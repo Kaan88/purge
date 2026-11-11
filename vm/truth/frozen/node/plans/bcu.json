@@ -1,0 +1,98 @@
+{
+  "schema": "purge.plan/0",
+  "app": "node",
+  "tool": "bcu",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\nodejs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Node.js"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Node.js"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\0DD75A3FB8D547A40A5576A0B7AA1467"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\0DD75A3FB8D547A40A5576A0B7AA1467"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\A3A70C74FE2431248AD5F8A59570C782"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\A3A70C74FE2431248AD5F8A59570C782"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\0DD75A3FB8D547A40A5576A0B7AA1467"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Node.js"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    }
+  ]
+}

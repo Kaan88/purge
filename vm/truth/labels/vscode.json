@@ -1,0 +1,47 @@
+{
+  "id": "vscode",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\Recent\\\\AutomaticDestinations\\\\1ced32d74a95c7bc\\.automaticDestinations-ms$",
+      "why": "Jump list of AppID Microsoft.VisualStudioCode (CRC-64 1ced32d74a95c7bc); FS-JUMPLISTS, Unchecked."
+    },
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\(CODE)\\.EXE-[0-9A-F]{8}\\.pf$",
+      "why": "Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash)."
+    },
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Roaming\\\\Code(\\\\.*)?$",
+      "why": "VS Code user data dir (settings.json, keybindings, workspace storage, hot-exit backups of unsaved files) created by the launch step."
+    },
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\\\.vscode(\\\\.*)?$",
+      "why": "~\\.vscode holds user-installed extensions and argv.json; user content, never preselected."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\AppModel\\\\StateRepository(\\\\[^|]*)?(\\|.*)?$",
+      "why": "StateRepository cache rows for the VS Code sparse package are maintained by the AppX deployment service; report-only, only the package API may change them."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\[^\\\\]+\\.pf$",
+      "why": "SysMain prefetch trace written for any executable that ran (installer, app, rig); Windows ages them out; not app state."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\bam\\\\State\\\\UserSettings\\\\S-1-5-21-[0-9-]+\\|",
+      "why": "Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target."
+    }
+  ]
+}

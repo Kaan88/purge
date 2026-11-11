@@ -1,0 +1,19 @@
+//! Thin, safe wrappers over the Win32 APIs the engine needs, and nothing else.
+//!
+//! Responsibility (ENGINE_PLAN.md §3.2):
+//! - `reg`: raw `RegEnumKeyExW` / `RegQueryInfoKeyW` with an explicit registry view, a walk that opens
+//!   symbolic links with `REG_OPTION_OPEN_LINK` instead of following them, `CurrentControlSet` →
+//!   `ControlSet00N` and `HKU\<SID>\Software\Classes` → `HKU\<SID>_Classes` mapping;
+//! - `fs`: `FindFirstFileExW` with `FIND_FIRST_EX_LARGE_FETCH` that never traverses reparse points,
+//!   handle-based operations, `FileIdInfo`;
+//! - tokens, SIDs, Known Folders, `ProfileList`, offline hives (offreg), MSI (`msi.dll`), AppX (WinRT),
+//!   SCM, Task Scheduler, firewall rules (WMI), shell links (`SLGP_RAWPATH`), signer and version info,
+//!   Restart Manager, System Restore, and the broker consent `TaskDialog`.
+//!
+//! Features: `read` (default) exposes read-only access. `write` adds mutating calls and is enabled only by
+//! `purge-exec`; `cargo xtask check-deps` proves it never reaches `purge-mcp`.
+//!
+//! Milestone: read side in M1a/M1b, `write` in M2, consent dialog in M3 (§11.1).
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+compile_error!("purge-win supports x86_64 Windows only (ENGINE_PLAN.md §3.2)");

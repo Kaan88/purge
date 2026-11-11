@@ -1,0 +1,28 @@
+Purge
+Copyright (c) 2026 the Purge authors.
+
+Purge is a Windows uninstaller and leftover cleaner. Parts of its program-inventory and leftover-scanning
+logic are ported from Bulk Crap Uninstaller, under the Apache License, Version 2.0:
+
+  Bulk Crap Uninstaller
+  Copyright (c) 2017 Marcin Szeniak (https://github.com/Klocman/)
+  https://github.com/Klocman/Bulk-Crap-Uninstaller
+  Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0).
+  A copy of the licence is included in THIRD_PARTY.md.
+
+Some BCU source files carry later copyright years (2018, 2019, 2020) for the same author. Every ported
+file keeps the copyright line of the file it was ported from, states that it was modified by Purge, and
+names its origin as `// Ported from BCU: source/<path> (Apache-2.0)`.
+
+The NOTICE file distributed with Bulk Crap Uninstaller reads as follows:
+
+-------------------------------------------------------------------------------
+Bulk Crap Uninstaller is a free open-source project hosted on GitHub. Marcin Szeniak is the project manager and lead developer.
+The official project is hosted at https://github.com/Klocman/Bulk-Crap-Uninstaller
+
+In case of issues, please update to the latest official release. Non-official releases are not supported.
+If the issue presists, please post a bug report to https://github.com/Klocman/Bulk-Crap-Uninstaller/issues
+
+If you wish to contribute, donate or otherwise help the project, please read the CONTRIBUTING file.
+https://github.com/Klocman/Bulk-Crap-Uninstaller/blob/master/CONTRIBUTING.md
+-------------------------------------------------------------------------------

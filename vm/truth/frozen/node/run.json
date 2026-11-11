@@ -1,0 +1,183 @@
+{
+    "schema":  "purge.rig.run/1",
+    "id":  "node",
+    "run":  "node",
+    "kind":  "app",
+    "tech":  "MSI (WiX)",
+    "url":  null,
+    "installer":  "C:\\cr\\inst\\node.msi",
+    "installer_sha256":  "93D1D30341D7D38B7A8F3AB0FA3BE1F9E6436B90338B2BD8B8AF4E80D00BD036",
+    "installer_sig":  "Valid CN=OpenJS Foundation",
+    "computer":  "INBOUND-WIN11-T",
+    "sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os":  "EnterpriseSEval 26100.1742",
+    "started":  "2026-11-11T08:14:33.4592428-08:00",
+    "finished":  "2026-11-11T08:16:23.6102207-08:00",
+    "main":  {
+                 "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}",
+                 "name":  "Node.js",
+                 "version":  "20.18.0",
+                 "publisher":  "Node.js Foundation",
+                 "sys":  false,
+                 "parent":  null,
+                 "uninstall":  "MsiExec.exe /I{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}",
+                 "quiet":  null,
+                 "loc":  "",
+                 "icon":  null,
+                 "msi":  "{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}",
+                 "size":  83369,
+                 "install_date":  "20261111",
+                 "bundle":  false
+             },
+    "install":  {
+                    "cmd":  "\"C:\\WINDOWS\\System32\\msiexec.exe\" /i \"C:\\cr\\inst\\node.msi\" /qn /norestart /L*v \"C:\\cr\\out\\node\\msi-install.log\"",
+                    "start":  "2026-11-11T08:14:53.7619097-08:00",
+                    "end":  "2026-11-11T08:15:11.8126750-08:00",
+                    "exit":  0,
+                    "timed_out":  false,
+                    "killed":  [
+
+                               ]
+                },
+    "launch":  {
+                   "done":  false,
+                   "exe":  null,
+                   "args":  null,
+                   "start":  null,
+                   "end":  null,
+                   "found":  false,
+                   "closed":  [
+
+                              ],
+                   "killed":  [
+
+                              ],
+                   "reason":  "app defines no launch"
+               },
+    "uninstall":  {
+                      "cmd":  "\"C:\\WINDOWS\\System32\\msiexec.exe\" /x {F3A57DD0-5D8B-4A74-A055-670A7BAA4176} /qn /norestart /L*v \"C:\\cr\\out\\node\\msi-uninstall.log\"",
+                      "t0":  "2026-11-11T08:15:40.6577332-08:00",
+                      "t1":  "2026-11-11T08:15:49.4550343-08:00",
+                      "exit":  0,
+                      "timed_out":  false,
+                      "entry_gone":  true,
+                      "killed":  [
+
+                                 ]
+                  },
+    "entries_created":  [
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}",
+                                "name":  "Node.js",
+                                "version":  "20.18.0",
+                                "publisher":  "Node.js Foundation",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}",
+                                "size":  83369,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            }
+                        ],
+    "entries_left":  [
+
+                     ],
+    "phases":  [
+                   {
+                       "name":  "setup",
+                       "start":  "2026-11-11T08:14:33.4645727-08:00",
+                       "end":  "2026-11-11T08:14:34.1256442-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "arp0",
+                       "start":  "2026-11-11T08:14:34.2692342-08:00",
+                       "end":  "2026-11-11T08:14:34.4173797-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists0",
+                       "start":  "2026-11-11T08:14:34.4191241-08:00",
+                       "end":  "2026-11-11T08:14:49.2115273-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap0",
+                       "start":  "2026-11-11T08:14:49.2132976-08:00",
+                       "end":  "2026-11-11T08:14:53.7349044-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "install",
+                       "start":  "2026-11-11T08:14:53.7382943-08:00",
+                       "end":  "2026-11-11T08:15:31.8273709-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "detect",
+                       "start":  "2026-11-11T08:15:31.8307762-08:00",
+                       "end":  "2026-11-11T08:15:31.9345298-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "launch",
+                       "start":  "2026-11-11T08:15:31.9362346-08:00",
+                       "end":  "2026-11-11T08:15:31.9478656-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists1",
+                       "start":  "2026-11-11T08:15:31.9495616-08:00",
+                       "end":  "2026-11-11T08:15:38.2232005-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap1",
+                       "start":  "2026-11-11T08:15:38.2232005-08:00",
+                       "end":  "2026-11-11T08:15:40.6360921-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "uninstall",
+                       "start":  "2026-11-11T08:15:40.6378420-08:00",
+                       "end":  "2026-11-11T08:16:19.4690003-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists2",
+                       "start":  "2026-11-11T08:16:19.4723101-08:00",
+                       "end":  "2026-11-11T08:16:21.1516735-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap2",
+                       "start":  "2026-11-11T08:16:21.1530671-08:00",
+                       "end":  "2026-11-11T08:16:23.5406822-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "entries",
+                       "start":  "2026-11-11T08:16:23.5423031-08:00",
+                       "end":  "2026-11-11T08:16:23.6087845-08:00",
+                       "ok":  true,
+                       "error":  null
+                   }
+               ]
+}

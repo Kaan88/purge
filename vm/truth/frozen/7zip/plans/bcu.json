@@ -1,0 +1,188 @@
+{
+  "schema": "purge.plan/0",
+  "app": "7zip",
+  "tool": "bcu",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\7-Zip"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\7-Zip"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\7-Zip"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\7-Zip"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\7-Zip"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers\\7-Zip"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Directory\\shellex\\DragDropHandlers"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Drive\\shellex\\DragDropHandlers"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Folder\\ShellEx\\ContextMenuHandlers\\7-Zip"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\96F071321C0420724280000010000000"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\96F071321C0420724280000010000000"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\96F071321C0420720000000040000000"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\96F071321C0420720000000040000000"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    }
+  ]
+}

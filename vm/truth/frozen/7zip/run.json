@@ -1,0 +1,183 @@
+{
+    "schema":  "purge.rig.run/1",
+    "id":  "7zip",
+    "run":  "7zip",
+    "kind":  "app",
+    "tech":  "MSI",
+    "url":  null,
+    "installer":  "C:\\cr\\inst\\7zip.msi",
+    "installer_sha256":  "98330E7E6DB3507B444D576DC437A9AC4D82333A88A6BB6EF36A91FE3D85FA92",
+    "installer_sig":  "NotSigned",
+    "computer":  "INBOUND-WIN11-T",
+    "sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os":  "EnterpriseSEval 26100.1742",
+    "started":  "2026-11-11T08:00:13.6677734-08:00",
+    "finished":  "2026-11-11T08:02:31.0958682-08:00",
+    "main":  {
+                 "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}",
+                 "name":  "7-Zip 24.08 (x64 edition)",
+                 "version":  "24.08.00.0",
+                 "publisher":  "Igor Pavlov",
+                 "sys":  false,
+                 "parent":  null,
+                 "uninstall":  "MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}",
+                 "quiet":  null,
+                 "loc":  "",
+                 "icon":  null,
+                 "msi":  "{23170F69-40C1-2702-2408-000001000000}",
+                 "size":  5883,
+                 "install_date":  "20261111",
+                 "bundle":  false
+             },
+    "install":  {
+                    "cmd":  "\"C:\\WINDOWS\\System32\\msiexec.exe\" /i \"C:\\cr\\inst\\7zip.msi\" /qn /norestart /L*v \"C:\\cr\\out\\7zip\\msi-install.log\"",
+                    "start":  "2026-11-11T08:00:39.5524208-08:00",
+                    "end":  "2026-11-11T08:00:43.9801859-08:00",
+                    "exit":  0,
+                    "timed_out":  false,
+                    "killed":  [
+
+                               ]
+                },
+    "launch":  {
+                   "done":  true,
+                   "exe":  "C:\\Program Files\\7-Zip\\7zFM.exe",
+                   "args":  "",
+                   "start":  "2026-11-11T08:01:05.3147424-08:00",
+                   "end":  "2026-11-11T08:01:36.6077602-08:00",
+                   "found":  true,
+                   "closed":  [
+                                  "7zFM.exe[5772]"
+                              ],
+                   "killed":  [
+
+                              ],
+                   "reason":  null
+               },
+    "uninstall":  {
+                      "cmd":  "\"C:\\WINDOWS\\System32\\msiexec.exe\" /x {23170F69-40C1-2702-2408-000001000000} /qn /norestart /L*v \"C:\\cr\\out\\7zip\\msi-uninstall.log\"",
+                      "t0":  "2026-11-11T08:01:54.6110204-08:00",
+                      "t1":  "2026-11-11T08:01:57.2256785-08:00",
+                      "exit":  0,
+                      "timed_out":  false,
+                      "entry_gone":  true,
+                      "killed":  [
+
+                                 ]
+                  },
+    "entries_created":  [
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}",
+                                "name":  "7-Zip 24.08 (x64 edition)",
+                                "version":  "24.08.00.0",
+                                "publisher":  "Igor Pavlov",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{23170F69-40C1-2702-2408-000001000000}",
+                                "size":  5883,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            }
+                        ],
+    "entries_left":  [
+
+                     ],
+    "phases":  [
+                   {
+                       "name":  "setup",
+                       "start":  "2026-11-11T08:00:13.6712570-08:00",
+                       "end":  "2026-11-11T08:00:13.9862383-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "arp0",
+                       "start":  "2026-11-11T08:00:14.1144324-08:00",
+                       "end":  "2026-11-11T08:00:14.2296965-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists0",
+                       "start":  "2026-11-11T08:00:14.2344763-08:00",
+                       "end":  "2026-11-11T08:00:27.3511538-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap0",
+                       "start":  "2026-11-11T08:00:27.3529019-08:00",
+                       "end":  "2026-11-11T08:00:39.5057274-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "install",
+                       "start":  "2026-11-11T08:00:39.5074918-08:00",
+                       "end":  "2026-11-11T08:01:03.9902620-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "detect",
+                       "start":  "2026-11-11T08:01:03.9917930-08:00",
+                       "end":  "2026-11-11T08:01:04.0786687-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "launch",
+                       "start":  "2026-11-11T08:01:04.0786687-08:00",
+                       "end":  "2026-11-11T08:01:46.6117359-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists1",
+                       "start":  "2026-11-11T08:01:46.6129798-08:00",
+                       "end":  "2026-11-11T08:01:52.3774537-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap1",
+                       "start":  "2026-11-11T08:01:52.3784671-08:00",
+                       "end":  "2026-11-11T08:01:54.5815550-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "uninstall",
+                       "start":  "2026-11-11T08:01:54.5901767-08:00",
+                       "end":  "2026-11-11T08:02:27.2306412-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists2",
+                       "start":  "2026-11-11T08:02:27.2331849-08:00",
+                       "end":  "2026-11-11T08:02:28.7814164-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap2",
+                       "start":  "2026-11-11T08:02:28.7832846-08:00",
+                       "end":  "2026-11-11T08:02:31.0318887-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "entries",
+                       "start":  "2026-11-11T08:02:31.0329930-08:00",
+                       "end":  "2026-11-11T08:02:31.0949276-08:00",
+                       "ok":  true,
+                       "error":  null
+                   }
+               ]
+}

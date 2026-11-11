@@ -1,0 +1,22 @@
+# Rust build output
+target/
+vm/rigtool/target/
+vm/harness/target/
+
+# VM rig scratch (large, machine-specific)
+vm/build/
+vm/runs/
+vm/cache/
+vm/shots/
+# Raw outputs of the pre-M0 clone/UT/BCU comparison (old 41 MB snapshots, tool logs and lists). The
+# converted plans that the scorer uses are committed in vm/truth/frozen/<id>/plans/.
+vm/results/
+
+# Snapshots are never committed; only the clean-Windows baselines are.
+*.tsv.gz
+!kb/baselines/*.tsv.gz
+
+# .NET build output (ui/, from M3)
+ui/**/bin/
+ui/**/obj/
+.vs/

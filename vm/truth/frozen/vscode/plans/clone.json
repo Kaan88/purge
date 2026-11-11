@@ -1,0 +1,7 @@
+{
+  "schema": "purge.plan/0",
+  "app": "vscode",
+  "tool": "clone",
+  "mode": "post",
+  "items": []
+}

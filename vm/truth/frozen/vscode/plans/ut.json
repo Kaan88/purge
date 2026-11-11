@@ -1,0 +1,1826 @@
+{
+  "schema": "purge.plan/0",
+  "app": "vscode",
+  "tool": "ut",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\Microsoft VS Code"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\WindowsApps\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Visual Studio Code"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Mappings\\S-1-15-2-1783282539-3115746269-55898877-3955378256-734967466-313783452-978914605"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Storage\\microsoft.visualstudiocode_8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\Microsoft.VisualStudioCode_8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Classes\\PackagedCom\\Package\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Applications\\Code.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{1C6DF0C0-192A-4451-BE36-6A59A86A692E}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\PackagedCom\\Package\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.ascx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.asp"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.aspx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.bash"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.bash_login"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.bash_logout"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.bash_profile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.bashrc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.bib"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.bowerrc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.c"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.c++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cfg"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cjs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.clj"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cljs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cljx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.clojure"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cls"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cmake"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.code-workspace"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.coffee"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.config"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.containerfile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cpp"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cshtml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.csproj"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.css"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.csv"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.csx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.ctp"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.cxx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.dart"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.diff"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.dockerfile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.dot"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.dtd"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.editorconfig"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.edn"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.erb"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.eyaml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.eyml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.fs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.fsi"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.fsscript"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.fsx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.gemspec"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.gitattributes"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.gitconfig"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.gitignore"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.go"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.gradle"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.groovy"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.h"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.h++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.handlebars"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.hbs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.hh"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.hpp"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.htm"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.html"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.hxx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.ini"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.ipynb"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.jade"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.jav"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.java"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.js"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.jscsrc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.jshintrc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.jshtm"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.json"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.jsp"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.jsx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.less"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.log"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.lua"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.m"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.makefile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.markdown"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.md"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mdoc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mdown"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mdtext"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mdtxt"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mdwn"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mjs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mk"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mkd"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mkdn"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.ml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.mli"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.npmignore"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.php"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.phtml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.pl"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.pl6"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.plist"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.pm"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.pm6"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.pod"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.pp"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.profile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.properties"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.ps1"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.psd1"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.psgi"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.psm1"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.py"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.pyi"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.r"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.rb"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.rhistory"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.rprofile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.rs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.rst"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.rt"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.sass"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.scss"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.sh"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.shtml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.sql"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.svg"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.t"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.tex"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.toml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.ts"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.tsx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.txt"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.vb"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.vue"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.wxi"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.wxl"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.wxs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.xaml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.xhtml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.xml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.yaml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.yml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCode.zsh"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\VSCodeSourceFile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\SecurityManager\\CapAuthz\\ApplicationsEx\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\code.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Data\\58"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Index\\Package\\37\\58"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Index\\PackageAndPackageRelativeApplicationId\\37^VSCode"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Data\\108"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Data\\109"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Application\\58\\108"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Application\\58\\109"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\ApplicationAndCategory\\58^windows.comServer\\109"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\ApplicationAndCategory\\58^windows.fileExplorerContextMenus\\108"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Category\\windows.comServer\\109"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Category\\windows.fileExplorerContextMenus\\108"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Data\\10b"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\Application\\58\\10b"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\PackageUser\\9f\\10b"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\PackageUserAndApplication\\9f^58"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\User\\2\\10b"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\UserAndApplication\\2^58"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\UserAndApplicationUserModelId\\2^Microsoft.VisualStudioCode_8wekyb3d8bbwe!VSCode\\10b"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Package\\Data\\37"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Package\\Index\\PackageFamily\\35\\37"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Package\\Index\\PackageFullName\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageExternalLocation\\Data\\4"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageExternalLocation\\Index\\UserAndPackage\\0^37"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Data\\34"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Index\\PackageFamily\\35\\34"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Index\\User\\2\\34"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Index\\UserAndPackageFamily\\2^35"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Data\\16"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Data\\17"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Data\\18"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Name\\AllowExternalContent\\16"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Name\\FileSystemWriteVirtualization\\18"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Name\\RegistryWriteVirtualization\\17"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Package\\37\\16"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Package\\37\\17"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Package\\37\\18"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\PackageAndName\\37^AllowExternalContent\\16"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\PackageAndName\\37^FileSystemWriteVirtualization\\18"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\PackageAndName\\37^RegistryWriteVirtualization\\17"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageUser\\Data\\9f"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageUser\\Index\\User\\2\\9f"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageUser\\Index\\UserAndPackage\\2^37"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\AppxAllUserStore\\Applications\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageState\\S-1-5-21-1336749127-99101324-1432799918-1000\\Microsoft.VisualStudioCode_8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{EA457B21-F73E-494C-ACAB-524FDE069978}_is1"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\SecurityManager\\CapAuthz\\ApplicationsEx\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths\\code.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    }
+  ]
+}

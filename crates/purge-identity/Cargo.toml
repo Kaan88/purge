@@ -1,0 +1,16 @@
+[package]
+name = "purge-identity"
+description = "App identity resolution: tokens, vendor aliases, signer and version info"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+purge-model.workspace = true
+purge-win = { workspace = true, features = ["read"] }
+purge-inventory.workspace = true
+
+[lints]
+workspace = true

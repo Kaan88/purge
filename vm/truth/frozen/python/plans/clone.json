@@ -1,0 +1,18 @@
+{
+  "schema": "purge.plan/0",
+  "app": "python",
+  "tool": "clone",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Python"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "clone",
+      "category": "Key(Lm)"
+    }
+  ]
+}

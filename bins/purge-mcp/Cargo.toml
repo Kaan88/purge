@@ -1,0 +1,18 @@
+[package]
+name = "purge-mcp"
+description = "Purge MCP server for AI agents: Read and Propose only, no executor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Only these two Purge crates, ever. `cargo xtask check-deps` fails if any other Purge crate (so also
+# purge-exec and purge-win) is in this crate's dependency tree, including under workspace feature
+# unification, and `cargo xtask ci` builds this crate on its own (ENGINE_PLAN.md §3.2, §8.1).
+[dependencies]
+purge-model.workspace = true
+purge-rpc.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,134 @@
+{
+  "schema": "purge.plan/0",
+  "app": "git",
+  "tool": "bcu",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\Git"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Git"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\.gitmodules"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Directory\\background\\shell\\git_gui"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Directory\\background\\shell\\git_shell"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Directory\\shell\\git_gui"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Directory\\shell\\git_shell"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell\\git_gui"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell\\git_shell"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\sh_auto_file\\DefaultIcon"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\sh_auto_file\\shell\\open\\command"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\sh_auto_file\\ShellEx\\DropHandler"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\GitForWindows"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Git_is1"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    }
+  ]
+}

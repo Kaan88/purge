@@ -1,0 +1,341 @@
+{
+  "schema": "purge.plan/0",
+  "app": "firefox",
+  "tool": "ut",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files (x86)\\Mozilla Maintenance Service"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\Mozilla Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Firefox Private Browsing.lnk"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Firefox.lnk"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\UpdateLock-308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates\\308046B0AF4A39CB\\updates"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\Public\\Desktop\\Firefox.lnk"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Mozilla"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Mozilla"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Windows\\System32\\Tasks\\Mozilla"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Classes\\FirefoxPDF-308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\AppID\\{56932DBC-A2C3-452E-B42D-7FD6CCAC6FCE}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Applications\\firefox.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\AppUserModelId\\FirefoxToast-308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\CLSID\\{56932DBC-A2C3-452E-B42D-7FD6CCAC6FCE}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\FirefoxHTML-308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\FirefoxPDF-308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\FirefoxURL-308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\WOW6432Node\\AppID\\{56932DBC-A2C3-452E-B42D-7FD6CCAC6FCE}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Clients\\StartMenuInternet\\Firefox-308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\MediaPlayer\\ShimInclusionList\\plugin-container.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Plain\\{8F988F03-13AB-4FFD-B55F-9C3EB9503F31}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{8F988F03-13AB-4FFD-B55F-9C3EB9503F31}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\Mozilla"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\firefox.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mozilla Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MozillaMaintenanceService"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Mozilla\\MaintenanceService\\f9b87e891978e3145f0f8f9953eadc00"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Mozilla\\Mozilla Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Mozilla\\Mozilla Firefox 160.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Classes\\AppID\\{56932DBC-A2C3-452E-B42D-7FD6CCAC6FCE}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Clients\\StartMenuInternet\\Firefox-308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths\\firefox.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\MozillaMaintenance"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    }
+  ]
+}

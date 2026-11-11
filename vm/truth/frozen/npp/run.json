@@ -1,0 +1,183 @@
+{
+    "schema":  "purge.rig.run/1",
+    "id":  "npp",
+    "run":  "npp",
+    "kind":  "app",
+    "tech":  "NSIS",
+    "url":  null,
+    "installer":  "C:\\cr\\inst\\npp.exe",
+    "installer_sha256":  "A18CFB33D616C8EECDA0059604D40BDB9D607FBC4EDE857C8BE6E41986464367",
+    "installer_sig":  "Valid E=don.h@free.fr",
+    "computer":  "INBOUND-WIN11-T",
+    "sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os":  "EnterpriseSEval 26100.1742",
+    "started":  "2026-11-11T07:46:51.7167296-08:00",
+    "finished":  "2026-11-11T07:49:39.5603526-08:00",
+    "main":  {
+                 "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++",
+                 "name":  "Notepad++ (64-bit x64)",
+                 "version":  "8.9.9",
+                 "publisher":  "Notepad++ Team",
+                 "sys":  false,
+                 "parent":  null,
+                 "uninstall":  "\"C:\\Program Files\\Notepad++\\uninstall.exe\"",
+                 "quiet":  "\"C:\\Program Files\\Notepad++\\uninstall.exe\" /S",
+                 "loc":  null,
+                 "icon":  "C:\\Program Files\\Notepad++\\notepad++.exe",
+                 "msi":  null,
+                 "size":  20058,
+                 "install_date":  null,
+                 "bundle":  false
+             },
+    "install":  {
+                    "cmd":  "\"C:\\cr\\inst\\npp.exe\" /S",
+                    "start":  "2026-11-11T07:47:26.3041528-08:00",
+                    "end":  "2026-11-11T07:47:47.5912959-08:00",
+                    "exit":  0,
+                    "timed_out":  false,
+                    "killed":  [
+
+                               ]
+                },
+    "launch":  {
+                   "done":  true,
+                   "exe":  "C:\\Program Files\\Notepad++\\notepad++.exe",
+                   "args":  "",
+                   "start":  "2026-11-11T07:48:09.0581479-08:00",
+                   "end":  "2026-11-11T07:48:41.1954937-08:00",
+                   "found":  true,
+                   "closed":  [
+                                  "notepad++.exe[3468]"
+                              ],
+                   "killed":  [
+
+                              ],
+                   "reason":  null
+               },
+    "uninstall":  {
+                      "cmd":  "\"C:\\Program Files\\Notepad++\\uninstall.exe\" /S",
+                      "t0":  "2026-11-11T07:48:59.8038182-08:00",
+                      "t1":  "2026-11-11T07:49:05.5280717-08:00",
+                      "exit":  0,
+                      "timed_out":  false,
+                      "entry_gone":  true,
+                      "killed":  [
+
+                                 ]
+                  },
+    "entries_created":  [
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++",
+                                "name":  "Notepad++ (64-bit x64)",
+                                "version":  "8.9.9",
+                                "publisher":  "Notepad++ Team",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "\"C:\\Program Files\\Notepad++\\uninstall.exe\"",
+                                "quiet":  "\"C:\\Program Files\\Notepad++\\uninstall.exe\" /S",
+                                "loc":  null,
+                                "icon":  "C:\\Program Files\\Notepad++\\notepad++.exe",
+                                "msi":  null,
+                                "size":  20058,
+                                "install_date":  null,
+                                "bundle":  false
+                            }
+                        ],
+    "entries_left":  [
+
+                     ],
+    "phases":  [
+                   {
+                       "name":  "setup",
+                       "start":  "2026-11-11T07:46:51.7239885-08:00",
+                       "end":  "2026-11-11T07:46:53.1101588-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "arp0",
+                       "start":  "2026-11-11T07:46:53.3136272-08:00",
+                       "end":  "2026-11-11T07:46:53.4950787-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists0",
+                       "start":  "2026-11-11T07:46:53.4972954-08:00",
+                       "end":  "2026-11-11T07:47:07.7612873-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap0",
+                       "start":  "2026-11-11T07:47:07.7630526-08:00",
+                       "end":  "2026-11-11T07:47:26.2798321-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "install",
+                       "start":  "2026-11-11T07:47:26.2815618-08:00",
+                       "end":  "2026-11-11T07:48:07.5968242-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "detect",
+                       "start":  "2026-11-11T07:48:07.5985348-08:00",
+                       "end":  "2026-11-11T07:48:07.7328916-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "launch",
+                       "start":  "2026-11-11T07:48:07.7365570-08:00",
+                       "end":  "2026-11-11T07:48:51.2161957-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists1",
+                       "start":  "2026-11-11T07:48:51.2220157-08:00",
+                       "end":  "2026-11-11T07:48:57.4109395-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap1",
+                       "start":  "2026-11-11T07:48:57.4124474-08:00",
+                       "end":  "2026-11-11T07:48:59.7502825-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "uninstall",
+                       "start":  "2026-11-11T07:48:59.7541019-08:00",
+                       "end":  "2026-11-11T07:49:35.5464562-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists2",
+                       "start":  "2026-11-11T07:49:35.5489950-08:00",
+                       "end":  "2026-11-11T07:49:37.0873969-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap2",
+                       "start":  "2026-11-11T07:49:37.0894848-08:00",
+                       "end":  "2026-11-11T07:49:39.5054733-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "entries",
+                       "start":  "2026-11-11T07:49:39.5074129-08:00",
+                       "end":  "2026-11-11T07:49:39.5591630-08:00",
+                       "ok":  true,
+                       "error":  null
+                   }
+               ]
+}

@@ -1,0 +1,342 @@
+{
+    "schema":  "purge.rig.run/1",
+    "id":  "python",
+    "run":  "python",
+    "kind":  "app",
+    "tech":  "WiX Burn bundle",
+    "url":  null,
+    "installer":  "C:\\cr\\inst\\python.exe",
+    "installer_sha256":  "1206721601A62C925D4E4A0DCFC371E88F2DDBE8C0C07962EBB2BE9B5BDE4570",
+    "installer_sig":  "Valid CN=Python Software Foundation",
+    "computer":  "INBOUND-WIN11-T",
+    "sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os":  "EnterpriseSEval 26100.1742",
+    "started":  "2026-11-11T08:10:54.5611835-08:00",
+    "finished":  "2026-11-11T08:13:37.6196823-08:00",
+    "main":  {
+                 "key":  "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+                 "name":  "Python 3.12.7 (64-bit)",
+                 "version":  "3.12.7150.0",
+                 "publisher":  "Python Software Foundation",
+                 "sys":  false,
+                 "parent":  null,
+                 "uninstall":  "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\"  /uninstall",
+                 "quiet":  "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\" /uninstall /quiet",
+                 "loc":  null,
+                 "icon":  "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe,0",
+                 "msi":  null,
+                 "size":  120938,
+                 "install_date":  null,
+                 "bundle":  true
+             },
+    "install":  {
+                    "cmd":  "\"C:\\cr\\inst\\python.exe\" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+                    "start":  "2026-11-11T08:11:12.2433095-08:00",
+                    "end":  "2026-11-11T08:11:36.2783203-08:00",
+                    "exit":  0,
+                    "timed_out":  false,
+                    "killed":  [
+
+                               ]
+                },
+    "launch":  {
+                   "done":  true,
+                   "exe":  "C:\\Program Files\\Python312\\pythonw.exe",
+                   "args":  "-m idlelib",
+                   "start":  "2026-11-11T08:11:57.5927654-08:00",
+                   "end":  "2026-11-11T08:12:28.7383744-08:00",
+                   "found":  true,
+                   "closed":  [
+                                  "pythonw.exe[2480]"
+                              ],
+                   "killed":  [
+
+                              ],
+                   "reason":  null
+               },
+    "uninstall":  {
+                      "cmd":  "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\" /uninstall /quiet",
+                      "t0":  "2026-11-11T08:12:47.8274132-08:00",
+                      "t1":  "2026-11-11T08:13:03.6197921-08:00",
+                      "exit":  0,
+                      "timed_out":  false,
+                      "entry_gone":  true,
+                      "killed":  [
+
+                                 ]
+                  },
+    "entries_created":  [
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{1BB43BDF-D9E8-487A-B743-CA10AAE7B25F}",
+                                "name":  "Python 3.12.7 Core Interpreter (64-bit)",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{1BB43BDF-D9E8-487A-B743-CA10AAE7B25F}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{1BB43BDF-D9E8-487A-B743-CA10AAE7B25F}",
+                                "size":  6808,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{314BCBA9-14E3-41D1-B9DD-32ADF7EA8C5D}",
+                                "name":  "Python 3.12.7 Documentation (64-bit)",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{314BCBA9-14E3-41D1-B9DD-32ADF7EA8C5D}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{314BCBA9-14E3-41D1-B9DD-32ADF7EA8C5D}",
+                                "size":  53236,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{680AB42D-FAF3-46E2-A16D-BDD38E4506BB}",
+                                "name":  "Python 3.12.7 pip Bootstrap (64-bit)",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{680AB42D-FAF3-46E2-A16D-BDD38E4506BB}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{680AB42D-FAF3-46E2-A16D-BDD38E4506BB}",
+                                "size":  268,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{8C1ACF90-E1B6-46A1-B4F0-DD6217005B25}",
+                                "name":  "Python 3.12.7 Executables (64-bit)",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{8C1ACF90-E1B6-46A1-B4F0-DD6217005B25}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{8C1ACF90-E1B6-46A1-B4F0-DD6217005B25}",
+                                "size":  2352,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}",
+                                "name":  "Python 3.12.7 Tcl/Tk Support (64-bit)",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}",
+                                "size":  15764,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{A26ABCC2-F6AA-4B7D-A767-16BE012DB52E}",
+                                "name":  "Python 3.12.7 Add to Path (64-bit)",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{A26ABCC2-F6AA-4B7D-A767-16BE012DB52E}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{A26ABCC2-F6AA-4B7D-A767-16BE012DB52E}",
+                                "size":  48,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{EA6E73B7-512D-4853-BBA5-331DAE48A6B1}",
+                                "name":  "Python 3.12.7 Development Libraries (64-bit)",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{EA6E73B7-512D-4853-BBA5-331DAE48A6B1}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{EA6E73B7-512D-4853-BBA5-331DAE48A6B1}",
+                                "size":  2196,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE}",
+                                "name":  "Python 3.12.7 Standard Library (64-bit)",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE}",
+                                "size":  24432,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+                                "name":  "Python Launcher",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /X{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+                                "size":  1524,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+                                "name":  "Python 3.12.7 (64-bit)",
+                                "version":  "3.12.7150.0",
+                                "publisher":  "Python Software Foundation",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\"  /uninstall",
+                                "quiet":  "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\" /uninstall /quiet",
+                                "loc":  null,
+                                "icon":  "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe,0",
+                                "msi":  null,
+                                "size":  120938,
+                                "install_date":  null,
+                                "bundle":  true
+                            }
+                        ],
+    "entries_left":  [
+                         {
+                             "key":  "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+                             "name":  "Python Launcher",
+                             "version":  "3.12.7150.0",
+                             "publisher":  "Python Software Foundation",
+                             "sys":  false,
+                             "parent":  null,
+                             "uninstall":  "MsiExec.exe /X{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+                             "quiet":  null,
+                             "loc":  "",
+                             "icon":  null,
+                             "msi":  "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+                             "size":  1524,
+                             "install_date":  "20261111",
+                             "bundle":  false
+                         }
+                     ],
+    "phases":  [
+                   {
+                       "name":  "setup",
+                       "start":  "2026-11-11T08:10:54.5649909-08:00",
+                       "end":  "2026-11-11T08:10:55.0843620-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "arp0",
+                       "start":  "2026-11-11T08:10:55.2029269-08:00",
+                       "end":  "2026-11-11T08:10:55.3335796-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists0",
+                       "start":  "2026-11-11T08:10:55.3353393-08:00",
+                       "end":  "2026-11-11T08:11:07.9045381-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap0",
+                       "start":  "2026-11-11T08:11:07.9062818-08:00",
+                       "end":  "2026-11-11T08:11:12.2207830-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "install",
+                       "start":  "2026-11-11T08:11:12.2225644-08:00",
+                       "end":  "2026-11-11T08:11:56.2954078-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "detect",
+                       "start":  "2026-11-11T08:11:56.2975003-08:00",
+                       "end":  "2026-11-11T08:11:56.3954639-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "launch",
+                       "start":  "2026-11-11T08:11:56.3972210-08:00",
+                       "end":  "2026-11-11T08:12:38.7495034-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists1",
+                       "start":  "2026-11-11T08:12:38.7508387-08:00",
+                       "end":  "2026-11-11T08:12:45.4636344-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap1",
+                       "start":  "2026-11-11T08:12:45.4652747-08:00",
+                       "end":  "2026-11-11T08:12:47.7960913-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "uninstall",
+                       "start":  "2026-11-11T08:12:47.7970703-08:00",
+                       "end":  "2026-11-11T08:13:33.6298646-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists2",
+                       "start":  "2026-11-11T08:13:33.6328853-08:00",
+                       "end":  "2026-11-11T08:13:35.1077292-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap2",
+                       "start":  "2026-11-11T08:13:35.1095147-08:00",
+                       "end":  "2026-11-11T08:13:37.5692407-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "entries",
+                       "start":  "2026-11-11T08:13:37.5692407-08:00",
+                       "end":  "2026-11-11T08:13:37.6178808-08:00",
+                       "ok":  true,
+                       "error":  null
+                   }
+               ]
+}

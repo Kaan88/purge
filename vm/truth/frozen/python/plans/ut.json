@@ -1,0 +1,584 @@
+{
+  "schema": "purge.plan/0",
+  "app": "python",
+  "tool": "ut",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\Python312"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache\\{1BB43BDF-D9E8-487A-B743-CA10AAE7B25F}v3.12.7150.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache\\{314BCBA9-14E3-41D1-B9DD-32ADF7EA8C5D}v3.12.7150.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache\\{680AB42D-FAF3-46E2-A16D-BDD38E4506BB}v3.12.7150.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache\\{8C1ACF90-E1B6-46A1-B4F0-DD6217005B25}v3.12.7150.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache\\{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}v3.12.7150.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache\\{A26ABCC2-F6AA-4B7D-A767-16BE012DB52E}v3.12.7150.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache\\{EA6E73B7-512D-4853-BBA5-331DAE48A6B1}v3.12.7150.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache\\{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE}v3.12.7150.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Package Cache"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Classes\\Installer\\Dependencies\\CPython-3.12"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\09FCA1C86B1E1A644B0FDD267100B552"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\2CCBA62AAA6FD7B47A7661EB10D25BE2"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\37E0D6FF35F29FC4DBC21F444EAF20EF"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\7B37E6AED2153584BB5A33D1EA846A1B"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\8D87148982757E84981A3C9E4A5D5FED"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\9ABCB4133E411D149BDD23DA7FAEC8D5"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\D24BA0863FAF2E641AD6DB3DE85460BB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Features\\FDB34BB18E9DA7847B34AC01AA7E2BF5"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\09FCA1C86B1E1A644B0FDD267100B552"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\2CCBA62AAA6FD7B47A7661EB10D25BE2"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\37E0D6FF35F29FC4DBC21F444EAF20EF"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\7B37E6AED2153584BB5A33D1EA846A1B"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\8D87148982757E84981A3C9E4A5D5FED"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\9ABCB4133E411D149BDD23DA7FAEC8D5"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\D24BA0863FAF2E641AD6DB3DE85460BB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\Products\\FDB34BB18E9DA7847B34AC01AA7E2BF5"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\27932F84D2615EE56B3101F4136C7E98"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\29CB17F2B775AAC58BD523B15E8F69BB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\369792FA939CF825AA57F495D2B5CE60"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\5EF11A5A9F184445CA5A3AFEC8CCF53D"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\5F138CB615460F45D88B3EA8B2F22A35"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\B70F0B1695A41135B8B478FEAE3703E9"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\D2B99FC06D5FF06529D5AC9C373AB86C"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\DA9EE7E27A922B7538E9AF5593911537"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Python.File\\Shell\\editwithidle"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Python.NoConFile\\Shell\\editwithidle"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\27932F84D2615EE56B3101F4136C7E98"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\29CB17F2B775AAC58BD523B15E8F69BB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\369792FA939CF825AA57F495D2B5CE60"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\5EF11A5A9F184445CA5A3AFEC8CCF53D"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\5F138CB615460F45D88B3EA8B2F22A35"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\B70F0B1695A41135B8B478FEAE3703E9"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\D2B99FC06D5FF06529D5AC9C373AB86C"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\DA9EE7E27A922B7538E9AF5593911537"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\09FCA1C86B1E1A644B0FDD267100B552"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\2CCBA62AAA6FD7B47A7661EB10D25BE2"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\37E0D6FF35F29FC4DBC21F444EAF20EF"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\7B37E6AED2153584BB5A33D1EA846A1B"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\8D87148982757E84981A3C9E4A5D5FED"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\9ABCB4133E411D149BDD23DA7FAEC8D5"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\D24BA0863FAF2E641AD6DB3DE85460BB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\FDB34BB18E9DA7847B34AC01AA7E2BF5"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{1BB43BDF-D9E8-487A-B743-CA10AAE7B25F}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{314BCBA9-14E3-41D1-B9DD-32ADF7EA8C5D}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{680AB42D-FAF3-46E2-A16D-BDD38E4506BB}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{8C1ACF90-E1B6-46A1-B4F0-DD6217005B25}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{A26ABCC2-F6AA-4B7D-A767-16BE012DB52E}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{EA6E73B7-512D-4853-BBA5-331DAE48A6B1}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Python"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "ut"
+    }
+  ]
+}

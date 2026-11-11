@@ -1,0 +1,28 @@
+{
+  "schema": "purge.plan/0",
+  "app": "npp",
+  "tool": "clone",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Notepad.lnk"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "clone",
+      "category": "File"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Notepad++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "clone",
+      "category": "Key(Lm)"
+    }
+  ]
+}

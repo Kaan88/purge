@@ -1,0 +1,161 @@
+{
+  "schema": "purge.plan/0",
+  "app": "firefox",
+  "tool": "bcu",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\Mozilla Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Firefox Private Browsing.lnk"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Firefox.lnk"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\Public\\Desktop\\Firefox.lnk"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_CURRENT_USER\\Software\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\CLSID\\{56932DBC-A2C3-452E-B42D-7FD6CCAC6FCE}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mozilla Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Mozilla\\Mozilla Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Mozilla\\Mozilla Firefox 160.0"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    }
+  ]
+}

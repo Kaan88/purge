@@ -1,0 +1,23 @@
+[package]
+name = "purge-win"
+description = "Thin Win32 wrappers: registry, filesystem, tokens, MSI, AppX, SCM, tasks, firewall, consent dialog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+default = ["read"]
+# Read-only system access. Everything except the executor uses only this.
+read = []
+# Mutating operations (delete, move, registry writes, restore points). Only purge-exec enables it;
+# purge-mcp may not depend on purge-win at all; `cargo xtask check-deps` enforces it.
+write = ["read"]
+
+[dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation"] }
+thiserror.workspace = true
+
+[lints]
+workspace = true

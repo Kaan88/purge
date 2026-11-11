@@ -1,0 +1,17 @@
+[package]
+name = "purge-scan"
+description = "Scanner trait and the leftover scanner catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+purge-model.workspace = true
+purge-source.workspace = true
+purge-identity.workspace = true
+purge-index.workspace = true
+
+[lints]
+workspace = true

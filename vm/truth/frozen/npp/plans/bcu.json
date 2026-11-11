@@ -1,0 +1,98 @@
+{
+  "schema": "purge.plan/0",
+  "app": "npp",
+  "tool": "bcu",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\Notepad++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Notepad++.lnk"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Notepad++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\*\\shell\\ANotepad++64"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\CLSID\\{B298D29A-A6ED-11DE-BA8C-A68E55D89593}"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\notepad++.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Notepad++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths\\notepad++.exe"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Notepad++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "bcu"
+    }
+  ]
+}

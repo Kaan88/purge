@@ -1,0 +1,215 @@
+{
+    "schema":  "purge.rig.run/1",
+    "id":  "vcredist",
+    "run":  "vcredist",
+    "kind":  "app",
+    "tech":  "WiX Burn bundle",
+    "url":  null,
+    "installer":  "C:\\cr\\inst\\vc_redist.exe",
+    "installer_sha256":  "CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B",
+    "installer_sig":  "Valid CN=Microsoft Corporation",
+    "computer":  "INBOUND-WIN11-T",
+    "sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os":  "EnterpriseSEval 26100.1742",
+    "started":  "2026-11-11T08:16:53.5228310-08:00",
+    "finished":  "2026-11-11T08:18:24.6778705-08:00",
+    "main":  {
+                 "key":  "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+                 "name":  "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211",
+                 "version":  "14.44.35211.0",
+                 "publisher":  "Microsoft Corporation",
+                 "sys":  false,
+                 "parent":  null,
+                 "uninstall":  "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\"  /uninstall",
+                 "quiet":  "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\" /uninstall /quiet",
+                 "loc":  null,
+                 "icon":  "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe,0",
+                 "msi":  null,
+                 "size":  21235,
+                 "install_date":  null,
+                 "bundle":  true
+             },
+    "install":  {
+                    "cmd":  "\"C:\\cr\\inst\\vc_redist.exe\" /install /quiet /norestart",
+                    "start":  "2026-11-11T08:17:11.1081388-08:00",
+                    "end":  "2026-11-11T08:17:17.1875031-08:00",
+                    "exit":  0,
+                    "timed_out":  false,
+                    "killed":  [
+
+                               ]
+                },
+    "launch":  {
+                   "done":  false,
+                   "exe":  null,
+                   "args":  null,
+                   "start":  null,
+                   "end":  null,
+                   "found":  false,
+                   "closed":  [
+
+                              ],
+                   "killed":  [
+
+                              ],
+                   "reason":  "app defines no launch"
+               },
+    "uninstall":  {
+                      "cmd":  "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\" /uninstall /quiet",
+                      "t0":  "2026-11-11T08:17:47.3657041-08:00",
+                      "t1":  "2026-11-11T08:17:50.4136058-08:00",
+                      "exit":  0,
+                      "timed_out":  false,
+                      "entry_gone":  true,
+                      "killed":  [
+
+                                 ]
+                  },
+    "entries_created":  [
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{43B0D101-A022-48F4-9D04-BA404CEB1D53}",
+                                "name":  "Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.44.35211",
+                                "version":  "14.44.35211",
+                                "publisher":  "Microsoft Corporation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{43B0D101-A022-48F4-9D04-BA404CEB1D53}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{43B0D101-A022-48F4-9D04-BA404CEB1D53}",
+                                "size":  2404,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}",
+                                "name":  "Microsoft Visual C++ 2022 X64 Additional Runtime - 14.44.35211",
+                                "version":  "14.44.35211",
+                                "publisher":  "Microsoft Corporation",
+                                "sys":  true,
+                                "parent":  null,
+                                "uninstall":  "MsiExec.exe /I{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}",
+                                "quiet":  null,
+                                "loc":  "",
+                                "icon":  null,
+                                "msi":  "{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}",
+                                "size":  11892,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+                                "name":  "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211",
+                                "version":  "14.44.35211.0",
+                                "publisher":  "Microsoft Corporation",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\"  /uninstall",
+                                "quiet":  "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\" /uninstall /quiet",
+                                "loc":  null,
+                                "icon":  "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe,0",
+                                "msi":  null,
+                                "size":  21235,
+                                "install_date":  null,
+                                "bundle":  true
+                            }
+                        ],
+    "entries_left":  [
+
+                     ],
+    "phases":  [
+                   {
+                       "name":  "setup",
+                       "start":  "2026-11-11T08:16:53.5287866-08:00",
+                       "end":  "2026-11-11T08:16:54.0675137-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "arp0",
+                       "start":  "2026-11-11T08:16:54.1778963-08:00",
+                       "end":  "2026-11-11T08:16:54.2885416-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists0",
+                       "start":  "2026-11-11T08:16:54.2885416-08:00",
+                       "end":  "2026-11-11T08:17:07.4043054-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap0",
+                       "start":  "2026-11-11T08:17:07.4043054-08:00",
+                       "end":  "2026-11-11T08:17:11.0639164-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "install",
+                       "start":  "2026-11-11T08:17:11.0649357-08:00",
+                       "end":  "2026-11-11T08:17:37.2051059-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "detect",
+                       "start":  "2026-11-11T08:17:37.2223112-08:00",
+                       "end":  "2026-11-11T08:17:37.3307110-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "launch",
+                       "start":  "2026-11-11T08:17:37.3324821-08:00",
+                       "end":  "2026-11-11T08:17:37.3480236-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists1",
+                       "start":  "2026-11-11T08:17:37.3515119-08:00",
+                       "end":  "2026-11-11T08:17:44.9040632-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap1",
+                       "start":  "2026-11-11T08:17:44.9058509-08:00",
+                       "end":  "2026-11-11T08:17:47.3100186-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "uninstall",
+                       "start":  "2026-11-11T08:17:47.3117544-08:00",
+                       "end":  "2026-11-11T08:18:20.4232176-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists2",
+                       "start":  "2026-11-11T08:18:20.4245156-08:00",
+                       "end":  "2026-11-11T08:18:22.2337638-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap2",
+                       "start":  "2026-11-11T08:18:22.2355267-08:00",
+                       "end":  "2026-11-11T08:18:24.6137859-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "entries",
+                       "start":  "2026-11-11T08:18:24.6150546-08:00",
+                       "end":  "2026-11-11T08:18:24.6761608-08:00",
+                       "ok":  true,
+                       "error":  null
+                   }
+               ]
+}

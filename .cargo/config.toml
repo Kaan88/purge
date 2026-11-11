@@ -1,0 +1,7 @@
+# Purge ships x86_64 Windows only for now (arm64 later, ENGINE_PLAN.md §3.2), linked against the static CRT
+# so the engine and broker run without a VC++ redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[alias]
+xtask = "run -q -p xtask --"

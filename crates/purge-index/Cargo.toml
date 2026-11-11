@@ -1,0 +1,15 @@
+[package]
+name = "purge-index"
+description = "Reference index, ownership index and clean-Windows baseline filter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+purge-model.workspace = true
+purge-source.workspace = true
+
+[lints]
+workspace = true

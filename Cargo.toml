@@ -1,0 +1,68 @@
+# Purge engine workspace. Layout and dependency rules: docs/ENGINE_PLAN.md §3.2.
+# vm/rigtool and vm/harness are separate Cargo projects and are deliberately not members.
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/purge-model",
+    "crates/purge-win",
+    "crates/purge-source",
+    "crates/purge-inventory",
+    "crates/purge-identity",
+    "crates/purge-harvest",
+    "crates/purge-index",
+    "crates/purge-scan",
+    "crates/purge-guard",
+    "crates/purge-policy",
+    "crates/purge-plan",
+    "crates/purge-exec",
+    "crates/purge-kb",
+    "crates/purge-rpc",
+    "bins/purge-engine",
+    "bins/purge-mcp",
+    "tools/xtask",
+]
+exclude = ["vm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+schemars = "1.0.4"
+thiserror = "2.0.12"
+anyhow = "1.0.98"
+windows = "0.62"
+windows-sys = "0.61"
+
+purge-model = { path = "crates/purge-model" }
+purge-win = { path = "crates/purge-win", default-features = false }
+purge-source = { path = "crates/purge-source" }
+purge-inventory = { path = "crates/purge-inventory" }
+purge-identity = { path = "crates/purge-identity" }
+purge-harvest = { path = "crates/purge-harvest" }
+purge-index = { path = "crates/purge-index" }
+purge-scan = { path = "crates/purge-scan" }
+purge-guard = { path = "crates/purge-guard" }
+purge-policy = { path = "crates/purge-policy" }
+purge-plan = { path = "crates/purge-plan" }
+purge-exec = { path = "crates/purge-exec" }
+purge-kb = { path = "crates/purge-kb" }
+purge-rpc = { path = "crates/purge-rpc" }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

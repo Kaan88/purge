@@ -1,0 +1,38 @@
+{
+  "id": "vcredist",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer(\\\\(Products|Features|Components|UpgradeCodes|Dependencies|Patches))?$",
+      "why": "Windows Installer / Burn dependency containers created by the first install on a clean base and left empty (v1 run: Classes\\Installer\\Dependencies); service-owned, not the runtime's."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\(Folders|UpgradeCodes|Products|Components|UserData|UserData\\\\S-1-5-18(\\\\(Products|Components))?)$",
+      "why": "Windows Installer machine-state containers created on first MSI use; the service's own keys."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows NT\\\\CurrentVersion\\\\SystemRestore$",
+      "why": "msiexec's restore-point bookkeeping key (created on the first MSI transaction); Windows state."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKU\\\\S-1-5-21-[0-9-]+(_Classes\\\\Installer(\\\\Dependencies)?|\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\RunOnce)$",
+      "why": "Per-user Windows Installer/Burn container and the RunOnce key Burn creates for reboot resumption; empty OS containers."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\[^\\\\]+\\.pf$",
+      "why": "SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\bam\\\\State\\\\UserSettings\\\\S-1-5-21-[0-9-]+\\|",
+      "why": "Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target."
+    }
+  ]
+}

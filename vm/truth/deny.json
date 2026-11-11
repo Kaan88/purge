@@ -1,0 +1,140 @@
+{
+  "id": "deny",
+  "rules": [
+    {
+      "label": "deny",
+      "match": "^P:C:\\\\(ProgramData|Users\\\\[^\\\\]+\\\\AppData\\\\Roaming)\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\(Accessories\\\\)?Notepad\\.lnk$",
+      "why": "L1: Windows' own Notepad shortcut; a Notepad++ name match must never offer it (the clone pre-ticked it)."
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\CLSID\\\\\\{042D2B7D-308B-4032-A569-466A8E0DE728\\}(\\\\[^|]*)?(\\|.*)?$",
+      "why": "L11: Windows Security's SecurityHealthAgent COM class (Microsoft-signed); never an app leftover."
+    },
+    {
+      "label": "deny",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Mozilla(\\\\NativeMessagingHosts(\\\\[^|]*)?)?$",
+      "why": "HKLM\\SOFTWARE\\Mozilla exists on clean Windows (Defender's browser-extension NativeMessagingHosts); only Firefox's own subkeys may be offered, never the vendor key or that subtree."
+    },
+    {
+      "label": "deny",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\MediaPlayer\\\\ShimInclusionList$",
+      "why": "ShimInclusionList is a shared Windows Media Player list (msedge.exe is in it on clean Windows); only an app's own subkey may be offered."
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\AppModel\\\\StateRepository(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Report-only: StateRepository is owned by the AppX deployment service; packages are removed through the package API."
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Schedule\\\\TaskCache(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Report-only: scheduled tasks are removed through the Task Scheduler API; editing TaskCache directly corrupts the task store."
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\bam(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Report-only: Background Activity Moderator state belongs to the bam driver."
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\WinSock2(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Report-only: the Winsock catalog; a wrong edit breaks networking."
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:HKU\\\\S-1-5-21-[0-9-]+\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\FileExts\\\\[^\\\\|]+\\\\UserChoice(\\|.*)?$",
+      "why": "Report-only: UserChoice is hash-protected (and guarded by the UCPD driver); deleting it resets the user's default app."
+    },
+    {
+      "label": "deny",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer(\\\\(Products|Features|Components|UpgradeCodes|Dependencies|Patches))?$",
+      "why": "Windows Installer registration containers: never offered as a whole, only a product's own packed-GUID subkeys."
+    },
+    {
+      "label": "deny",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer(\\\\(Folders|UpgradeCodes|Products|Components|UserData|UserData\\\\S-1-5-18(\\\\(Products|Components))?))?$",
+      "why": "Windows Installer machine-state containers: never offered as a whole."
+    },
+    {
+      "label": "deny",
+      "match": "^K:(HKLM|HKU\\\\S-1-5-21-[0-9-]+)\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\(Run|RunOnce|Uninstall|App Paths|Explorer)$",
+      "why": "Shared Windows registration containers; only an app's own value or subkey may be offered."
+    },
+    {
+      "label": "deny",
+      "match": "^P:C:\\\\(Windows|Program Files|Program Files \\(x86\\)|ProgramData|Users|Program Files\\\\Common Files|Program Files \\(x86\\)\\\\Common Files|Windows\\\\System32|Windows\\\\SysWOW64|Windows\\\\Installer|Windows\\\\Fonts)$",
+      "why": "Volume and system roots; never a cleanup target."
+    },
+    {
+      "label": "deny",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+(\\\\(AppData|AppData\\\\Roaming|AppData\\\\Local|AppData\\\\LocalLow|AppData\\\\Local\\\\Programs|Desktop|Documents|Downloads|Pictures|Videos|Music|Saved Games))?$",
+      "why": "A profile root or a Known Folder; never a cleanup target as a whole."
+    },
+    {
+      "label": "deny",
+      "match": "^P:C:\\\\(ProgramData|Users\\\\[^\\\\]+\\\\AppData\\\\Roaming)\\\\Microsoft\\\\Windows\\\\Start Menu(\\\\Programs)?$",
+      "why": "Start Menu roots; only an app's own shortcut or folder may be offered."
+    },
+    {
+      "label": "deny",
+      "match": "^P:C:\\\\Program Files\\\\WindowsApps(\\\\.*)?$",
+      "why": "Package store: package files are removed by the deployment service (Remove-AppxPackage), never by a raw delete (ENGINE_PLAN §1.2). A package offer covers it.",
+      "pkg": true
+    },
+    {
+      "label": "deny",
+      "match": "^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows\\\\(AppRepository|AppxProvisioning\\.xml)(\\\\.*)?$",
+      "why": "Package store: the AppX repository database and provisioning list; report-only.",
+      "pkg": true
+    },
+    {
+      "label": "deny",
+      "match": "^P:C:\\\\ProgramData\\\\Packages(\\\\.*)?$",
+      "why": "Package store: all-user package data; removed with the package.",
+      "pkg": true
+    },
+    {
+      "label": "deny",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Local\\\\Packages(\\\\.*)?$",
+      "why": "Package store: per-user package data (LocalState etc.); removed with the package.",
+      "pkg": true
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:(HKLM\\\\SOFTWARE\\\\Classes|HKU\\\\S-1-5-21-[0-9-]+_Classes)\\\\Local Settings\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\AppModel(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Package store: AppModel repository/SystemAppData rows; written by the deployment service only.",
+      "pkg": true
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\(AppModel|Appx)(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Package store: machine AppModel/Appx state; written by the deployment service only.",
+      "pkg": true
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:(HKLM\\\\SOFTWARE\\\\Classes|HKU\\\\S-1-5-21-[0-9-]+_Classes)\\\\Local Settings\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\AppContainer(\\\\[^|]*)?(\\|.*)?$",
+      "why": "AppContainer profile and mappings; deleted with the package (DeleteAppContainerProfile), never raw.",
+      "pkg": true
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\CapabilityAccessManager(\\\\[^|]*)?(\\|.*)?$|^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\CapabilityAccessManager(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Capability access (CapAuthz) consent store; OS-owned.",
+      "pkg": true
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\SharedAccess\\\\Parameters\\\\FirewallPolicy\\\\RestrictedServices\\\\AppIso\\\\FirewallRules(\\\\[^|]*)?(\\|.*)?$",
+      "why": "AppContainer firewall rules; removed through the firewall API with the package.",
+      "pkg": true
+    },
+    {
+      "label": "deny",
+      "match": "^[KVC]:(HKLM\\\\SOFTWARE\\\\Classes|HKU\\\\S-1-5-21-[0-9-]+_Classes)\\\\PackagedCom(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Packaged COM catalog; maintained by the deployment service, removed with the package.",
+      "pkg": true
+    }
+  ]
+}

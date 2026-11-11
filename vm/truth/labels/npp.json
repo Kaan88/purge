@@ -1,0 +1,35 @@
+{
+  "id": "npp",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\(NOTEPAD\\+\\+|GUP)\\.EXE-[0-9A-F]{8}\\.pf$",
+      "why": "Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash)."
+    },
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Roaming\\\\Notepad\\+\\+(\\\\.*)?$",
+      "why": "Notepad++ per-user settings; its backup\\ subfolder holds unsaved documents from the session snapshot feature, so the folder is user data."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\AppModel\\\\StateRepository(\\\\[^|]*)?(\\|.*)?$",
+      "why": "StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\[^\\\\]+\\.pf$",
+      "why": "SysMain prefetch trace written for any executable that ran (installer, app, rig); Windows ages them out; not app state."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\bam\\\\State\\\\UserSettings\\\\S-1-5-21-[0-9-]+\\|",
+      "why": "Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target."
+    }
+  ]
+}

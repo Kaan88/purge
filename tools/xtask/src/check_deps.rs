@@ -1,0 +1,241 @@
+//! `check-deps`: the MCP server must never link the executor (ENGINE_PLAN.md §3.2, §8.1).
+//!
+//! Three checks, all on normal and build edges:
+//! 1. **Allowlist.** In purge-mcp's own tree (`cargo tree -p purge-mcp`), the only Purge crates are
+//!    [`ALLOWED`]. That keeps purge-exec and purge-win out entirely, so no `write`-gated API is reachable.
+//! 2. **Unified resolution.** A workspace build unifies features, so an optional dependency that another
+//!    member switches on can pull a crate into purge-mcp that its own tree does not show. For every other
+//!    Purge crate in the workspace graph, `cargo tree --workspace -i <crate>` must not list purge-mcp.
+//! 3. `purge-win` must not have feature `write` in purge-mcp's own tree (kept as a direct statement of the
+//!    rule; check 1 already implies it).
+//!
+//! `xtask ci` also builds purge-mcp on its own (`cargo clippy -p purge-mcp`), so code that only compiles
+//! with features another member turns on fails CI.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+
+/// The checked binary.
+const MCP: &str = "purge-mcp";
+/// The only Purge crates purge-mcp may depend on, directly or not.
+const ALLOWED: [&str; 2] = ["purge-model", "purge-rpc"];
+
+/// One package line of `cargo tree --prefix none -f "{p} {f}"`.
+#[derive(Debug, PartialEq, Eq)]
+struct TreeLine<'a> {
+    name: &'a str,
+    features: Vec<&'a str>,
+}
+
+/// Parses `name vX.Y.Z [(source)] [feat1,feat2] [(*)]`.
+fn parse_line(line: &str) -> Option<TreeLine<'_>> {
+    let line = line.trim();
+    let line = line.strip_suffix("(*)").unwrap_or(line).trim_end();
+    let (name, rest) = line.split_once(' ')?;
+    let feats = match rest.rfind(')') {
+        Some(i) => &rest[i + 1..],
+        None => rest.split_once(' ').map_or("", |(_version, f)| f),
+    };
+    let features = feats
+        .split(',')
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .collect();
+    Some(TreeLine { name, features })
+}
+
+fn is_purge(name: &str) -> bool {
+    name.starts_with("purge-")
+}
+
+/// Violations in a `cargo tree -p purge-mcp` listing (checks 1 and 3).
+fn own_tree_violations(tree: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for line in tree.lines().filter_map(parse_line) {
+        if is_purge(line.name)
+            && line.name != MCP
+            && !ALLOWED.contains(&line.name)
+            && seen.insert(line.name)
+        {
+            out.push(format!(
+                "{} is in {MCP}'s dependency tree; only {} are allowed",
+                line.name,
+                ALLOWED.join(" and ")
+            ));
+        }
+        if line.name == "purge-win" && line.features.contains(&"write") {
+            out.push(format!("purge-win is built with feature `write` for {MCP}"));
+        }
+    }
+    out
+}
+
+/// Purge crates in a workspace-wide tree listing that purge-mcp must not reach.
+fn forbidden_in(tree: &str) -> BTreeSet<&str> {
+    tree.lines()
+        .filter_map(parse_line)
+        .map(|l| l.name)
+        .filter(|n| is_purge(n) && *n != MCP && !ALLOWED.contains(n))
+        .collect()
+}
+
+/// Violations in `cargo tree --workspace -i <a> -i <b>...` output (check 2). Cargo prints one tree per
+/// inverted crate, root first, separated by a blank line; a purge-mcp line in a tree means purge-mcp
+/// depends on that root under unified features. If a tree's root is not recognised, every inverted crate
+/// is named.
+fn unified_violations(inverted: &str, forbidden: &BTreeSet<&str>) -> Vec<String> {
+    let text = inverted.replace("\r\n", "\n");
+    let mut out = Vec::new();
+    for block in text.split("\n\n") {
+        let mut lines = block.lines().filter_map(parse_line);
+        let Some(root) = lines.next() else { continue };
+        if root.name == MCP || lines.any(|l| l.name == MCP) {
+            let what = if forbidden.contains(root.name) {
+                root.name.to_string()
+            } else {
+                let all: Vec<&str> = forbidden.iter().copied().collect();
+                format!("one of {}", all.join(", "))
+            };
+            out.push(format!(
+                "with workspace feature unification, {MCP} depends on {what}"
+            ));
+        }
+    }
+    out
+}
+
+fn cargo_tree(root: &Path, args: &[&str]) -> Result<String> {
+    let output = crate::cargo()
+        .arg("tree")
+        .args(args)
+        .args(["-e", "normal,build", "--prefix", "none"])
+        .current_dir(root)
+        .output()
+        .context("running cargo tree")?;
+    if !output.status.success() {
+        bail!(
+            "cargo tree {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    String::from_utf8(output.stdout).context("cargo tree output is not UTF-8")
+}
+
+/// Runs the check; `Ok(false)` on a violation.
+pub fn run(root: &Path) -> Result<bool> {
+    let own = cargo_tree(root, &["-p", MCP, "-f", "{p} {f}"])?;
+    let names: Vec<&str> = own.lines().filter_map(parse_line).map(|l| l.name).collect();
+    if names.first() != Some(&MCP) {
+        bail!("unexpected cargo tree output (first package is not {MCP}):\n{own}");
+    }
+    let mut found = own_tree_violations(&own);
+
+    let workspace = cargo_tree(root, &["--workspace", "-f", "{p}"])?;
+    let forbidden = forbidden_in(&workspace);
+    if !forbidden.contains("purge-exec") || !forbidden.contains("purge-win") {
+        bail!("unexpected cargo tree output (purge-exec or purge-win missing):\n{workspace}");
+    }
+    let mut args = vec!["--workspace", "-f", "{p}"];
+    for name in &forbidden {
+        args.extend(["-i", name]);
+    }
+    let inverted = cargo_tree(root, &args)?;
+    found.extend(unified_violations(&inverted, &forbidden));
+
+    for v in &found {
+        eprintln!("check-deps: {v}");
+    }
+    if found.is_empty() {
+        println!(
+            "check-deps: ok ({MCP} tree has {} packages, Purge crates only {}; with unified workspace \
+             features it reaches none of {} other Purge crates)",
+            names.len(),
+            ALLOWED.join(", "),
+            forbidden.len()
+        );
+    }
+    Ok(found.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_path_and_registry_lines() {
+        assert_eq!(
+            parse_line(r"purge-win v0.1.0 (C:\a b\crates\purge-win) default,read,write"),
+            Some(TreeLine {
+                name: "purge-win",
+                features: vec!["default", "read", "write"]
+            })
+        );
+        assert_eq!(
+            parse_line(r"purge-model v0.1.0 (C:\x\purge-model)"),
+            Some(TreeLine {
+                name: "purge-model",
+                features: vec![]
+            })
+        );
+        assert_eq!(
+            parse_line("serde v1.0.228 default,derive,std (*)"),
+            Some(TreeLine {
+                name: "serde",
+                features: vec!["default", "derive", "std"]
+            })
+        );
+        assert_eq!(
+            parse_line("itoa v1.0.15"),
+            Some(TreeLine {
+                name: "itoa",
+                features: vec![]
+            })
+        );
+    }
+
+    #[test]
+    fn own_tree_allows_only_model_and_rpc() {
+        let clean = "purge-mcp v0.1.0 (C:\\p)\npurge-rpc v0.1.0 (C:\\r)\npurge-model v0.1.0 (C:\\m)\nserde v1 default\n";
+        assert!(own_tree_violations(clean).is_empty());
+        // purge-win with read only is still not allowed: a workspace build may unify `write` into it.
+        let read_only = "purge-mcp v0.1.0 (C:\\p)\npurge-win v0.1.0 (C:\\w) default,read\n";
+        assert_eq!(own_tree_violations(read_only).len(), 1);
+        let exec = "purge-mcp v0.1.0 (C:\\p)\npurge-exec v0.1.0 (C:\\e)\n";
+        assert_eq!(own_tree_violations(exec).len(), 1);
+        let write = "purge-mcp v0.1.0 (C:\\p)\npurge-win v0.1.0 (C:\\w) read,write (*)\n";
+        assert_eq!(own_tree_violations(write).len(), 2);
+        let other = "purge-mcp v0.1.0 (C:\\p)\npurge-source v0.1.0 (C:\\s)\npurge-source v0.1.0 (C:\\s) (*)\n";
+        assert_eq!(own_tree_violations(other).len(), 1, "reported once");
+        let lookalike = "purge-mcp v0.1.0 (C:\\p)\nfoo-purge-exec v0.1.0\nfoo v1 write\n";
+        assert!(own_tree_violations(lookalike).is_empty());
+    }
+
+    #[test]
+    fn unified_check_flags_mcp_as_a_dependent() {
+        let ws = "purge-engine v0.1.0 (C:\\e)\npurge-exec v0.1.0 (C:\\x)\npurge-win v0.1.0 (C:\\w)\n\
+                  purge-model v0.1.0 (C:\\m)\npurge-mcp v0.1.0 (C:\\p)\npurge-rpc v0.1.0 (C:\\r)\n";
+        let forbidden = forbidden_in(ws);
+        assert_eq!(
+            forbidden.iter().copied().collect::<Vec<_>>(),
+            ["purge-engine", "purge-exec", "purge-win"]
+        );
+        let clean =
+            "purge-win v0.1.0 (C:\\w)\npurge-exec v0.1.0 (C:\\x)\npurge-engine v0.1.0 (C:\\e)\n";
+        assert!(unified_violations(clean, &forbidden).is_empty());
+        let bad = "purge-exec v0.1.0 (C:\\x)\r\npurge-engine v0.1.0 (C:\\e)\r\n\r\n\
+                   purge-win v0.1.0 (C:\\w)\r\npurge-rpc v0.1.0 (C:\\r)\r\npurge-mcp v0.1.0 (C:\\p)\r\n";
+        let v = unified_violations(bad, &forbidden);
+        assert_eq!(v.len(), 1);
+        assert!(v[0].ends_with("depends on purge-win"), "{v:?}");
+        let unknown_root = "purge-rpc v0.1.0 (C:\\r)\npurge-mcp v0.1.0 (C:\\p)\n";
+        let v = unified_violations(unknown_root, &forbidden);
+        assert!(
+            v[0].contains("one of purge-engine, purge-exec, purge-win"),
+            "{v:?}"
+        );
+    }
+}

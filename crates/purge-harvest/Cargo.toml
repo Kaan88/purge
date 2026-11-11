@@ -1,0 +1,20 @@
+[package]
+name = "purge-harvest"
+description = "Pre-uninstall harvest: validated roots, installer logs, MSI tables, fingerprint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+purge-model.workspace = true
+purge-win = { workspace = true, features = ["read"] }
+purge-source.workspace = true
+purge-inventory.workspace = true
+purge-identity.workspace = true
+purge-guard.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

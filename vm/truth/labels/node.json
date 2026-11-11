@@ -1,0 +1,40 @@
+{
+  "id": "node",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\Recent\\\\AutomaticDestinations\\\\b37f432ffcc36ce3\\.automaticDestinations-ms$",
+      "why": "Jump list of AppID {ProgramFilesX64}\\nodejs\\node.exe (CRC-64 b37f432ffcc36ce3); FS-JUMPLISTS, Unchecked."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer(\\\\(Products|Features|Components|UpgradeCodes|Dependencies|Patches))?$",
+      "why": "Windows Installer registration containers created by the first MSI install on a clean base and left empty; owned by the Installer service, not Node.js."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\(Folders|UpgradeCodes|Products|Components|UserData|UserData\\\\S-1-5-18(\\\\(Products|Components))?)$",
+      "why": "Windows Installer machine-state containers created on first MSI use; the service's own keys."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows NT\\\\CurrentVersion\\\\SystemRestore$",
+      "why": "msiexec's restore-point bookkeeping key (created on the first MSI transaction); Windows state."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\[^\\\\]+\\.pf$",
+      "why": "SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\bam\\\\State\\\\UserSettings\\\\S-1-5-21-[0-9-]+\\|",
+      "why": "Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target."
+    }
+  ]
+}

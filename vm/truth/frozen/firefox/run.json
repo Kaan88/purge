@@ -1,0 +1,199 @@
+{
+    "schema":  "purge.rig.run/1",
+    "id":  "firefox",
+    "run":  "firefox",
+    "kind":  "app",
+    "tech":  "NSIS (Mozilla)",
+    "url":  null,
+    "installer":  "C:\\cr\\inst\\firefox.exe",
+    "installer_sha256":  "8732312EE2D7960C6EA830A4E0D3C0FF5FE0B10856DAB44E2C432FCDEB63FF63",
+    "installer_sig":  "Valid CN=Mozilla Corporation",
+    "computer":  "INBOUND-WIN11-T",
+    "sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os":  "EnterpriseSEval 26100.1742",
+    "started":  "2026-11-11T08:19:30.9499996-08:00",
+    "finished":  "2026-11-11T08:22:08.0531583-08:00",
+    "main":  {
+                 "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mozilla Firefox",
+                 "name":  "Mozilla Firefox (x64 en-US)",
+                 "version":  "160.0",
+                 "publisher":  "Mozilla",
+                 "sys":  false,
+                 "parent":  null,
+                 "uninstall":  "\"C:\\Program Files\\Mozilla Firefox\\uninstall\\helper.exe\"",
+                 "quiet":  null,
+                 "loc":  "C:\\Program Files\\Mozilla Firefox",
+                 "icon":  "C:\\Program Files\\Mozilla Firefox\\firefox.exe,0",
+                 "msi":  null,
+                 "size":  369349,
+                 "install_date":  null,
+                 "bundle":  false
+             },
+    "install":  {
+                    "cmd":  "\"C:\\cr\\inst\\firefox.exe\" /S",
+                    "start":  "2026-11-11T08:19:51.8725823-08:00",
+                    "end":  "2026-11-11T08:20:07.7083577-08:00",
+                    "exit":  0,
+                    "timed_out":  false,
+                    "killed":  [
+
+                               ]
+                },
+    "launch":  {
+                   "done":  true,
+                   "exe":  "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+                   "args":  "",
+                   "start":  "2026-11-11T08:20:29.2670409-08:00",
+                   "end":  "2026-11-11T08:21:01.5816598-08:00",
+                   "found":  true,
+                   "closed":  [
+                                  "firefox.exe[2656]"
+                              ],
+                   "killed":  [
+
+                              ],
+                   "reason":  null
+               },
+    "uninstall":  {
+                      "cmd":  "\"C:\\Program Files\\Mozilla Firefox\\uninstall\\helper.exe\" /S",
+                      "t0":  "2026-11-11T08:21:26.5948602-08:00",
+                      "t1":  "2026-11-11T08:21:34.1650145-08:00",
+                      "exit":  0,
+                      "timed_out":  false,
+                      "entry_gone":  true,
+                      "killed":  [
+
+                                 ]
+                  },
+    "entries_created":  [
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mozilla Firefox",
+                                "name":  "Mozilla Firefox (x64 en-US)",
+                                "version":  "160.0",
+                                "publisher":  "Mozilla",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "\"C:\\Program Files\\Mozilla Firefox\\uninstall\\helper.exe\"",
+                                "quiet":  null,
+                                "loc":  "C:\\Program Files\\Mozilla Firefox",
+                                "icon":  "C:\\Program Files\\Mozilla Firefox\\firefox.exe,0",
+                                "msi":  null,
+                                "size":  369349,
+                                "install_date":  null,
+                                "bundle":  false
+                            },
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MozillaMaintenanceService",
+                                "name":  "Mozilla Maintenance Service",
+                                "version":  "160.0",
+                                "publisher":  "Mozilla",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "\"C:\\Program Files (x86)\\Mozilla Maintenance Service\\uninstall.exe\"",
+                                "quiet":  null,
+                                "loc":  null,
+                                "icon":  "C:\\Program Files (x86)\\Mozilla Maintenance Service\\Uninstall.exe,0",
+                                "msi":  null,
+                                "size":  378,
+                                "install_date":  null,
+                                "bundle":  false
+                            }
+                        ],
+    "entries_left":  [
+
+                     ],
+    "phases":  [
+                   {
+                       "name":  "setup",
+                       "start":  "2026-11-11T08:19:30.9535542-08:00",
+                       "end":  "2026-11-11T08:19:32.3001020-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "arp0",
+                       "start":  "2026-11-11T08:19:32.4281749-08:00",
+                       "end":  "2026-11-11T08:19:32.5075417-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists0",
+                       "start":  "2026-11-11T08:19:32.5092998-08:00",
+                       "end":  "2026-11-11T08:19:48.4318248-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap0",
+                       "start":  "2026-11-11T08:19:48.4335699-08:00",
+                       "end":  "2026-11-11T08:19:51.8488189-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "install",
+                       "start":  "2026-11-11T08:19:51.8515050-08:00",
+                       "end":  "2026-11-11T08:20:27.7240237-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "detect",
+                       "start":  "2026-11-11T08:20:27.7286241-08:00",
+                       "end":  "2026-11-11T08:20:27.8064692-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "launch",
+                       "start":  "2026-11-11T08:20:27.8082760-08:00",
+                       "end":  "2026-11-11T08:21:11.5932364-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists1",
+                       "start":  "2026-11-11T08:21:11.5983154-08:00",
+                       "end":  "2026-11-11T08:21:23.1261451-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap1",
+                       "start":  "2026-11-11T08:21:23.1274787-08:00",
+                       "end":  "2026-11-11T08:21:26.5648855-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "uninstall",
+                       "start":  "2026-11-11T08:21:26.5665840-08:00",
+                       "end":  "2026-11-11T08:22:04.1842265-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists2",
+                       "start":  "2026-11-11T08:22:04.1874191-08:00",
+                       "end":  "2026-11-11T08:22:05.7335920-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap2",
+                       "start":  "2026-11-11T08:22:05.7348113-08:00",
+                       "end":  "2026-11-11T08:22:08.0024989-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "entries",
+                       "start":  "2026-11-11T08:22:08.0043836-08:00",
+                       "end":  "2026-11-11T08:22:08.0504522-08:00",
+                       "ok":  true,
+                       "error":  null
+                   }
+               ]
+}

@@ -1,0 +1,204 @@
+{
+    "schema":  "purge.rig.dirty/1",
+    "started":  "2026-11-11T08:35:01.7104865-08:00",
+    "finished":  "2026-11-11T08:41:58.1532677-08:00",
+    "free_gb_before":  52.6,
+    "installs":  [
+                     {
+                         "name":  "Thunderbird",
+                         "file":  "thunderbird.exe",
+                         "url":  "https://download.mozilla.org/?product=thunderbird-latest-ssl\u0026os=win64\u0026lang=en-US",
+                         "sha256":  "27C75ECB78609505B1C89E139FA172B634C74EB1B5E823C49AEFEE15286111A0",
+                         "sig":  "Valid CN=Mozilla Corporation",
+                         "cmd":  "\"C:\\cr\\inst\\thunderbird.exe\" /S",
+                         "exit":  0,
+                         "timed_out":  false,
+                         "arp":  [
+                                     "Mozilla Thunderbird (x64 en-US) 160.0"
+                                 ],
+                         "error":  null
+                     },
+                     {
+                         "name":  "NVDA",
+                         "file":  "nvda.exe",
+                         "url":  "https://github.com/nvaccess/nvda/releases/download/release-2026.3.1/nvda_2026.3.1.exe",
+                         "sha256":  "6F80A5B0CA720A7D0D314B5BE212F37388BBE81A1107AC3298C1821A1CD3F052",
+                         "sig":  "Valid CN=NV Access Limited",
+                         "cmd":  "\"C:\\cr\\inst\\nvda.exe\" --install-silent",
+                         "exit":  0,
+                         "timed_out":  false,
+                         "arp":  [
+                                     "NVDA 2026.3.1 2026.3.1.58288"
+                                 ],
+                         "error":  null
+                     },
+                     {
+                         "name":  "Steam",
+                         "file":  "steam.exe",
+                         "url":  "https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe",
+                         "sha256":  "7D3654531C32D941B8CAE81C4137FC542172BFA9635F169CB392F245A0A12BCB",
+                         "sig":  "Valid CN=Valve Corp.",
+                         "cmd":  "\"C:\\cr\\inst\\steam.exe\" /S",
+                         "exit":  0,
+                         "timed_out":  false,
+                         "arp":  [
+                                     "Steam 2.10.91.91"
+                                 ],
+                         "error":  null
+                     },
+                     {
+                         "name":  "Zotero",
+                         "file":  "zotero.exe",
+                         "url":  "https://www.zotero.org/download/client/dl?channel=release\u0026platform=win-x64",
+                         "sha256":  "1BA5D091FD24B50DB1159C71650F55303D99C82E66494DC09EDDAB76A4179D73",
+                         "sig":  "Valid OID.1.3.6.1.4.1.311.60.2.1.3=US",
+                         "cmd":  "\"C:\\cr\\inst\\zotero.exe\" /S",
+                         "exit":  0,
+                         "timed_out":  false,
+                         "arp":  [
+                                     "Zotero 10.0.8"
+                                 ],
+                         "error":  null
+                     },
+                     {
+                         "name":  "Python 3.13",
+                         "file":  "python313.exe",
+                         "url":  "https://www.python.org/ftp/python/3.13.1/python-3.13.1-amd64.exe",
+                         "sha256":  "6B33FA9A439A86F553F9F60E538CCABC857D2F308BC77C477C04A46552ADE81F",
+                         "sig":  "Valid CN=Python Software Foundation",
+                         "cmd":  "\"C:\\cr\\inst\\python313.exe\" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+                         "exit":  0,
+                         "timed_out":  false,
+                         "arp":  [
+                                     "Python 3.13.1 Standard Library (64-bit) 3.13.1150.0",
+                                     "Python 3.13.1 Documentation (64-bit) 3.13.1150.0",
+                                     "Python 3.13.1 pip Bootstrap (64-bit) 3.13.1150.0",
+                                     "Python 3.13.1 Executables (64-bit) 3.13.1150.0",
+                                     "Python 3.13.1 Add to Path (64-bit) 3.13.1150.0",
+                                     "Python 3.13.1 Core Interpreter (64-bit) 3.13.1150.0",
+                                     "Python 3.13.1 Tcl/Tk Support (64-bit) 3.13.1150.0",
+                                     "Python 3.13.1 Development Libraries (64-bit) 3.13.1150.0",
+                                     "Python 3.13.1 (64-bit) 3.13.1150.0"
+                                 ],
+                         "error":  null
+                     },
+                     {
+                         "name":  "Python 3.11",
+                         "file":  "python311.exe",
+                         "url":  "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe",
+                         "sha256":  "5EE42C4EEE1E6B4464BB23722F90B45303F79442DF63083F05322F1785F5FDDE",
+                         "sig":  "Valid CN=Python Software Foundation",
+                         "cmd":  "\"C:\\cr\\inst\\python311.exe\" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+                         "exit":  0,
+                         "timed_out":  false,
+                         "arp":  [
+                                     "Python 3.11.9 pip Bootstrap (64-bit) 3.11.9150.0",
+                                     "Python 3.11.9 Utility Scripts (64-bit) 3.11.9150.0",
+                                     "Python 3.11.9 Documentation (64-bit) 3.11.9150.0",
+                                     "Python 3.11.9 Tcl/Tk Support (64-bit) 3.11.9150.0",
+                                     "Python 3.11.9 Standard Library (64-bit) 3.11.9150.0",
+                                     "Python 3.11.9 Core Interpreter (64-bit) 3.11.9150.0",
+                                     "Python 3.11.9 Executables (64-bit) 3.11.9150.0",
+                                     "Python 3.11.9 Add to Path (64-bit) 3.11.9150.0",
+                                     "Python 3.11.9 Development Libraries (64-bit) 3.11.9150.0",
+                                     "Python 3.11.9 (64-bit) 3.11.9150.0"
+                                 ],
+                         "error":  null
+                     },
+                     {
+                         "name":  "Node.js 20",
+                         "file":  "node.msi",
+                         "url":  "",
+                         "sha256":  "93D1D30341D7D38B7A8F3AB0FA3BE1F9E6436B90338B2BD8B8AF4E80D00BD036",
+                         "sig":  "Valid CN=OpenJS Foundation",
+                         "cmd":  "\"C:\\WINDOWS\\System32\\msiexec.exe\" /i \"C:\\cr\\inst\\node.msi\" /qn /norestart",
+                         "exit":  0,
+                         "timed_out":  false,
+                         "arp":  [
+                                     "Node.js 20.18.0"
+                                 ],
+                         "error":  null
+                     },
+                     {
+                         "name":  "VS Code",
+                         "file":  "vscode.exe",
+                         "url":  "",
+                         "sha256":  "972FCB16D819532A25AF8DC1976E1C80508E080BF56EB65BFD6A35EED983A35B",
+                         "sig":  "Valid CN=Microsoft Corporation",
+                         "cmd":  "\"C:\\cr\\inst\\vscode.exe\" /VERYSILENT /NORESTART /MERGETASKS=!runcode",
+                         "exit":  0,
+                         "timed_out":  false,
+                         "arp":  [
+                                     "Microsoft Visual Studio Code 1.146.0"
+                                 ],
+                         "error":  null
+                     },
+                     {
+                         "name":  "VS Build Tools 2022 (MSBuild)",
+                         "file":  "vs_buildtools.exe",
+                         "url":  "https://aka.ms/vs/17/release/vs_BuildTools.exe",
+                         "sha256":  "8AAF70D164808D313EE6226AF5D1E3B2DB43C60BE551BFEB2B70CE139D792C37",
+                         "sig":  "Valid CN=Microsoft Corporation",
+                         "cmd":  "\"C:\\cr\\inst\\vs_buildtools.exe\" --quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.MSBuildTools",
+                         "exit":  0,
+                         "timed_out":  false,
+                         "arp":  [
+                                     "Visual Studio Build Tools 2022 17.14.45"
+                                 ],
+                         "error":  null
+                     },
+                     {
+                         "name":  "SysinternalsSuite",
+                         "file":  "SysinternalsSuite.zip",
+                         "url":  "https://download.sysinternals.com/files/SysinternalsSuite.zip",
+                         "sha256":  "e7f49d1f4477e416b3051636dc44929b20ae025b46a1ee4cd8c1f1e869af6ae6",
+                         "cmd":  "expand to C:\\Tools\\Sysinternals",
+                         "exit":  0
+                     },
+                     {
+                         "name":  "ripgrep",
+                         "file":  "ripgrep.zip",
+                         "url":  "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+                         "sha256":  "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+                         "cmd":  "expand to C:\\Tools",
+                         "exit":  0
+                     }
+                 ],
+    "planted":  [
+                    "C:\\Users\\tester\\Zotero\\storage\\ABCD1234\\paper-notes.txt",
+                    "C:\\Users\\tester\\Zotero\\zotero-library-export.rdf",
+                    "C:\\Users\\tester\\AppData\\Roaming\\Code\\User\\settings.json",
+                    "C:\\Users\\tester\\AppData\\Roaming\\Code\\User\\snippets\\planted.code-snippets",
+                    "C:\\Users\\tester\\AppData\\Roaming\\Thunderbird\\planted-address-book-export.ldif",
+                    "C:\\Users\\tester\\AppData\\Roaming\\nvda\\nvda.ini",
+                    "C:\\Users\\tester\\AppData\\Local\\Programs\\Python\\planted-venv-notes.txt",
+                    "C:\\Tools\\notes\\my-tool-notes.txt",
+                    "C:\\Program Files\\Microsoft VS Code\\planted-user-file.txt",
+                    "C:\\Program Files (x86)\\Steam\\steamapps\\common\\PlantedGame\\save\\slot1.sav",
+                    "C:\\Users\\tester\\Documents\\Projects\\demo\\main.py",
+                    "C:\\Users\\tester\\.gitconfig",
+                    "C:\\Users\\tester\\.npmrc"
+                ],
+    "skipped":  [
+                    "Office C2R: needs the Office Deployment Tool, ~3 GB and a licence to be useful; not installed in M0.",
+                    "Visual Studio IDE: replaced by VS Build Tools 2022 (MSBuild workload) to keep the VM disk and time small.",
+                    "OneDrive Known Folder Move: needs a Microsoft account sign-in.",
+                    "Steam library on D:: the VM has no D: volume; a planted steamapps folder under the install root stands in."
+                ],
+    "phases":  [
+                   {
+                       "name":  "lists0",
+                       "start":  "2026-11-11T08:41:43.4000685-08:00",
+                       "end":  "2026-11-11T08:41:54.5476774-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap0",
+                       "start":  "2026-11-11T08:41:54.5516609-08:00",
+                       "end":  "2026-11-11T08:41:58.1515075-08:00",
+                       "ok":  true,
+                       "error":  null
+                   }
+               ]
+}

@@ -1,0 +1,183 @@
+{
+    "schema":  "purge.rig.run/1",
+    "id":  "git",
+    "run":  "git",
+    "kind":  "app",
+    "tech":  "Inno Setup",
+    "url":  null,
+    "installer":  "C:\\cr\\inst\\git.exe",
+    "installer_sha256":  "C330C72E10B408CC39994BFEFDB63542B0D93D21699325C3E0BD874AF8A5A559",
+    "installer_sig":  "Valid CN=Johannes Schindelin",
+    "computer":  "INBOUND-WIN11-T",
+    "sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os":  "EnterpriseSEval 26100.1742",
+    "started":  "2026-11-11T08:06:55.7695099-08:00",
+    "finished":  "2026-11-11T08:10:22.9054440-08:00",
+    "main":  {
+                 "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Git_is1",
+                 "name":  "Git",
+                 "version":  "2.56.1",
+                 "publisher":  "The Git Development Community",
+                 "sys":  false,
+                 "parent":  null,
+                 "uninstall":  "\"C:\\Program Files\\Git\\unins000.exe\"",
+                 "quiet":  "\"C:\\Program Files\\Git\\unins000.exe\" /SILENT",
+                 "loc":  "C:\\Program Files\\Git\\",
+                 "icon":  "C:\\Program Files\\Git\\ucrt64\\share\\git\\git-for-windows.ico",
+                 "msi":  null,
+                 "size":  350567,
+                 "install_date":  "20261111",
+                 "bundle":  false
+             },
+    "install":  {
+                    "cmd":  "\"C:\\cr\\inst\\git.exe\" /VERYSILENT /NORESTART",
+                    "start":  "2026-11-11T08:07:22.0726270-08:00",
+                    "end":  "2026-11-11T08:08:31.4877549-08:00",
+                    "exit":  0,
+                    "timed_out":  false,
+                    "killed":  [
+
+                               ]
+                },
+    "launch":  {
+                   "done":  true,
+                   "exe":  "C:\\Program Files\\Git\\git-bash.exe",
+                   "args":  "",
+                   "start":  "2026-11-11T08:08:53.0022347-08:00",
+                   "end":  "2026-11-11T08:09:24.2359472-08:00",
+                   "found":  true,
+                   "closed":  [
+                                  "mintty.exe[2644]"
+                              ],
+                   "killed":  [
+
+                              ],
+                   "reason":  null
+               },
+    "uninstall":  {
+                      "cmd":  "\"C:\\Program Files\\Git\\unins000.exe\" /VERYSILENT /NORESTART /SUPPRESSMSGBOXES",
+                      "t0":  "2026-11-11T08:09:43.1776380-08:00",
+                      "t1":  "2026-11-11T08:09:49.0887115-08:00",
+                      "exit":  0,
+                      "timed_out":  false,
+                      "entry_gone":  true,
+                      "killed":  [
+
+                                 ]
+                  },
+    "entries_created":  [
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Git_is1",
+                                "name":  "Git",
+                                "version":  "2.56.1",
+                                "publisher":  "The Git Development Community",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "\"C:\\Program Files\\Git\\unins000.exe\"",
+                                "quiet":  "\"C:\\Program Files\\Git\\unins000.exe\" /SILENT",
+                                "loc":  "C:\\Program Files\\Git\\",
+                                "icon":  "C:\\Program Files\\Git\\ucrt64\\share\\git\\git-for-windows.ico",
+                                "msi":  null,
+                                "size":  350567,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            }
+                        ],
+    "entries_left":  [
+
+                     ],
+    "phases":  [
+                   {
+                       "name":  "setup",
+                       "start":  "2026-11-11T08:06:55.7726397-08:00",
+                       "end":  "2026-11-11T08:06:56.7210082-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "arp0",
+                       "start":  "2026-11-11T08:06:56.8441872-08:00",
+                       "end":  "2026-11-11T08:06:56.9329717-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists0",
+                       "start":  "2026-11-11T08:06:56.9347406-08:00",
+                       "end":  "2026-11-11T08:07:10.3119312-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap0",
+                       "start":  "2026-11-11T08:07:10.3136945-08:00",
+                       "end":  "2026-11-11T08:07:22.0179008-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "install",
+                       "start":  "2026-11-11T08:07:22.0196514-08:00",
+                       "end":  "2026-11-11T08:08:51.4943639-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "detect",
+                       "start":  "2026-11-11T08:08:51.4969493-08:00",
+                       "end":  "2026-11-11T08:08:51.5800471-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "launch",
+                       "start":  "2026-11-11T08:08:51.5820176-08:00",
+                       "end":  "2026-11-11T08:09:34.2387511-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists1",
+                       "start":  "2026-11-11T08:09:34.2402704-08:00",
+                       "end":  "2026-11-11T08:09:40.7216324-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap1",
+                       "start":  "2026-11-11T08:09:40.7233011-08:00",
+                       "end":  "2026-11-11T08:09:43.1405402-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "uninstall",
+                       "start":  "2026-11-11T08:09:43.1433054-08:00",
+                       "end":  "2026-11-11T08:10:19.1041880-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists2",
+                       "start":  "2026-11-11T08:10:19.1064140-08:00",
+                       "end":  "2026-11-11T08:10:20.5550251-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap2",
+                       "start":  "2026-11-11T08:10:20.5550251-08:00",
+                       "end":  "2026-11-11T08:10:22.8585152-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "entries",
+                       "start":  "2026-11-11T08:10:22.8599729-08:00",
+                       "end":  "2026-11-11T08:10:22.9032977-08:00",
+                       "ok":  true,
+                       "error":  null
+                   }
+               ]
+}

@@ -1,0 +1,183 @@
+{
+    "schema":  "purge.rig.run/1",
+    "id":  "vscode",
+    "run":  "vscode",
+    "kind":  "app",
+    "tech":  "Inno Setup",
+    "url":  null,
+    "installer":  "C:\\cr\\inst\\vscode.exe",
+    "installer_sha256":  "972FCB16D819532A25AF8DC1976E1C80508E080BF56EB65BFD6A35EED983A35B",
+    "installer_sig":  "Valid CN=Microsoft Corporation",
+    "computer":  "INBOUND-WIN11-T",
+    "sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid":  "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os":  "EnterpriseSEval 26100.1742",
+    "started":  "2026-11-11T08:03:06.3201113-08:00",
+    "finished":  "2026-11-11T08:06:23.6364554-08:00",
+    "main":  {
+                 "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{EA457B21-F73E-494C-ACAB-524FDE069978}_is1",
+                 "name":  "Microsoft Visual Studio Code",
+                 "version":  "1.146.0",
+                 "publisher":  "Microsoft Corporation",
+                 "sys":  false,
+                 "parent":  null,
+                 "uninstall":  "\"C:\\Program Files\\Microsoft VS Code\\unins000.exe\"",
+                 "quiet":  "\"C:\\Program Files\\Microsoft VS Code\\unins000.exe\" /SILENT",
+                 "loc":  "C:\\Program Files\\Microsoft VS Code\\",
+                 "icon":  "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+                 "msi":  null,
+                 "size":  1108174,
+                 "install_date":  "20261111",
+                 "bundle":  false
+             },
+    "install":  {
+                    "cmd":  "\"C:\\cr\\inst\\vscode.exe\" /VERYSILENT /NORESTART /MERGETASKS=!runcode",
+                    "start":  "2026-11-11T08:03:43.2852934-08:00",
+                    "end":  "2026-11-11T08:04:24.6938899-08:00",
+                    "exit":  0,
+                    "timed_out":  false,
+                    "killed":  [
+
+                               ]
+                },
+    "launch":  {
+                   "done":  true,
+                   "exe":  "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+                   "args":  "",
+                   "start":  "2026-11-11T08:04:46.3715831-08:00",
+                   "end":  "2026-11-11T08:05:19.0625574-08:00",
+                   "found":  true,
+                   "closed":  [
+                                  "Code.exe[4196]"
+                              ],
+                   "killed":  [
+
+                              ],
+                   "reason":  null
+               },
+    "uninstall":  {
+                      "cmd":  "\"C:\\Program Files\\Microsoft VS Code\\unins000.exe\" /VERYSILENT /NORESTART /SUPPRESSMSGBOXES",
+                      "t0":  "2026-11-11T08:05:38.5392767-08:00",
+                      "t1":  "2026-11-11T08:05:49.6315262-08:00",
+                      "exit":  0,
+                      "timed_out":  false,
+                      "entry_gone":  true,
+                      "killed":  [
+
+                                 ]
+                  },
+    "entries_created":  [
+                            {
+                                "key":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{EA457B21-F73E-494C-ACAB-524FDE069978}_is1",
+                                "name":  "Microsoft Visual Studio Code",
+                                "version":  "1.146.0",
+                                "publisher":  "Microsoft Corporation",
+                                "sys":  false,
+                                "parent":  null,
+                                "uninstall":  "\"C:\\Program Files\\Microsoft VS Code\\unins000.exe\"",
+                                "quiet":  "\"C:\\Program Files\\Microsoft VS Code\\unins000.exe\" /SILENT",
+                                "loc":  "C:\\Program Files\\Microsoft VS Code\\",
+                                "icon":  "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+                                "msi":  null,
+                                "size":  1108174,
+                                "install_date":  "20261111",
+                                "bundle":  false
+                            }
+                        ],
+    "entries_left":  [
+
+                     ],
+    "phases":  [
+                   {
+                       "name":  "setup",
+                       "start":  "2026-11-11T08:03:06.3264409-08:00",
+                       "end":  "2026-11-11T08:03:09.8270687-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "arp0",
+                       "start":  "2026-11-11T08:03:09.9958503-08:00",
+                       "end":  "2026-11-11T08:03:10.1038971-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists0",
+                       "start":  "2026-11-11T08:03:10.1056399-08:00",
+                       "end":  "2026-11-11T08:03:24.7653310-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap0",
+                       "start":  "2026-11-11T08:03:24.7671071-08:00",
+                       "end":  "2026-11-11T08:03:43.2623699-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "install",
+                       "start":  "2026-11-11T08:03:43.2641419-08:00",
+                       "end":  "2026-11-11T08:04:44.7006044-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "detect",
+                       "start":  "2026-11-11T08:04:44.7034741-08:00",
+                       "end":  "2026-11-11T08:04:44.8321173-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "launch",
+                       "start":  "2026-11-11T08:04:44.8334629-08:00",
+                       "end":  "2026-11-11T08:05:29.0746510-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists1",
+                       "start":  "2026-11-11T08:05:29.0787568-08:00",
+                       "end":  "2026-11-11T08:05:36.0232601-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap1",
+                       "start":  "2026-11-11T08:05:36.0232601-08:00",
+                       "end":  "2026-11-11T08:05:38.5016434-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "uninstall",
+                       "start":  "2026-11-11T08:05:38.5035761-08:00",
+                       "end":  "2026-11-11T08:06:19.6364186-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "lists2",
+                       "start":  "2026-11-11T08:06:19.6384706-08:00",
+                       "end":  "2026-11-11T08:06:21.2577580-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "snap2",
+                       "start":  "2026-11-11T08:06:21.2577580-08:00",
+                       "end":  "2026-11-11T08:06:23.5760008-08:00",
+                       "ok":  true,
+                       "error":  null
+                   },
+                   {
+                       "name":  "entries",
+                       "start":  "2026-11-11T08:06:23.5778736-08:00",
+                       "end":  "2026-11-11T08:06:23.6353129-08:00",
+                       "ok":  true,
+                       "error":  null
+                   }
+               ]
+}

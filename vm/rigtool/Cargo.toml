@@ -1,0 +1,36 @@
+[package]
+name = "rigtool"
+version = "0.2.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Purge VM rig: snapshot, diff, truth, ambient, score, convert, baseline"
+
+# Standalone project: NOT a member of the product workspace (purge/Cargo.toml excludes vm/).
+[workspace]
+
+[dependencies]
+flate2 = "1"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+regex = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+    "Win32_System_Memory",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+debug = false
+panic = "unwind"

@@ -1,0 +1,2622 @@
+{
+  "schema": "purge.rig.truth/1",
+  "id": "npp",
+  "run": {
+    "schema": "purge.rig.run/1",
+    "id": "npp",
+    "run": "npp",
+    "kind": "app",
+    "tech": "NSIS",
+    "url": null,
+    "installer": "C:\\cr\\inst\\npp.exe",
+    "installer_sha256": "A18CFB33D616C8EECDA0059604D40BDB9D607FBC4EDE857C8BE6E41986464367",
+    "installer_sig": "Valid E=don.h@free.fr",
+    "computer": "INBOUND-WIN11-T",
+    "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os": "EnterpriseSEval 26100.1742",
+    "started": "2026-11-11T07:46:51.7167296-08:00",
+    "finished": "2026-11-11T07:49:39.5603526-08:00",
+    "main": {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++",
+      "name": "Notepad++ (64-bit x64)",
+      "version": "8.9.9",
+      "publisher": "Notepad++ Team",
+      "sys": false,
+      "parent": null,
+      "uninstall": "\"C:\\Program Files\\Notepad++\\uninstall.exe\"",
+      "quiet": "\"C:\\Program Files\\Notepad++\\uninstall.exe\" /S",
+      "loc": null,
+      "icon": "C:\\Program Files\\Notepad++\\notepad++.exe",
+      "msi": null,
+      "size": 20058,
+      "install_date": null,
+      "bundle": false
+    },
+    "install": {
+      "cmd": "\"C:\\cr\\inst\\npp.exe\" /S",
+      "start": "2026-11-11T07:47:26.3041528-08:00",
+      "end": "2026-11-11T07:47:47.5912959-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "killed": []
+    },
+    "launch": {
+      "done": true,
+      "exe": "C:\\Program Files\\Notepad++\\notepad++.exe",
+      "args": "",
+      "start": "2026-11-11T07:48:09.0581479-08:00",
+      "end": "2026-11-11T07:48:41.1954937-08:00",
+      "found": true,
+      "closed": [
+        "notepad++.exe[3468]"
+      ],
+      "killed": [],
+      "reason": null
+    },
+    "uninstall": {
+      "cmd": "\"C:\\Program Files\\Notepad++\\uninstall.exe\" /S",
+      "t0": "2026-11-11T07:48:59.8038182-08:00",
+      "t1": "2026-11-11T07:49:05.5280717-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "entry_gone": true,
+      "killed": []
+    },
+    "entries_created": [
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++",
+        "name": "Notepad++ (64-bit x64)",
+        "version": "8.9.9",
+        "publisher": "Notepad++ Team",
+        "sys": false,
+        "parent": null,
+        "uninstall": "\"C:\\Program Files\\Notepad++\\uninstall.exe\"",
+        "quiet": "\"C:\\Program Files\\Notepad++\\uninstall.exe\" /S",
+        "loc": null,
+        "icon": "C:\\Program Files\\Notepad++\\notepad++.exe",
+        "msi": null,
+        "size": 20058,
+        "install_date": null,
+        "bundle": false
+      }
+    ],
+    "entries_left": [],
+    "phases": [
+      {
+        "name": "setup",
+        "start": "2026-11-11T07:46:51.7239885-08:00",
+        "end": "2026-11-11T07:46:53.1101588-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "arp0",
+        "start": "2026-11-11T07:46:53.3136272-08:00",
+        "end": "2026-11-11T07:46:53.4950787-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists0",
+        "start": "2026-11-11T07:46:53.4972954-08:00",
+        "end": "2026-11-11T07:47:07.7612873-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap0",
+        "start": "2026-11-11T07:47:07.7630526-08:00",
+        "end": "2026-11-11T07:47:26.2798321-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "install",
+        "start": "2026-11-11T07:47:26.2815618-08:00",
+        "end": "2026-11-11T07:48:07.5968242-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "detect",
+        "start": "2026-11-11T07:48:07.5985348-08:00",
+        "end": "2026-11-11T07:48:07.7328916-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "launch",
+        "start": "2026-11-11T07:48:07.7365570-08:00",
+        "end": "2026-11-11T07:48:51.2161957-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists1",
+        "start": "2026-11-11T07:48:51.2220157-08:00",
+        "end": "2026-11-11T07:48:57.4109395-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap1",
+        "start": "2026-11-11T07:48:57.4124474-08:00",
+        "end": "2026-11-11T07:48:59.7502825-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "uninstall",
+        "start": "2026-11-11T07:48:59.7541019-08:00",
+        "end": "2026-11-11T07:49:35.5464562-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists2",
+        "start": "2026-11-11T07:49:35.5489950-08:00",
+        "end": "2026-11-11T07:49:37.0873969-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap2",
+        "start": "2026-11-11T07:49:37.0894848-08:00",
+        "end": "2026-11-11T07:49:39.5054733-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "entries",
+        "start": "2026-11-11T07:49:39.5074129-08:00",
+        "end": "2026-11-11T07:49:39.5591630-08:00",
+        "ok": true,
+        "error": null
+      }
+    ]
+  },
+  "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "counts": {
+    "ambient": 167,
+    "kept_owner": 0,
+    "leftover": 29,
+    "rig": 0,
+    "user_data": 0
+  },
+  "counts_by_kind": {
+    "Path": {
+      "ambient": 24,
+      "leftover": 10
+    },
+    "RegKey": {
+      "ambient": 55,
+      "leftover": 16
+    },
+    "RegValue": {
+      "ambient": 10,
+      "leftover": 3
+    },
+    "RegValueChanged": {
+      "ambient": 78
+    }
+  },
+  "ambient_by_run": {
+    "null1": 78,
+    "null2": 72,
+    "null3": 70
+  },
+  "deny_hits": [
+    "P:C:\\Program Files\\WindowsApps\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww (deny: Package store: package files are removed by the deployment service (Remove-AppxPackage), never by a raw delete (ENGINE_PLAN §1.2). A package offer covers it.)",
+    "P:C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\fb764295-5706-4eaf-8f28-603f30273874_S-1-5-21-1336749127-99101324-1432799918-1000_1.rslc (deny: Package store: the AppX repository database and provisioning list; report-only.)",
+    "P:C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww.xml (deny: Package store: the AppX repository database and provisioning list; report-only.)",
+    "P:C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\Packages\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww (deny: Package store: the AppX repository database and provisioning list; report-only.)",
+    "P:C:\\ProgramData\\Packages\\NotepadPlusPlus_2247w0b46hfww (deny: Package store: all-user package data; removed with the package.)",
+    "P:C:\\Users\\tester\\AppData\\Local\\Packages\\NotepadPlusPlus_2247w0b46hfww (deny: Package store: per-user package data (LocalState etc.); removed with the package.)",
+    "K:HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PackageRepository\\Packages\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww (deny: Package store: AppModel repository/SystemAppData rows; written by the deployment service only.)",
+    "K:HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{E6950302-61F0-4FEB-97DB-855E30D4A991} (deny: Packaged COM catalog; maintained by the deployment service, removed with the package.)",
+    "K:HKLM\\SOFTWARE\\Classes\\PackagedCom\\Package\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww (deny: Packaged COM catalog; maintained by the deployment service, removed with the package.)",
+    "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StagingInfo\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww (deny: Package store: machine AppModel/Appx state; written by the deployment service only.)",
+    "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageState\\S-1-5-21-1336749127-99101324-1432799918-1000\\NotepadPlusPlus_2247w0b46hfww (deny: Package store: machine AppModel/Appx state; written by the deployment service only.)",
+    "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Mappings\\S-1-15-2-2557016000-3416274266-3014759505-2624777461-3676268001-1533065058-806985695 (deny: AppContainer profile and mappings; deleted with the package (DeleteAppContainerProfile), never raw.)",
+    "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Storage\\notepadplusplus_2247w0b46hfww (deny: AppContainer profile and mappings; deleted with the package (DeleteAppContainerProfile), never raw.)",
+    "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PolicyCache\\NotepadPlusPlus_2247w0b46hfww (deny: Package store: AppModel repository/SystemAppData rows; written by the deployment service only.)",
+    "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww (deny: Package store: AppModel repository/SystemAppData rows; written by the deployment service only.)",
+    "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\NotepadPlusPlus_2247w0b46hfww (deny: Package store: AppModel repository/SystemAppData rows; written by the deployment service only.)",
+    "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\PackagedCom\\Package\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww (deny: Packaged COM catalog; maintained by the deployment service, removed with the package.)",
+    "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\RestrictedServices\\AppIso\\FirewallRules|NotepadPlusPlus_2247w0b46hfww-In-Block (deny: AppContainer firewall rules; removed through the firewall API with the package.)",
+    "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\RestrictedServices\\AppIso\\FirewallRules|NotepadPlusPlus_2247w0b46hfww-Out-Block (deny: AppContainer firewall rules; removed through the firewall API with the package.)"
+  ],
+  "snaps": {
+    "s0": {
+      "file": "runs/npp/snap-npp-0.tsv.gz",
+      "header": {
+        "time": "2026-11-11T15:47:24Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "s1": "runs/npp/snap-npp-1.tsv.gz",
+    "s2": {
+      "file": "runs/npp/snap-npp-2.tsv.gz",
+      "header": {
+        "time": "2026-11-11T15:49:37Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "kept_entries": []
+  },
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\WindowsApps\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 64270,
+      "lwt": 134388856614881370,
+      "dir": true,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\3542745e28b85e2a6444999b4b5aa36a957736d1"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows Defender\\\\Scans\\\\RtSigs\\\\Data\\\\[0-9a-f]{16,}(?:\\\\.*)?$",
+      "size": 350,
+      "lwt": 134388856473174047,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\44656de5c058993b7913aaaf813af904432a0d27"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows Defender\\\\Scans\\\\RtSigs\\\\Data\\\\[0-9a-f]{16,}(?:\\\\.*)?$",
+      "size": 350,
+      "lwt": 134388856600646372,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\514d2416f0c53dfe01625831689f8394a0d1b838"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows Defender\\\\Scans\\\\RtSigs\\\\Data\\\\[0-9a-f]{16,}(?:\\\\.*)?$",
+      "size": 350,
+      "lwt": 134388856494761988,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\6b080455539c4fd747cc3e8b38bbe0d3649963bb"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows Defender\\\\Scans\\\\RtSigs\\\\Data\\\\[0-9a-f]{16,}(?:\\\\.*)?$",
+      "size": 346,
+      "lwt": 134388857429645057,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\b10fad8ec60879dc2936fea5f966590a531232dc"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows Defender\\\\Scans\\\\RtSigs\\\\Data\\\\[0-9a-f]{16,}(?:\\\\.*)?$",
+      "size": 350,
+      "lwt": 134388856578933982,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\dfabb91fff58ede0d214aa65a4452ef5b54e9a33"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows Defender\\\\Scans\\\\RtSigs\\\\Data\\\\[0-9a-f]{16,}(?:\\\\.*)?$",
+      "size": 346,
+      "lwt": 134388856471531150,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\fb764295-5706-4eaf-8f28-603f30273874_S-1-5-21-1336749127-99101324-1432799918-1000_1.rslc"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 388,
+      "lwt": 134388856614916556,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww.xml"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 2862,
+      "lwt": 134388856608920530,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\Packages\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 2156,
+      "lwt": 134388856616970710,
+      "dir": true,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Packages\\NotepadPlusPlus_2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 0,
+      "lwt": 134388856616693008,
+      "dir": true,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\USOShared\\Logs\\System\\MoUxCoreWorker.87595130-b9f6-4432-b3bd-534b330e850c.1.etl"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^P:C:\\\\ProgramData\\\\USOShared\\\\Logs\\\\System\\\\MoUxCoreWorker\\.\\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\}?\\.1\\.etl(?:\\\\.*)?$",
+      "size": 0,
+      "lwt": 134388857145214123,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\USOShared\\Logs\\System\\UpdateSessionOrchestration.4a297710-33a7-49a2-99c5-cb8f3a569e67.1.etl"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^P:C:\\\\ProgramData\\\\USOShared\\\\Logs\\\\System\\\\UpdateSessionOrchestration\\.\\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\}?\\.1\\.etl(?:\\\\.*)?$",
+      "size": 0,
+      "lwt": 134388857145176636,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\Caches\\{3DA71D5A-20CC-432F-A115-DFE92379E91F}.3.ver0x0000000000000011.db"
+      },
+      "label": "ambient",
+      "rule": "labels: Shell/Search per-user cache database, regenerated with a new version suffix whenever the Start menu app list changes.",
+      "size": 57824,
+      "lwt": 134388857447505287,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Packages\\NotepadPlusPlus_2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 8192,
+      "lwt": 134388856616746140,
+      "dir": true,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\tem5A6A.tmp"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 389104,
+      "lwt": 134384520660000000,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\~nsu1.tmp"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 280232,
+      "lwt": 134388857404847006,
+      "dir": true,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\Content\\103621DE9CD5414CC2538780B4B75751"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 836,
+      "lwt": 134388856930172924,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\Content\\1B1495DD322A24490E2BF2FAABAE1C61"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 368,
+      "lwt": 134388856930744056,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\Content\\22D536C4B4AD2CEF7AC6B7789FD235E3"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 284,
+      "lwt": 134388856931310848,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\Content\\307B56A7272241190849219D861B1A86"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 1770,
+      "lwt": 134388856934738665,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\Content\\8B9DC743D29AB9DE072DD80446DE9B31"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 100575,
+      "lwt": 134388856932171517,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\Content\\9CB4373A4252DE8D2212929836304EC5_6C354C532D063DF5607A63BA827F5164"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 1712,
+      "lwt": 134388856607653690,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\Content\\A1D627669EFC8CD4F21BCF387D97F9B5_AB1B00F707521C22B07C077113A83DC3"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 1680,
+      "lwt": 134388856607991908,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\MetaData\\103621DE9CD5414CC2538780B4B75751"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 192,
+      "lwt": 134388856930191257,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\MetaData\\1B1495DD322A24490E2BF2FAABAE1C61"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 192,
+      "lwt": 134388856930774520,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\MetaData\\22D536C4B4AD2CEF7AC6B7789FD235E3"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 192,
+      "lwt": 134388856931326016,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\MetaData\\307B56A7272241190849219D861B1A86"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 272,
+      "lwt": 134388856934738665,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\MetaData\\8B9DC743D29AB9DE072DD80446DE9B31"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 246,
+      "lwt": 134388857214901794,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\MetaData\\9CB4373A4252DE8D2212929836304EC5_6C354C532D063DF5607A63BA827F5164"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 532,
+      "lwt": 134388857214906120,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\LocalLow\\Microsoft\\CryptnetUrlCache\\MetaData\\A1D627669EFC8CD4F21BCF387D97F9B5_AB1B00F707521C22B07C077113A83DC3"
+      },
+      "label": "ambient",
+      "rule": "labels: CryptoAPI URL cache (CRL/OCSP/AIA downloads) filled while verifying any signed binary; Windows ages it out.",
+      "size": 540,
+      "lwt": 134388857214909282,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\GUP.EXE-7F7956CE.pf"
+      },
+      "label": "leftover",
+      "rule": "labels: Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash).",
+      "size": 4696,
+      "lwt": 134388856934856725,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\NOTEPAD++.EXE-0C41AC7A.pf"
+      },
+      "label": "leftover",
+      "rule": "labels: Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash).",
+      "size": 22123,
+      "lwt": 134388856994292140,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\ReadyBoot\\Trace6.fx"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 977020,
+      "lwt": 134388856446354778,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PackageRepository\\Packages\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856614898823,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\PackagedCom"
+      },
+      "label": "ambient",
+      "rule": "labels: PackagedCom catalog containers created by the AppX COM catalog on first packaged-COM registration. The package and CLSID entries inside are the package's own (split).",
+      "lwt": 134388856616132918,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex"
+      },
+      "label": "ambient",
+      "rule": "labels: PackagedCom catalog containers created by the AppX COM catalog on first packaged-COM registration. The package and CLSID entries inside are the package's own (split).",
+      "lwt": 134388856616132918,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{E6950302-61F0-4FEB-97DB-855E30D4A991}"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616132918,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\PackagedCom\\Package"
+      },
+      "label": "ambient",
+      "rule": "labels: PackagedCom catalog containers created by the AppX COM catalog on first packaged-COM registration. The package and CLSID entries inside are the package's own (split).",
+      "lwt": 134388856616132918,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\PackagedCom\\Package\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616132918,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\IdentityCRL\\NegativeCache"
+      },
+      "label": "ambient",
+      "rule": "labels: Microsoft account client cache.",
+      "lwt": 134388857762707221,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\IdentityCRL\\ThrottleCache"
+      },
+      "label": "ambient",
+      "rule": "labels: Microsoft account client cache.",
+      "lwt": 134388857762720267,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Security Center\\Svc\\Vol"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134388857146348384,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SecurityManager\\CapAuthz\\ApplicationsEx\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616116415,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StagingInfo\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856614495649,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Activation\\Data\\7f"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856615174113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Activation\\Index\\ActivationKey\\0rgh4vmwpnkd808tnh1xb1frvkezpvz5ap6r1cgv2t22dwxy4pag"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856615174113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Data\\56"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617413518,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Index\\Package\\33"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Index\\PackageAndPackageRelativeApplicationId\\33^NotepadPlusPlus"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Data\\102"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617413518,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Data\\103"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617413518,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Application\\56"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\ApplicationAndCategory\\56^windows.comServer"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\ApplicationAndCategory\\56^windows.fileExplorerContextMenus"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Category\\windows.comServer"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Category\\windows.fileExplorerContextMenus"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Data\\102"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617413518,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\Application\\56"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\PackageUser\\94"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\PackageUserAndApplication\\94^56"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\User\\2\\102"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617426046,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\UserAndApplication\\2^56"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\UserAndApplicationUserModelId\\2^NotepadPlusPlus_2247w0b46hfww!NotepadPlusPlus"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Package\\Data\\33"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617392232,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Package\\Index\\PackageFamily\\31"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Package\\Index\\PackageFullName\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageExternalLocation\\Data\\3"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617392232,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageExternalLocation\\Index\\UserAndPackage\\2^33"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamily\\Data\\31"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856615174113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamily\\Index\\PackageFamilyName\\NotepadPlusPlus_2247w0b46hfww"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856615174113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamily\\Index\\PackageSID\\S-1-15-2-2557016000-3416274266-3014759505-2624777461-3676268001-1533065058-806985695"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856615174113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Data\\30"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856615174113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Index\\PackageFamily\\31"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856615174113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Index\\User\\2\\30"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856615174113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Index\\UserAndPackageFamily\\2^31"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856615174113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Data\\15"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617392232,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Name\\AllowExternalContent\\15"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Package\\33"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\PackageAndName\\33^AllowExternalContent"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageUser\\Data\\94"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617413518,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageUser\\Index\\User\\2\\94"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageUser\\Index\\UserAndPackage\\2^33"
+      },
+      "label": "ambient",
+      "rule": "labels: StateRepository cache rows (v1 run: ApplicationUser/PackageUser rows for the NotepadPlusPlus sparse package) are maintained by the AppX deployment service; report-only, only the package API may change them.",
+      "lwt": 134388856617442533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageState\\S-1-5-21-1336749127-99101324-1432799918-1000\\NotepadPlusPlus_2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616728026,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageVolumes\\1\\MutablePackagesOnline"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134388856614601214,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageVolumes\\1\\UserMutablePackagesOnline"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134388856614601214,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH"
+      },
+      "label": "ambient",
+      "rule": "labels: UFH (shortcut/usage history) service state.",
+      "lwt": 134388856649579126,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Orchestrator\\InstallAtShutdown"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134388857145773118,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134388857333791981,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Notepad++"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856473210291,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\SystemCertificates\\CA\\Certificates\\7A2146EDB29E2EAD64AFBE7CEAD0B6085D437A32"
+      },
+      "label": "ambient",
+      "rule": "labels: User certificate stores (intermediate CA cache); never a cleaner target.",
+      "lwt": 134388856934774290,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\AppHost\\IndexedDB\\NotepadPlusPlus_2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616818207,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\NotepadPlusPlus_2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856617009026,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService\\Cache\\10838321916021121218"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134388856733453886,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications\\Backup\\NotepadPlusPlus_2247w0b46hfww!NotepadPlusPlus"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616970710,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Mappings\\S-1-15-2-2557016000-3416274266-3014759505-2624777461-3676268001-1533065058-806985695"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616728026,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Storage\\notepadplusplus_2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616935082,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PolicyCache\\NotepadPlusPlus_2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616765052,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616782795,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\ShellRefresh"
+      },
+      "label": "ambient",
+      "rule": "labels: AppX shell refresh marker.",
+      "lwt": 134388856717399873,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\NotepadPlusPlus_2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616970710,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\PackagedCom"
+      },
+      "label": "ambient",
+      "rule": "labels: PackagedCom catalog containers created by the AppX COM catalog on first packaged-COM registration. The package and CLSID entries inside are the package's own (split).",
+      "lwt": 134388856616970710,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\PackagedCom\\Package"
+      },
+      "label": "ambient",
+      "rule": "labels: PackagedCom catalog containers created by the AppX COM catalog on first packaged-COM registration. The package and CLSID entries inside are the package's own (split).",
+      "lwt": 134388856616970710,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\PackagedCom\\Package\\MaxInstallOrder"
+      },
+      "label": "ambient",
+      "rule": "labels: PackagedCom catalog install-order counter key (not a package: package keys are named by their full name).",
+      "lwt": 134388856616970710,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\PackagedCom\\Package\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134388856616970710,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler",
+        "name": "134388857760150947"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134388857764449529,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\SCM Event Provider @ root/CIMV2",
+        "name": "134388857074713253"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\SCM Event Provider @ root/CIMV2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134388857074713253,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\wfascim @ root/standardcimv2",
+        "name": "134388857369981582"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\wfascim @ root/standardcimv2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134388857769123958,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\Win32_WIN32_TERMINALSERVICE_Prov @ root/CIMV2",
+        "name": "134388857764931868"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\Win32_WIN32_TERMINALSERVICE_Prov @ root/CIMV2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134388857765017845,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications",
+        "name": "41C64E6DA3B568E5"
+      },
+      "label": "ambient",
+      "rule": "labels: Notification platform sequence/hash bookkeeping.",
+      "size": 136,
+      "lwt": 134388856616728026,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications",
+        "name": "41C64E6DA389D855"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\VolatileNotifications\\|[0-9a-f]{16,}$",
+      "size": 96,
+      "lwt": 134388857333847805,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+        "name": "GlobalAssocChangedCounter"
+      },
+      "label": "ambient",
+      "rule": "labels: Shell association change counter (SHChangeNotify).",
+      "size": 4,
+      "lwt": 134388856639233605,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+        "name": "PendingFileRenameOperations"
+      },
+      "label": "ambient",
+      "rule": "labels: Boot-time delete queue the uninstaller wrote for locked files; consumed at the next reboot. Purge only appends and removes its own pairs (plan §5 reconcile).",
+      "size": 332,
+      "lwt": 134388857415511500,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Program Files\\Notepad++\\notepad++.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134388857674746327,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\RestrictedServices\\AppIso\\FirewallRules",
+        "name": "NotepadPlusPlus_2247w0b46hfww-In-Block"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 348,
+      "lwt": 134388856616800489,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\RestrictedServices\\AppIso\\FirewallRules",
+        "name": "NotepadPlusPlus_2247w0b46hfww-Out-Block"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 350,
+      "lwt": 134388856616800489,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows NT\\CurrentVersion\\SoftwareProtectionPlatform\\PersistedSystemState",
+        "name": "StartupLoggedAlready"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134388856498743345,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+        "name": "{6Q809377-6NS0-444O-8957-N3773S02200R}\\Abgrcnq++\\abgrcnq++.rkr"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 72,
+      "lwt": 134388856929314175,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Deployment\\Package\\*\\AllUsers\\{74E5B9CE-71FA-4FD3-97F7-EBFEE1791E1E}",
+        "name": "Version",
+        "before": "0",
+        "after": "10"
+      },
+      "label": "ambient",
+      "rule": "labels: AppX deployment service version stamps.",
+      "size": 8,
+      "lwt": 134388856618051804,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Deployment\\Package\\*\\S-1-5-21-1336749127-99101324-1432799918-1000\\{61623B31-A463-469E-9F3B-4AC25936E7CB}",
+        "name": "Version",
+        "before": "0",
+        "after": "10"
+      },
+      "label": "ambient",
+      "rule": "labels: AppX deployment service version stamps.",
+      "size": 8,
+      "lwt": 134388856618026970,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Deployment\\Package\\*\\S-1-5-21-1336749127-99101324-1432799918-1000\\{BBDDF7C6-6DC6-4D9C-B73A-6AB1F775A9A1}",
+        "name": "Version",
+        "before": "0",
+        "after": "10"
+      },
+      "label": "ambient",
+      "rule": "labels: AppX deployment service version stamps.",
+      "size": 8,
+      "lwt": 134388856618026970,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Deployment\\Package\\*\\S-1-5-21-1336749127-99101324-1432799918-1000\\{F1AD28A7-B368-48F3-BA08-4AB38830AD68}",
+        "name": "Version",
+        "before": "0",
+        "after": "10"
+      },
+      "label": "ambient",
+      "rule": "labels: AppX deployment service version stamps.",
+      "size": 8,
+      "lwt": 134388856618026970,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Deployment\\Package\\*\\S-1-5-21-1336749127-99101324-1432799918-1000\\{FAD8B118-F382-433E-B72E-58290271783E}",
+        "name": "Version",
+        "before": "0",
+        "after": "10"
+      },
+      "label": "ambient",
+      "rule": "labels: AppX deployment service version stamps.",
+      "size": 8,
+      "lwt": 134388856618026970,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\DirectX",
+        "name": "LastSeen",
+        "before": "134388855931590924",
+        "after": "134388856535718353"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388856535886735,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\DirectX\\{CC6BEB52-DBC0-11F1-8785-806E6F6E6963}",
+        "name": "LastSeen",
+        "before": "134388855931590924",
+        "after": "134388856535718353"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388856535886735,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\DirectX\\{CC6BEB62-DBC0-11F1-8785-806E6F6E6963}",
+        "name": "LastSeen",
+        "before": "134388855931590924",
+        "after": "134388856535718353"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388856535886735,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\AutoUpdate",
+        "name": "PinRulesLastSyncTime",
+        "before": "#7c67b7df8ad17a9d",
+        "after": "#91d37d43b460ac31"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857338439888,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\CIMOM",
+        "name": "List of event-active namespaces",
+        "before": "#df4d9c5d4e14550a",
+        "after": "#5bcff375b1a64efd"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 46,
+      "lwt": 134388857073631143,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Spynet",
+        "name": "LastMAPSSuccessTime",
+        "before": "#f2428b5ce51f1189",
+        "after": "#70a4e2c3b9376c73"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857496624175,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications",
+        "name": "SequenceNumber",
+        "before": "#5fbbc50a5e0bc4e1",
+        "after": "#1e7be6b7b8226716"
+      },
+      "label": "ambient",
+      "rule": "labels: Notification platform sequence/hash bookkeeping.",
+      "size": 8,
+      "lwt": 134388856616728026,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418A073AA3BC2475",
+        "before": "#00de3df2e4f63930",
+        "after": "#e36da76fc0564894"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Notifications\\\\Data\\|[0-9a-f]{16,}$",
+      "size": 546,
+      "lwt": 134388857762759205,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418A073AA3BC3475",
+        "before": "#750d02f0ab96c26f",
+        "after": "#8ae36f4898c6c0b3"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 436,
+      "lwt": 134388857762759205,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418B1D29A3BC0C75",
+        "before": "#e96b45310366cf93",
+        "after": "#d38986315d7cbd4b"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Notifications\\\\Data\\|[0-9a-f]{16,}$",
+      "size": 98,
+      "lwt": 134388857762759205,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{0C9E24B1-FA69-4154-B7F3-041454657229}",
+        "name": "DynamicInfo",
+        "before": "#8e3de53b000f2fde",
+        "after": "#1ab4cbcbc8aa088f"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388856553061302,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{6FD85B93-7A13-4DCA-B793-1D7D18FEAC39}",
+        "name": "DynamicInfo",
+        "before": "#636045da2f7b6952",
+        "after": "#e962fd8ab638a113"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388857735938784,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{7F6F3E07-9CB5-42F1-AF2B-9331F44F776B}",
+        "name": "DynamicInfo",
+        "before": "#7a314118eabafa4e",
+        "after": "#8112fad2225b6fec"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388857739016557,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{9B732870-44E4-4482-B75F-85DF6F9F9D7C}",
+        "name": "Hash",
+        "before": "#cee163f439e8d883",
+        "after": "#b9ff01a2c226bafc"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 32,
+      "lwt": 134388857145582389,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{9B732870-44E4-4482-B75F-85DF6F9F9D7C}",
+        "name": "Triggers",
+        "before": "#1af4e6a7df0f71b8",
+        "after": "#3c63dd2f1a58d037"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 304,
+      "lwt": 134388857145582389,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{9E14B502-3C1A-434E-97FF-01D7A67A4CD2}",
+        "name": "DynamicInfo",
+        "before": "#4624b65668f986fb",
+        "after": "#d573446e04cd0393"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388856554097483,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{CD644B8B-7297-4AA8-96A4-F4EC1FD24615}",
+        "name": "DynamicInfo",
+        "before": "#bcdfac5dfe0daefc",
+        "after": "#5e31b44dfa7b0c5d"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388857128502587,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{EBBD491B-D054-4669-AB31-07F0B5970A6F}",
+        "name": "Hash",
+        "before": "#495a1377e398653a",
+        "after": "#947f71770d8072c0"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 32,
+      "lwt": 134388857624051482,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{EBBD491B-D054-4669-AB31-07F0B5970A6F}",
+        "name": "Triggers",
+        "before": "#2fd85327b46ef5bd",
+        "after": "#947fd8b273114706"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 320,
+      "lwt": 134388857624051482,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{F49854D8-60F3-475E-8F40-E85C4EC04138}",
+        "name": "DynamicInfo",
+        "before": "#a4891d093d874777",
+        "after": "#90ad999d37ea53ce"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388856535904679,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{F65E78D2-6CBA-464C-921F-C03CAD0A1A91}",
+        "name": "DynamicInfo",
+        "before": "#ce1b46d93a1226c4",
+        "after": "#4523c3cb0307394f"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388857438990509,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SoftwareProtectionPlatform",
+        "name": "ServiceSessionId",
+        "before": "#074d8c8df72b38cc",
+        "after": "#92da238aa907546a"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 16,
+      "lwt": 134388857142711020,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateChange",
+        "name": "PackageVersion",
+        "before": "200",
+        "after": "202"
+      },
+      "label": "ambient",
+      "rule": "labels: AppX deployment service counters.",
+      "size": 4,
+      "lwt": 134388856617633358,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepositoryStatus",
+        "name": "DeploymentDatabaseStatisticsLastUpdated",
+        "before": "134388326968584643",
+        "after": "134388856617358807"
+      },
+      "label": "ambient",
+      "rule": "labels: AppX deployment service counters.",
+      "size": 8,
+      "lwt": 134388856617374981,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepositoryStatus",
+        "name": "MachineDatabaseStatisticsLastUpdated",
+        "before": "134388326968470468",
+        "after": "134388856617178036"
+      },
+      "label": "ambient",
+      "rule": "labels: AppX deployment service counters.",
+      "size": 8,
+      "lwt": 134388856617374981,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack",
+        "name": "LastSuccessfulNormalUploadTime",
+        "before": "134388826794766249",
+        "after": "134388857260434455"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857260434455,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack",
+        "name": "LastSuccessfulUploadTime",
+        "before": "134388855971118215",
+        "after": "134388857260434455"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857260434455,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+        "name": "GlobalAssocChangedCounter",
+        "before": "1",
+        "after": "2"
+      },
+      "label": "ambient",
+      "rule": "labels: Shell association change counter (SHChangeNotify).",
+      "size": 4,
+      "lwt": 134388856717432572,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\VFUProvider",
+        "name": "StartTime",
+        "before": "134388856200069744",
+        "after": "134388857400046911"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857400046911,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\WinREUninstallList",
+        "name": "Timestamp",
+        "before": "2026-11-11T14:14:51Z",
+        "after": "2026-11-11T15:48:32Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134388857125713029,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\UsageStats\\Daily\\Counts",
+        "name": "core_onlogon_completed",
+        "before": "#f0a0278e4372459c",
+        "after": "#f13ee6ed54ea2aae"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857139548517,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\UsageStats\\Daily\\Counts",
+        "name": "core_onlogon_disabled",
+        "before": "#6cc16abd70eefb90",
+        "after": "#a111f275cc2e7588"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857139548517,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\UsageStats\\Daily\\Counts",
+        "name": "core_onlogon_started",
+        "before": "#f0a0278e4372459c",
+        "after": "#f13ee6ed54ea2aae"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857139548517,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\UsageStats\\Daily\\Counts",
+        "name": "goopdate_constructor",
+        "before": "#74b4dda3624aed85",
+        "after": "#5c3f166fce0a8ac7"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857139548517,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\UsageStats\\Daily\\Counts",
+        "name": "goopdate_main",
+        "before": "#74b4dda3624aed85",
+        "after": "#5c3f166fce0a8ac7"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857139548517,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Windows\\System32\\cmd.exe",
+        "before": "#17e9f00410f7a147",
+        "after": "#2779bc6a88447d6d"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134388857674746327,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "MicrosoftWindows.Client.CBS_cw5n1h2txyewy",
+        "before": "#962caa4aee7f8213",
+        "after": "#db1698d918a5ec41"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 24,
+      "lwt": 134388857674746327,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "SequenceNumber",
+        "before": "4",
+        "after": "6"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 4,
+      "lwt": 134388857674746327,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "name": "SecureTimeEstimated",
+        "before": "134389197159530000",
+        "after": "134388857143718108"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857159428844,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "name": "SecureTimeHigh",
+        "before": "134390916657810000",
+        "after": "134388893143718108"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857159428844,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "name": "SecureTimeLow",
+        "before": "134388117007810000",
+        "after": "134388821143718108"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857159428844,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits\\RunTime",
+        "name": "SecureTimeConfidence",
+        "before": "7",
+        "after": "6"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134388857159428844,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits\\RunTime",
+        "name": "SecureTimeTickCount",
+        "before": "8609",
+        "after": "128625"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857159428844,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Config",
+        "name": "KVFileExpirationTime",
+        "before": "134390533937117309",
+        "after": "134390585446630070"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857446612818,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "CacheSizeBytes",
+        "before": "530932957",
+        "after": "490507469"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857453388172,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "CPUpct",
+        "before": "0.269051",
+        "after": "0.000000"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 18,
+      "lwt": 134388857453388172,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "MemoryUsageKB",
+        "before": "5028",
+        "after": "5716"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857453388172,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "UploadCount",
+        "before": "5",
+        "after": "4"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134388857453388172,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\EdgeUpdate",
+        "name": "LastLogonTime-Machine",
+        "before": "134388799732531046",
+        "after": "134388855946596814"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388856553908289,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\Cache\\DefaultAccount\\$de${a4e98711-2506-4a5b-8f96-0f510ed03cf4}$$windows.data.unifiedtile.localstarttilepropertiesmap\\Current",
+        "name": "Data",
+        "before": "#2f517b0aefaa1096",
+        "after": "#e45d6de1b41193a0"
+      },
+      "label": "ambient",
+      "rule": "labels: CloudStore (Start layout/tiles) blobs; rewritten whenever the app list changes.",
+      "size": 6420,
+      "lwt": 134388856521430006,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+        "name": "HRZR_PGYFRFFVBA",
+        "before": "#b0207836a77877f6",
+        "after": "#8d1b821624995fb2"
+      },
+      "label": "ambient",
+      "rule": "labels: UserAssist session counter (ROT13 of UEME_CTLSESSION), updated by every launch.",
+      "size": 1612,
+      "lwt": 134388856929314175,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService",
+        "name": "LastContext",
+        "before": "&country=US&locale=en-US&poptin=0&fmt=json&clr=cdmlite&MX_FlightIds=MD%3A283BAEF%2CME%3A2E30985%2CME%3A2E30A2A%2CME%3A3036FD6%2CMD%3A3037091&arch=AMD64&concp=0&d3dfl=D3D_FEATURE_LEVEL_12_1&devfam=Windows.Desktop&devfm=0&devosver=10.0.26100.1742&dinst=1794136152&dmret=0&drgng=244&flightbranch=&flightring=Retail&icluc=0&iepe=1&iste=1&localid=w%3A4A7AB615-C997-2237-71AF-ED4E445C5249&oem=VirtualBox&oemmsf=Virtual%20Machine&oemn=innotek%20GmbH&oemname=innotek%20GmbH&osbranch=ge_release&oslocale=en-US&osret=1&ossku=EnterpriseSEval&osskuid=129&prccn=4&prccs=3418&prcmf=GenuineIntel&procm=Intel%28R%29%20Core%28TM%29%20i7-14700KF&ram=4076&smbiosdm=VirtualBox&tinst=Client&tl=1&usri=-2&pat=0&smc=0&sac=0&disphorzres=1024&dispsize=13.3&dispvertres=765&ldisphorzres=1024&ldispvertres=765&moncnt=1&cpdsk=64362&frdsk=54458&lo=4568&tsu=4568",
+        "after": "&country=US&locale=en-US&poptin=0&fmt=json&clr=cdmlite&MX_FlightIds=MD%3A283BAEF%2CME%3A2E30985%2CME%3A2E30A2A%2CME%3A3036FD6%2CMD%3A3037091&arch=AMD64&concp=0&d3dfl=D3D_FEATURE_LEVEL_12_1&devfam=Windows.Desktop&devfm=0&devosver=10.0.26100.1742&dinst=1794136152&dmret=0&drgng=244&flightbranch=&flightring=Retail&icluc=0&iepe=1&iste=1&localid=w%3A4A7AB615-C997-2237-71AF-ED4E445C5249&oem=VirtualBox&oemmsf=Virtual%20Machine&oemn=innotek%20GmbH&oemname=innotek%20GmbH&osbranch=ge_release&oslocale=en-US&osret=1&ossku=EnterpriseSEval&osskuid=129&prccn=4&prccs=3418&prcmf=GenuineIntel&procm=Intel%28R%29%20Core%28TM%29%20i7-14700KF&ram=4076&smbiosdm=VirtualBox&tinst=Client&tl=1&usri=-2&pat=0&smc=0&sac=0&disphorzres=1024&dispsize=13.3&dispvertres=765&ldisphorzres=1024&ldispvertres=765&moncnt=1&cpdsk=64362&frdsk=54458&lo=4598&tsu=4598"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 1666,
+      "lwt": 134388856733453886,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService",
+        "name": "LastContextDate",
+        "before": "2026-11-11T15:18:04Z",
+        "after": "2026-11-11T15:47:53Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134388856733453886,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData",
+        "name": "_now_",
+        "before": "2026-11-11T02:56:46Z",
+        "after": "2026-11-11T15:47:53Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134388856733702929,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData",
+        "name": "Data",
+        "before": "{\"f\":\"raf\",\"v\":\"1.0\",\"rdr\":[{\"c\":\"Windows Engagement\",\"u\":\"Engine v1 Template\"}],\"ad\":{\"Rules\":\"{\\\"ver\\\":1,\\\"consentcategories\\\":[\\\"datasharing\\\"],\\\"*\\\":{\\\"rules\\\":[{\\\"id\\\":\\\"1\\\",\\\"name\\\":\\\"MSA Token failure to be resolved for successful MSA sign in\\\",\\\"type\\\":\\\"alert\\\",\\\"severity\\\":2,\\\"priority\\\":1,\\\"maximpressioncount\\\":7,\\\"maxdismissalcount\\\":7,\\\"delaybetweenimpressions\\\":0,\\\"delaybetweendismisses\\\":1440,\\\"delaybetweeninvokes\\\":1440,\\\"delayaftermaximpression\\\":20160,\\\"delayaftermaxdismiss\\\":20160,\\\"delayaftersnooze\\\":4320,\\\"condition\\\":\\\"{useraccount.accounttype == Msa} && {useraccount.validtoken == false}\\\",\\\"defaultproperties\\\":{\\\"icon\\\":\\\"&#xEB90;\\\",\\\"title\\\":\\\"Sign in again\\\",\\\"description\\\":\\\"Something happened, and we weren't able to sign you in to this device.\\\",\\\"snoozeText\\\":\\\"Remind me later\\\",\\\"ctaText\\\":\\\"Sign in\\\",\\\"ctaLink\\\":\\\"ms-cxh-wam://\\\"}},{\\\"id\\\":\\\"2\\\",\\\"name\\\":\\\"Convert local users to MSA attached state for non-backed up devices\\\",\\\"type\\\":\\\"alert\\\",\\\"severity\\\":1,\\\"priority\\\":2,\\\"maxi",
+        "after": "{\"f\":\"raf\",\"v\":\"1.0\",\"rdr\":[{\"c\":\"Windows Engagement\",\"u\":\"Engine v1 Template\"}],\"ad\":{\"Rules\":\"{\\\"ver\\\":1,\\\"consentcategories\\\":[\\\"datasharing\\\"],\\\"*\\\":{\\\"rules\\\":[{\\\"id\\\":\\\"1\\\",\\\"name\\\":\\\"MSA Token failure to be resolved for successful MSA sign in\\\",\\\"type\\\":\\\"alert\\\",\\\"severity\\\":2,\\\"priority\\\":1,\\\"maximpressioncount\\\":7,\\\"maxdismissalcount\\\":7,\\\"delaybetweenimpressions\\\":0,\\\"delaybetweendismisses\\\":1440,\\\"delaybetweeninvokes\\\":1440,\\\"delayaftermaximpression\\\":20160,\\\"delayaftermaxdismiss\\\":20160,\\\"delayaftersnooze\\\":4320,\\\"condition\\\":\\\"{useraccount.accounttype == Msa} && {useraccount.validtoken == false}\\\",\\\"defaultproperties\\\":{\\\"icon\\\":\\\"&#xEB90;\\\",\\\"title\\\":\\\"Sign in again\\\",\\\"description\\\":\\\"Something happened, and we weren't able to sign you in to this device.\\\",\\\"snoozeText\\\":\\\"Remind me later\\\",\\\"ctaText\\\":\\\"Sign in\\\",\\\"ctaLink\\\":\\\"ms-cxh-wam://\\\"}},{\\\"id\\\":\\\"2\\\",\\\"name\\\":\\\"Convert local users to MSA attached state for non-backed up devices\\\",\\\"type\\\":\\\"alert\\\",\\\"severity\\\":1,\\\"priority\\\":2,\\\"maxi"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 114064,
+      "lwt": 134388856733702929,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData",
+        "name": "State",
+        "before": "{\n  \"RetrieveIrisContentSuccess\":true,\n  \"RetrieveIrisContentStatusCode\":200,\n  \"RetrieveIrisContentSuccessDate\":\"2026-11-11T14:14:11Z\",\n  \"RetrieveIrisContentLastAttemptDate\":\"2026-11-11T14:14:11Z\",\n  \"RetrieveIrisContentRetryCount\":0,\n  \"RetrieveIrisContentRetryDate\":\"2026-11-12T13:14:11Z\",\n  \"LastTriggerType\":0,\n  \"LastBackgroundTaskRunDate\":\"2026-11-11T14:14:11Z\"\n}",
+        "after": "{\n  \"RetrieveIrisContentSuccess\":true,\n  \"RetrieveIrisContentStatusCode\":200,\n  \"RetrieveIrisContentSuccessDate\":\"2026-11-11T15:47:52Z\",\n  \"RetrieveIrisContentLastAttemptDate\":\"2026-11-11T15:47:52Z\",\n  \"RetrieveIrisContentRetryCount\":0,\n  \"RetrieveIrisContentRetryDate\":\"2026-11-12T14:47:52Z\",\n  \"LastTriggerType\":0,\n  \"LastBackgroundTaskRunDate\":\"2026-11-11T15:47:52Z\"\n}"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 744,
+      "lwt": 134388856733702929,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData",
+        "name": "UpdateTimer",
+        "before": "2026-11-11T14:14:11Z",
+        "after": "2026-11-11T15:47:53Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134388856733702929,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\Metadata",
+        "name": "IrisUpdateTimestamp",
+        "before": "2026-11-11T02:56:46Z",
+        "after": "2026-11-11T15:47:53Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134388856733490813,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+        "name": "InstalledPackagedAppsRevision",
+        "before": "{4D3A4080-63C9-4738-9615-6D0B34F878AB}",
+        "after": "{9D46882A-0842-4083-B8DC-C316ACA62437}"
+      },
+      "label": "ambient",
+      "rule": "labels: Search app-list revision GUID.",
+      "size": 78,
+      "lwt": 134388857447523340,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+        "name": "InstalledWin32AppsRevision",
+        "before": "{9B2E426E-E482-4556-B3FC-D750813C64C7}",
+        "after": "{5065247F-F5B3-4E78-87C5-6702D3773027}"
+      },
+      "label": "ambient",
+      "rule": "labels: Search app-list revision GUID.",
+      "size": 78,
+      "lwt": 134388857447523340,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{852FB1F8-5CC6-4567-9C0E-7C330F8807C2}.check.100",
+        "name": "CheckSetting",
+        "before": "#f81b2a0202168f0e",
+        "after": "#b87ccef63de7e658"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388857162727581,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{C8E6F269-B90A-4053-A3BE-499AFCEC98C4}.check.0",
+        "name": "CheckSetting",
+        "before": "#aaa2a1ad448dbe1c",
+        "after": "#b87ccef63de7e658"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388857163073961,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.100",
+        "name": "CheckSetting",
+        "before": "#e20d6ff0157d2119",
+        "after": "#aaa2a1ad448dbe1c"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388857188321638,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.101",
+        "name": "CheckSetting",
+        "before": "#8677c8d4c3c28e7b",
+        "after": "#aaa2a1ad448dbe1c"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388857208538072,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.102",
+        "name": "CheckSetting",
+        "before": "#f81b2a0202168f0e",
+        "after": "#fed9a80b07f0a630"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134388857208538072,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start",
+        "name": "Config",
+        "before": "#2ccc8ea929e54154",
+        "after": "#09e5e85b08e4f589"
+      },
+      "label": "ambient",
+      "rule": "labels: Start menu config blob.",
+      "size": 796,
+      "lwt": 134388857467613638,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "0",
+        "before": "C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Inbound Download Manager.lnk\u0000C:\\Users\\tester\\AppData\\Local\\Programs\\Inbound Download Manager\\app\\DownloadManager.Host.exe\u0000--open",
+        "after": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Notepad++.lnk\u0000C:\\Program Files\\Notepad++\\notepad++.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: UFH keys and changed SHC slots (a slot that existed before the install now names another shortcut: editing it back is not possible, deleting it is danger). New SHC values name the app's own shortcut and exe and stay leftover (REF-ANY).",
+      "size": 220,
+      "lwt": 134388856521275687,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.RulesEngine\\V1\\LU",
+        "name": "PCT",
+        "before": "134388800513182698",
+        "after": "134388856727227301"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857333847805,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.RulesEngine\\V1\\LU",
+        "name": "PTT",
+        "before": "134388801115433602",
+        "after": "134388857333847805"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857333847805,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WebExperienceHost\\V1\\LU",
+        "name": "PCT",
+        "before": "134388800513266329",
+        "after": "134388856727295161"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857328572465,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WebExperienceHost\\V1\\LU",
+        "name": "PTT",
+        "before": "134388801119995076",
+        "after": "134388857328572465"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857328572465,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.OOBE_cw5n1h2txyewy\\HAM\\AUI\\OobeHost\\V1\\LU",
+        "name": "PCT",
+        "before": "134388800512937680",
+        "after": "134388856727014983"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857328083200,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.OOBE_cw5n1h2txyewy\\HAM\\AUI\\OobeHost\\V1\\LU",
+        "name": "PTT",
+        "before": "134388394664812028",
+        "after": "134388857328083200"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134388857328083200,
+      "in_s1": true
+    }
+  ]
+}
