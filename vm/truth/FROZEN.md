@@ -114,4 +114,5 @@ for known reasons:
 - Three jump-list hashes (Python 1, Node 2) did not resolve to an app exe or AUMID and stay ambient.
 - Temp scratch with random names (`DEL*.tmp`, `~nsu*.tmp`, `is-*.tmp`) is labelled leftover (FS-TEMP,
   Unchecked). It counts in recall_listed but cannot reach recall_safe by design.
-- Clean-Pro baseline (26300 Pro) is not built: its ISO needs a Microsoft sign-in (docs/M0_REPORT.md).
+- Clean-Pro baseline: built for Pro 26340.9882 (`kb/baselines/Professional-26340.9882.tsv.gz`, 2026-11-12).
+  The host is still on 26300.9974, so it has no matching baseline until it updates (docs/M0_REPORT.md).

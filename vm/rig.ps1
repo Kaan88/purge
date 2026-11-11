@@ -24,11 +24,13 @@
 param(
     [string[]] $Ids = @(),
     [int] $Nulls = 0,
-    [string] $Snapshot = 'rig-base'
+    [string] $Snapshot = 'rig-base',
+    # 'Inbound-Win11-Test' (Enterprise LTSC 26100, the corpus VM) or 'Purge-CleanPro' (Pro Insider, RIG.md §1)
+    [string] $VmName = 'Inbound-Win11-Test'
 )
 
 $script:VBox      = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
-$script:VmName    = 'Inbound-Win11-Test'
+$script:VmName    = $VmName
 $script:GuestUser = 'tester'
 $script:RigDir    = $PSScriptRoot
 $script:RunsDir   = Join-Path $PSScriptRoot 'runs'

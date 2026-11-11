@@ -4,6 +4,16 @@ What a clean Windows install contains, per (edition, build), for the engine's "p
 check (ENGINE_PLAN.md §5.5, §10.2). Written by `rigtool baseline` from the `snap-0` of a clean snapshot that
 never had a test app installed, minus rig-owned items. vm/RIG.md §2 and §8 are the authoritative format.
 
+## Baselines
+
+| File | Machine | Source snap-0 | Records (K / V / D / F) |
+|---|---|---|---|
+| `EnterpriseSEval-26100.1742.tsv.gz` | corpus VM `Inbound-Win11-Test`, Enterprise LTSC eval | `vm/runs/null1/snap-null1-0.tsv.gz` | 275,872 / 460,215 / 2,158 / 15,050 |
+| `Professional-26340.9882.tsv.gz` | Clean-Pro VM `Purge-CleanPro`, Pro Insider | `vm/runs/cleanpro-null1/snap-null1-0.tsv.gz` | 309,932 / 528,901 / 6,001 / 37,410 |
+
+The Professional baseline matches a host only on build 26340.9882. A host on another build has no matching
+baseline and gets values-only + X-SYSTIDY (ENGINE_PLAN §5.7.1).
+
 ## File name
 
 `<EditionID>-<build>.<ubr>.tsv.gz`, e.g. `EnterpriseSEval-26100.1742.tsv.gz`.

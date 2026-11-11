@@ -3,7 +3,7 @@
 #   1. creates C:\cr\bin, C:\cr\guest, C:\cr\out, C:\cr\inst, C:\cr\jobs
 #   2. writes C:\cr\start-agent-direct.cmd and registers the logon task PurgeRigAgent
 #      (equivalent of: schtasks /create /tn PurgeRigAgent /sc onlogon /it /rl highest /ru tester)
-#   3. pauses Windows Update by policy (AU\NoAutoUpdate = 1)
+#   3. pauses Windows Update by policy (AU\NoAutoUpdate = 1); turns Fast Startup and hibernation off
 #   4. downloads every installer in apps.ps1 into C:\cr\inst (official URLs only), printing size and
 #      Authenticode status, and records them in C:\cr\inst\sources.json
 #   5. reports autologon and anything that makes the VM not clean (test apps already installed)
@@ -49,6 +49,14 @@ $wu = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
 New-Item -Path $wu -Force | Out-Null
 New-ItemProperty -Path $wu -Name 'NoAutoUpdate' -PropertyType DWord -Value 1 -Force | Out-Null
 Log "Windows Update policy: NoAutoUpdate=$((Get-ItemProperty $wu).NoAutoUpdate)"
+
+# 3b. Fast Startup and hibernation off. With Fast Startup an ACPI shutdown (Save-BaseSnapshot -Off)
+#     hibernates the kernel session; the next boot resumes it inside a new VM process and VBoxService
+#     never reconnects ("guest execution service is not ready"), so an offline snapshot would be unusable.
+$pw = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power'
+New-ItemProperty -Path $pw -Name 'HiberbootEnabled' -PropertyType DWord -Value 0 -Force | Out-Null
+& powercfg.exe /hibernate off
+Log "Fast Startup: HiberbootEnabled=$((Get-ItemProperty $pw).HiberbootEnabled); hibernate off (exit $LASTEXITCODE)"
 
 # 4. installers
 $sources = [ordered]@{}

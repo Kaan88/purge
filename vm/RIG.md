@@ -27,6 +27,23 @@ Principles:
   The manifest is in `vm\truth\dirty-base.json`, and the captured state in `vm\runs\dirty-base\` (snap0 and
   lists). It is used for the danger gates on a non-clean machine: run an app with
   `Invoke-Campaign -Snapshot dirty-base`.
+- VM `Purge-CleanPro` (ENGINE_PLAN §10.2 Clean-Pro, `E:\purge-vm`): Windows 11 **Pro** Insider
+  10.0.26340.9882 from Microsoft's Insider ISO (`Windows11_InsiderPreview_Client_x64_en-us_26340_9882.iso`,
+  image 6), EFI + Secure Boot + TPM 2.0, 4 vCPU, 4 GB, 3D off, user `tester`. Installed with
+  `VBoxManage unattended install` (VirtualBox 7.2 template: autologon, `LabConfig` bypass values,
+  `PowerdownAfterShutdown`, guest additions). The post-install command sets
+  `ConsentPromptBehaviorAdmin=0` so `vm\bootstrap-vm.ps1` can start the agent elevated without a UAC
+  click: guestcontrol runs with a filtered (medium) token outside the console session and cannot elevate,
+  so the script arms an HKCU `RunOnce` entry (`C:\cr\start-agent-elevated.cmd`, which does
+  `Start-Process -Verb RunAs`) and reboots the guest; at autologon the agent starts elevated. The script
+  then runs `setup-base` (which also turns Fast Startup and hibernation off), restores the Windows default
+  (5), and **ejects the unattended install media**: left attached, the next cold boot of an offline
+  snapshot runs Windows Setup again over the restored disk. Snapshots: `rig-base-off` (offline, checked
+  by restore + `Wait-Agent`), then `rig-base` (offline) as its child. Use it with
+  `. .\vm\rig.ps1 -VmName Purge-CleanPro`. Its null run (kept in `vm\runs\cleanpro-null1\`, so it does
+  not replace the LTSC `null1` that `truth/ambient.json` uses) gives the `Professional-26340.9882` baseline. **It matches the host only when the host runs build 26340**: the host
+  was on 26300.9974 when it was built, so until the host moves, the engine on the host still has no
+  matching baseline (values-only + X-SYSTIDY, ENGINE_PLAN §5.7.1).
 - Rig-owned paths, excluded from truth and baselines (label `rig`): `C:\cr\**`, `C:\ut\**`,
   scheduled tasks `PurgeRigAgent`, `PurgeRigLaunch`, `agentstart`, `elev*`, `crshot*`, `utrun`, `PurgeSetup`, and their
   `TaskCache` entries, and `%TEMP%\vmjobs\**`.

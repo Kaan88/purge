@@ -25,7 +25,7 @@ Milestone M0 of ENGINE_PLAN §11.1, finished 2026-11-11. M1 has not started.
 | Corpus scripted | Done. `vm/guest/apps.ps1` covers 10 apps (8 measured) and `vm/rig.ps1` runs whole campaigns. |
 | `PARITY.md` updated | Done (§11.5). |
 | Dirty-baseline VM | Done. Offline snapshot `dirty-base` (child of `rig-base`), built in 7 minutes by `vm/guest/setup-dirty.ps1`. Installed, all from official URLs with valid signatures and exit 0: Thunderbird 160.0, NVDA 2026.3.1, Steam, Zotero 10.0.8, Python 3.13.1 + 3.11.9 (+ Launcher), Node.js 20.18.0, VS Code 1.146.0 and VS Build Tools 2022 17.14 (MSBuild). Sysinternals and ripgrep are in `C:\Tools`, and 13 user files are planted. A boot check confirmed the agent comes up elevated and everything is present. **Not included:** Office C2R (~3 GB plus a licence), the full VS IDE (Build Tools stands in), OneDrive KFM (needs sign-in) and a Steam library on D: (the VM has no D:). Manifest: `vm/truth/dirty-base.json`. |
-| Clean-Pro VM | **Blocked, needs your decision** (§11.3 item 6). The host runs Windows 11 Pro Insider 26300, and a matching ISO needs a Microsoft-account sign-in to the Insider download page. Until it exists, the engine treats skeleton keys on the host as values-only + X-SYSTIDY (§5.7.1). |
+| Clean-Pro VM | Done after M0 (2026-11-12). VM `Purge-CleanPro`, Windows 11 Pro Insider 26340.9882 from your Insider ISO, offline snapshots `rig-base-off` and `rig-base` (vm/RIG.md §1). Baseline `kb/baselines/Professional-26340.9882.tsv.gz` (882,244 records) from its null run. **The host is on 26300.9974**, so this baseline applies to the host only once it moves to 26340; until then the engine treats skeleton keys on the host as values-only + X-SYSTIDY (§5.7.1). |
 
 ## Changes made while finishing M0
 
@@ -79,7 +79,8 @@ Node, VC++ and Firefox.
 
 ## Open points
 
-1. Clean-Pro VM: you need to choose how to get a 26300 Insider image (above).
+1. Clean-Pro VM: built on 26340.9882 (above). It matches the host once the host updates to 26340; after
+   later host updates, the VM needs a matching ISO and a new baseline.
 2. §1.4 targets: VC++'s "no candidates at all" conflicts with truth (installer logs and PCA traces). Node's
    PATH target is not exercised, because the uninstaller already removes the segment. Both are noted in FROZEN.md.
 3. Licence: MIT, chosen after M0 (`LICENSE`).
