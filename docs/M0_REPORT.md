@@ -83,4 +83,5 @@ Node, VC++ and Firefox.
 2. §1.4 targets: VC++'s "no candidates at all" conflicts with truth (installer logs and PCA traces). Node's
    PATH target is not exercised, because the uninstaller already removes the segment. Both are noted in FROZEN.md.
 3. Licence: MIT, chosen after M0 (`LICENSE`).
-4. Nothing is committed. The repo is not a git repository yet.
+4. Git: private GitHub repository `purge` (branch `main`), created after M0. `vm/runs`, `vm/build`,
+   `vm/results` and `vm/shots` stay local (git-ignored); the frozen truth and plans are committed.
