@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Purge's shared styles (look of the "Purge UI mockups" canvas). Everything is a theme resource so light,
+     dark and high contrast follow. Never look these up from code: under Native AOT the cast fails. -->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+            <StaticResource x:Key="SubtleHoverBrush" ResourceKey="SubtleFillColorSecondaryBrush" />
+            <StaticResource x:Key="SubtlePressedBrush" ResourceKey="SubtleFillColorTertiaryBrush" />
+            <SolidColorBrush x:Key="ChipNewBackgroundBrush" Color="#1F3F2B" />
+            <SolidColorBrush x:Key="ChipNewForegroundBrush" Color="#9FE2B0" />
+            <SolidColorBrush x:Key="SelectedRowBrush" Color="#1A60CDFF" />
+            <SolidColorBrush x:Key="ChipBackgroundBrush" Color="#17FFFFFF" />
+            <SolidColorBrush x:Key="AssistantChipBackgroundBrush" Color="#3A2F4D" />
+            <SolidColorBrush x:Key="AssistantChipForegroundBrush" Color="#D9C8F2" />
+            <SolidColorBrush x:Key="FooterBarBrush" Color="#0DFFFFFF" />
+            <SolidColorBrush x:Key="ChipBorderBrush" Color="Transparent" />
+            <Thickness x:Key="ChipBorderThickness">0</Thickness>
+            <!-- Footprint map (board 09): tiles keep their colour; in a contrast theme they become outlined. -->
+            <SolidColorBrush x:Key="FootprintCoverBrush" Color="Transparent" />
+            <SolidColorBrush x:Key="FootprintTextBrush" Color="White" />
+            <SolidColorBrush x:Key="FootprintOutlineBrush" Color="Transparent" />
+            <Thickness x:Key="FootprintOutlineThickness">0</Thickness>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+            <StaticResource x:Key="SubtleHoverBrush" ResourceKey="SubtleFillColorSecondaryBrush" />
+            <StaticResource x:Key="SubtlePressedBrush" ResourceKey="SubtleFillColorTertiaryBrush" />
+            <SolidColorBrush x:Key="ChipNewBackgroundBrush" Color="#DFF6DD" />
+            <SolidColorBrush x:Key="ChipNewForegroundBrush" Color="#0F5223" />
+            <SolidColorBrush x:Key="SelectedRowBrush" Color="#E8F0FA" />
+            <SolidColorBrush x:Key="ChipBackgroundBrush" Color="#F0F0F0" />
+            <SolidColorBrush x:Key="AssistantChipBackgroundBrush" Color="#EFE9F7" />
+            <SolidColorBrush x:Key="AssistantChipForegroundBrush" Color="#5B3D8A" />
+            <SolidColorBrush x:Key="FooterBarBrush" Color="#F3F3F3" />
+            <SolidColorBrush x:Key="ChipBorderBrush" Color="Transparent" />
+            <Thickness x:Key="ChipBorderThickness">0</Thickness>
+            <!-- Footprint map (board 09): tiles keep their colour; in a contrast theme they become outlined. -->
+            <SolidColorBrush x:Key="FootprintCoverBrush" Color="Transparent" />
+            <SolidColorBrush x:Key="FootprintTextBrush" Color="White" />
+            <SolidColorBrush x:Key="FootprintOutlineBrush" Color="Transparent" />
+            <Thickness x:Key="FootprintOutlineThickness">0</Thickness>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="HighContrast">
+            <StaticResource x:Key="SubtleHoverBrush" ResourceKey="SystemColorHighlightBrush" />
+            <StaticResource x:Key="SubtlePressedBrush" ResourceKey="SystemColorHighlightBrush" />
+            <StaticResource x:Key="ChipNewBackgroundBrush" ResourceKey="SystemColorWindowBrush" />
+            <StaticResource x:Key="ChipNewForegroundBrush" ResourceKey="SystemColorWindowTextBrush" />
+            <StaticResource x:Key="SelectedRowBrush" ResourceKey="SystemColorHighlightBrush" />
+            <StaticResource x:Key="ChipBackgroundBrush" ResourceKey="SystemColorWindowBrush" />
+            <StaticResource x:Key="AssistantChipBackgroundBrush" ResourceKey="SystemColorWindowBrush" />
+            <StaticResource x:Key="AssistantChipForegroundBrush" ResourceKey="SystemColorWindowTextBrush" />
+            <StaticResource x:Key="FooterBarBrush" ResourceKey="SystemColorWindowBrush" />
+            <!-- Board 21: in a contrast theme every label is outlined in the text colour, with its glyph, so
+                 meaning never depends on a fill colour. -->
+            <StaticResource x:Key="ChipBorderBrush" ResourceKey="SystemColorWindowTextBrush" />
+            <Thickness x:Key="ChipBorderThickness">2</Thickness>
+            <!-- Footprint map: system colours, outlined blocks, and the leftover band outlined in the highlight colour,
+                 with its text label, so hatching is never the only signal. -->
+            <StaticResource x:Key="FootprintCoverBrush" ResourceKey="SystemColorWindowBrush" />
+            <StaticResource x:Key="FootprintTextBrush" ResourceKey="SystemColorWindowTextBrush" />
+            <StaticResource x:Key="FootprintOutlineBrush" ResourceKey="SystemColorWindowTextBrush" />
+            <Thickness x:Key="FootprintOutlineThickness">2</Thickness>
+            <StaticResource x:Key="SystemFillColorSuccessBackgroundBrush" ResourceKey="SystemColorWindowBrush" />
+            <StaticResource x:Key="SystemFillColorCautionBackgroundBrush" ResourceKey="SystemColorWindowBrush" />
+            <StaticResource x:Key="SystemFillColorCriticalBackgroundBrush" ResourceKey="SystemColorWindowBrush" />
+            <StaticResource x:Key="SystemFillColorAttentionBackgroundBrush" ResourceKey="SystemColorWindowBrush" />
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+
+    <!-- A borderless button that shows a fill only on hover and press (rail items, tabs, toolbar). -->
+    <Style x:Key="SubtleButton" TargetType="Button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="MinHeight" Value="32" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+        <Setter Property="FontFamily" Value="{ThemeResource ContentControlThemeFontFamily}" />
+        <Setter Property="FontSize" Value="{ThemeResource ControlContentThemeFontSize}" />
+        <Setter Property="UseSystemFocusVisuals" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}">
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal" />
+                                <VisualState x:Name="PointerOver">
+                                    <VisualState.Setters>
+                                        <Setter Target="Hover.Background" Value="{ThemeResource SubtleHoverBrush}" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Pressed">
+                                    <VisualState.Setters>
+                                        <Setter Target="Hover.Background" Value="{ThemeResource SubtlePressedBrush}" />
+                                        <Setter Target="Presenter.Opacity" Value="0.8" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Disabled">
+                                    <VisualState.Setters>
+                                        <Setter Target="Presenter.Opacity" Value="0.45" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                        <Border x:Name="Hover" CornerRadius="{TemplateBinding CornerRadius}" />
+                        <ContentPresenter x:Name="Presenter"
+                                          Padding="{TemplateBinding Padding}"
+                                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          Foreground="{TemplateBinding Foreground}" />
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Small rounded label ("MSI", "new", "later"). -->
+    <Style x:Key="Chip" TargetType="Border">
+        <Setter Property="Height" Value="20" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Background" Value="{ThemeResource ChipBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource ChipBorderBrush}" />
+        <Setter Property="BorderThickness" Value="{ThemeResource ChipBorderThickness}" />
+    </Style>
+    <Style x:Key="ChipText" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="16" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+    </Style>
+
+    <Style x:Key="SecondaryText" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+    </Style>
+
+    <!-- White card on the layer, as in the mockups. -->
+    <Style x:Key="Card" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <!-- Coloured chips: band and state labels. -->
+    <Style x:Key="ChipSuccess" TargetType="Border" BasedOn="{StaticResource Chip}">
+        <Setter Property="Background" Value="{ThemeResource SystemFillColorSuccessBackgroundBrush}" />
+    </Style>
+    <Style x:Key="ChipCaution" TargetType="Border" BasedOn="{StaticResource Chip}">
+        <Setter Property="Background" Value="{ThemeResource SystemFillColorCautionBackgroundBrush}" />
+    </Style>
+    <Style x:Key="ChipCritical" TargetType="Border" BasedOn="{StaticResource Chip}">
+        <Setter Property="Background" Value="{ThemeResource SystemFillColorCriticalBackgroundBrush}" />
+    </Style>
+    <Style x:Key="ChipAttention" TargetType="Border" BasedOn="{StaticResource Chip}">
+        <Setter Property="Background" Value="{ThemeResource SystemFillColorAttentionBackgroundBrush}" />
+    </Style>
+    <Style x:Key="ChipOutline" TargetType="Border" BasedOn="{StaticResource Chip}">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource ControlStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style x:Key="ChipAccent" TargetType="Border" BasedOn="{StaticResource Chip}">
+        <Setter Property="Background" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+    </Style>
+    <Style x:Key="ChipAssistant" TargetType="Border" BasedOn="{StaticResource Chip}">
+        <Setter Property="Background" Value="{ThemeResource AssistantChipBackgroundBrush}" />
+    </Style>
+    <Style x:Key="ChipTextPrimary" TargetType="TextBlock" BasedOn="{StaticResource ChipText}">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
+    </Style>
+    <Style x:Key="ChipTextOnAccent" TargetType="TextBlock" BasedOn="{StaticResource ChipText}">
+        <Setter Property="Foreground" Value="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+    </Style>
+    <Style x:Key="ChipTextAssistant" TargetType="TextBlock" BasedOn="{StaticResource ChipText}">
+        <Setter Property="Foreground" Value="{ThemeResource AssistantChipForegroundBrush}" />
+    </Style>
+
+    <!-- Status glyphs (Segoe Fluent Icons). -->
+    <Style x:Key="GlyphDone" TargetType="FontIcon">
+        <Setter Property="Glyph" Value="&#xEC61;" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="Foreground" Value="{ThemeResource SystemFillColorSuccessBrush}" />
+    </Style>
+    <Style x:Key="GlyphWarn" TargetType="FontIcon">
+        <Setter Property="Glyph" Value="&#xE7BA;" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCautionBrush}" />
+    </Style>
+    <Style x:Key="GlyphError" TargetType="FontIcon">
+        <Setter Property="Glyph" Value="&#xEB90;" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCriticalBrush}" />
+    </Style>
+    <Style x:Key="GlyphPending" TargetType="FontIcon">
+        <Setter Property="Glyph" Value="&#xEA3A;" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+    </Style>
+    <Style x:Key="GlyphInfo" TargetType="FontIcon">
+        <Setter Property="Glyph" Value="&#xE946;" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+    </Style>
+
+    <Style x:Key="PageSubtitle" TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+        <Setter Property="VerticalAlignment" Value="Bottom" />
+        <Setter Property="Margin" Value="0,0,0,5" />
+    </Style>
+    <Style x:Key="SmallSecondary" TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="16" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style x:Key="Body13" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style x:Key="Mono" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="Cascadia Mono, Consolas" />
+        <Setter Property="FontSize" Value="12.5" />
+    </Style>
+    <Style x:Key="Divider" TargetType="Border">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{ThemeResource DividerStrokeColorDefaultBrush}" />
+    </Style>
+
+    <!-- A Settings row: title and description on the left, the control on the right. -->
+    <Style x:Key="SettingCard" TargetType="Border">
+        <Setter Property="MinHeight" Value="68" />
+        <Setter Property="Padding" Value="16,12" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style x:Key="SettingHeading" TargetType="TextBlock">
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Margin" Value="0,14,0,4" />
+    </Style>
+</ResourceDictionary>

@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Board 14, Home: a rail item above Programs (Programs stays the start page). Three counts, a drop target and
+     "Needs your attention". No score: everything here is a count of what Purge recorded. Items whose engine support
+     isn't decided yet are marked Sample. Built on first navigation only. -->
+<UserControl
+    x:Class="Purge.App.Views.HomeView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <UserControl.Resources>
+        <Style x:Key="StatLabel" TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="CharacterSpacing" Value="50" />
+        </Style>
+        <Style x:Key="StatValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="28" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="LineHeight" Value="34" />
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer>
+        <StackPanel Padding="28,20,28,28" Spacing="16" MaxWidth="1100" HorizontalAlignment="Left">
+            <StackPanel>
+                <TextBlock Text="Your PC" Style="{StaticResource TitleTextBlockStyle}" />
+                <TextBlock x:Name="Subtitle" FontSize="13" Style="{StaticResource SecondaryText}" />
+            </StackPanel>
+
+            <StackPanel x:Name="InfoBarHost" Spacing="6" />
+
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>
+                <Button Style="{StaticResource SubtleButton}" Padding="0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                        Tag="programs" Click="OnOpenPage" AutomationProperties.Name="Programs">
+                    <Border Style="{StaticResource Card}" Padding="16,12">
+                        <StackPanel>
+                            <TextBlock Text="PROGRAMS" Style="{StaticResource StatLabel}" />
+                            <TextBlock x:Name="StatPrograms" Text="–" Style="{StaticResource StatValue}" />
+                            <TextBlock x:Name="StatProgramsSub" Text="Measuring sizes…" Style="{StaticResource SmallSecondary}" />
+                        </StackPanel>
+                    </Border>
+                </Button>
+                <Button Grid.Column="1" Style="{StaticResource SubtleButton}" Padding="0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                        Tag="vault" Click="OnOpenPage" AutomationProperties.Name="Quarantine">
+                    <Border Style="{StaticResource Card}" Padding="16,12">
+                        <StackPanel>
+                            <TextBlock Text="QUARANTINE" Style="{StaticResource StatLabel}" />
+                            <TextBlock x:Name="StatVault" Text="–" Style="{StaticResource StatValue}" />
+                            <TextBlock x:Name="StatVaultSub" Text="Reading…" Style="{StaticResource SmallSecondary}" />
+                        </StackPanel>
+                    </Border>
+                </Button>
+                <Button Grid.Column="2" Style="{StaticResource SubtleButton}" Padding="0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                        Tag="leftovers" Click="OnOpenPage" AutomationProperties.Name="Reclaimable">
+                    <Border Style="{StaticResource Card}" Padding="16,12">
+                        <StackPanel>
+                            <TextBlock Text="RECLAIMABLE" Style="{StaticResource StatLabel}" />
+                            <TextBlock x:Name="StatReclaim" Text="–" Style="{StaticResource StatValue}" />
+                            <TextBlock x:Name="StatReclaimSub" Style="{StaticResource SmallSecondary}" />
+                        </StackPanel>
+                    </Border>
+                </Button>
+            </Grid>
+
+            <!-- Drop target. Works only while Purge runs without admin rights (Windows blocks drag and drop from
+                 Explorer into an elevated window). -->
+            <Grid x:Name="DropZone" AllowDrop="True" DragOver="OnDragOver" DragLeave="OnDragLeave" Drop="OnDrop"
+                  Padding="20,16" ColumnSpacing="16" CornerRadius="8" Background="{ThemeResource SubtleFillColorTransparentBrush}"
+                  BorderBrush="{ThemeResource ControlStrongStrokeColorDefaultBrush}" BorderThickness="1"
+                  AutomationProperties.Name="Drop a program or folder here">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <FontIcon Glyph="&#xE896;" FontSize="24" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock x:Name="DropTitle" Text="Drop a program or folder here" FontWeight="SemiBold" />
+                    <TextBlock Text="Find what a portable app left behind. Works with .exe files, shortcuts and folders." Style="{StaticResource SmallSecondary}" />
+                </StackPanel>
+                <Button Grid.Column="2" Content="Browse…" VerticalAlignment="Center" Click="OnBrowse" />
+            </Grid>
+
+            <TextBlock Text="Needs your attention" FontSize="18" FontWeight="SemiBold" Margin="0,4,0,0" />
+            <StackPanel x:Name="AttentionList" Spacing="8">
+                <!-- Removed outside Purge: no engine report yet, so this card is sample and says so. -->
+                <Border Style="{StaticResource Card}" Padding="16,12">
+                    <Grid ColumnSpacing="14">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xE7BA;" FontSize="18" Foreground="{ThemeResource SystemFillColorCautionBrush}" VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock TextWrapping="Wrap"><Run Text="Notion and Slack were removed outside Purge" FontWeight="SemiBold" /><Run Text="   " /><Run Text="SAMPLE" FontSize="11" CharacterSpacing="50" Foreground="{ThemeResource TextFillColorTertiaryBrush}" /></TextBlock>
+                            <TextBlock Text="Purge still has a record of what they registered. 11 leftovers found." Style="{StaticResource SmallSecondary}" />
+                        </StackPanel>
+                        <Button Grid.Column="2" Content="Review leftovers" VerticalAlignment="Center" Tag="leftovers" Click="OnOpenPage" />
+                    </Grid>
+                </Border>
+                <!-- Quarantine expiry: from quarantine.status; collapsed when nothing is close to expiring. -->
+                <Border x:Name="ExpiryCard" Style="{StaticResource Card}" Padding="16,12" Visibility="Collapsed">
+                    <Grid ColumnSpacing="14">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xE916;" FontSize="18" Foreground="{ThemeResource SystemFillColorCautionBrush}" VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock x:Name="ExpiryTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock x:Name="ExpiryText" Style="{StaticResource SmallSecondary}" />
+                        </StackPanel>
+                        <Button Grid.Column="2" Content="Review and delete…" VerticalAlignment="Center" Tag="vault" Click="OnOpenPage" />
+                    </Grid>
+                </Border>
+                <!-- Orphaned companion: sample until the ownership index reports it. -->
+                <Border Style="{StaticResource Card}" Padding="16,12">
+                    <Grid ColumnSpacing="14">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xE946;" FontSize="18" VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock TextWrapping="Wrap"><Run Text="Python Launcher is still installed and owns 13 registrations" FontWeight="SemiBold" /><Run Text="   " /><Run Text="SAMPLE" FontSize="11" CharacterSpacing="50" Foreground="{ThemeResource TextFillColorTertiaryBrush}" /></TextBlock>
+                            <TextBlock Text="Python itself is gone. Uninstall the launcher too?" Style="{StaticResource SmallSecondary}" />
+                        </StackPanel>
+                        <Button x:Name="QueueLauncher" Grid.Column="2" Content="Add to queue" VerticalAlignment="Center" Click="OnQueueLauncher" />
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
