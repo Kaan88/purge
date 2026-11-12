@@ -1,0 +1,31 @@
+[CLS-TOASTS] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts | "VSCode.md_.md"
+  id=c-b986c293a50c4d9b category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=extjournal:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts|VSCode.md_.md
+    anchor=VSCode.md
+    ext=.md
+    group=File associations
+    progid=VSCode.md
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.md
+    anchor=VSCode.md
+    ext=.md
+    group=File associations
+    progid=VSCode.md
+[CLS-TOASTS] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts | "VSCode.txt_.txt"
+  id=c-066e594155449351 category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts|VSCode.txt_.txt
+    anchor=VSCode.txt
+    ext=.txt
+    group=File associations
+    progid=VSCode.txt
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.txt
+    anchor=VSCode.txt
+    ext=.txt
+    group=File associations
+    progid=VSCode.txt
+[CLS-TOASTS] DeleteValue RegValue HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts | "VSCode.md_.md"
+  id=c-811bad503f82b379 category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.md
+    anchor=VSCode.md
+    ext=.md
+    group=File associations
+    progid=VSCode.md

@@ -1,0 +1,13 @@
+FS-APPDATA Quarantine Cache C:\Users\tester\AppData\Roaming\Lumen Studio\Cache
+  harm=Low reversibility=Full size=60000 files=1
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteDirOrFiles}
+FS-APPDATA Quarantine UserData C:\Users\tester\AppData\Roaming\Lumen Studio
+  harm=High reversibility=Full size=69877 files=4
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteDirOrFiles}
+  + ExactFullName B/4 Path AdminOnly [identity:Lumen Studio] {name=Lumen Studio}
+  ! UserData
+  > C:\Users\tester\AppData\Roaming\Lumen Studio\Cache
+FS-APPDATA Quarantine UserData C:\ProgramData\Brightwell\licence.dat
+  harm=High reversibility=Full size=64 files=1
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteFile}
+  ! UserData

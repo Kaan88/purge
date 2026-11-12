@@ -1,0 +1,1061 @@
+{
+ "summary": "M1a is almost entirely greenfield. Verified against the code: only purge-model (Target with 9 string-path variants, Band/Tool/ScanMode/Category, Plan `purge.plan/0`), the purge-engine argument parser (bins/purge-engine/src/main.rs, every verb prints \"not implemented\") and tools/xtask (ui-strings, check-deps, ci) contain real code; all other crates are doc-comment stubs. kb/*.json are empty arrays; kb/baselines has EnterpriseSEval-26100.1742 and Professional-26340.9882. .cargo/config.toml already sets +crt-static, so the engine exe runs in the guest without a redistributable. No unins*.dat or .lnk fixture exists in the repo (absent).\n\nDesign: 25 packages in 6 waves. Wave 0 fixes every shared file once (all Cargo.toml, Cargo.lock, every lib.rs mod list, empty module stubs) and lands the \u00a75.2 model, so later packages only fill in their own module files and never touch a manifest or lib.rs. Wave 1 is the pure/leaf layer (guard, policy, Inno parser, tokenizer, baseline+matcher, source traits+Fixture, purge-win FFI). Wave 2 is inventory, runner, live source, targeted index queries, identity assembly, scan framework, decide+plan. Wave 3 is harvest (two packages), the 17 scanners (four packages) and rig glue (two packages). Wave 4 wires the CLI; wave 5 adds offline replay + scanner-coverage. The gate then runs in the VM.\n\nThree design choices worth knowing:\n1. Fixture can load a rig snap (`snap-*.tsv.gz` + `lists-*.json`) directly, so the whole pipeline can be replayed offline: harvest on snap1, scan on snap2, score with rigtool. This gives a fast loop without the VM. Limits: no file contents, no REG_BINARY data, previews cut at 1024 chars.\n2. Engine runs in the VM must use a run name different from the app id (e.g. `r0-vscode`), because vm/rig.ps1 `Move-RunToOld` would otherwise archive the frozen M0 run directories that vm/truth/recompute.sh reads.\n3. The M1a scanner list cannot meet two M1a exit criteria on its own. Notepad++ frozen truth is 29 items, of which only `HKLM\\SOFTWARE\\WOW6432Node\\Notepad++` is reachable by M1a scanners: 1/29 = 3.4 %, exactly BCU's number, so \"better than BCU\" fails without an `AppxPackage` offer. \u00a71.4 also asks for \"Sparse AppX package Likely\" for VS Code and Notepad++. SYS-APPX is listed under M1b. The breakdown therefore includes a minimal read-only sparse-package link (marked APPX-MIN in P12/P15/P30/P32); it needs your confirmation (see questions).\n\nExpected M1a recall ceilings from frozen truth (vm/truth/frozen): Git 2/16 (the two Classes keys; the rest is Prefetch, jump lists, UserAssist, JumplistData, UFH, temp, all M1b/M4/v2), Firefox roughly 8-9/24 (BCU 20.8 %), VS Code about 135+/154 through skeletons on the LTSC baseline (BCU 0 %), Notepad++ about 22+/29 only with the package offer.\n\nImportance routing used: engine correctness/safety logic critical; FFI, CLI, runner, live plumbing high; rig glue medium; scaffolding trivial.",
+ "packages": [
+  {
+   "id": "P00",
+   "title": "Wave-0 scaffolding: manifests, lib.rs module lists, empty module stubs",
+   "importance": "trivial",
+   "depends_on": [],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a73.2",
+    "\u00a711.1"
+   ],
+   "crates_files": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/*/Cargo.toml (all except crates/purge-model/Cargo.toml)",
+    "bins/purge-engine/Cargo.toml",
+    "tools/xtask/Cargo.toml",
+    "crates/{purge-win,purge-source,purge-inventory,purge-identity,purge-harvest,purge-index,purge-scan,purge-guard,purge-policy,purge-plan}/src/lib.rs",
+    "every module file named in P10-P41 as an empty doc-comment stub",
+    "bins/purge-engine/src/lib.rs (new, `pub mod pipeline; pub mod cli;` stubs)"
+   ],
+   "scope": "Only package allowed to edit any Cargo.toml, Cargo.lock or crate lib.rs for the whole milestone. (1) Workspace deps: add flate2, sha2, unicode-normalization, crc32fast; keep windows 0.62 / windows-sys 0.61. (2) purge-win: add feature `run = [\"read\"]` (process + Job object; not part of `read`), and windows-sys features Win32_System_Registry, Win32_Storage_FileSystem, Win32_Security, Win32_Security_Cryptography, Win32_Security_Authorization, Win32_System_Threading, Win32_System_JobObjects, Win32_System_Diagnostics_ToolHelp, Win32_System_ApplicationInstallationAndServicing, Win32_UI_Shell, Win32_System_Com, Win32_System_Environment, Win32_System_SystemInformation, Win32_System_IO, Win32_System_Kernel, Win32_Storage_Packaging_Appx; optional dep `windows` with Management_Deployment, ApplicationModel, Foundation_Collections behind feature `appx`. (3) Crate deps: purge-guard += serde, serde_json; purge-source += flate2; purge-inventory += serde, serde_json, purge-win feature run; purge-identity += purge-source, unicode-normalization, serde, serde_json; purge-harvest += purge-index, serde, serde_json, crc32fast; purge-index += purge-guard, flate2; purge-scan += purge-guard; purge-plan += serde, sha2; purge-engine += serde, purge-win features read+run+appx, add [lib] target; xtask += purge-engine (lib), purge-scan, purge-source. (4) In each lib.rs keep the existing crate doc and add only `pub mod <name>;` lines, no re-exports (so nobody needs lib.rs later). Module names, exactly: purge-win {reg, fs, sid, known_folders, env, os, msi, signer, versioninfo, shelllink, process, cmdline, appx}; purge-source {types, registry, filesystem, system, fixture, snapfixture, live}; purge-inventory {arp, msi_merge, kind, quiet, runner, verify_gone}; purge-identity {tokenizer, matcher, sift4, kbdata, identity}; purge-harvest {inno, roots, exes, anchors, tokens, inno_map, harvest, refsnap, subtree, assoc, coproducts, appx_link}; purge-index {baseline, matcher, refscan, queries}; purge-scan {framework, skeleton, catalog, fs_installdir, fs_uninstaller, fs_appdata, fs_vendorparent, fs_shortcuts, sys_appx, reg_software, reg_apppaths, reg_run, reg_env, ref_any, cls_progid, cls_verbs, cls_protocol, cls_aumid, cls_regapps, cls_assoc, cls_fileexts, cls_toasts}; purge-guard {canon, prefix, deny, containers}; purge-policy {score, band, harm, explain, bcu_map}; purge-plan {decide, collapse, empty_after, order, hash, emit}. Each stub file is a `//!` doc line only. Rule for later packages: a package may add private submodules under its own module (declared from its own file); needing a new dependency means stopping and reporting, not editing a manifest.",
+   "acceptance": "`cargo build --workspace`, `cargo xtask ci` (fmt, clippy -D warnings, tests, check-deps, ui-strings) all pass with the stubs. `cargo tree -p purge-mcp` still shows neither purge-exec nor purge-win. No file under crates/purge-model/src or vm/ touched.",
+   "tests": "No new tests; existing 7 purge-model tests and 3 purge-engine parser tests still pass."
+  },
+  {
+   "id": "P01",
+   "title": "purge-model: \u00a75.2 entities, fingerprint, inventory and run documents",
+   "importance": "critical",
+   "depends_on": [],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a75.2",
+    "\u00a75.3",
+    "\u00a74.1",
+    "\u00a73.4",
+    "\u00a75.8.5",
+    "vm/RIG.md \u00a77"
+   ],
+   "crates_files": [
+    "crates/purge-model/Cargo.toml",
+    "crates/purge-model/src/** (lib.rs, target.rs, plan.rs kept wire-compatible; new: scope.rs, root.rs, evidence.rs, blocker.rs, candidate.rs, appref.rs, fingerprint.rs, inventory.rs, run.rs, ids.rs)"
+   ],
+   "scope": "Add the types every other package compiles against. Keep `Target` and `Plan` (`purge.plan/0`) byte-compatible with vm/rigtool/src/target.rs and score.rs: do NOT restructure Target into the typed \u00a75.2 form on the wire. Instead add an internal typed view `TypedTarget { hive: Hive(Hklm|Hku(sid)|HkuClasses(sid)), view: View(K64|K32), path, kind }` with lossless `From/TryFrom` to `Target` (WOW6432Node as path segment = 32-bit view), plus `RegMultiSzSegment` optional `index` (serde skip when None). No DefenderExclusion/Shortcut variants in M1a (shortcuts are `Target::Path`). New types, all Serialize/Deserialize/JsonSchema: `Scope{Value,Key,Path,Package}`; `Root{path,kind: RootKind{InstallRoot,ReferencedDataDir,InferredRoot},source: RootSource{ArpInstallLocation,InnoApp,MsiComponent,AppxInstalledLocation,DisplayIcon,UninstallerDir,Referenced},trust: SourceTrust{AdminOnly,UserWritable},volume_serial,parent_existed}`; `Tier{A,B,C,Ai}`; `EvidenceKind` with every \u00a75.3 row needed in M1a (InsideInstallRoot, InstallerManifest{inno}, InPreUninstallRefSnapshot, ProvenOwnedSkeleton, DanglingRef, PointsIntoInstallRoot, HarvestedToken, AppNamedKeyWithRootRef, ComKeyOwnership, UninstallerArtifact, AppxExternalLocation, ChainedRef, ReferencedByApp, ProductSubfolderOfVendor, ExactFullName, NameTokenExact, VendorContainer, TimeWindow, EmptyAfterPlan, negatives ExecutablesPresent/ManyFiles/GenericName/NameFuzzy/ModifiedAfterUninstall) and an associated `default_weight()/default_tier()/scope()` table equal to \u00a75.3; `Evidence{kind,tier,weight:i8,scope,trust,source:SourceId,detail:Facts(BTreeMap<String,String>)}`; `Blocker` enum with `is_hard()` covering every hard and soft blocker of \u00a75.3; `Harm{None,Low,Medium,High,Critical}`; `Reversibility`; `Origin{Scanner,Signature,ProbeAgent,ManualUser}`; `Action{Quarantine,DeleteKey,DeleteValue,EditSegment,RemoveDirIfEmpty,RemovePackage,ReportOnly}`; `AppRef{program_id,display_name}`; `Candidate{id,target,action,owner,origin,scanner,category,evidence,blockers,harm,reversibility,children,size_bytes,child_count,decision:Option<Decision{band,preselected,score,explanation}>}`; `Fingerprint` (schema `purge.fp/0`): app, identity snapshot (names, vendors, tokens, mega_vendor flag), roots, exe set + AppFileOutsideRoot, anchors {progids P, clsids, appids, typelibs, aumids, package families/full names, run entries}, harvested tokens, Inno records (decoded, normalised: kind, target, flags existed_before/shared/key_create, view), reference snapshot entries {target value, matched anchor, parent value/subkey counts}, subtree baselines {key, value names+hashes, subkeys, lwt, ti_owned}, ext journal entries (\u00a75.7.1), co-removed products, os {edition, build, ubr}, user_sid, time window {install_time, t_start, t_end}, verify_gone result, warnings; `InventoryDoc` (schema `purge.inventory/0`) with `InventoryEntry{program_id, key_path, hive_sid, view, display_name, version, publisher, raw flags (system_component, has_display_name, has_uninstall_string, parent_key, release_type, windows_installer), installer_kind, scope, product_code, upgrade_code, inno_app_id, writable_by, install_location, uninstall_string, quiet_uninstall_string, display_icon, install_time_evidence[], msi{context, local_package, install_date}?}` and `msi_only[]` rows; `RunDoc` (schema `purge.run/0`): program_id, cmd, signer, t_start, t_end, exit_code, outcome{Success,AlreadyGone,SuccessReboot,Cancelled,Failed,TimedOut}, verify_gone{arp_gone,msi_unknown_all_ctx,main_exes_gone}, processes seen, co_removed. `program_id` is a stable string: `<hive tag>|<view>|<key name>` (e.g. `HKLM|64|Git_is1`, `HKU:<sid>|64|{...}`), documented and parseable.",
+   "acceptance": "All prior tests pass unchanged (plan/0 wire format identical; add a test that serialises each plan-legal Target and deserialises it with a copy of rigtool's field names, including FirewallRule `id`). Every type round-trips through serde_json and generates a JSON Schema. Evidence default table matches \u00a75.3 line by line (test asserts each weight/tier/scope). `Blocker::is_hard` matches the \u00a75.3 hard/soft split. No dependency added beyond serde/schemars.",
+   "tests": "Unit tests in each module: round trips; TypedTarget<->Target for HKLM 64/32, HKU, HKU_Classes; program_id parse/format; weight table golden; schema generation for Fingerprint, InventoryDoc, RunDoc, Candidate; unknown schema ids rejected for fp/inventory/run documents."
+  },
+  {
+   "id": "P10",
+   "title": "purge-guard: canonicalisation (G1), separator-aware prefix tests, deny-list, structural containers",
+   "importance": "critical",
+   "depends_on": [
+    "P00",
+    "P01"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a75.10",
+    "\u00a75.2 validate_root inputs",
+    "\u00a710.1 guard tests",
+    "\u00a711.2"
+   ],
+   "crates_files": [
+    "crates/purge-guard/src/{canon.rs,prefix.rs,deny.rs,containers.rs} and private submodules",
+    "kb/deny.json",
+    "kb/shared-components.json"
+   ],
+   "scope": "Pure, no I/O (system facts arrive in a `GuardEnv` struct: windir, program files dirs, programdata, profile roots and per-profile known folders, current control set number, sync roots, other apps' roots, loaded SIDs, purge dirs). canon.rs: file paths (whitelisted env tokens expanded from GuardEnv only; strip/normalise `\\\\?\\`; reject `..`, GLOBALROOT, UNC, ADS `:`, device names, trailing dots/spaces; 8.3 names flagged `needs_long_name` for the caller since resolution is I/O); registry (HKEY_* / HKCU / HKLM forms to canonical roots; HKCR rejected; `HKLM\\SYSTEM\\CurrentControlSet` -> `ControlSet00N`; `HKU\\<SID>\\Software\\Classes` -> `HKU\\<SID>_Classes`; explicit view kept). prefix.rs: case-insensitive, separator-aware `is_same`, `is_inside`, `is_ancestor` for paths and keys (shared by index/scan/harvest). deny.rs: rule model with [S]/[E]/[E+A] annotations; every filesystem and registry rule of \u00a75.10 compiled in from GuardEnv; extra data rules from kb/deny.json (seed it: Notepad.lnk class of shortcuts under ProgramData\\Microsoft Start Menu without Tier A is already covered by rule; add `HKLM\\SOFTWARE\\Mozilla` [E], `...\\Mozilla\\NativeMessagingHosts` [S], `MediaPlayer\\ShimInclusionList` [E], package stores, mirroring vm/truth/deny.json semantics); `check(target, GuardEnv, exemptions) -> Option<Blocker::DenyListed{rule}>` with the two documented exemptions (ProvenOwnedSkeleton for Classes shell/shellex roots; Environment segment edit under Session Manager). containers.rs: static table of derived structural value containers (Run, RunOnce, StartupApproved\\*, Environment, FileExts\\*\\OpenWithList, ApplicationAssociationToasts, RegisteredApplications, ShimInclusionList, App Paths root, OpenWithProgids is NOT here) -> `Blocker::StructuralContainer` for key deletes. kb/shared-components.json: seed VC++ redist, .NET, WebView2, DirectX, VCLibs, WindowsAppRuntime, UI.Xaml, Edge path/key patterns; loader fn returns typed rules.",
+   "acceptance": "Every bullet of \u00a75.10 has at least one positive and one negative test. Deleting any [E+A] item or its ancestors is denied while children are allowed; [S] denies the subtree. `HKLM\\SOFTWARE\\Mozilla` key denied, `HKLM\\SOFTWARE\\Mozilla\\Firefox` allowed. `C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Accessories\\Notepad.lnk` denied. All targets in vm/truth/deny.json patterns are denied by the guard (test reads that file, read-only).",
+   "tests": "Table-driven unit tests; a hand-rolled property test (deterministic PRNG, no new dep) over path forms: case, separators, `\\\\?\\`, 8.3 markers, ADS, `..`, device names, WOW6432Node, HKCR, CurrentControlSet/_Classes mapping (\u00a710.1). Regression: InstallLocation `C:\\Program Files\\` is [E+A]-denied; `steamapps`; `Microsoft.NET` vs '.NET Hosting'."
+  },
+  {
+   "id": "P11",
+   "title": "purge-win core read wrappers: registry, filesystem, SIDs, known folders, env, OS version",
+   "importance": "high",
+   "depends_on": [
+    "P00"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a73.2",
+    "\u00a75.10 filesystem",
+    "\u00a74.2 expand_env",
+    "vm/RIG.md \u00a72"
+   ],
+   "crates_files": [
+    "crates/purge-win/src/{reg.rs,fs.rs,sid.rs,known_folders.rs,env.rs,os.rs}"
+   ],
+   "scope": "Safe wrappers under feature `read`, all `unsafe` confined here with SAFETY comments. reg: open predefined HKLM/HKU with explicit KEY_WOW64_64KEY/32KEY, always REG_OPTION_OPEN_LINK; RegQueryInfoKeyW (counts, LastWriteTime), RegEnumKeyExW, RegEnumValueW with raw bytes + type, buffer-retry on ERROR_MORE_DATA; link detection (returns `is_link` + SymbolicLinkValue, never follows); key security: owner SID and whether any ACE names TrustedInstaller; `current_control_set()` from SYSTEM\\Select\\Current; loaded HKU SIDs. fs: FindFirstFileExW(FindExInfoBasic, LARGE_FETCH) listing that reports attributes, size, times, reparse tag and never recurses into reparse points; metadata by handle with FILE_FLAG_OPEN_REPARSE_POINT|BACKUP_SEMANTICS; FileIdInfo; GetFinalPathNameByHandleW; GetLongPathNameW; volume serial + drive type + filesystem name; bounded file read (max bytes). sid: current user SID string, token elevation flag, ProfileList (sid -> profile path), `is_admin_only_writable(path)` (DACL check: no write ACE for non-admin principals on the path and every ancestor) used for SourceTrust. known_folders: SHGetKnownFolderPath for the folders \u00a75.2/\u00a75.10 name. env: ExpandEnvironmentStringsW with buffer retry (rewritten, not copied from the clone), and expansion against a supplied variable map. os: EditionID, CurrentBuildNumber, UBR from the registry.",
+   "acceptance": "Builds with `-D warnings`; no `write`-feature API added. Reading `HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall` in both views on the dev host returns the same key names as `reg query /reg:64` and `/reg:32`. A junction created in a temp dir is listed with its reparse tag and not traversed. `HKU\\<SID>\\Software\\Classes` is reported as a link.",
+   "tests": "Host-touching tests are read-only or confined to std::env::temp_dir (junction via `cmd /c mklink /J`, cleaned up): reg enumeration parity with a second method for a known key, value types incl. REG_MULTI_SZ/REG_BINARY/default value, long value retry, link flag, fs listing with reparse entry, FileId stable across two opens, env expansion incl. unknown variables left intact, OS version non-empty."
+  },
+  {
+   "id": "P12",
+   "title": "purge-win extras: MSI, signer, VersionInfo, shell links, process/Job object, command line, AppX read (APPX-MIN)",
+   "importance": "high",
+   "depends_on": [
+    "P00"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a73.2",
+    "\u00a74.1 MSI",
+    "\u00a74.3 ProcessStartCommand",
+    "\u00a74.4",
+    "\u00a75.4 vendors",
+    "\u00a75.6 FS-SHORTCUTS"
+   ],
+   "crates_files": [
+    "crates/purge-win/src/{msi.rs,signer.rs,versioninfo.rs,shelllink.rs,process.rs,cmdline.rs,appx.rs}"
+   ],
+   "scope": "msi (read): MsiEnumProductsExW over user-unmanaged, user-managed and machine contexts with szUserSid NULL (medium) or `s-1-1-0` (elevated), MsiGetProductInfoExW (ProductName, VersionString, InstallLocation, LocalPackage, InstallDate, Publisher), MsiQueryProductStateW-equivalent per context (`product_state_all_contexts(code) -> Vec<(ctx,state)>`), packed-GUID <-> GUID conversion (pure). signer: CryptQueryObject -> CMSG_SIGNER_INFO_PARAM -> CertGetNameStringW subject CN, no revocation, no network. versioninfo: GetFileVersionInfoW CompanyName/ProductName/FileDescription/OriginalFilename over the first translation. shelllink: CoInitializeEx on the calling thread, IShellLinkW + IPersistFile::Load, GetPath(SLGP_RAWPATH), GetArguments, GetWorkingDirectory, AUMID via IPropertyStore (System.AppUserModel.ID); never calls Resolve. cmdline (pure, BCU ProcessStartCommand port with the attribution header of \u00a74.3): split an UninstallString into exe + args, quoted and unquoted forms, `rundll32`/`msiexec` forms. process (feature `run`): CreateProcessW suspended into a Job object with breakaway disallowed, resume, job process-list polling, wait with timeout, exit code, `mutex_exists(\"Global\\\\_MSIExecute\")`, Toolhelp32 snapshot + QueryFullProcessImageNameW. appx (feature `appx`, APPX-MIN): PackageManager.FindPackagesForUser(\"\") (and FindPackages when elevated) returning full_name, family, installed location, EffectiveExternalPath, SignatureKind, IsFramework, IsResourcePackage, users.",
+   "acceptance": "`cargo build -p purge-win --features read,run,appx` clean. MSI enumeration on the dev host returns the same product-code set as the registry `Installer\\UserData\\*\\Products` listing (differences printed). Signer CN of `C:\\Windows\\System32\\notepad.exe` or another catalog/embedded-signed file handled without panic (unsigned -> None). A .lnk created in temp by a test (via the same COM API under `#[cfg(test)]`) round-trips raw path and arguments. A Job-launched `cmd /c start /b ping -n 3 127.0.0.1` is waited to full tree exit.",
+   "tests": "Pure unit tests: packed GUID conversion vectors, cmdline splitting table (quoted path with spaces, unquoted path with spaces ending .exe, `MsiExec.exe /I{GUID}`, `\"C:\\x\\unins000.exe\" /SILENT`). Host tests as in acceptance, read-only or temp-dir only; process tests spawn only cmd/ping."
+  },
+  {
+   "id": "P13",
+   "title": "purge-policy: score, bands, Rule T, mode rules, harm, explanation templates (pure, versioned)",
+   "importance": "critical",
+   "depends_on": [
+    "P00",
+    "P01"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.3 Rule T",
+    "\u00a75.8.1-\u00a75.8.6",
+    "\u00a75.11",
+    "\u00a71.3",
+    "\u00a71.4"
+   ],
+   "crates_files": [
+    "crates/purge-policy/src/{score.rs,band.rs,harm.rs,explain.rs,bcu_map.rs}"
+   ],
+   "scope": "`POLICY_VERSION: &str`. score: S = sum over distinct non-Ai kinds of max weight, +1 per extra independent `source` of the same kind (cap +2), plus negatives; Ai excluded. Rule T: given target scope (machine vs per-user, derived from TypedTarget hive/path class supplied by the caller as `TargetScope`), evidence with trust UserWritable is downgraded to Tier B for machine-scope targets before banding. band: Blocked if any hard blocker; Safe iff a Tier A evidence exists whose `scope` matches the target type (Value evidence never supports a key target; Key supports key; Path supports path; Package supports AppxPackage), Rule T satisfied, S >= 8, no soft blocker, harm <= Low, category not in {UserData, System}, and mode/verify-gone allows; Likely iff Tier A with a soft blocker or harm >= Medium, or S >= 4, or ExactFullName present; else Weak. Mode rules: forced or verify-gone failed -> Safe shown as Likely, nothing preselected; external -> Safe only from AdminOnly evidence. Caps for origin ProbeAgent/Signature (implemented, unused in M1a). preselected = band == Safe. PATH segment edits: harm Medium by \u00a75.8.5 but \u00a71.4 requires PATH Safe: implement the documented exception `Action::EditSegment` with InstallerManifest or InsideInstallRoot-declared segment counts as harm Low (record this decision in a comment and in explain). harm: default harm per (category, action). explain: fixed templates rendered from evidence/blockers into a string list; no free text. bcu_map: the \u00a75.8.1 table as a const map.",
+   "acceptance": "Decision is a pure function `decide(&Candidate, &PolicyCtx{mode, verify_gone, target_scope}) -> Decision`; same input, same output; no I/O; no dependency on scan/harvest. Golden table of at least 40 cases covering each band rule, each cap, Rule T, scope mismatch (Value-only Tier A on a RegKey target is never Safe), UserData never preselected, AppxPackage with ReversibilityNone soft blocker -> Likely.",
+   "tests": "Golden tests keyed by POLICY_VERSION (file crates/purge-policy/tests/golden.rs with inline cases). Property-style checks: adding a hard blocker always yields Blocked; adding Ai evidence never raises a band; removing evidence never raises a band; forced mode never preselects."
+  },
+  {
+   "id": "P14",
+   "title": "Inno Setup uninstall-log parser (unins*.dat)",
+   "importance": "critical",
+   "depends_on": [
+    "P00",
+    "P01"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a76.1 Inno row",
+    "\u00a75.3 InstallerManifest",
+    "\u00a710.1 parser tests",
+    "\u00a711.2 Inno format changes"
+   ],
+   "crates_files": [
+    "crates/purge-harvest/src/inno.rs and private submodules under crates/purge-harvest/src/inno/",
+    "crates/purge-harvest/tests/fixtures/inno/** (synthetic logs built by a test helper; real logs added at the gate)"
+   ],
+   "scope": "Pure byte parser written from the public issrc `Setup.UninstallLog.pas` format (attribution line in the header comment; nothing from draft_clone). 448-byte header: ID string, AppId, AppName, Version, NumRecs, EndOffset, Flags, reserved, CRC32 over the header; version gate: parse versions <= 1055, otherwise return `Unsupported{version}` so the caller records a warning and falls back to harvest-only. Body: blocks of up to 4096 bytes each prefixed `{Size u32, NotSize u32, CRC u32}` with NotSize == !Size and CRC checked; concatenated stream of records `{Typ u16, ExtraData u32, DataSize u32}` followed by DataSize bytes of packed strings: length marker byte 0x00-0xFC literal length, 0xFD u16 length, 0xFE i32 length (negative = UTF-16LE byte count), 0xFF end. Record types 0x80-0x8B decoded into typed records: Run, DeleteDirOrFiles, DeleteFile, DeleteGroupOrItem, IniDeleteEntry, IniDeleteSection, RegDeleteEntireKey, RegClearValue, RegDeleteKeyIfEmpty, RegDeleteValue, DecrementSharedCount, RefreshFileAssoc, MutexCheck (unknown types kept as Raw with a warning, never an error). Flags surfaced: 64-bit view (`ExtraData & 0x01000000`), ExistedBeforeInstall, SharedFile, RegisteredServer and the per-type flag bits. Output maps to model `InnoRecord`s: registry root constants to canonical hives (HKCU records keep a `user` marker for the caller to bind to a SID), view, path, value name; file paths as written. All lengths bounds-checked; malformed input returns an error, never panics; cap total decoded size (e.g. 64 MiB).",
+   "acceptance": "A synthetic writer in the test module produces logs for versions at and below the gate; parse(write(x)) == x. Corrupt CRC, truncated block, NotSize mismatch, oversized length, version > 1055 each produce the specific error/Unsupported value. When a real Git or VS Code unins000.dat is supplied via env `PURGE_INNO_FIXTURES` (directory), the ignored test parses it fully with zero Raw records and prints record counts per type.",
+   "tests": "Unit tests on synthetic logs (ANSI and UTF-16 strings, all 12 types, 32/64-bit flags, multi-block records spanning a block boundary). A no-panic sweep: every single-byte truncation and 1,000 deterministic bit flips of a synthetic log return Ok or Err. `#[ignore]` test for real logs."
+  },
+  {
+   "id": "P15",
+   "title": "purge-source: traits, value types, JSON Fixture and rig-snap Fixture",
+   "importance": "high",
+   "depends_on": [
+    "P00",
+    "P01"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a73.2 purge-source",
+    "\u00a75.6 (scanners read only via purge-source)",
+    "\u00a710.1",
+    "vm/RIG.md \u00a72-\u00a73"
+   ],
+   "crates_files": [
+    "crates/purge-source/src/{types.rs,registry.rs,filesystem.rs,system.rs,fixture.rs,snapfixture.rs}",
+    "crates/purge-source/tests/fixtures/**"
+   ],
+   "scope": "types: `RegData{ty:u32, bytes}` with typed accessors (sz, expand_sz, multi_sz segments, dword, qword, utf16 strings inside binary up to 4 KB), `KeyInfo{lwt, n_values, n_subkeys, is_link, link_target, ti_owned}`, `DirEntry/FileMeta{size, attrs, times, reparse_tag, file_id?}`, `VersionInfo`, `ShortcutInfo{raw_path,args,workdir,aumid}`, `VolumeInfo{serial, fixed, fs}`, `PackageInfo` (APPX-MIN), `OsInfo{edition, build, ubr}`. Traits (object-safe, `&self`, Send+Sync): `RegistrySource` (key_info, subkeys, values, value, loaded_user_sids, current_control_set; paths are canonical strings as produced by purge-guard canon, view explicit via WOW6432Node segment); `FileSystemSource` (metadata, list_dir (non-traversing), exists tri-state {Present, Absent, Unknown} for dangling checks, read_bytes(max), long_path, volume_info, version_info, signer_cn, read_shortcut, is_admin_only_writable); `SystemSource` (os_info, user_sid, elevated, profiles, known_folders, env map for the interactive user, processes, msi_products, msi_product_state_all, packages, now). fixture.rs: `purge.fixture/1` JSON tree (keys with values incl. base64 bytes, dirs/files with optional inline content or side-file reference, shortcuts, version info, signers, volumes, system facts, msi products, packages); builder API for tests. snapfixture.rs: `Fixture::from_snap(snap.tsv.gz, lists.json?, overlay_dir?)` reading the RIG.md \u00a72 format (D/F/K/V, escapes, header edition/build) with REG_SZ/EXPAND_SZ/MULTI_SZ/DWORD/QWORD reconstructed from preview, other types as `data_unknown` (accessor returns None, flagged), previews cut at 1024 marked truncated; `HKLM\\SYSTEM\\CurrentControlSet` in snaps mapped to ControlSet001 for the fixture; lists.json supplies msi/appx/processes; overlay_dir supplies file contents (e.g. unins000.dat) by path.",
+   "acceptance": "Every trait method has a Fixture implementation; `cargo test -p purge-source` runs without touching the host registry. Loading kb-free: `Fixture::from_snap` on a 20-line hand-written snap in tests/fixtures gives the expected tree. With env `PURGE_RUNS_DIR` set, an ignored test loads `vscode/snap-vscode-1.tsv.gz` + lists and reports counts equal to the snap's own K/V/D/F line counts.",
+   "tests": "Unit tests: fixture JSON round trip, case-insensitive key/path lookup, default value name \"\", multi_sz segmentation, binary-utf16 extraction bound, tri-state exists (path on a volume the fixture marks removable -> Unknown), snap escape decoding (`\\\\`, `\\t`, `\\n`, `\\0`), truncated preview flag."
+  },
+  {
+   "id": "P16",
+   "title": "purge-identity pure core: tokenizer, matcher, IDF, mega-vendors, Sift4, kb token data",
+   "importance": "critical",
+   "depends_on": [
+    "P00",
+    "P01"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.4 tokenizer steps 1-9 and mega-vendors",
+    "\u00a710.1 regression list"
+   ],
+   "crates_files": [
+    "crates/purge-identity/src/{tokenizer.rs,matcher.rs,sift4.rs,kbdata.rs}",
+    "kb/generic-tokens.json",
+    "kb/mega-vendors.json"
+   ],
+   "scope": "tokenizer: NFKC + lowercase casefold; split on whitespace and on `_ - .` between alphanumerics; keep symbol tokens (`notepad++`, `c#`, `f#`, `.net`); drop stopwords (version-like tokens, x64, x86, (64-bit), setup, edition, inc, corp, corporation, ltd, llc, gmbh, foundation, the, for, windows); drop generic tokens from kb/generic-tokens.json (seed the list from \u00a75.4 plus obvious peers; licence-clean, own wording). `Corpus` built from all installed apps' names/publishers/key names: IDF rule drops tokens present in more than 2 apps. Distinctiveness rule: fewer than 1 remaining token (fewer than 2 when the publisher is a mega-vendor) disables NameTokenExact, ExactFullName and ProductSubfolderOfVendor for that app (`NameMatching::Disabled`). matcher: whole-token match needing every significant token; names of <= 3 chars only as exact full name and flagged `needs_tier_ab_neighbour`; vendor alias match; mega-vendor vendor-only weight 0; Sift4 distance used only to order ties. kbdata: `include_str!` loaders for the two JSON files with typed structs and validation (lowercase, no duplicates). kb/mega-vendors.json seeded (Microsoft, Google, Adobe, Oracle, Apple, Intel, NVIDIA, AMD, Mozilla?: decide by rule 'many unrelated products'; Mozilla is NOT a mega-vendor, Firefox/Thunderbird separation is done by tokens and anchors).",
+   "acceptance": "Pure functions; no purge-win use. Required cases pass: all VC++ redistributables installed together -> every one of them has name matching disabled; `Git` and `Code` match only as exact full names; `Notepad++` never matches `Notepad`; 'Mozilla Firefox' tokens do not match a `Thunderbird` folder and vice versa while both share vendor `mozilla`; 'Microsoft Visual Studio Code' with mega-vendor publisher keeps >= 2 distinctive tokens only if they survive IDF with dirty-base's Visual Studio Build Tools present (test both corpora and assert the documented outcome).",
+   "tests": "Table tests for each tokenizer step; corpus tests built from the `uninstall` arrays of vm/truth/dirty-base.json-like inline data (inline copies, not file reads); non-ASCII names (NFKC full-width, Turkish dotless i casefold documented); Sift4 vectors."
+  },
+  {
+   "id": "P17",
+   "title": "purge-index pure core: baseline loader/filter and reference matcher",
+   "importance": "critical",
+   "depends_on": [
+    "P00",
+    "P01",
+    "P10"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.5 reference index matching",
+    "\u00a75.3 WindowsBaseline, ProvenOwnedSkeleton",
+    "\u00a75.7.1 step 3",
+    "kb/baselines/README.md"
+   ],
+   "crates_files": [
+    "crates/purge-index/src/{baseline.rs,matcher.rs}",
+    "crates/purge-index/tests/fixtures/**"
+   ],
+   "scope": "baseline.rs: read `kb/baselines/<EditionID>-<build>.<ubr>.tsv.gz` (header `#purge-baseline 1`, `#source`, records K/V/D/F, escapes) into a compact case-insensitive set (sorted Vec of lowercased strings or hashed set; must load the 310k-key Professional file in well under 1 s release and stay under ~150 MB); `Baseline::select(dir, edition, build, ubr) -> Option<Baseline>` requires an exact (edition, build.ubr) match, otherwise None (callers then go values-only); queries `has_key`, `has_value(key,name)`, `has_path`, with `HKLM\\SYSTEM\\CurrentControlSet` <-> ControlSet00N and per-user SID normalisation (baseline SID replaced by a placeholder at load so another machine's user SID matches). matcher.rs: the reference matcher used by harvest and scanners: given an `AnchorSet` (roots, exe paths, exe names, ProgIDs, CLSIDs, AUMIDs, tokens), test a string (value name, SZ/EXPAND_SZ data, each MULTI_SZ segment, UTF-16 run in binary) and return the matched anchor + kind; case-insensitive; separator-aware (root `C:\\Program Files\\Git` matches `C:\\Program Files\\Git\\cmd` and quoted/command-line embedded forms, never `C:\\Program Files\\GitHub`); environment variables expanded with a supplied map and also compared unexpanded; handles `\"path\" args`, `path,iconindex`, 8.3 forms supplied by the caller, forward slashes; token match is whole-segment only (\u00a75.3 HarvestedToken).",
+   "acceptance": "Loads both committed baselines (test reads them from kb/baselines relative to CARGO_MANIFEST_DIR, read-only) and reports the record counts in kb/baselines/README.md. Golden matcher cases from \u00a75.5: Firefox `TaskBarIDs` and `Launcher` value NAMES that are paths; VS Code OpenWithProgids value names with empty data; a MuiCache-style name `C:\\...\\app.exe.FriendlyAppName`.",
+   "tests": "Unit tests with a 30-line synthetic baseline in tests/fixtures; exact-match selection (wrong ubr -> None); SID placeholder; matcher table (positive, near-miss prefix, quoted, env-expanded, token whole-segment `308046B0AF4A39CB` vs longer hex run)."
+  },
+  {
+   "id": "P20",
+   "title": "purge-source Live implementation over purge-win",
+   "importance": "high",
+   "depends_on": [
+    "P11",
+    "P12",
+    "P15"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a73.2",
+    "\u00a75.10 G1 mappings",
+    "\u00a74.1"
+   ],
+   "crates_files": [
+    "crates/purge-source/src/live.rs and private submodules under crates/purge-source/src/live/"
+   ],
+   "scope": "`LiveRegistry`, `LiveFileSystem`, `LiveSystem` implementing the P15 traits by calling purge-win. Canonical path -> (root HKEY, subpath, view) translation incl. WOW6432Node segment to KEY_WOW64_32KEY where Windows redirects, `HKU\\<SID>_Classes` physical hive, ControlSet00N. Registry links are reported, never followed. exists tri-state: ERROR_FILE_NOT_FOUND/PATH_NOT_FOUND on a mounted fixed NTFS/ReFS volume -> Absent; access denied, sharing violation, removable/network/unmounted -> Unknown. Shortcut reads run on a dedicated COM-initialised thread. Interactive-user env map built from `HKU\\<SID>\\Environment`, Volatile Environment and the system block. Errors mapped to a `SourceError` enum (NotFound, AccessDenied, Other(code)).",
+   "acceptance": "A parity test runs the same read-only query set (Uninstall keys both views, HKU Run key, a Program Files listing depth 1, OS info) through Live and prints results; no panics unelevated; access-denied keys are counted, not fatal. No write API referenced (crate still depends on purge-win `read` only, plus `appx` for packages).",
+   "tests": "Host read-only tests: Live vs direct purge-win calls agree; canonical path translation table (pure unit test); tri-state mapping from error codes (pure unit test over a code table)."
+  },
+  {
+   "id": "P21",
+   "title": "purge-inventory: ARP enumeration, MSI merge by ProductCode, installer kind, quiet command generation",
+   "importance": "high",
+   "depends_on": [
+    "P01",
+    "P12",
+    "P15"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a74.1",
+    "\u00a74.2",
+    "\u00a74.3",
+    "\u00a74.4 quiet commands",
+    "\u00a711.1 inventory exit criterion",
+    "ENGINE_RESEARCH.md purge-inventory rule"
+   ],
+   "crates_files": [
+    "crates/purge-inventory/src/{arp.rs,msi_merge.rs,kind.rs,quiet.rs}",
+    "crates/purge-inventory/tests/fixtures/**"
+   ],
+   "scope": "Written fresh from documented Uninstall-key semantics and BCU RegistryFactory.cs / the three quiet-string generators (each ported file carries the \u00a74.3 header lines); nothing from the clone's programs.rs. arp.rs: over `RegistrySource` enumerate `HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall` (64 view), the WOW6432Node twin (32 view), and `HKU\\<SID>\\Software\\...\\Uninstall` for every loaded profile (interactive user first); exactly one `InventoryEntry` per key, never deduplicated, never dropped (keys without DisplayName are kept with has_display_name=false); raw flags, hive_sid, view, writable_by (admin for HKLM, user for HKU), scope, install_time_evidence (InstallDate value, key LastWriteTime, install-dir creation time and unins000.dat creation time via FileSystemSource when present). kind.rs: installer_kind detection (MSI: WindowsInstaller=1 or GUID key name with msiexec string; Inno: `_is1` key suffix / `Inno Setup:` values -> inno_app_id; NSIS: uninstaller exe heuristics per BCU; Burn: BundleProviderKey/BundleCachePath, recorded but children not linked in M1a; Unknown). msi_merge.rs: take `SystemSource::msi_products()`, attach to entries by ProductCode only; products without an ARP key go to `msi_only[]`. quiet.rs: QuietUninstallString if present; else MSI `msiexec /x {PC} /qn REBOOT=ReallySuppress` built from the ProductCode; Inno `<uninstaller> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`; NSIS `<uninstaller> /S` with BCU's `_?=` handling; returns `QuietCommand{exe,args,generated:bool,kind}`; uses purge-win cmdline splitting. Output `InventoryDoc`.",
+   "acceptance": "On a Fixture built from the `uninstall` rows of an inline sample (shape of vm/results/lists-registry.json: 78 HKLM incl. 35 WOW6432Node, 2 HKCU), the entry set has exactly one entry per source key. Quiet commands for Git_is1 (Inno), Mozilla Firefox (NSIS), Notepad++ (NSIS), a `{GUID}` MSI entry equal the forms in vm/guest/apps.ps1 (`{U} /VERYSILENT /NORESTART /SUPPRESSMSGBOXES`, `{U} /S`, `msiexec /x {PC} /qn ...`) up to argument order. With `PURGE_RUNS_DIR`, ignored test: inventory over `Fixture::from_snap(snap-vscode-1)` equals the key set of `lists-vscode-1.json` `uninstall` (35 entries), differences listed.",
+   "tests": "Fixture unit tests: both views with the same key name produce two entries; HKU entry tagged user-writable; entry with no DisplayName kept; SystemComponent/ParentKeyName/ReleaseType flags; MSI merge by code with differing names; msi_only row; kind detection table; quiet generation table incl. `/I{`->`/X{` with odd spacing and NSIS `_?=`."
+  },
+  {
+   "id": "P22",
+   "title": "purge-index targeted queries over RegistrySource (reference scan)",
+   "importance": "critical",
+   "depends_on": [
+    "P15",
+    "P17"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.5 reference index scope and post_uninstall rule",
+    "\u00a75.1",
+    "\u00a71.3 engine timing"
+   ],
+   "crates_files": [
+    "crates/purge-index/src/{refscan.rs,queries.rs}"
+   ],
+   "scope": "refscan.rs: a bounded walk over the \u00a75.5 scope (`HKLM\\SOFTWARE` incl. WOW6432Node, `HKU\\<SID>\\Software`, `HKU\\<SID>_Classes`, `HKLM\\SYSTEM\\ControlSet00N\\Services`, Session Manager\\Environment and `HKU\\<SID>\\Environment`) that applies the P17 matcher to value names, SZ/EXPAND_SZ data, every MULTI_SZ segment and UTF-16 runs in REG_BINARY (<= 4 KB per value); never follows links; skips a configurable prune list (e.g. `Classes\\Installer`, `Windows\\CurrentVersion\\Component Based Servicing`, package stores) for speed; emits `RefHit{key, value_name, where: Name|Data|Segment(i)|Binary, anchor, anchor_kind, parent n_values/n_subkeys}`; progress callback; deterministic order. Used once at harvest (the reference snapshot) and once post-uninstall. queries.rs: targeted lookups driven by anchors for post mode: `values_referencing(anchor set, key list)`, `keys_named(parent list, name set)` (ProgIDs/CLSIDs/AUMIDs by name under known parents), `subtree(key, limits)` capture (value names + data hashes (SHA-256 first 16 hex, same as RIG.md), subkeys, lwt, ti_owned) for subtree baselines, with hard caps (keys/values/depth) returning a `truncated` flag.",
+   "acceptance": "On a Fixture, a refscan finds every planted reference in each of the four carriers (name, data, multi_sz segment, binary utf16) and none of the near-miss decoys. With `PURGE_RUNS_DIR`, ignored perf test: refscan over `Fixture::from_snap(snap-vscode-1)` with VS Code anchors completes and reports hit counts and time. Subtree capture hashes equal the snap's value hashes for SZ values.",
+   "tests": "Fixture unit tests for scope limits (a hit outside scope is not reported), prune list, link not followed, truncation flag, deterministic ordering, Firefox TaskBarIDs/Launcher name hits, VS Code empty-data OpenWithProgids names."
+  },
+  {
+   "id": "P23",
+   "title": "Minimal uninstall runner and verify-gone",
+   "importance": "high",
+   "depends_on": [
+    "P01",
+    "P12",
+    "P15",
+    "P21"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a74.4",
+    "\u00a75.8.3",
+    "\u00a73.4 uninstall verb"
+   ],
+   "crates_files": [
+    "crates/purge-inventory/src/{runner.rs,verify_gone.rs}"
+   ],
+   "scope": "runner.rs: logic behind a `ProcessHost` trait (spawn_in_job, job_active_pids, mutex_exists, now, sleep) with a Live impl over purge-win `run` feature and a scripted fake for tests. Sequence: resolve QuietCommand (P21); record signer CN of the uninstaller exe; start in a Job (no breakaway); wait until (job has no live process) AND (`Global\\_MSIExecute` absent) AND (ARP key gone), with two consecutive quiet polls; if the tree and MSI are idle but the ARP key stays for 180 s give up waiting (not a timeout; verify-gone will fail); overall timeout (default 30 min) kills nothing by default and reports TimedOut (a `--kill-on-timeout` behaviour is NOT implemented; process termination needs consent, M2/M3). Exit-code table: 0 Success candidate, 1605 AlreadyGone, 1641/3010 SuccessReboot, 1602 Cancelled, other Failed. No WM_CLOSE handling of running app processes in M1a: running processes under the roots are listed in RunDoc only. verify_gone.rs (pure over sources): ARP key gone, MSI product state UNKNOWN in all contexts (when the entry has a product code), main exes from the fingerprint absent (tri-state Unknown counts as not gone) -> `VerifyGone{arp_gone, msi_unknown_all_ctx, main_exes_gone, passed}`. Co-removed products: diff of inventory before/after (entries that disappeared other than the target). The per-user/machine routing rule of \u00a74.4 is recorded as a field (`ran_as: elevated|medium`, `should_run_medium: bool`) but not enforced in M1a (CLI runs with its own token).",
+   "acceptance": "With the fake host: each exit code maps to the documented outcome; NSIS-style relaunch (child outlives parent inside the job) is waited; MSI mutex present delays completion; ARP-stays case ends after the idle give-up with verify_gone.passed=false; timeout path. Live smoke test (dev host, harmless): run `cmd /c exit 1605` as a fake 'uninstaller' through the Live host and get AlreadyGone.",
+   "tests": "Scripted fake-host unit tests for the wait state machine and exit table; verify-gone table on Fixture (ARP gone/present, MSI state lists, exe Present/Absent/Unknown); co-removed diff test (Firefox + Mozilla Maintenance Service disappearing together)."
+  },
+  {
+   "id": "P24",
+   "title": "purge-identity assembly: AppIdentity from inventory, VersionInfo and signer",
+   "importance": "critical",
+   "depends_on": [
+    "P15",
+    "P16",
+    "P21"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.4 names, vendors",
+    "\u00a75.3 Rule T trust"
+   ],
+   "crates_files": [
+    "crates/purge-identity/src/identity.rs and private submodules"
+   ],
+   "scope": "`AppIdentity::resolve(entry, all_entries, fs: &dyn FileSystemSource) -> AppIdentity`: Names from DisplayName, MSI ProductName, Inno AppId/AppName (AppName supplied later by harvest via `with_inno`), NSIS key name, ARP key name, main exe names, VersionInfo ProductName/FileDescription of the main exes; Vendors from Publisher, signer CN, VersionInfo CompanyName, URLInfoAbout/HelpLink host (registrable domain label only), with normalisation (strip legal suffixes) into vendor aliases; builds the `Corpus` (P16) from all entries and stores the token set, the name-matching state (enabled/disabled) and mega-vendor flag; exposes `matches_name(segment)`, `matches_full_name(segment)`, `matches_vendor(segment)` returning evidence kinds + weights (NameTokenExact C/3, ExactFullName B/4, ProductSubfolderOfVendor B/3, VendorContainer C/2 or 0). Main-exe selection: exes in InstallLocation depth <= 2 and the DisplayIcon target, largest/primary by VersionInfo match (documented heuristic); the full exe set belongs to harvest. Serialises into the Fingerprint identity snapshot so scan needs no live identity resolution after the uninstall.",
+   "acceptance": "On Fixtures: Firefox identity has vendor alias `mozilla`, name tokens `firefox`; with Thunderbird also installed, `matches_name(\"Thunderbird\")` is false and `matches_vendor(\"Mozilla\")` is true with VendorContainer only. Git: 3-char rule active. VS Code: publisher Microsoft Corporation is a mega-vendor, so vendor-only weight is 0 and `Microsoft` folders are never matched by name. Identity snapshot round-trips through Fingerprint JSON and gives identical match results after reload.",
+   "tests": "Fixture unit tests per app above plus Notepad++ (symbol token kept; `Notepad` is not a match), VC++ redist set (matching disabled), an entry with no publisher and unsigned exe, non-ASCII publisher."
+  },
+  {
+   "id": "P25",
+   "title": "purge-scan framework: Scanner trait, ScanCtx, candidate builder, ProvenOwnedSkeleton helper, catalog",
+   "importance": "critical",
+   "depends_on": [
+    "P01",
+    "P15",
+    "P17",
+    "P10"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.6 trait and coverage rule",
+    "\u00a75.3 ProvenOwnedSkeleton, DanglingRef, carry-over rule (\u00a75.5)",
+    "\u00a75.10 derived structural containers"
+   ],
+   "crates_files": [
+    "crates/purge-scan/src/{framework.rs,skeleton.rs,catalog.rs}",
+    "the 18 scanner stub files get their struct + id + captured_roots + empty scan() from this package (bodies are replaced by P32-P35)"
+   ],
+   "scope": "framework.rs: `trait Scanner { fn id(&self)->&'static str; fn captured_roots(&self)->&[RootSpec]; fn value_containers(&self)->&[&'static str] { &[] } fn scan(&self, ctx:&ScanCtx, app:&AppIdentityView)->Vec<Candidate>; }`; `RootSpec{kind: Reg|Fs, pattern, depth}`; `ScanCtx{reg, fs, sys, fp:&Fingerprint, baseline:Option<&Baseline>, mode, verify_gone, env, other_apps:&OtherApps (roots/anchors of every other current inventory entry for ReferencedByOtherApp / InsideOtherApp / ContainsOtherApp checks), limits}`; `CandidateBuilder` that fills id (stable hash of target), scanner id, owner, category, action, default harm, and offers typed evidence constructors that set tier/weight/scope from the model table and trust from the fingerprint source (so scanners cannot invent weights); helper `dangling(path)` implementing the full DanglingRef rule (Absent on a fixed NTFS/ReFS volume with the recorded serial and nearest existing ancestor == the root's recorded parent); helper `inside_install_root(path)`; helper for common blockers (WindowsBaseline when the target is in the baseline, TrustedInstallerOwned, ExistedBeforeInstall from Inno flags, other-app checks via purge-guard prefix fns). Scanners never set a band. skeleton.rs: `proven_owned_skeleton(key) -> Option<Evidence>`: the fingerprint has a subtree baseline for the key in which every value and subkey was attributed Tier A (or the key is an Inno key-create record), the key is now value-free (and subkeys are either gone or themselves proven), key not in the (edition, build) baseline (None baseline -> no evidence), no TI owner/ACE. catalog.rs: `all_scanners()` returning the 17 M1a scanners plus SYS-APPX (APPX-MIN), and `metadata()` for xtask scanner-coverage.",
+   "acceptance": "`all_scanners()` lists exactly: FS-INSTALLDIR, FS-UNINSTALLER, FS-APPDATA, FS-VENDORPARENT, FS-SHORTCUTS, REG-SOFTWARE, REG-APPPATHS, REG-RUN, REG-ENV, REF-ANY, CLS-PROGID, CLS-ASSOC, CLS-FILEEXTS, CLS-TOASTS, CLS-AUMID, CLS-VERBS, CLS-PROTOCOL, CLS-REGAPPS (+ SYS-APPX). The union of `value_containers()` is a subset of purge-guard's containers table (test). Skeleton helper returns evidence only when all five conditions hold; each condition has a failing test.",
+   "tests": "Fixture unit tests for skeleton (Git `sh_auto_file` and `LibraryFolder\\background\\shell` shapes: proven; same with an extra foreign value at harvest: not proven; key present in baseline: not proven; no baseline: not proven; TI-owned: not proven), dangling helper (removable volume -> none, serial mismatch -> none), builder weight/tier/scope equal to the model table."
+  },
+  {
+   "id": "P26",
+   "title": "purge-plan: decide (guard + policy), nesting collapse, EmptyAfterPlan, ordering, hash, purge.plan/0 emission",
+   "importance": "critical",
+   "depends_on": [
+    "P01",
+    "P10",
+    "P13"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a73.6 steps 6-7",
+    "\u00a75.8",
+    "\u00a77.1 (collapse/order/hash only)",
+    "\u00a75.6 FS-VENDORPARENT",
+    "\u00a75.10 blast radius",
+    "vm/RIG.md \u00a77"
+   ],
+   "crates_files": [
+    "crates/purge-plan/src/{decide.rs,collapse.rs,empty_after.rs,order.rs,hash.rs,emit.rs}"
+   ],
+   "scope": "decide.rs: for each Candidate: canonicalise target with purge-guard (failure -> hard blocker), run `deny::check` with the exemptions the candidate's evidence earns (ProvenOwnedSkeleton; Environment segment edit), add StructuralContainer for key deletes of value containers, apply blast-radius soft blockers (TooLarge: > 50 keys or > 5,000 files / > 2 GB or > 50k files per \u00a75.3), merge duplicate candidates on the same target from different scanners (evidence union, independent-source count preserved, first scanner id kept and others listed in facts), then call purge-policy `decide`. empty_after.rs: for FS-VENDORPARENT / registry vendor-parent candidates carrying the pending marker, compute whether the container would be empty once all Safe-and-preselected descendants in the plan are removed (dirs holding only desktop.ini/Thumbs.db count as empty; `children` listing supplied by the scanner in facts); if so add `EmptyAfterPlan` evidence (Tier A, Key/Path scope, weight 8) and re-decide, else leave it Likely/unoffered per VendorContainer weight. collapse.rs: a Safe parent absorbs its descendants (they become `children`, not separate items); a non-Safe parent never absorbs; a Blocked child prevents the parent from being Safe (parent gets `ContainsOtherApp`/UnmatchedChildren as appropriate). order.rs: deterministic order (values before keys, children before parents, files before dirs, API objects last) and stable sort key. hash.rs: SHA-256 over the canonical JSON of ordered items + policy version + mode. emit.rs: `to_plan0(app_id, mode, decided) -> purge_model::Plan` with tool=purge: one PlanItem per top-level decided candidate incl. Blocked and Weak ones (scorer treats them per band), `RegValue` name \"\" for default; plus an extended sidecar document (`purge.scan/0`: full candidates with evidence, blockers, explanation, plan hash) for `plan show` and debugging.",
+   "acceptance": "Emitted plans parse with vm/rigtool's reader (test deserialises into a local mirror of rigtool's Plan/PlanItem/Target structs). The BCU nested-delete sequence regression (\u00a710.1): parent Likely + child Safe -> both listed, child not absorbed; parent Safe + children -> one item. A denied target is emitted with band Blocked and preselected=false. Hash is stable across runs and changes when any item, band or the policy version changes.",
+   "tests": "Unit tests: decide with each guard outcome; duplicate merge; EmptyAfterPlan true/false/desktop.ini-only; collapse table; ordering determinism (shuffled input -> same output); hash golden; emit round trip."
+  },
+  {
+   "id": "P30",
+   "title": "purge-harvest I: validate_root, roots, exe set, anchors (P set, CLSIDs, AUMIDs), tokens, Inno mapping, orchestrator, sparse-package link (APPX-MIN)",
+   "importance": "critical",
+   "depends_on": [
+    "P10",
+    "P14",
+    "P15",
+    "P17",
+    "P21",
+    "P22",
+    "P24"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a75.2 validate_root, root kinds, Fingerprint",
+    "\u00a75.3 HarvestedToken, InstallerManifest, Rule T",
+    "\u00a75.4 anchors and P",
+    "\u00a76.1 harvest row",
+    "\u00a74.1 AppX linking rule",
+    "\u00a711.2 wrong root"
+   ],
+   "crates_files": [
+    "crates/purge-harvest/src/{roots.rs,exes.rs,anchors.rs,tokens.rs,inno_map.rs,harvest.rs,appx_link.rs}",
+    "crates/purge-harvest/tests/fixtures/** (except inno/)"
+   ],
+   "scope": "roots.rs: `validate_root(path, source, env)` rejecting every case of \u00a75.2 (deny-listed incl. %WINDIR% and Common Files; a Known Folder or inside a user-content Known Folder; under a sync root; volume root, Program Files*, ProgramData, `%LOCALAPPDATA%\\Programs` root, a vendor folder holding other apps; under Package Cache / Windows\\Installer / InstallShield Installation Information; parent of any other app's anchor (UninstallString, DisplayIcon, exe, service ImagePath read from the Services keys)). Root kinds: InstallRoot only from ARP InstallLocation, Inno `{app}` (derived from the uninstaller's directory when the log confirms it, and from `Inno Setup: App Path`), AppX InstalledLocation; InferredRoot from DisplayIcon / uninstaller dir (Tier B only, never whole-quarantine); trust from `is_admin_only_writable` + hive (HKU ARP => UserWritable). Records volume serial and whether the parent exists. exes.rs: exe/dll set under InstallRoots (bounded walk, non-traversing), names + full paths. anchors.rs: ProgID set P = Classes keys (HKLM\\SOFTWARE\\Classes and HKU\\<SID>_Classes) whose `shell\\*\\command` targets the roots AND that no key outside the app references (DefaultIcon/AUMID alone insufficient); pre-existing ProgIDs the app modified are recorded as `modified_progids`, not in P; CLSID/AppID/TypeLib ids whose server path is in the roots (recorded for REF-ANY and ChainedRef; COM key deletion is M1b); AUMIDs (Classes\\AppUserModelId names referencing roots, shortcut AUMIDs, RegisteredApplications/Capabilities names); Run entries pointing into roots. tokens.rs: HarvestedToken extraction: GUIDs and >= 12-hex tokens from the app's own ProgIDs, AUMIDs, ARP key name, Inno AppId; kept only if absent from every other app's anchors and from the baseline (when one matches). inno_map.rs: locate `unins*.dat` next to the uninstaller, parse (P14), bind HKCU records to the hive SID, map to InnoRecords with key-create vs value scope and ExistedBeforeInstall/SharedFile flags; unsupported version -> warning in fp. appx_link.rs (APPX-MIN): link a sparse package only when its external location equals or lies under a validated InstallRoot; record full name + family; never by publisher; never framework/resource/Store- or System-signed. harvest.rs: `harvest(entry, inventory, sources, baseline, kb) -> Fingerprint` orchestrating identity (P24), roots, exes, anchors, tokens, Inno, appx link, then calling P31's refsnap/subtree/assoc/coproducts functions (signatures fixed by P00 stubs: `refsnap::capture(ctx)->Vec<RefSnapEntry>`, `subtree::capture(ctx, keys)->Vec<SubtreeBaseline>`, `assoc::capture(ctx)->Vec<ExtJournalEntry>`, `coproducts::candidates(ctx)->Vec<CoProductPre>`), stamps os, user_sid, install_time, and writes `purge.fp/0`.",
+   "acceptance": "validate_root: one failing fixture per rejection bullet, incl. regressions InstallLocation `C:\\Program Files\\`, install into Documents, `Program Files\\Mozilla` style vendor folder holding Thunderbird (root `C:\\Program Files\\Mozilla Firefox` accepted, a vendor parent rejected). P set: on a VS Code-shaped fixture `VSCode.*` ProgIDs are in P, `txtfile` (pre-existing, modified) is not; on Git, `sh_auto_file` handling is left to skeleton evidence. Tokens: Firefox `308046B0AF4A39CB` harvested; a hex token also present in Thunderbird's anchors is dropped. With `PURGE_RUNS_DIR` (+ optional overlay with unins000.dat): ignored test harvests vscode, git, firefox, npp from their snap-1 fixtures and prints a summary (roots, |P|, tokens, Inno record counts); the linked sparse packages are exactly `Microsoft.VisualStudioCode_*` and `NotepadPlusPlus_*`, never the Edge sparse package.",
+   "tests": "Fixture unit tests listed above, Rule T trust tagging (HKU ARP entry -> UserWritable roots), per-user Inno log HKCU binding, deterministic output (same fixture -> byte-identical fp.json)."
+  },
+  {
+   "id": "P31",
+   "title": "purge-harvest II: reference snapshot, subtree baselines, association journal, co-removed products",
+   "importance": "critical",
+   "depends_on": [
+    "P10",
+    "P15",
+    "P17",
+    "P22",
+    "P01"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.2 Fingerprint (reference snapshot, subtree baselines, co-removed)",
+    "\u00a75.3 InPreUninstallRefSnapshot, ProvenOwnedSkeleton",
+    "\u00a75.5",
+    "\u00a75.7.1 step 1",
+    "\u00a71.3 harvest <= 3 s"
+   ],
+   "crates_files": [
+    "crates/purge-harvest/src/{refsnap.rs,subtree.rs,assoc.rs,coproducts.rs}",
+    "crates/purge-harvest/tests/refsnap/**"
+   ],
+   "scope": "Functions take an explicit `HarvestCtx{reg, fs, sys, anchors:&AnchorSet, roots, inno:&[InnoRecord], baseline, inventory}` so they are testable without P30. refsnap.rs: run P22 refscan with the anchor set (roots, exe paths, ProgIDs P, CLSIDs, AUMIDs, tokens) and store `RefSnapEntry{key, value_name, carrier, anchor, parent n_values, parent n_subkeys, data_hash}`. subtree.rs: for every key that is (a) an Inno key-create record, (b) a ProgID in P, (c) a key holding any refsnap hit plus its ancestors up to the first structural container or baseline key, capture a `SubtreeBaseline` (value names + hashes, subkeys, lwt, ti_owned) and compute `fully_attributed`: every value and subkey in the subtree is attributed to the app by Tier A (refsnap hit, Inno record, or name in P). assoc.rs (\u00a75.7.1 step 1): for every `.ext` key in the app's scope hives (HKLM\\SOFTWARE\\Classes and HKU\\<SID>_Classes) touched by P: record OpenWithProgids values split into ours/others, subkey count, ext default (and whether it equals a ProgID in P), other values and subkeys, TI flags, vendor backup value (e.g. `<Name>_backup`), whether the `.ext` and its `OpenWithProgids` exist in the baseline; also `HKU\\<SID>\\...\\Explorer\\FileExts\\.ext` OpenWithProgids/OpenWithList/MRUList entries naming P or the exe set, and `ApplicationAssociationToasts` values `<ProgID>_<.ext>` with ProgID in P. coproducts.rs: pre-harvest summaries (roots, tokens, ARP key) for other inventory entries that may disappear with the target: same vendor alias and (shared root parent or referenced by the target's uninstaller dir / Inno log), e.g. Mozilla Maintenance Service; after the uninstall the runner's disappeared-entries diff picks from these.",
+   "acceptance": "VS Code-shaped fixture (3 extensions: one `.ext` new with only our OpenWithProgids value, one pre-existing in baseline, one with another app's value too): journal marks them distinctly; subtree `fully_attributed` true/false/false. Git-shaped fixture: `LibraryFolder\\background\\shell` subtree captured with its verb subkeys attributed by Inno records. Firefox fixture with Maintenance Service: it appears as a co-product candidate; Thunderbird does not. With `PURGE_RUNS_DIR`: ignored timing test on snap-vscode-1 prints refsnap + subtree time (target: within the 3 s harvest budget in release on the dev host; reported, not asserted).",
+   "tests": "Fixture unit tests above; caps (subtree truncated -> fully_attributed=false); TI-owned flag propagates; deterministic ordering."
+  },
+  {
+   "id": "P32",
+   "title": "Scanners FS-INSTALLDIR, FS-UNINSTALLER, FS-APPDATA, FS-VENDORPARENT, FS-SHORTCUTS, SYS-APPX (APPX-MIN)",
+   "importance": "critical",
+   "depends_on": [
+    "P25",
+    "P24",
+    "P22",
+    "P10"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a75.6 Files and folders table",
+    "\u00a75.6 SYS-APPX row",
+    "\u00a75.3",
+    "\u00a75.5 carry-over rule",
+    "\u00a75.10 blast radius",
+    "\u00a71.4 Firefox, Notepad++"
+   ],
+   "crates_files": [
+    "crates/purge-scan/src/{fs_installdir.rs,fs_uninstaller.rs,fs_appdata.rs,fs_vendorparent.rs,fs_shortcuts.rs,sys_appx.rs}",
+    "crates/purge-scan/tests/fs/**"
+   ],
+   "scope": "Each scanner reads only through ScanCtx sources and the Fingerprint; emits Candidates with typed evidence/blockers via CandidateBuilder; declares captured_roots. FS-INSTALLDIR: for each validated InstallRoot still present: `InsideInstallRoot` + requires verify-gone passed (else `NotGone`); blockers when any running process image is inside, any other ARP UninstallString/DisplayIcon points inside (`ContainsOtherApp`), or any file was modified after t_end (`ModifiedAfterUninstall` negative + UnmatchedChildren); whole-dir quarantine only for manifest-backed InstallRoots; InferredRoots never offered whole (only owned descendants). Category AppFiles. FS-UNINSTALLER: leftover uninstaller exe/dat/msg files and dir (`UninstallerArtifact`), category AppFiles. FS-APPDATA: `%APPDATA%`, `%LOCALAPPDATA%`, LocalLow, `%PROGRAMDATA%`, VirtualStore, depth <= 2 for the interactive user: attribution by refsnap/Inno records (Tier A), HarvestedToken whole-segment match (e.g. `ProgramData\\Mozilla-<guid>\\updates\\<hash>`: only the matching subfolder, never the `Mozilla-<guid>` parent), ExactFullName / NameTokenExact / ProductSubfolderOfVendor from identity; known cache dir names (Cache, GPUCache, Code Cache, CachedData, logs, crashpad) under an attributed app folder are category Cache and may be Safe with Tier A; every other attributed folder is category UserData with the `UserData` soft blocker (so at most Likely, never preselected); ReferencedDataDir never a whole-directory target; negatives ExecutablesPresent/ManyFiles/GenericName. FS-VENDORPARENT: `Roaming\\<Vendor>`, `Local\\<Vendor>`, `Program Files\\<Vendor>`, Start Menu vendor folders matched by vendor alias: emit with VendorContainer evidence, action RemoveDirIfEmpty, a pending-EmptyAfterPlan marker and the child listing in facts (P26 decides); mega-vendor containers never emitted. FS-SHORTCUTS: Start Menu (user + common), Desktop (user + Public), Quick Launch, `User Pinned\\TaskBar`, ImplicitAppShortcuts, Startup folders; `.lnk` via `read_shortcut` (raw path, args, AUMID), `.url`, `.appref-ms`; attribution: target into an InstallRoot / exe set (`PointsIntoInstallRoot`) or dangling per the helper, `--processStart` and `shell:AppsFolder\\<AUMID>` parsing; a shortcut whose target exists outside the roots is never offered (Notepad.lnk regression: target `%windir%\\system32\\notepad.exe`); Start Menu `.lnk` under ProgramData\\Microsoft needs Tier A (guard exemption). SYS-APPX (APPX-MIN): for each package linked in the fingerprint and still registered (`SystemSource::packages`): one `Target::AppxPackage{full_name}` candidate, `AppxExternalLocation` evidence, category Package, action RemovePackage, soft blocker ReversibilityNone (=> Likely); never framework/resource/Store/System-signed.",
+   "acceptance": "Golden fixture tests per scanner (expected candidate list with evidence kinds and blockers, serialised and compared). Required regressions: Notepad++ fixture never yields `Notepad.lnk`; Firefox fixture with Thunderbird installed yields nothing under `...\\Thunderbird` and offers `Roaming\\Mozilla` / `Local\\Mozilla` only as vendor-parent (delete-if-empty) with the Firefox profile folder as UserData/Likely; planted user file inside an app AppData folder keeps the folder UserData; root with a running process -> blocked; SYS-APPX offers `NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww` on the npp snap-2 lists and never the Edge package.",
+   "tests": "Per-scanner Fixture goldens under crates/purge-scan/tests/fs; property check that no emitted target lies inside another app's root in the fixture; no scanner sets `decision`."
+  },
+  {
+   "id": "P33",
+   "title": "Scanners REG-SOFTWARE, REG-APPPATHS, REG-RUN, REG-ENV, REF-ANY",
+   "importance": "critical",
+   "depends_on": [
+    "P25",
+    "P24",
+    "P22",
+    "P10"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a75.6 Registry application keys table",
+    "\u00a75.3 AppNamedKeyWithRootRef, PointsIntoInstallRoot, DanglingRef, InPreUninstallRefSnapshot, HarvestedToken",
+    "\u00a71.4 Firefox, VS Code PATH, Git PATH",
+    "\u00a75.10 derived containers"
+   ],
+   "crates_files": [
+    "crates/purge-scan/src/{reg_software.rs,reg_apppaths.rs,reg_run.rs,reg_env.rs,ref_any.rs}",
+    "crates/purge-scan/tests/reg/**"
+   ],
+   "scope": "REG-SOFTWARE: `Software[\\WOW6432Node]\\<Vendor>\\<Product>` and `...\\<Product>` in HKLM and HKU\\<SID>, depth <= 2. Key-level evidence: `AppNamedKeyWithRootRef` (token match + at least one value recorded at harvest pointing into an InstallRoot, no value/subkey referencing another app's anchors, not a structural container, not under `SOFTWARE\\Microsoft`, not older than the install), Inno key-create record, `ProvenOwnedSkeleton`, `HarvestedToken` segment. Vendor keys (`SOFTWARE\\Mozilla`, `WOW6432Node\\Mozilla`, `HKU\\..\\Software\\Mozilla`) are emitted only as delete-if-empty vendor containers with the pending EmptyAfterPlan marker (never when denied, e.g. `HKLM\\SOFTWARE\\Mozilla` stays Blocked by guard and only its product subkeys are offered). Co-removed products' keys (e.g. `Mozilla\\MaintenanceService`) are attributed through the co-product pre-harvest in the fingerprint. Under `SOFTWARE\\Microsoft`, key deletes need InstallerManifest or ProvenOwnedSkeleton. Value-level: `PointsIntoInstallRoot`. REG-APPPATHS: `App Paths\\<exe>` and `Classes\\Applications\\<exe>` whose path is into roots or dangling and whose exe name is not claimed by another app. REG-RUN: Run/RunOnce (64/32, HKU) values whose command is into roots or dangling, plus the same-named `StartupApproved\\{Run,Run32,StartupFolder}` value; value targets only. REG-ENV: `HKLM\\SYSTEM\\ControlSet00N\\Control\\Session Manager\\Environment` and `HKU\\<SID>\\Environment`: `;`-list values (Path etc.): a segment under a root or declared by the Inno log, compared unexpanded and expanded for the user, directory gone -> `Target::RegMultiSzSegment{path,name,segment}` with action EditSegment (emit the path with `CurrentControlSet` spelling as rigtool canonicalises: confirm against vm/rigtool/src/canon.rs and emit the form the scorer matches); whole-value deletes for app-declared variables only with Inno value records. REF-ANY: any value in the reference-index scope whose name or data references a harvested anchor: value-level only, Tier A when in the pre-uninstall snapshot (`InPreUninstallRefSnapshot`) or dangling; skips values already claimed by a more specific scanner (dedupe is P26's merge, so just emit); a key is offered only when every value and subkey is covered, re-checked live (uses skeleton/subtree data). All: ExistedBeforeInstall and WindowsBaseline blockers, other-app reference blockers.",
+   "acceptance": "Goldens per scanner. Firefox fixture: offers `HKLM\\SOFTWARE\\Mozilla\\Firefox`, `...\\Mozilla\\MaintenanceService` (co-product), `HKLM\\SOFTWARE\\mozilla.org` (decide and document its evidence path; if none reaches Tier A it must still be listed Likely), `WOW6432Node\\Mozilla` and `HKU\\..\\Software\\Mozilla` as delete-if-empty; never `HKLM\\SOFTWARE\\Mozilla` as a deletable key; Firefox `TaskBarIDs`/`Launcher` values referencing the root are value targets, the containing keys are not deleted. Notepad++ fixture: `HKLM\\SOFTWARE\\WOW6432Node\\Notepad++` offered. PATH: a Git `cmd` segment left behind yields one RegMultiSzSegment candidate; a segment that existed before install (Inno flag or not in snapshot) yields none. No candidate under `SOFTWARE\\Microsoft` without manifest/skeleton evidence.",
+   "tests": "Per-scanner Fixture goldens under crates/purge-scan/tests/reg; structural-container test (no RegKey candidate equals a table entry); Rule T fixture (HKU-sourced evidence on an HKLM target is tagged UserWritable so policy can downgrade)."
+  },
+  {
+   "id": "P34",
+   "title": "Scanners CLS-PROGID, CLS-VERBS, CLS-PROTOCOL, CLS-AUMID, CLS-REGAPPS",
+   "importance": "critical",
+   "depends_on": [
+    "P25",
+    "P24",
+    "P22",
+    "P10"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.6 Classes table",
+    "\u00a75.4 P set",
+    "\u00a75.3 ProvenOwnedSkeleton, ChainedRef",
+    "\u00a71.4 Git, Firefox",
+    "\u00a75.10 Classes rules"
+   ],
+   "crates_files": [
+    "crates/purge-scan/src/{cls_progid.rs,cls_verbs.rs,cls_protocol.rs,cls_aumid.rs,cls_regapps.rs}",
+    "crates/purge-scan/tests/cls_keys/**"
+   ],
+   "scope": "Physical hives only (`HKLM\\SOFTWARE\\Classes`, `HKU\\<SID>_Classes`), never HKCR. CLS-PROGID: `Classes\\<ProgID>` for ProgIDs in P (harvest evidence, dangling command); `*_auto_file` only through ProvenOwnedSkeleton or a command path into roots; key deletes only with a matching baseline (no baseline -> value-level candidates only, key not offered); pre-existing modified ProgIDs never produce key candidates. CLS-VERBS: `{*, AllFilesystemObjects, Folder, Directory, Directory\\Background, Drive, DesktopBackground, LibraryFolder\\Background}\\shell\\<verb>` whose command is into roots or dangling -> key; the parent `shell` key only via ProvenOwnedSkeleton (Git `LibraryFolder\\background\\shell`). CLS-PROTOCOL: `Classes\\<scheme>` with `URL Protocol` and command into roots (e.g. per-user `vscode`). CLS-AUMID: `Classes\\AppUserModelId\\<AUMID>` for AUMIDs in the anchor set (e.g. `FirefoxToast-<hash>`). CLS-REGAPPS: `RegisteredApplications` values (value target) whose Capabilities path is the app's, the `Capabilities` key, `Clients\\StartMenuInternet\\<name>` and `Clients\\Mail\\<name>` keys by P/command/token. All with baseline, TI, ExistedBeforeInstall and other-referrer blockers (a ProgID still referenced by another app's `.ext` default or OpenWithProgids -> ReferencedByOtherApp).",
+   "acceptance": "Goldens. Git fixture on the LTSC baseline: `HKLM\\SOFTWARE\\Classes\\sh_auto_file` and `HKLM\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell` each get ProvenOwnedSkeleton Key-scope Tier A; the same fixture with `baseline=None` offers neither key. VS Code user-shaped fixture: `HKU\\<SID>_Classes\\vscode` protocol key offered. Firefox-shaped fixture (pre-uninstall leftovers simulated): `FirefoxHTML-<hash>` ProgID, `Clients\\StartMenuInternet\\Firefox-<hash>`, `AppUserModelId\\FirefoxToast-<hash>` offered; with Thunderbird present, `ThunderbirdEML` etc. never offered. `Classes\\*\\shell` and other structural roots never offered.",
+   "tests": "Per-scanner Fixture goldens under crates/purge-scan/tests/cls_keys incl. the with/without-baseline pair, TI-owned key, ProgID referenced by another app."
+  },
+  {
+   "id": "P35",
+   "title": "Scanners CLS-ASSOC, CLS-FILEEXTS, CLS-TOASTS and the \u00a75.7.1 association handler",
+   "importance": "critical",
+   "depends_on": [
+    "P25",
+    "P24",
+    "P22",
+    "P10"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a75.7.1 steps 1-4",
+    "\u00a75.6 CLS-ASSOC/FILEEXTS/TOASTS",
+    "\u00a71.4 VS Code (system)",
+    "\u00a75.3 ChainedRef, ProvenOwnedSkeleton"
+   ],
+   "crates_files": [
+    "crates/purge-scan/src/{cls_assoc.rs,cls_fileexts.rs,cls_toasts.rs} and private submodule cls_assoc/handler.rs",
+    "crates/purge-scan/tests/assoc/**"
+   ],
+   "scope": "Driven by the fingerprint's ext journal (P31). CLS-ASSOC: (a) values named exactly in P under `.ext\\OpenWithProgids` -> RegValue candidates (InPreUninstallRefSnapshot / ChainedRef, Value scope); `OpenWithList\\<exe>` and `SystemFileAssociations` entries by exe set/P; (b) `OpenWithProgids` key -> RegKey candidate with ProvenOwnedSkeleton only when it is now empty AND the journal shows only our value AND a matching (edition, build) baseline exists that does not contain it; (c) `.ext` key under the same conditions applied to its whole subtree (then the `.ext` candidate absorbs its OpenWithProgids child via `children`); (d) `.ext` default equal to a removed ProgID: restore candidate from the vendor backup value or the baseline value (action recorded as restore in facts; in the dry-run plan it is emitted as a RegValue item with harm Medium => Likely), or ReportOnly when neither exists; (e) TI-owned keys never deleted (hard blocker); (f) no matching baseline: values only; skeleton keys are emitted with scanner id `X-SYSTIDY`, band-neutral evidence so policy yields Likely/unchecked (document that X-SYSTIDY proper is M4 and this is the \u00a75.7.1 step-3 fallback). CLS-FILEEXTS: `HKU\\<SID>\\...\\Explorer\\FileExts\\.ext\\OpenWithProgids` values in P and `OpenWithList` entries + MRUList edit naming our exe -> value targets; `UserChoice` report-only (and guard-denied). CLS-TOASTS: `ApplicationAssociationToasts` values `<ProgID>_<.ext>` with ProgID in P -> RegValue. Grouping: every candidate carries `group = \"File associations\"` in facts for the UI node.",
+   "acceptance": "Goldens on a VS Code-shaped fixture (system install, LTSC baseline): for an extension new to the machine the `.ext` key is one Safe-eligible key candidate (Key-scope Tier A) absorbing OpenWithProgids; for an extension present in the baseline only the value is offered; for an extension where another app also has a value only our value is offered; with baseline None, zero key candidates carry ProvenOwnedSkeleton and the skeleton keys appear under X-SYSTIDY. With `PURGE_RUNS_DIR`: ignored test builds the fingerprint inputs from snap-vscode-1, scans snap-vscode-2, and reports how many of the ~135 truth skeleton keys in vm/truth/frozen/vscode/truth.json are covered by key candidates (target: all that are absent from the baseline).",
+   "tests": "Per-scanner Fixture goldens under crates/purge-scan/tests/assoc; TI-owned `.ext`; `.ext` default restore with backup / with baseline value / with neither; toast value with ProgID not in P ignored."
+  },
+  {
+   "id": "P36",
+   "title": "Rig: engine phases in the guest run, run-name separation, new corpus entries, labels",
+   "importance": "medium",
+   "depends_on": [
+    "P01"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a710.2 R0",
+    "\u00a710.4",
+    "\u00a711.1 M1a exit",
+    "vm/RIG.md \u00a71, \u00a74, \u00a75, \u00a77"
+   ],
+   "crates_files": [
+    "vm/rig.ps1",
+    "vm/guest/run-app.ps1",
+    "vm/guest/apps.ps1",
+    "vm/guest/riglib.ps1",
+    "vm/guest/tests/**",
+    "vm/RIG.md",
+    "vm/README.md",
+    "vm/truth/mk_labels.py",
+    "vm/truth/labels/{vscode-user.json,firefox-tb.json}",
+    "vm/truth/m1a.sh (new)",
+    "vm/rigtool/src/items.rs"
+   ],
+   "scope": "(1) rig.ps1 Push-Tools: optional `-Engine <path>` (default `target\\release\\purge-engine.exe` at the repo root when present) copied to `C:\\cr\\bin\\purge-engine.exe`, plus `kb\\baselines\\*.tsv.gz` to `C:\\cr\\bin\\kb\\baselines\\`. (2) Run name != app id: `Invoke-Run`/`Invoke-Campaign` gain `-RunPrefix` (e.g. `r0-`); run-app.ps1 gets a second placeholder `__RUN__` (defaults to the id) so outputs go to `C:\\cr\\out\\r0-<id>\\` and frozen `vm\\runs\\<id>\\` is never archived by Move-RunToOld. (3) run-app.ps1 engine mode (switch placeholder `__ENGINE__`): after snap1: `purge-engine inventory --json > inv-1.json`; resolve the program_id of the main ARP entry from inv-1.json by key path; `purge-engine harvest <program_id> -o fp.json`; uninstall phase runs `purge-engine uninstall <program_id> --quiet --fp fp.json -o engine-run.json` instead of the vendor command built by Build-UninstallCommand (t0/t1/exit copied into run.json; the existing WaitTree/settle still runs afterwards as a safety net); then lists2 + snap2 as today; AFTER snap2: `purge-engine scan --fp fp.json --mode post -o plan-purge.json` and `purge-engine inventory --json > inv-2.json` (after the capture so engine reads cannot disturb snap2); each engine call is its own Phase with stdout/stderr and exit code logged. (4) Pull-Run already copies top-level files; host step copies `plan-purge.json` to `vm\\runs\\<run>\\plans\\purge.json` and the frozen `vm\\truth\\frozen\\<id>\\plans\\bcu.json` next to it. (5) apps.ps1: add `vscode-user` (official `https://update.code.visualstudio.com/latest/win32-x64-user/stable`, same Inno switches, launch from `%LOCALAPPDATA%\\Programs\\Microsoft VS Code`, match the '(User)' DisplayName) and `thunderbird` (official Mozilla URL as in setup-dirty.ps1, `/S`); add optional `pre = @('thunderbird')` support: pre-apps are installed (and settled) BEFORE lists0/snap0; add `firefox-tb` = firefox definition + `pre=thunderbird`. Since the guest user is an admin and the agent is elevated, install `vscode-user` through the existing medium-integrity task launcher (LaunchMedium pattern) so the per-user install is realistic; record in run.json which token ran it. (6) Labels: `vscode-user.json` and `firefox-tb.json` (include `_os.json`, reuse the vscode/firefox rules via `include`), generated by mk_labels.py; rig rule in vm/rigtool/src/items.rs for `C:\\Windows\\Prefetch\\PURGE-ENGINE.EXE-*.pf` like the existing RIGTOOL rule (line ~149) with a rigtool unit test. (7) vm/truth/m1a.sh: recompute truth for the `r0-*` runs with the per-app label file and score them (see gate). (8) RIG.md/README updated for all of the above. Engine CLI contract assumed: \u00a73.4 exactly; exit code 0 on success.",
+   "acceptance": "`vm/guest/tests` self-test extended and passing with a stub `purge-engine.cmd` that writes canned JSON: phases run in the documented order, a failing engine phase is recorded and the captures still run, outputs land under the prefixed run name. `New-RunJobText` unit checks for both placeholders. rigtool tests still pass (45 + new). An M0-style run without `-Engine` behaves exactly as before (vendor uninstall path untouched). No UT/clone file or string touched.",
+   "tests": "PowerShell self-tests (Pester-free, same style as vm/guest/tests/rig-selftest.ps1) for job-text generation, pre-app ordering, engine phase ordering, program_id lookup from a sample inv.json; rigtool unit test for the new rig rule. No VM run is part of this package's own acceptance."
+  },
+  {
+   "id": "P37",
+   "title": "Rig: inventory equality check (engine inventory vs raw ARP enumeration + MSI), with explained differences",
+   "importance": "medium",
+   "depends_on": [
+    "P01"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a711.1 M1a inventory exit criterion",
+    "\u00a74.1",
+    "vm/RIG.md \u00a73"
+   ],
+   "crates_files": [
+    "vm/rigtool/src/invdiff.rs (new)",
+    "vm/rigtool/src/main.rs",
+    "vm/rigtool/README.md",
+    "vm/truth/inventory-explain.json (new)"
+   ],
+   "scope": "New `rigtool invdiff --inv inv.json --lists lists-<run>-<phase>.json [--explain inventory-explain.json] --json out.json --md out.md`. Reference set = `uninstall[]` keys of the lists file (raw enumeration by vm/guest/riglib.ps1 `UninstallEntries`: HKLM 64, WOW6432Node, HKU loaded SIDs) plus `msi[]` product codes (riglib `MsiProducts` reads `Installer\\UserData\\<SID>\\Products`; note in the README that this is a registry enumeration, while the engine uses MsiEnumProductsExW, so a difference here is itself something to explain). Engine set = `InventoryDoc.entries` (by canonical key path) + `msi_only` + entries' product codes. Canonicalise key paths with the existing vm/rigtool/src/canon.rs. Output: only_in_engine, only_in_reference, field mismatches for name/version/uninstall string/quiet string/SystemComponent/ParentKeyName/product code, each matched against explanation rules `{match: regex on canonical key or code, side, why}`; exit code 1 when any difference has no explanation. Also accept `--lists` pointing at the legacy array-shaped vm/results/lists-registry.json (rows {key,name,version,sys,parent,uninstall,quiet,size,loc}) so the plan's named file can be diffed as a sample. rigtool stays a separate Cargo project: it reads the inventory JSON through its own serde structs (no dependency on the workspace).",
+   "acceptance": "Unit tests in vm/rigtool pass; `rigtool invdiff` on a synthetic pair reports zero differences; on a pair with one HKCU-only key, one MSI product without ARP key and one renamed entry it lists exactly those, and exits 0 only when each is covered by an explanation rule. Legacy-shape input parses the committed vm/results/lists-registry.json (80 rows) without error.",
+   "tests": "rigtool unit tests (cargo test in vm/rigtool): parsing both list shapes, canonicalisation (HKEY_CURRENT_USER -> HKU\\<sid> via --sid), diff classification, explanation matching, exit code."
+  },
+  {
+   "id": "P40",
+   "title": "purge-engine CLI and pipeline: inventory, harvest, uninstall, scan, plan show",
+   "importance": "high",
+   "depends_on": [
+    "P20",
+    "P21",
+    "P23",
+    "P26",
+    "P30",
+    "P31",
+    "P32",
+    "P33",
+    "P34",
+    "P35"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a73.4",
+    "\u00a73.6 steps 1-7",
+    "\u00a75.1 modes",
+    "\u00a75.8.3",
+    "\u00a71.3 engine timing"
+   ],
+   "crates_files": [
+    "bins/purge-engine/src/{main.rs,lib.rs,pipeline.rs,cli.rs} and submodules under bins/purge-engine/src/cli/",
+    "bins/purge-engine/tests/**"
+   ],
+   "scope": "lib `purge_engine::pipeline`, generic over the three source traits so Live and Fixture share one code path: `inventory(sources)->InventoryDoc`; `harvest(sources, program_id, kb)->Fingerprint`; `uninstall(sources, host, program_id, fp:Option<&mut Fingerprint>)->RunDoc` (updates fp with t_start/t_end, verify-gone, co-removed products, and writes it back when `--fp` is given); `scan(sources, fp, mode)->(Vec<Candidate>, Plan)` = build ScanCtx (baseline selected by OS edition/build from `<exe dir>\\kb\\baselines` or env `PURGE_KB_DIR`; None when no exact match), other-apps set from a fresh inventory, run all catalog scanners, P26 decide/collapse/emit. `scan --path <dir>`: forced mode, identity from VersionInfo + signer of exes in the dir, no Safe (policy forced rule) \u2014 minimal implementation, clearly marked. Mode handling: `--mode post` requires fp with a completed uninstall window, else exit code 2 with a message; verify-gone failed -> forced-mode rules + a warning line. cli: per-verb argument parsing replacing the M0 stubs for inventory/harvest/uninstall/scan/plan show (exec, undo, journal, kb lint, --stdio, --broker keep the 'not implemented' exit 1 and their tests); `-o` writes UTF-8 without BOM atomically (temp + rename); `inventory --json` to stdout; `plan show` prints a table grouped by band with scanner, category and explanation lines and the plan hash; the extended sidecar `<plan>.scan.json` (purge.scan/0) is written next to plan.json. `app` field of the plan: `--app <id>` option (rig passes the truth id), default derived from the ARP key name lowercased. Exit codes: 0 ok, 1 not implemented, 2 usage/precondition, 3 runtime error, 4 uninstall failed/cancelled/timeout. Harvest and scan warn (not fail) when not elevated. Progress lines to stderr; first one immediately.",
+   "acceptance": "`cargo xtask ci` passes. Integration tests run the pipeline on committed mini-fixtures (crates' fixture JSONs composed into before/after pairs for an Inno app and an NSIS app with a co-product): harvest(before) -> simulated uninstall window -> scan(after) yields the golden plan.json; `plan show` output golden. On the dev host (read-only): `purge-engine inventory --json` prints valid `purge.inventory/0`; `purge-engine harvest <id of any installed Inno app> -o <scratch>/fp.json` succeeds unelevated or reports access problems as warnings. Emitted plan validates against rigtool's reader (`rigtool score --plan` accepts it in the offline replay of P41).",
+   "tests": "Argument-parser unit tests per verb (incl. errors); pipeline integration tests on fixtures under bins/purge-engine/tests; exit-code tests with a fake ProcessHost; no test launches a real uninstaller."
+  },
+  {
+   "id": "P41",
+   "title": "xtask: offline replay over rig snaps, scanner-coverage, CI wiring",
+   "importance": "medium",
+   "depends_on": [
+    "P40"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.6 scanner-coverage rule",
+    "\u00a710.1 xtask ci",
+    "vm/RIG.md \u00a72 default roots"
+   ],
+   "crates_files": [
+    "tools/xtask/src/{main.rs,replay.rs (new),scanner_coverage.rs (new)}"
+   ],
+   "scope": "`cargo xtask replay --run-dir vm/runs/<id> [--overlay <dir>] [--baselines kb/baselines] --app <id> -o <plan.json>`: build `Fixture::from_snap` for snap-1 (+lists-1) and snap-2 (+lists-2), pick the main entry from run.json (`main.key`), run pipeline harvest on the snap-1 fixture, synthesise the uninstall window from run.json `uninstall.t0/t1` and verify-gone from the snap-2 fixture, run scan on the snap-2 fixture, write plan.json (tool=purge, mode=post). Prints the limits (no file contents unless overlaid: Inno log absent unless `unins000.dat` is in the overlay; REG_BINARY unknown; previews cut). `cargo xtask replay-all` loops vscode, git, firefox, npp and then shells `vm/rigtool/target/release/rigtool score --set ...` if the binary exists. `cargo xtask scanner-coverage`: for every scanner in `purge_scan::catalog::metadata()`, each captured_roots RootSpec must lie inside the rig capture roots of RIG.md \u00a72 (table compiled into xtask with a comment pointing at vm/rigtool/src/capture.rs defaults; depth-1 roots honoured) and the scanners' value_containers must equal purge-guard's containers table; failure lists the scanner and root. Add scanner-coverage to `xtask ci`.",
+   "acceptance": "`cargo xtask ci` passes including scanner-coverage for all 18 scanners (a deliberately wrong RootSpec in a unit test fails it). With vm/runs present: `cargo xtask replay-all` writes four plans to the scratch/target dir (never into vm/runs or vm/truth) and prints rigtool's table; with vm/runs absent it exits with a clear message and code 0 under `--if-present`.",
+   "tests": "Unit tests for the coverage checker (inside/outside/depth-1 cases) and for replay's run.json parsing on an inline sample; replay itself is exercised manually and at the gate (needs git-ignored vm/runs)."
+  },
+  {
+   "id": "P20f",
+   "title": "Finish purge-source Live: packages (appx) and processes",
+   "importance": "high",
+   "depends_on": [
+    "P20"
+   ],
+   "crates_files": [
+    "crates/purge-source/Cargo.toml",
+    "crates/purge-source/src/live.rs (and its private submodules)",
+    "crates/purge-win/Cargo.toml (feature wiring only)",
+    "crates/purge-win/src/process.rs (feature gating of snapshot_processes/process_image_path only)"
+   ],
+   "plan_refs": [
+    "\u00a73.2",
+    "\u00a74.4",
+    "\u00a75.6 FS-INSTALLDIR blockers"
+   ],
+   "scope": "P20 left SystemSource::packages and SystemSource::processes in the Live implementation returning Err(SourceError::Other(50)). (1) Enable purge-win feature `appx` for purge-source (`features = [\"read\", \"appx\"]`) and implement packages(): AppxPackage -> PackageInfo, effective_external_path -> external_location, sparse = external path present, users as SIDs, signature_kind mapped. (2) Move purge-win's read-only process enumeration (Toolhelp32 snapshot_processes, process_image_path) from feature `run` to feature `read` WITHOUT moving CreateProcess/Job APIs (those stay behind `run`); implement processes() over them. Keep `cargo xtask check-deps` passing (purge-mcp must not reach purge-win `run`).",
+   "acceptance": "Both methods implemented; workspace build, clippy -D warnings, tests and `cargo xtask ci` pass; check-deps shows `run` still unreachable from purge-mcp.",
+   "tests": "Live smoke tests (#[ignore] if they need the host) listing processes (own PID present) and packages (no panic); unit test of the AppxPackage->PackageInfo mapping.",
+   "est_size": "S"
+  }
+ ],
+ "waves": [
+  [
+   "P00",
+   "P01"
+  ],
+  [
+   "P10",
+   "P11",
+   "P12",
+   "P13",
+   "P14",
+   "P15",
+   "P16",
+   "P17"
+  ],
+  [
+   "P20",
+   "P21",
+   "P22",
+   "P23",
+   "P24",
+   "P25",
+   "P26"
+  ],
+  [
+   "P30",
+   "P31",
+   "P32",
+   "P33",
+   "P34",
+   "P35",
+   "P36",
+   "P37"
+  ],
+  [
+   "P40"
+  ],
+  [
+   "P41"
+  ]
+ ],
+ "gate_procedure": "All commands from C:\\Users\\kaank\\Desktop\\uninstall\\purge unless noted. Nothing here touches draft_clone or the commercial reference tool; installers come from official vendor URLs only (vm/guest/apps.ps1).\n\nA. Local pre-gate (no VM)\n1. `cargo xtask ci` (fmt, clippy -D warnings, tests, check-deps, ui-strings, scanner-coverage).\n2. `cargo build --release -p purge-engine` -> target\\release\\purge-engine.exe (static CRT via .cargo/config.toml). `cargo build --release` in vm\\rigtool; `cargo test` there.\n3. Offline replay on the frozen M0 runs (needs the git-ignored vm\\runs\\{vscode,git,firefox,npp}): `cargo xtask replay-all`. This gives a first score against the exact frozen truth and BCU plans without a VM. It under-reports anything needing file contents (Inno log, shortcuts), so it is a development signal, not the gate.\n\nB. VM runs (R0, post_uninstall) on the corpus VM Inbound-Win11-Test (EnterpriseSEval 26100.1742; matching baseline kb\\baselines\\EnterpriseSEval-26100.1742.tsv.gz)\n4. `$env:VMPWFILE = '<password file>'; . .\\vm\\rig.ps1 -VmName Inbound-Win11-Test`\n5. `Invoke-Campaign -Ids vscode,vscode-user,git,firefox,firefox-tb,npp -Nulls 0 -Snapshot rig-base -RunPrefix r0- -Engine .\\target\\release\\purge-engine.exe` (parameters added by P36). Per run the rig restores rig-base, pushes rigtool.exe, purge-engine.exe, kb\\baselines and the guest scripts, then in the guest: [pre-install Thunderbird for firefox-tb] -> lists0/snap0 -> install -> launch once at medium IL -> lists1/snap1 -> `purge-engine inventory --json > inv-1.json` -> `purge-engine harvest <program_id> -o fp.json` -> `purge-engine uninstall <program_id> --quiet --fp fp.json -o engine-run.json` -> settle -> lists2/snap2 -> `purge-engine scan --fp fp.json --mode post --app <truth id> -o plan-purge.json` -> `purge-engine inventory --json > inv-2.json` -> run.json. Outputs are pulled to vm\\runs\\r0-<id>\\; the host copies plan-purge.json to vm\\runs\\r0-<id>\\plans\\purge.json. The frozen vm\\runs\\<id>\\ directories are not touched because the run name differs from the app id.\n6. Check each vm\\runs\\campaign-<stamp>.json row is ok and each run.json has uninstall.entry_gone = true and engine-run.json verify_gone.passed = true. A failed verify-gone means the plan was produced under forced rules and is not a valid R0.\n7. Pull the real Inno logs once for parser fixtures (Git, VS Code system and user `unins000.dat` copied from the guest at the snap1 point by the run script into the run dir) and run the ignored parser test with PURGE_INNO_FIXTURES.\n\nC. Truth for the new runs and scoring (from vm\\, Git Bash) \u2014 `bash truth/m1a.sh` (P36), which does:\n8. For each run r0-<id>: `rigtool/target/release/rigtool truth --s0 runs/r0-<id>/snap-r0-<id>-0.tsv.gz --s1 ...-1.tsv.gz --s2 ...-2.tsv.gz --lists0 runs/r0-<id>/lists-r0-<id>-0.json --lists2 ...-2.json --run runs/r0-<id>/run.json --ambient truth/ambient.json --labels truth/labels/<id>.json --deny truth/deny.json -o runs/r0-<id>/truth.json`. Labels: the frozen vscode/git/firefox/npp files; vscode-user.json and firefox-tb.json from P36.\n9. Sanity against frozen truth: compare leftover/user_data counts and item lists of runs/r0-<id>/truth.json with truth/frozen/<id>/truth.json (expected: same items except random names such as temp files and jump-list hashes). Any other difference (for example something the engine's own uninstall command changed) is investigated before scoring; the frozen truth stays the reference for what counts as a leftover.\n10. BCU on the same runs: copy truth/frozen/<id>/plans/bcu.json to runs/r0-<id>/plans/bcu.json for vscode, git, firefox, npp. For vscode-user and firefox-tb there is no BCU plan (see questions).\n11. Score: `rigtool/target/release/rigtool score --set runs/r0-vscode runs/r0-vscode-user runs/r0-git runs/r0-firefox runs/r0-firefox-tb runs/r0-npp --deny truth/deny.json --json truth/m1a-score.json --md truth/m1a-score.md`.\n12. Cross-check against the frozen sets as well: copy each purge.json into a scratch copy of the frozen set and run `rigtool score --plan <purge.json> --plan truth/frozen/<id>/plans/bcu.json --truth truth/frozen/<id>/truth.json --s0 runs/<id>/snap-<id>-0.tsv.gz --s2 runs/<id>/snap-<id>-2.tsv.gz --deny truth/deny.json --json ... --md ...` (items with run-specific random names score `gone`; used only to confirm danger 0 and precision on the frozen snapshots).\n\nD. Pass criteria (read from truth/m1a-score.md, tool = purge, the `_nd` columns)\n- danger_listed = 0 and danger_preselected = 0 on every run, including firefox-tb, where anything of Thunderbird's existed in snap0 and therefore scores danger.\n- precision_safe = 100 % on every run; userdata_preselected = 0.\n- recall_visible_nd(purge) > recall_visible_nd(bcu) per app: Firefox > 20.8 %, VS Code > 0 %, Git > 0 %, Notepad++ > 3.4 % (the last needs the AppxPackage offer).\n- \u00a71.4 bands, checked by hand from `purge-engine plan show` output and the score's hit/missed lists (the scorer does not check bands): VS Code system: OpenWithProgids values Safe, `.ext`/OpenWithProgids skeletons Safe (baseline matches on this VM), ApplicationAssociationToasts values Safe, PATH segment Safe if one is left, sparse package Likely. Git: `LibraryFolder\\background\\shell` and `sh_auto_file` Safe via ProvenOwnedSkeleton. Firefox: Mozilla\\Firefox keys and Maintenance Service leftovers Safe, `ProgramData\\Mozilla-<guid>\\updates\\<hash>` Safe, profiles (Roaming\\Mozilla) Likely and not preselected, vendor parents delete-if-empty only, nothing of Thunderbird's listed in firefox-tb. Notepad++: no Notepad.lnk, sparse package Likely. Record the per-item band table in docs (an M1a report) with the plan hashes.\n- Items \u00a71.4 names that the vendor uninstaller already removed in these runs (Firefox ProgIDs, toast AUMID, Default Browser Agent task) are reported as 'not exercised', as FROZEN.md already notes.\n\nE. Inventory criterion\n13. For each run and phase 1 and 2: `rigtool invdiff --inv runs/r0-<id>/inv-<n>.json --lists runs/r0-<id>/lists-r0-<id>-<n>.json --explain truth/inventory-explain.json --json ... --md ...` must exit 0 (every difference explained). Additionally run it once against the plan-named sample `results/lists-registry.json` for the record (it is a stale capture of another VM state, so it is informational).\n\nF. Optional second pass (decide with the user): the same campaign on Purge-CleanPro (`-VmName Purge-CleanPro`, baseline Professional-26340.9882) and a danger-only pass on the dirty snapshot (`-Snapshot dirty-base`, ids firefox and vscode-user style apps that are not already installed there).",
+ "risks_and_questions": [
+  "DECISION NEEDED (scope): M1a's scanner list has no AppX scanner (SYS-APPX is M1b), but two M1a exit criteria need one. Notepad++ frozen truth has 29 items and only `HKLM\\SOFTWARE\\WOW6432Node\\Notepad++` is reachable with M1a scanners: 1/29 = 3.4 %, equal to BCU, so 'better recall than BCU' fails. \u00a71.4 also asks 'Sparse AppX package Likely' for VS Code and Notepad++. The breakdown includes a minimal read-only sparse-package link and offer (marked APPX-MIN in P12, P15, P30, P32). Confirm pulling this forward, or relax the Notepad++ criterion to M1b.",
+  "DECISION NEEDED: 'Firefox (+ Thunderbird)' has no run today. Thunderbird exists only in the dirty-base snapshot (capture only). Proposed: a new corpus id `firefox-tb` that installs Thunderbird from Mozilla's official URL before snap0 on rig-base, so anything of Thunderbird's scores as danger automatically. Alternative: run Firefox on dirty-base, which mixes in many other apps. Which do you want as the gate run?",
+  "DECISION NEEDED: VS Code user install has no corpus entry, run, labels or truth. P36 adds `vscode-user` (official win32-x64-user build) installed through the medium-integrity launcher because the guest user is an admin and the agent is elevated. Its truth has to be labelled and reviewed once (new label file); are you fine freezing that truth as part of M1a?",
+  "DECISION NEEDED: 'better recall than BCU on the same runs' for vscode-user and firefox-tb needs BCU plans that do not exist. Options: run BCU (official release) in the VM on those two runs and convert with `rigtool convert`, or limit the BCU comparison to the four apps with frozen BCU plans. Your VM rules exclude the clone and the commercial tool; please confirm BCU runs are allowed.",
+  "DECISION NEEDED: where the uninstall runner lives and how it is gated. Proposed: crates/purge-inventory/src/runner.rs with a new purge-win feature `run` (CreateProcess + Job object), separate from `read` and `write`, so purge-mcp can never reach it and purge-exec stays M2. The plan does not name a home for it.",
+  "DECISION NEEDED: \u00a75.2 shows a typed Target (Hive/View/CanonPath, tuple Service/Task, Shortcut, DefenderExclusion). The rig's plan format and purge-model today use plain string paths, and rigtool must keep reading them. P01 keeps the wire format as is and adds a typed internal view. Confirm, or the rig scorer and frozen plans need a format bump.",
+  "DECISION NEEDED: PATH segment edits are harm Medium in \u00a75.8.5, and \u00a75.8.2 says Safe needs harm <= Low, but \u00a71.4 requires 'PATH segment Safe'. P13 treats a manifest-declared or under-root segment edit as harm Low. Confirm this reading or change the target.",
+  "Expected recall is low for Git even when everything works: 2 of 16 truth items are reachable in M1a (the two Classes keys). The other 14 are Prefetch, jump lists, UserAssist, JumplistData, UFH slots and a temp file, which belong to M1b/M4/v2 scanners. It beats BCU (0 %) but will look poor in the table; this is by plan, not a defect.",
+  "The scorer does not check bands. \u00a71.4 band targets must be reviewed by hand from `plan show` and the hit/missed lists, or a per-item expected-band file is added to rigtool later. Not in this breakdown; say if you want it as a package.",
+  "Several \u00a71.4 Firefox Safe items (ProgIDs, Clients\\StartMenuInternet, toast AUMID, Default Browser Agent task, plugin-container shim value) are removed by Mozilla's uninstaller in the frozen run, so the gate cannot exercise them; they are covered by fixture tests only. The Default Browser Agent task and firewall rule are M1b scanners anyway.",
+  "Engine runs change the measured run slightly: the uninstall is started by purge-engine (same quiet switches as vm/guest/apps.ps1), and purge-engine.exe leaves a Prefetch file (rig rule added in P36). Truth for the r0 runs is recomputed with the frozen label files and compared with frozen truth before scoring; a material difference would need your call on which truth governs.",
+  "Run names: an engine campaign under the plain app ids would move the frozen vm\\runs\\<id> directories to vm\\runs\\_old (rig.ps1 Move-RunToOld) and break vm/truth/recompute.sh, since snaps are git-ignored. P36 adds a run prefix (r0-<id>); do not start an engine campaign before that lands.",
+  "No real Inno uninstall log is in the repo (absent). P14 is built and tested on synthetic logs written from the public issrc format; real unins000.dat files (Git, VS Code system/user) are first seen at gate step 7. A format detail that differs from the synthetic writer will surface late. Mitigation: pull the three logs from a VM early (one short rig job) if you allow a VM run before wave 3.",
+  "Inno version gate: \u00a76.1 gates at header version <= 1055. Current Git and VS Code installers may use a newer Inno Setup with a higher log version; then the parser skips with a warning and Git's two keys lose their key-create evidence path, leaving only the subtree-attribution route to ProvenOwnedSkeleton. Unknown until a real log is read.",
+  "The inventory criterion names vm/results/lists-registry.json, which is a stale 80-row capture from the old v1 machine state. The gate compares against the per-run lists files captured in the same VM session instead and diffs the named file only for the record. Also the rig's `msi` list is read from the registry (riglib.ps1 MsiProducts), not MsiEnumProductsEx, and was empty in the VS Code run; none of the four M1a apps is MSI, so the MSI half of the criterion is exercised only by Windows' own products, if any.",
+  "Host has no matching baseline (host 26300.9974; baselines are 26100.1742 and 26340.9882), so on the dev host the engine runs values-only with skeletons under the X-SYSTIDY fallback. All skeleton behaviour is verified only in the VMs and on fixtures.",
+  "Clean-Pro VM has only a null run. The M1a text does not require it, and \u00a71.3 mentions the dirty-baseline VM for danger. The gate treats both as optional passes (step F). Say if either should be mandatory for M1a.",
+  "Per-user versus elevated execution (\u00a74.4) is recorded but not enforced in M1a: the rig runs everything from the elevated agent with the same admin user. Rule T trust tagging is tested on fixtures; the real medium/broker split is M3.",
+  "Size and ordering risk: P01 (model) is on the critical path for every other package and its shape will be stressed by harvest and scanners in wave 3. Expect at least one model follow-up between waves; since only P01 owns purge-model/src, such changes should be made by a small serial fix package between waves, not inside wave packages.",
+  "Shared-file rule depends on P00 guessing every dependency and module name up front. If a wave package finds it needs a new crate dependency or module, it must stop and report rather than edit a manifest or lib.rs; a short serial scaffold amendment then runs before the next wave.",
+  "Offline replay limits: rig snaps carry no file contents, no REG_BINARY data and previews cut at 1024 characters, so replay cannot see Inno logs (unless overlaid), shortcut targets, VersionInfo or signers. Replay scores are a development signal only; the VM runs are the gate.",
+  "kb seed data (generic tokens, mega-vendors, shared components, deny extras) is written by hand in P10 and P16 from the plan text and public knowledge. The kb README says deny data is to be seeded from BCU (Apache-2.0, attributed). Confirm whether you want the BCU lists ported now (with attribution in THIRD_PARTY.md) or the small hand-written seed for M1a.",
+  "One configured MCP server (ngfx-workflow) failed to connect in this session; it was not needed for this task."
+ ],
+ "decisions": [
+  "USER 2026-11-12: APPX-MIN pulled forward into M1a (minimal read-only sparse-package link + Likely offer).",
+  "USER 2026-11-12: Firefox+Thunderbird gate run = new corpus id firefox-tb on rig-base (Thunderbird installed from Mozilla's official URL before snap0).",
+  "USER 2026-11-12: BCU (official release, Apache-2.0) may be run in the VM for vscode-user and firefox-tb; convert with rigtool convert.",
+  "USER 2026-11-12: PATH segment under a validated root or declared by MSI/Inno/RememberedManifest = harm Low (can be Safe); other segment edits stay Medium.",
+  "DEFAULT: plan wire format unchanged (purge.plan/0, string-path Target) + typed internal view.",
+  "DEFAULT: uninstall runner in purge-inventory behind purge-win feature `run`.",
+  "DEFAULT: vscode-user truth is labelled and frozen as part of M1a.",
+  "DEFAULT: kb seed data hand-written for M1a; BCU list port later with attribution.",
+  "DEFAULT: Clean-Pro and dirty-base VM passes are optional for M1a."
+ ],
+ "cross_package_notes": [
+  "`AppRef.program_id` is a typed `ProgramId` (one ARP key). `purge-engine scan --path` for portable apps has no ARP key and will need a synthetic id or an optional program_id when that verb lands.",
+  "The `Anchors` struct has no services, tasks or firewall rule ids (M1b). Its fields all use `serde(default)`, so adding them later stays within `purge.fp/0`.",
+  "`ManifestKind` has only `Inno`, and `EvidenceKind` omits Traced, RememberedManifest, KnowledgeRule, ContentMentionsAppPath and Ai; add each with its producer's milestone.",
+  "P14 and P31 must agree on `InnoRecord.user_hive`: the parser emits `HKCU\\\\...` paths with user_hive=true, and the harvest rewrites them to `HKU\\\\<sid>\\\\...`. An unbound HKCU path is rejected by `TypedTarget::try_from` (UnknownRoot).",
+  "`purge-guard` canonicalisation should rewrite `HKLM\\\\SOFTWARE\\\\Classes\\\\WOW6432Node\\\\...` to `HKLM\\\\SOFTWARE\\\\WOW6432Node\\\\Classes\\\\...` if such keys are to be treated as 32-bit view; `TypedTarget` deliberately leaves that alias as K64.",
+  "Policy (P13) must apply the ChainedRef anchor-tier rule and Rule T itself; the model's `default_tier` is only the table value.",
+  "Consumers must call the new APIs for the fixes to bite: P13/P26 (policy/plan) should gate Safe on `VerifyGone::is_passed()`, not the `passed` field; P34/P35 (CLS scanners) should build ChainedRef with `Evidence::chained(anchor_tier, ..)`, not `Evidence::new(ChainedRef, ..)`, which still yields Tier A.",
+  "Inventory (P-inventory) must handle `ProgramId::user` returning Err(BadHive) for `<sid>_Classes` names when enumerating HKEY_USERS (skip them, do not unwrap).",
+  "Evidence, Candidate and Decision have public fields and plain derived Deserialize: tier/weight/band/preselected read from JSON are not re-validated against the \u00a75.3 table. Acceptable while these are engine-internal, but any path that reads candidates from an untrusted file must re-run policy rather than trust the stored decision.",
+  "InnoRecord.key_create is a free boolean, not tied to kind (RegDeleteEntireKey/RegDeleteKeyIfEmpty) or to a RegKey target; the Inno mapper (P14/P30) must enforce that, since Key-scope Tier A evidence follows from it. `user_hive` defaults to false when absent.",
+  "InventoryEntry carries key_path, hive_sid and view next to program_id without a consistency check; producers should derive them from the ProgramId.",
+  "Target::RegValue/RegValueChanged/RegMultiSzSegment require the `name` field to be present (null allowed) while rigtool defaults a missing name to \"\". Unchanged M0 behaviour and stricter on our side, so plans we write are always readable by rigtool; only rig output that omits `name` would fail to read here.",
+  "TypedTarget equality is case-sensitive on path and SID, and `HKU\\<sid>\\Software\\Classes\\...` is not folded onto `HKU\\<sid>_Classes\\...`; both are purge-guard canonicalisation duties (as is the HKLM\\SOFTWARE\\Classes\\WOW6432Node alias the implementer already flagged).",
+  "EmptyAfterPlan is Tier A / weight 8 by P26's spec, not by ENGINE_PLAN \u00a75.3 (which has no such row); alone it meets S >= 8, so P26's emptiness computation is the only safeguard for vendor-container removal.",
+  "P10 review: Behaviour changes callers should know: (a) an app shortcut placed inside a Windows-shipped Start Menu folder (Accessories, Administrative Tools, System Tools, Windows PowerShell, Windows Tools, Maintenance, Accessibility) is now always denied, so it stays as a leftover; (b) event-source keys are allowed only under the current control set; (c) a GuardEnv with a non-canonicalisable directory (relative, `..`, ADS, device namespace, volume-GUID path, `%TOKEN%`) now yields `guard.unavailable` for everything, so the live GuardEnv builder (P20) must pass plain drive paths. I did not rebuild or test dependant crates against these changes.",
+  "P10 review: Implementer deviation 2 left as is: the Tier A carve-out allows any item (file or folder, not only `.lnk`) strictly below all-users `Start Menu\\Programs`. The guard cannot tell file from folder lexically; P26 should only set `tier_a_start_menu_entry` for a `.lnk` or for an app folder whose contents are all Tier A.",
+  "P10 review: Case folding uses Rust Unicode lower-casing, not the NTFS/registry upcase tables. prefix.rs argues a mismatch only ever makes names look different, but for a deny-list 'different' is the unsafe direction. All built-in protected names are ASCII, so exposure is limited to non-ASCII profile names / dynamic roots with exotic code points; not changed.",
+  "P10 review: `long_names_resolved: true` disables the 8.3 check entirely; a caller that sets it without really resolving (e.g. `C:\\PROGRA~1`) bypasses `fs.program-files`. P26 must set it only for paths read from the file system in long form.",
+  "P10 review: The deny-list permits targets inside user-content known folders (e.g. `%USERPROFILE%\\Documents\\X`) and unlisted `SOFTWARE\\Microsoft\\...` keys (e.g. `Windows NT\\CurrentVersion\\Windows`); per \u00a75.10 these rely on root_rejection, the WindowsBaseline blocker and (M1b) agent-origin default-deny, none of which are in P10.",
+  "P10 review: Not implemented, as the implementer reported: REG-ARP-MSI exception for S-1-5-18 (denied outright, safe direction), agent-origin default-deny, blast-radius limits, and the \u00a75.10 containers outside the ten in VALUE_CONTAINERS (SharedDLLs, AppCompatFlags\\Layers, UserAssist, MuiCache, Installer\\Folders, FirewallRules, FeatureControl).",
+  "P10 review: Canonical keys spell `ControlSet00N`; P33 must translate to `CurrentControlSet` when emitting plan targets for the rig scorer. Targets spelled `HKCU\\...` are denied by `check` (no SID binding), so plan targets must use `HKU\\<SID>`.",
+  "P10 review: kb/README.md still describes deny.json as seeded from BCU (not a P10-owned file).",
+  "P10: P25/P41: scanners' value_containers() must use the exact strings of purge_guard::containers::VALUE_CONTAINERS (pattern syntax documented in containers.rs).",
+  "P10: P26: fill Exemptions.tier_a_start_menu_entry and long_names_resolved as well as the two spec'd exemptions; compile one DenyList per scan instead of calling deny::check per target.",
+  "P10: P30: DenyList::root_rejection(path, long_names_resolved) covers the lexical validate_root cases (deny-listed, user-content known folders, Package Cache, InstallShield info); 'vendor folder holding other apps' and 'parent of another app's anchor' are only covered through GuardEnv.other_app_roots, so anchors that are not roots still need the harvest's own check.",
+  "P10: P20/whoever builds GuardEnv live: loaded_sids, current_control_set, profiles (with redirected known_folders and user_content_folders), sync_roots, other_app_roots (excluding the app being cleaned), purge_dirs and protected_dirs (Steam libraries, Java homes) must be filled; empty required fields make the guard deny everything.",
+  "P10: P33: canonical keys come out as ControlSet00N; translate to the CurrentControlSet spelling when emitting plan targets for the rig scorer.",
+  "P10: Decide whether HKCR\\LibraryFolder\\Background (the key, not its shell root) should also yield to ProvenOwnedSkeleton; it is currently [E+A] with no exemption, so only its shell/shellex roots can be removed as skeletons.",
+  "P10: M1b: REG-ARP-MSI exception for S-1-5-18 rows, extra structural containers when their scanners land, agent-origin default-deny (SOFTWARE\\Microsoft, Classes\\{Interface,TypeLib,CLSID}).",
+  "P10: kb/README.md still says deny.json is 'seeded from BCU's'; the M1a seed is hand-written, so that line should be updated by the README's owner.",
+  "P11: P20 (Live source) should map Win32Error::LINK_ON_PATH to 'link on path' (a RegLink block / not traversed), not to NotFound. It should use reg::Key::{info, subkeys, values, value, link_target, security}, reg::current_control_set and reg::loaded_user_sids. loaded_user_sids leaves out `_Classes` and `.DEFAULT` names but includes S-1-5-18/19/20 when they are loaded.",
+  "P11: P20: fs::list_dir maps ERROR_FILE_NOT_FOUND to an empty listing and returns other errors (PATH_NOT_FOUND, ACCESS_DENIED) as-is for the tri-state mapping. fs::FileHandle::final_path returns the \\\\?\\C:\\... form.",
+  "P11: sid::profiles() expands ProfileImagePath against the engine's own environment, not the profile owner's. P20 may want to re-expand raw_path with env::expand_with and an EnvMap built from that user.",
+  "P12: Check the BCU source paths in the cmdline.rs attribution header against the BCU repository (written from memory; BCU source is not in the repo).",
+  "P12: P11 owns two failing tests in the full crate run: sid::tests::token_facts (sid.rs:495) and reg::tests::user_classes_is_reported_as_link_and_not_followed (reg.rs:655).",
+  "P12: Two product codes are in the registry's UserData but not returned by MsiEnumProductsExW in the current-user scope: {E537BDF5-F802-4861-806C-170763E7786F} and {F5C45561-EBDC-48CA-8C0A-890814274E2E}. Likely another user's per-user install or an orphan; worth checking in the inventory work.",
+  "P12: If catalog-signed signer names are needed for S2 (e.g. System32 binaries), add the Win32_Security_WinTrust feature and a CryptCATAdmin lookup.",
+  "P12: The uninstall runner in purge-inventory should combine JobProcess::wait_tree with msi_execute_running() and the ARP-entry-gone check (ENGINE_PLAN \u00a74.4).",
+  "P13 review: Clippy without --no-deps currently fails in purge-guard (crates/purge-guard/src/deny.rs:337, clippy::type_complexity), which another package owns and was mid-edit during this review; purge-policy itself is clean.",
+  "P13 review: Path and AppxPackage targets: Rule T relies entirely on the caller's PolicyCtx.target_scope. P26 must classify Program Files / ProgramData / other users' profiles as Machine; policy cannot check this lexically.",
+  "P13 review: Source bonus cap is +2 per evidence kind (plan text is ambiguous; an overall +2 cap would be stricter). Left as is; needs a decision of record. SourceId independence is also taken on trust from scanners.",
+  "P13 review: ReferencedByApp is 'always UserData' per 5.3, but policy does not force that: a scanner that attaches it with another category and a Tier A row can reach Safe. Enforcing it in policy would break the required 'removing evidence never raises a band' property, so scanners (and their reviewers) must set Category::UserData.",
+  "P13 review: EmptyAfterPlan still adds 8 to S on a non-RemoveDirIfEmpty action (it only stops being the supporting proof). purge-plan must attach it only to delete-if-empty candidates.",
+  "P13 review: Plan inconsistency: 5.11 lists 'vendor containers' as unchecked, while 5.6 FS-VENDORPARENT says 'Safe when empty-after-plan'; the code follows 5.6 (RemoveDirIfEmpty + EmptyAfterPlan is Safe and ticked).",
+  "P13 review: 5.8.2 reads 'verify-gone passed (or mode != forced)'; the code requires both verify-gone passed and mode != forced (stricter, matches 5.8.3).",
+  "P13 review: decide() is still not re-exported from lib.rs (not owned by P13); callers use purge_policy::band::decide. P26 must include POLICY_VERSION (now m1a.2) in the plan hash.",
+  "P13 review: BCU record names in bcu_map.rs were written from memory and are still unverified against the BCU source.",
+  "P13: lib.rs owner (P00/integration): consider `pub use band::{decide, PolicyCtx, TargetScope, POLICY_VERSION};` in crates/purge-policy/src/lib.rs so P26 can call `purge_policy::decide`; until then use `purge_policy::band::decide`.",
+  "P13: P26 (purge-plan): build PolicyCtx with target_scope from the canonical target (TargetScope::of_hive for registry; path class from GuardEnv for files); vendor-container candidates must use Action::RemoveDirIfEmpty or EmptyAfterPlan will not support Safe; include band::POLICY_VERSION in the plan hash; a ProbeAgent item can be Safe with preselected=false, so collapse logic should test `preselected`, not only the band.",
+  "P13: P33 (REG-ENV): emit PATH segment candidates as Target::RegMultiSzSegment + Action::EditSegment with Value-scope InstallerManifest or PointsIntoInstallRoot evidence (harm may be left at Medium; policy lowers it to Low). A segment backed only by DanglingRef/HarvestedToken stays Likely.",
+  "P13: P35 (associations): restore-type candidates must use an action that fits the target (e.g. DeleteValue on RegValue) or they are capped at Likely by the action/target check.",
+  "P13: All scanners: set Facts keys `root`, `path`, `anchor`, `token`, `baseline` where known so explanations are specific; scanners may call harm::default_harm(category, action) for the harm field.",
+  "P13: Verify the BCU record names in bcu_map.rs against the BCU source when the BCU heuristics port lands.",
+  "P13: ENGINE_PLAN inconsistency to resolve before M1b: 5.11 lists Tier A services/tasks and firewall rules as checked (Safe), while 5.8.2 excludes category System from Safe and those targets have no evidence scope yet; policy currently never makes them Safe.",
+  "P13: Run `xtask ui-strings` over crates/purge-policy/src/explain.rs once the local English.xml check is wired up; the templates were written independently but have not been machine-checked.",
+  "P14 review: `cargo clippy -p purge-harvest -- -D warnings` (without --no-deps) still fails, only in the sibling crate purge-guard ('very complex type' lint); nothing is reported in purge-harvest.",
+  "P14 review: Model gap (purge-model, not P14's file): InnoRecord cannot say 'remove directory only if empty', 'files but not subdirectories' or 'wildcard pattern', so those records are dropped from the model rather than mapped. If P30 wants created-directory evidence it must read LogRecord (dir_* accessors) or the model needs a field. Also a mapped non-directory record without DELETE_SUBDIRS_ALSO (flags 0x05/0x25) means 'this file'; if the path turns out to be a directory, the uninstaller would not delete it, so P30/scanners must not treat it as tree ownership (check LogRecord::dir_deletes_subdirs()).",
+  "P14 review: Model gap (purge-model TypedTarget): the 32-bit view of HKLM\\SOFTWARE is always spelled with WOW6432Node, but other shared keys exist besides Classes (e.g. Microsoft\\Windows\\CurrentVersion\\App Paths and several more in Microsoft's WOW64 table). I only corrected SOFTWARE\\Classes inside the Inno mapping; the general case belongs in the model/guard canonicaliser.",
+  "P14 review: P30 notes: (1) logs accumulate one full record set per install/update run (Shotcut: 68,600 records for 7 runs), so model_records() contains many duplicates; dedupe. (2) HKCU records with the 32-bit view under Software\\Classes\\CLSID etc. are left as 'HKCU\\...' with view=K32; binding must apply the view. (3) RegDeleteKeyIfEmpty carries key_create=true as the plan specifies, including on vendor-level keys such as 'HKLM\\Software\\GitForWindows'; policy/guard must keep such shallow keys from becoming Key-scope deletions of shared parents. (4) LogOp::StartInstall gives the installing user's account name and the app directory, useful for binding HKCU to a SID and for the Inno {app} root; field meaning is taken from real logs, the third string is named app_dir on that basis. (5) HKLM key paths keep the log's letter case ('Software\\...').",
+  "P14 review: Registry record types RegClearValue, IniDelete*, DeleteGroupOrItem and DecrementSharedCount, HKCR under a 32-bit view, and ANSI (pre-Unicode) string logs did not occur in the 25 real logs (two version-48 logs did use single-byte length markers); those paths are covered by synthetic tests only.",
+  "P14 review: Version gate: all 25 real logs, including one written by Inno Setup 7, have header version <= 1055, so none hit Unsupported. VS Code logs were not available on this machine.",
+  "P14: Format details written from memory of the published issrc description and unverified against a real log: MutexCheck = 0x8C, header flag bit order, per-type ExtraData flag values, string order inside Run and DeleteFile (font name/file as trailing strings). Run the ignored test `inno::tests::real_logs_parse_without_raw_records` with PURGE_INNO_FIXTURES pointing at real Git / VS Code unins000.dat as early as possible; it also fails on any parser warning.",
+  "P14: If current Git / VS Code installers write a header version above 1055, parse returns Unsupported and the key-create evidence path is lost for them (already listed in risks_and_questions).",
+  "P14: P30 (inno_map.rs): call `purge_harvest::inno::parse(bytes)` then `log.model_records()`; rewrite targets with user_hive=true from `HKCU\\...` to `HKU\\<sid>\\...`; push `log.warnings` and any InnoLogError (incl. Unsupported{version}) into Fingerprint.warnings. Per-record extras (registered_server(), fs_redirection_disabled(), INI section/entry, Run commands) are on LogRecord only.",
+  "P14: DeleteFile/DeleteDirOrFiles paths are kept as written: without the DisableFsRedir flag a System32 path from a 32-bit installer really means SysWOW64. P30 should consult LogRecord::fs_redirection_disabled() if it attributes System32 files.",
+  "P14: HKCR records are mapped to HKLM\\SOFTWARE\\Classes; a per-user install writing through HKCR could have landed in the user's classes hive instead. Modern Inno scripts use HKA/HKCU\\Software\\Classes so this should be rare; confirm on the VS Code user log.",
+  "P14: `cargo clippy -p purge-harvest -- -D warnings` will only pass once purge-source (P15) has no dead-code warnings.",
+  "P15: P20 (Live) should return the same error meanings: NotCaptured is never NotFound; listing a reparse-point directory returns ReparsePoint; env map names are upper-cased; `loaded_user_sids` leaves out `.DEFAULT` and the `_Classes` hives; `VolumeInfo::proves_absence()` is the rule for when exists may return Absent.",
+  "P15: Consumers (P21, P22, P23, P30) should treat a value with `data_unknown` or `truncated` set as incomplete. With a snap fixture, a value's `hash` field holds the snap's recorded hash, so P31 subtree hashes can be compared with it even when the bytes are unknown.",
+  "P15: Snap fixtures report packages with `signature_kind: Unknown` and `is_framework: false`, because lists.json does not record them. `is_resource` comes from `split.*` in the full name. P32 SYS-APPX filtering should not assume these values are known.",
+  "P15: P41 replay should pass the overlay in the drive-letter layout described in deviation 4 (`<overlay>\\C\\Program Files\\...\\unins000.dat`).",
+  "P16 review: Behaviour change to confirm: apps named `<Vendor> <generic words>` (Docker Desktop, GitHub Desktop, Mozilla Maintenance Service) now have name matching Disabled and rely on anchors/Tier A evidence. I chose this over letting them claim the shared vendor folder by name.",
+  "P16 review: `cargo clippy -p purge-identity -- -D warnings` without --no-deps fails on dead-code warnings in purge-source (crates/purge-source/src/registry.rs: control_set_name, map_current_control_set, is_registry_path and three more), which another package owns. purge-identity itself is clean.",
+  "P16 review: Implementer deviation 4 is looser than the literal plan text and I left it: a non-mega vendor prefix is stripped, so `Firefox` alone matches `Mozilla Firefox` by NameTokenExact (Tier C, weight 3). Policy must never preselect on name evidence alone.",
+  "P16 review: With no vendor string at all, `Mozilla Maintenance Service` still yields product token {mozilla} unless IDF drops it; the matcher cannot know the vendor. P24 must always pass Publisher/signer as vendors.",
+  "P16 review: Short-name bound is 4 characters summed over product tokens, against the plan's literal 3; ENGINE_PLAN 5.4 step 8 should be updated or the bound confirmed.",
+  "P16 review: VS Code stays Enabled in dirty-base as captured (visual/studio appear in only 2 apps); it becomes Disabled only with a third Visual Studio entry. This is the documented and tested outcome, and `code` is still required for any match.",
+  "P16 review: Single-word MSI component names (e.g. `Python 3.13.1 Executables` gives {executables}) match any folder of that name as NameTokenExact; this follows the spec's minimum of 1 token. Scanners/policy must keep it Tier C and unselected.",
+  "P16 review: Scanners (P24 and later) must honour NameMatch.needs_tier_ab_neighbour, pass one segment at a time, strip file extensions themselves, and pass KB aliases as extra vendor strings.",
+  "P16 review: Version numbers are noise, so `Visual Studio 2019` and `Visual Studio 2022`, or Python 3.12 and 3.13, share tokens and both match the same folders by name when only two are installed; the sibling/ownership index must resolve that.",
+  "P16 review: Scratch files can be deleted: C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\rev_p16.py and C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\rev-P16.",
+  "P16: Re-run cargo build/test/clippy -p purge-identity once purge-win compiles (sid.rs:295 needs env::expand from P11/P12).",
+  "P16: P24 API to code against: tokenizer::{normalize, lex, tokenize, significant_tokens, full_name_key, vendor_key, Corpus::{from_apps, add_app, is_common, doc_freq}}; kbdata::{Kb::shipped(), GenericTokens, MegaVendors::is_mega}; matcher::AppMatcher::{build(names, vendors, &corpus, kb), from_parts(names, vendors, tokens, mega_vendor, kb), name_matching, tokens, mega_vendor, vendor_keys, match_name, match_full_name, match_product_subfolder(vendor_segment, product_segment), match_vendor}, NameMatch{kind, name, needs_tier_ab_neighbour, distance}.weight()/evidence_kind(), VendorMatch.weight() (0 for mega), order_ties.",
+  "P16: P24 must pass KB aliases as extra vendor strings (e.g. `mozilla.org`); match_vendor only compares vendor keys and does not know aliases itself.",
+  "P16: P24 should store AppMatcher::tokens() and mega_vendor() in IdentitySnapshot; from_parts rebuilds an equal matcher (tested). Empty tokens = Disabled.",
+  "P16: Policy/scanners must honour NameMatch.needs_tier_ab_neighbour: a short-name ExactFullName is valid only next to Tier A/B evidence on the same target; the matcher only flags it.",
+  "P16: Decide whether the 4-character short bound (vs the plan's literal 3) should be written back into ENGINE_PLAN 5.4 step 8.",
+  "P16: The matchers take one path/key segment, not a whole path; callers split paths and strip file extensions (e.g. `Notepad.lnk` is tokenized as notepad + lnk).",
+  "P16: Scratch harness at C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\p16check and target dir target\\pkg-P16 can be deleted.",
+  "P17 review: Callers (P25 WindowsBaseline, ProvenOwnedSkeleton, P30 tokens) must check `Baseline::key_in_scope` / `path_in_scope` before treating `has_key`/`has_path` == false as 'not Windows' own'. The scope is hard-coded from vm/RIG.md \u00a72 defaults; if a baseline is ever written with `--root`, the file header would need to carry its roots.",
+  "P17 review: The 64-bit-twin rule means `HKLM\\SOFTWARE\\WOW6432Node\\X` counts as baseline whenever `HKLM\\SOFTWARE\\X` is in the baseline (e.g. `WOW6432Node\\Mozilla`, since `SOFTWARE\\Mozilla` is baseline). Deliberately conservative; costs a little recall on exact twins only.",
+  "P17 review: `add_token` now refuses tokens under 12 characters, and `AnchorSet::from_fingerprint` silently skips them. P30 tokens.rs (currently a stub) should not rely on shorter tokens.",
+  "P17 review: A root followed by `\\..` is no longer reported at all (not even as Embedded). Scanners that want to resolve such paths must normalise them before matching.",
+  "P17 review: Unchanged implementer caveats that still hold: file records compare lexically on drive C:; 8.3 spellings are not derived; `has_path` normalises every `C:\\Users\\<name>` to the baseline user, so any direct child of `C:\\Users` looks baseline (safe direction); `has_key` needs a K record (a V record alone does not make its key present); case folding is Unicode lower-casing rather than the NTFS/registry upcase table.",
+  "P17 review: Matcher residual: a ProgID/AUMID anchor also matches as a path segment (`C:\\x\\git_shell\\y`), and `add_root` accepts broad directories such as `C:\\Program Files`; root validation is the harvest's job (validate_root), not enforced here.",
+  "P17 review: Scratch files in the session scratchpad (p17rev_scan.py, q.py, edit1.py, edit2.py) and target\\rev-P17 can be deleted.",
+  "P17: P22 (refscan/queries): build one RefMatcher per scan with `RefMatcher::with_env(&set, env_pairs)` and call `find_all` on value names and SZ/EXPAND_SZ data, `find_in_segments` on MULTI_SZ, `find_in_binary` on the first 4 KB of REG_BINARY (the caller bounds the slice). `RefMatch.anchor` is the model's AnchorRef; map carriers to RefCarrier yourself.",
+  "P17: P30/P31: `AnchorSet::from_fingerprint` adds roots, exe paths, outside-root files, names of main exes only, ProgIDs, CLSIDs, AUMIDs and tokens. It does not add appids, typelibs or package families; add them with add_clsid/add_token if they should be searched. 8.3 spellings must be read from the file system and added with add_root_alias / add_exe_alias.",
+  "P17: P30 tokens.rs: use `Baseline::has_token` for 'absent from the baseline'. It tests whole last segments and value names only, not tokens embedded in a longer name.",
+  "P17: P35 (CLS-TOASTS): the matcher deliberately does not match `<ProgID>_<.ext>` composite value names; split them in the scanner. Same for `UpdateLock-<hash>` style file names (Mozilla KB rule).",
+  "P17: Scanners: `RefMatch.name_only` marks a bare exe-name match; it says nothing about the directory and should not be treated as PointsIntoInstallRoot.",
+  "P17: P25 (WindowsBaseline blocker): both committed baselines contain `HKLM\\SOFTWARE\\Mozilla` (Defender native messaging host), so that key is baseline on clean Windows. The Professional-26340 baseline has no `HKLM\\SOFTWARE\\Classes\\txtfile` key, and neither baseline has `.txt\\OpenWithProgids`.",
+  "P17: Baseline paths are compared lexically on drive C: with `C:\\Users\\<name>` as the profile; a host with Windows on another drive will not match file records. Registry records are unaffected.",
+  "P17: Case folding is Unicode lower-casing, as in purge-guard prefix.rs (same caveat as the P10 review note about NTFS/registry upcase tables).",
+  "P17: The Bash tool's heredocs halve backslashes in this environment; scripts that contain Windows paths should be written with the Write tool. Scratch files p17fix.py and p17edit.py in the session scratchpad and the target dir target\\pkg-P17 can be deleted.",
+  "P20: purge-source Cargo.toml owner: add the `appx` feature to the purge-win dependency, then replace the LiveSystem::packages stub in crates/purge-source/src/live/system.rs.",
+  "P20: P11/P12 (purge-win): move process::snapshot_processes and process_image_path from feature `run` to `read` so LiveSystem::processes can be implemented without spawn APIs.",
+  "P20: P12 (purge-win): consider exposing a COM-apartment guard (or a read_shell_link variant that assumes COM is already initialised) so the purge-source shortcut worker can stay initialised instead of calling CoInitializeEx/CoUninitialize on every read.",
+  "P20: P12 (purge-win): versioninfo does not read FileVersion/ProductVersion; the source VersionInfo has those fields, and Live always leaves them None.",
+  "P20: Fixture vs Live: the rig snapshot records HKLM\\SOFTWARE\\WOW6432Node\\Classes (and the Clients, Policies, RegisteredApplications and ProfileList links under WOW6432Node) as link keys. Live reads canonical K32 paths through the redirector, so WOW6432Node\\Classes\\... resolves to the 32-bit Classes view in Live but is not readable in a snap Fixture. Paths under shared WOW6432Node links such as Policies fail with ReparsePoint in both.",
+  "P20: HKU\\S-1-5-18 is itself a registry link (to .DEFAULT), so every HKU\\S-1-5-18\\... path answers ReparsePoint from Live. Inventory or ARP scanners that read S-1-5-18 rows should read HKU\\.DEFAULT, or guard canonicalisation should decide on that mapping.",
+  "P20: P10 note: no package owns building GuardEnv from Live data yet (loaded_sids, current_control_set, profiles with known_folders/user_content_folders, sync_roots, other_app_roots, purge/protected dirs). Live provides profiles, known_folders (process user, or for_user via User Shell Folders), env and current_control_set as plain drive paths; sync roots and redirected user-content folders for other profiles still need a producer.",
+  "P20: LiveSystem::known_folders for the process user uses SHGetKnownFolderPath; for other users only the 13 per-user folders the source models are derived (Pictures, Videos, Music and Saved Games are not in the source KnownFolder enum, though the guard's user_content_folders wants them).",
+  "P21: lib.rs owner: consider re-exporting `pub use arp::{inventory, Inventory, InventoryWarning}; pub use quiet::{quiet_command, QuietCommand, QuietError};` so P23/P40 can write `purge_inventory::inventory`.",
+  "P21: P23 (runner): QuietCommand.exe for MSI is `%SystemRoot%\\System32\\msiexec.exe` and other exes may hold %VARS% as written in the key; call `quiet.expand(&sys.env()?)` before spawning, and never resolve msiexec through the search path. quiet_command() returns Err(NoQuietForm/NoUninstallString/NoProductCode/Unsplittable) when no quiet form exists.",
+  "P21: P40/P20: arp::inventory takes utc_offset_secs (local minus UTC) for day-precision InstallDate; the Live pipeline should pass the host's bias (SystemSource has no time-zone fact); 0 = UTC midnight.",
+  "P21: BCU source paths in the attribution headers of arp.rs, kind.rs and quiet.rs (RegistryFactory.cs, InfoAdders/InstallDateAdder.cs, InfoAdders/UninstallerTypeAdder.cs, InfoAdders/{Msi,Nsis,InnoSetup}...Generator.cs) were written from memory and need checking against the BCU repository.",
+  "P21: P12 note about two ProductCodes in UserData that MsiEnumProductsExW does not return ({E537BDF5-...}, {F5C45561-...}) was not investigated: it needs the live host (P20 Live source). msi_only would not show them either, since they are not in msi_products().",
+  "P21: M1b: MSI UpgradeCode for MSI entries needs MsiGetProductInfoExW(UpgradeCode) added to purge_source::types::MsiProduct.",
+  "P21: Decide whether HKU\\S-1-5-18/19/20 entries should be writable_by=admin (service hives are admin-only); currently user per spec (the lower-trust direction).",
+  "P21: Scratch to delete: target\\pkg-P21, and C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\p21a.py and \\p21_accept.rs.",
+  "P26 review: Decision wanted (not changed): a Safe parent absorbs Likely/Weak descendants that are only short of evidence. ENGINE_PLAN \u00a77.1 says a parent absorbs only children that are themselves Safe, otherwise it becomes 'owned descendants + delete-if-empty'. In particular a descendant held down by negative evidence (ModifiedAfterUninstall, ExecutablesPresent) or by a negative Ai note is absorbed without demoting the parent. Stricter handling would lower recall for install roots; needs a decision of record.",
+  "P26 review: Decision wanted (not changed): collapse does not compare owners. A candidate of another program id that nests in a Safe parent is absorbed. Harmless while build() gets one app's candidates; relevant if co-product candidates carry a different owner.",
+  "P26 review: Blast radius fails open when scanners leave child_count / size_bytes unset (None is treated as 0). Scanners P32/P33 and FS-INSTALLDIR must fill them; the plan cannot tell a file from a directory to enforce it here.",
+  "P26 review: \u00a75.10 'whole-directory quarantine only under a manifest-backed InstallRoot after verify-gone' is not enforced in decide (not in the P26 scope text); a non-root directory with Tier A Path evidence and score >= 8 can be Safe as a whole quarantine up to 5,000 files.",
+  "P26 review: An already empty vendor container (no children, or only desktop.ini/Thumbs.db) becomes Safe + preselected on VendorContainer + EmptyAfterPlan alone, also when VendorContainer has mega-vendor weight 0. This matches \u00a75.6 as written; confirm it is wanted for mega-vendors.",
+  "P26 review: The plan hash does not cover the app id or the targets of absorbed children (only their ids). Acceptable for M1a dry runs; revisit when the hash is bound to execution in M2.",
+  "P26 review: lib.rs (not owned by P26) still does not re-export emit::build / DecideCtx / empty_after::mark_pending; callers use module paths.",
+  "P26 review: Scratch target dirs can be deleted: C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\rev-P26 and C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\pkg-P26.",
+  "P26: P40 (pipeline): call `purge_plan::emit::build(app_id, candidates, &DecideCtx{deny, mode, verify_gone, user_sid, long_names_resolved, limits})`; compile one `DenyList` per scan; set `user_sid` to the user being cleaned (otherwise HKCU targets are Blocked and all paths are machine scope); set `long_names_resolved` only when paths were read from the file system in long form. Write `built.plan` as plan.json and `built.scan` as `<plan>.scan.json`.",
+  "P26: P32 / P33 (FS-VENDORPARENT, REG-SOFTWARE vendor keys): emit Action::RemoveDirIfEmpty with VendorContainer evidence whose detail comes from `purge_plan::empty_after::mark_pending(facts, children)`, listing every direct child (files/values as Child::Leaf, subdirs/subkeys as Child::Container, default value as Leaf(\"\")). An incomplete listing must not be emitted as complete. purge-scan would need a purge-plan dependency for the helper; otherwise write the two detail keys `empty_after_plan`=`pending` and `children`=<JSON array, `\\\\`-terminated names for containers> by hand.",
+  "P26: Scanners: fill `child_count` (and `size_bytes` for paths) on whole-removal candidates, or the blast-radius limits cannot fire; a missing count is treated as 0.",
+  "P26: Scanners: a merged candidate keeps the first scanner in input order, so the catalog order decides which scanner id appears in the plan and in the hash; keep that order stable.",
+  "P26: Decision of record wanted: the collapse rule that a held-back descendant (UserData, soft blocker, harm above Low) demotes a Safe parent to Likely. It protects user data inside an install root but will lower recall_safe for an InstallRoot that contains an attributed UserData folder.",
+  "P26: Decision of record wanted: the 50,000-file limit for proven install roots versus 5,000 for other directories (ENGINE_PLAN \u00a75.3 and \u00a75.10 give different numbers).",
+  "P26: lib.rs owner: consider re-exporting `emit::{build, Built, ScanDoc, to_plan0}`, `decide::{DecideCtx, Limits}` and `empty_after::{mark_pending, Child}` from purge-plan's crate root.",
+  "P26: Scratch files that can be deleted: C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\p26hash.py and the target dir C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\pkg-P26.",
+  "P22 review: P31/P33 must honour the new `RefHit::cut_edge`: never use such a hit as Tier A attribution or to preselect a deletion; do treat it as a possible reference in shared-ownership checks. The same caution applies to any hit with `data_complete == false`.",
+  "P22 review: P31/P33 must check `is_complete()` on RefScan / ValuesReferencing / KeysNamed / Subtree before concluding 'no reference' or 'fully attributed'. With `Scope::standard` on snapshot fixtures the scan is always incomplete (service-SID hives read as NotCaptured); use `Scope::for_sids` with the interactive user's SID.",
+  "P22 review: Implementer's deviations that stand and need the owners' decision: SubtreeValue.hash in the model says 'type and data' while queries gives a data-only hash plus `ty`; `ti_owned` is Option<bool> here and plain bool in the model; private SHA-256 should be replaced by `sha2` if the manifest owner adds the dependency; the default prune list includes `Installer\\UserData` (to be confirmed with the M1b MSI work).",
+  "P22 review: Token anchors do not match `{GUID}_is1`-style strings (0 token hits on the VS Code snapshot) - a matcher (P17) / P30 decision, not a P22 defect.",
+  "P22 review: Optional hardening not done: read values/subkeys regardless of the `key_info` counts; keep a custom-scope root that lies below a pruned or link key.",
+  "P22 review: Scratch files that can be deleted: C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\p22fix.py and the target dir C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\rev-P22.",
+  "P22: P31 (refsnap/subtree): API is `refscan::{scan, scan_standard, Scope::{standard, for_sids, custom, with_prune, contains}, RefScanOptions, RefHit, RefWhere, value_hits, default_prune}` and `queries::{values_referencing, keys_named, subtree, SubtreeLimits, data_hash, hash_bytes, hash_hex}`. Map `RefHit.location.carrier()` to RefCarrier, `location.segment()` to the segment index, `hash_hex(data_hash)` to RefSnapEntry.data_hash.",
+  "P22: P31: decide how to fill SubtreeValue.hash (model doc says 'type and data', queries gives a data-only hash plus `ty`) and what SubtreeBaseline.ti_owned should be when the source returns None.",
+  "P22: P31/P33: check `RefScan::is_complete()` / `Subtree::is_complete()` before concluding 'no reference' or 'fully attributed'. With snapshot fixtures the scan is always incomplete because HKU\\S-1-5-18\\Software, S-1-5-18\\Environment and the service `_Classes` roots read as NotCaptured; use `Scope::for_sids` with the interactive user's SID to avoid that.",
+  "P22: Scope::standard includes every loaded SID, service SIDs included. On a live machine HKU\\S-1-5-18 mirrors HKU\\.DEFAULT; whoever calls the scan live should decide whether to restrict to the interactive user via for_sids.",
+  "P22: The walk calls key_info once per key (needed for link detection and parent counts). On the Live source (P20) that is one extra open per key; measure against the 1.3 timing budget once P20 lands.",
+  "P22: Confirm the default prune list, in particular pruning `HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData` (MSI component paths point into install roots; left to the M1b MSI work).",
+  "P22: Token anchors do not match `{GUID}_is1` ARP key-name style strings (matcher's whole-segment rule: `_` is an identifier character); 0 token hits on the VS Code snapshot. Matcher owner (P17) / P30 to decide whether that is intended.",
+  "P22: If `sha2` is added to purge-index's manifest, replace `queries::sha256` with it.",
+  "P22: Target dir C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\pkg-P22 and scratch file C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\p22snap.py can be deleted.",
+  "P25 review: Decision for the design owner: DanglingRef is now strict per 5.3 (root gone, nearest ancestor == recorded parent). If references into a partly surviving root should count as dangling, that needs a plan change, ideally gated on verify-gone; until then such values rely on PointsIntoInstallRoot / InPreUninstallRefSnapshot. Likewise, when the uninstaller also removes the vendor parent directory, nothing is dangling (literal plan text).",
+  "P25 review: P32-P35 must be told about the stricter constructors: `in_ref_snapshot()` returns false for Root anchors that are InferredRoot/ReferencedDataDir; `harvested_token()` returns false on keys without a baseline; `common_blockers()` now puts InsideOtherApp on values inside another app's own keys, so P40 must fill `OtherApp::keys` only with keys that are really that app's own (ARP key, Software\\Vendor\\Product), never shared containers such as Run.",
+  "P25 review: Inno `RegDeleteKeyIfEmpty` records give Key-scope Tier A `InstallerManifest` (as the plan states), even though Inno scripts commonly put `uninsdeletekeyifempty` on shared vendor keys (e.g. Software\\<Vendor>). REG-SOFTWARE (P33) should use a delete-if-empty style action or require the key to be empty or fully covered before offering DeleteKey on such a record; the framework cannot tell from the record alone.",
+  "P25 review: `owner_blockers()` puts the hard `TrustedInstallerOwned` blocker on value targets whose key is TI-owned or has a TI ACE (and on any target whose key matches an ext_journal entry flagged ti_owned). This is fail-closed but may hide legitimate value-level offers (P values in OpenWithProgids, .ext default restore) under TI-ACE keys; the plan's rule is about deleting keys. Needs a decision before P34.",
+  "P25 review: `uninstaller_artifact(what)` and `chained_ref(anchor_tier, anchor)` verify only the scope: the scanner's word is taken for 'this is the app's ARP key / uninstaller file' and for the anchor's tier. The fingerprint holds no UninstallString to check against. FS-UNINSTALLER and CLS scanners need careful review.",
+  "P25 review: `harvested_token` matches the token as a delimited part of the name (`FirefoxHTML-<token>`), while `Baseline::has_token` treats `-` as part of a run, so a baseline name of the form `Prefix-<token>` would not veto. Practically harmless for GUID / 12-hex tokens and the exact-key baseline blocker still applies, but the two definitions differ.",
+  "P25 review: Still open from the implementer's report: the copies of `default_harm` and the empty_after constants in framework.rs have no cross-crate equality test (needs a Cargo.toml change or a test in purge-engine); `outside_root_files` (py.exe in C:\\Windows) can never be dangling because no volume serial is recorded for them, although 5.3 wants those references to stay offerable; `inno_trust` is approximated from the registration and InnoApp roots.",
+  "P25 review: `candidate_id` does not apply the CurrentControlSet / ControlSet00N alias, so two scanners spelling the same key differently would produce different ids; harmless if every scanner emits guard-canonical keys.",
+  "P25 review: Scratch that can be deleted: C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\rev_p25.py, C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\rev_p25b.py and C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\rev-P25.",
+  "P25: Cargo.toml owner: consider adding purge-policy (and serde_json) to purge-scan so framework::default_harm and the children-listing JSON writer can be replaced by the originals; until then add a cross-crate test (e.g. in purge-engine) that framework::{PENDING_KEY, PENDING_VALUE, CHILDREN_KEY} equal purge_plan::empty_after's and that framework::default_harm equals purge_policy::harm::default_harm for every (Category, Action).",
+  "P25: Decision needed: is DanglingRef allowed when the root directory still exists and only the referenced file is gone (implemented: yes), or only when the nearest existing ancestor is exactly the root's recorded parent (literal 5.3 text)? Strict callers can test Dangling::root_gone().",
+  "P25: P32-P35: replace only the scan() bodies; keep `pub const ID`, the struct names (FsInstallDir, FsUninstaller, FsAppData, FsVendorParent, FsShortcuts, RegSoftware, RegAppPaths, RegRun, RegEnv, RefAny, ClsProgId, ClsAssoc, ClsFileExts, ClsToasts, ClsAumid, ClsVerbs, ClsProtocol, ClsRegApps, SysAppx) and review the ROOTS / VALUE_CONTAINERS I declared for your scanner. catalog.rs imports those names.",
+  "P25: P32-P35: build candidates with `ctx.candidate(ID, target, action, category)`; evidence constructors return false when their condition fails (check the result); call `common_blockers()` on every candidate and `require_verify_gone()` for FS-INSTALLDIR. Add Tier A/B evidence before `name_match()` of a short name. P35's X-SYSTIDY candidates just pass that id string.",
+  "P25: P32/P33 vendor containers: use `vendor_container_pending(match, children)` with Action::RemoveDirIfEmpty and list every direct child (ContainerChild::Leaf / Container); a missing child would make a non-empty container look empty to purge-plan.",
+  "P25: P40 (pipeline): must build `OtherApps` (per other current inventory entry: roots, files referenced by UninstallString/DisplayIcon, own keys, anchors), excluding the target and its co-removed products, and fill ScanCtx incl. `guard`, `env`, `baseline` (exact edition/build.ubr only) and `verify_gone`. OtherApp is plain data; there is no from-inventory constructor.",
+  "P25: P41 (xtask scanner-coverage): use `purge_scan::catalog::metadata()` / `catalog::value_containers()`; Fs patterns start with one of `RootSpec::FS_TOKENS`, Reg patterns with one of `RootSpec::REG_PREFIXES` (`HKCR\\` = machine or user Classes root); SYS-APPX has no roots by design.",
+  "P25: Model/harvest: the fingerprint records no trust for the Inno log itself and no volume serial for `outside_root_files`; adding both would let inno_trust be exact and let dangling references to declared files outside the roots (py.exe) qualify.",
+  "P25: ComKeyOwnership has no builder constructor yet (M1b COM scanners); EmptyAfterPlan is deliberately not constructible from purge-scan.",
+  "P25: Scratch files that can be deleted: C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\p25_gen.py and C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\pkg-P25.",
+  "P23: P01/purge-model owner: decide whether `ran_as` and `should_run_medium` belong in `RunDoc`, with serde defaults so the purge.run/0 schema stays compatible. Until then P40 has to read them from `runner::RunReport.routing`.",
+  "P23: P40: build `RunRequest` from the fingerprint, using `main_exes()` paths and root paths. Pass the pre-run inventory entries as `before` so co_removed gets filled. Copy t_start, t_end, verify_gone and co_removed back into the Fingerprint. Map `RunOutcome::TimedOut`, `Cancelled` and `Failed` to exit code 4. Use `VerifyGone::is_passed()`, not the `passed` field.",
+  "P23: purge-win (P12 owner): add a process start-time wrapper (GetProcessTimes) so `ProcessSeen.start` can be filled and pid reuse can be told apart.",
+  "P23: M2/M3: add WM_CLOSE handling, terminate-with-consent and a kill-on-timeout option. The `ProcessHost` trait deliberately has no terminate method yet.",
+  "P23: Scratch target directory C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\pkg-P23 can be deleted after the wave.",
+  "P24 review: Plain `AppIdentity::resolve` still sees no URLInfoAbout/HelpLink and no MSI ProductName, because InventoryEntry lacks them (implementer deviation 1). P30 must call `resolve_with` with `IdentityHints`; this is an inventory/model owner decision.",
+  "P24 review: A file-sourced name can be a one-word subset of the product name (`Photo.exe` for `Affinity Photo 2`, `Lumen.exe` for `Lumen Studio`). That word then matches as NameTokenExact C/3 and ExactFullName B/4 on a folder of exactly that name. The plan asks for this ('main exe names' are names) and it never preselects alone, but the policy/scan owners (P25/P32) should know that ExactFullName can come from an exe stem. Consider requiring an exe-stem name to cover all product tokens of the DisplayName unless it is the DisplayIcon target.",
+  "P24 review: The other-app rule compares against other entries' DisplayNames only. An app that is not in the inventory (portable, or MSI-only rows) cannot protect its name, and `with_inno` on an already-resolved identity adds the AppName without this check (it is a primary name by design).",
+  "P24 review: A component whose DisplayIcon borrows a sibling entry's exe now gets no signer or CompanyName vendor from it, only its Publisher. This is a small recall loss chosen for safety.",
+  "P24 review: Vendor aliases still come unconditionally from the signer CN and CompanyName of a DisplayIcon exe that is not inside any other entry's InstallLocation (for example a shared runtime with no ARP entry). The effect is limited to VendorContainer (delete-if-empty) and ProductSubfolderOfVendor, which still needs a product match.",
+  "P24 review: The URL label still has no public-suffix list; unlisted multi-tenant hosts yield a C/2 vendor alias.",
+  "P24 review: The `LargestOnly` main exe is unrelated to the app's names. P30 must not seed verify-gone or `ExeFile.main` from it without root validation.",
+  "P24 review: The path checks are lexical: `in_windows_tree` and `is_shared_location` assume a `<drive>:\\Windows` layout and do not resolve junctions or 8.3 names other than `PROGRA~N`. Harvest's `validate_root` has to stay the real gate.",
+  "P24 review: The test fixture's assumption that `maintenanceservice.exe` carries ProductName `Firefox` should be confirmed on the firefox-tb rig.",
+  "P24 review: Build directories target\\pkg-P24 and target\\rev-P24 can be deleted.",
+  "P24: P30 (harvest): call `IdentityHints::default().with_arp_urls(reg, entry)`, set `env` from the entry's user, `msi_product_name` from the MSI product and `kb_aliases` from the KB, then `AppIdentity::resolve_with`; store `identity.snapshot()` in the Fingerprint and push `identity.warnings()` into Fingerprint.warnings.",
+  "P24: P30: `with_inno(app_name)` after resolution adds the name but does not re-run main-exe selection or the file-name relation check; pass `inno_app_name` in the hints when it is known up front.",
+  "P24: P30 exes.rs: `identity.main_exes()` (path, basis, size, VersionInfo, signer) can seed `ExeFile.main`. A `LargestOnly` exe is unrelated to the app's names; decide whether verify-gone should rely on it.",
+  "P24: P25/P32 scanners: after the uninstall use `AppIdentity::from_snapshot(&fp.identity)`. Pass one segment at a time with file extensions removed, and honour `IdentityMatch.needs_tier_ab_neighbour`.",
+  "P24: Inventory owner: consider adding URLInfoAbout/HelpLink (and MSI ProductName) to InventoryEntry so plain `resolve` sees them.",
+  "P24: Confirm on the firefox-tb rig what `maintenanceservice.exe` really carries as ProductName; the test fixture assumes `Firefox`.",
+  "P24: A vendor URL on a second-level public suffix outside the small table (e.g. `foo.blogspot.com`, `x.azurewebsites.net`) yields the host's own label as a vendor alias. It is VendorContainer only (C/2, delete-if-empty), but a public-suffix list or a longer shared-host list would be cleaner.",
+  "P24: target\\pkg-P24 can be deleted.",
+  "P20f: purge-win (P12 owner): add GetProcessTimes / ProcessIdToSessionId wrappers (the session one needs the windows-sys feature Win32_System_RemoteDesktop) so LiveSystem::processes can fill ProcessInfo.start and .session (see the P23 note about pid reuse).",
+  "P20f: LiveSystem::for_user(sid) for an account other than the engine's, when not elevated: packages() still returns the engine account's packages, labelled with the engine account's SID. purge-win appx has no per-SID scope (FindPackagesByUserSecurityId(sid) for another user needs admin rights anyway).",
+  "P20f: Fixture vs Live sparse flag: the rig also sets sparse from the manifest's AllowExternalContent, while Live sets it only when EffectiveExternalPath is present. If parity matters, purge-win could expose a manifest-based flag.",
+  "P30 review: Rule T gap for Inno records (needs purge-model, not owned by P30): `InnoRecord` carries no SourceTrust. A log located via an HKU Uninstall key, or lying in a user-writable directory, yields records that the scan could treat as Tier A InstallerManifest for machine-scope targets. The scan (or a model field) must downgrade them using entry hive + root trust.",
+  "P30 review: `modified_progids` still lives only in `harvest::HarvestReport` (no Fingerprint field); the scan cannot see them until purge-model gains the field.",
+  "P30 review: appx_link links a sparse package under an InferredRoot (needed for the Notepad++ acceptance, but beyond ENGINE_PLAN 4.1 'InstallRoot'). An inferred root that is really a vendor folder with unregistered sibling apps could link a sibling's sparse package; the scan should weigh InferredRoot links lower, and the plan text should be settled.",
+  "P30 review: resolve_root checks the reparse flag only on the leaf directory; a root reached through a junction in an ancestor is accepted lexically (FileSystemSource has no final-path query). ReparseMismatch at plan time is the remaining defence.",
+  "P30 review: validate_root accepts Windows-component directories under Program Files that the guard does not list (e.g. `C:\\Program Files\\Windows NT`, `Windows Defender`) and a subdirectory of %TEMP%, if an ARP entry claims them; candidates for kb/deny.json (other package).",
+  "P30 review: Git `sh_auto_file` remains in P (acceptance leaves it open).",
+  "P30 review: PURGE_OVERLAY_DIR path with a real unins000.dat is still unexercised on rig data (no overlay available); Inno mapping is covered by synthetic-log unit tests only.",
+  "P30 review: `cargo fmt --check` reports pre-existing formatting diffs in exes.rs (implementer's code, not touched); cosmetic.",
+  "P30: purge-model: add `modified_progids` (name + reason) to the fingerprint so the scan can see ProgIDs the app only modified; today it is only in harvest::HarvestReport.",
+  "P30: purge-source FileSystemSource has no short-path (8.3) query, so AnchorSet::add_root_alias/add_exe_alias are not fed; references written in 8.3 form are missed.",
+  "P30: Rig: provide an overlay with unins000.dat for vscode and git (PURGE_OVERLAY_DIR/<app>/C/Program Files/...) so the ignored test exercises real Inno logs; currently Inno record counts are 0 on rig data.",
+  "P30: Snapshot fixtures do not capture shortcut contents, version resources or signers: shortcut AUMIDs are empty and identity emits one warning per exe on rig data (noisy; purge-identity could aggregate).",
+  "P30: Decide whether Git's `sh_auto_file` (in P by the command rule, absent from the baseline) should stay in P or be demoted to skeleton evidence only.",
+  "P30: AnchorSet::from_fingerprint does not add AppIDs/TypeLib ids; they are recorded in fp.anchors but not matched by the reference scan.",
+  "P30: ENGINE_PLAN \u00a74.1 should state whether an InferredRoot may carry the sparse-package link (needed for Notepad++).",
+  "P31 review: cargo clippy -p purge-harvest --all-targets -- -D warnings currently fails on two needless_borrows_for_generic_args findings in crates/purge-harvest/src/tokens.rs test code (lines 386 and 408). That file belongs to another package and was not touched; none of the P31 files have findings.",
+  "P31 review: A REG_SZ or binary value that names the app's root together with another app's path (e.g. another tool's command line taking a file in our root as an argument) is still a proven reference and attributes the value. This follows the plan's InPreUninstallRefSnapshot definition; tightening it needs a decision at plan level (e.g. require the anchor at the start of the data for key attribution).",
+  "P31 review: assoc: with two users in scope, only the first user's FileExts record is attached to the HKLM entry of an extension; the second user's is kept only if that user has an own <sid>_Classes entry for it. No warning is emitted.",
+  "P31 review: Co-product name tie (exe stem starts with the entry's product name, 6+ chars) can nominate an unrelated same-vendor entry such as a product called 'Update' when the target ships update.exe. It only matters if that entry also disappears during the uninstall; confirm on the firefox-tb gate run as the implementer suggested.",
+  "P31 review: Implementer follow-ups still stand: ExtJournalEntry lacks fields for default_is_ours / baseline membership / FileExts details; Environment list values are stored per segment, so a whole-value candidate in reg_env will not match in_ref_snapshot; K32 Inno records need WOW6432Node spelling from P30; CoProductPre has no place in the fingerprint yet.",
+  "P31 review: Ignored perf test on snap-vscode-1 was not rerun in this review (the added matcher check per multi-string hit is negligible).",
+  "P31: P30 (harvest.rs is still a stub): build `refsnap::HarvestCtx { reg, fs, sys, anchors, roots, inno, baseline, inventory, target }` and call `let snap = refsnap::capture_report(&ctx); let keys = subtree::keys(&ctx, &snap.entries); let st = subtree::capture_with(&ctx, &keys, &SubtreeOptions::default()); let journal = assoc::capture_detailed(&ctx); let pre = coproducts::candidates(&ctx);` and push each `.warnings` into Fingerprint.warnings. Inno records must already be bound to HKU\\<sid> (an unbound HKCU path is bound to the interactive user as a fallback only).",
+  "P31: P40: after the uninstall, `coproducts::co_removed(&candidates, &run.co_removed)` gives Fingerprint.co_removed (fingerprint: None). CoProductPre is Serialize/Deserialize but the fingerprint has no field to persist the candidates between the harvest and uninstall commands; either harvest full fingerprints for candidates or add a field.",
+  "P31: Model owner (P01): ExtJournalEntry lacks default_is_ours, ext/OpenWithProgids baseline membership, OpenWithProgids TI flag and the FileExts details (OpenWithProgids in P, OpenWithList entries, MRUList, UserChoice). They exist only in assoc::ExtRecord / FileExtsRecord; P35 must recompute them at scan time unless the model gains fields.",
+  "P31: P35: for an extension that only has user-side traces (FileExts or a toast) the journal holds an entry for its HKLM\\SOFTWARE\\Classes key with empty openwith_ours (the key may not exist). file_exts_key and toast_values are attached to every entry of that extension, HKLM and user hive alike.",
+  "P31: P33/P35: PATH-like values are in the snapshot as RegMultiSzSegment {segment trimmed as written, index = position among the `;` pieces, empty pieces counted}; a whole-value RegValue candidate for such a value will not match in_ref_snapshot.",
+  "P31: Inno records whose view is K32 are compared by path as given; if P30 does not spell the 32-bit view with WOW6432Node, those records will not attribute keys under WOW6432Node.",
+  "P31: Token anchors still produce no hits for `{GUID}_is1` names (P17/P22 note), so the ARP key of an Inno app is not in the snapshot through its token.",
+  "P31: The co-product name tie is a heuristic; worth confirming on the firefox-tb gate run that it yields exactly the Maintenance Service.",
+  "P32 review: Model/framework decision still open (implementer followup 1): PointsIntoInstallRoot/DanglingRef are Value-scope only, so shortcuts of non-Inno apps carry at most name/TimeWindow evidence; all-users Start Menu shortcuts of Firefox/Notepad++ will be guard-denied until a Path/Shortcut scope exists.",
+  "P32 review: FS-INSTALLDIR does not check services or scheduled tasks pointing inside the root (plan 5.6 row lists them; the P32 package spec does not). Running processes, other apps' ARP files and modified-after are covered.",
+  "P32 review: FS-INSTALLDIR offers any RootKind::InstallRoot whole, including ARP InstallLocation roots (deviation 7); the plan's 'manifest-backed' wording in 5.5/7 is stricter, but 1.4 requires Firefox (NSIS) install-dir remnants Safe. Needs an owner decision; safety relies on validate_root, verify-gone and the live blockers.",
+  "P32 review: FS-UNINSTALLER recognises uninstallers by name (`unins*.exe`) in an UninstallerDir InferredRoot without a recorded UninstallString path; a fingerprint field for the exact path would make this exact. It also has no running-process check of its own (covered only by verify-gone).",
+  "P32 review: FS-APPDATA: an Inno-declared directory with a cache name at depth >= 2 below a base is Category::Cache without checking that its parent is an attributed app folder; and the `updates\\<token>` => Cache rule (deviation 5) can reach Safe. Both rest on Tier A evidence about the directory itself; worth a policy-owner look.",
+  "P32 review: Process image paths are compared lexically (no 8.3/long-path or device-path normalisation); a source returning non-canonical image paths would miss the InUse/NotGone blocker. P40 should guarantee canonical paths from SystemSource::processes.",
+  "P32 review: Build directory C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\rev-P32 can be deleted.",
+  "P32: Decision needed (model/framework owner): allow PointsIntoInstallRoot and DanglingRef at Path scope for shortcut files, or add a Shortcut target/evidence kind. Until then FS-SHORTCUTS cannot reach Tier A for non-Inno apps and all-users Start Menu shortcuts of Firefox/Notepad++ will be guard-denied; the scanner already calls both constructors.",
+  "P32: Rig: snapshots do not record shortcut contents (read_shortcut = NotCaptured), so FS-SHORTCUTS offers only Inno-declared shortcuts on snapshot runs; the rig would need to capture .lnk target/args/AUMID (or an overlay) for npp/firefox shortcut recall.",
+  "P32: P26/policy: confirm that a shortcut whose only evidence is TimeWindow (C/1) or a name match lands in an unchecked band, and that tier_a_start_menu_entry is set only from InstallerManifest on the .lnk or group folder.",
+  "P32: P40 pipeline: SystemSource::processes must be readable or every FS-INSTALLDIR candidate is NotGone; ScanCtx.env needs WINDIR/SYSTEMROOT etc. for shortcut target expansion; known_folders/env/guard profile for fp.user_sid drive the scanned locations.",
+  "P32: P41 scanner-coverage: FS-APPDATA now declares depth 3 under %APPDATA%, %LOCALAPPDATA%, LocalLow and %ProgramData%; FS-VENDORPARENT adds %USERPROFILE%\\AppData\\LocalLow depth 1.",
+  "P32: Review the 'updates\\\\<token>' => Category::Cache rule and the FS-UNINSTALLER name heuristics (P25 review note 156 asked for a careful look); a recorded UninstallString path in the fingerprint would make the latter exact.",
+  "P32: Fingerprint has no path-level reference snapshot, so FS-APPDATA has no 'refsnap' attribution for folders; consider recording data-dir references with their own evidence if that recall is wanted.",
+  "P32: ClickOnce .appref-ms and MSI/InstallShield uninstaller caches are not attributed yet (M1b/M4).",
+  "P32: Build directory C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\pkg-P32 can be deleted.",
+  "P33 review: Acceptance deviation stands: HKLM\\SOFTWARE\\WOW6432Node\\Mozilla is not offered as delete-if-empty on real baselines because the baseline treats a 32-bit key as baseline when its 64-bit twin is. This errs on the safe side but needs a decision of record.",
+  "P33 review: DenyListed is not part of common_blockers. Product keys and values under a deny-listed path rely on the purge-plan/guard stage to block them; only vendor containers consult the deny-list in this package. Confirm P26/guard applies it to every candidate.",
+  "P33 review: The other-app checks (Foreign, ReferencedByOtherApp, ContainsOtherApp, exe claimant) see nothing until P40 fills OtherApp roots, keys and anchors. P40 must also leave co-removed products out of other_apps, or the new value-level blocker will block Firefox values that mention the Maintenance Service.",
+  "P33 review: The Run-value check blocks whenever another app's anchor appears anywhere in the command, since RefMatch carries no positions. A Run entry of this app that passes another app's file as an argument is therefore listed as blocked (a missed leftover, not a wrong deletion).",
+  "P33 review: REG-ENV whole-variable delete for an app-declared variable whose single entry lies outside the root (GIT_SSH=plink.exe) is Safe on the Inno value record alone, as the spec says. The Inno record carries no data, so a variable another program re-set after the uninstall cannot be told apart.",
+  "P33 review: MaintenanceService-style keys only reach Likely (name evidence only).",
+  "P33 review: REF-ANY runs one full refscan per app and again per co-product, and each of the scanners now builds a Foreign matcher per pass. Timing against the 10 s budget is unmeasured on a real hive.",
+  "P33 review: common::expand_env duplicates the copy in fs_installdir.rs; the shared helpers live in reg_software::common because lib.rs is not owned by this package.",
+  "P33 review: offer_value carries #[allow(clippy::too_many_arguments)] (8 parameters) after the Foreign parameter was added.",
+  "P33 review: Scratch files and build dirs can be deleted: target\\rev-P33, target\\pkg-P33, and in C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad the files rev_p33_edit.py, rev_p33_tests.rs and main.rs.bak.",
+  "P33: Decide the baseline 32-bit-twin rule for vendor keys: as it stands WOW6432Node\\Mozilla is never offered on a real baseline, contrary to the P33 acceptance wording.",
+  "P33: Decision of record wanted for the evidence rows used on App Paths / Applications keys (AppNamedKeyWithRootRef) and StartupApproved values (ChainedRef through the Run value).",
+  "P33: P31 should record `;`-list hits as RegMultiSzSegment in the ref snapshot; REG-ENV currently accepts both the segment form and the whole-value form.",
+  "P33: MaintenanceService-style keys only reach Likely (no root ref); depends on P24 storing the `maintenanceservice` token. A key with HarvestedToken (weight 7) alone is Likely.",
+  "P33: REF-ANY runs a full refscan per app and again per co-product; timing against the 10 s budget has not been measured on a real hive.",
+  "P33: P40 must fill OtherApp::keys / anchors, otherwise the ReferencedByOtherApp / ContainsOtherApp checks in these scanners see nothing.",
+  "P33: Move reg_software::common::expand_env and fs_installdir's copy into one shared place once someone owns lib.rs.",
+  "P33: Scratch build dir C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\pkg-P33 and C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\notes_p33.txt can be deleted.",
+  "P33: Just before context compaction I was inspecting three regions for a possible last refinement (reg_apppaths.rs main_exe_name check near line 159, ref_any.rs value re-read near line 126, reg_software.rs common::is_wow); no edit was made and the suite is green, but a reviewer may want to look at those spots.",
+  "P34 review: Design owner: a verb, scheme or ProgID key attributed only by its command gets ChainedRef (weight 5) and so lands in Likely, not the 'Safe' default of the \u00a75.6 table; Safe needs InstallerManifest, ProvenOwnedSkeleton or HarvestedToken next to it. This is the safe direction but costs recall_safe (e.g. per-user `vscode` is Safe only with the Inno key-create record). Decide whether a Key-scope 'command into roots / dangling' evidence kind is wanted.",
+  "P34 review: All five scanners offer no key without a matching baseline (stricter than the spec, which states this only for CLS-PROGID). Safe direction; confirm it is intended for hosts without a baseline.",
+  "P34 review: Value-level fallback: a foreign program's command that merely mentions the app's root as an argument (rundll32, wscript, or an unrelated tool) yields a DeleteValue candidate that is Safe when dangling (PointsIntoInstallRoot 6 + DanglingRef 7). This follows the framework-wide PointsIntoInstallRoot semantics and is blocked by WindowsBaseline only when the baseline has that value; confirm on the rig runs.",
+  "P34 review: env_applies only guards other users' HKU hives. Per-user variables (%LOCALAPPDATA%, %USERPROFILE%) in HKLM strings are still expanded with the interactive user's environment, as in the other scanners. When an admin X uninstalls user A's per-user app, strings with %VAR% in A's hive are no longer expanded (treated as foreign), which loses recall but not safety.",
+  "P34 review: Implementer follow-ups still stand: an unrecorded `.ext` referrer hard-blocks the ProgID key (depends on harvest completeness, P31); TrustedInstallerOwned on value candidates (P25 decision); CLS-PROTOCOL does one value read per Classes subkey, to be timed on the Live source; tests/fs/main.rs of another package reportedly breaks crate-wide `cargo test` / `clippy --all-targets`.",
+  "P34 review: target\\rev-P34 and the scratch file C:\\Users\\kaank\\AppData\\Local\\Temp\\claude\\b72fa0e98c700f51\\8033e7d2-e67f-41b1-8deb-42dbdcabcd34\\scratchpad\\rev_p34_edit.py can be deleted.",
+  "P34: P30/P31 (harvest): Inno records and ext_journal/ref_snapshot entries for the user's classes must be spelled `HKU\\<SID>_Classes\\...` (not `HKU\\<SID>\\Software\\Classes\\...`), otherwise CandidateBuilder::installer_manifest / in_ref_snapshot / existed_before_blocker (framework, same_key does not fold the alias) will not match the `_Classes` targets these scanners emit. My own checks (recorded-as-own, snapshot_below, existed_before for keys) fold the alias locally.",
+  "P34: P31 (harvest): the ReferencedByOtherApp check relies on the app's own association values being in ref_snapshot or ext_journal. If the harvest misses one (e.g. an OpenWithProgids value in another user's hive), the ProgID key is hard-blocked as 'unrecorded association'. Confirm on the firefox-tb and vscode rig runs; decide whether an unrecorded referrer with no known other app should be a hard blocker.",
+  "P34: Design owner: decide whether ChainedRef is the intended Key-scope evidence for 'command into roots' (CLS-VERBS/PROTOCOL/PROGID default 'Safe' in \u00a75.6). As implemented, a verb or scheme key attributed only by its command is Likely (S=5), not Safe; e.g. the per-user `vscode` key is Safe only with the Inno key-create record matching.",
+  "P34: Open P25 decision still stands: owner_blockers() puts TrustedInstallerOwned on value candidates whose key is TI-owned; the values-only fallbacks of these scanners inherit that.",
+  "P34: Timing: CLS-PROTOCOL does one value read per Classes subkey and CLS-PROGID (only when a key is about to be offered) reads the default and OpenWithProgids of every `.ext` key; measure on the Live source against the \u00a71.3 budget.",
+  "P34: crates/purge-scan/tests/fs/main.rs (another wave-3 package) currently does not compile, which breaks `cargo test -p purge-scan` and `clippy --all-targets` for the whole crate until that package finishes.",
+  "P34: target\\pkg-P34 and scratchpad file notes.txt can be deleted.",
+  "P35 review: Decision needed (model/M2): a baseline restore of an `.ext` default can never carry restore_to, because Baseline stores only a hash and previous_default only ever comes from the vendor backup. Either give the baseline format default-value data or have the scanner emit ReportOnly when restore_to is unknown. I left the behaviour as the spec words it (RegValue item, harm Medium, Likely).",
+  "P35 review: Decision needed: whether a skeleton key whose owner is unknown now (ti_owned None) should fail closed as in skeleton.rs. Doing so today would zero skeleton coverage on rig snapshots. A cleaner fix is for the model to carry the harvest's openwith_ti_owned and for rig snapshots to record owners.",
+  "P35 review: M2 executor: skeleton keys use Action::DeleteKey, consistent with CLS-PROGID, while the \u00a75.6 table says 'value \u2192 delete-if-empty'. The executor must re-check that the key (and its absorbed OpenWithProgids child) is still empty before deleting. The child id in `children` is not an emitted candidate.",
+  "P35 review: M2 executor: MRUList is emitted as RegMultiSzSegment/EditSegment on a REG_SZ letter string, so it must be handled per letter. Consider tying the MRUList edit to its OpenWithList value so they are ticked together.",
+  "P35 review: P31 harvest: toast_values should be recorded per key (hive), or the scanner should drop the journal-derived snapshot evidence for toasts.",
+  "P35 review: Whole-crate `cargo test -p purge-scan` and `clippy --all-targets` were not run, because other packages' test targets in this crate were reported mid-edit; re-run once P32-P34 settle.",
+  "P35 review: target\\rev-P35 and target\\pkg-P35 can be deleted.",
+  "P35: P31 (harvest assoc): the scanners rely on ExtJournalEntry semantics as documented in the model: openwith_ours = exact value names in P, openwith_others = every other OpenWithProgids value, other_values excludes the default and the vendor backup, other_subkeys excludes OpenWithProgids, subkey_count = direct subkeys, key = `<Classes root>\\<.ext>` (entries of any other shape are ignored), file_exts_key = `...\\FileExts\\<.ext>`, toast_values = full value names in the user's key. If P31 also records these values in ref_snapshot, the builder evidence is used and the journal evidence is not added.",
+  "P35: P40/P26 (pipeline/plan): X-SYSTIDY candidates come out of the CLS-ASSOC scanner with scanner id `X-SYSTIDY`; a whole-`.ext` candidate lists an OpenWithProgids child id that is not itself an emitted candidate; ScanCtx.baseline should be passed only for an exact match (the handler re-checks is_for, but baseline_blocker does not).",
+  "P35: Policy/UI owners: restore items are RegValue + DeleteValue + harm Medium with `action=restore` in evidence detail; the executor (M2) must read that fact and write restore_to instead of deleting. Report-only items use Action::ReportOnly with a ChainedRef so they show as Likely; UserChoice is additionally DenyListed (reg.userchoice) by the guard.",
+  "P35: Decision still open from the P25 review: owner_blockers puts TrustedInstallerOwned on values inside TI keys; the association scanners inherit that (a P value in a TI-owned OpenWithProgids, or a default restore in a TI `.ext`, is Blocked).",
+  "P35: Model owner: consider a `facts` field on Candidate (group, action=restore) instead of stamping evidence details, and a baseline format that can supply default-value data for restores.",
+  "P35: Other packages' test targets in purge-scan (tests\\cls_keys and the fs test target) did not compile at the time of my last run, so the whole-crate `cargo test -p purge-scan` must be re-run once P32-P34 finish.",
+  "P35: target\\pkg-P35 can be deleted.",
+  "P36: P40: confirm the CLI accepts `scan ... --app <id>` and writes `inventory --json` to stdout. run-app.ps1 relies on both, and on exit code 0 meaning success.",
+  "P36: First VM campaign: check that vscode-user's jump list carries the same AppID hash as the system build (vscode.json rule 1ced32d74a95c7bc), review the r0 truths in truth/m1a-sanity.md, then freeze vscode-user.json and firefox-tb.json.",
+  "P36: rig-base has no vscode-user.exe or thunderbird.exe in C:\\cr\\inst yet. The first run downloads them from the official URLs. Re-running setup-base (or a rebuilt rig-base) would cache them.",
+  "P36: BCU plans for vscode-user and firefox-tb do not exist yet (user decision: run official BCU in the VM and convert with rigtool convert). m1a.sh scores Purge alone for those two until then.",
+  "P36: If the engine's spawned uninstaller inherits the stdout pipe, Invoke-Engine waits at most 30 s more for output and then records output_complete=false. Watch for this in the first real run.log.",
+  "P37: Run `rigtool invdiff` on a real VM pair (engine inventory --json + lists-<run>-0.json) and add rules to vm/truth/inventory-explain.json only for the real design differences it shows (likely MsiEnumProductsExW vs UserData registry walk: advertised products, other users' contexts).",
+  "P37: vm/rigtool/Cargo.toml `description` does not mention invdiff (P37 does not own Cargo.toml).",
+  "P37: vm/RIG.md has no invdiff section; the README documents it."
+ ]
+}

@@ -1,0 +1,5 @@
+FS-INSTALLDIR Quarantine AppFiles C:\Program Files\Git
+  harm=Low reversibility=Full size=4226 files=3
+  + InsideInstallRoot A/9 Path AdminOnly [root:C:\Program Files\Git] {root=C:\Program Files\Git}
+  + ModifiedAfterUninstall C/-4 Path AdminOnly [scan] {path=C:\Program Files\Git\etc\new.log, root=C:\Program Files\Git}
+  ! UnmatchedChildren { n: 1 }

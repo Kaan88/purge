@@ -1,0 +1,9 @@
+{
+  "id": "vscode-user",
+  "include": [
+    "_os.json",
+    "vscode.json"
+  ],
+  "note": "VS Code per-user build (win32-x64-user), installed at medium integrity into %LOCALAPPDATA%\\Programs. Same app and user data as the system build, so the vscode rules apply; confirm on the first r0-vscode-user run that its jump list carries the same AppID hash, and freeze after that review (ENGINE_PLAN 11.1 M1a).",
+  "rules": []
+}

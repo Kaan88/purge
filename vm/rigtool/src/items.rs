@@ -121,7 +121,7 @@ pub fn sort_items(v: &mut [Item]) {
 // Rig exclusions (RIG.md §1)
 // ---------------------------------------------------------------------------------------------
 
-const RIG_TASKS: &str = r"PurgeRigAgent|PurgeRigLaunch|agentstart|elev[^\\|]*|crshot[^\\|]*|utrun|PurgeSetup";
+const RIG_TASKS: &str = r"PurgeRigAgent|PurgeRigLaunch|PurgeRigInstall|agentstart|elev[^\\|]*|crshot[^\\|]*|utrun|PurgeSetup";
 
 pub struct RigRules {
     rules: Vec<(Regex, String)>,
@@ -147,6 +147,8 @@ impl RigRules {
                 "rig:task signature".to_string(),
             ),
             (ci(r"^P:[A-Z]:\\Windows\\Prefetch\\RIGTOOL\.EXE-[0-9A-F]+\.pf$"), "rig:rigtool prefetch".to_string()),
+            // M1a engine runs (RIG.md section 4a): the engine is the measuring tool here, not the app.
+            (ci(r"^P:[A-Z]:\\Windows\\Prefetch\\PURGE-ENGINE\.EXE-[0-9A-F]+\.pf$"), "rig:purge-engine prefetch".to_string()),
         ];
         let guids = rig_task_guids(snaps);
         if !guids.is_empty() {
@@ -261,5 +263,26 @@ mod tests {
             r.check("V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\CompatibilityAdapter\\Signatures|\\PurgeRigAgent.fp")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn rig_exclusions_engine_runs() {
+        let s = snap_text(|t| {
+            let k = format!("{TASKCACHE}\\Tree\\PurgeRigInstall");
+            write_k(t, &k, 1, Some(1), Some(0));
+            write_v(t, &k, "Id", 1, 78, 1, "{22222222-2222-3333-4444-555555555555}");
+        });
+        let r = RigRules::new(&[&s]);
+        assert_eq!(r.check("P:C:\\Windows\\Prefetch\\PURGE-ENGINE.EXE-1A2B3C4D.pf"), Some("rig:purge-engine prefetch"));
+        assert!(r.check("P:C:\\Windows\\Prefetch\\purge-engine.exe-0123abcd.pf").is_some());
+        assert!(r.check("P:C:\\Windows\\Prefetch\\RIGTOOL.EXE-1A2B3C4D.pf").is_some());
+        // Only the engine itself: the app's and the vendor uninstaller's traces stay with the app.
+        assert!(r.check("P:C:\\Windows\\Prefetch\\PURGE-ENGINE-HELPER.EXE-1A2B3C4D.pf").is_none());
+        assert!(r.check("P:C:\\Windows\\Prefetch\\UNINS000.EXE-1A2B3C4D.pf").is_none());
+        assert!(r.check("P:C:\\Windows\\Prefetch\\PURGE-ENGINE.EXE-1A2B3C4D.pf\\x").is_none());
+        // The medium-integrity install task of vscode-user.
+        assert!(r.check("P:C:\\Windows\\System32\\Tasks\\PurgeRigInstall").is_some());
+        assert!(r.check(&format!("K:{TASKCACHE}\\Tree\\PurgeRigInstall")).is_some());
+        assert!(r.check(&format!("K:{TASKCACHE}\\Plain\\{{22222222-2222-3333-4444-555555555555}}")).is_some());
     }
 }

@@ -5,3 +5,10 @@
 //! dialog shows and the executor checks.
 //!
 //! Milestone: dry-run plans in M1a, hash binding to execution in M2 (§11.1).
+
+pub mod collapse;
+pub mod decide;
+pub mod emit;
+pub mod empty_after;
+pub mod hash;
+pub mod order;

@@ -1,0 +1,40 @@
+{
+  "schema": "purge.lists/1",
+  "run": "npp",
+  "phase": 2,
+  "user_sid": "S-1-5-21-1004336348-1177238915-682003330-1001",
+  "appx": [
+    {
+      "full_name": "1527c705-839a-4832-9118-54d4Bd6a0c89_10.0.19640.1000_neutral_neutral_cw5n1h2txyewy",
+      "family": "1527c705-839a-4832-9118-54d4Bd6a0c89_cw5n1h2txyewy",
+      "install_location": "C:\\Windows\\SystemApps\\Microsoft.Windows.FilePicker_cw5n1h2txyewy",
+      "users": ["S-1-5-18", "S-1-5-21-1004336348-1177238915-682003330-1001"],
+      "sparse": false,
+      "external_location": null
+    },
+    {
+      "full_name": "Microsoft.MicrosoftEdgeDevToolsClient_1000.25128.1000.0_neutral_neutral_8wekyb3d8bbwe",
+      "family": "Microsoft.MicrosoftEdgeDevToolsClient_8wekyb3d8bbwe",
+      "install_location": "C:\\Windows\\SystemApps\\Microsoft.MicrosoftEdgeDevToolsClient_8wekyb3d8bbwe",
+      "users": ["S-1-5-18", "S-1-5-21-1004336348-1177238915-682003330-1001"],
+      "sparse": false,
+      "external_location": null
+    },
+    {
+      "full_name": "Microsoft.MicrosoftEdge.Stable_157.0.4341.46_neutral__8wekyb3d8bbwe",
+      "family": "Microsoft.MicrosoftEdge.Stable_8wekyb3d8bbwe",
+      "install_location": "C:\\Program Files\\WindowsApps\\Microsoft.MicrosoftEdge.Stable_157.0.4341.46_neutral__8wekyb3d8bbwe",
+      "users": ["S-1-5-21-1004336348-1177238915-682003330-1001"],
+      "sparse": true,
+      "external_location": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application"
+    },
+    {
+      "full_name": "NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+      "family": "NotepadPlusPlus_2247w0b46hfww",
+      "install_location": "C:\\Program Files\\WindowsApps\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+      "users": ["S-1-5-21-1004336348-1177238915-682003330-1001"],
+      "sparse": true,
+      "external_location": "C:\\Program Files\\Notepad++\\contextMenu"
+    }
+  ]
+}

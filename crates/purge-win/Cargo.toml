@@ -9,14 +9,21 @@ license.workspace = true
 
 [features]
 default = ["read"]
-# Read-only system access. Everything except the executor uses only this.
+# Read-only system access, including the Toolhelp32 process snapshot and process image paths.
+# Everything except the executor uses only this.
 read = []
 # Mutating operations (delete, move, registry writes, restore points). Only purge-exec enables it;
 # purge-mcp may not depend on purge-win at all; `cargo xtask check-deps` enforces it.
 write = ["read"]
+# Process creation (CreateProcessW), Job objects and the MSI mutex probe for the uninstall runner
+# (purge-inventory). Not part of `read`.
+run = ["read"]
+# AppX package enumeration through WinRT.
+appx = ["dep:windows"]
 
 [dependencies]
-windows-sys = { workspace = true, features = ["Win32_Foundation"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Cryptography", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp", "Win32_System_ApplicationInstallationAndServicing", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Environment", "Win32_System_SystemInformation", "Win32_System_IO", "Win32_System_Kernel", "Win32_Storage_Packaging_Appx"] }
+windows = { workspace = true, optional = true, features = ["Management_Deployment", "ApplicationModel", "Foundation_Collections"] }
 thiserror.workspace = true
 
 [lints]

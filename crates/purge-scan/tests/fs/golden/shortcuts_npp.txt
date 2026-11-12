@@ -1,0 +1,12 @@
+FS-SHORTCUTS Quarantine AppFiles C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Notepad++.lnk
+  harm=Low reversibility=Full size=0 files=1
+  + ExactFullName B/4 Path AdminOnly [identity:Notepad++ (64-bit x64)] {name=Notepad++ (64-bit x64)}
+  + TimeWindow C/1 Path AdminOnly [window] {}
+FS-SHORTCUTS Quarantine AppFiles C:\Users\tester\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Notepad++.lnk
+  harm=Low reversibility=Full size=0 files=1
+  + ExactFullName B/4 Path AdminOnly [identity:Notepad++ (64-bit x64)] {name=Notepad++ (64-bit x64)}
+  + TimeWindow C/1 Path AdminOnly [window] {}
+FS-SHORTCUTS Quarantine AppFiles C:\Users\tester\Desktop\Notepad++.lnk
+  harm=Low reversibility=Full size=0 files=1
+  + ExactFullName B/4 Path AdminOnly [identity:Notepad++ (64-bit x64)] {name=Notepad++ (64-bit x64)}
+  + TimeWindow C/1 Path AdminOnly [window] {}

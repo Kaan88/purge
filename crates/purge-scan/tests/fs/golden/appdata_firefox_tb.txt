@@ -1,0 +1,11 @@
+FS-APPDATA Quarantine UserData C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+  harm=High reversibility=Full size=5252180 files=3
+  + ProductSubfolderOfVendor B/3 Path AdminOnly [identity:Firefox] {name=Firefox}
+  ! UserData
+FS-APPDATA Quarantine UserData C:\Users\tester\AppData\Local\Mozilla\Firefox
+  harm=High reversibility=Full size=70000 files=1
+  + ProductSubfolderOfVendor B/3 Path AdminOnly [identity:Firefox] {name=Firefox}
+  ! UserData
+FS-APPDATA Quarantine Cache C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\308046B0AF4A39CB
+  harm=Low reversibility=Full size=52 files=2
+  + HarvestedToken A/7 Path AdminOnly [token:anchor:test] {token=308046B0AF4A39CB}

@@ -7,13 +7,17 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[lib]
+name = "purge_engine"
+path = "src/lib.rs"
+
 [features]
 # Headless `exec` without the consent dialog, for the VM rig only (ENGINE_PLAN.md §3.4). Never in releases.
 rig-exec = []
 
 [dependencies]
 purge-model.workspace = true
-purge-win = { workspace = true, features = ["read"] }
+purge-win = { workspace = true, features = ["read", "run", "appx"] }
 purge-source.workspace = true
 purge-inventory.workspace = true
 purge-identity.workspace = true
@@ -26,6 +30,7 @@ purge-plan.workspace = true
 purge-exec.workspace = true
 purge-kb.workspace = true
 purge-rpc.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 

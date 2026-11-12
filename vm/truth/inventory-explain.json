@@ -1,0 +1,20 @@
+{
+  "about": "Explanation rules for `rigtool invdiff` (engine inventory vs the rig's raw ARP + MSI enumeration). `match` is a case-insensitive regex on the canonical key path or the MSI product code; `side` is engine | reference | mismatch | any; `field` (optional) limits a rule to mismatches of that field. First matching rule wins. Add a rule only with the reason it is a design difference, never to hide an engine bug.",
+  "rules": [
+    {
+      "match": "^HKU\\\\\\.DEFAULT\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\",
+      "side": "engine",
+      "why": "The engine enumerates every loaded HKU hive whose name starts with S- (purge-win reg::loaded_user_sids), so S-1-5-18 (canonical HKU\\.DEFAULT) is read; riglib Get-LoadedUserSids keeps S-1-5-21-* hives only."
+    },
+    {
+      "match": "^HKU\\\\S-1-5-(19|20)\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\",
+      "side": "engine",
+      "why": "LocalService / NetworkService hives: read by the engine (every loaded S-* hive), skipped by riglib (S-1-5-21-* only)."
+    },
+    {
+      "match": "^HKU\\\\S-1-12-1-[0-9-]+\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\",
+      "side": "engine",
+      "why": "Microsoft Entra ID (Azure AD) user hives (S-1-12-1-*): read by the engine, skipped by riglib (S-1-5-21-* only)."
+    }
+  ]
+}

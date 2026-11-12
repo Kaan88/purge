@@ -787,3 +787,106 @@ function Snap([string]$Run, [string]$Phase) {
     if (-not $ok) { throw "rigtool snap failed (exit $($r.exit), timed_out=$($r.timed_out))" }
     $out
 }
+
+# ---------------------------------------------------------------------------------------- purge-engine
+#
+# Engine mode of run-app.ps1 (RIG.md §4a): the engine CLI of ENGINE_PLAN §3.4, pushed by the host to
+# C:\cr\bin\purge-engine.exe with the (edition, build) baselines in C:\cr\bin\kb\baselines\.
+
+$RigEngine = 'C:\cr\bin\purge-engine.exe'
+
+# Pure: one argument quoted for a verbatim argument string (CommandLineToArgvW rules). Program ids hold
+# '|' and ARP key names hold spaces, so anything but a plain word is quoted.
+function ConvertTo-EngineArg([string]$Value) {
+    if ($Value -ne '' -and $Value -notmatch '[\s"|&<>^%]') { return $Value }
+    $v = [regex]::Replace($Value, '(\\*)"', { param($m) ($m.Groups[1].Value * 2) + '\"' })
+    $v = [regex]::Replace($v, '(\\+)$', { param($m) $m.Groups[1].Value * 2 })
+    '"' + $v + '"'
+}
+
+# Pure: a purge.run/0 FILETIME (u64, 100 ns since 1601 UTC) as a local ISO time like the rig's own; $null stays $null.
+function ConvertFrom-EngineFileTime($FileTime) {
+    if ($null -eq $FileTime -or "$FileTime" -eq '') { return $null }
+    [DateTimeOffset]::FromFileTime([long]$FileTime).ToLocalTime().ToString('o')
+}
+
+# Pure: the program_id of the inventory entry (purge.inventory/0, parsed) whose key_path is the rig's ARP
+# key $Key (compared canonically and case-insensitively). Throws when there is none or more than one.
+function Find-InventoryProgramId($Inventory, [string]$Key) {
+    if (-not $Key) { throw 'no ARP key to look up' }
+    $want = (ConvertTo-CanonKey $Key).ToLowerInvariant()
+    # (ConvertFrom-Json in 5.1 can hand back an array as one object: unroll it.)
+    $entries = @(@($Inventory.entries) | ForEach-Object { $_ } | Where-Object { $_ })
+    $hits = @($entries | Where-Object { $_.key_path -and (ConvertTo-CanonKey "$($_.key_path)").ToLowerInvariant() -eq $want })
+    if ($hits.Count -eq 0) { throw "no inventory entry has key_path '$Key' ($($entries.Count) entries)" }
+    if ($hits.Count -gt 1) { throw "$($hits.Count) inventory entries have key_path '$Key': $(@($hits | ForEach-Object { $_.program_id }) -join ', ')" }
+    if (-not "$($hits[0].program_id)") { throw "inventory entry '$Key' has no program_id" }
+    "$($hits[0].program_id)"
+}
+
+# Runs purge-engine with a verbatim argument string, stdout and stderr captured and logged line by line.
+# With -StdoutFile, stdout goes to that file (UTF-8, no BOM) instead of the log. A child the engine starts
+# (the vendor uninstaller) may inherit the pipes and hold them open after the engine exits, so the reads
+# get at most $DrainSec more; output_complete says whether they finished. Never throws on a non-zero exit.
+function Invoke-Engine {
+    param([string]$Arguments = '', [int]$TimeoutSec = 1800, [string]$StdoutFile = '', [string]$Exe = $RigEngine, [int]$DrainSec = 30)
+    if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) { throw "missing $Exe (push it with Push-Tools -Engine on the host)" }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = $Arguments
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $RigUtf8
+    $psi.StandardErrorEncoding = $RigUtf8
+    $cmd = '"' + $Exe + '" ' + $Arguments
+    Log "engine: $cmd"
+    $t = Get-Date
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $o = $p.StandardOutput.ReadToEndAsync()
+    $e = $p.StandardError.ReadToEndAsync()
+    $exited = $p.WaitForExit($TimeoutSec * 1000)
+    if (-not $exited) {
+        Log "  !! purge-engine still running after $TimeoutSec s; killing it"
+        try { $p.Kill() } catch { }
+        [void]$p.WaitForExit(10000)
+    }
+    $code = $null
+    if ($exited) { $p.WaitForExit(); $code = $p.ExitCode }
+    $complete = [System.Threading.Tasks.Task]::WaitAll(@($o, $e), $DrainSec * 1000)
+    $stdout = ''; $stderr = ''
+    if ($o.IsCompleted) { $stdout = $o.Result }
+    if ($e.IsCompleted) { $stderr = $e.Result }
+    foreach ($l in "$stderr" -split "`r?`n") { if ($l.Trim()) { Log "  engine stderr: $l" } }
+    if ($StdoutFile) {
+        [IO.File]::WriteAllText($StdoutFile, $stdout, $RigUtf8)
+        Log "  engine stdout -> $StdoutFile ($($stdout.Length) chars)"
+    } else {
+        foreach ($l in "$stdout" -split "`r?`n") { if ($l.Trim()) { Log "  engine: $l" } }
+    }
+    if (-not $complete) { Log "  !! engine output still held open by a child after $DrainSec s; output incomplete" }
+    $end = Get-Date
+    Log ("  engine exit={0} timed_out={1} ({2:N0} s)" -f $code, (-not $exited), ($end - $t).TotalSeconds)
+    [pscustomobject][ordered]@{
+        cmd = $cmd; exit = $code; timed_out = (-not $exited); pid = $p.Id; start = $t; end = $end
+        stdout = $stdout; stderr = $stderr; output_complete = $complete
+    }
+}
+
+# One engine call of a run: Invoke-Engine, recorded in $Calls (an ArrayList that run.json holds), then a
+# throw on timeout or a non-zero exit so the enclosing Phase is marked failed. Returns the Invoke-Engine record.
+function Invoke-EngineStep {
+    param([Parameter(Mandatory)][string]$Step, [string]$Arguments = '', $Calls = $null, [int]$TimeoutSec = 1800, [string]$StdoutFile = '')
+    $r = Invoke-Engine -Arguments $Arguments -TimeoutSec $TimeoutSec -StdoutFile $StdoutFile
+    if ($null -ne $Calls) {
+        $tail = @("$($r.stderr)" -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 5)
+        [void]$Calls.Add([ordered]@{
+            step = $Step; cmd = $r.cmd; exit = $r.exit; timed_out = $r.timed_out; pid = $r.pid
+            start = $r.start.ToString('o'); end = $r.end.ToString('o'); output_complete = $r.output_complete; stderr_tail = $tail
+        })
+    }
+    if ($r.timed_out) { throw "purge-engine $Step timed out after $TimeoutSec s" }
+    if ($r.exit -ne 0) { throw "purge-engine $Step exited $($r.exit)" }
+    $r
+}

@@ -1,0 +1,11 @@
+[REG-ENV] DeleteValue RegValue HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment | "GIT_INSTALL_ROOT"
+  id=c-3d8b14f1745a88c9 owner="Git" category=Registration harm=Low reversibility=Full child_count=None
+  evidence InstallerManifest(Inno) A/8 Value AdminOnly source=inno:log
+    record=RegDeleteValue
+  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:C:\Program Files\Git\home
+    path=C:\Program Files\Git\home
+    root=C:\Program Files\Git
+[REG-ENV] DeleteValue RegValue HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment | "GIT_SSH"
+  id=c-2844deac340f8c25 owner="Git" category=Registration harm=Low reversibility=Full child_count=None
+  evidence InstallerManifest(Inno) A/8 Value AdminOnly source=inno:log
+    record=RegDeleteValue

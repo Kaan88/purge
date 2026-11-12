@@ -1,0 +1,4 @@
+FS-APPDATA Quarantine UserData C:\Users\tester\AppData\Roaming\Notepad++
+  harm=High reversibility=Full size=4331 files=3
+  + ExactFullName B/4 Path AdminOnly [identity:Notepad++ (64-bit x64)] {name=Notepad++ (64-bit x64)}
+  ! UserData

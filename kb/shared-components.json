@@ -1,1 +1,128 @@
-[]
+[
+  {
+    "id": "webview2",
+    "name": "Microsoft Edge WebView2 Runtime",
+    "paths": [
+      "%ProgramFiles%\\Microsoft\\EdgeWebView",
+      "%LOCALAPPDATA%\\Microsoft\\EdgeWebView"
+    ],
+    "keys": [
+      "*\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+      "*\\SOFTWARE\\Microsoft\\EdgeUpdate\\ClientState\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+      "*\\SOFTWARE\\Microsoft\\EdgeWebView",
+      "*\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Microsoft EdgeWebView"
+    ],
+    "packages": [
+      "Microsoft.WebView2Runtime*",
+      "Microsoft.Win32WebViewHost*"
+    ]
+  },
+  {
+    "id": "edge",
+    "name": "Microsoft Edge",
+    "paths": [
+      "%ProgramFiles%\\Microsoft\\Edge",
+      "%ProgramFiles%\\Microsoft\\EdgeCore",
+      "%ProgramFiles%\\Microsoft\\EdgeUpdate",
+      "%LOCALAPPDATA%\\Microsoft\\Edge",
+      "%LOCALAPPDATA%\\Microsoft\\EdgeUpdate"
+    ],
+    "keys": [
+      "*\\SOFTWARE\\Microsoft\\Edge",
+      "*\\SOFTWARE\\Microsoft\\EdgeUpdate",
+      "*\\SOFTWARE\\Clients\\StartMenuInternet\\Microsoft Edge",
+      "*\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Microsoft Edge",
+      "*\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Microsoft Edge Update",
+      "*\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe",
+      "HKCR\\MSEdgeHTM",
+      "HKCR\\MSEdgePDF",
+      "HKCR\\MSEdgeMHT",
+      "HKCR\\microsoft-edge"
+    ],
+    "packages": [
+      "Microsoft.MicrosoftEdge*"
+    ]
+  },
+  {
+    "id": "vcredist",
+    "name": "Microsoft Visual C++ Redistributable",
+    "paths": [],
+    "keys": [
+      "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\*\\VC\\Runtimes",
+      "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC",
+      "HKCR\\Installer\\Dependencies\\Microsoft.VS.VC_Runtime*",
+      "HKCR\\Installer\\Dependencies\\VC,redist.*"
+    ],
+    "packages": []
+  },
+  {
+    "id": "dotnet",
+    "name": "Microsoft .NET",
+    "paths": [
+      "%ProgramFiles%\\dotnet",
+      "%ProgramFiles%\\Reference Assemblies",
+      "%ProgramFiles%\\Microsoft.NET",
+      "%WINDIR%\\Microsoft.NET",
+      "%WINDIR%\\assembly"
+    ],
+    "keys": [
+      "HKLM\\SOFTWARE\\dotnet",
+      "HKLM\\SOFTWARE\\Microsoft\\.NETFramework",
+      "HKLM\\SOFTWARE\\Microsoft\\NET Framework Setup",
+      "HKLM\\SOFTWARE\\Microsoft\\ASP.NET",
+      "HKCR\\Installer\\Dependencies\\dotnet_*"
+    ],
+    "packages": [
+      "Microsoft.NET.Native.*",
+      "Microsoft.DotNet.*"
+    ]
+  },
+  {
+    "id": "directx",
+    "name": "Microsoft DirectX",
+    "paths": [
+      "%WINDIR%\\System32\\DirectX",
+      "%WINDIR%\\SysWOW64\\DirectX"
+    ],
+    "keys": [
+      "HKLM\\SOFTWARE\\Microsoft\\DirectX",
+      "HKLM\\SOFTWARE\\Microsoft\\Direct3D",
+      "HKLM\\SOFTWARE\\Microsoft\\DirectDraw",
+      "HKLM\\SOFTWARE\\Microsoft\\DirectInput",
+      "HKLM\\SOFTWARE\\Microsoft\\DirectPlay",
+      "HKLM\\SOFTWARE\\Microsoft\\DirectSound"
+    ],
+    "packages": [
+      "Microsoft.DirectXRuntime*"
+    ]
+  },
+  {
+    "id": "vclibs",
+    "name": "Microsoft Visual C++ Runtime Package",
+    "paths": [],
+    "keys": [],
+    "packages": [
+      "Microsoft.VCLibs.*"
+    ]
+  },
+  {
+    "id": "windowsappruntime",
+    "name": "Windows App Runtime",
+    "paths": [],
+    "keys": [],
+    "packages": [
+      "Microsoft.WindowsAppRuntime.*",
+      "MicrosoftCorporationII.WinAppRuntime.*",
+      "Microsoft.WinAppRuntime.*"
+    ]
+  },
+  {
+    "id": "ui-xaml",
+    "name": "Microsoft UI XAML",
+    "paths": [],
+    "keys": [],
+    "packages": [
+      "Microsoft.UI.Xaml.*"
+    ]
+  }
+]

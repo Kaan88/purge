@@ -1,0 +1,17 @@
+[REG-SOFTWARE] DeleteValue RegValue HKLM\SOFTWARE\GitForWindows | "InstallPath"
+  id=c-57a79c4130c3d229 owner="Git" category=Registration harm=Low reversibility=Full child_count=None
+  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\git
+    path=c:\program files\git
+    root=C:\Program Files\Git
+  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\git
+    path=c:\program files\git
+    root=C:\Program Files\Git
+[REG-SOFTWARE] DeleteKey RegKey HKLM\SOFTWARE\GitForWindows
+  id=c-870f1c11f2fd52a0 owner="Git" category=Registration harm=Low reversibility=Full child_count=Some(1)
+  child c-57a79c4130c3d229
+  evidence InstallerManifest(Inno) A/8 Key AdminOnly source=inno:log
+    record=RegDeleteEntireKey
+[REG-SOFTWARE] RemoveDirIfEmpty RegKey HKLM\SOFTWARE\Shared Tools Vendor
+  id=c-9a63d9d7ac04a1a4 owner="Git" category=Registration harm=None reversibility=Full child_count=Some(2)
+  evidence InstallerManifest(Inno) A/8 Key AdminOnly source=inno:log
+    record=RegDeleteKeyIfEmpty

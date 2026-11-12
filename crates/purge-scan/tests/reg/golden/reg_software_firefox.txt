@@ -1,0 +1,104 @@
+[REG-SOFTWARE] DeleteValue RegValue HKLM\SOFTWARE\Mozilla\Firefox\TaskBarIDs | "C:\\Program Files\\Mozilla Firefox"
+  id=c-8b461c33a349a20d owner="Mozilla Firefox (x64 en-US)" category=Registration harm=Low reversibility=Full child_count=None
+  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKLM\SOFTWARE\Mozilla\Firefox\TaskBarIDs|C:\Program Files\Mozilla Firefox
+    anchor=C:\Program Files\Mozilla Firefox
+  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\mozilla firefox
+    path=c:\program files\mozilla firefox
+    root=C:\Program Files\Mozilla Firefox
+  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\mozilla firefox
+    path=c:\program files\mozilla firefox
+    root=C:\Program Files\Mozilla Firefox
+[REG-SOFTWARE] DeleteKey RegKey HKLM\SOFTWARE\Mozilla\Firefox
+  id=c-49f788687f8e815d owner="Mozilla Firefox (x64 en-US)" category=Registration harm=Low reversibility=Full child_count=Some(2)
+  child c-8b461c33a349a20d
+  evidence AppNamedKeyWithRootRef A/7 Key AdminOnly source=software-key:HKLM\SOFTWARE\Mozilla\Firefox
+    path=c:\program files\mozilla firefox
+    root=C:\Program Files\Mozilla Firefox
+  evidence ExactFullName B/4 Key AdminOnly source=identity:Firefox
+    name=Firefox
+  evidence ProductSubfolderOfVendor B/3 Key AdminOnly source=identity:Firefox
+    name=Firefox
+  evidence NameTokenExact C/3 Key AdminOnly source=identity:Firefox
+    name=Firefox
+  evidence TimeWindow C/1 Key AdminOnly source=window
+[REG-SOFTWARE] RemoveDirIfEmpty RegKey HKLM\SOFTWARE\mozilla.org
+  id=c-ac976579b7556178 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=None reversibility=Full child_count=Some(1)
+  evidence VendorContainer C/2 Key AdminOnly source=identity:mozilla org
+    children=["Mozilla\\"]
+    empty_after_plan=pending
+    vendor=mozilla org
+  evidence VendorContainer C/2 Key AdminOnly source=identity:mozilla
+    vendor=mozilla
+  evidence TimeWindow C/1 Key AdminOnly source=window
+[REG-SOFTWARE] RemoveDirIfEmpty RegKey HKLM\SOFTWARE\mozilla.org\Mozilla
+  id=c-d2eb2e1563143a48 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=None reversibility=Full child_count=Some(1)
+  evidence VendorContainer C/2 Key AdminOnly source=identity:mozilla
+    children=["CurrentVersion"]
+    empty_after_plan=pending
+    vendor=mozilla
+[REG-SOFTWARE] RemoveDirIfEmpty RegKey HKLM\SOFTWARE\WOW6432Node\Mozilla
+  id=c-c4897971a5db6914 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=None reversibility=Full child_count=Some(1)
+  evidence VendorContainer C/2 Key AdminOnly source=identity:mozilla
+    children=["MaintenanceService\\"]
+    empty_after_plan=pending
+    vendor=mozilla
+[REG-SOFTWARE] RemoveDirIfEmpty RegKey HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Mozilla
+  id=c-0280ae0a4dfdcf52 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=None reversibility=Full child_count=Some(1)
+  evidence VendorContainer C/2 Key AdminOnly source=identity:mozilla
+    children=["Firefox\\"]
+    empty_after_plan=pending
+    vendor=mozilla
+[REG-SOFTWARE] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Mozilla\Firefox\DllPrefetchExperiment | "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+  id=c-a637aab75f567cfa owner="Mozilla Firefox (x64 en-US)" category=Registration harm=Low reversibility=Full child_count=None
+  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\mozilla firefox\firefox.exe
+    path=c:\program files\mozilla firefox\firefox.exe
+    root=C:\Program Files\Mozilla Firefox
+  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\mozilla firefox\firefox.exe
+    path=c:\program files\mozilla firefox\firefox.exe
+    root=C:\Program Files\Mozilla Firefox
+[REG-SOFTWARE] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Mozilla\Firefox\Launcher | "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Launcher"
+  id=c-c22f20d70c5f4358 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=Low reversibility=Full child_count=None
+  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Mozilla\Firefox\Launcher|C:\Program Files\Mozilla Firefox\firefox.exe|Launcher
+    anchor=C:\Program Files\Mozilla Firefox\firefox.exe
+  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\mozilla firefox\firefox.exe
+    path=c:\program files\mozilla firefox\firefox.exe
+    root=C:\Program Files\Mozilla Firefox
+  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\mozilla firefox\firefox.exe
+    path=c:\program files\mozilla firefox\firefox.exe
+    root=C:\Program Files\Mozilla Firefox
+[REG-SOFTWARE] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Mozilla\Firefox\Launcher | "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Browser"
+  id=c-29441c134bb42940 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=Low reversibility=Full child_count=None
+  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Mozilla\Firefox\Launcher|C:\Program Files\Mozilla Firefox\firefox.exe|Browser
+    anchor=C:\Program Files\Mozilla Firefox\firefox.exe
+  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\mozilla firefox\firefox.exe
+    path=c:\program files\mozilla firefox\firefox.exe
+    root=C:\Program Files\Mozilla Firefox
+  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\mozilla firefox\firefox.exe
+    path=c:\program files\mozilla firefox\firefox.exe
+    root=C:\Program Files\Mozilla Firefox
+[REG-SOFTWARE] DeleteKey RegKey HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Mozilla\Firefox
+  id=c-74edba69fcb75717 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=Low reversibility=Full child_count=Some(5)
+  child c-a637aab75f567cfa
+  child c-c22f20d70c5f4358
+  child c-29441c134bb42940
+  evidence AppNamedKeyWithRootRef A/7 Key AdminOnly source=software-key:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Mozilla\Firefox
+    path=c:\program files\mozilla firefox\firefox.exe
+    root=C:\Program Files\Mozilla Firefox
+  evidence ExactFullName B/4 Key AdminOnly source=identity:Firefox
+    name=Firefox
+  evidence ProductSubfolderOfVendor B/3 Key AdminOnly source=identity:Firefox
+    name=Firefox
+  evidence NameTokenExact C/3 Key AdminOnly source=identity:Firefox
+    name=Firefox
+[REG-SOFTWARE] DeleteKey RegKey HKLM\SOFTWARE\Mozilla\MaintenanceService
+  id=c-8651f9452814ea76 owner="Mozilla Maintenance Service" category=Registration harm=Low reversibility=Full child_count=Some(4)
+  evidence ProductSubfolderOfVendor B/3 Key AdminOnly source=identity:maintenanceservice.exe
+    name=maintenanceservice.exe
+  evidence NameTokenExact C/3 Key AdminOnly source=identity:maintenanceservice.exe
+    name=maintenanceservice.exe
+[REG-SOFTWARE] DeleteKey RegKey HKLM\SOFTWARE\WOW6432Node\Mozilla\MaintenanceService
+  id=c-acb67fd6ea39aac2 owner="Mozilla Maintenance Service" category=Registration harm=Low reversibility=Full child_count=Some(2)
+  evidence ProductSubfolderOfVendor B/3 Key AdminOnly source=identity:maintenanceservice.exe
+    name=maintenanceservice.exe
+  evidence NameTokenExact C/3 Key AdminOnly source=identity:maintenanceservice.exe
+    name=maintenanceservice.exe

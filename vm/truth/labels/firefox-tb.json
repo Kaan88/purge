@@ -1,0 +1,9 @@
+{
+  "id": "firefox-tb",
+  "include": [
+    "_os.json",
+    "firefox.json"
+  ],
+  "note": "The firefox run with Thunderbird installed before snap 0. Everything of Thunderbird's (and the shared Mozilla Maintenance Service, vendor keys and dirs it created) existed in snap 0, so offering it scores danger by the scorer's own rule; no kept_owner rule is needed for it. Freeze after review of the first r0-firefox-tb run.",
+  "rules": []
+}

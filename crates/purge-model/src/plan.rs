@@ -261,7 +261,8 @@ mod tests {
             Target::RegMultiSzSegment {
                 path: "HKLM\\X".into(),
                 name: String::new(),
-                segment: "s".into()
+                segment: "s".into(),
+                index: None,
             }
         );
     }

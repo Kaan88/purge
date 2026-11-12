@@ -1,1 +1,249 @@
-[]
+[
+  {
+    "id": "windows-notepad-shortcut",
+    "kind": "path",
+    "annotation": "E",
+    "pattern": "%ProgramData%\\Microsoft\\Windows\\Start Menu\\Programs\\Notepad.lnk",
+    "why": "Windows' own Notepad shortcut; a Notepad++ name match must never offer it."
+  },
+  {
+    "id": "windows-notepad-shortcut",
+    "kind": "path",
+    "annotation": "E",
+    "pattern": "%ProgramData%\\Microsoft\\Windows\\Start Menu\\Programs\\Accessories\\Notepad.lnk",
+    "why": "Windows' own Notepad shortcut; a Notepad++ name match must never offer it."
+  },
+  {
+    "id": "windows-notepad-shortcut",
+    "kind": "path",
+    "annotation": "E",
+    "pattern": "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Notepad.lnk",
+    "why": "Windows' own Notepad shortcut; a Notepad++ name match must never offer it."
+  },
+  {
+    "id": "windows-notepad-shortcut",
+    "kind": "path",
+    "annotation": "E",
+    "pattern": "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Accessories\\Notepad.lnk",
+    "why": "Windows' own Notepad shortcut; a Notepad++ name match must never offer it."
+  },
+  {
+    "id": "security-health-agent-clsid",
+    "kind": "key",
+    "annotation": "S",
+    "pattern": "HKLM\\SOFTWARE\\Classes\\CLSID\\{042D2B7D-308B-4032-A569-466A8E0DE728}",
+    "why": "Windows Security's SecurityHealthAgent COM class; never an app leftover."
+  },
+  {
+    "id": "mozilla-vendor-key",
+    "kind": "key",
+    "annotation": "E",
+    "pattern": "HKLM\\SOFTWARE\\Mozilla",
+    "view": "K64",
+    "why": "Exists on clean Windows (Defender's browser-extension NativeMessagingHosts); only a product's own subkeys may be offered."
+  },
+  {
+    "id": "mozilla-native-messaging-hosts",
+    "kind": "key",
+    "annotation": "S",
+    "pattern": "HKLM\\SOFTWARE\\Mozilla\\NativeMessagingHosts",
+    "view": "K64",
+    "why": "Shared native-messaging host list; Windows Defender registers here on clean Windows."
+  },
+  {
+    "id": "mediaplayer-shim-inclusion-list",
+    "kind": "key",
+    "annotation": "E",
+    "pattern": "HKLM\\SOFTWARE\\Microsoft\\MediaPlayer\\ShimInclusionList",
+    "why": "Shared Windows Media Player list (msedge.exe is in it on clean Windows); only an app's own subkey may be offered."
+  },
+  {
+    "id": "package-store-machine-data",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "%ProgramData%\\Packages",
+    "why": "Package store: all-user package data; removed with the package."
+  },
+  {
+    "id": "package-store-windowsapps",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "%ProgramFiles%\\WindowsApps",
+    "why": "Package store: package files are removed by the deployment service, never by a raw delete."
+  },
+  {
+    "id": "package-store-user-data",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "%LOCALAPPDATA%\\Packages",
+    "why": "Package store: per-user package data; removed with the package."
+  },
+  {
+    "id": "package-store-repository",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "%ProgramData%\\Microsoft\\Windows\\AppRepository",
+    "why": "Package store: the AppX repository database; report only."
+  },
+  {
+    "id": "package-store-provisioning",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "%ProgramData%\\Microsoft\\Windows\\AppxProvisioning.xml",
+    "why": "Package store: the provisioning list; report only."
+  },
+  {
+    "id": "package-store-state-repository",
+    "kind": "key",
+    "annotation": "S",
+    "pattern": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository",
+    "why": "Owned by the AppX deployment service; packages are removed through the package API."
+  },
+  {
+    "id": "program-files-microsoft",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\Microsoft",
+    "why": "Vendor folder shared by Edge, WebView2, the Microsoft JDK and others."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\Java",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\Eclipse Adoptium",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\Eclipse Foundation",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\AdoptOpenJDK",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\Amazon Corretto",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\Zulu",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\BellSoft",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\Semeru",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\OpenJDK",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\RedHat",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%ProgramFiles%\\ojdkbuild",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "java-root",
+    "kind": "path",
+    "annotation": "E+A",
+    "pattern": "%USERPROFILE%\\.jdks",
+    "why": "A Java vendor root that can hold several runtimes; only one runtime's own folder may be offered."
+  },
+  {
+    "id": "package-store-other-volume",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "*:\\WindowsApps",
+    "why": "Package store on a volume other than the system drive; removed by the deployment service only."
+  },
+  {
+    "id": "package-store-other-volume",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "*:\\WpSystem",
+    "why": "Package data on a volume other than the system drive; removed with the package."
+  },
+  {
+    "id": "volume-boot-file",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "*:\\bootmgr",
+    "why": "Boot and paging files at a volume root; never a cleanup target."
+  },
+  {
+    "id": "volume-boot-file",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "*:\\BOOTNXT",
+    "why": "Boot and paging files at a volume root; never a cleanup target."
+  },
+  {
+    "id": "volume-boot-file",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "*:\\EFI",
+    "why": "Boot and paging files at a volume root; never a cleanup target."
+  },
+  {
+    "id": "volume-boot-file",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "*:\\pagefile.sys",
+    "why": "Boot and paging files at a volume root; never a cleanup target."
+  },
+  {
+    "id": "volume-boot-file",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "*:\\hiberfil.sys",
+    "why": "Boot and paging files at a volume root; never a cleanup target."
+  },
+  {
+    "id": "volume-boot-file",
+    "kind": "path",
+    "annotation": "S",
+    "pattern": "*:\\swapfile.sys",
+    "why": "Boot and paging files at a volume root; never a cleanup target."
+  }
+]

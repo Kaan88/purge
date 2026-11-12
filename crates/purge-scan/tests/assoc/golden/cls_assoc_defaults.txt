@@ -1,0 +1,69 @@
+[CLS-ASSOC] DeleteKey RegKey HKLM\SOFTWARE\Classes\.foo\OpenWithProgids
+  id=c-4a7ef8120aa0444c category=Association harm=Low reversibility=Full origin=Scanner child_count=Some(0)
+  evidence ProvenOwnedSkeleton A/8 Key AdminOnly source=extjournal:HKLM\SOFTWARE\Classes\.foo
+    baseline=EnterpriseSEval-26100.1742
+    ext=.foo
+    group=File associations
+    key=HKLM\SOFTWARE\Classes\.foo\OpenWithProgids
+    via=ext-journal
+[CLS-ASSOC] DeleteValue RegValue HKLM\SOFTWARE\Classes\.foo | ""
+  id=c-37a2ba2e40159f81 category=Association harm=Medium reversibility=Full origin=Scanner child_count=None
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.foo
+    action=restore
+    anchor=VSCode.foo
+    backup_value=VSCode_backup
+    ext=.foo
+    group=File associations
+    progid=VSCode.foo
+    restore_from=vendor_backup
+    restore_to=foofile
+[CLS-ASSOC] DeleteValue RegValue HKLM\SOFTWARE\Classes\.bar | ""
+  id=c-5d6f10511983d892 category=Association harm=Medium reversibility=Full origin=Scanner child_count=None
+  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKLM\SOFTWARE\Classes\.bar|
+    action=restore
+    anchor=VSCode.bar
+    baseline=EnterpriseSEval-26100.1742
+    ext=.bar
+    group=File associations
+    progid=VSCode.bar
+    restore_from=baseline
+    restore_hash=5deb8c121fc624f9
+    restore_to=barfile
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.bar
+    action=restore
+    anchor=VSCode.bar
+    baseline=EnterpriseSEval-26100.1742
+    ext=.bar
+    group=File associations
+    progid=VSCode.bar
+    restore_from=baseline
+    restore_hash=5deb8c121fc624f9
+    restore_to=barfile
+[CLS-ASSOC] DeleteValue RegValue HKLM\SOFTWARE\Classes\.baz | ""
+  id=c-5d8a5051199b0d0a category=Association harm=Medium reversibility=Full origin=Scanner child_count=None
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.baz
+    action=restore
+    anchor=VSCode.baz
+    baseline=EnterpriseSEval-26100.1742
+    ext=.baz
+    group=File associations
+    progid=VSCode.baz
+    restore_from=baseline
+    restore_hash=c9ea568fe7e1c30f
+[CLS-ASSOC] DeleteKey RegKey HKLM\SOFTWARE\Classes\.qux\OpenWithProgids
+  id=c-231e1ad8f34fdb6a category=Association harm=Low reversibility=Full origin=Scanner child_count=Some(0)
+  evidence ProvenOwnedSkeleton A/8 Key AdminOnly source=extjournal:HKLM\SOFTWARE\Classes\.qux
+    baseline=EnterpriseSEval-26100.1742
+    ext=.qux
+    group=File associations
+    key=HKLM\SOFTWARE\Classes\.qux\OpenWithProgids
+    via=ext-journal
+[CLS-ASSOC] ReportOnly RegValue HKLM\SOFTWARE\Classes\.qux | ""
+  id=c-1145f4ce55a0feef category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.qux
+    action=report
+    anchor=VSCode.qux
+    ext=.qux
+    group=File associations
+    note=.qux has no default app; choose one in Settings
+    progid=VSCode.qux

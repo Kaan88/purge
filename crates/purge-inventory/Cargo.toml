@@ -9,8 +9,10 @@ license.workspace = true
 
 [dependencies]
 purge-model.workspace = true
-purge-win = { workspace = true, features = ["read"] }
+purge-win = { workspace = true, features = ["read", "run"] }
 purge-source.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]

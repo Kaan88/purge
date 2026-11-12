@@ -1,0 +1,18 @@
+[REG-SOFTWARE] DeleteValue RegValue HKLM\SOFTWARE\WOW6432Node\Notepad++ | ""
+  id=c-f7dfe38494e38a6a owner="Notepad++ (64-bit x64)" category=Registration harm=Low reversibility=Full child_count=None
+  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\notepad++
+    path=c:\program files\notepad++
+    root=C:\Program Files\Notepad++
+  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\notepad++
+    path=c:\program files\notepad++
+    root=C:\Program Files\Notepad++
+[REG-SOFTWARE] DeleteKey RegKey HKLM\SOFTWARE\WOW6432Node\Notepad++
+  id=c-fcf86800bcbd17ff owner="Notepad++ (64-bit x64)" category=Registration harm=Low reversibility=Full child_count=Some(1)
+  child c-f7dfe38494e38a6a
+  evidence AppNamedKeyWithRootRef A/7 Key AdminOnly source=software-key:HKLM\SOFTWARE\WOW6432Node\Notepad++
+    path=c:\program files\notepad++
+    root=C:\Program Files\Notepad++
+  evidence ExactFullName B/4 Key AdminOnly source=identity:Notepad++ (64-bit x64)
+    name=Notepad++ (64-bit x64)
+  evidence NameTokenExact C/3 Key AdminOnly source=identity:Notepad++ (64-bit x64)
+    name=Notepad++ (64-bit x64)

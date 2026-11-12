@@ -129,6 +129,25 @@ PREFETCH = {
     'firefox': ['FIREFOX', 'CRASHHELPER'],
 }
 
+# M1a corpus variants (vm/RIG.md section 4a): label files that reuse a base app's rules through `include`.
+# The base file's hand-written and generated rules (jump lists, Prefetch, user data) apply unchanged; rules of
+# the variant's own come after them and are kept across regenerations like any hand-written rule.
+VARIANTS = {
+    'vscode-user': {
+        'base': 'vscode',
+        'note': 'VS Code per-user build (win32-x64-user), installed at medium integrity into %LOCALAPPDATA%\\Programs. '
+                'Same app and user data as the system build, so the vscode rules apply; confirm on the first r0-vscode-user '
+                'run that its jump list carries the same AppID hash, and freeze after that review (ENGINE_PLAN 11.1 M1a).',
+    },
+    'firefox-tb': {
+        'base': 'firefox',
+        'note': 'The firefox run with Thunderbird installed before snap 0. Everything of Thunderbird\'s (and the shared '
+                'Mozilla Maintenance Service, vendor keys and dirs it created) existed in snap 0, so offering it scores '
+                'danger by the scorer\'s own rule; no kept_owner rule is needed for it. Freeze after review of the first '
+                'r0-firefox-tb run.',
+    },
+}
+
 
 def main(d):
     rules = [dict(label='ambient', match=rx(m), why=w) for m, w in OS]
@@ -168,7 +187,24 @@ def main(d):
                 j2[k] = v
         with open(fn, 'w', encoding='utf-8') as f:
             json.dump(j2, f, indent=2, ensure_ascii=False)
-    print(f'_os.json: {len(rules)} rules ({len(SPLIT)} split)')
+
+    for id, v in VARIANTS.items():
+        fn = f'{d}/{id}.json'
+        try:
+            with open(fn, encoding='utf-8') as f:
+                j = json.load(f)
+        except FileNotFoundError:
+            j = {'id': id, 'rules': []}
+        keep = [r for r in j.get('rules', []) if not r.get('gen')]
+        # `_os.json` first (as in every app file), then the base app's file, which includes `_os.json` again:
+        # the duplicate rules are harmless, a rule's label decides its precedence, not its position.
+        j2 = {'id': id, 'include': ['_os.json', v['base'] + '.json'], 'note': v['note'], 'rules': keep}
+        for k, val in j.items():
+            if k not in ('id', 'include', 'note', 'rules'):
+                j2[k] = val
+        with open(fn, 'w', encoding='utf-8') as f:
+            json.dump(j2, f, indent=2, ensure_ascii=False)
+    print(f'_os.json: {len(rules)} rules ({len(SPLIT)} split); variants: {", ".join(VARIANTS)}')
 
 
 if __name__ == '__main__':

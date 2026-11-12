@@ -14,6 +14,10 @@ purge-source.workspace = true
 purge-inventory.workspace = true
 purge-identity.workspace = true
 purge-guard.workspace = true
+purge-index.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+crc32fast.workspace = true
 thiserror.workspace = true
 
 [lints]

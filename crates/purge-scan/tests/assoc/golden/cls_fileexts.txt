@@ -1,0 +1,42 @@
+[CLS-FILEEXTS] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\OpenWithProgids | "VSCode.md"
+  id=c-c98b0a59f349e1bc category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\OpenWithProgids|VSCode.md
+    anchor=VSCode.md
+    ext=.md
+    group=File associations
+    progid=VSCode.md
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.md
+    anchor=VSCode.md
+    ext=.md
+    group=File associations
+    progid=VSCode.md
+[CLS-FILEEXTS] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\OpenWithList | "a"
+  id=c-861e5c6d91c6819c category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence ChainedRef B/5 Value AdminOnly source=chain:Code.exe
+    anchor=Code.exe
+    exe=Code.exe
+    ext=.md
+    group=File associations
+[CLS-FILEEXTS] EditSegment Segment HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\OpenWithList | "MRUList" | "a" @ Some(1)
+  id=c-7fa2e26691abf769 category=Association harm=Medium reversibility=Full origin=Scanner child_count=None
+  evidence ChainedRef B/5 Value AdminOnly source=chain:Code.exe
+    anchor=Code.exe
+    exe=Code.exe
+    ext=.md
+    group=File associations
+[CLS-FILEEXTS] ReportOnly RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\UserChoice | "ProgId"
+  id=c-9068a9ae916a5430 category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.md
+    action=report
+    anchor=VSCode.md
+    ext=.md
+    group=File associations
+    note=.md opens with an app that was removed; choose one in Settings
+    progid=VSCode.md
+[CLS-FILEEXTS] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\OpenWithProgids | "VSCode.txt"
+  id=c-4097acc465e05036 category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.txt
+    anchor=VSCode.txt
+    ext=.txt
+    group=File associations
+    progid=VSCode.txt

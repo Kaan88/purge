@@ -1,0 +1,15 @@
+FS-SHORTCUTS Quarantine AppFiles C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Git\Git Bash.lnk
+  harm=Low reversibility=Full size=1500 files=1
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteFile}
+FS-SHORTCUTS Quarantine AppFiles C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Git\Git GUI.lnk
+  harm=Low reversibility=Full size=1500 files=1
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteFile}
+FS-SHORTCUTS Quarantine AppFiles C:\Users\tester\Desktop\Git Bash.lnk
+  harm=Low reversibility=Full size=1500 files=1
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteFile}
+FS-SHORTCUTS Quarantine AppFiles C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Git
+  harm=Low reversibility=Full size=3080 files=3
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteDirOrFiles}
+  + ExactFullName B/4 Path AdminOnly [identity:Git] {name=Git}
+  > C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Git\Git Bash.lnk
+  > C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Git\Git GUI.lnk

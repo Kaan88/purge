@@ -1,0 +1,12 @@
+FS-UNINSTALLER Quarantine AppFiles C:\Program Files\Git\unins000.dat
+  harm=Low reversibility=Full size=900000 files=1
+  + InsideInstallRoot A/9 Path AdminOnly [root:C:\Program Files\Git] {root=C:\Program Files\Git}
+  + UninstallerArtifact A/6 Path AdminOnly [arp:Inno Setup uninstall log] {anchor=Inno Setup uninstall log}
+FS-UNINSTALLER Quarantine AppFiles C:\Program Files\Git\unins000.exe
+  harm=Low reversibility=Full size=3000000 files=1
+  + InsideInstallRoot A/9 Path AdminOnly [root:C:\Program Files\Git] {root=C:\Program Files\Git}
+  + UninstallerArtifact A/6 Path AdminOnly [arp:Inno Setup uninstaller] {anchor=Inno Setup uninstaller}
+FS-UNINSTALLER Quarantine AppFiles C:\Program Files\Git\unins000.msg
+  harm=Low reversibility=Full size=24000 files=1
+  + InsideInstallRoot A/9 Path AdminOnly [root:C:\Program Files\Git] {root=C:\Program Files\Git}
+  + UninstallerArtifact A/6 Path AdminOnly [arp:Inno Setup uninstaller messages] {anchor=Inno Setup uninstaller messages}

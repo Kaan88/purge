@@ -1,0 +1,9 @@
+FS-VENDORPARENT RemoveDirIfEmpty AppFiles C:\Program Files\Mozilla
+  harm=None reversibility=Full size=- files=1
+  + VendorContainer C/2 Path AdminOnly [identity:mozilla] {children=["readme.txt"], empty_after_plan=pending, vendor=mozilla}
+FS-VENDORPARENT RemoveDirIfEmpty AppFiles C:\Program Files (x86)\Mozilla Corporation
+  harm=None reversibility=Full size=- files=0
+  + VendorContainer C/2 Path AdminOnly [identity:mozilla] {children=[], empty_after_plan=pending, vendor=mozilla}
+FS-VENDORPARENT RemoveDirIfEmpty AppFiles C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Mozilla
+  harm=None reversibility=Full size=- files=1
+  + VendorContainer C/2 Path AdminOnly [identity:mozilla] {children=["Firefox.lnk"], empty_after_plan=pending, vendor=mozilla}

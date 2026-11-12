@@ -1,0 +1,22 @@
+[REG-APPPATHS] DeleteKey RegKey HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe
+  id=c-c932cb8d7984e644 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=Low reversibility=Full child_count=Some(2)
+  evidence ChainedRef A/5 Key AdminOnly source=chain:c:\program files\mozilla firefox\firefox.exe
+    anchor=c:\program files\mozilla firefox\firefox.exe
+  evidence AppNamedKeyWithRootRef A/7 Key AdminOnly source=software-key:HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe
+    path=c:\program files\mozilla firefox\firefox.exe
+    root=C:\Program Files\Mozilla Firefox
+  evidence ExactFullName B/4 Key AdminOnly source=identity:Firefox
+    name=Firefox
+  evidence NameTokenExact C/3 Key AdminOnly source=identity:Firefox
+    name=Firefox
+[REG-APPPATHS] DeleteKey RegKey HKLM\SOFTWARE\Classes\Applications\firefox.exe
+  id=c-20a3aa53971ffad4 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=Low reversibility=Full child_count=Some(4)
+  evidence ChainedRef A/5 Key AdminOnly source=chain:c:\program files\mozilla firefox\firefox.exe
+    anchor=c:\program files\mozilla firefox\firefox.exe
+  evidence AppNamedKeyWithRootRef A/7 Key AdminOnly source=software-key:HKLM\SOFTWARE\Classes\Applications\firefox.exe
+    path=c:\program files\mozilla firefox\firefox.exe
+    root=C:\Program Files\Mozilla Firefox
+  evidence ExactFullName B/4 Key AdminOnly source=identity:Firefox
+    name=Firefox
+  evidence NameTokenExact C/3 Key AdminOnly source=identity:Firefox
+    name=Firefox

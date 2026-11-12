@@ -4,209 +4,74 @@
 //! - `--broker`: the elevated broker (harvest, uninstall, scan, plan, consent, execute, undo);
 //! - CLI verbs for the VM rig and power users. Headless `exec` exists only with the `rig-exec` feature.
 //!
-//! Milestone: CLI verbs in M1a, `exec`/`undo`/`journal` in M2, `--stdio` and `--broker` in M3 (§11.1).
-//! In M0 every verb is recognised and reports that it is not implemented yet.
+//! Milestone: the CLI verbs `inventory`, `harvest`, `uninstall`, `scan` and `plan show` in M1a;
+//! `exec`/`undo`/`journal` in M2, `--stdio` and `--broker` in M3 (§11.1). Those report "not implemented"
+//! with exit code 1.
+//!
+//! This file only wires the live machine into [`purge_engine::cli::run`]: the `Live` sources, the live
+//! process host, and the settings taken from the process (see [`settings`]).
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 compile_error!("purge-engine supports x86_64 Windows only (ENGINE_PLAN.md §3.2)");
 
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "\
-usage: purge-engine <verb> [args]
+use purge_engine::cli::{self, Env};
+use purge_engine::pipeline::{Settings, Sources};
+use purge_inventory::runner::{LiveHost, RunOptions};
+use purge_source::live::Live;
 
-modes:
-  --stdio                                   serve the UI over stdin/stdout (medium integrity)
-  --broker --pipe <name> --parent <pid> --parent-ctime <filetime>
-                                            elevated broker for the UI
+/// Overrides the knowledge-base directory; its `baselines` subdirectory holds the baselines.
+const KB_DIR_VAR: &str = "PURGE_KB_DIR";
 
-verbs:
-  inventory --json
-  harvest <program_id> -o <fp.json>
-  uninstall <program_id> --quiet [--fp <fp.json>] -o <run.json>
-  scan (--fp <fp.json> [--mode post|external|forced] | --path <dir>) -o <plan.json>
-  plan show <plan.json>
-  exec --plan <plan.json> --confirm <hash>
-  undo --session <id> [--confirm <hash>]
-  journal recover|resume|rollback
-  kb lint <pack.json>... [--baselines <dir>]
-
-  --version, -V                             print the version
-  --help, -h                                print this help
-";
-
-/// A recognised top-level command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Command {
-    Stdio,
-    Broker,
-    Inventory,
-    Harvest,
-    Uninstall,
-    Scan,
-    PlanShow,
-    Exec,
-    Undo,
-    JournalRecover,
-    JournalResume,
-    JournalRollback,
-    KbLint,
-}
-
-impl Command {
-    fn name(self) -> &'static str {
-        match self {
-            Command::Stdio => "--stdio",
-            Command::Broker => "--broker",
-            Command::Inventory => "inventory",
-            Command::Harvest => "harvest",
-            Command::Uninstall => "uninstall",
-            Command::Scan => "scan",
-            Command::PlanShow => "plan show",
-            Command::Exec => "exec",
-            Command::Undo => "undo",
-            Command::JournalRecover => "journal recover",
-            Command::JournalResume => "journal resume",
-            Command::JournalRollback => "journal rollback",
-            Command::KbLint => "kb lint",
-        }
+/// The engine's settings from the process: baselines from `%PURGE_KB_DIR%\baselines`, else from
+/// `<exe dir>\kb\baselines`; Purge's own directories are the exe's directory and
+/// `%ProgramData%\Purge`.
+fn settings() -> Settings {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from));
+    let baseline_dir = std::env::var_os(KB_DIR_VAR)
+        .filter(|v| !v.is_empty())
+        .map(|kb| PathBuf::from(kb).join("baselines"))
+        .or_else(|| exe_dir.as_ref().map(|d| d.join("kb").join("baselines")));
+    let mut purge_dirs: Vec<String> = Vec::new();
+    if let Some(dir) = exe_dir.as_ref().and_then(|d| d.to_str()) {
+        purge_dirs.push(dir.to_owned());
     }
-}
-
-/// The result of parsing the command line.
-#[derive(Debug, PartialEq, Eq)]
-enum Invocation {
-    Version,
-    Help,
-    /// A command plus its remaining arguments (not interpreted in M0).
-    Run(Command, Vec<String>),
-}
-
-/// Recognises the verb (and sub-verb) of a command line. Arguments after the verb are kept as-is.
-fn parse(args: &[String]) -> Result<Invocation, String> {
-    let Some(first) = args.first() else {
-        return Err("missing verb".into());
-    };
-    let rest = |n: usize| args[n..].to_vec();
-    let sub = |verb: &str, choices: &[(&str, Command)]| -> Result<Invocation, String> {
-        let Some(s) = args.get(1) else {
-            return Err(format!("'{verb}' needs a sub-verb"));
-        };
-        choices
-            .iter()
-            .find(|(name, _)| name == s)
-            .map(|&(_, cmd)| Invocation::Run(cmd, rest(2)))
-            .ok_or_else(|| format!("unknown '{verb}' sub-verb '{s}'"))
-    };
-    let cmd = match first.as_str() {
-        "--version" | "-V" => return Ok(Invocation::Version),
-        "--help" | "-h" | "help" => return Ok(Invocation::Help),
-        "--stdio" => Command::Stdio,
-        "--broker" => Command::Broker,
-        "inventory" => Command::Inventory,
-        "harvest" => Command::Harvest,
-        "uninstall" => Command::Uninstall,
-        "scan" => Command::Scan,
-        "exec" => Command::Exec,
-        "undo" => Command::Undo,
-        "plan" => return sub("plan", &[("show", Command::PlanShow)]),
-        "journal" => {
-            return sub(
-                "journal",
-                &[
-                    ("recover", Command::JournalRecover),
-                    ("resume", Command::JournalResume),
-                    ("rollback", Command::JournalRollback),
-                ],
-            );
-        }
-        "kb" => return sub("kb", &[("lint", Command::KbLint)]),
-        other => return Err(format!("unknown verb '{other}'")),
-    };
-    Ok(Invocation::Run(cmd, rest(1)))
+    if let Some(data) = std::env::var_os("ProgramData").and_then(|v| v.into_string().ok()) {
+        purge_dirs.push(format!("{}\\Purge", data.trim_end_matches('\\')));
+    }
+    Settings {
+        baseline_dir,
+        purge_dirs,
+    }
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match parse(&args) {
-        Ok(Invocation::Version) => {
-            println!("purge-engine {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
-        }
-        Ok(Invocation::Help) => {
-            print!("{USAGE}");
-            ExitCode::SUCCESS
-        }
-        Ok(Invocation::Run(cmd, _args)) => {
-            println!("purge-engine {}: not implemented in M0", cmd.name());
-            ExitCode::FAILURE
-        }
-        Err(e) => {
-            eprintln!("purge-engine: {e}\n\n{USAGE}");
-            ExitCode::from(2)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn p(line: &str) -> Result<Invocation, String> {
-        let args: Vec<String> = line.split_whitespace().map(String::from).collect();
-        parse(&args)
-    }
-
-    #[test]
-    fn recognises_every_verb_of_the_cli_contract() {
-        let cases = [
-            ("--stdio", Command::Stdio),
-            (
-                "--broker --pipe p --parent 1 --parent-ctime 2",
-                Command::Broker,
-            ),
-            ("inventory --json", Command::Inventory),
-            ("harvest app -o fp.json", Command::Harvest),
-            (
-                "uninstall app --quiet --fp fp.json -o run.json",
-                Command::Uninstall,
-            ),
-            ("scan --fp fp.json --mode post -o plan.json", Command::Scan),
-            ("plan show plan.json", Command::PlanShow),
-            ("exec --plan plan.json --confirm abc", Command::Exec),
-            ("undo --session s1", Command::Undo),
-            ("journal recover", Command::JournalRecover),
-            ("journal resume", Command::JournalResume),
-            ("journal rollback", Command::JournalRollback),
-            (
-                "kb lint a.json b.json --baselines vm/baselines/",
-                Command::KbLint,
-            ),
-        ];
-        for (line, want) in cases {
-            match p(line) {
-                Ok(Invocation::Run(cmd, _)) => assert_eq!(cmd, want, "{line}"),
-                other => panic!("{line}: {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn keeps_arguments_after_the_verb() {
-        assert_eq!(
-            p("plan show x.json"),
-            Ok(Invocation::Run(Command::PlanShow, vec!["x.json".into()]))
-        );
-    }
-
-    #[test]
-    fn version_help_and_errors() {
-        assert_eq!(p("--version"), Ok(Invocation::Version));
-        assert_eq!(p("-V"), Ok(Invocation::Version));
-        assert_eq!(p("--help"), Ok(Invocation::Help));
-        assert!(p("").is_err());
-        assert!(p("frobnicate").is_err());
-        assert!(p("plan").is_err());
-        assert!(p("journal delete").is_err());
-    }
+    let live = Live::new();
+    let mut host = LiveHost::new();
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
+    let (mut out, mut err) = (stdout.lock(), stderr.lock());
+    let exit = cli::run(
+        &args,
+        &mut Env {
+            sources: Sources {
+                reg: &live.registry,
+                fs: &live.fs,
+                sys: &live.system,
+            },
+            host: &mut host,
+            settings: settings(),
+            run_options: RunOptions::default(),
+            stdout: &mut out,
+            stderr: &mut err,
+        },
+    );
+    let _ = out.flush();
+    ExitCode::from(exit.code())
 }

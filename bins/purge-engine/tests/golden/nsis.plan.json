@@ -1,0 +1,140 @@
+{
+  "schema": "purge.plan/0",
+  "app": "fennec browser 9.0 (x64 en-us)",
+  "tool": "purge",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\FennecHTML\\shell\\open\\command",
+        "name": ""
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\FennecHTML\\DefaultIcon",
+        "name": ""
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Software\\Fennec\\Fennec Browser"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Fennec\\Fennec Browser"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Fennec\\MaintenanceService"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Software\\Fennec"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Fennec"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Fennec\\Fennec Browser"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "FS-APPDATA",
+      "category": "UserData"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Fennec\\Fennec Browser"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "FS-APPDATA",
+      "category": "UserData"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Fennec"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppData"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Fennec"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppData"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\Fennec Browser"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "FS-INSTALLDIR",
+      "category": "AppFiles"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Fennec"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppData"
+    }
+  ]
+}

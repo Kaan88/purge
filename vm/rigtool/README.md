@@ -146,3 +146,43 @@ rigtool baseline --snap vm\runs\null1\snap-0.tsv.gz -o kb\baselines\
 ```
 
 With a directory (or a trailing `\`) as `-o`, the file is named `<EditionID>-<build>.<ubr>.tsv.gz`.
+
+### invdiff
+
+```
+rigtool invdiff --inv inventory.json --lists lists-<run>-<phase>.json [--explain vm\truth\inventory-explain.json]
+                [--sid S-1-5-21-...] [--json out.json] [--md out.md]
+```
+
+The M1a inventory exit check (ENGINE_PLAN §11.1, §4.1): the engine's inventory (`purge-engine inventory --json`,
+`purge.inventory/0`, read through rigtool's own serde structs) against the rig's raw enumeration. Exit code 1
+when any difference has no explanation rule (0 otherwise); without `--md` the Markdown goes to stdout.
+
+- Reference set: the `uninstall[]` rows of the lists file (riglib `UninstallEntries`: HKLM 64-bit view,
+  `WOW6432Node`, `HKU\<sid>` of the loaded `S-1-5-21-…` hives) by canonical key, plus the `msi[]` product codes.
+  riglib `MsiProducts` is a **registry enumeration** of `Installer\UserData\<SID>\Products`, while the engine
+  calls `MsiEnumProductsExW`; an MSI difference can therefore come from the two methods themselves (advertised
+  products, a context the registry walk does not see) and is itself something to explain.
+- Engine set: `entries[]` by canonical `key_path`; MSI codes = `msi_only[]` plus the `product_code` of every
+  entry with `msi` set (merged with a Windows Installer product). Codes are compared as sets.
+- Keys on both sides are canonicalised like everything else (see "Canonical registry names");
+  `HKEY_CURRENT_USER` maps to `HKU\<sid>` with `--sid`, else the lists file's `user_sid`.
+- Reported: `only_in_engine`, `only_in_reference` (subject `key` or `msi`) and `mismatches` on keys present on
+  both sides for `name`, `version`, `uninstall`, `quiet`, `sys` (SystemComponent), `parent` (ParentKeyName,
+  case-insensitive) and `product_code` (case-insensitive). Values are compared trimmed with blank = absent (the
+  engine trims and drops blank values); a missing reference name stands for the key name (the engine's
+  `display_name` fallback). riglib reads values with .NET `GetValue`, which expands `REG_EXPAND_SZ`, while the
+  engine keeps them as written, so a `%VAR%` in the engine's value matches any text (`counts.expanded`).
+- `--lists` also accepts the legacy array `vm\results\lists-registry.json` (rows
+  `{key,name,version,sys,parent,uninstall,quiet,size,loc}`); it has no MSI list and no product code column, so
+  those are not compared (`msi_compared: false`).
+
+Explanation file (`vm\truth\inventory-explain.json`), `{ "rules": [...] }` or a bare array:
+
+```json
+{ "rules": [ { "match": "^HKU\\S-1-5-(19|20)\\\\", "side": "engine", "why": "service hives: riglib reads S-1-5-21-* only" } ] }
+```
+
+`match` is a case-insensitive regex on the canonical key path or the MSI code; `side` is `engine`,
+`reference`, `mismatch` or `any` (default); an optional `field` limits a rule to mismatches of that field. The
+first matching rule wins. The report lists `unused_rules` so stale rules can be removed.

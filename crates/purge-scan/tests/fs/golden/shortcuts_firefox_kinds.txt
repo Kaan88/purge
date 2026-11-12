@@ -1,0 +1,20 @@
+FS-SHORTCUTS Quarantine AppFiles C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Firefox Help.url
+  harm=Low reversibility=Full size=79 files=1
+  + TimeWindow C/1 Path AdminOnly [window] {}
+FS-SHORTCUTS Quarantine AppFiles C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Firefox Nightly.lnk
+  harm=Low reversibility=Full size=0 files=1
+  + TimeWindow C/1 Path AdminOnly [window] {}
+FS-SHORTCUTS Quarantine AppFiles C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Firefox Private Browsing.lnk
+  harm=Low reversibility=Full size=0 files=1
+  + TimeWindow C/1 Path AdminOnly [window] {}
+FS-SHORTCUTS Quarantine AppFiles C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Firefox Website.url
+  harm=Low reversibility=Full size=101 files=1
+  + TimeWindow C/1 Path AdminOnly [window] {}
+FS-SHORTCUTS Quarantine AppFiles C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Firefox.lnk
+  harm=Low reversibility=Full size=0 files=1
+  + ExactFullName B/4 Path AdminOnly [identity:Firefox] {name=Firefox}
+  + TimeWindow C/1 Path AdminOnly [window] {}
+FS-SHORTCUTS Quarantine Startup C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Firefox.lnk
+  harm=Low reversibility=Full size=0 files=1
+  + ExactFullName B/4 Path AdminOnly [identity:Firefox] {name=Firefox}
+  + TimeWindow C/1 Path AdminOnly [window] {}

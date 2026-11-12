@@ -5,3 +5,9 @@
 //! shown to the user. Every change bumps the policy version reported by `engine.hello`.
 //!
 //! Milestone: M1a (§11.1).
+
+pub mod band;
+pub mod bcu_map;
+pub mod explain;
+pub mod harm;
+pub mod score;

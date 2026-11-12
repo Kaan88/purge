@@ -45,8 +45,9 @@ Principles:
   was on 26300.9974 when it was built, so until the host moves, the engine on the host still has no
   matching baseline (values-only + X-SYSTIDY, ENGINE_PLAN §5.7.1).
 - Rig-owned paths, excluded from truth and baselines (label `rig`): `C:\cr\**`, `C:\ut\**`,
-  scheduled tasks `PurgeRigAgent`, `PurgeRigLaunch`, `agentstart`, `elev*`, `crshot*`, `utrun`, `PurgeSetup`, and their
-  `TaskCache` entries, and `%TEMP%\vmjobs\**`.
+  scheduled tasks `PurgeRigAgent`, `PurgeRigLaunch`, `PurgeRigInstall`, `agentstart`, `elev*`, `crshot*`, `utrun`,
+  `PurgeSetup`, and their `TaskCache` entries, `%TEMP%\vmjobs\**`, and the Prefetch files of the rig's own tools
+  `C:\Windows\Prefetch\RIGTOOL.EXE-*.pf` and `PURGE-ENGINE.EXE-*.pf` (engine runs, §4a).
 
 ## 2. Snapshot format (`rigtool snap`)
 
@@ -103,10 +104,19 @@ records access errors.
 
 ## 4. Run protocol (one app, `guest\run-app.ps1`, phases written to `C:\cr\out\<run>\`)
 
-`<run>` = `<app id>` for app runs, `null1..null3` for null runs.
+`<run>` = `<app id>` for app runs, `null1..null3` for null runs. With `rig.ps1 -RunPrefix <p>` an app run is
+named `<p><app id>` (e.g. `r0-vscode`): every output file and `run.json`'s `run` carry the run name, `run.json`'s
+`id` stays the app id (the label file and the plan's `app`). Engine runs (§4a) always use a prefix, so the frozen
+M0 run directories `vm\runs\<id>\` are never archived or overwritten. Null runs keep `null<n>`.
 
+0. Pre-apps (`pre` in `apps.ps1`, e.g. `firefox-tb`: Thunderbird): each is installed exactly as in step 2 and
+   settled, and its ARP entry recorded in `run.json` `pre[]`, **before** step 1, so everything of theirs is in
+   the clean state and offering any of it scores as danger.
 1. `lists 0`, `snap 0` (clean, from `rig-base`).
-2. Install silently. Record `install_start`, `install_end`, exit code. Wait for the installer's **process
+2. Install silently. Record `install_start`, `install_end`, exit code and `ran_as`: `elevated` (the agent's token)
+   or, for apps with `install_il = 'medium'` (`vscode-user`, a per-user install), `medium`: the installer is
+   started through the one-shot task `PurgeRigInstall` (same interactive, limited token as `PurgeRigLaunch`;
+   the task is deleted afterwards, also on failure). Wait for the installer's **process
    tree** to exit (`WaitTree -RootPid`: the installer's PID and every descendant seen while polling, by
    parent PID, so a restored guest's clock jump cannot make System or maintenance processes look new), and
    for Windows Installer to be idle (`Test-MsiBusy`: the `_MSIExecute` mutex), two quiet polls in a row,
@@ -129,7 +139,33 @@ Null runs follow the same steps with no install, launch or uninstall, and the sa
 0 s, 60 s), so their diff is pure Windows churn.
 
 Host side (`rig.ps1`): power off → `snapshot restore rig-base` → start → wait for the agent → copy fresh
-`rigtool.exe` and `guest\*.ps1` → run the job → copy `C:\cr\out\<run>\` to `vm\runs\<run>\` → next app.
+`rigtool.exe`, `purge-engine.exe` (when given with `-Engine` or built at `target\release\`) with
+`kb\baselines\*.tsv.gz` (to `C:\cr\bin\kb\baselines\`), and `guest\*.ps1` → run the job → copy
+`C:\cr\out\<run>\` to `vm\runs\<run>\` → next app.
+
+## 4a. Engine mode (M1a R0, ENGINE_PLAN §10.2, §11.1)
+
+`Invoke-Campaign -Ids ... -RunPrefix r0- -Engine <purge-engine.exe>` (or `Invoke-Run -Id <id> -RunPrefix r0-
+-Engine` after `Push-Tools -Engine`) sets the job's `__ENGINE__` placeholder. The run protocol is §4 with these
+changes, each engine call its own phase (command line, exit code, stdout/stderr in `run.log`, a record in
+`run.json` `engine.calls[]`; a failed engine phase is recorded and the captures still run):
+
+| After | Phase | Command (CLI contract ENGINE_PLAN §3.4) |
+|---|---|---|
+| `snap 1` | `engine-inventory-1` | `purge-engine inventory --json > inv-1.json`; the `program_id` of the main ARP entry is the entry whose `key_path` is `run.json` `main.key` (compared canonically) |
+| | `engine-harvest` | `purge-engine harvest <program_id> -o fp.json` |
+| | `uninstall` | `purge-engine uninstall <program_id> --quiet --fp fp.json -o engine-run.json` **instead of** the vendor command; `run.json` `uninstall.t0/t1/exit` come from `engine-run.json` (`t_start`, `t_end`, `exit_code`; `uninstall.times` = `engine`, or `rig` when the file is missing), plus `outcome`, `verify_gone`, `engine_exit`, `rig_t0`/`rig_t1`. The rig's WaitTree (engine process tree, ARP entry gone, max 10 min) and the 30 s settle still run as a safety net. |
+| `snap 2`, `entries` | `engine-scan` | `purge-engine scan --fp fp.json --mode post --app <id> -o plan-purge.json` (`--app`: the plan's `app` is the truth id, ENGINE_PLAN P40) |
+| | `engine-inventory-2` | `purge-engine inventory --json > inv-2.json` |
+
+The scan and the second inventory run only after `snap 2`, so the engine's reads cannot disturb the capture.
+The host copies `plan-purge.json` to `vm\runs\<run>\plans\purge.json` and the frozen BCU plan
+`vm\truth\frozen\<id>\plans\bcu.json` (when there is one) next to it. `vm\truth\m1a.sh` then recomputes truth
+for the `r0-*` runs with the app's label file, compares it with the frozen truth, scores Purge and BCU, and
+runs `rigtool invdiff` on `inv-1`/`inv-2` against `lists-1`/`lists-2`.
+
+M1a corpus additions (`apps.ps1`): `vscode-user` (VS Code per-user build, installed at medium integrity),
+`thunderbird`, and `firefox-tb` (the `firefox` definition with `pre = thunderbird`).
 
 ## 5. Truth (`rigtool truth`)
 
@@ -167,7 +203,10 @@ Restart Manager, `PendingFileRenameOperations`, AppX deployment counters…). It
 therefore run before every per-app rule, so each one is anchored under a Windows-owned root.
 `_os.json` and the generated per-app rules come from `vm\truth\mk_labels.py` (rules it adds carry
 `"gen": true`); `bash truth/recompute.sh` regenerates them, recomputes every truth and re-scores. The
-frozen M0 numbers are in `vm\truth\FROZEN.md`.
+frozen M0 numbers are in `vm\truth\FROZEN.md`. Corpus variants get a file that includes `_os.json` and the base
+app's file (`vscode-user.json` → `vscode.json`, `firefox-tb.json` → `firefox.json`), also written by
+`mk_labels.py`; rules of their own are hand-written below the include. `bash truth/m1a.sh` does the same for the
+M1a engine runs (§4a).
 
 Two optional rule fields:
 - `"split": true` (ambient rules only): the rule labels a **container** Windows creates, not what is in it.

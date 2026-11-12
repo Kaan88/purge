@@ -1,0 +1,14 @@
+{
+  "comment": "What the Tidy Notes uninstaller removes; everything else in inno.before.json stays as a leftover.",
+  "remove_keys": [
+    "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{6F1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D}_is1",
+    "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\tidynotes.exe"
+  ],
+  "remove_values": [],
+  "remove_paths": [
+    "C:\\Program Files\\Tidy Notes\\tidynotes.exe",
+    "C:\\Program Files\\Tidy Notes\\unins000.exe",
+    "C:\\Program Files\\Tidy Notes\\unins000.dat",
+    "C:\\Program Files\\Tidy Notes\\bin\\tidy-cli.exe"
+  ]
+}

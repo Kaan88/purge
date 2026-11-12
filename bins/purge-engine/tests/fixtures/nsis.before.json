@@ -1,0 +1,218 @@
+{
+  "schema": "purge.fixture/1",
+  "system": {
+    "os": { "edition": "Professional", "build": 26340, "ubr": 9882 },
+    "user_sid": "S-1-5-21-1004336348-1177238915-682003330-1001",
+    "elevated": true,
+    "profiles": [
+      { "sid": "S-1-5-21-1004336348-1177238915-682003330-1001", "path": "C:\\Users\\tester" }
+    ],
+    "known_folders": {
+      "Windows": "C:\\Windows",
+      "System": "C:\\Windows\\System32",
+      "ProgramFiles": "C:\\Program Files",
+      "ProgramFilesX86": "C:\\Program Files (x86)",
+      "ProgramFilesCommon": "C:\\Program Files\\Common Files",
+      "ProgramData": "C:\\ProgramData",
+      "Public": "C:\\Users\\Public",
+      "CommonStartMenu": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu",
+      "CommonPrograms": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
+      "Profile": "C:\\Users\\tester",
+      "RoamingAppData": "C:\\Users\\tester\\AppData\\Roaming",
+      "LocalAppData": "C:\\Users\\tester\\AppData\\Local",
+      "LocalAppDataLow": "C:\\Users\\tester\\AppData\\LocalLow",
+      "UserProgramFiles": "C:\\Users\\tester\\AppData\\Local\\Programs",
+      "Desktop": "C:\\Users\\tester\\Desktop",
+      "Documents": "C:\\Users\\tester\\Documents",
+      "Downloads": "C:\\Users\\tester\\Downloads",
+      "StartMenu": "C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu",
+      "Programs": "C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs"
+    },
+    "env": {
+      "USERNAME": "tester",
+      "USERPROFILE": "C:\\Users\\tester",
+      "SYSTEMDRIVE": "C:",
+      "WINDIR": "C:\\Windows",
+      "SYSTEMROOT": "C:\\Windows",
+      "PROGRAMFILES": "C:\\Program Files",
+      "PROGRAMW6432": "C:\\Program Files",
+      "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+      "PROGRAMDATA": "C:\\ProgramData",
+      "ALLUSERSPROFILE": "C:\\ProgramData",
+      "PUBLIC": "C:\\Users\\Public",
+      "APPDATA": "C:\\Users\\tester\\AppData\\Roaming",
+      "LOCALAPPDATA": "C:\\Users\\tester\\AppData\\Local"
+    },
+    "processes": [],
+    "now": 134400000000000000
+  },
+  "registry": {
+    "current_control_set": 1,
+    "keys": {
+      "HKLM\\SYSTEM\\ControlSet001\\Services": {},
+      "HKLM\\SYSTEM\\ControlSet001\\Control\\TimeZoneInformation": {
+        "values": { "ActiveTimeBias": { "dword": 4294967236 } }
+      },
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Fennec Browser 9.0 (x64 en-US)": {
+        "lwt": 134390000000000000,
+        "values": {
+          "DisplayName": "Fennec Browser (x64 en-US)",
+          "DisplayVersion": "9.0",
+          "Publisher": "Fennec",
+          "InstallLocation": "C:\\Program Files\\Fennec Browser",
+          "DisplayIcon": "C:\\Program Files\\Fennec Browser\\fennec.exe,0",
+          "UninstallString": "\"C:\\Program Files\\Fennec Browser\\uninstall\\helper.exe\"",
+          "QuietUninstallString": "\"C:\\Program Files\\Fennec Browser\\uninstall\\helper.exe\" /S",
+          "NoModify": { "dword": 1 },
+          "NoRepair": { "dword": 1 }
+        }
+      },
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\FennecMaintenanceService": {
+        "lwt": 134390000000000000,
+        "values": {
+          "DisplayName": "Fennec Maintenance Service",
+          "DisplayVersion": "9.0",
+          "Publisher": "Fennec",
+          "DisplayIcon": "C:\\Program Files (x86)\\Fennec Maintenance Service\\Uninstall.exe,0",
+          "UninstallString": "\"C:\\Program Files (x86)\\Fennec Maintenance Service\\uninstall.exe\""
+        }
+      },
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Fennec Mail 7.0 (x64 en-US)": {
+        "lwt": 134380000000000000,
+        "values": {
+          "DisplayName": "Fennec Mail (x64 en-US)",
+          "DisplayVersion": "7.0",
+          "Publisher": "Fennec",
+          "InstallLocation": "C:\\Program Files\\Fennec Mail",
+          "DisplayIcon": "C:\\Program Files\\Fennec Mail\\fennecmail.exe,0",
+          "UninstallString": "\"C:\\Program Files\\Fennec Mail\\uninstall\\helper.exe\"",
+          "QuietUninstallString": "\"C:\\Program Files\\Fennec Mail\\uninstall\\helper.exe\" /S"
+        }
+      },
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\fennec.exe": {
+        "values": {
+          "": "C:\\Program Files\\Fennec Browser\\fennec.exe",
+          "Path": "C:\\Program Files\\Fennec Browser"
+        }
+      },
+      "HKLM\\SOFTWARE\\Fennec\\Fennec Browser\\9.0 (x64 en-US)\\Main": {
+        "values": {
+          "Install Directory": "C:\\Program Files\\Fennec Browser",
+          "PathToExe": "C:\\Program Files\\Fennec Browser\\fennec.exe"
+        }
+      },
+      "HKLM\\SOFTWARE\\Fennec\\Fennec Mail\\7.0 (x64 en-US)\\Main": {
+        "values": {
+          "Install Directory": "C:\\Program Files\\Fennec Mail",
+          "PathToExe": "C:\\Program Files\\Fennec Mail\\fennecmail.exe"
+        }
+      },
+      "HKLM\\SOFTWARE\\Fennec\\MaintenanceService": {
+        "values": { "Attempted": { "dword": 1 } }
+      },
+      "HKLM\\SOFTWARE\\Classes\\FennecHTML": {
+        "values": { "": "Fennec HTML Document" },
+        "keys": {
+          "DefaultIcon": { "values": { "": "C:\\Program Files\\Fennec Browser\\fennec.exe,1" } },
+          "shell\\open\\command": {
+            "values": { "": "\"C:\\Program Files\\Fennec Browser\\fennec.exe\" -osint -url \"%1\"" }
+          }
+        }
+      },
+      "HKLM\\SOFTWARE\\Classes\\FennecEML": {
+        "values": { "": "Fennec Mail Message" },
+        "keys": {
+          "shell\\open\\command": {
+            "values": { "": "\"C:\\Program Files\\Fennec Mail\\fennecmail.exe\" \"%1\"" }
+          }
+        }
+      },
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Software\\Fennec\\Fennec Browser": {
+        "values": { "Last Run": "9.0" }
+      },
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Run": {
+        "values": {
+          "Fennec Mail": "\"C:\\Program Files\\Fennec Mail\\fennecmail.exe\" -silent"
+        }
+      }
+    }
+  },
+  "filesystem": {
+    "volumes": { "C:\\": { "serial": 305419896, "fixed": true, "fs": "NTFS" } },
+    "admin_only_roots": ["C:\\Program Files", "C:\\Program Files (x86)", "C:\\Windows"],
+    "entries": {
+      "C:\\Windows": { "dir": true, "children": { "System32": { "dir": true } } },
+      "C:\\Program Files\\Common Files": { "dir": true },
+      "C:\\Program Files\\Fennec Browser": {
+        "dir": true,
+        "children": {
+          "fennec.exe": {
+            "size": 900000,
+            "version_info": { "company_name": "Fennec", "product_name": "Fennec Browser", "original_filename": "fennec.exe", "product_version": "9.0" },
+            "signer": "Fennec Project"
+          },
+          "maintenanceservice.exe": { "size": 200000, "signer": "Fennec Project" },
+          "maintenanceservice_installer.exe": { "size": 300000, "signer": "Fennec Project" },
+          "browser": { "dir": true, "children": { "omni.ja": { "size": 5000000 } } },
+          "distribution": { "dir": true, "children": { "policies.json": { "size": 100 } } },
+          "uninstall": { "dir": true, "children": { "helper.exe": { "size": 1000000 }, "uninstall.log": { "size": 2000 } } }
+        }
+      },
+      "C:\\Program Files (x86)\\Fennec Maintenance Service": {
+        "dir": true,
+        "children": {
+          "maintenanceservice.exe": { "size": 200000 },
+          "Uninstall.exe": { "size": 100000 },
+          "logs": { "dir": true, "children": { "maintenanceservice.log": { "size": 500 } } }
+        }
+      },
+      "C:\\Program Files\\Fennec Mail": {
+        "dir": true,
+        "children": {
+          "fennecmail.exe": { "size": 900000, "version_info": { "company_name": "Fennec", "product_name": "Fennec Mail" } },
+          "uninstall": { "dir": true, "children": { "helper.exe": { "size": 1000000 } } }
+        }
+      },
+      "C:\\ProgramData\\Fennec": {
+        "dir": true,
+        "children": { "updates": { "dir": true, "children": { "308046B0AF4A39CB": { "dir": true, "children": { "update.status": { "size": 10 } } } } } }
+      },
+      "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Fennec Browser.lnk": {
+        "size": 1500,
+        "shortcut": { "raw_path": "C:\\Program Files\\Fennec Browser\\fennec.exe", "workdir": "C:\\Program Files\\Fennec Browser" }
+      },
+      "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Fennec Mail.lnk": {
+        "size": 1500,
+        "shortcut": { "raw_path": "C:\\Program Files\\Fennec Mail\\fennecmail.exe" }
+      },
+      "C:\\Users\\tester\\AppData\\Roaming\\Fennec": {
+        "dir": true,
+        "children": {
+          "Fennec Browser": {
+            "dir": true,
+            "children": {
+              "profiles.ini": { "size": 200 },
+              "Profiles": { "dir": true, "children": { "abc123.default-release": { "dir": true, "children": { "prefs.js": { "size": 4000 }, "places.sqlite": { "size": 5242880 } } } } }
+            }
+          },
+          "Fennec Mail": {
+            "dir": true,
+            "children": { "profiles.ini": { "size": 200 } }
+          }
+        }
+      },
+      "C:\\Users\\tester\\AppData\\Local\\Fennec": {
+        "dir": true,
+        "children": {
+          "Fennec Browser": { "dir": true, "children": { "Profiles": { "dir": true, "children": { "abc123.default-release": { "dir": true, "children": { "cache2": { "dir": true, "children": { "index": { "size": 4096 } } } } } } } } }
+        }
+      },
+      "C:\\Users\\tester\\Documents": { "dir": true },
+      "C:\\Users\\tester\\Desktop": { "dir": true },
+      "C:\\Users\\tester\\Downloads": { "dir": true },
+      "C:\\Users\\Public": { "dir": true }
+    }
+  },
+  "msi": { "products": [] },
+  "packages": []
+}

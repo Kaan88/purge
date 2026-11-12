@@ -1,0 +1,49 @@
+plan tidynotes: tool purge, mode post, 13 item(s) (6 preselected)
+hash d9754befb005ae9c5bd86df0b5d7db5eb22e3c80d7b979d00d06d2f6985dc7d5 (policy m1a.2)
+
+Safe (6)
+  [x] RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Run : TidyNotes
+      REG-RUN, Startup
+      Named in Tidy Notes 2.4's uninstall log · Pointed to C:\Program Files\Tidy Notes\tidynotes.exe before uninstall · Points to c:\program files\tidy notes\tidynotes.exe in Tidy Notes 2.4's install folder
+  [x] RegValue HKLM\SOFTWARE\Classes\.tidy\OpenWithProgids : TidyNotes.Document
+      REF-ANY, Registration, also CLS-ASSOC
+      Named in Tidy Notes 2.4's uninstall log · Pointed to TidyNotes.Document before uninstall · Refers to TidyNotes.Document, which belongs to Tidy Notes 2.4
+  [x] RegValue HKLM\SOFTWARE\Classes\.tidy : (default)
+      REF-ANY, Registration
+      Pointed to TidyNotes.Document before uninstall
+  [x] RegKey HKLM\SOFTWARE\Classes\TidyNotes.Document
+      REF-ANY, Registration, absorbs 2
+      Named in Tidy Notes 2.4's uninstall log
+  [x] RegKey HKLM\SOFTWARE\Acme Tools
+      REG-SOFTWARE, Registration, absorbs 2, also REF-ANY
+      Named in Tidy Notes 2.4's uninstall log
+  [x] Path C:\Program Files\Tidy Notes
+      FS-INSTALLDIR, AppFiles
+      Inside Tidy Notes 2.4's install folder C:\Program Files\Tidy Notes
+
+Likely (2)
+  [ ] RegKey HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Acme Tools\Tidy Notes
+      REG-SOFTWARE, Registration
+      Named exactly like Tidy Notes 2.4 · Tidy Notes 2.4's product name under its vendor's name · Name matches Tidy Notes 2.4
+  [ ] Path C:\Users\tester\AppData\Roaming\Tidy Notes
+      FS-APPDATA, UserData
+      Named exactly like Tidy Notes 2.4 · May hold your own data
+
+Weak (3)
+  [ ] RegKey HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Acme Tools
+      REG-SOFTWARE, Registration
+      Vendor container, removed only if it is empty
+  [ ] Path C:\Users\tester\AppData\Local\Acme Tools\Tidy Notes
+      FS-APPDATA, UserData
+      Tidy Notes 2.4's product name under its vendor's name · May hold your own data
+  [ ] Path C:\Users\tester\AppData\Local\Acme Tools
+      FS-VENDORPARENT, AppData
+      Vendor container, removed only if it is empty
+
+Blocked (2)
+  [ ] Path C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Tidy Notes\Tidy Notes.lnk
+      FS-SHORTCUTS, AppFiles
+      Kept: protected location (rule fs.programdata.microsoft)
+  [ ] Path C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Tidy Notes
+      FS-SHORTCUTS, AppFiles
+      Kept: protected location (rule fs.programdata.microsoft)

@@ -1,0 +1,21 @@
+[CLS-ASSOC] DeleteKey RegKey HKLM\SOFTWARE\Classes\.md\OpenWithList\Code.exe
+  id=c-3f605236861dc714 category=Association harm=Low reversibility=Full origin=Scanner child_count=Some(0)
+  evidence ChainedRef B/5 Key AdminOnly source=chain:Code.exe
+    anchor=Code.exe
+    exe=Code.exe
+    ext=.md
+    group=File associations
+[CLS-ASSOC] DeleteKey RegKey HKLM\SOFTWARE\Classes\SystemFileAssociations\.md\OpenWithList\code.exe
+  id=c-c59061f8d055d157 category=Association harm=Low reversibility=Full origin=Scanner child_count=Some(0)
+  evidence ChainedRef B/5 Key AdminOnly source=chain:Code.exe
+    anchor=Code.exe
+    exe=Code.exe
+    ext=.md
+    group=File associations
+[CLS-ASSOC] DeleteKey RegKey HKLM\SOFTWARE\Classes\SystemFileAssociations\.md\shell\VSCodeOpen
+  id=c-8001139d6ba70064 category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence ChainedRef A/5 Key AdminOnly source=chain:c:\program files\microsoft vs code\code.exe
+    anchor=c:\program files\microsoft vs code\code.exe
+    ext=.md
+    group=File associations
+    path=c:\program files\microsoft vs code\code.exe

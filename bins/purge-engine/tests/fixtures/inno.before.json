@@ -1,0 +1,193 @@
+{
+  "schema": "purge.fixture/1",
+  "system": {
+    "os": { "edition": "Professional", "build": 26340, "ubr": 9882 },
+    "user_sid": "S-1-5-21-1004336348-1177238915-682003330-1001",
+    "elevated": true,
+    "profiles": [
+      { "sid": "S-1-5-21-1004336348-1177238915-682003330-1001", "path": "C:\\Users\\tester" }
+    ],
+    "known_folders": {
+      "Windows": "C:\\Windows",
+      "System": "C:\\Windows\\System32",
+      "ProgramFiles": "C:\\Program Files",
+      "ProgramFilesX86": "C:\\Program Files (x86)",
+      "ProgramFilesCommon": "C:\\Program Files\\Common Files",
+      "ProgramData": "C:\\ProgramData",
+      "Public": "C:\\Users\\Public",
+      "CommonStartMenu": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu",
+      "CommonPrograms": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
+      "Profile": "C:\\Users\\tester",
+      "RoamingAppData": "C:\\Users\\tester\\AppData\\Roaming",
+      "LocalAppData": "C:\\Users\\tester\\AppData\\Local",
+      "LocalAppDataLow": "C:\\Users\\tester\\AppData\\LocalLow",
+      "UserProgramFiles": "C:\\Users\\tester\\AppData\\Local\\Programs",
+      "Desktop": "C:\\Users\\tester\\Desktop",
+      "Documents": "C:\\Users\\tester\\Documents",
+      "Downloads": "C:\\Users\\tester\\Downloads",
+      "StartMenu": "C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu",
+      "Programs": "C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs"
+    },
+    "env": {
+      "USERNAME": "tester",
+      "USERPROFILE": "C:\\Users\\tester",
+      "SYSTEMDRIVE": "C:",
+      "WINDIR": "C:\\Windows",
+      "SYSTEMROOT": "C:\\Windows",
+      "PROGRAMFILES": "C:\\Program Files",
+      "PROGRAMW6432": "C:\\Program Files",
+      "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+      "PROGRAMDATA": "C:\\ProgramData",
+      "ALLUSERSPROFILE": "C:\\ProgramData",
+      "PUBLIC": "C:\\Users\\Public",
+      "APPDATA": "C:\\Users\\tester\\AppData\\Roaming",
+      "LOCALAPPDATA": "C:\\Users\\tester\\AppData\\Local"
+    },
+    "processes": [],
+    "now": 134400000000000000
+  },
+  "registry": {
+    "current_control_set": 1,
+    "keys": {
+      "HKLM\\SYSTEM\\ControlSet001\\Services": {},
+      "HKLM\\SYSTEM\\ControlSet001\\Control\\TimeZoneInformation": {
+        "values": { "ActiveTimeBias": { "dword": 0 } }
+      },
+      "HKLM\\SYSTEM\\ControlSet001\\Control\\Session Manager\\Environment": {
+        "values": {
+          "Path": { "expand_sz": "C:\\Windows\\system32;C:\\Windows;C:\\Program Files\\Tidy Notes\\bin" },
+          "TIDY_HOME": "C:\\Program Files\\Tidy Notes"
+        }
+      },
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{6F1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D}_is1": {
+        "lwt": 134390000000000000,
+        "values": {
+          "DisplayName": "Tidy Notes 2.4",
+          "DisplayVersion": "2.4.1",
+          "Publisher": "Acme Tools Ltd",
+          "InstallLocation": "C:\\Program Files\\Tidy Notes\\",
+          "DisplayIcon": "C:\\Program Files\\Tidy Notes\\tidynotes.exe",
+          "UninstallString": "\"C:\\Program Files\\Tidy Notes\\unins000.exe\"",
+          "QuietUninstallString": "\"C:\\Program Files\\Tidy Notes\\unins000.exe\" /SILENT",
+          "Inno Setup: App Path": "C:\\Program Files\\Tidy Notes",
+          "Inno Setup: Setup Version": "6.2.2",
+          "Inno Setup: Icon Group": "Tidy Notes",
+          "InstallDate": "20261101"
+        }
+      },
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ExampleMail": {
+        "lwt": 134380000000000000,
+        "values": {
+          "DisplayName": "Example Mail",
+          "DisplayVersion": "1.0",
+          "Publisher": "Example Corp",
+          "InstallLocation": "C:\\Program Files\\Example Mail",
+          "DisplayIcon": "C:\\Program Files\\Example Mail\\mail.exe,0",
+          "UninstallString": "\"C:\\Program Files\\Example Mail\\uninstall\\helper.exe\"",
+          "QuietUninstallString": "\"C:\\Program Files\\Example Mail\\uninstall\\helper.exe\" /S"
+        }
+      },
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\tidynotes.exe": {
+        "values": {
+          "": "C:\\Program Files\\Tidy Notes\\tidynotes.exe",
+          "Path": "C:\\Program Files\\Tidy Notes"
+        }
+      },
+      "HKLM\\SOFTWARE\\Acme Tools\\Tidy Notes": {
+        "values": {
+          "InstallDir": "C:\\Program Files\\Tidy Notes",
+          "Version": "2.4.1"
+        }
+      },
+      "HKLM\\SOFTWARE\\Classes\\.tidy": {
+        "values": { "": "TidyNotes.Document" },
+        "keys": {
+          "OpenWithProgids": { "values": { "TidyNotes.Document": "" } }
+        }
+      },
+      "HKLM\\SOFTWARE\\Classes\\TidyNotes.Document": {
+        "values": { "": "Tidy Notes Document" },
+        "keys": {
+          "DefaultIcon": { "values": { "": "C:\\Program Files\\Tidy Notes\\tidynotes.exe,0" } },
+          "shell\\open\\command": {
+            "values": { "": "\"C:\\Program Files\\Tidy Notes\\tidynotes.exe\" \"%1\"" }
+          }
+        }
+      },
+      "HKLM\\SOFTWARE\\Classes\\txtfile\\shell\\open\\command": {
+        "values": { "": "%SystemRoot%\\system32\\NOTEPAD.EXE %1" }
+      },
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Run": {
+        "values": {
+          "TidyNotes": "\"C:\\Program Files\\Tidy Notes\\tidynotes.exe\" --tray",
+          "ExampleMail": "\"C:\\Program Files\\Example Mail\\mail.exe\" -background"
+        }
+      },
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Software\\Acme Tools\\Tidy Notes\\Settings": {
+        "values": { "Theme": "dark", "LastFile": "C:\\Users\\tester\\Documents\\todo.tidy" }
+      },
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Environment": {
+        "values": { "TEMP": "C:\\Users\\tester\\AppData\\Local\\Temp" }
+      }
+    }
+  },
+  "filesystem": {
+    "volumes": { "C:\\": { "serial": 305419896, "fixed": true, "fs": "NTFS" } },
+    "admin_only_roots": ["C:\\Program Files", "C:\\Program Files (x86)", "C:\\Windows"],
+    "entries": {
+      "C:\\Windows": { "dir": true, "children": { "System32": { "dir": true } } },
+      "C:\\Program Files\\Common Files": { "dir": true },
+      "C:\\Program Files\\Tidy Notes": {
+        "dir": true,
+        "children": {
+          "tidynotes.exe": {
+            "size": 4096000,
+            "version_info": { "company_name": "Acme Tools Ltd", "product_name": "Tidy Notes", "original_filename": "tidynotes.exe", "product_version": "2.4.1" },
+            "signer": "Acme Tools Ltd"
+          },
+          "unins000.exe": { "size": 3200000 },
+          "bin": { "dir": true, "children": { "tidy-cli.exe": { "size": 81920 } } },
+          "plugins": { "dir": true, "children": { "spell.dll": { "size": 20480 } } }
+        }
+      },
+      "C:\\Program Files\\Example Mail": {
+        "dir": true,
+        "children": {
+          "mail.exe": { "size": 1000, "version_info": { "company_name": "Example Corp", "product_name": "Example Mail" } },
+          "uninstall": { "dir": true, "children": { "helper.exe": { "size": 1000 } } }
+        }
+      },
+      "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Tidy Notes": {
+        "dir": true,
+        "children": {
+          "Tidy Notes.lnk": {
+            "size": 1200,
+            "shortcut": { "raw_path": "C:\\Program Files\\Tidy Notes\\tidynotes.exe", "workdir": "C:\\Program Files\\Tidy Notes" }
+          }
+        }
+      },
+      "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Example Mail.lnk": {
+        "size": 1200,
+        "shortcut": { "raw_path": "C:\\Program Files\\Example Mail\\mail.exe" }
+      },
+      "C:\\Users\\tester\\AppData\\Roaming\\Tidy Notes": {
+        "dir": true,
+        "children": { "settings.json": { "content_text": "{\"theme\":\"dark\"}" } }
+      },
+      "C:\\Users\\tester\\AppData\\Local\\Acme Tools\\Tidy Notes": {
+        "dir": true,
+        "children": { "cache": { "dir": true, "children": { "index.db": { "size": 65536 } } } }
+      },
+      "C:\\Users\\tester\\AppData\\Local\\Temp": { "dir": true },
+      "C:\\Users\\tester\\Documents": {
+        "dir": true,
+        "children": { "todo.tidy": { "size": 300 } }
+      },
+      "C:\\Users\\tester\\Desktop": { "dir": true },
+      "C:\\Users\\tester\\Downloads": { "dir": true },
+      "C:\\Users\\Public": { "dir": true }
+    }
+  },
+  "msi": { "products": [] },
+  "packages": []
+}

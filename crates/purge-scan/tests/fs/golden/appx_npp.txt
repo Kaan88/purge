@@ -1,0 +1,4 @@
+SYS-APPX RemovePackage Package package:NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww
+  harm=Medium reversibility=None size=- files=-
+  + AppxExternalLocation A/8 Package AdminOnly [appx:link] {anchor=NotepadPlusPlus_2247w0b46hfww}
+  ! ReversibilityNone

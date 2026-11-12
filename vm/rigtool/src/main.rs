@@ -10,6 +10,7 @@ mod deny;
 mod diff;
 mod err;
 mod escape;
+mod invdiff;
 mod items;
 mod jsonio;
 mod score;
@@ -35,6 +36,8 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
                 [--deny deny.json] [--sid SID] --json out.json --md out.md
   rigtool convert (--clone FILE | --removed FILE --tool ut|bcu) --app ID -o plan.json
   rigtool baseline --snap snap-0.tsv.gz -o FILE.tsv.gz|DIR\\
+  rigtool invdiff --inv inventory.json --lists lists-<run>-<phase>.json [--explain inventory-explain.json]
+                  [--sid SID] [--json out.json] [--md out.md]     (exit 1 = unexplained differences)
 ";
 
 struct Args {
@@ -215,6 +218,21 @@ fn run(argv: Vec<String>) -> Result<()> {
         "baseline" => {
             let a = Args::parse(rest, &[], &[], &["--snap", "-o"])?;
             baseline::cmd_baseline(&a.req("--snap")?, &a.req("-o")?)
+        }
+        "invdiff" => {
+            let a = Args::parse(rest, &[], &[], &["--inv", "--lists", "--explain", "--sid", "--json", "--md"])?;
+            let rep = invdiff::cmd_invdiff(&invdiff::InvdiffArgs {
+                inv: a.req("--inv")?,
+                lists: a.req("--lists")?,
+                explain: a.path("--explain"),
+                sid: a.get("--sid"),
+                json: a.path("--json"),
+                md: a.path("--md"),
+            })?;
+            if rep.exit_code() != 0 {
+                bail!("invdiff: {} unexplained differences", rep.unexplained());
+            }
+            Ok(())
         }
         "-h" | "--help" | "help" => {
             print!("{USAGE}");

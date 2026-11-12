@@ -1,0 +1,31 @@
+#purge-baseline 1	2026-11-12T00:00:00Z	TEST-PC	Synthetic	12345.678
+#source	tests/fixtures/snap-synthetic-0.tsv.gz
+K	HKLM\\SOFTWARE\\Classes
+K	HKLM\\SOFTWARE\\Classes\\.txt
+K	HKLM\\SOFTWARE\\Classes\\.txt\\OpenWithProgids
+K	HKLM\\SOFTWARE\\Classes\\txtfile
+K	HKLM\\SOFTWARE\\Classes\\CLSID\\{00021401-0000-0000-C000-000000000046}
+K	HKLM\\SOFTWARE\\Classes\\MIME\\Database\\Content Type\\text/plain
+K	HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\S-1-5-21-1111111111-2222222222-3333333333-1000
+K	HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip
+K	HKLM\\SYSTEM\\ControlSet001\\Control\\Session Manager\\Environment
+K	HKU\\.DEFAULT\\Environment
+K	HKU\\S-1-5-19\\Environment
+K	HKU\\S-1-5-21-1111111111-2222222222-3333333333-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Run
+K	HKU\\S-1-5-21-1111111111-2222222222-3333333333-1000_Classes\\Local Settings
+V	HKLM\\SOFTWARE\\Classes\\.txt		1	1111111111111111
+V	HKLM\\SOFTWARE\\Classes\\.txt	Content Type	1	0123456789abcdef
+V	HKLM\\SOFTWARE\\Classes\\.txt\\OpenWithProgids	txtfile	0	e3b0c44298fc1c14
+V	HKLM\\SOFTWARE\\Classes\\txtfile\\shell\\open\\command		2	2222222222222222
+V	HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run	C:\\Tools\\a\tb	1	3333333333333333
+V	HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run	Über Größe	1	4444444444444444
+V	HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip	ImagePath	2	5555555555555555
+V	HKLM\\SYSTEM\\ControlSet001\\Control\\Session Manager\\Environment	Path	2	6666666666666666
+V	HKU\\S-1-5-21-1111111111-2222222222-3333333333-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Run	OneDriveSetup	1	7777777777777777
+D	C:\\Windows\\System32
+D	C:\\Program Files\\Common Files
+D	C:\\Users\\testuser\\AppData\\Local\\Microsoft
+D	C:\\Users\\Public\\Desktop
+F	C:\\Windows\\System32\\notepad.exe
+F	C:\\Windows\\explorer.exe
+F	C:\\Users\\testuser\\NTUSER.DAT

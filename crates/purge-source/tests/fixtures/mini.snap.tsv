@@ -1,0 +1,28 @@
+#purge-snap 1	2026-11-11T16:05:36Z	DEMO-PC	EnterpriseSEval	26100.1742
+#roots	HKLM\\SOFTWARE	HKLM\\SYSTEM\\CurrentControlSet	HKU\\S-1-5-21-100-200-300-1001	HKU\\S-1-5-21-100-200-300-1001_Classes	C:\\Program Files	C:\\ProgramData	C:\\Users	C:\\Windows\\System32@1
+#exclude	HKLM\\SYSTEM\\CurrentControlSet\\Enum
+D	C:\\Program Files\\Demo	10	134388866613378836	0
+F	C:\\Program Files\\Demo\\demo.exe	4096	20	134388866613378836	0
+F	C:\\Program Files\\Demo\\unins000.dat	16	20	134388866613378836	0
+D	C:\\ProgramData\\Link	410	134388866613378836	a0000003
+D	C:\\ProgramData\\Locked	10	134388866613378836	0
+F	C:\\Windows\\System32\\notepad.exe	201216	20	133564297360441541	0
+F	C:\\Users\\tester\\NTUSER.DAT	262144	22	134388866613378836	0
+K	HKLM\\SOFTWARE\\Demo	134388866613378836	1	0
+V	HKLM\\SOFTWARE\\Demo		7	18	0123456789abcdef	one\0two
+K	HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo_is1	134388866613378836	4	0
+V	HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo_is1	DisplayName	1	18	1111111111111111	Demo\tApp
+V	HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo_is1	InstallLocation	1	46	2222222222222222	C:\\Program Files\\Demo\\
+V	HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo_is1	EstimatedSize	4	4	3333333333333333	1234
+V	HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo_is1	Blob	3	3	4444444444444444	
+K	HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\S-1-5-21-100-200-300-1001	134388866613378836	1	0
+V	HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\S-1-5-21-100-200-300-1001	ProfileImagePath	2	54	5555555555555555	%SystemDrive%\\Users\\tester
+K	HKLM\\SYSTEM\\CurrentControlSet\\Services\\DemoSvc	134388866613378836	1	0
+V	HKLM\\SYSTEM\\CurrentControlSet\\Services\\DemoSvc	Start	4	4	6666666666666666	2
+K	HKU\\S-1-5-21-100-200-300-1001\\Environment	134388866613378836	1	0
+V	HKU\\S-1-5-21-100-200-300-1001\\Environment	DEMOVAR	2	38	7777777777777777	%USERPROFILE%\\demo
+K	HKU\\S-1-5-21-100-200-300-1001\\Software\\Classes	134388866613378836	1	0
+V	HKU\\S-1-5-21-100-200-300-1001\\Software\\Classes	SymbolicLinkValue	6	96	8888888888888888	\\REGISTRY\\USER\\S-1-5-21-100-200-300-1001_Classes
+K	HKU\\S-1-5-21-100-200-300-1001_Classes\\.demo	134388866613378836	0	0
+#denied	C:\\ProgramData\\Locked
+#errors	2	HKLM\\SOFTWARE\\Secret|C:\\ProgramData\\Gone

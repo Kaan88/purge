@@ -1,7 +1,7 @@
 # Purge rig v2: the test apps (dot-sourced after riglib.ps1). Official vendor URLs only; each app covers a
 # different installer technology. Ids, URLs, silent install arguments and 'match' are unchanged from v1.
 #
-#   id      run name and truth label file (vm\truth\labels\<id>.json)
+#   id      truth label file (vm\truth\labels\<id>.json) and default run name (rig.ps1 -RunPrefix adds a prefix)
 #   file    installer file name in C:\cr\inst\
 #   url     scriptblock returning one URL or several candidates (tried in order)
 #   install silent install arguments; 'msi' = msiexec /i <file> /qn /norestart
@@ -14,6 +14,22 @@
 #           after install. The exe is looked up in the main entry's InstallLocation, then next to its
 #           DisplayIcon, then under regdir's default value, then in dirs (environment variables expanded),
 #           then App Paths.
+# Optional (M1a, vm\RIG.md §4):
+#   pre        ids of other apps installed (and settled) before lists 0 / snap 0, so everything of theirs is
+#              in the clean state and anything of theirs a cleaner offers scores as danger
+#   install_il 'medium': the installer runs at medium integrity through the one-shot task PurgeRigInstall
+#              (LaunchMedium pattern), as a per-user install by a normal user would; default: the elevated
+#              agent token
+
+# Pure: a shallow copy of an app definition with some fields replaced (a corpus variant of another app).
+function Copy-AppDef($App, [hashtable]$Changes) {
+    if (-not $App) { throw 'Copy-AppDef: no base app definition' }
+    $c = @{}
+    foreach ($k in $App.Keys) { $c[$k] = $App[$k] }
+    foreach ($k in $Changes.Keys) { $c[$k] = $Changes[$k] }
+    $c
+}
+
 $Apps = @(
   @{ id = 'npp'; tech = 'NSIS'; file = 'npp.exe'
      url = { GitHubAsset 'notepad-plus-plus/notepad-plus-plus' 'Installer\.x64\.exe$' }
@@ -69,7 +85,25 @@ $Apps = @(
      url = { 'https://aka.ms/vs/17/release/vs_community.exe' }
      install = '--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.CoreEditor --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64'
      match = '^Visual Studio Community 2022'; un = '{U} --quiet --norestart --wait'; launch = $null }
+
+  # VS Code per-user build (ENGINE_PLAN §10.4 #7): %LOCALAPPDATA%\Programs, HKU Classes. Installed at
+  # medium integrity: the guest user is an admin and the agent is elevated.
+  @{ id = 'vscode-user'; tech = 'Inno Setup (per-user)'; file = 'vscode-user.exe'
+     url = { 'https://update.code.visualstudio.com/latest/win32-x64-user/stable' }
+     install = '/VERYSILENT /NORESTART /MERGETASKS=!runcode'; install_il = 'medium'
+     match = '^Microsoft Visual Studio Code \(User\)'
+     un = '{U} /VERYSILENT /NORESTART /SUPPRESSMSGBOXES'
+     launch = @{ exe = 'Code.exe'; args = ''; dirs = @('%LOCALAPPDATA%\Programs\Microsoft VS Code') } }
+
+  @{ id = 'thunderbird'; tech = 'NSIS (Mozilla)'; file = 'thunderbird.exe'
+     url = { 'https://download.mozilla.org/?product=thunderbird-latest-ssl&os=win64&lang=en-US' }
+     install = '/S'; match = '^Mozilla Thunderbird'; un = '{U} /S'
+     launch = @{ exe = 'thunderbird.exe'; args = ''; dirs = @('%ProgramFiles%\Mozilla Thunderbird') } }
 )
+
+# firefox-tb (ENGINE_PLAN §10.4 #2): the firefox run with Thunderbird installed before snap 0, so the shared
+# Mozilla parts (Maintenance Service, vendor keys and dirs) are pre-existing and offering them is danger.
+$Apps += (Copy-AppDef ($Apps | Where-Object { $_.id -eq 'firefox' } | Select-Object -First 1) @{ id = 'firefox-tb'; pre = @('thunderbird') })
 
 function Get-App([string]$Id) {
     $a = $Apps | Where-Object { $_.id -eq $Id } | Select-Object -First 1

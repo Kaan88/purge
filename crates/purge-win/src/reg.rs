@@ -1,0 +1,933 @@
+//! Read-only registry access with an explicit WOW64 view that never follows registry links.
+//!
+//! ENGINE_PLAN.md §3.2 / §5.10 (G1):
+//! - Only the two physical roots the engine reasons about are exposed: `HKLM` and `HKU` ([`RegRoot`]).
+//!   `HKCR` and `HKCU` are merged/aliased views and are deliberately absent.
+//! - Every open passes an explicit `KEY_WOW64_64KEY` or `KEY_WOW64_32KEY` ([`RegView`]) and
+//!   `REG_OPTION_OPEN_LINK`. [`Key::open`] opens a path **one component at a time**, so a registry
+//!   symbolic link is opened as the link key itself and never traversed: as the last component the
+//!   caller sees it through [`Key::link_target`]; before the last component the open fails with
+//!   [`Win32Error::LINK_ON_PATH`]. Consequently `HKLM\SYSTEM\CurrentControlSet\...` does not
+//!   resolve; map it to `ControlSet00N` first with [`current_control_set`], and read
+//!   `HKU\<SID>_Classes` instead of `HKU\<SID>\Software\Classes` (both are `purge-guard`
+//!   canonicalisation duties).
+//! - Enumeration uses `RegQueryInfoKeyW` for sizes, `RegEnumKeyExW` and `RegEnumValueW` with the raw
+//!   value bytes and type, and grows its buffers on `ERROR_MORE_DATA` (values can change between the
+//!   size query and the read).
+//! - [`Key::security`] reports the owner SID and whether any DACL entry names TrustedInstaller, the
+//!   subtree-baseline facts of ENGINE_PLAN.md §5.2.
+//!
+//! All `unsafe` FFI is confined to this module and carries `SAFETY` comments.
+#![cfg(feature = "read")]
+
+use std::ptr;
+use std::sync::OnceLock;
+
+use windows_sys::Win32::Foundation::FILETIME;
+use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_QUERY_VALUE, KEY_READ, KEY_WOW64_32KEY,
+    KEY_WOW64_64KEY, REG_OPTION_OPEN_LINK, RegCloseKey, RegEnumKeyExW, RegEnumValueW,
+    RegGetKeySecurity, RegOpenKeyExW, RegQueryInfoKeyW, RegQueryValueExW,
+};
+
+use crate::os::{Win32Error, from_wide, wide};
+use crate::sid::{TRUSTED_INSTALLER_SID, sd_facts};
+
+/// `REG_NONE`.
+pub const REG_NONE: u32 = 0;
+/// `REG_SZ`.
+pub const REG_SZ: u32 = 1;
+/// `REG_EXPAND_SZ`.
+pub const REG_EXPAND_SZ: u32 = 2;
+/// `REG_BINARY`.
+pub const REG_BINARY: u32 = 3;
+/// `REG_DWORD` (little-endian).
+pub const REG_DWORD: u32 = 4;
+/// `REG_DWORD_BIG_ENDIAN`.
+pub const REG_DWORD_BIG_ENDIAN: u32 = 5;
+/// `REG_LINK`: the target of a registry symbolic link (stored in `SymbolicLinkValue`).
+pub const REG_LINK: u32 = 6;
+/// `REG_MULTI_SZ`.
+pub const REG_MULTI_SZ: u32 = 7;
+/// `REG_QWORD` (little-endian).
+pub const REG_QWORD: u32 = 11;
+
+/// Name of the value that holds a link key's target.
+const SYMBOLIC_LINK_VALUE: &str = "SymbolicLinkValue";
+
+/// A physical registry root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RegRoot {
+    /// `HKEY_LOCAL_MACHINE`.
+    Hklm,
+    /// `HKEY_USERS` (loaded user hives, `<SID>` and `<SID>_Classes`).
+    Hku,
+}
+
+impl RegRoot {
+    fn hkey(self) -> HKEY {
+        match self {
+            RegRoot::Hklm => HKEY_LOCAL_MACHINE,
+            RegRoot::Hku => HKEY_USERS,
+        }
+    }
+}
+
+/// The WOW64 registry view passed explicitly on every open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RegView {
+    /// `KEY_WOW64_64KEY`: the native view; `WOW6432Node` appears as an ordinary subkey.
+    K64,
+    /// `KEY_WOW64_32KEY`: the redirected 32-bit view.
+    K32,
+}
+
+impl RegView {
+    fn sam(self) -> u32 {
+        match self {
+            RegView::K64 => KEY_WOW64_64KEY,
+            RegView::K32 => KEY_WOW64_32KEY,
+        }
+    }
+}
+
+/// Sizes and timestamp from `RegQueryInfoKeyW`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyInfo {
+    /// Number of direct subkeys.
+    pub n_subkeys: u32,
+    /// Longest subkey name, in UTF-16 units, without the terminator.
+    pub max_subkey_name_len: u32,
+    /// Number of values (the default value counts when it is set).
+    pub n_values: u32,
+    /// Longest value name, in UTF-16 units, without the terminator.
+    pub max_value_name_len: u32,
+    /// Largest value data, in bytes.
+    pub max_value_len: u32,
+    /// Last write time as a FILETIME (100 ns ticks since 1601-01-01 UTC).
+    pub last_write_time: u64,
+}
+
+/// One subkey from `RegEnumKeyExW`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubkeyEntry {
+    /// Subkey name (one path component).
+    pub name: String,
+    /// Its last write time as a FILETIME.
+    pub last_write_time: u64,
+}
+
+/// One registry value: name, raw type and raw bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegValue {
+    /// Value name; empty for the default value.
+    pub name: String,
+    /// Raw `REG_*` type.
+    pub ty: u32,
+    /// Raw data bytes exactly as stored.
+    pub data: Vec<u8>,
+}
+
+impl RegValue {
+    /// The data as UTF-16 units (an odd trailing byte is dropped).
+    fn utf16(&self) -> Vec<u16> {
+        self.data
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect()
+    }
+
+    /// `REG_SZ`, `REG_EXPAND_SZ` or `REG_LINK` data as a string, cut at the first NUL. `None` for
+    /// other types. Expansion is not performed (see `env`).
+    pub fn as_string(&self) -> Option<String> {
+        matches!(self.ty, REG_SZ | REG_EXPAND_SZ | REG_LINK).then(|| from_wide(&self.utf16()))
+    }
+
+    /// `REG_MULTI_SZ` segments, in order, without the empty terminator segment. Empty segments in
+    /// the middle are kept (they are real data a segment index refers to).
+    pub fn as_multi_sz(&self) -> Option<Vec<String>> {
+        if self.ty != REG_MULTI_SZ {
+            return None;
+        }
+        let mut units = self.utf16();
+        // Strip the terminator(s): "a\0b\0\0" -> "a\0b".
+        while units.last() == Some(&0) {
+            units.pop();
+        }
+        if units.is_empty() {
+            return Some(Vec::new());
+        }
+        Some(
+            units
+                .split(|&c| c == 0)
+                .map(String::from_utf16_lossy)
+                .collect(),
+        )
+    }
+
+    /// `REG_DWORD` / `REG_DWORD_BIG_ENDIAN` data. `None` for other types or short data.
+    pub fn as_u32(&self) -> Option<u32> {
+        let b: [u8; 4] = self.data.get(..4)?.try_into().ok()?;
+        match self.ty {
+            REG_DWORD => Some(u32::from_le_bytes(b)),
+            REG_DWORD_BIG_ENDIAN => Some(u32::from_be_bytes(b)),
+            _ => None,
+        }
+    }
+
+    /// `REG_QWORD` data (or a `REG_DWORD` widened). `None` for other types or short data.
+    pub fn as_u64(&self) -> Option<u64> {
+        match self.ty {
+            REG_QWORD => Some(u64::from_le_bytes(self.data.get(..8)?.try_into().ok()?)),
+            REG_DWORD | REG_DWORD_BIG_ENDIAN => self.as_u32().map(u64::from),
+            _ => None,
+        }
+    }
+}
+
+/// Owner and TrustedInstaller facts of a key's security descriptor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeySecurity {
+    /// Owner SID in string form (`S-1-5-...`), if the descriptor has an owner.
+    pub owner_sid: Option<String>,
+    /// Whether any DACL entry names `NT SERVICE\TrustedInstaller`.
+    pub dacl_names_trusted_installer: bool,
+}
+
+impl KeySecurity {
+    /// Whether the owner is `NT SERVICE\TrustedInstaller`.
+    pub fn owner_is_trusted_installer(&self) -> bool {
+        self.owner_sid.as_deref() == Some(TRUSTED_INSTALLER_SID)
+    }
+
+    /// Owner or any ACE is TrustedInstaller: the "TI-owned" flag of the subtree baseline.
+    pub fn trusted_installer(&self) -> bool {
+        self.owner_is_trusted_installer() || self.dacl_names_trusted_installer
+    }
+}
+
+/// An open registry key (read access, explicit view, opened with `REG_OPTION_OPEN_LINK`).
+///
+/// Closed on drop. Predefined roots from [`Key::root`] are not closed.
+#[derive(Debug)]
+pub struct Key {
+    hkey: HKEY,
+    owned: bool,
+    view: RegView,
+    /// Whether this key is a symbolic link, computed once when a path descends through it.
+    link: OnceLock<Result<bool, Win32Error>>,
+}
+
+// SAFETY: a registry key handle is a kernel handle, not tied to the thread that opened it; the
+// registry API is safe to call concurrently on one handle.
+unsafe impl Send for Key {}
+// SAFETY: every method takes `&self` and only issues read calls, which the registry serialises;
+// the only interior state is a `OnceLock`, which is itself `Sync`.
+unsafe impl Sync for Key {}
+
+impl Drop for Key {
+    fn drop(&mut self) {
+        if self.owned {
+            // SAFETY: `hkey` was returned by `RegOpenKeyExW`, is owned by this value and is closed
+            // exactly once here.
+            unsafe { RegCloseKey(self.hkey) };
+        }
+    }
+}
+
+impl Key {
+    fn new(hkey: HKEY, owned: bool, view: RegView) -> Key {
+        Key {
+            hkey,
+            owned,
+            view,
+            link: OnceLock::new(),
+        }
+    }
+
+    /// The predefined root handle in `view` (not opened, never closed).
+    pub fn root(root: RegRoot, view: RegView) -> Key {
+        Key::new(root.hkey(), false, view)
+    }
+
+    /// Opens `path` (backslash-separated, relative to `root`) in `view`, one component at a time
+    /// with `REG_OPTION_OPEN_LINK`. An empty path returns the root.
+    ///
+    /// A link as the last component is opened as the link key itself (see [`Key::link_target`]).
+    /// A link before the last component fails the open with [`Win32Error::LINK_ON_PATH`]: the
+    /// kernel would otherwise reparse relative opens below a link key into its target. Every
+    /// intermediate key must therefore allow `KEY_QUERY_VALUE` so it can be checked.
+    pub fn open(root: RegRoot, path: &str, view: RegView) -> Result<Key, Win32Error> {
+        Key::root(root, view).open_subkey(path)
+    }
+
+    /// Opens `path` below this key in this key's view (component-wise, see [`Key::open`]). Fails
+    /// with [`Win32Error::LINK_ON_PATH`] when this key, or any intermediate key, is a link.
+    pub fn open_subkey(&self, path: &str) -> Result<Key, Win32Error> {
+        let mut comps = path.split('\\').filter(|c| !c.is_empty()).peekable();
+        if comps.peek().is_none() {
+            return self.reopen();
+        }
+        let mut current: Option<Key> = None;
+        while let Some(comp) = comps.next() {
+            let parent = current.as_ref().unwrap_or(self);
+            parent.ensure_not_link()?;
+            let access = if comps.peek().is_none() {
+                KEY_READ
+            } else {
+                KEY_QUERY_VALUE
+            };
+            current = Some(parent.open_one(comp, access)?);
+        }
+        Ok(current.expect("at least one component"))
+    }
+
+    /// Refuses to descend below a link key (predefined roots are never links).
+    fn ensure_not_link(&self) -> Result<(), Win32Error> {
+        if !self.owned {
+            return Ok(());
+        }
+        match *self.link.get_or_init(|| self.is_link()) {
+            Ok(false) => Ok(()),
+            Ok(true) => Err(Win32Error::LINK_ON_PATH),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// A new owned handle to the same key (or the root itself for a predefined key).
+    fn reopen(&self) -> Result<Key, Win32Error> {
+        if !self.owned {
+            return Ok(Key::new(self.hkey, false, self.view));
+        }
+        let empty = wide("");
+        let mut out: HKEY = ptr::null_mut();
+        // SAFETY: `self.hkey` is a live key handle, `empty` is NUL-terminated and outlives the call,
+        // `out` is a valid out-pointer. An empty subkey on a non-predefined key opens a new handle.
+        let rc = unsafe {
+            RegOpenKeyExW(
+                self.hkey,
+                empty.as_ptr(),
+                REG_OPTION_OPEN_LINK,
+                KEY_READ | self.view.sam(),
+                &mut out,
+            )
+        };
+        Win32Error::check(rc)?;
+        Ok(Key::new(out, true, self.view))
+    }
+
+    /// Opens a single path component.
+    fn open_one(&self, name: &str, access: u32) -> Result<Key, Win32Error> {
+        let name_w = wide(name);
+        let mut out: HKEY = ptr::null_mut();
+        // SAFETY: `self.hkey` is live for the borrow, `name_w` is NUL-terminated and outlives the
+        // call, `out` is a valid out-pointer written only on success.
+        let rc = unsafe {
+            RegOpenKeyExW(
+                self.hkey,
+                name_w.as_ptr(),
+                REG_OPTION_OPEN_LINK,
+                access | self.view.sam(),
+                &mut out,
+            )
+        };
+        Win32Error::check(rc)?;
+        Ok(Key::new(out, true, self.view))
+    }
+
+    /// The view this key was opened in.
+    pub fn view(&self) -> RegView {
+        self.view
+    }
+
+    /// Counts, maximum sizes and last write time (`RegQueryInfoKeyW`).
+    pub fn info(&self) -> Result<KeyInfo, Win32Error> {
+        let (mut n_sub, mut max_sub, mut n_val, mut max_vname, mut max_vlen) =
+            (0u32, 0u32, 0u32, 0u32, 0u32);
+        let mut ft = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        // SAFETY: every non-null pointer refers to a local that outlives the call; the class buffer,
+        // reserved, max class length and security descriptor size are null (not requested).
+        let rc = unsafe {
+            RegQueryInfoKeyW(
+                self.hkey,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null(),
+                &mut n_sub,
+                &mut max_sub,
+                ptr::null_mut(),
+                &mut n_val,
+                &mut max_vname,
+                &mut max_vlen,
+                ptr::null_mut(),
+                &mut ft,
+            )
+        };
+        Win32Error::check(rc)?;
+        Ok(KeyInfo {
+            n_subkeys: n_sub,
+            max_subkey_name_len: max_sub,
+            n_values: n_val,
+            max_value_name_len: max_vname,
+            max_value_len: max_vlen,
+            last_write_time: filetime_u64(ft),
+        })
+    }
+
+    /// Direct subkeys with their last write times (`RegEnumKeyExW`), in registry order.
+    pub fn subkeys(&self) -> Result<Vec<SubkeyEntry>, Win32Error> {
+        let info = self.info()?;
+        self.subkeys_with_capacity(info.max_subkey_name_len as usize + 1)
+    }
+
+    /// Direct subkey names.
+    pub fn subkey_names(&self) -> Result<Vec<String>, Win32Error> {
+        Ok(self.subkeys()?.into_iter().map(|e| e.name).collect())
+    }
+
+    /// Enumeration with an explicit starting name buffer (in UTF-16 units); grows on `ERROR_MORE_DATA`.
+    fn subkeys_with_capacity(&self, name_cap: usize) -> Result<Vec<SubkeyEntry>, Win32Error> {
+        let mut name = vec![0u16; name_cap.max(1)];
+        let mut out = Vec::new();
+        let mut index = 0u32;
+        loop {
+            let mut len = name.len() as u32;
+            let mut ft = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            // SAFETY: `name` has `len` writable units; class/reserved are null; `ft` and `len` are
+            // valid locals.
+            let rc = unsafe {
+                RegEnumKeyExW(
+                    self.hkey,
+                    index,
+                    name.as_mut_ptr(),
+                    &mut len,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    &mut ft,
+                )
+            };
+            match Win32Error::check(rc) {
+                Ok(()) => {
+                    out.push(SubkeyEntry {
+                        name: String::from_utf16_lossy(&name[..len as usize]),
+                        last_write_time: filetime_u64(ft),
+                    });
+                    index += 1;
+                }
+                Err(Win32Error::NO_MORE_ITEMS) => return Ok(out),
+                Err(Win32Error::MORE_DATA) => {
+                    if name.len() >= MAX_NAME_UNITS {
+                        return Err(Win32Error::MORE_DATA);
+                    }
+                    name.resize((name.len() * 2).min(MAX_NAME_UNITS), 0);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// All values with raw type and bytes (`RegEnumValueW`), in registry order.
+    pub fn values(&self) -> Result<Vec<RegValue>, Win32Error> {
+        let info = self.info()?;
+        self.values_with_capacity(
+            info.max_value_name_len as usize + 1,
+            info.max_value_len as usize,
+        )
+    }
+
+    /// Enumeration with explicit starting buffers; both grow on `ERROR_MORE_DATA`.
+    fn values_with_capacity(
+        &self,
+        name_cap: usize,
+        data_cap: usize,
+    ) -> Result<Vec<RegValue>, Win32Error> {
+        let mut name = vec![0u16; name_cap.max(1)];
+        let mut data = vec![0u8; data_cap.max(1)];
+        let mut out = Vec::new();
+        let mut index = 0u32;
+        loop {
+            let mut name_len = name.len() as u32;
+            let mut data_len = data.len() as u32;
+            let mut ty = 0u32;
+            // SAFETY: `name` has `name_len` writable units and `data` has `data_len` writable bytes;
+            // `ty`, `name_len` and `data_len` are valid locals; reserved is null.
+            let rc = unsafe {
+                RegEnumValueW(
+                    self.hkey,
+                    index,
+                    name.as_mut_ptr(),
+                    &mut name_len,
+                    ptr::null(),
+                    &mut ty,
+                    data.as_mut_ptr(),
+                    &mut data_len,
+                )
+            };
+            match Win32Error::check(rc) {
+                Ok(()) => {
+                    out.push(RegValue {
+                        name: String::from_utf16_lossy(&name[..name_len as usize]),
+                        ty,
+                        data: data[..data_len as usize].to_vec(),
+                    });
+                    index += 1;
+                }
+                Err(Win32Error::NO_MORE_ITEMS) => return Ok(out),
+                Err(Win32Error::MORE_DATA) => {
+                    // Either buffer may be the short one; `data_len` holds the required size when the
+                    // data was too small. Grow both and retry the same index.
+                    if name.len() >= MAX_NAME_UNITS && data.len() >= MAX_DATA_BYTES {
+                        return Err(Win32Error::MORE_DATA);
+                    }
+                    name.resize((name.len() * 2).min(MAX_NAME_UNITS), 0);
+                    let want = (data_len as usize).max(data.len() * 2);
+                    data.resize(want.min(MAX_DATA_BYTES), 0);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// One value by name (`""` for the default value); `Ok(None)` when it does not exist.
+    pub fn value(&self, name: &str) -> Result<Option<RegValue>, Win32Error> {
+        self.value_with_capacity(name, 256)
+    }
+
+    /// Query with an explicit starting buffer; grows on `ERROR_MORE_DATA`.
+    fn value_with_capacity(
+        &self,
+        name: &str,
+        data_cap: usize,
+    ) -> Result<Option<RegValue>, Win32Error> {
+        let name_w = wide(name);
+        let mut data = vec![0u8; data_cap.max(1)];
+        loop {
+            let mut ty = 0u32;
+            let mut len = data.len() as u32;
+            // SAFETY: `name_w` is NUL-terminated, `data` has `len` writable bytes, `ty` and `len` are
+            // valid locals; reserved is null.
+            let rc = unsafe {
+                RegQueryValueExW(
+                    self.hkey,
+                    name_w.as_ptr(),
+                    ptr::null(),
+                    &mut ty,
+                    data.as_mut_ptr(),
+                    &mut len,
+                )
+            };
+            match Win32Error::check(rc) {
+                Ok(()) => {
+                    data.truncate(len as usize);
+                    return Ok(Some(RegValue {
+                        name: name.to_owned(),
+                        ty,
+                        data,
+                    }));
+                }
+                Err(e) if e.is_not_found() => return Ok(None),
+                Err(Win32Error::MORE_DATA) => {
+                    if data.len() >= MAX_DATA_BYTES {
+                        return Err(Win32Error::MORE_DATA);
+                    }
+                    let want = (len as usize).max(data.len() * 2);
+                    data.resize(want.min(MAX_DATA_BYTES), 0);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// The target of a registry symbolic link, if this key is one: the `REG_LINK` data of its
+    /// `SymbolicLinkValue` (an NT path such as `\REGISTRY\USER\S-1-5-21-..._Classes`). The link is
+    /// never followed.
+    pub fn link_target(&self) -> Result<Option<String>, Win32Error> {
+        Ok(self
+            .value(SYMBOLIC_LINK_VALUE)?
+            .filter(|v| v.ty == REG_LINK)
+            .and_then(|v| v.as_string()))
+    }
+
+    /// Whether this key is a registry symbolic link.
+    pub fn is_link(&self) -> Result<bool, Win32Error> {
+        Ok(self.link_target()?.is_some())
+    }
+
+    /// Owner SID and TrustedInstaller DACL flag (`RegGetKeySecurity`).
+    pub fn security(&self) -> Result<KeySecurity, Win32Error> {
+        let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+        // u64 storage keeps the self-relative descriptor suitably aligned for the parsers.
+        let mut buf = vec![0u64; 64];
+        loop {
+            let mut len = (buf.len() * 8) as u32;
+            // SAFETY: `buf` has `len` writable bytes and `len` is a valid local.
+            let rc =
+                unsafe { RegGetKeySecurity(self.hkey, info, buf.as_mut_ptr().cast(), &mut len) };
+            match Win32Error::check(rc) {
+                Ok(()) => break,
+                Err(Win32Error::INSUFFICIENT_BUFFER) => {
+                    buf.resize((len as usize).div_ceil(8).max(buf.len() * 2), 0)
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        // SAFETY: `buf` now holds a valid self-relative security descriptor written by the call
+        // above, and stays alive (unmoved) for the duration of the parse.
+        let facts = unsafe { sd_facts(buf.as_mut_ptr().cast())? };
+        let dacl_names_trusted_installer = facts
+            .aces()
+            .iter()
+            .any(|a| a.sid.as_deref() == Some(TRUSTED_INSTALLER_SID));
+        Ok(KeySecurity {
+            owner_sid: facts.owner,
+            dacl_names_trusted_installer,
+        })
+    }
+}
+
+/// Upper bound for name buffers (registry names are at most 16,383 units).
+const MAX_NAME_UNITS: usize = 16_384;
+/// Upper bound for value data reads (well above any value the engine needs; guards runaway growth).
+const MAX_DATA_BYTES: usize = 64 * 1024 * 1024;
+
+/// FILETIME as a single u64 tick count.
+pub(crate) fn filetime_u64(ft: FILETIME) -> u64 {
+    (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime)
+}
+
+/// `ControlSet00N`, the set `HKLM\SYSTEM\CurrentControlSet` links to, from `HKLM\SYSTEM\Select\Current`.
+pub fn current_control_set() -> Result<String, Win32Error> {
+    let key = Key::open(RegRoot::Hklm, r"SYSTEM\Select", RegView::K64)?;
+    let n = key
+        .value("Current")?
+        .and_then(|v| v.as_u32())
+        .ok_or(Win32Error::FILE_NOT_FOUND)?;
+    Ok(format!("ControlSet{n:03}"))
+}
+
+/// SIDs of the user hives loaded under `HKU` (`S-1-...` names, without `<SID>_Classes` and `.DEFAULT`).
+/// Includes service accounts (`S-1-5-18/19/20`) when loaded.
+pub fn loaded_user_sids() -> Result<Vec<String>, Win32Error> {
+    let names = Key::root(RegRoot::Hku, RegView::K64).subkey_names()?;
+    Ok(names
+        .into_iter()
+        .filter(|n| {
+            n.len() > 2
+                && n[..2].eq_ignore_ascii_case("S-")
+                && !ends_with_ignore_case(n, "_Classes")
+        })
+        .collect())
+}
+
+fn ends_with_ignore_case(s: &str, suffix: &str) -> bool {
+    s.len() >= suffix.len()
+        && s.is_char_boundary(s.len() - suffix.len())
+        && s[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::process::Command;
+
+    const UNINSTALL: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+
+    /// Subkey names of an HKLM key per `reg query`, the second enumeration method.
+    fn reg_query_subkeys(path: &str, view_flag: &str) -> BTreeSet<String> {
+        let full = format!(r"HKLM\{path}");
+        let out = Command::new("reg")
+            .args(["query", &full, view_flag])
+            .output()
+            .expect("run reg.exe");
+        assert!(out.status.success(), "reg query failed");
+        let text = String::from_utf8_lossy(&out.stdout);
+        let prefix = format!(r"HKEY_LOCAL_MACHINE\{path}\").to_lowercase();
+        text.lines()
+            .map(str::trim_end)
+            .filter(|l| l.to_lowercase().starts_with(&prefix))
+            .map(|l| l[prefix.len()..].to_string())
+            .collect()
+    }
+
+    #[test]
+    fn uninstall_parity_with_reg_query_both_views() {
+        for (view, flag) in [(RegView::K64, "/reg:64"), (RegView::K32, "/reg:32")] {
+            let ours: BTreeSet<String> = Key::open(RegRoot::Hklm, UNINSTALL, view)
+                .unwrap()
+                .subkey_names()
+                .unwrap()
+                .into_iter()
+                .collect();
+            let theirs = reg_query_subkeys(UNINSTALL, flag);
+            // reg.exe prints names through a best-fit OEM conversion (e.g. a registered-trademark
+            // sign becomes `r`), so non-ASCII names cannot be compared verbatim: every ASCII name of
+            // ours must appear in its output, and the leftovers must pair up one to one.
+            assert_eq!(ours.len(), theirs.len(), "{view:?} count");
+            let ours_ascii: BTreeSet<String> =
+                ours.iter().filter(|n| n.is_ascii()).cloned().collect();
+            let missing: Vec<&String> = ours_ascii.difference(&theirs).collect();
+            assert!(
+                missing.is_empty(),
+                "{view:?} names missing from reg query: {missing:?}"
+            );
+            assert_eq!(
+                theirs.difference(&ours_ascii).count(),
+                ours.len() - ours_ascii.len(),
+                "{view:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn views_differ_and_wow6432node_is_plain_subkey_in_64() {
+        let k64 = Key::open(RegRoot::Hklm, "SOFTWARE", RegView::K64)
+            .unwrap()
+            .subkey_names()
+            .unwrap();
+        assert!(k64.iter().any(|n| n.eq_ignore_ascii_case("WOW6432Node")));
+        let via_node = Key::open(
+            RegRoot::Hklm,
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+            RegView::K64,
+        )
+        .unwrap()
+        .subkey_names()
+        .unwrap();
+        let k32 = Key::open(RegRoot::Hklm, UNINSTALL, RegView::K32)
+            .unwrap()
+            .subkey_names()
+            .unwrap();
+        assert_eq!(via_node, k32);
+    }
+
+    #[test]
+    fn value_types_multi_sz_binary_dword_default() {
+        let ccs = current_control_set().unwrap();
+        assert!(
+            ccs.starts_with("ControlSet") && ccs.len() == "ControlSet001".len(),
+            "{ccs}"
+        );
+        let sgo = Key::open(
+            RegRoot::Hklm,
+            &format!(r"SYSTEM\{ccs}\Control\ServiceGroupOrder"),
+            RegView::K64,
+        )
+        .unwrap();
+        let list = sgo.value("List").unwrap().expect("List");
+        assert_eq!(list.ty, REG_MULTI_SZ);
+        let segs = list.as_multi_sz().unwrap();
+        assert!(
+            segs.len() > 3 && segs.iter().all(|s| !s.is_empty()),
+            "{segs:?}"
+        );
+        assert!(list.as_string().is_none());
+
+        let cv = Key::open(
+            RegRoot::Hklm,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            RegView::K64,
+        )
+        .unwrap();
+        let all = cv.values().unwrap();
+        assert!(
+            all.iter().any(|v| v.ty == REG_BINARY && !v.data.is_empty()),
+            "no REG_BINARY under CurrentVersion"
+        );
+        let dw = all.iter().find(|v| v.ty == REG_DWORD).expect("a DWORD");
+        assert_eq!(dw.data.len(), 4);
+        assert!(dw.as_u32().is_some() && dw.as_u64().is_some());
+        // Enumerated and queried data agree.
+        for v in all.iter().take(20) {
+            assert_eq!(cv.value(&v.name).unwrap().as_ref(), Some(v));
+        }
+
+        let txt = Key::open(RegRoot::Hklm, r"SOFTWARE\Classes\.txt", RegView::K64).unwrap();
+        let def = txt.value("").unwrap().expect("default value of .txt");
+        assert_eq!(def.ty, REG_SZ);
+        assert!(!def.as_string().unwrap().is_empty());
+        assert!(
+            txt.values().unwrap().iter().any(|v| v.name.is_empty()),
+            "default value enumerated with empty name"
+        );
+        assert_eq!(txt.value("NoSuchValue-purge-test").unwrap(), None);
+    }
+
+    #[test]
+    fn long_value_retry_with_tiny_buffers() {
+        let cv = Key::open(
+            RegRoot::Hklm,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            RegView::K64,
+        )
+        .unwrap();
+        let normal = cv.values().unwrap();
+        assert_eq!(cv.values_with_capacity(1, 1).unwrap(), normal);
+        let longest = normal.iter().max_by_key(|v| v.data.len()).unwrap();
+        assert!(longest.data.len() > 1);
+        assert_eq!(
+            cv.value_with_capacity(&longest.name, 1).unwrap().as_ref(),
+            Some(longest)
+        );
+
+        let un = Key::open(RegRoot::Hklm, UNINSTALL, RegView::K64).unwrap();
+        assert_eq!(un.subkeys_with_capacity(1).unwrap(), un.subkeys().unwrap());
+    }
+
+    #[test]
+    fn info_counts_match_enumeration() {
+        let un = Key::open(RegRoot::Hklm, UNINSTALL, RegView::K64).unwrap();
+        let info = un.info().unwrap();
+        assert_eq!(info.n_subkeys as usize, un.subkeys().unwrap().len());
+        assert_eq!(info.n_values as usize, un.values().unwrap().len());
+        assert!(info.last_write_time > 0);
+    }
+
+    #[test]
+    fn user_classes_is_reported_as_link_and_not_followed() {
+        let sid = crate::sid::current_user_sid().unwrap();
+        assert!(loaded_user_sids().unwrap().contains(&sid));
+        let classes = Key::open(
+            RegRoot::Hku,
+            &format!(r"{sid}\Software\Classes"),
+            RegView::K64,
+        )
+        .unwrap();
+        let target = classes
+            .link_target()
+            .unwrap()
+            .expect("Software\\Classes is a link");
+        assert!(
+            target
+                .to_ascii_lowercase()
+                .ends_with(&format!("{sid}_classes").to_ascii_lowercase()),
+            "{target}"
+        );
+        assert!(classes.is_link().unwrap());
+        // Not followed: the link key has no subkeys of its own, while the real hive has many.
+        assert_eq!(classes.info().unwrap().n_subkeys, 0);
+        let real = Key::open(RegRoot::Hku, &format!("{sid}_Classes"), RegView::K64).unwrap();
+        assert!(!real.is_link().unwrap());
+        // A path through the link does not resolve, neither in one open nor from the link key.
+        let through = Key::open(
+            RegRoot::Hku,
+            &format!(r"{sid}\Software\Classes\CLSID"),
+            RegView::K64,
+        );
+        assert_eq!(through.unwrap_err(), Win32Error::LINK_ON_PATH);
+        assert_eq!(
+            classes.open_subkey("CLSID").unwrap_err(),
+            Win32Error::LINK_ON_PATH
+        );
+        assert!(real.open_subkey("CLSID").is_ok());
+    }
+
+    #[test]
+    fn current_control_set_is_a_link() {
+        let ccs = Key::open(RegRoot::Hklm, r"SYSTEM\CurrentControlSet", RegView::K64).unwrap();
+        let target = ccs
+            .link_target()
+            .unwrap()
+            .expect("CurrentControlSet is a link");
+        assert!(
+            target.ends_with(&current_control_set().unwrap()),
+            "{target}"
+        );
+        let through = Key::open(
+            RegRoot::Hklm,
+            r"SYSTEM\CurrentControlSet\Control",
+            RegView::K64,
+        );
+        assert_eq!(through.unwrap_err(), Win32Error::LINK_ON_PATH);
+    }
+
+    #[test]
+    fn key_security_owner_and_trusted_installer() {
+        let sec = Key::open(
+            RegRoot::Hklm,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            RegView::K64,
+        )
+        .unwrap()
+        .security()
+        .unwrap();
+        assert!(
+            sec.owner_sid
+                .as_deref()
+                .is_some_and(|s| s.starts_with("S-1-")),
+            "{sec:?}"
+        );
+        let un = Key::open(RegRoot::Hklm, UNINSTALL, RegView::K64)
+            .unwrap()
+            .security()
+            .unwrap();
+        assert!(un.owner_sid.is_some());
+    }
+
+    #[test]
+    fn missing_key_is_not_found() {
+        let e = Key::open(
+            RegRoot::Hklm,
+            r"SOFTWARE\purge-test-no-such-key-7f3a",
+            RegView::K64,
+        )
+        .unwrap_err();
+        assert!(e.is_not_found(), "{e}");
+    }
+
+    #[test]
+    fn reg_value_accessors() {
+        let utf16 = |s: &str| {
+            s.encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<u8>>()
+        };
+        let ms = RegValue {
+            name: "m".into(),
+            ty: REG_MULTI_SZ,
+            data: utf16("a\0\0b\0\0"),
+        };
+        assert_eq!(ms.as_multi_sz().unwrap(), vec!["a", "", "b"]);
+        let empty = RegValue {
+            name: "m".into(),
+            ty: REG_MULTI_SZ,
+            data: utf16("\0"),
+        };
+        assert_eq!(empty.as_multi_sz().unwrap(), Vec::<String>::new());
+        let sz = RegValue {
+            name: String::new(),
+            ty: REG_EXPAND_SZ,
+            data: utf16("%X%\\y\0junk"),
+        };
+        assert_eq!(sz.as_string().unwrap(), "%X%\\y");
+        let be = RegValue {
+            name: String::new(),
+            ty: REG_DWORD_BIG_ENDIAN,
+            data: vec![0, 0, 1, 2],
+        };
+        assert_eq!(be.as_u32(), Some(0x0102));
+        let qw = RegValue {
+            name: String::new(),
+            ty: REG_QWORD,
+            data: 5u64.to_le_bytes().to_vec(),
+        };
+        assert_eq!(qw.as_u64(), Some(5));
+        assert_eq!(qw.as_u32(), None);
+        let short = RegValue {
+            name: String::new(),
+            ty: REG_DWORD,
+            data: vec![1],
+        };
+        assert_eq!(short.as_u32(), None);
+        assert!(ends_with_ignore_case("S-1-5-21-1_CLASSES", "_Classes"));
+        assert!(!ends_with_ignore_case("S-1", "_Classes"));
+    }
+}

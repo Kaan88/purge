@@ -1,0 +1,19 @@
+{
+  "comment": "What the Fennec Browser uninstaller removes, the Fennec Maintenance Service entry included; everything else in nsis.before.json stays.",
+  "remove_keys": [
+    "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Fennec Browser 9.0 (x64 en-US)",
+    "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\FennecMaintenanceService",
+    "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\fennec.exe"
+  ],
+  "remove_values": [],
+  "remove_paths": [
+    "C:\\Program Files\\Fennec Browser\\fennec.exe",
+    "C:\\Program Files\\Fennec Browser\\maintenanceservice.exe",
+    "C:\\Program Files\\Fennec Browser\\maintenanceservice_installer.exe",
+    "C:\\Program Files\\Fennec Browser\\browser",
+    "C:\\Program Files\\Fennec Browser\\uninstall",
+    "C:\\Program Files (x86)\\Fennec Maintenance Service\\maintenanceservice.exe",
+    "C:\\Program Files (x86)\\Fennec Maintenance Service\\Uninstall.exe",
+    "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Fennec Browser.lnk"
+  ]
+}

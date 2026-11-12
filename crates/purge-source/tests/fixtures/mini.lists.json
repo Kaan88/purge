@@ -1,0 +1,76 @@
+{
+ "schema": "purge.lists/1",
+ "run": "mini",
+ "phase": "1",
+ "time": "2026-11-11T16:05:40Z",
+ "computer": "DEMO-PC",
+ "user_sid": "S-1-5-21-100-200-300-1001",
+ "uninstall": [
+  {
+   "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo_is1",
+   "name": "Demo App",
+   "version": "1.0",
+   "publisher": "Demo",
+   "sys": false,
+   "parent": null,
+   "uninstall": "\"C:\\Program Files\\Demo\\unins000.exe\"",
+   "quiet": null,
+   "loc": "C:\\Program Files\\Demo\\",
+   "icon": null,
+   "msi": null
+  }
+ ],
+ "msi": [
+  {
+   "code": "{23170F69-40C1-2702-2408-000001000000}",
+   "name": "7-Zip 24.08 (x64 edition)",
+   "version": "24.08.00.0",
+   "context": "machine",
+   "sid": "S-1-5-18"
+  }
+ ],
+ "appx": [
+  {
+   "full_name": "Demo.App_1.0.0.0_neutral__abc123",
+   "family": "Demo.App_abc123",
+   "install_location": "C:\\Program Files\\WindowsApps\\Demo.App_1.0.0.0_neutral__abc123",
+   "users": [
+    "S-1-5-21-100-200-300-1001"
+   ],
+   "sparse": true,
+   "external_location": "C:\\Program Files\\Demo"
+  },
+  {
+   "full_name": "Demo.App_1.0.0.0_neutral_split.scale-100_abc123",
+   "family": "Demo.App_abc123",
+   "install_location": null,
+   "users": [
+    "S-1-5-21-100-200-300-1001"
+   ],
+   "sparse": false,
+   "external_location": null
+  }
+ ],
+ "appx_provisioned": [],
+ "tasks": [],
+ "services": [],
+ "firewall": [],
+ "certs": [],
+ "fonts": [],
+ "env": {
+  "machine_path": [],
+  "user_path": []
+ },
+ "processes": [
+  {
+   "pid": 4242,
+   "ppid": 1000,
+   "name": "demo.exe",
+   "path": "C:\\Program Files\\Demo\\demo.exe",
+   "start": "2026-11-11T19:02:40.9834290-08:00",
+   "session": 1,
+   "cmd": "\"C:\\Program Files\\Demo\\demo.exe\""
+  }
+ ],
+ "errors": []
+}

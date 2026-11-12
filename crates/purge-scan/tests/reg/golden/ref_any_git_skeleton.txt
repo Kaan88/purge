@@ -1,0 +1,6 @@
+[REF-ANY] DeleteKey RegKey HKLM\SOFTWARE\Classes\sh_auto_file
+  id=c-4eb101ded8dd2416 owner="Git" category=Registration harm=Low reversibility=Full child_count=Some(2)
+  evidence ProvenOwnedSkeleton A/8 Key AdminOnly source=subtree:HKLM\SOFTWARE\Classes\sh_auto_file
+    baseline=Professional-26340.9882
+    key=HKLM\SOFTWARE\Classes\sh_auto_file
+    via=subtree

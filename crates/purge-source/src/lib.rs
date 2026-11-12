@@ -5,3 +5,11 @@
 //! (offreg), so every scanner can be tested without touching the host.
 //!
 //! Milestone: M1a (§11.1).
+
+pub mod filesystem;
+pub mod fixture;
+pub mod live;
+pub mod registry;
+pub mod snapfixture;
+pub mod system;
+pub mod types;

@@ -11,7 +11,9 @@ license.workspace = true
 purge-model.workspace = true
 purge-guard.workspace = true
 purge-policy.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

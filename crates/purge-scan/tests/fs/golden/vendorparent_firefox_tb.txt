@@ -1,0 +1,15 @@
+FS-VENDORPARENT RemoveDirIfEmpty AppData C:\Users\tester\AppData\Roaming\Mozilla
+  harm=None reversibility=Full size=- files=2
+  + VendorContainer C/2 Path AdminOnly [identity:mozilla] {children=["Extensions\\","Firefox\\"], empty_after_plan=pending, vendor=mozilla}
+FS-VENDORPARENT RemoveDirIfEmpty AppData C:\Users\tester\AppData\Local\Mozilla
+  harm=None reversibility=Full size=- files=1
+  + VendorContainer C/2 Path AdminOnly [identity:mozilla] {children=["Firefox\\"], empty_after_plan=pending, vendor=mozilla}
+FS-VENDORPARENT RemoveDirIfEmpty AppData C:\Users\tester\AppData\LocalLow\Mozilla
+  harm=None reversibility=Full size=- files=0
+  + VendorContainer C/2 Path AdminOnly [identity:mozilla] {children=[], empty_after_plan=pending, vendor=mozilla}
+FS-VENDORPARENT RemoveDirIfEmpty AppData C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38
+  harm=None reversibility=Full size=- files=2
+  + VendorContainer C/2 Path AdminOnly [identity:mozilla] {children=["profile_count_308046B0AF4A39CB.json","updates\\"], empty_after_plan=pending, vendor=mozilla}
+FS-VENDORPARENT RemoveDirIfEmpty AppData C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates
+  harm=None reversibility=Full size=- files=2
+  + VendorContainer C/2 Path AdminOnly [identity:mozilla] {children=["308046B0AF4A39CB\\","D78BF5DD33499EC2\\"], empty_after_plan=pending, vendor=mozilla}

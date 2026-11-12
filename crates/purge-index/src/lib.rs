@@ -6,3 +6,8 @@
 //! queries scanners run from harvested anchors.
 //!
 //! Milestone: targeted queries in M1a, MSI ownership rows in M1b (§11.1).
+
+pub mod baseline;
+pub mod matcher;
+pub mod queries;
+pub mod refscan;

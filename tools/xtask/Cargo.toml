@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Purge repository automation: ui-strings, check-deps, ci"
+description = "Purge repository automation: ui-strings, check-deps, scanner-coverage, replay, ci"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,16 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+purge-engine = { path = "../../bins/purge-engine" }
+purge-guard.workspace = true
+purge-harvest.workspace = true
+purge-identity.workspace = true
+purge-inventory.workspace = true
+purge-model.workspace = true
+purge-scan.workspace = true
+purge-source.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 roxmltree = "0.21"
 
 [lints]

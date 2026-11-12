@@ -1,1 +1,10 @@
-[]
+[
+  { "vendor": "adobe", "aliases": ["adobe systems"] },
+  { "vendor": "amd", "aliases": ["advanced micro devices"] },
+  { "vendor": "apple", "aliases": ["apple computer"] },
+  { "vendor": "google", "aliases": [] },
+  { "vendor": "intel", "aliases": [] },
+  { "vendor": "microsoft", "aliases": [] },
+  { "vendor": "nvidia", "aliases": [] },
+  { "vendor": "oracle", "aliases": ["oracle america", "sun microsystems"] }
+]

@@ -1,0 +1,4 @@
+FS-UNINSTALLER Quarantine AppFiles C:\Program Files\Mozilla Firefox\uninstall
+  harm=Low reversibility=Full size=1250000 files=2
+  + InsideInstallRoot A/9 Path AdminOnly [root:C:\Program Files\Mozilla Firefox] {root=C:\Program Files\Mozilla Firefox}
+  + UninstallerArtifact A/6 Path AdminOnly [arp:uninstaller directory] {anchor=uninstaller directory}

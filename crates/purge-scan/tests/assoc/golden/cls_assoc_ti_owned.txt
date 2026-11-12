@@ -1,0 +1,40 @@
+[CLS-ASSOC] DeleteKey RegKey HKLM\SOFTWARE\Classes\.vsnew
+  id=c-a9f0732edc0edb9d category=Association harm=Low reversibility=Full origin=Scanner child_count=Some(1)
+  child c-b4e07a53d99185df
+  evidence ChainedRef B/5 Key AdminOnly source=chain:VSCode.vsnew
+    anchor=VSCode.vsnew
+    ext=.vsnew
+    group=File associations
+  blocker TrustedInstallerOwned
+[CLS-ASSOC] DeleteKey RegKey HKLM\SOFTWARE\Classes\.xaml\OpenWithProgids
+  id=c-1380d08924ebd68a category=Association harm=Low reversibility=Full origin=Scanner child_count=Some(0)
+  evidence ProvenOwnedSkeleton A/8 Key AdminOnly source=extjournal:HKLM\SOFTWARE\Classes\.xaml
+    baseline=EnterpriseSEval-26100.1742
+    ext=.xaml
+    group=File associations
+    key=HKLM\SOFTWARE\Classes\.xaml\OpenWithProgids
+    via=ext-journal
+[CLS-ASSOC] DeleteValue RegValue HKLM\SOFTWARE\Classes\.txt\OpenWithProgids | "VSCode.txt"
+  id=c-38063b8bb7a35bf7 category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKLM\SOFTWARE\Classes\.txt\OpenWithProgids|VSCode.txt
+    anchor=VSCode.txt
+    ext=.txt
+    group=File associations
+    progid=VSCode.txt
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.txt
+    anchor=VSCode.txt
+    ext=.txt
+    group=File associations
+    progid=VSCode.txt
+[CLS-ASSOC] DeleteValue RegValue HKLM\SOFTWARE\Classes\.md\OpenWithProgids | "VSCode.md"
+  id=c-f2a23fb9d0a99bed category=Association harm=Low reversibility=Full origin=Scanner child_count=None
+  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=extjournal:HKLM\SOFTWARE\Classes\.md\OpenWithProgids|VSCode.md
+    anchor=VSCode.md
+    ext=.md
+    group=File associations
+    progid=VSCode.md
+  evidence ChainedRef A/5 Value AdminOnly source=chain:VSCode.md
+    anchor=VSCode.md
+    ext=.md
+    group=File associations
+    progid=VSCode.md

@@ -10,6 +10,8 @@ license.workspace = true
 [dependencies]
 purge-model.workspace = true
 purge-source.workspace = true
+purge-guard.workspace = true
+flate2.workspace = true
 
 [lints]
 workspace = true

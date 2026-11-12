@@ -1,0 +1,7 @@
+FS-INSTALLDIR Quarantine AppFiles C:\Tools\Lumen\lumen.dll
+  harm=Low reversibility=Full size=500 files=1
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteFile}
+FS-INSTALLDIR Quarantine AppFiles C:\Tools\Lumen\plugins
+  harm=Low reversibility=Full size=30 files=1
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteDirOrFiles}
+  ! UnmatchedChildren { n: 1 }

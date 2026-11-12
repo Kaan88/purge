@@ -1,0 +1,104 @@
+{
+  "schema": "purge.fixture/1",
+  "system": {
+    "os": {
+      "edition": "Professional",
+      "build": 26100,
+      "ubr": 1742
+    },
+    "user_sid": "S-1-5-21-100-200-300-1001",
+    "elevated": true,
+    "profiles": [
+      {
+        "sid": "S-1-5-21-100-200-300-1001",
+        "path": "C:\\Users\\tester"
+      }
+    ],
+    "known_folders": {
+      "ProgramFiles": "C:\\Program Files",
+      "RoamingAppData": "C:\\Users\\tester\\AppData\\Roaming"
+    },
+    "env": {
+      "APPDATA": "C:\\Users\\tester\\AppData\\Roaming",
+      "PROGRAMFILES": "C:\\Program Files"
+    },
+    "processes": [],
+    "now": 134388866613378836
+  },
+  "registry": {
+    "keys": {
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo_is1": {
+        "lwt": 134388866613378836,
+        "values": {
+          "DisplayName": "Demo App",
+          "InstallLocation": "C:\\Program Files\\Demo\\",
+          "EstimatedSize": {
+            "dword": 1234
+          },
+          "Blob": {
+            "type": 3,
+            "b64": "AAEC"
+          },
+          "Comments": {
+            "expand_sz": "%ProgramFiles%\\Demo"
+          }
+        }
+      },
+      "HKLM\\SOFTWARE\\Demo": {
+        "values": {
+          "": {
+            "multi_sz": [
+              "one",
+              "two"
+            ]
+          }
+        },
+        "keys": {
+          "Settings\\Deep": {}
+        }
+      }
+    }
+  },
+  "filesystem": {
+    "volumes": {
+      "C:\\": {
+        "serial": 305419896,
+        "fixed": true,
+        "fs": "NTFS"
+      },
+      "D:\\": {
+        "serial": 7,
+        "fixed": false,
+        "fs": "FAT32"
+      }
+    },
+    "admin_only_roots": [
+      "C:\\Program Files"
+    ],
+    "entries": {
+      "C:\\Program Files\\Demo": {
+        "dir": true,
+        "children": {
+          "demo.exe": {
+            "size": 4096,
+            "version_info": {
+              "company_name": "Demo",
+              "product_name": "Demo App"
+            },
+            "signer": "Demo Ltd"
+          },
+          "unins000.dat": {
+            "content_file": "side/unins000.dat"
+          },
+          "notes.txt": {
+            "content_text": "inline"
+          }
+        }
+      }
+    }
+  },
+  "msi": {
+    "products": []
+  },
+  "packages": []
+}

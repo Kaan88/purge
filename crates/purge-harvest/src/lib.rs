@@ -7,3 +7,16 @@
 //!
 //! Milestone: Inno log, reference snapshot, tokens and co-products in M1a; MSI tables and Burn in M1b;
 //! pre-harvest cache in M4 (§11.1).
+
+pub mod anchors;
+pub mod appx_link;
+pub mod assoc;
+pub mod coproducts;
+pub mod exes;
+pub mod harvest;
+pub mod inno;
+pub mod inno_map;
+pub mod refsnap;
+pub mod roots;
+pub mod subtree;
+pub mod tokens;

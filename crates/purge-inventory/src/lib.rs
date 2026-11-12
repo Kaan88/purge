@@ -6,3 +6,10 @@
 //! and Microsoft documentation; the clone's list builder is not reused.
 //!
 //! Milestone: ARP and the minimal uninstall runner in M1a, MSI/Burn/AppX depth in M1b (§11.1).
+
+pub mod arp;
+pub mod kind;
+pub mod msi_merge;
+pub mod quiet;
+pub mod runner;
+pub mod verify_gone;

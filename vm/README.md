@@ -8,9 +8,9 @@ The plan context is `docs\ENGINE_PLAN.md` §10.2. The v1 scripts behind `docs\CO
 |---|---|---|
 | `rig.ps1` | host, Windows PowerShell 5.1 | restore snapshot, start VM, wait for agent, push tools, run job, pull outputs |
 | `agent.ps1` | guest, elevated, in tester's session | runs every `C:\cr\jobs\*.ps1`, writes `<job>.log` + `<job>.done` |
-| `guest\riglib.ps1` | guest (dot-sourced) | Fetch, GitHubAsset, UninstallEntries, MsiProducts, Lists, Snap, WaitTree, LaunchMedium |
-| `guest\apps.ps1` | guest (dot-sourced) | the 10 test apps: URL, silent install, ARP match, quiet uninstall, launch exe |
-| `guest\run-app.ps1` | guest job (template `__ID__`) | one app run, RIG.md §4 |
+| `guest\riglib.ps1` | guest (dot-sourced) | Fetch, GitHubAsset, UninstallEntries, MsiProducts, Lists, Snap, WaitTree, LaunchMedium, Invoke-Engine |
+| `guest\apps.ps1` | guest (dot-sourced) | the test apps: URL, silent install, ARP match, quiet uninstall, launch exe; `pre` apps, `install_il` |
+| `guest\run-app.ps1` | guest job (template `__ID__`, `__RUN__`, `__ENGINE__`) | one app run, RIG.md §4 (engine mode §4a) |
 | `guest\null-run.ps1` | guest job (template `__RUN__`) | one null run (no install), for the ambient set |
 | `guest\setup-base.ps1` | guest job, once | prepares the clean VM before the `rig-base` snapshots |
 | `rigtool\` | host build, guest `C:\cr\bin\rigtool.exe` | `snap` in the guest; `ambient`, `truth`, `score`, `convert`, `baseline` on the host |
@@ -22,6 +22,9 @@ Host prerequisites:
   password goes to VBoxManage only through `--passwordfile`; `rig.ps1` never prints it.
 - `rigtool.exe` built: `cargo build --release --manifest-path vm\rigtool\Cargo.toml` (static CRT, so it runs on
   clean Windows). `Push-Tools` copies `vm\rigtool\target\release\rigtool.exe`.
+- For engine runs: `purge-engine.exe` built (`cargo build --release -p purge-engine`, static CRT). `Push-Tools`
+  copies `target\release\purge-engine.exe` (or the file given with `-Engine`) to `C:\cr\bin\` and
+  `kb\baselines\*.tsv.gz` to `C:\cr\bin\kb\baselines\`, where the engine looks for its baselines.
 
 ## Building rig-base (once)
 
@@ -83,6 +86,28 @@ and later captures still run. Null runs wait 60 s / 0 s / 60 s instead.
 Typical durations: a null run takes about 10 min (three snaps plus two minutes of idle). An app run takes
 15–40 min. Restoring and waiting for the agent takes 1–5 min.
 
+Apps with `pre` (`firefox-tb`: Thunderbird) install those apps first and settle, before `lists 0` + `snap 0`.
+`vscode-user` (`install_il = 'medium'`) is installed through the one-shot task `PurgeRigInstall` at medium
+integrity, as a normal user would; `run.json` `install.ran_as` says which token ran each installer.
+
+## Engine runs (M1a R0)
+
+```powershell
+cargo build --release -p purge-engine
+. .\vm\rig.ps1
+Invoke-Campaign -Ids vscode,vscode-user,git,firefox,firefox-tb,npp -Nulls 0 -RunPrefix r0- `
+                -Engine .\target\release\purge-engine.exe
+```
+
+The guest then runs RIG.md §4a: after `snap 1` the engine's inventory and harvest, the uninstall through
+`purge-engine uninstall` instead of the vendor command, and after `snap 2` the engine's scan and a second
+inventory. The run name is `r0-<id>` (`-RunPrefix`; required with `-Engine`), so the frozen M0 directories
+`vm\runs\<id>\` stay as they are. Without `-Engine` a run is exactly the M0 run (vendor uninstall, run name =
+id unless a prefix is given). After the pull, the host copies `plan-purge.json` to `plans\purge.json` and the
+frozen BCU plan of the app to `plans\bcu.json`. Then, from `vm\` in Git Bash: `bash truth/m1a.sh` (truth with the
+app's label file, a sanity comparison with the frozen truth in `truth\m1a-sanity.md`, the score in
+`truth\m1a-score.md`, frozen-set cross-checks and the inventory check).
+
 ## Outputs
 
 `vm\runs\<run>\` (copied from the guest's `C:\cr\out\<run>\`):
@@ -95,6 +120,12 @@ Typical durations: a null run takes about 10 min (three snaps plus two minutes o
 | `snap-<run>-0/1/2.tsv.gz` | raw filesystem + registry captures, RIG.md §2 |
 | `msi-install.log`, `msi-uninstall.log` | verbose MSI logs (MSI apps) |
 | `job.log` | the agent's console log of the job |
+| `inv-1.json`, `inv-2.json` | engine runs: `purge-engine inventory --json` after `snap 1` / `snap 2` |
+| `fp.json`, `engine-run.json` | engine runs: the harvested fingerprint and the engine's uninstall run (`purge.run/0`) |
+| `plan-purge.json` (+ `plans\purge.json`, `plans\bcu.json`) | engine runs: the engine's post-uninstall plan, and the plans `rigtool score --set` reads |
+
+`run.json` of an engine run also holds `engine {exe, app, program_id, run, files, calls[]}`, and `uninstall`
+gains `via`, `times`, `outcome`, `verify_gone`, `engine_exit`, `rig_t0`, `rig_t1` (RIG.md §4a).
 
 `vm\runs\campaign-<stamp>.log` and `.json` hold the per-run status of a campaign.
 
@@ -123,9 +154,11 @@ evidence from a run log or snapshot.
 
 - Guest scripts target Windows PowerShell 5.1. Native programs get one verbatim argument string, because
   5.1 does not escape embedded quotes. `ConvertFrom-Json` arrays are unrolled before use.
-- `PurgeRigLaunch` is created and deleted inside each app run, also when the launch fails (LaunchMedium
-  deletes it before rethrowing, and run-app's `finally` calls Stop-Launch either way). It is not yet in
-  RIG.md's §1 rig task list or rigtool's `RIG_TASKS`; it should be added there.
+- `PurgeRigLaunch` and `PurgeRigInstall` are created and deleted inside each app run, also when the launch or
+  install fails (LaunchMedium deletes the task before rethrowing; run-app's `finally` deletes it either way).
+  Both are in RIG.md's §1 rig task list and rigtool's `RIG_TASKS`.
+- Self-test (no VM): `powershell.exe -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-selftest.ps1`.
+  It runs `run-app.ps1` end to end against fakes and a stub `purge-engine.cmd`.
 - The agent and the launch task run at task priority 4 (normal). The default 7 would run every job below
   normal.
 - `msedge.exe` / `msedgewebview2.exe` and `explorer.exe` are on the WaitTree allow-list, so a run never

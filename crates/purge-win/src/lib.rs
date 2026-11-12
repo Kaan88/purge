@@ -17,3 +17,17 @@
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 compile_error!("purge-win supports x86_64 Windows only (ENGINE_PLAN.md §3.2)");
+
+pub mod appx;
+pub mod cmdline;
+pub mod env;
+pub mod fs;
+pub mod known_folders;
+pub mod msi;
+pub mod os;
+pub mod process;
+pub mod reg;
+pub mod shelllink;
+pub mod sid;
+pub mod signer;
+pub mod versioninfo;

@@ -5,3 +5,8 @@
 //! that block a candidate regardless of its evidence.
 //!
 //! Milestone: read-side gates in M1a, executor-time re-checks in M2 (§11.1).
+
+pub mod canon;
+pub mod containers;
+pub mod deny;
+pub mod prefix;

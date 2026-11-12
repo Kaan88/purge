@@ -39,6 +39,10 @@ thiserror = "2.0.12"
 anyhow = "1.0.98"
 windows = "0.62"
 windows-sys = "0.61"
+flate2 = "1"
+sha2 = "0.10"
+unicode-normalization = "0.1"
+crc32fast = "1"
 
 purge-model = { path = "crates/purge-model" }
 purge-win = { path = "crates/purge-win", default-features = false }

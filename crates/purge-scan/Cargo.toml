@@ -12,6 +12,7 @@ purge-model.workspace = true
 purge-source.workspace = true
 purge-identity.workspace = true
 purge-index.workspace = true
+purge-guard.workspace = true
 
 [lints]
 workspace = true
