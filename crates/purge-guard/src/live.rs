@@ -26,16 +26,21 @@
 //! | [`key_probe`], [`check_key`] | G1 (canonical key), G2 and structural containers, G11 on the key and every ancestor, G3, G13 |
 //! | [`check_protected_descendants`] | a whole-tree removal must not take a protected plan item with it |
 //! | [`check_quarantine_destination`] | the move target lies in this session's quarantine, on the same volume |
-//! | [`StoreScope::authorises`], [`check_store_item`] | the own-store exemption for executor-internal work |
+//! | [`StoreScope::new`], [`StoreScope::authorises`], [`check_store_item`] | the own-store exemption for executor-internal work |
 //! | [`check_undo_path`], [`check_undo_key`] | §7.8: G2 and G11 on the place an item is restored to |
 //! | [`admin_only_ancestors`] | §7.6: a boot-time move only below administrator-only ancestors |
 //!
 //! Missing items are not this module's business: the executor maps "not found" to `vanished` before it
 //! asks for a verdict. A facts struct that says "missing" where a rule needs the item is refused.
+//!
+//! The verdicts that take a [`DenyList`] also refuse everything while its environment names none of
+//! Purge's own directories ([`GuardEnv::purge_dirs`]): Purge's install directory is protected by that
+//! fact alone ([`reason::NO_PURGE_DIRS`]).
 
 use std::fmt;
 
-use purge_model::{Action, Band, Blocker, Candidate, Target};
+use purge_model::exec::session::SessionId;
+use purge_model::{Action, Band, Blocker, Candidate, Hive, Target, View};
 
 use crate::canon::{CanonError, CanonKey, GuardEnv, canon_key, canon_path};
 use crate::containers;
@@ -141,8 +146,12 @@ pub mod reason {
     pub const NO_LINKS: &str = "live.g6.no-links";
     /// The operation does not fit the target type.
     pub const OP_TARGET_MISMATCH: &str = "live.op-target-mismatch";
+    /// The environment names none of Purge's own directories, so the deny-list cannot protect them.
+    pub const NO_PURGE_DIRS: &str = "live.env.no-purge-dirs";
     /// G1: the key path does not canonicalise (the blocker names the `canon.*` rule).
     pub const KEY_NOT_CANONICAL: &str = "live.g1.key-not-canonical";
+    /// G1: the key is a hive root (`HKLM`), which is never opened or acted on.
+    pub const KEY_IS_HIVE_ROOT: &str = "live.g1.key-is-hive-root";
     /// G2: a deny rule matches the registry target.
     pub const DENY_KEY: &str = "live.g2.key";
     /// The key is a value container and would be deleted as a key.
@@ -171,7 +180,7 @@ pub mod reason {
     pub const VALUE_CHANGED: &str = "live.value-changed";
     /// A protected plan item lies below a whole-tree removal.
     pub const PROTECTED_DESCENDANT: &str = "live.nesting.protected-descendant";
-    /// The path is not strictly inside this session's own directories.
+    /// The path is not strictly inside this session's own directories in a Purge store root.
     pub const OUTSIDE_STORE: &str = "live.store.outside-session";
     /// The store operation needs a recorded identity and none was given.
     pub const STORE_NEEDS_IDENTITY: &str = "live.store.needs-identity";
@@ -179,9 +188,10 @@ pub mod reason {
     pub const STORE_OTHER_VOLUME: &str = "live.store.other-volume";
     /// The quarantine destination is not `<quarantine dir of the session>\<op>\<leaf>`.
     pub const QUARANTINE_OUTSIDE_STORE: &str = "live.quarantine.outside-store";
-    /// The quarantine destination and the source overlap, or the source lies in the store.
+    /// The quarantine destination and the source overlap, or the source lies in or contains a Purge
+    /// store root.
     pub const QUARANTINE_OVERLAP: &str = "live.quarantine.overlap";
-    /// Source and destination are not known to be on one volume.
+    /// Source and destination are not known to be on one volume (a serial of 0 is not known).
     pub const QUARANTINE_OTHER_VOLUME: &str = "live.quarantine.other-volume";
     /// The destination's parent is not the plain directory its path names.
     pub const QUARANTINE_PARENT: &str = "live.quarantine.parent";
@@ -189,7 +199,7 @@ pub mod reason {
     pub const QUARANTINE_OCCUPIED: &str = "live.quarantine.occupied";
     /// Undo: the parent of the original path is not the plain directory its path names.
     pub const UNDO_PARENT: &str = "live.undo.parent";
-    /// Undo: the original path lies on another volume than the quarantined item.
+    /// Undo: the original path lies on another volume than the quarantined item, or a serial is 0.
     pub const UNDO_OTHER_VOLUME: &str = "live.undo.other-volume";
     /// Undo: something exists at the original path, or that could not be told.
     pub const UNDO_OCCUPIED: &str = "live.undo.occupied";
@@ -268,9 +278,31 @@ pub struct FileIdentity {
 
 impl FileIdentity {
     /// Whether the id can identify anything: a file id of all zero bits or all one bits is what a file
-    /// system reports when it has no id for the file.
+    /// system reports when it has no id for the file, and a volume serial of 0 is what a volume without
+    /// a serial reports. Either counts as unknown.
     pub fn is_valid(&self) -> bool {
-        self.file_id != [0u8; 16] && self.file_id != [0xFFu8; 16]
+        self.volume_serial != 0 && self.file_id != [0u8; 16] && self.file_id != [0xFFu8; 16]
+    }
+}
+
+/// Whether two volume serials are known and name one volume: both equal and not 0 (a volume without a
+/// serial reports 0, so two of them would look alike).
+fn same_volume(a: Option<u64>, b: Option<u64>) -> bool {
+    matches!((a, b), (Some(a), Some(b)) if a == b && a != 0)
+}
+
+/// Refuses while the environment names none of Purge's own directories: Purge's install directory is
+/// protected only by that fact, so a verdict without it could let Purge remove itself.
+fn purge_dirs_known(deny: &DenyList) -> Verdict {
+    if deny
+        .env()
+        .purge_dirs
+        .iter()
+        .any(|dir| !dir.trim().is_empty())
+    {
+        Ok(())
+    } else {
+        Err(Refusal::rule(reason::NO_PURGE_DIRS))
     }
 }
 
@@ -408,7 +440,8 @@ fn final_path_of(final_path: Option<&str>) -> Result<String, Refusal> {
 /// In order, the first failing rule decides:
 ///
 /// 1. **G1** the lexical path canonicalises (`\\?\` stripped, separators unified; no environment token).
-/// 2. **G2** the deny-list on the lexical path.
+/// 2. **G2** the deny-list on the lexical path; the environment names Purge's own directories
+///    ([`reason::NO_PURGE_DIRS`]).
 /// 3. **G1** the final path is known and is a drive path; **G2** the deny-list on the final path (so a
 ///    clean path that resolves into a protected place reports the deny rule); the final path names the
 ///    same item as the lexical path, segment by segment and case-folded ([`crate::prefix`]), else
@@ -439,6 +472,7 @@ pub fn check_path(check: &PathCheck<'_>, facts: &PathFacts, deny: &DenyList) -> 
     if let Some(blocker) = deny.check(&path_target(&lexical), &check.exemptions) {
         return refuse(blocker, reason::DENY_LEXICAL);
     }
+    purge_dirs_known(deny)?;
 
     let final_path = final_path_of(facts.final_path.as_deref())?;
     // A final path comes from the file system in long form, whatever the caller knows about the
@@ -590,11 +624,128 @@ pub enum KeyNode {
     Link,
 }
 
+/// The predefined registry root a [`KeyAddress`] is opened below. One-to-one with `RegRoot` of the
+/// `purge-win` crate, which this crate does not depend on: `KeyRoot::Hklm` is `RegRoot::Hklm` and
+/// `KeyRoot::Hku` is `RegRoot::Hku`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KeyRoot {
+    /// `HKEY_LOCAL_MACHINE`.
+    Hklm,
+    /// `HKEY_USERS`. The path of the address starts with `<SID>` or `<SID>_Classes`.
+    Hku,
+}
+
+impl KeyRoot {
+    /// `HKLM` or `HKU`.
+    pub fn name(self) -> &'static str {
+        match self {
+            KeyRoot::Hklm => "HKLM",
+            KeyRoot::Hku => "HKU",
+        }
+    }
+}
+
+/// Where one registry key is opened: exactly the `root`, `path` and `view` arguments of
+/// `WKey::open(root, path, view, access)` in `purge-win`'s `reg_write` module, which walks the path one
+/// component at a time with `REG_OPTION_OPEN_LINK`.
+///
+/// | Field | `WKey::open` argument |
+/// |---|---|
+/// | `root`: [`KeyRoot::Hklm`] / [`KeyRoot::Hku`] | `root`: `RegRoot::Hklm` / `RegRoot::Hku` |
+/// | `path`, as it is | `path` |
+/// | `view`: [`View::K64`] / [`View::K32`] | `view`: `RegView::K64` / `RegView::K32` |
+///
+/// `path` is never empty (a hive root is not opened) and is relative to the root: under
+/// [`KeyRoot::Hku`] its first segment is `<SID>` or `<SID>_Classes`.
+///
+/// # Registry view
+///
+/// A key in the 32-bit view is addressed with the view flag and its logical path, never through a
+/// `WOW6432Node` segment: (`K32`, `SOFTWARE\Vendor`), not (`K64`, `SOFTWARE\WOW6432Node\Vendor`).
+/// Windows documents `WOW6432Node` as the physical location of redirected keys, reserved by the system
+/// and subject to change, and tells programs to reach the other view with `KEY_WOW64_32KEY` instead
+/// ("Registry Redirector", "Accessing an Alternate Registry View"). Windows 11 shows why:
+/// `HKLM\SOFTWARE\WOW6432Node\Classes` is a registry link to `HKLM\SOFTWARE\Classes\Wow6432Node`, so a
+/// walk through the physical spelling meets a link and G11 refuses every 32-bit `HKLM` class key, while
+/// the flag route has no link on its components (measured unelevated on Windows 11 build 26300 in the
+/// M2 wave 1 review, finding S1).
+///
+/// Place by place (wire spelling of [`Target`] on the left):
+///
+/// - `HKLM\SOFTWARE\WOW6432Node\Classes\X` (32-bit machine classes; also spelled
+///   `HKLM\SOFTWARE\Classes\WOW6432Node\X`): (`Hklm`, `K32`, `SOFTWARE\Classes\X`).
+/// - `HKLM\SOFTWARE\WOW6432Node\X`, `X` not `Classes`: (`Hklm`, `K32`, `SOFTWARE\X`). The physical
+///   `SOFTWARE\WOW6432Node` is a plain key today, but it is the reserved spelling; one rule for every
+///   32-bit key keeps the executor free of special cases.
+/// - `HKU\<SID>_Classes\WOW6432Node\X` (a user's 32-bit classes): (`Hku`, `K32`, `<SID>_Classes\X`).
+///   The review measured no link there on either route.
+/// - `HKU\<SID>\Software\WOW6432Node\X`: a user's `Software` is not redirected (only `HKLM\SOFTWARE`
+///   and the classes roots are), so this `WOW6432Node` is an ordinary key name:
+///   (`Hku`, `K64`, `<SID>\Software\WOW6432Node\X`).
+/// - Everything else: the 64-bit view, with the two aliases of §5.10 already resolved
+///   (`SYSTEM\ControlSet00N` for `SYSTEM\CurrentControlSet`, `<SID>_Classes` for
+///   `<SID>\Software\Classes`).
+///
+/// A subkey Windows shares between the views (`SOFTWARE\Classes\AppID`, for one) is one key in both
+/// views; the flag route reaches the key a 32-bit program wrote there.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KeyAddress {
+    /// The predefined root.
+    pub root: KeyRoot,
+    /// The registry view.
+    pub view: View,
+    /// The path below the root, without a redirecting `WOW6432Node` segment. Never empty.
+    pub path: String,
+}
+
+impl KeyAddress {
+    /// The address of a canonical key, by the rule of the type documentation.
+    fn of(key: &CanonKey) -> KeyAddress {
+        let below = |top: String| {
+            if key.path.is_empty() {
+                top
+            } else {
+                format!("{top}{SEP}{}", key.path)
+            }
+        };
+        let (root, path) = match &key.hive {
+            Hive::Hklm => (KeyRoot::Hklm, key.path.clone()),
+            Hive::Hku(sid) => (KeyRoot::Hku, below(sid.clone())),
+            Hive::HkuClasses(sid) => (KeyRoot::Hku, below(format!("{sid}_Classes"))),
+        };
+        KeyAddress {
+            root,
+            view: key.view,
+            path,
+        }
+    }
+
+    /// Whether two addresses name one key the same way: same root and view, and paths equal as keys
+    /// are compared (case-insensitively).
+    pub fn is_same(&self, other: &KeyAddress) -> bool {
+        self.root == other.root
+            && self.view == other.view
+            && prefix::is_same(&self.path, &other.path)
+    }
+}
+
+impl fmt::Display for KeyAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}{SEP}{} ({}-bit view)",
+            self.root.name(),
+            self.path,
+            self.view.bits()
+        )
+    }
+}
+
 /// The probe of one ancestor of a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyAncestor {
-    /// The ancestor's canonical key path, as [`KeyProbe::ancestors`] lists it.
-    pub path: String,
+    /// The ancestor as [`KeyProbe::ancestors`] lists it, opened by itself at exactly this address.
+    pub key: KeyAddress,
     /// What the probe found.
     pub node: KeyNode,
 }
@@ -627,9 +778,10 @@ pub enum ValueState {
 /// nothing and is refused.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeyFacts {
-    /// What the key is.
+    /// What the key is, opened at [`KeyProbe::open`].
     pub node: KeyNode,
-    /// Every ancestor [`key_probe`] lists, each opened by itself with `REG_OPTION_OPEN_LINK`.
+    /// Every ancestor [`key_probe`] lists, each opened by itself at its [`KeyAddress`] with
+    /// `REG_OPTION_OPEN_LINK`.
     pub ancestors: Vec<KeyAncestor>,
     /// The key's owner is `NT SERVICE\TrustedInstaller`.
     pub owner_is_ti: Option<bool>,
@@ -676,20 +828,28 @@ pub struct KeyCheck<'a> {
 pub struct KeyProbe {
     /// The canonical key: hive, view and path below the hive.
     pub key: CanonKey,
-    /// Its wire spelling, e.g. `HKLM\SOFTWARE\WOW6432Node\Vendor\App`. This is the key to open.
-    pub key_path: String,
-    /// Every ancestor to probe, from the hive downwards, e.g. `HKLM\SOFTWARE`,
-    /// `HKLM\SOFTWARE\WOW6432Node`, `HKLM\SOFTWARE\WOW6432Node\Vendor`. Under `HKU` the list starts at
-    /// the hive (`HKU\<SID>` or `HKU\<SID>_Classes`). Empty for a key directly below `HKLM`.
-    pub ancestors: Vec<String>,
+    /// Where to open the key: the arguments of `WKey::open` (see [`KeyAddress`]). This is the key to
+    /// open, read the facts from, and act on.
+    pub open: KeyAddress,
+    /// The key's wire spelling as [`Target`] has it, e.g. `HKLM\SOFTWARE\WOW6432Node\Classes\CLSID\{X}`.
+    /// A label for reports and the journal only: it is **not** a path to open, since the spelling
+    /// through `WOW6432Node` can run through a registry link.
+    pub label: String,
+    /// Every ancestor to probe, from the top downwards, in the root and view of [`KeyProbe::open`]:
+    /// every proper prefix of its path, the path components `WKey::open` walks. For
+    /// `HKLM\SOFTWARE\WOW6432Node\Classes\CLSID\{X}` these are (`Hklm`, `K32`) `SOFTWARE`,
+    /// `SOFTWARE\Classes`, `SOFTWARE\Classes\CLSID`. Under `HKU` the list starts at the hive key
+    /// (`<SID>` or `<SID>_Classes`). Empty for a key directly below its root.
+    pub ancestors: Vec<KeyAddress>,
 }
 
 /// The key a registry target is read at, and the ancestors whose link state [`check_key`] and
 /// [`check_undo_key`] need (G11). The two aliases of §5.10 are resolved here and nowhere else:
 /// `CurrentControlSet` becomes `ControlSet00N` and `HKU\<SID>\Software\Classes` becomes
-/// `HKU\<SID>_Classes`, so neither link is on the probed chain. `HKCR`, an unbound `HKCU` and every other
-/// spelling that does not canonicalise are refused with the `canon.*` rule; a target that is not a
-/// registry target is refused too.
+/// `HKU\<SID>_Classes`, so neither link is on the probed chain; the 32-bit view is addressed by its view
+/// flag, so the `WOW6432Node\Classes` link is not on it either ([`KeyAddress`]). `HKCR`, an unbound
+/// `HKCU` and every other spelling that does not canonicalise are refused with the `canon.*` rule; a hive
+/// root (`HKLM`) and a target that is not a registry target are refused too.
 pub fn key_probe(target: &Target, env: &GuardEnv) -> Result<KeyProbe, Refusal> {
     let key_path = key_of(target).ok_or_else(|| Refusal::rule(reason::OP_TARGET_MISMATCH))?;
     let key = canon_key(key_path, None, env, None).map_err(|e| {
@@ -700,42 +860,48 @@ pub fn key_probe(target: &Target, env: &GuardEnv) -> Result<KeyProbe, Refusal> {
             reason::KEY_NOT_CANONICAL,
         )
     })?;
-    let key_path = key.key_path();
-    // Nearest first; the bare root name (`HKLM`, `HKU`) is a predefined handle, not a key to probe.
-    let mut ancestors: Vec<String> = prefix::ancestors(&key_path)
-        .filter(|ancestor| prefix::depth(ancestor) > 1)
-        .map(str::to_owned)
+    let open = KeyAddress::of(&key);
+    if prefix::depth(&open.path) == 0 {
+        return Err(Refusal::rule(reason::KEY_IS_HIVE_ROOT));
+    }
+    // Nearest first, then turned around.
+    let mut ancestors: Vec<KeyAddress> = prefix::ancestors(&open.path)
+        .map(|path| KeyAddress {
+            root: open.root,
+            view: open.view,
+            path: path.to_owned(),
+        })
         .collect();
     ancestors.reverse();
     Ok(KeyProbe {
+        label: key.key_path(),
         key,
-        key_path,
+        open,
         ancestors,
     })
 }
 
 /// G11 for the ancestors: every ancestor of the probe has exactly the states the facts give it, none is
-/// a link or unknown, and no fact names a key off the chain. With `may_be_missing`, an ancestor may be
-/// missing as long as everything below it is missing too; returns whether any ancestor is missing.
+/// a link or unknown, and no fact names a key off the chain (another root, another view, another path).
+/// With `may_be_missing`, an ancestor may be missing as long as everything below it is missing too;
+/// returns whether any ancestor is missing.
 fn check_ancestors(
     probe: &KeyProbe,
     facts: &[KeyAncestor],
     may_be_missing: bool,
 ) -> Result<bool, Refusal> {
     let link = |reason| Refusal::new(Blocker::RegLink, reason);
-    if facts.iter().any(|fact| {
-        !probe
-            .ancestors
-            .iter()
-            .any(|a| prefix::is_same(a, &fact.path))
-    }) {
+    if facts
+        .iter()
+        .any(|fact| !probe.ancestors.iter().any(|a| a.is_same(&fact.key)))
+    {
         return Err(link(reason::ANCESTORS_CONTRADICT));
     }
     let mut missing = false;
     for ancestor in &probe.ancestors {
         let mut nodes = facts
             .iter()
-            .filter(|fact| prefix::is_same(&fact.path, ancestor))
+            .filter(|fact| fact.key.is_same(ancestor))
             .map(|fact| fact.node);
         let node = nodes.next().ok_or_else(|| link(reason::ANCESTOR_UNKNOWN))?;
         if nodes.any(|other| other != node) {
@@ -771,9 +937,11 @@ fn deny_key(target: &Target, deny: &DenyList, exemptions: &Exemptions) -> Verdic
 ///
 /// 1. The operation fits the target type ([`KeyOp`]); `RegValueChanged` and non-registry targets never do.
 /// 2. **G1** the key canonicalises ([`key_probe`]).
-/// 3. **G2** the deny-list on the target, then [`containers::check`].
-/// 4. **G11** the key is an ordinary key, and so is every ancestor of the canonical key: the facts must
-///    cover the whole chain of [`KeyProbe::ancestors`]. A link or an unknown reports [`Blocker::RegLink`].
+/// 3. **G2** the deny-list on the target, then [`containers::check`]; the environment names Purge's own
+///    directories ([`reason::NO_PURGE_DIRS`]).
+/// 4. **G11** the key (read at [`KeyProbe::open`]) is an ordinary key, and so is every ancestor: the
+///    facts must cover the whole chain of [`KeyProbe::ancestors`], each at its [`KeyAddress`]. A link or
+///    an unknown reports [`Blocker::RegLink`].
 /// 5. **G3** TrustedInstaller neither owns the key nor is named in its DACL.
 /// 6. **G13** for [`KeyOp::DeleteKeyIfEmpty`]: no subkey and no value, else
 ///    [`Blocker::ChangedSinceScan`] (soft: "no longer empty").
@@ -796,6 +964,7 @@ pub fn check_key(check: &KeyCheck<'_>, facts: &KeyFacts, deny: &DenyList) -> Ver
     }
     let probe = key_probe(check.target, deny.env())?;
     deny_key(check.target, deny, &check.exemptions)?;
+    purge_dirs_known(deny)?;
 
     match facts.node {
         KeyNode::Unknown => return refuse(Blocker::RegLink, reason::KEY_LINK_UNKNOWN),
@@ -896,29 +1065,148 @@ pub fn check_protected_descendants<'a>(
 // Purge's own store
 // ---------------------------------------------------------------------------------------------------
 
+/// Name of the sessions directory under the data root. Must stay equal to `SESSIONS_DIR` of
+/// `purge-exec`'s `storage` module, which owns the layout; this crate cannot depend on that one, so the
+/// name is repeated here.
+pub const SESSIONS_DIR: &str = "sessions";
+/// Name of the quarantine directory under the data root. Must stay equal to `QUARANTINE_DIR` of
+/// `purge-exec`'s `storage` module.
+pub const QUARANTINE_DIR: &str = "Quarantine";
+/// Name of the quarantine directory at the root of every other volume. Must stay equal to
+/// `VOLUME_QUARANTINE_DIR` of `purge-exec`'s `storage` module.
+pub const VOLUME_QUARANTINE_DIR: &str = ".purge-q";
+
+/// Why a [`StoreScope`] could not be built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreScopeError {
+    /// The data root is not an absolute drive path below a drive root (`C:\ProgramData\Purge`).
+    DataRoot(String),
+    /// A quarantine root is neither `<data root>\Quarantine` nor `X:\.purge-q` at the root of a drive
+    /// other than the data root's.
+    QuarantineRoot(String),
+}
+
+impl fmt::Display for StoreScopeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DataRoot(path) => write!(f, "not a Purge data root: {path:?}"),
+            Self::QuarantineRoot(path) => write!(f, "not a Purge quarantine root: {path:?}"),
+        }
+    }
+}
+
+impl std::error::Error for StoreScopeError {}
+
 /// The directories one session owns in Purge's store. Everything in Purge's directories is deny-listed
 /// (`fs.purge`); this is the one exemption, and it reaches no further than these directories.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Built only by [`StoreScope::new`], which derives every directory from the store's roots and the
+/// session id with the layout of `purge-exec`'s `storage` module ([`SESSIONS_DIR`], [`QUARANTINE_DIR`],
+/// [`VOLUME_QUARANTINE_DIR`]):
+///
+/// - the session directory `<data root>\sessions\<session>` (journal, registry backups, definitions);
+/// - the quarantine directory `<data root>\Quarantine\<session>` on the data root's volume;
+/// - `X:\.purge-q\<session>` on every other volume the session quarantines on.
+///
+/// So every directory of the scope ends in the session id, and lies one level below a Purge store root
+/// (`<data root>\sessions`, `<data root>\Quarantine`, `X:\.purge-q`): another session, the index and the
+/// rest of the disk are never in scope, whatever the caller passes.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreScope {
-    /// `<sessions root>\<session>`: the journal, registry backups and definitions of the session.
-    pub session_dir: String,
-    /// `<quarantine root>\<session>` on every volume the session quarantines on
-    /// (`C:\ProgramData\Purge\Quarantine\<session>`, `X:\.purge-q\<session>`).
-    pub quarantine_dirs: Vec<String>,
+    session: SessionId,
+    /// The canonical data root and the canonical `X:\.purge-q` roots: everything Purge's store holds.
+    roots: Vec<String>,
+    /// `<data root>\sessions\<session>`, canonical.
+    session_dir: String,
+    /// `<data root>\Quarantine\<session>` first, then `X:\.purge-q\<session>`, canonical.
+    quarantine_dirs: Vec<String>,
 }
 
 impl StoreScope {
-    /// The scope directory `canonical` lies strictly inside, among `dirs`. A directory that does not
-    /// canonicalise or has fewer than three segments (`X:\.purge-q\<session>` is the shallowest a session
-    /// directory can be) authorises nothing.
-    fn dir_of<'a>(canonical: &str, dirs: impl IntoIterator<Item = &'a String>) -> Option<String> {
-        dirs.into_iter()
-            .filter_map(|dir| canon_plain(dir).ok())
-            .find(|dir| prefix::depth(dir) >= 3 && prefix::is_inside(canonical, dir))
+    /// The scope of `session` in the store at `data_root` (`C:\ProgramData\Purge`, or a test root in a
+    /// temporary directory).
+    ///
+    /// `quarantine_roots` are the quarantine roots of the other volumes the session uses, each
+    /// `X:\.purge-q` at the root of a drive other than the data root's. `<data root>\Quarantine` is
+    /// always part of the scope and may be listed too; duplicates count once. Anything else, a drive root
+    /// or a directory that does not canonicalise is refused, and so is a data root that does not
+    /// canonicalise (`%TOKEN%`, UNC, relative) or is a drive root.
+    pub fn new<S: AsRef<str>>(
+        data_root: &str,
+        quarantine_roots: &[S],
+        session: &SessionId,
+    ) -> Result<StoreScope, StoreScopeError> {
+        let data = canon_plain(data_root)
+            .ok()
+            .filter(|root| prefix::depth(root) >= 2)
+            .ok_or_else(|| StoreScopeError::DataRoot(data_root.to_owned()))?;
+        let id = session.as_str();
+        let below = |dir: &str, name: &str| format!("{}{SEP}{name}", dir.trim_end_matches(SEP));
+        let drive = |path: &str| prefix::segments(path).next().unwrap_or_default().to_owned();
+        let main_quarantine = below(&data, QUARANTINE_DIR);
+        let data_drive = drive(&data);
+
+        let mut roots = vec![data.clone()];
+        let mut quarantine_dirs = vec![below(&main_quarantine, id)];
+        for raw in quarantine_roots {
+            let raw = raw.as_ref();
+            let bad = || StoreScopeError::QuarantineRoot(raw.to_owned());
+            let root = canon_plain(raw).map_err(|_| bad())?;
+            if prefix::is_same(&root, &main_quarantine) {
+                continue;
+            }
+            let volume_root = prefix::depth(&root) == 2
+                && prefix::leaf(&root).is_some_and(|leaf| eq_ci(leaf, VOLUME_QUARANTINE_DIR))
+                && !eq_ci(&drive(&root), &data_drive);
+            if !volume_root {
+                return Err(bad());
+            }
+            if roots.iter().any(|known| prefix::is_same(known, &root)) {
+                continue;
+            }
+            quarantine_dirs.push(below(&root, id));
+            roots.push(root);
+        }
+        Ok(StoreScope {
+            session: session.clone(),
+            session_dir: below(&below(&data, SESSIONS_DIR), id),
+            roots,
+            quarantine_dirs,
+        })
     }
 
-    fn all_dirs(&self) -> impl Iterator<Item = &String> {
-        std::iter::once(&self.session_dir).chain(&self.quarantine_dirs)
+    /// The session the scope belongs to.
+    pub fn session(&self) -> &SessionId {
+        &self.session
+    }
+
+    /// `<data root>\sessions\<session>`, in canonical form.
+    pub fn session_dir(&self) -> &str {
+        &self.session_dir
+    }
+
+    /// `<data root>\Quarantine\<session>` first, then `X:\.purge-q\<session>` for every other volume, in
+    /// canonical form.
+    pub fn quarantine_dirs(&self) -> &[String] {
+        &self.quarantine_dirs
+    }
+
+    /// The store roots: the data root, then every `X:\.purge-q`, in canonical form.
+    pub fn store_roots(&self) -> &[String] {
+        &self.roots
+    }
+
+    /// The directory of `dirs` that `canonical` lies strictly inside.
+    fn dir_of<'a>(canonical: &str, dirs: &'a [String]) -> Option<&'a str> {
+        dirs.iter()
+            .map(String::as_str)
+            .find(|dir| prefix::is_inside(canonical, dir))
+    }
+
+    /// Whether `canonical` lies strictly inside the session directory or a quarantine directory.
+    fn contains(&self, canonical: &str) -> bool {
+        prefix::is_inside(canonical, &self.session_dir)
+            || Self::dir_of(canonical, &self.quarantine_dirs).is_some()
     }
 
     /// The own-store exemption: whether `path` lies **strictly inside** the session directory or one of
@@ -926,7 +1214,7 @@ impl StoreScope {
     /// and the rest of Purge's directories are not authorised. Lexical only: pair it with
     /// [`check_store_item`] before acting on a handle.
     pub fn authorises(&self, path: &str) -> bool {
-        canon_plain(path).is_ok_and(|path| Self::dir_of(&path, self.all_dirs()).is_some())
+        canon_plain(path).is_ok_and(|path| self.contains(&path))
     }
 }
 
@@ -959,11 +1247,13 @@ pub struct StoreCheck<'a> {
 /// facts of the handle acted on. Of [`PathFacts`] it reads `final_path`, `reparse_tag`, `attributes`,
 /// `is_dir` and `identity`.
 ///
-/// 1. The path is authorised by the scope ([`StoreScope::authorises`]), else `DenyListed` (`fs.purge`).
+/// 1. The path is authorised by the scope ([`StoreScope::authorises`]): strictly inside this session's
+///    directory in a Purge store root. Else `DenyListed` (`fs.purge`).
 /// 2. **G1** the final path is known and names the same item, else [`Blocker::ReparseMismatch`].
 /// 3. The item is not a reparse point, unless the operation is [`StoreOp::Remove`]. [`StoreOp::Descend`]
 ///    needs a directory.
-/// 4. The identity is known and on the recorded volume, else [`Blocker::ReparseMismatch`].
+/// 4. The identity is known ([`FileIdentity::is_valid`]: no volume serial of 0) and on the recorded
+///    volume, else [`Blocker::ReparseMismatch`].
 /// 5. Under [`Binding::Recheck`] the identity and kind are the recorded ones, else
 ///    [`Blocker::ChangedSinceScan`]. [`StoreOp::MoveBack`] without a recorded identity is refused.
 pub fn check_store_item(check: &StoreCheck<'_>, facts: &PathFacts, scope: &StoreScope) -> Verdict {
@@ -976,7 +1266,7 @@ pub fn check_store_item(check: &StoreCheck<'_>, facts: &PathFacts, scope: &Store
         )
     };
     let lexical = canon_plain(check.path).map_err(|_| outside())?;
-    if StoreScope::dir_of(&lexical, scope.all_dirs()).is_none() {
+    if !scope.contains(&lexical) {
         return Err(outside());
     }
     let final_path = final_path_of(facts.final_path.as_deref())?;
@@ -1016,6 +1306,11 @@ pub fn check_store_item(check: &StoreCheck<'_>, facts: &PathFacts, scope: &Store
 
 /// Facts about a directory that an item is about to be renamed into, read from a handle on that
 /// directory (opened with `FILE_FLAG_OPEN_REPARSE_POINT`), and about the name the item will get.
+///
+/// The verdict holds for that handle only. The executor keeps the handle open and renames the item into
+/// it **by handle** (`MoveHandle::rename_into(&parent_handle, leaf)` in `purge-win`), never by a path to
+/// the destination: a rename by path walks the path again and follows a reparse point planted after the
+/// check.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DestinationFacts {
     /// The final path of the destination's parent directory, as returned (`\\?\C:\...`).
@@ -1024,7 +1319,7 @@ pub struct DestinationFacts {
     pub parent_reparse_tag: Option<u32>,
     /// Whether the parent is a directory.
     pub parent_is_dir: Option<bool>,
-    /// The serial of the volume the parent lies on (from its `FILE_ID_INFO`).
+    /// The serial of the volume the parent lies on (from its `FILE_ID_INFO`). `0` counts as unknown.
     pub parent_volume_serial: Option<u64>,
     /// Whether anything exists at the destination path itself (probed without following links).
     pub occupied: Option<bool>,
@@ -1055,7 +1350,8 @@ fn check_destination_parent(
 pub struct QuarantineCheck<'a> {
     /// The item's path (already let through by [`check_path`]).
     pub source: &'a str,
-    /// The serial of the volume the item lies on, from the identity of its handle.
+    /// The serial of the volume the item lies on, from the identity of its handle. `0` counts as
+    /// unknown.
     pub source_volume_serial: Option<u64>,
     /// Where the item is to be renamed to.
     pub destination: &'a str,
@@ -1064,10 +1360,12 @@ pub struct QuarantineCheck<'a> {
 /// Whether a quarantine move may go to `destination` (§7.5).
 ///
 /// 1. The destination is `<a quarantine directory of the session>\<op>\<leaf>` or deeper; anything else,
-///    the session directory included, is refused.
-/// 2. The source does not lie in the store, and neither path contains the other.
-/// 3. Source and destination are on one volume: same drive letter, and both volume serials known and
-///    equal, else [`Blocker::CannotBackUp`].
+///    the session directory included, is refused. Every quarantine directory of a [`StoreScope`] lies in
+///    a Purge store root, so nothing outside one is a destination.
+/// 2. The source neither lies in nor contains a Purge store root of the scope
+///    ([`StoreScope::store_roots`]), and neither path contains the other.
+/// 3. Source and destination are on one volume: same drive letter, and both volume serials known (not 0)
+///    and equal, else [`Blocker::CannotBackUp`].
 /// 4. The destination's parent is the plain directory its path names (no reparse point on the way), else
 ///    [`Blocker::ReparseMismatch`].
 /// 5. Nothing exists at the destination, else [`Blocker::CannotBackUp`]: a move never overwrites.
@@ -1079,15 +1377,15 @@ pub fn check_quarantine_destination(
     let outside = || Refusal::rule(reason::QUARANTINE_OUTSIDE_STORE);
     let destination = canon_plain(check.destination).map_err(|_| outside())?;
     let dir = StoreScope::dir_of(&destination, &scope.quarantine_dirs).ok_or_else(outside)?;
-    if prefix::depth(&destination) < prefix::depth(&dir) + 2 {
+    if prefix::depth(&destination) < prefix::depth(dir) + 2 {
         return Err(outside());
     }
     let source =
         canon_plain(check.source).map_err(|_| Refusal::rule(reason::QUARANTINE_OVERLAP))?;
     let in_store = scope
-        .all_dirs()
-        .filter_map(|dir| canon_plain(dir).ok())
-        .any(|dir| prefix::relation(&source, &dir) != Relation::Unrelated);
+        .roots
+        .iter()
+        .any(|root| prefix::relation(&source, root) != Relation::Unrelated);
     if in_store || prefix::relation(&source, &destination) != Relation::Unrelated {
         return Err(Refusal::rule(reason::QUARANTINE_OVERLAP));
     }
@@ -1096,11 +1394,7 @@ pub fn check_quarantine_destination(
         (prefix::segments(&source).next(), prefix::segments(&destination).next()),
         (Some(a), Some(b)) if eq_ci(a, b)
     );
-    let same_volume = matches!(
-        (check.source_volume_serial, facts.parent_volume_serial),
-        (Some(a), Some(b)) if a == b
-    );
-    if !(same_drive && same_volume) {
+    if !(same_drive && same_volume(check.source_volume_serial, facts.parent_volume_serial)) {
         return refuse(Blocker::CannotBackUp, reason::QUARANTINE_OTHER_VOLUME);
     }
     check_destination_parent(&destination, facts, reason::QUARANTINE_PARENT)?;
@@ -1129,11 +1423,13 @@ pub struct UndoPathCheck<'a> {
 /// Whether a quarantined item may be renamed back to its original path (§7.8). The quarantined item
 /// itself is checked by [`check_store_item`] with [`StoreOp::MoveBack`]; this is the destination half.
 ///
-/// 1. **G1** the original path canonicalises; **G2** the deny-list on it, as it is now.
+/// 1. **G1** the original path canonicalises; **G2** the deny-list on it, as it is now; the environment
+///    names Purge's own directories ([`reason::NO_PURGE_DIRS`]).
 /// 2. Its parent exists and is the plain directory the path names: the final path of the parent handle is
 ///    equal, it has no reparse tag and is a directory, else [`Blocker::ReparseMismatch`]. The final path
 ///    of the destination (parent's final path plus the leaf) passes the deny-list too.
-/// 3. The parent is on the volume of the quarantined item, else [`Blocker::CannotBackUp`].
+/// 3. The parent is on the volume of the quarantined item (serials equal and not 0), else
+///    [`Blocker::CannotBackUp`].
 /// 4. Nothing exists at the original path, else [`Blocker::ChangedSinceScan`] (a conflict: skip and
 ///    report). Not knowing is refused the same way.
 pub fn check_undo_path(
@@ -1152,6 +1448,7 @@ pub fn check_undo_path(
     if let Some(blocker) = deny.check(&path_target(&original), &check.exemptions) {
         return refuse(blocker, reason::DENY_LEXICAL);
     }
+    purge_dirs_known(deny)?;
     check_destination_parent(&original, facts, reason::UNDO_PARENT)?;
     // The parent check has shown the two spellings equal; the deny-list still sees the one the file
     // system gave.
@@ -1161,7 +1458,7 @@ pub fn check_undo_path(
     if let Some(blocker) = deny.check(&path_target(&final_destination), &check.exemptions) {
         return refuse(blocker, reason::DENY_FINAL);
     }
-    if facts.parent_volume_serial != Some(check.volume_serial) {
+    if !same_volume(facts.parent_volume_serial, Some(check.volume_serial)) {
         return refuse(Blocker::CannotBackUp, reason::UNDO_OTHER_VOLUME);
     }
     if facts.occupied != Some(false) {
@@ -1173,18 +1470,21 @@ pub fn check_undo_path(
 /// Facts about the place a registry backup is restored to.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UndoKeyFacts {
-    /// The key of the target as it is now: the key to re-create, or the key that receives the value.
+    /// The key of the target as it is now, opened at [`KeyProbe::open`]: the key to re-create, or the
+    /// key that receives the value.
     pub node: KeyNode,
-    /// Every ancestor [`key_probe`] lists. Ancestors that no longer exist are [`KeyNode::Missing`].
+    /// Every ancestor [`key_probe`] lists, each at its [`KeyAddress`]. Ancestors that no longer exist
+    /// are [`KeyNode::Missing`].
     pub ancestors: Vec<KeyAncestor>,
 }
 
 /// Whether a key, a value or a segment may be restored at `target` (§7.8: G2 and G11 on the destination).
 ///
 /// 1. **G1** the key canonicalises; **G2** the deny-list on the target as it is now, then the structural
-///    containers.
-/// 2. **G11** the key is an ordinary key or missing, and so is every ancestor; a link or an unknown
-///    reports [`Blocker::RegLink`]. Below a missing ancestor everything must be missing.
+///    containers; the environment names Purge's own directories ([`reason::NO_PURGE_DIRS`]).
+/// 2. **G11** the key (read at [`KeyProbe::open`]) is an ordinary key or missing, and so is every
+///    ancestor at its [`KeyAddress`]; a link or an unknown reports [`Blocker::RegLink`]. Below a missing
+///    ancestor everything must be missing.
 ///
 /// Whether an existing key or value is a conflict (§7.8: `Installer\*`, `Services`, COM; a value with
 /// other data) is the undo's decision, not this gate's.
@@ -1199,6 +1499,7 @@ pub fn check_undo_key(
     }
     let probe = key_probe(target, deny.env())?;
     deny_key(target, deny, exemptions)?;
+    purge_dirs_known(deny)?;
     match facts.node {
         KeyNode::Unknown => return refuse(Blocker::RegLink, reason::KEY_LINK_UNKNOWN),
         KeyNode::Link => return refuse(Blocker::RegLink, reason::KEY_IS_LINK),

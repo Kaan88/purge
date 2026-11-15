@@ -943,8 +943,8 @@ fn key_facts(target: &Target) -> KeyFacts {
         node: KeyNode::Plain,
         ancestors: ancestors
             .into_iter()
-            .map(|path| KeyAncestor {
-                path,
+            .map(|key| KeyAncestor {
+                key,
                 node: KeyNode::Plain,
             })
             .collect(),
@@ -986,26 +986,205 @@ fn delete_tree(target: &Target, facts: &KeyFacts) -> Verdict {
 
 const APP_KEY: &str = r"HKLM\SOFTWARE\Vendor\App";
 
+/// The address `WKey::open(root, path, view, ..)` takes.
+fn at(root: KeyRoot, view: View, path: &str) -> KeyAddress {
+    KeyAddress {
+        root,
+        view,
+        path: path.to_owned(),
+    }
+}
+
+/// The addresses `key_probe` gives `target`: the key, then its ancestors from the top.
+fn probed(target: &Target) -> (KeyAddress, Vec<KeyAddress>) {
+    let probe = key_probe(target, LIST.env()).unwrap();
+    (probe.open, probe.ancestors)
+}
+
 #[test]
 fn key_probe_lists_the_chain_below_the_hive() {
     let probe = key_probe(&key(r"HKLM\Software\WOW6432Node\Vendor\App"), LIST.env()).unwrap();
-    assert_eq!(probe.key_path, r"HKLM\SOFTWARE\WOW6432Node\Vendor\App");
-    assert_eq!(
-        probe.ancestors,
-        [
-            r"HKLM\SOFTWARE",
-            r"HKLM\SOFTWARE\WOW6432Node",
-            r"HKLM\SOFTWARE\WOW6432Node\Vendor"
-        ]
-    );
+    assert_eq!(probe.label, r"HKLM\SOFTWARE\WOW6432Node\Vendor\App");
+    let k32 = |path| at(KeyRoot::Hklm, View::K32, path);
+    assert_eq!(probe.open, k32(r"SOFTWARE\Vendor\App"));
+    assert_eq!(probe.ancestors, [k32("SOFTWARE"), k32(r"SOFTWARE\Vendor")]);
     assert_eq!(probe.key.path, r"SOFTWARE\Vendor\App");
 
     let probe = key_probe(&value(hku(r"Software\Vendor"), "x"), LIST.env()).unwrap();
-    assert_eq!(probe.key_path, hku(r"Software\Vendor"));
-    assert_eq!(probe.ancestors, [format!(r"HKU\{SID}"), hku("Software")]);
+    assert_eq!(probe.label, hku(r"Software\Vendor"));
+    let user = |path: &str| at(KeyRoot::Hku, View::K64, path);
+    assert_eq!(probe.open, user(&format!(r"{SID}\Software\Vendor")));
+    assert_eq!(
+        probe.ancestors,
+        [user(SID), user(&format!(r"{SID}\Software"))]
+    );
 
     let probe = key_probe(&key(r"HKLM\SOFTWARE"), LIST.env()).unwrap();
+    assert_eq!(probe.open, at(KeyRoot::Hklm, View::K64, "SOFTWARE"));
     assert!(probe.ancestors.is_empty());
+    assert_eq!(
+        probe.open.to_string(),
+        r"HKLM\SOFTWARE (64-bit view)".to_owned()
+    );
+
+    // A hive root is never opened (`WKey::open` refuses an empty path): refused, whatever the facts.
+    let root = key("HKLM");
+    let (_, why) = deny_rule(key_probe(&root, LIST.env()).map(drop));
+    assert_eq!(why, reason::KEY_IS_HIVE_ROOT);
+    let mut facts = key_facts(&key(APP_KEY));
+    facts.ancestors.clear();
+    let (_, why) = deny_rule(delete_tree(&root, &facts));
+    assert_eq!(why, reason::KEY_IS_HIVE_ROOT);
+}
+
+/// Review M2 wave 1, S1: the probe of a 32-bit `HKLM` class key must not lead through
+/// `HKLM\SOFTWARE\WOW6432Node\Classes`, which on Windows 11 is a registry link to
+/// `HKLM\SOFTWARE\Classes\Wow6432Node`. The route that opens is the 32-bit view of
+/// `SOFTWARE\Classes\...` (measured by the review; this test pins the addresses the gate hands out).
+#[test]
+fn a_32_bit_machine_class_key_is_probed_through_the_view_flag() {
+    let clsid = "{0B5A2C52-3EB9-470A-96E2-6C6D4570E40F}";
+    let k32 = |path: &str| at(KeyRoot::Hklm, View::K32, path);
+    let want_key = k32(&format!(r"SOFTWARE\Classes\CLSID\{clsid}"));
+    let want_chain = vec![
+        k32("SOFTWARE"),
+        k32(r"SOFTWARE\Classes"),
+        k32(r"SOFTWARE\Classes\CLSID"),
+    ];
+    // The reviewer's input, and the other spelling of the same key.
+    for spelled in [
+        format!(r"HKLM\SOFTWARE\WOW6432Node\Classes\CLSID\{clsid}"),
+        format!(r"HKLM\SOFTWARE\Classes\WOW6432Node\CLSID\{clsid}"),
+        format!(r"hkey_local_machine\software\wow6432node\classes\CLSID\{clsid}"),
+    ] {
+        let target = key(spelled.as_str());
+        let probe = key_probe(&target, LIST.env()).unwrap();
+        assert_eq!(probe.open, want_key, "{spelled}");
+        assert_eq!(probe.ancestors, want_chain, "{spelled}");
+        for address in std::iter::once(&probe.open).chain(&probe.ancestors) {
+            assert!(
+                !address.path.to_ascii_lowercase().contains("wow6432node"),
+                "{spelled}: {address}"
+            );
+        }
+        // The wire spelling stays the label.
+        assert_eq!(
+            probe.label,
+            format!(r"HKLM\SOFTWARE\WOW6432Node\Classes\CLSID\{clsid}")
+        );
+        // An executor that probes exactly the listed chain, all plain, is let through: before the fix
+        // the chain held the link and every such key was refused with `ancestor-is-link`.
+        assert_eq!(
+            delete_tree(&target, &key_facts(&target)),
+            Ok(()),
+            "{spelled}"
+        );
+        let in_key = value(spelled.as_str(), "");
+        let verdict = key_with(
+            &in_key,
+            KeyOp::DeleteValue,
+            Binding::Capture,
+            none(),
+            &key_facts(&in_key),
+        );
+        assert_eq!(verdict, Ok(()), "{spelled}");
+    }
+
+    // A probe of the old route (through the link, in the 64-bit view) is not a probe of the chain.
+    let target = key(format!(r"HKLM\SOFTWARE\WOW6432Node\Classes\CLSID\{clsid}"));
+    for stray in [
+        at(KeyRoot::Hklm, View::K64, r"SOFTWARE\WOW6432Node\Classes"),
+        at(KeyRoot::Hklm, View::K64, r"SOFTWARE\Classes"),
+        at(KeyRoot::Hklm, View::K32, r"SOFTWARE\WOW6432Node"),
+        at(KeyRoot::Hku, View::K32, r"SOFTWARE\Classes"),
+    ] {
+        let mut facts = key_facts(&target);
+        facts.ancestors.push(KeyAncestor {
+            key: stray.clone(),
+            node: KeyNode::Plain,
+        });
+        refused(
+            delete_tree(&target, &facts),
+            Blocker::RegLink,
+            reason::ANCESTORS_CONTRADICT,
+        );
+    }
+    // A link on the flag route is still refused.
+    let mut facts = key_facts(&target);
+    facts.ancestors[1].node = KeyNode::Link;
+    refused(
+        delete_tree(&target, &facts),
+        Blocker::RegLink,
+        reason::ANCESTOR_IS_LINK,
+    );
+}
+
+/// Every other place: the addresses follow the rule of `KeyAddress` (32-bit view by flag where Windows
+/// redirects, the literal `WOW6432Node` key where it does not, aliases resolved).
+#[test]
+fn key_addresses_follow_windows_redirection() {
+    let hklm = |view, path: &str| at(KeyRoot::Hklm, view, path);
+    let hkuc = |view, path: &str| at(KeyRoot::Hku, view, &format!(r"{SID}_Classes{path}"));
+    let hku_ = |path: &str| at(KeyRoot::Hku, View::K64, &format!(r"{SID}{path}"));
+    let cases = [
+        // 32-bit, not classes.
+        (
+            r"HKLM\SOFTWARE\WOW6432Node\Vendor\App".to_owned(),
+            hklm(View::K32, r"SOFTWARE\Vendor\App"),
+            vec![
+                hklm(View::K32, "SOFTWARE"),
+                hklm(View::K32, r"SOFTWARE\Vendor"),
+            ],
+        ),
+        // 64-bit machine classes.
+        (
+            r"HKLM\SOFTWARE\Classes\CLSID\{X}".to_owned(),
+            hklm(View::K64, r"SOFTWARE\Classes\CLSID\{X}"),
+            vec![
+                hklm(View::K64, "SOFTWARE"),
+                hklm(View::K64, r"SOFTWARE\Classes"),
+                hklm(View::K64, r"SOFTWARE\Classes\CLSID"),
+            ],
+        ),
+        // A user's 32-bit classes, in both spellings.
+        (
+            format!(r"HKU\{SID}_Classes\WOW6432Node\CLSID\{{X}}"),
+            hkuc(View::K32, r"\CLSID\{X}"),
+            vec![hkuc(View::K32, ""), hkuc(View::K32, r"\CLSID")],
+        ),
+        (
+            hku(r"Software\Classes\WOW6432Node\CLSID\{X}"),
+            hkuc(View::K32, r"\CLSID\{X}"),
+            vec![hkuc(View::K32, ""), hkuc(View::K32, r"\CLSID")],
+        ),
+        // A user's 64-bit classes.
+        (
+            hku(r"Software\Classes\CLSID\{X}"),
+            hkuc(View::K64, r"\CLSID\{X}"),
+            vec![hkuc(View::K64, ""), hkuc(View::K64, r"\CLSID")],
+        ),
+        // A user's `Software\WOW6432Node` is an ordinary key: no redirection there.
+        (
+            hku(r"Software\WOW6432Node\Vendor"),
+            hku_(r"\Software\WOW6432Node\Vendor"),
+            vec![hku_(""), hku_(r"\Software"), hku_(r"\Software\WOW6432Node")],
+        ),
+        // `CurrentControlSet` is resolved.
+        (
+            r"HKLM\SYSTEM\CurrentControlSet\Services\VendorSvc".to_owned(),
+            hklm(View::K64, r"SYSTEM\ControlSet001\Services\VendorSvc"),
+            vec![
+                hklm(View::K64, "SYSTEM"),
+                hklm(View::K64, r"SYSTEM\ControlSet001"),
+                hklm(View::K64, r"SYSTEM\ControlSet001\Services"),
+            ],
+        ),
+    ];
+    for (spelled, want_key, want_chain) in cases {
+        let (got_key, got_chain) = probed(&key(spelled.as_str()));
+        assert_eq!(got_key, want_key, "{spelled}");
+        assert_eq!(got_chain, want_chain, "{spelled}");
+    }
 }
 
 /// The two aliases of §5.10 are resolved lexically, so the link they stand for is not on the chain.
@@ -1014,17 +1193,18 @@ fn the_two_aliases_are_resolved_and_hkcr_is_rejected() {
     let source = r"Services\EventLog\Application\VendorApp";
     let aliased = key(format!(r"HKLM\SYSTEM\CurrentControlSet\{source}"));
     let probe = key_probe(&aliased, LIST.env()).unwrap();
-    assert_eq!(
-        probe.key_path,
-        format!(r"HKLM\SYSTEM\ControlSet001\{source}")
-    );
+    assert_eq!(probe.label, format!(r"HKLM\SYSTEM\ControlSet001\{source}"));
+    assert_eq!(probe.open.path, format!(r"SYSTEM\ControlSet001\{source}"));
     assert!(
         probe
             .ancestors
             .iter()
-            .all(|a| !a.contains("CurrentControlSet"))
+            .all(|a| !a.path.contains("CurrentControlSet"))
     );
-    assert_eq!(probe.ancestors[1], r"HKLM\SYSTEM\ControlSet001");
+    assert_eq!(
+        probe.ancestors[1],
+        at(KeyRoot::Hklm, View::K64, r"SYSTEM\ControlSet001")
+    );
     assert_eq!(delete_tree(&aliased, &key_facts(&aliased)), Ok(()));
     let physical = key(format!(r"HKLM\SYSTEM\ControlSet001\{source}"));
     assert_eq!(delete_tree(&physical, &key_facts(&physical)), Ok(()));
@@ -1036,14 +1216,25 @@ fn the_two_aliases_are_resolved_and_hkcr_is_rejected() {
     ] {
         let target = key(spelled);
         let probe = key_probe(&target, LIST.env()).unwrap();
-        assert_eq!(probe.key_path, format!(r"HKU\{SID}_Classes\vendor.file"));
-        assert_eq!(probe.ancestors, [format!(r"HKU\{SID}_Classes")]);
+        assert_eq!(probe.label, format!(r"HKU\{SID}_Classes\vendor.file"));
+        assert_eq!(
+            probe.open,
+            at(
+                KeyRoot::Hku,
+                View::K64,
+                &format!(r"{SID}_Classes\vendor.file")
+            )
+        );
+        assert_eq!(
+            probe.ancestors,
+            [at(KeyRoot::Hku, View::K64, &format!(r"{SID}_Classes"))]
+        );
         assert_eq!(delete_tree(&target, &key_facts(&target)), Ok(()));
     }
 
     // A caller that probed the alias instead of the canonical chain has not probed the chain.
     let mut facts = key_facts(&aliased);
-    facts.ancestors[1].path = r"HKLM\SYSTEM\CurrentControlSet".into();
+    facts.ancestors[1].key.path = r"SYSTEM\CurrentControlSet".into();
     refused(
         delete_tree(&aliased, &facts),
         Blocker::RegLink,
@@ -1250,7 +1441,7 @@ fn the_deny_list_and_the_containers_run_on_registry_targets() {
 
 #[test]
 fn a_link_on_the_key_or_on_any_ancestor_is_refused() {
-    let target = key(r"HKLM\SOFTWARE\WOW6432Node\Vendor\App");
+    let target = key(r"HKLM\SOFTWARE\WOW6432Node\Vendor\Suite\App");
     let clean = key_facts(&target);
     assert_eq!(clean.ancestors.len(), 3);
 
@@ -1278,7 +1469,7 @@ fn a_link_on_the_key_or_on_any_ancestor_is_refused() {
             facts.ancestors[i].node = node;
             refused(delete_tree(&target, &facts), Blocker::RegLink, why);
             // The same for every operation, also for a value in the key.
-            let in_key = value(r"HKLM\SOFTWARE\WOW6432Node\Vendor\App", "x");
+            let in_key = value(r"HKLM\SOFTWARE\WOW6432Node\Vendor\Suite\App", "x");
             let verdict = key_with(
                 &in_key,
                 KeyOp::DeleteValue,
@@ -1315,16 +1506,19 @@ fn a_link_on_the_key_or_on_any_ancestor_is_refused() {
         Blocker::RegLink,
         reason::ANCESTOR_UNKNOWN,
     );
-    // A fact about a key that is not an ancestor (the 64-bit sibling, the key itself, a child).
+    // A fact about a key that is not an ancestor (the 64-bit sibling, the physical spelling of the
+    // 32-bit one, the key itself, a child, the hive root, another root).
     for stray in [
-        r"HKLM\SOFTWARE\Vendor",
-        r"HKLM\SOFTWARE\WOW6432Node\Vendor\App",
-        r"HKLM\SOFTWARE\WOW6432Node\Vendor\App\Sub",
-        r"HKLM",
+        at(KeyRoot::Hklm, View::K64, r"SOFTWARE\Vendor"),
+        at(KeyRoot::Hklm, View::K64, r"SOFTWARE\WOW6432Node\Vendor"),
+        at(KeyRoot::Hklm, View::K32, r"SOFTWARE\Vendor\Suite\App"),
+        at(KeyRoot::Hklm, View::K32, r"SOFTWARE\Vendor\Suite\App\Sub"),
+        at(KeyRoot::Hklm, View::K32, ""),
+        at(KeyRoot::Hku, View::K32, r"SOFTWARE\Vendor"),
     ] {
         let mut facts = clean.clone();
         facts.ancestors.push(KeyAncestor {
-            path: stray.into(),
+            key: stray,
             node: KeyNode::Plain,
         });
         refused(
@@ -1337,7 +1531,7 @@ fn a_link_on_the_key_or_on_any_ancestor_is_refused() {
     let mut facts = clean.clone();
     facts.ancestors.reverse();
     for ancestor in &mut facts.ancestors {
-        ancestor.path = ancestor.path.to_lowercase();
+        ancestor.key.path = ancestor.key.path.to_lowercase();
     }
     assert_eq!(delete_tree(&target, &facts), Ok(()));
     // A plain duplicate is harmless.
@@ -1653,15 +1847,174 @@ fn actions_that_remove_no_tree_are_not_concerned() {
 
 // ----- the own store -----------------------------------------------------------------------------------
 
-const SESSION: &str = r"C:\ProgramData\Purge\sessions\20261115T101500Z-9f3a";
-const Q_C: &str = r"C:\ProgramData\Purge\Quarantine\20261115T101500Z-9f3a";
-const Q_D: &str = r"D:\.purge-q\20261115T101500Z-9f3a";
+const DATA_ROOT: &str = r"C:\ProgramData\Purge";
+const ID: &str = "20261115T101500Z-9f3a6c1d2b7e4a50";
+const OTHER_ID: &str = "20261114T090000Z-0000000000000001";
+const SESSION: &str = r"C:\ProgramData\Purge\sessions\20261115T101500Z-9f3a6c1d2b7e4a50";
+const Q_C: &str = r"C:\ProgramData\Purge\Quarantine\20261115T101500Z-9f3a6c1d2b7e4a50";
+const Q_D: &str = r"D:\.purge-q\20261115T101500Z-9f3a6c1d2b7e4a50";
+
+fn session(id: &str) -> SessionId {
+    id.parse().unwrap()
+}
 
 fn scope() -> StoreScope {
-    StoreScope {
-        session_dir: SESSION.into(),
-        quarantine_dirs: vec![Q_C.into(), Q_D.into()],
+    StoreScope::new(DATA_ROOT, &[r"D:\.purge-q"], &session(ID)).unwrap()
+}
+
+#[test]
+fn a_store_scope_is_derived_from_the_store_roots_and_the_session() {
+    let scope = scope();
+    assert_eq!(scope.session().as_str(), ID);
+    assert_eq!(scope.session_dir(), SESSION);
+    assert_eq!(scope.quarantine_dirs(), [Q_C, Q_D]);
+    assert_eq!(scope.store_roots(), [DATA_ROOT, r"D:\.purge-q"]);
+    // The layout names are those of purge-exec's storage module.
+    assert_eq!(
+        (SESSIONS_DIR, QUARANTINE_DIR, VOLUME_QUARANTINE_DIR),
+        ("sessions", "Quarantine", ".purge-q")
+    );
+
+    // Spellings of the same roots; the data root's quarantine may be listed; duplicates count once.
+    let same = StoreScope::new(
+        r"\\?\c:\programdata\purge\",
+        &[
+            r"C:\ProgramData\Purge\Quarantine",
+            r"d:\.PURGE-Q",
+            r"D:/.purge-q",
+        ],
+        &session(ID),
+    )
+    .unwrap();
+    assert_eq!(same.quarantine_dirs().len(), 2);
+    assert!(same.authorises(&format!(r"{Q_D}\0001\x")));
+    assert!(same.authorises(&format!(r"{SESSION}\journal.jsonl")));
+    // No other volume: only the data root's quarantine.
+    let alone = StoreScope::new(DATA_ROOT, &[] as &[&str], &session(ID)).unwrap();
+    assert_eq!(alone.quarantine_dirs(), [Q_C]);
+    assert!(!alone.authorises(&format!(r"{Q_D}\0001\x")));
+
+    // A data root that is no directory below a drive root.
+    for bad in [
+        r"C:\",
+        "C:",
+        "",
+        r"Purge\data",
+        r"%ProgramData%\Purge",
+        r"\\server\share\Purge",
+        r"C:\ProgramData\..\Purge",
+    ] {
+        assert_eq!(
+            StoreScope::new(bad, &[r"D:\.purge-q"], &session(ID)),
+            Err(StoreScopeError::DataRoot(bad.to_owned())),
+            "{bad}"
+        );
     }
+    // A quarantine root that is not Purge's: review M2 wave 1, S2, the third counter-example
+    // (`C:\Users\tester\Documents`), and every other shape that is not `X:\.purge-q` of another drive.
+    for bad in [
+        r"C:\Users\tester\Documents",
+        r"C:\.purge-q",
+        r"c:\.Purge-Q",
+        r"D:\",
+        r"D:\x\.purge-q",
+        r"D:\.purge-q\sub",
+        r"D:\.purge-q2",
+        r"E:\Quarantine",
+        r"C:\ProgramData\Purge",
+        r"C:\ProgramData\Purge\sessions",
+        r"\\server\share\.purge-q",
+        "",
+    ] {
+        assert_eq!(
+            StoreScope::new(DATA_ROOT, &[r"D:\.purge-q", bad], &session(ID)),
+            Err(StoreScopeError::QuarantineRoot(bad.to_owned())),
+            "{bad}"
+        );
+    }
+}
+
+/// Review M2 wave 1, S2: the three counter-examples, refused by `check_store_item` and
+/// `check_quarantine_destination`.
+#[test]
+fn a_store_scope_cannot_reach_outside_the_session() {
+    // 1. A scope aimed at `System32\config`: the session directory is derived, so the hive files are
+    //    not in it, whatever the data root.
+    let config =
+        StoreScope::new(r"C:\Windows\System32\config", &[] as &[&str], &session(ID)).unwrap();
+    for target in [
+        r"C:\Windows\System32\config\SAM",
+        r"C:\Windows\System32\config\sessions\SAM",
+        r"C:\Windows\System32\config\Quarantine\SAM",
+    ] {
+        assert!(!config.authorises(target), "{target}");
+        let check = StoreCheck {
+            path: target,
+            op: StoreOp::Remove,
+            binding: Binding::Capture,
+            volume_serial: SERIAL,
+        };
+        let got = deny_rule(check_store_item(&check, &file_facts(target), &config));
+        assert_eq!(
+            got,
+            ("fs.purge".to_owned(), reason::OUTSIDE_STORE),
+            "{target}"
+        );
+    }
+
+    // 2. Another session's journal, the index and the store roots themselves.
+    let scope = scope();
+    for target in [
+        format!(r"{DATA_ROOT}\sessions\{OTHER_ID}\journal.jsonl"),
+        format!(r"{DATA_ROOT}\Quarantine\{OTHER_ID}\0001\App"),
+        format!(r"D:\.purge-q\{OTHER_ID}\0001\App"),
+        format!(r"{DATA_ROOT}\sessions\index.json"),
+        format!(r"{DATA_ROOT}\sessions"),
+        DATA_ROOT.to_owned(),
+    ] {
+        let check = StoreCheck {
+            path: &target,
+            op: StoreOp::Remove,
+            binding: Binding::Capture,
+            volume_serial: SERIAL,
+        };
+        let got = deny_rule(check_store_item(&check, &file_facts(&target), &scope));
+        assert_eq!(
+            got,
+            ("fs.purge".to_owned(), reason::OUTSIDE_STORE),
+            "{target}"
+        );
+    }
+    // A scope for the other session reaches its journal and not ours.
+    let other = StoreScope::new(DATA_ROOT, &[r"D:\.purge-q"], &session(OTHER_ID)).unwrap();
+    assert!(other.authorises(&format!(r"{DATA_ROOT}\sessions\{OTHER_ID}\journal.jsonl")));
+    assert!(!other.authorises(&format!(r"{SESSION}\journal.jsonl")));
+
+    // 3. A destination inside Documents: no scope has a quarantine directory there.
+    let documents = r"C:\Users\tester\Documents";
+    let destination = format!(r"{documents}\000001\App");
+    let facts = destination_facts(&format!(r"{documents}\000001"));
+    let check = QuarantineCheck {
+        source: APP,
+        source_volume_serial: Some(SERIAL),
+        destination: &destination,
+    };
+    let (_, why) = deny_rule(check_quarantine_destination(&check, &facts, &scope));
+    assert_eq!(why, reason::QUARANTINE_OUTSIDE_STORE);
+    // Not even with Documents as the data root: the destination must be `<root>\Quarantine\<session>\..`.
+    let in_documents = StoreScope::new(documents, &[] as &[&str], &session(ID)).unwrap();
+    let (_, why) = deny_rule(check_quarantine_destination(&check, &facts, &in_documents));
+    assert_eq!(why, reason::QUARANTINE_OUTSIDE_STORE);
+    let inside = format!(r"{documents}\Quarantine\{ID}\000001\App");
+    let parent = format!(r"{documents}\Quarantine\{ID}\000001");
+    let check = QuarantineCheck {
+        destination: &inside,
+        ..check
+    };
+    assert_eq!(
+        check_quarantine_destination(&check, &destination_facts(&parent), &in_documents),
+        Ok(())
+    );
 }
 
 #[test]
@@ -1690,33 +2043,22 @@ fn the_store_exemption_reaches_only_inside_the_session() {
         r"C:\ProgramData\Purge".to_owned(),
         r"C:\ProgramData\Purge\sessions".to_owned(),
         r"C:\ProgramData\Purge\sessions\index.json".to_owned(),
-        r"C:\ProgramData\Purge\sessions\20261114T090000Z-0001\journal.jsonl".to_owned(),
-        r"C:\ProgramData\Purge\Quarantine\20261114T090000Z-0001\0001\App".to_owned(),
+        format!(r"C:\ProgramData\Purge\sessions\{OTHER_ID}\journal.jsonl"),
+        format!(r"C:\ProgramData\Purge\Quarantine\{OTHER_ID}\0001\App"),
         format!(r"{Q_C}-old\0001\App"),
-        format!(r"{Q_C}\..\20261114T090000Z-0001\0001\App"),
+        format!(r"{Q_C}\..\{OTHER_ID}\0001\App"),
         format!(r"{Q_C}\0001\App."),
         format!(r"{Q_C}\0001\App:stream"),
         r"C:\Program Files\Purge\purge-engine.exe".to_owned(),
         r"D:\.purge-q".to_owned(),
-        r"E:\.purge-q\20261115T101500Z-9f3a\0001\x".to_owned(),
-        r"%ProgramData%\Purge\Quarantine\20261115T101500Z-9f3a\0001\App".to_owned(),
+        format!(r"E:\.purge-q\{ID}\0001\x"),
+        format!(r"%ProgramData%\Purge\Quarantine\{ID}\0001\App"),
         r"\\server\share\x".to_owned(),
         FILE.to_owned(),
         String::new(),
     ] {
         assert!(!scope.authorises(&outside), "{outside}");
     }
-    // A scope that names too much, or nothing usable, authorises nothing.
-    for dir in [r"C:\", r"C:\ProgramData", r"D:\.purge-q", "", r"sessions\x"] {
-        let wide = StoreScope {
-            session_dir: dir.into(),
-            quarantine_dirs: vec![dir.into()],
-        };
-        assert!(!wide.authorises(r"C:\ProgramData\Purge\x"), "{dir}");
-        assert!(!wide.authorises(r"D:\.purge-q\s\1\x"), "{dir}");
-        assert!(!wide.authorises(FILE), "{dir}");
-    }
-    assert!(!StoreScope::default().authorises(&format!(r"{Q_C}\0001\App")));
 }
 
 fn store_item(path: &str, op: StoreOp, facts: &PathFacts, recorded: Option<&PathStamp>) -> Verdict {
@@ -1935,6 +2277,11 @@ fn a_quarantine_move_goes_into_the_session_on_the_same_volume() {
         r"C:\ProgramData".to_owned(),
         Q_D.to_owned(),
         r"Vendor\App".to_owned(),
+        // Another session's quarantine, Purge's data root, a volume quarantine root and its drive.
+        format!(r"{DATA_ROOT}\Quarantine\{OTHER_ID}\0001\App"),
+        DATA_ROOT.to_owned(),
+        r"D:\.purge-q".to_owned(),
+        r"D:\".to_owned(),
     ] {
         let (_, why) = deny_rule(to_quarantine(&source, &destination, &facts));
         assert_eq!(why, reason::QUARANTINE_OVERLAP, "{source}");
@@ -2109,7 +2456,7 @@ fn undo_key(target: &Target, facts: &UndoKeyFacts) -> Verdict {
 
 #[test]
 fn a_key_is_restored_only_below_plain_ancestors() {
-    let target = key(r"HKLM\SOFTWARE\WOW6432Node\Vendor\App");
+    let target = key(r"HKLM\SOFTWARE\WOW6432Node\Vendor\Suite\App");
     for node in [KeyNode::Missing, KeyNode::Plain] {
         assert_eq!(undo_key(&target, &undo_key_facts(&target, node)), Ok(()));
     }
@@ -2329,6 +2676,121 @@ fn a_boot_move_needs_an_admin_only_chain() {
             BootMove::Hold("live.boot.source-not-canonical"),
             "{source}"
         );
+    }
+}
+
+// ----- facts the gate does not take on trust (review M2 wave 1, M5) -------------------------------------
+
+/// A volume serial of 0 is what a volume without a serial reports: unknown, never an identity and never
+/// proof that two items share a volume.
+#[test]
+fn a_volume_serial_of_0_is_unknown() {
+    let mut facts = file_facts(FILE);
+    facts.identity.as_mut().unwrap().volume_serial = 0;
+    assert!(!facts.identity.unwrap().is_valid());
+    assert_eq!(facts.stamp(), None);
+    refused(
+        quarantine(FILE, &facts),
+        Blocker::ReparseMismatch,
+        reason::IDENTITY_UNKNOWN,
+    );
+
+    // A store item on a serial-0 volume, with the journal recording 0 as well.
+    let item = format!(r"{Q_C}\0001\App");
+    let mut facts = dir_facts(&item);
+    facts.identity.as_mut().unwrap().volume_serial = 0;
+    let check = StoreCheck {
+        path: &item,
+        op: StoreOp::Remove,
+        binding: Binding::Capture,
+        volume_serial: 0,
+    };
+    refused(
+        check_store_item(&check, &facts, &scope()),
+        Blocker::ReparseMismatch,
+        reason::IDENTITY_UNKNOWN,
+    );
+
+    // A quarantine move where both sides report 0.
+    let op_dir = format!(r"{Q_C}\0001");
+    let destination = format!(r"{op_dir}\App");
+    let mut facts = destination_facts(&op_dir);
+    facts.parent_volume_serial = Some(0);
+    let check = QuarantineCheck {
+        source: APP,
+        source_volume_serial: Some(0),
+        destination: &destination,
+    };
+    refused(
+        check_quarantine_destination(&check, &facts, &scope()),
+        Blocker::CannotBackUp,
+        reason::QUARANTINE_OTHER_VOLUME,
+    );
+
+    // An undo where both sides report 0.
+    let mut facts = destination_facts(r"C:\Program Files\Vendor");
+    facts.parent_volume_serial = Some(0);
+    let check = UndoPathCheck {
+        original: APP,
+        volume_serial: 0,
+        exemptions: none(),
+    };
+    refused(
+        check_undo_path(&check, &facts, &LIST),
+        Blocker::CannotBackUp,
+        reason::UNDO_OTHER_VOLUME,
+    );
+}
+
+/// With no Purge directory in the environment, Purge's install directory is protected by nothing: no
+/// verdict that consults the deny-list lets anything through.
+#[test]
+fn verdicts_need_purge_s_own_directories() {
+    for purge_dirs in [Vec::new(), vec![String::new(), "  ".to_owned()]] {
+        let env = GuardEnv {
+            purge_dirs,
+            ..GuardEnv::sample()
+        };
+        let list = DenyList::compile(&env);
+        let refuses = |verdict: Verdict| {
+            let (_, why) = deny_rule(verdict);
+            assert_eq!(why, reason::NO_PURGE_DIRS);
+        };
+
+        // The reviewer's case: the install directory, and an ordinary item.
+        for path in [r"C:\Program Files\Purge\purge-engine.exe", FILE] {
+            let check = PathCheck {
+                lexical: path,
+                op: PathOp::QuarantineMove,
+                binding: Binding::Capture,
+                exemptions: none(),
+            };
+            refuses(check_path(&check, &file_facts(path), &list));
+        }
+        let target = key(APP_KEY);
+        let check = KeyCheck {
+            target: &target,
+            op: KeyOp::DeleteKeyTree,
+            binding: Binding::Capture,
+            exemptions: none(),
+        };
+        refuses(check_key(&check, &key_facts(&target), &list));
+        let check = UndoPathCheck {
+            original: APP,
+            volume_serial: SERIAL,
+            exemptions: none(),
+        };
+        refuses(check_undo_path(
+            &check,
+            &destination_facts(r"C:\Program Files\Vendor"),
+            &list,
+        ));
+        refuses(check_undo_key(
+            &target,
+            &undo_key_facts(&target, KeyNode::Missing),
+            &list,
+            &none(),
+        ));
     }
 }
 
