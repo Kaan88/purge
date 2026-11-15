@@ -36,12 +36,13 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use purge_guard::live::{KeyAddress, KeyProbe, KeyRoot};
 use purge_model::exec::journal::UndoConflict;
 use purge_model::exec::op::{BackupRef, Sha256Hex};
 use purge_model::exec::regbackup::{
     BytesB64, KeyNode, RegBackup, RegBackupBody, RegBackupSchema, RegTree, ValueBackup, WideB64,
 };
-use purge_model::{Blocker, FileTime, Hive, TypedTarget, View};
+use purge_model::{Blocker, FileTime, View};
 use purge_win::fs_write::{FsError, create_file_secure, flush, flush_dir};
 use purge_win::os::Win32Error;
 use purge_win::reg::{REG_EXPAND_SZ, REG_LINK, REG_MULTI_SZ, REG_SZ, RegRoot, RegValue, RegView};
@@ -556,46 +557,48 @@ pub fn is_protected_root(key_path: &str) -> bool {
     })
 }
 
-/// The hive root, view and native path of a canonical key path (`HKLM\…`, `HKU\<sid>\…`,
-/// `HKU\<sid>_Classes\…`, with a 32-bit view spelled as `WOW6432Node`).
-fn native_path(key_path: &str) -> Result<(RegRoot, RegView, String), Win32Error> {
-    let (hive, view, path) =
-        TypedTarget::parse_key_path(key_path).map_err(|_| Win32Error::INVALID_PARAMETER)?;
-    let (root, prefix) = match hive {
-        Hive::Hklm => (RegRoot::Hklm, None),
-        Hive::Hku(sid) => (RegRoot::Hku, Some(sid)),
-        Hive::HkuClasses(sid) => (RegRoot::Hku, Some(format!("{sid}_Classes"))),
+/// Opens the key at `addr` with `access`, through [`WKey::open`]: component-wise, never through a link
+/// ([`Win32Error::LINK_ON_PATH`] for a link on the way; a link as the key itself is returned as the
+/// link).
+///
+/// `addr` is the address the guard hands out ([`KeyProbe::open`] of `purge_guard::live::key_probe`),
+/// never one derived here from the wire spelling of [`RegBackup::key`]: the gate, the delete and the
+/// restore then open one key by one route (root and view one-to-one, the 32-bit view by its view flag,
+/// `CurrentControlSet` and `Software\Classes` already resolved; see [`KeyAddress`]).
+pub fn open_key_path(addr: &KeyAddress, access: KeyAccess) -> Result<WKey, Win32Error> {
+    let root = match addr.root {
+        KeyRoot::Hklm => RegRoot::Hklm,
+        KeyRoot::Hku => RegRoot::Hku,
     };
-    let full = match prefix {
-        Some(prefix) if path.is_empty() => prefix,
-        Some(prefix) => format!("{prefix}\\{path}"),
-        None => path,
-    };
-    let view = match view {
+    let view = match addr.view {
         View::K64 => RegView::K64,
         View::K32 => RegView::K32,
     };
-    Ok((root, view, full))
+    WKey::open(root, &addr.path, view, access)
 }
 
-/// Opens the key at canonical `key_path` (as [`RegBackup::key`] spells it) with `access`, through
-/// [`WKey::open`]: component-wise, never through a link ([`Win32Error::LINK_ON_PATH`] for a link on the
-/// way; a link as the key itself is returned as the link).
-pub fn open_key_path(key_path: &str, access: KeyAccess) -> Result<WKey, Win32Error> {
-    let (root, view, path) = native_path(key_path)?;
-    WKey::open(root, &path, view, access)
-}
-
-/// Opens the parent of the key at canonical `key_path` with `access` and returns it with the key's own
-/// name: what [`restore_tree`] and [`probe_tree`] take. Fails with `ERROR_INVALID_PARAMETER` when the
-/// parent would be a hive root.
-pub fn open_parent(key_path: &str, access: KeyAccess) -> Result<(WKey, String), Win32Error> {
-    let (root, view, path) = native_path(key_path)?;
-    let (parent, leaf) = path
+/// Opens the parent of the key of `probe` with `access` and returns it with the key's own name: what
+/// [`restore_tree`] and [`probe_tree`] take. The parent is the last of [`KeyProbe::ancestors`] (same
+/// root and view as [`KeyProbe::open`]), opened by [`open_key_path`]. Fails with
+/// `ERROR_INVALID_PARAMETER` when the key lies directly below its root, or the probe's ancestors do not
+/// end at the key's parent.
+pub fn open_parent(probe: &KeyProbe, access: KeyAccess) -> Result<(WKey, String), Win32Error> {
+    let (parent_path, leaf) = probe
+        .open
+        .path
         .rsplit_once('\\')
         .filter(|(parent, leaf)| !parent.is_empty() && !leaf.is_empty())
         .ok_or(Win32Error::INVALID_PARAMETER)?;
-    Ok((WKey::open(root, parent, view, access)?, leaf.to_owned()))
+    let parent = probe
+        .ancestors
+        .last()
+        .filter(|parent| {
+            parent.root == probe.open.root
+                && parent.view == probe.open.view
+                && parent.path == parent_path
+        })
+        .ok_or(Win32Error::INVALID_PARAMETER)?;
+    Ok((open_key_path(parent, access)?, leaf.to_owned()))
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -3618,32 +3621,62 @@ mod tests {
 
     #[test]
     fn key_paths_open_and_protected_roots() {
+        // Keys are opened at the guard's probe address: the one route the gate uses too.
+        let probe = |key_path: &str| {
+            purge_guard::live::key_probe(
+                &purge_model::Target::RegKey {
+                    path: key_path.to_owned(),
+                },
+                &purge_guard::canon::GuardEnv::sample(),
+            )
+            .unwrap()
+        };
+        let addr = |root: KeyRoot, view: View, path: &str| KeyAddress {
+            root,
+            view,
+            path: path.to_owned(),
+        };
         let root = TestRoot::new();
         small_tree(&root);
-        let key = open_key_path(&root.key_path("T\\A"), KeyAccess::READ).unwrap();
+        let key = open_key_path(&probe(&root.key_path("T\\A")).open, KeyAccess::READ).unwrap();
         assert_eq!(key.info().unwrap().n_subkeys, 2);
-        let (parent, leaf) = open_parent(&root.key_path("T\\A"), KeyAccess::READ).unwrap();
+        let (parent, leaf) = open_parent(&probe(&root.key_path("T\\A")), KeyAccess::READ).unwrap();
         assert_eq!(leaf, "A");
         assert_eq!(parent.info().unwrap().n_subkeys, 2);
         assert_eq!(
-            open_parent(r"HKLM\SOFTWARE", KeyAccess::READ).unwrap_err(),
+            open_parent(&probe(r"HKLM\SOFTWARE"), KeyAccess::READ).unwrap_err(),
             Win32Error::INVALID_PARAMETER
         );
         assert_eq!(
-            native_path(r"HKLM\SOFTWARE\WOW6432Node\Vendor").unwrap(),
-            (RegRoot::Hklm, RegView::K32, r"SOFTWARE\Vendor".into())
+            probe(r"HKLM\SOFTWARE\WOW6432Node\Vendor").open,
+            addr(KeyRoot::Hklm, View::K32, r"SOFTWARE\Vendor")
         );
         assert_eq!(
-            native_path(r"HKU\S-1-5-21-1_Classes\WOW6432Node\CLSID\x").unwrap(),
-            (
-                RegRoot::Hku,
-                RegView::K32,
-                r"S-1-5-21-1_Classes\CLSID\x".into()
+            probe(r"HKU\S-1-5-21-1_Classes\WOW6432Node\CLSID\x").open,
+            addr(KeyRoot::Hku, View::K32, r"S-1-5-21-1_Classes\CLSID\x")
+        );
+        assert_eq!(
+            probe(r"HKU\S-1-5-21-1\Software\x").open,
+            addr(KeyRoot::Hku, View::K64, r"S-1-5-21-1\Software\x")
+        );
+        // `HKLM\SOFTWARE\WOW6432Node\Classes` is a registry link on Windows 11; the probe address of a
+        // 32-bit machine class key avoids it (view flag, logical path), and so does its parent.
+        let class = probe(r"HKLM\SOFTWARE\WOW6432Node\Classes\CLSID\{0}");
+        assert_eq!(
+            class.open,
+            addr(KeyRoot::Hklm, View::K32, r"SOFTWARE\Classes\CLSID\{0}")
+        );
+        let (class_parent, class_leaf) = open_parent(&class, KeyAccess::READ).unwrap();
+        assert_eq!(class_leaf, "{0}");
+        assert!(!class_parent.is_link().unwrap());
+        // The current control set is reached through `ControlSet00N`, never through the link.
+        assert_eq!(
+            probe(r"HKLM\SYSTEM\CurrentControlSet\Services\Svc").open,
+            addr(
+                KeyRoot::Hklm,
+                View::K64,
+                r"SYSTEM\ControlSet001\Services\Svc"
             )
-        );
-        assert_eq!(
-            native_path(r"HKU\S-1-5-21-1\Software\x").unwrap(),
-            (RegRoot::Hku, RegView::K64, r"S-1-5-21-1\Software\x".into())
         );
 
         for (path, protected) in [
