@@ -16,12 +16,18 @@
 //! - Renames never replace an existing destination. Deletes are non-recursive.
 //! - [`create_dir_secure`] and [`create_file_secure`] create a new object with a security
 //!   descriptor given at creation and fail if anything already has that name.
-//! - [`move_delay_until_reboot`], [`pending_renames`] and [`remove_pending_pairs`] cover the
-//!   boot-time move list (`PendingFileRenameOperations`). The list is never rewritten wholesale:
-//!   removal cuts the exact byte ranges of the caller's own pairs and leaves every other byte as
-//!   it was.
+//!   [`DestDir::create_dir`] does the same for a directory relative to a directory handle, so a
+//!   path swapped for a junction after the check cannot redirect it.
+//! - [`MoveHandle::set_times`] and [`MoveHandle::set_security`] put recorded timestamps and a
+//!   recorded owner, group and DACL back on an object, through its handle.
+//! - [`move_delay_until_reboot`], [`pending_renames`], [`remove_pending_pairs`] and
+//!   [`remove_pending_pairs_exactly`] cover the boot-time move list
+//!   (`PendingFileRenameOperations`). The list is never rewritten wholesale: removal cuts the
+//!   exact byte ranges of the caller's own pairs and leaves every other byte as it was.
 //!
-//! Nothing here raises access: no ownership change, no ACL edit, no privilege is enabled. Paths are
+//! Nothing here raises access: ownership is never taken and no privilege is enabled. The only
+//! security write, [`MoveHandle::set_security`], stores a descriptor through a handle the caller's
+//! token was granted `WRITE_DAC` / `WRITE_OWNER` on, and fails where the token may not. Paths are
 //! turned into their `\\?\` form by [`extended_path`] and are not normalised, so long paths work
 //! and names ending in a dot or a space keep their spelling. Stream syntax (a `:` after the drive,
 //! as in `name::$DATA` or `dir::$INDEX_ALLOCATION`) is refused by every function that takes a path.
@@ -33,12 +39,19 @@ use std::path::Path;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, LocalFree, RtlNtStatusToDosError,
+    GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, LocalFree, OBJ_CASE_INSENSITIVE,
+    RtlNtStatusToDosError, UNICODE_STRING,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
-use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+use windows_sys::Win32::Security::{
+    ACL, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, GetSecurityDescriptorControl,
+    GetSecurityDescriptorDacl, GetSecurityDescriptorGroup, GetSecurityDescriptorOwner,
+    GetSecurityDescriptorSacl, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    SE_DACL_AUTO_INHERIT_REQ, SE_DACL_AUTO_INHERITED, SECURITY_ATTRIBUTES, SetKernelObjectSecurity,
+    SetSecurityDescriptorControl,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ADD_FILE, FILE_ATTRIBUTE_DIRECTORY,
     FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_BASIC_INFO,
@@ -49,7 +62,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_WRITE_ATTRIBUTES, FileAttributeTagInfo, FileBasicInfo, FileDispositionInfo,
     FileDispositionInfoEx, FileStreamInfo, FlushFileBuffers, GetFileInformationByHandleEx,
     MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE,
-    SetFileInformationByHandle,
+    SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::Registry::{
@@ -95,7 +108,8 @@ const ERROR_NOT_SUPPORTED: u32 = 50;
 const ERROR_FILE_EXISTS: u32 = 80;
 const ERROR_DIR_NOT_EMPTY: u32 = 145;
 const ERROR_ALREADY_EXISTS: u32 = 183;
-/// `ERROR_RETRY`: [`remove_pending_pairs`] gave up because the list kept changing under it.
+/// `ERROR_RETRY`: [`remove_pending_pairs`] or [`remove_pending_pairs_exactly`] gave up because the
+/// list kept changing under it.
 pub const ERROR_RETRY: u32 = 1237;
 
 /// `FileRenameInformation` (`FILE_INFORMATION_CLASS`).
@@ -114,7 +128,44 @@ unsafe extern "system" {
         length: u32,
         class: i32,
     ) -> i32;
+
+    /// `NtCreateFile`. Used only by [`DestDir::create_dir`], to create a directory relative to a
+    /// directory handle (`OBJECT_ATTRIBUTES.RootDirectory`), which no Win32 call can do.
+    fn NtCreateFile(
+        file: *mut HANDLE,
+        access: u32,
+        attributes: *const ObjectAttributes,
+        io_status: *mut IO_STATUS_BLOCK,
+        allocation_size: *const i64,
+        file_attributes: u32,
+        share: u32,
+        disposition: u32,
+        options: u32,
+        ea: *const core::ffi::c_void,
+        ea_length: u32,
+    ) -> i32;
 }
+
+/// `OBJECT_ATTRIBUTES` (the `windows-sys` definition sits behind the WDK feature set).
+#[repr(C)]
+struct ObjectAttributes {
+    length: u32,
+    root_directory: HANDLE,
+    object_name: *const UNICODE_STRING,
+    attributes: u32,
+    security_descriptor: *const core::ffi::c_void,
+    security_quality_of_service: *const core::ffi::c_void,
+}
+
+/// `FILE_CREATE` (`NtCreateFile` disposition): fail if the name exists.
+const NT_FILE_CREATE: u32 = 2;
+/// `FILE_DIRECTORY_FILE` (`NtCreateFile` option).
+const NT_FILE_DIRECTORY_FILE: u32 = 0x1;
+/// `FILE_SYNCHRONOUS_IO_NONALERT` (`NtCreateFile` option), what `CreateFileW` asks for without
+/// `FILE_FLAG_OVERLAPPED`.
+const NT_FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x20;
+/// `FILE_OPEN_REPARSE_POINT` (`NtCreateFile` option).
+const NT_FILE_OPEN_REPARSE_POINT: u32 = 0x20_0000;
 
 /// Why a file operation failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -155,6 +206,13 @@ pub enum FsError {
     /// [`MoveHandle::rename_into`] that is not a plain directory). Nothing was changed.
     #[error("wrong kind of object for this operation")]
     WrongKind,
+    /// [`remove_pending_pairs_exactly`] found the pair a number of times other than the caller
+    /// expected, and changed nothing. [`FsError::code`] is `ERROR_INVALID_DATA`.
+    #[error("the boot-time move list holds the pair {found} time(s), not the expected count")]
+    PendingCountMismatch {
+        /// How many occurrences of the pair the list holds.
+        found: usize,
+    },
     /// Any other Win32 error code.
     #[error("Win32 error {0}")]
     Other(u32),
@@ -172,6 +230,7 @@ impl FsError {
             FsError::NotSameDevice => ERROR_NOT_SAME_DEVICE,
             FsError::AlreadyExists => ERROR_ALREADY_EXISTS,
             FsError::WrongKind => Win32Error::INVALID_PARAMETER.0,
+            FsError::PendingCountMismatch { .. } => Win32Error::INVALID_DATA.0,
             FsError::Other(code) => code,
         }
     }
@@ -375,16 +434,9 @@ impl MoveHandle {
     /// Uses `NtSetInformationFile(FileRenameInformationEx)` with the root directory set and no
     /// replace flag, falling back to `FileRenameInformation` where the newer class is unknown.
     pub fn rename_into(&self, dest_dir: &impl AsHandle, leaf: &str) -> Result<(), FsError> {
-        if leaf.is_empty() || leaf == "." || leaf == ".." || leaf.contains(['\\', '/', ':', '\0']) {
-            return Err(Win32Error::INVALID_PARAMETER.into());
-        }
+        check_leaf(leaf)?;
         let root = dest_dir.as_handle().as_raw_handle();
-        let tag = attribute_tag(root)?;
-        if tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
-            || tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        {
-            return Err(FsError::WrongKind);
-        }
+        require_plain_dir(root)?;
         let name: Vec<u16> = leaf.encode_utf16().collect();
         match self.rename_raw(root, &name) {
             Err(FsError::AccessDenied)
@@ -529,6 +581,121 @@ impl MoveHandle {
         set_info(self.raw(), FileBasicInfo, &info)?;
         Ok(wanted)
     }
+
+    /// Sets the creation time and the last-write time of the opened object, as FILETIME ticks
+    /// (100 ns since 1601-01-01 UTC, the unit of [`FileMeta::creation_time`] and
+    /// [`FileMeta::last_write_time`]). The last-access time and the attributes are left as they
+    /// are; the change time is the file system's to update.
+    ///
+    /// `SetFileInformationByHandle(FileBasicInfo)` with the two times given and `0` in the other
+    /// time fields and in `FileAttributes`, which Microsoft documents as "keep the current value".
+    /// The values `-1` and `-2`, which would switch the handle's own timestamp updates off and on,
+    /// are never written. So `0` and anything above `i64::MAX` (negative as a `LARGE_INTEGER`) are
+    /// refused with `FsError::Other(ERROR_INVALID_PARAMETER)`.
+    ///
+    /// Needs `FILE_WRITE_ATTRIBUTES` on the handle: one from
+    /// [`MoveHandle::open_with_attribute_write`], [`MoveHandle::open_with_security_write`] or
+    /// [`DestDir::create_dir`]; otherwise [`FsError::AccessDenied`]. Set the times of a directory
+    /// after its content is in place: adding an entry updates its last-write time.
+    pub fn set_times(&self, creation: u64, last_write: u64) -> Result<(), FsError> {
+        let (Ok(creation), Ok(last_write)) = (i64::try_from(creation), i64::try_from(last_write))
+        else {
+            return Err(Win32Error::INVALID_PARAMETER.into());
+        };
+        if creation == 0 || last_write == 0 {
+            return Err(Win32Error::INVALID_PARAMETER.into());
+        }
+        let info = FILE_BASIC_INFO {
+            CreationTime: creation,
+            LastAccessTime: 0,
+            LastWriteTime: last_write,
+            ChangeTime: 0,
+            FileAttributes: 0,
+        };
+        Ok(set_info(self.raw(), FileBasicInfo, &info)?)
+    }
+
+    /// Like [`MoveHandle::open`], with `FILE_WRITE_ATTRIBUTES`, `WRITE_DAC` and `WRITE_OWNER`
+    /// added so that [`MoveHandle::set_times`] and [`MoveHandle::set_security`] work. Fails with
+    /// [`FsError::AccessDenied`] when the object's security descriptor does not grant all of them
+    /// to the caller's token; no privilege is used to get them.
+    pub fn open_with_security_write(path: &Path) -> Result<MoveHandle, FsError> {
+        Self::open_access(
+            path,
+            DELETE
+                | SYNCHRONIZE
+                | FILE_READ_ATTRIBUTES
+                | FILE_WRITE_ATTRIBUTES
+                | WRITE_DAC
+                | WRITE_OWNER,
+        )
+    }
+
+    /// Sets the owner (`O:`), group (`G:`) and DACL (`D:`) parts present in `sddl` (any subset,
+    /// at least one) on the opened object, through this handle. The DACL is stored as given,
+    /// with its ACEs and their inherited flags, its protected flag (`P`) and its auto-inherited
+    /// flag (`AI`); nothing is recomputed from the parent and nothing is propagated to children.
+    ///
+    /// - A SACL part (`S:`) is refused with `FsError::Other(ERROR_INVALID_PARAMETER)`, as is a
+    ///   string with none of the three parts or one that is not SDDL.
+    /// - An owner the caller's token may not assign fails with
+    ///   `FsError::Other(ERROR_INVALID_OWNER)` (1307), and nothing is changed. No privilege is
+    ///   enabled and ownership is never taken.
+    /// - The handle needs `WRITE_DAC` for a DACL and `WRITE_OWNER` for an owner or group: one from
+    ///   [`MoveHandle::open_with_security_write`] or [`DestDir::create_dir`]; otherwise
+    ///   [`FsError::AccessDenied`].
+    ///
+    /// `SetKernelObjectSecurity` on the handle (never `SetSecurityInfo`, which recomputes the
+    /// inherited part from the parent and walks the children).
+    pub fn set_security(&self, sddl: &str) -> Result<(), FsError> {
+        let mut sd = SddlDescriptor::parse(sddl)?;
+        let (info, control) = sd.parts()?;
+        Ok(write_security(self.raw(), &mut sd, info, control)?)
+    }
+}
+
+/// `SetKernelObjectSecurity` on `h` with the parts `info` of `sd` (`control` is its control word).
+///
+/// The kernel stores the auto-inherited flag of a new DACL only when the descriptor also carries
+/// `SE_DACL_AUTO_INHERIT_REQ`; without it `D:AI(...)` is stored as `D:(...)` and `D:PAI(...)` as
+/// `D:P(...)`. With it, NTFS stores the given DACL unchanged (ACE order and inherited ACEs
+/// included) and sets the flag; it propagates nothing to children. So the request bit is set
+/// exactly when the given DACL has the auto-inherited flag (`set_security_round_trips_*` tests).
+fn write_security(
+    h: HANDLE,
+    sd: &mut SddlDescriptor,
+    info: u32,
+    control: u16,
+) -> Result<(), Win32Error> {
+    let auto_inherited =
+        info & DACL_SECURITY_INFORMATION != 0 && control & SE_DACL_AUTO_INHERITED != 0;
+    sd.set_auto_inherit_req(auto_inherited)?;
+    // SAFETY: `h` is live for the call; `sd.0` is a valid descriptor kept alive by `sd`.
+    if unsafe { SetKernelObjectSecurity(h, info, sd.0) } == 0 {
+        return Err(Win32Error::last());
+    }
+    Ok(())
+}
+
+/// The leaf rule of [`MoveHandle::rename_into`] and [`DestDir::create_dir`]: one plain path
+/// component, not empty, not `.` or `..`, no `\`, `/`, `:` or NUL. A trailing dot or space is
+/// allowed and kept.
+fn check_leaf(leaf: &str) -> Result<(), FsError> {
+    if leaf.is_empty() || leaf == "." || leaf == ".." || leaf.contains(['\\', '/', ':', '\0']) {
+        return Err(Win32Error::INVALID_PARAMETER.into());
+    }
+    Ok(())
+}
+
+/// [`FsError::WrongKind`] unless `h` is on a directory that is not a reparse point.
+fn require_plain_dir(h: HANDLE) -> Result<(), FsError> {
+    let tag = attribute_tag(h)?;
+    if tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(FsError::WrongKind);
+    }
+    Ok(())
 }
 
 /// `SetFileInformationByHandle` for a fixed-size information struct.
@@ -641,6 +808,99 @@ impl DestDir {
     pub fn as_file(&self) -> &FileHandle {
         &self.file
     }
+
+    /// Creates a new directory named `leaf` directly inside the directory this handle is on, with
+    /// the security descriptor `sddl` applied at creation, and returns a handle on it.
+    ///
+    /// The parent is this handle, not its path: if the directory was renamed and a junction put
+    /// at its old path since it was opened, the new directory still lands in the directory the
+    /// handle is on. Rules:
+    ///
+    /// - `leaf` follows the rule of [`MoveHandle::rename_into`]: one plain component, not empty,
+    ///   not `.` or `..`, no `\`, `/`, `:` or NUL, otherwise `FsError::Other(ERROR_INVALID_PARAMETER)`;
+    ///   a trailing dot or space is kept exactly.
+    /// - A handle that is not a plain directory (a file, a junction, a symbolic link, a mount
+    ///   point) is refused with [`FsError::WrongKind`].
+    /// - [`FsError::AlreadyExists`] if anything already has that name (a directory, a file, a
+    ///   link, dangling or not); the existing object is never opened or adopted.
+    /// - As with [`create_dir_secure`], an SDDL string without an owner part leaves the owner to
+    ///   the caller's token, and an owner the token may not assign fails with
+    ///   `FsError::Other(ERROR_INVALID_OWNER)`. A DACL without `P` also receives the parent's
+    ///   inheritable ACEs; use [`MoveHandle::set_security`] on the result to store a recorded
+    ///   descriptor exactly.
+    ///
+    /// The returned handle carries `DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES |
+    /// FILE_WRITE_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER` (the creator of an object
+    /// is granted what it asks for), with read, write and delete sharing, so
+    /// [`MoveHandle::set_times`], [`MoveHandle::set_security`] and [`MoveHandle::security`] work
+    /// on it. Whether an entry may be added is checked against the parent's security descriptor
+    /// at the time of the call; this handle needs no particular access.
+    ///
+    /// `NtCreateFile` with `RootDirectory` set to this handle, `FILE_CREATE`, and
+    /// `FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT`; no backup
+    /// intent, so no privilege takes part.
+    pub fn create_dir(&self, leaf: &str, sddl: &str) -> Result<MoveHandle, FsError> {
+        check_leaf(leaf)?;
+        let root = self.file.as_handle().as_raw_handle();
+        require_plain_dir(root)?;
+        let sd = SddlDescriptor::parse(sddl)?;
+        let mut name: Vec<u16> = leaf.encode_utf16().collect();
+        let Ok(name_bytes) = u16::try_from(name.len() * 2) else {
+            return Err(Win32Error::INVALID_PARAMETER.into());
+        };
+        let object_name = UNICODE_STRING {
+            Length: name_bytes,
+            MaximumLength: name_bytes,
+            Buffer: name.as_mut_ptr(),
+        };
+        let attributes = ObjectAttributes {
+            length: size_of::<ObjectAttributes>() as u32,
+            root_directory: root,
+            object_name: &object_name,
+            attributes: OBJ_CASE_INSENSITIVE,
+            security_descriptor: sd.0.cast_const(),
+            security_quality_of_service: ptr::null(),
+        };
+        let access = DELETE
+            | SYNCHRONIZE
+            | FILE_READ_ATTRIBUTES
+            | FILE_WRITE_ATTRIBUTES
+            | READ_CONTROL
+            | WRITE_DAC
+            | WRITE_OWNER;
+        let mut handle: HANDLE = ptr::null_mut();
+        let mut io = IO_STATUS_BLOCK::default();
+        // SAFETY: `attributes` points to a complete OBJECT_ATTRIBUTES whose name (`name`, of
+        // `name_bytes` bytes) and descriptor (kept alive by `sd`) outlive the call; `root` is a
+        // live handle borrowed from `self`; `handle` and `io` are writable locals; no allocation
+        // size and no extended attributes.
+        let status = unsafe {
+            NtCreateFile(
+                &mut handle,
+                access,
+                &attributes,
+                &mut io,
+                ptr::null(),
+                FILE_ATTRIBUTE_NORMAL,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                NT_FILE_CREATE,
+                NT_FILE_DIRECTORY_FILE
+                    | NT_FILE_OPEN_REPARSE_POINT
+                    | NT_FILE_SYNCHRONOUS_IO_NONALERT,
+                ptr::null(),
+                0,
+            )
+        };
+        if status < 0 {
+            // SAFETY: a pure status-to-code mapping.
+            return Err(Win32Error(unsafe { RtlNtStatusToDosError(status) }).into());
+        }
+        Ok(MoveHandle {
+            // SAFETY: on success `handle` is a freshly created, valid handle owned by nobody else.
+            file: FileHandle(unsafe { OwnedHandle::from_raw_handle(handle) }),
+            read_control: true,
+        })
+    }
 }
 
 /// `GetFileInformationByHandleEx(FileStreamInfo)`, decoded.
@@ -727,6 +987,66 @@ impl SddlDescriptor {
             return Err(Win32Error::last());
         }
         Ok(SddlDescriptor(psd))
+    }
+
+    /// The `SECURITY_INFORMATION` bits for the parts the descriptor holds (owner, group, DACL) and
+    /// its control word. A SACL part is refused with `ERROR_INVALID_PARAMETER` (writing one needs
+    /// a privilege, and Purge enables none), and so is a descriptor with none of the three parts.
+    fn parts(&self) -> Result<(u32, u16), Win32Error> {
+        let mut info = 0u32;
+        let (mut sid, mut defaulted): (PSID, i32) = (ptr::null_mut(), 0);
+        // SAFETY: `self.0` is a valid descriptor kept alive by `self`; out-pointers are locals.
+        if unsafe { GetSecurityDescriptorOwner(self.0, &mut sid, &mut defaulted) } == 0 {
+            return Err(Win32Error::last());
+        }
+        if !sid.is_null() {
+            info |= OWNER_SECURITY_INFORMATION;
+        }
+        sid = ptr::null_mut();
+        // SAFETY: as above.
+        if unsafe { GetSecurityDescriptorGroup(self.0, &mut sid, &mut defaulted) } == 0 {
+            return Err(Win32Error::last());
+        }
+        if !sid.is_null() {
+            info |= GROUP_SECURITY_INFORMATION;
+        }
+        let (mut present, mut acl): (i32, *mut ACL) = (0, ptr::null_mut());
+        // SAFETY: as above.
+        if unsafe { GetSecurityDescriptorSacl(self.0, &mut present, &mut acl, &mut defaulted) } == 0
+        {
+            return Err(Win32Error::last());
+        }
+        if present != 0 {
+            return Err(Win32Error::INVALID_PARAMETER);
+        }
+        // SAFETY: as above.
+        if unsafe { GetSecurityDescriptorDacl(self.0, &mut present, &mut acl, &mut defaulted) } == 0
+        {
+            return Err(Win32Error::last());
+        }
+        if present != 0 {
+            info |= DACL_SECURITY_INFORMATION;
+        }
+        if info == 0 {
+            return Err(Win32Error::INVALID_PARAMETER);
+        }
+        let (mut control, mut revision) = (0u16, 0u32);
+        // SAFETY: as above.
+        if unsafe { GetSecurityDescriptorControl(self.0, &mut control, &mut revision) } == 0 {
+            return Err(Win32Error::last());
+        }
+        Ok((info, control))
+    }
+
+    /// Sets or clears `SE_DACL_AUTO_INHERIT_REQ` in the descriptor's control word.
+    fn set_auto_inherit_req(&mut self, on: bool) -> Result<(), Win32Error> {
+        let bits = if on { SE_DACL_AUTO_INHERIT_REQ } else { 0 };
+        // SAFETY: `self.0` is a valid descriptor owned by `self`; the bit is one of those
+        // SetSecurityDescriptorControl documents as settable.
+        if unsafe { SetSecurityDescriptorControl(self.0, SE_DACL_AUTO_INHERIT_REQ, bits) } == 0 {
+            return Err(Win32Error::last());
+        }
+        Ok(())
     }
 
     fn attributes(&self) -> SECURITY_ATTRIBUTES {
@@ -938,6 +1258,31 @@ pub fn remove_pairs_from_value(bytes: &[u8], own: &[PendingPair]) -> PendingEdit
     }
 }
 
+/// Cuts the occurrences of `pair` out of the raw bytes of a `PendingFileRenameOperations` value
+/// if, and only if, there are exactly `expected` of them.
+///
+/// Equality is that of [`remove_pairs_from_value`]: source and destination equal unit for unit,
+/// case-sensitive, a `*<digit>` marker included (a pair stored as `*1\??\C:\x` is not the pair
+/// `\??\C:\x`; take the spelling from [`pending_renames`] or [`BootMove::pair`]). Every other byte
+/// stays as it was and in the same order. With `expected == 0` and no occurrence the input comes
+/// back unchanged with `removed == 0`.
+///
+/// Any other count gives [`FsError::PendingCountMismatch`] with the number found, and nothing is
+/// edited.
+pub fn remove_pair_exactly_from_value(
+    bytes: &[u8],
+    pair: &PendingPair,
+    expected: usize,
+) -> Result<PendingEdit, FsError> {
+    let edit = remove_pairs_from_value(bytes, std::slice::from_ref(pair));
+    if edit.removed != expected {
+        return Err(FsError::PendingCountMismatch {
+            found: edit.removed,
+        });
+    }
+    Ok(edit)
+}
+
 /// Where the boot-time move list is stored; lets the removal logic run against a stand-in.
 trait PendingStore {
     /// Raw type and bytes of a value, `None` if it does not exist.
@@ -982,6 +1327,39 @@ fn remove_pairs_in(store: &mut impl PendingStore, own: &[PendingPair]) -> Result
         }
     }
     Ok(total)
+}
+
+/// [`remove_pending_pairs_exactly`] against `store`: one read-modify-write of
+/// `PendingFileRenameOperations`. The edit is written only if a second read equals the first;
+/// otherwise nothing is written and the edit is redone from the new content, at most
+/// [`MAX_PENDING_WRITES`] times.
+fn remove_pair_exactly_in(
+    store: &mut impl PendingStore,
+    pair: &PendingPair,
+    expected: usize,
+) -> Result<usize, FsError> {
+    let name = PENDING_VALUE_NAMES[0];
+    for _ in 0..MAX_PENDING_WRITES {
+        let before = store.read(name)?;
+        let edit = match &before {
+            Some((REG_MULTI_SZ, bytes)) => remove_pair_exactly_from_value(bytes, pair, expected)?,
+            // No list (or not a list): the pair is there zero times.
+            _ if expected == 0 => return Ok(0),
+            _ => return Err(FsError::PendingCountMismatch { found: 0 }),
+        };
+        if edit.removed == 0 {
+            return Ok(0);
+        }
+        if store.read(name)? != before {
+            continue;
+        }
+        match &edit.value {
+            Some(v) => store.write(name, REG_MULTI_SZ, v)?,
+            None => store.delete(name)?,
+        }
+        return Ok(edit.removed);
+    }
+    Err(FsError::Other(ERROR_RETRY))
 }
 
 /// An open registry key, closed on drop.
@@ -1119,6 +1497,28 @@ pub fn remove_pending_pairs(own: &[PendingPair]) -> Result<usize, FsError> {
     remove_pairs_in(&mut store, own)
 }
 
+/// Removes the occurrences of `pair` from `PendingFileRenameOperations` only if the value holds
+/// exactly `expected` of them, and returns that count. With any other count nothing is changed
+/// and the call fails with [`FsError::PendingCountMismatch`], which carries the count found.
+///
+/// Equality is exact (see [`remove_pair_exactly_from_value`]); every other entry stays
+/// byte-identical and in order, and the value is deleted only when nothing but terminators would
+/// be left. `PendingFileRenameOperations2`, which `MoveFileExW` does not write, is neither read
+/// nor changed.
+///
+/// One read-modify-write: the value is read, edited in memory, read again and written only if
+/// the second read equals the first; if another program changed it in between, nothing is
+/// written and the edit is redone from the new content (at most eight attempts, then
+/// `FsError::Other(ERROR_RETRY)`). The registry has no compare-and-swap, so a writer that
+/// lands between the second read and the write can still be overwritten.
+///
+/// Opens the key for writing only if something is to be removed: with `expected == 0` and the
+/// pair absent it returns `Ok(0)` without administrative rights.
+pub fn remove_pending_pairs_exactly(pair: &PendingPair, expected: usize) -> Result<usize, FsError> {
+    let mut store = RegistryPending::open()?;
+    remove_pair_exactly_in(&mut store, pair, expected)
+}
+
 /// NT form (`\??\C:\dir\name`) of an absolute path, the spelling `MoveFileExW` stores.
 fn nt_string(path: &Path) -> Result<String, Win32Error> {
     let ext = extended_units(path)?;
@@ -1135,9 +1535,15 @@ pub fn pending_pair(src: &Path, dst: &Path) -> Result<PendingPair, FsError> {
     })
 }
 
-/// An entry without a leading `*<digits>` marker, which newer Windows builds may write in front of
-/// the NT path.
-fn strip_marker(entry: &str) -> &str {
+/// A boot-time move list entry (a [`PendingPair::src`] or [`PendingPair::dst`]) without the
+/// leading `*<digits>` marker that newer Windows builds may write in front of the NT path:
+/// `*1\??\C:\x` gives `\??\C:\x`. An entry without the marker comes back unchanged, and a `*` or
+/// digits elsewhere are kept. A leading `!` (replace an existing destination) is not a marker and
+/// is kept.
+///
+/// Use it to recognise a stored pair as the one [`pending_pair`] spells; the removal functions
+/// compare exactly and need the stored spelling, marker included.
+pub fn strip_marker(entry: &str) -> &str {
     match entry.strip_prefix('*') {
         Some(rest) => rest.trim_start_matches(|c: char| c.is_ascii_digit()),
         None => entry,
@@ -2333,5 +2739,558 @@ mod tests {
         );
         assert!(!dest.exists());
         assert_eq!(std::fs::read(&f).unwrap(), b"stay");
+    }
+
+    /// The SDDL string of `path`, read through a handle on the path itself.
+    fn sddl_of(path: &Path) -> String {
+        crate::secure::handle_sddl(&crate::secure::open_for_security(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn create_dir_lands_in_the_handle_directory_after_a_path_swap() {
+        let s = Scratch::new("mkdir-swap");
+        let (parent, protected) = (s.path("parent"), s.path("protected"));
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::create_dir(&protected).unwrap();
+        let me = crate::sid::current_user_sid().unwrap();
+        let sddl = format!("O:{me}G:{me}D:P(A;OICI;FA;;;{me})(A;OICI;FA;;;SY)");
+
+        let dir = DestDir::open(&parent).unwrap();
+        assert!(dir.facts().unwrap().is_plain_dir());
+        // Between the check and the creation, the directory is renamed away and a junction to a
+        // protected directory takes its name.
+        let old = s.path("parent.old");
+        std::fs::rename(&parent, &old).unwrap();
+        mklink_junction(&parent, &protected);
+
+        let created = dir.create_dir("child", &sddl).unwrap();
+        assert!(names(&protected).is_empty());
+        assert_eq!(names(&old), ["child"]);
+        let meta = created.metadata().unwrap();
+        assert!(meta.is_dir && meta.reparse_tag == 0, "{meta:?}");
+        assert_eq!(
+            meta.file_id,
+            crate::fs::file_id(&old.join("child")).unwrap()
+        );
+        let canon = std::fs::canonicalize(old.join("child")).unwrap();
+        assert!(
+            created
+                .final_path()
+                .unwrap()
+                .eq_ignore_ascii_case(&canon.to_string_lossy())
+        );
+
+        // The descriptor was applied at creation, exactly.
+        assert!(created.has_read_control());
+        let sec = created.security().unwrap();
+        assert_eq!(sec.sddl, sddl);
+        assert_eq!(sddl_of(&old.join("child")), sddl);
+
+        // A fresh look at the path sees the junction, and creating through it is refused.
+        let fresh = DestDir::open(&parent).unwrap();
+        assert_eq!(
+            fresh.create_dir("x", &sddl).unwrap_err(),
+            FsError::WrongKind
+        );
+        assert!(names(&protected).is_empty());
+    }
+
+    #[test]
+    fn create_dir_never_adopts_an_existing_object_and_refuses_bad_leaves() {
+        let s = Scratch::new("mkdir-exists");
+        let me = crate::sid::current_user_sid().unwrap();
+        let sddl = format!("D:P(A;OICI;FA;;;{me})");
+        let d = s.path("d");
+        std::fs::create_dir(&d).unwrap();
+        let dir = DestDir::open(&d).unwrap();
+
+        // Existing objects of every kind: a directory with content, a file, a junction (live and
+        // dangling), a file symbolic link to a missing target if one can be made.
+        std::fs::create_dir(d.join("taken")).unwrap();
+        std::fs::write(d.join(r"taken\inner.txt"), b"inner").unwrap();
+        std::fs::write(d.join("file.txt"), b"file").unwrap();
+        mklink_junction(&d.join("live-j"), &s.path("elsewhere"));
+        std::fs::create_dir(s.path("elsewhere")).unwrap();
+        mklink_junction(&d.join("dangling-j"), &s.path("victim-j"));
+        let mut taken = vec!["taken", "file.txt", "live-j", "dangling-j"];
+        if try_symlink_file(
+            &s.path("victim.txt"),
+            &d.join("dangling-f"),
+            "create_dir_never_adopts_an_existing_object_and_refuses_bad_leaves",
+        ) {
+            taken.push("dangling-f");
+        }
+        let before: Vec<(String, crate::fs::FileMeta, String)> = taken
+            .iter()
+            .map(|n| {
+                let p = d.join(n);
+                (n.to_string(), crate::fs::metadata(&p).unwrap(), sddl_of(&p))
+            })
+            .collect();
+        let listing = names(&d);
+        for name in &taken {
+            assert_eq!(
+                dir.create_dir(name, &sddl).unwrap_err(),
+                FsError::AlreadyExists,
+                "{name}"
+            );
+            // Another letter case is the same name.
+            assert_eq!(
+                dir.create_dir(&name.to_uppercase(), &sddl).unwrap_err(),
+                FsError::AlreadyExists,
+                "{name}"
+            );
+        }
+        for (name, meta, sd) in &before {
+            let p = d.join(name);
+            assert_eq!(&crate::fs::metadata(&p).unwrap(), meta, "{name}");
+            assert_eq!(&sddl_of(&p), sd, "{name}");
+        }
+        assert_eq!(names(&d), listing);
+        assert_eq!(names(&d.join("taken")), ["inner.txt"]);
+        assert_eq!(std::fs::read(d.join("file.txt")).unwrap(), b"file");
+        assert!(names(&s.path("elsewhere")).is_empty());
+        for victim in ["victim-j", "victim.txt"] {
+            assert!(!s.path(victim).exists(), "{victim}");
+        }
+
+        // Leaves that are not one plain component.
+        for bad in [
+            "", ".", "..", r"a\b", "a/b", "a:b", "a::$DATA", "a\0b", r"..\up",
+        ] {
+            assert_eq!(
+                dir.create_dir(bad, &sddl).unwrap_err(),
+                FsError::Other(87),
+                "{bad:?}"
+            );
+        }
+        // A descriptor that is not SDDL creates nothing.
+        assert!(matches!(
+            dir.create_dir("bad-sddl", "not sddl").unwrap_err(),
+            FsError::Other(_)
+        ));
+        assert_eq!(names(&d), listing);
+        assert_eq!(names(&s.0), ["d", "elsewhere"]);
+
+        // A trailing dot or space is kept, as for rename_into.
+        let dotted = dir.create_dir("kept. ", &sddl).unwrap();
+        assert!(dotted.final_path().unwrap().ends_with(r"\kept. "));
+        assert!(names(&d).contains(&"kept. ".to_string()));
+
+        // A handle that is not a plain directory: a file, a junction.
+        let on_file = DestDir::open(&d.join("file.txt")).unwrap();
+        assert_eq!(
+            on_file.create_dir("x", &sddl).unwrap_err(),
+            FsError::WrongKind
+        );
+        let on_junction = DestDir::open(&d.join("live-j")).unwrap();
+        assert_eq!(
+            on_junction.create_dir("x", &sddl).unwrap_err(),
+            FsError::WrongKind
+        );
+        assert!(names(&s.path("elsewhere")).is_empty());
+    }
+
+    #[test]
+    fn create_dir_handle_carries_the_rights_it_asked_for() {
+        // The creator is granted the access it requests, even when the new descriptor grants the
+        // caller nothing but reading.
+        let s = Scratch::new("mkdir-rights");
+        let me = crate::sid::current_user_sid().unwrap();
+        let dir = DestDir::open(&s.0).unwrap();
+        let h = dir
+            .create_dir("readonly", &format!("O:{me}D:P(A;;FR;;;WD)"))
+            .unwrap();
+        let sec = h.security().unwrap();
+        assert_eq!(sec.aces().len(), 1, "{}", sec.sddl);
+        let m = h.metadata().unwrap();
+        h.set_times(m.creation_time - 10_000_000, m.last_write_time - 20_000_000)
+            .unwrap();
+        let open = format!("D:P(A;OICI;FA;;;{me})");
+        h.set_security(&open).unwrap();
+        assert!(h.security().unwrap().sddl.ends_with(&open));
+        h.remove_dir_if_empty().unwrap();
+        drop(h);
+        assert!(names(&s.0).is_empty());
+    }
+
+    #[test]
+    fn set_times_round_trips_through_metadata() {
+        let s = Scratch::new("times");
+        let (src, f, d) = (s.path("src.txt"), s.path("f.txt"), s.path("d"));
+        std::fs::write(&src, b"source").unwrap();
+        std::fs::write(&f, b"target").unwrap();
+        std::fs::create_dir(&d).unwrap();
+        let _ = MoveHandle::open_with_attribute_write(&src)
+            .unwrap()
+            .set_attributes(FILE_ATTRIBUTE_HIDDEN, 0)
+            .unwrap();
+        // 2001-02-03 and 2002-03-04, odd tick counts to see that nothing is rounded.
+        let (creation, last_write) = (126_257_000_001_234_567u64, 126_597_000_007_654_321u64);
+
+        for path in [&f, &d] {
+            let h = MoveHandle::open_with_attribute_write(path).unwrap();
+            let before = h.metadata().unwrap();
+            h.set_times(creation, last_write).unwrap();
+            let after = h.metadata().unwrap();
+            assert_eq!(
+                (after.creation_time, after.last_write_time),
+                (creation, last_write)
+            );
+            assert_eq!(after.last_access_time, before.last_access_time);
+            assert_eq!(after.attributes, before.attributes);
+            drop(h);
+            let fresh = crate::fs::metadata(path).unwrap();
+            assert_eq!(
+                (fresh.creation_time, fresh.last_write_time),
+                (creation, last_write)
+            );
+        }
+
+        // Times captured on one file and written on another come back equal. (The content is
+        // read first: reading updates the last-access time, which the checks below compare.)
+        assert_eq!(std::fs::read(&f).unwrap(), b"target");
+        let captured = crate::fs::metadata(&src).unwrap();
+        let h = MoveHandle::open_with_security_write(&f).unwrap();
+        h.set_times(captured.creation_time, captured.last_write_time)
+            .unwrap();
+        drop(h);
+        let copy = crate::fs::metadata(&f).unwrap();
+        assert_eq!(
+            (copy.creation_time, copy.last_write_time),
+            (captured.creation_time, captured.last_write_time)
+        );
+        assert_eq!(copy.attributes & FILE_ATTRIBUTE_HIDDEN, 0);
+
+        // Values that FILE_BASIC_INFO gives another meaning to are refused; nothing changes.
+        let h = MoveHandle::open_with_attribute_write(&f).unwrap();
+        for (c, w) in [
+            (0, last_write),
+            (creation, 0),
+            (u64::MAX, last_write),
+            (creation, u64::MAX - 1),
+            (1 << 63, last_write),
+        ] {
+            assert_eq!(h.set_times(c, w), Err(FsError::Other(87)), "{c} {w}");
+        }
+        assert_eq!(crate::fs::metadata(&f).unwrap(), copy);
+
+        // A handle without FILE_WRITE_ATTRIBUTES cannot.
+        let plain = MoveHandle::open(&f).unwrap();
+        assert_eq!(
+            plain.set_times(creation, last_write),
+            Err(FsError::AccessDenied)
+        );
+        assert_eq!(crate::fs::metadata(&f).unwrap(), copy);
+    }
+
+    #[test]
+    fn set_security_round_trips_auto_inherited_and_protected_dacls() {
+        let s = Scratch::new("setsec");
+        let me = crate::sid::current_user_sid().unwrap();
+        let d = s.path("d");
+        std::fs::create_dir(&d).unwrap();
+        std::fs::write(d.join("child.txt"), b"c").unwrap();
+        let child_sddl = sddl_of(&d.join("child.txt"));
+        let h = MoveHandle::open_with_security_write(&d).unwrap();
+
+        // What the directory inherited from the temp directory: an auto-inherited DACL.
+        let inherited = h.security().unwrap();
+        assert!(inherited.sddl.contains("D:AI("), "{}", inherited.sddl);
+        assert_ne!(inherited.control & SE_DACL_AUTO_INHERITED, 0);
+
+        let full = |dacl: &str| format!("O:{me}G:{me}{dacl}");
+        let cases = [
+            // Protected, then auto-inherited again (SetKernelObjectSecurity alone drops AI here).
+            full(&format!("D:P(A;OICI;FA;;;{me})(A;;FR;;;BU)")),
+            inherited.sddl.clone(),
+            // Protected and auto-inherited, with an inherited ACE kept as given.
+            full(&format!("D:PAI(A;;FR;;;BU)(A;OICIID;FA;;;{me})")),
+            // Auto-inherited with explicit and inherited ACEs that differ from the parent's.
+            full(&format!(
+                "D:AI(A;;FR;;;BU)(A;OICIID;FA;;;{me})(A;OICIID;FA;;;SY)"
+            )),
+            // Neither flag: AI must not appear.
+            full(&format!("D:(A;;FR;;;BU)(A;OICIID;FA;;;{me})")),
+            inherited.sddl.clone(),
+        ];
+        for sddl in &cases {
+            h.set_security(sddl).unwrap();
+            let got = h.security().unwrap();
+            assert_eq!(&got.sddl, sddl);
+            assert_eq!(&sddl_of(&d), sddl);
+            assert_eq!(
+                got.control & SE_DACL_AUTO_INHERITED != 0,
+                sddl.contains(":AI(") || sddl.contains(":PAI("),
+                "{sddl}"
+            );
+            assert_eq!(got.dacl_protected, sddl.contains("D:P"), "{sddl}");
+        }
+        // Nothing was propagated to the child.
+        assert_eq!(sddl_of(&d.join("child.txt")), child_sddl);
+
+        // A descriptor captured on one object is stored exactly on another.
+        let f = s.path("f.txt");
+        std::fs::write(&f, b"f").unwrap();
+        let fh = MoveHandle::open_with_security_write(&f).unwrap();
+        let mixed = &cases[3];
+        fh.set_security(mixed).unwrap();
+        assert_eq!(&fh.security().unwrap().sddl, mixed);
+        fh.set_security(&child_sddl).unwrap();
+        assert_eq!(fh.security().unwrap().sddl, child_sddl);
+
+        // The DACL alone leaves owner and group; the owner alone leaves the DACL.
+        let protected_dacl = format!("D:P(A;OICI;FA;;;{me})");
+        h.set_security(&protected_dacl).unwrap();
+        assert_eq!(h.security().unwrap().sddl, full(&protected_dacl));
+        h.set_security(&format!("O:{me}")).unwrap();
+        assert_eq!(h.security().unwrap().sddl, full(&protected_dacl));
+        let now = h.security().unwrap().sddl;
+
+        // Refused inputs change nothing.
+        let inv = FsError::Other(87);
+        assert_eq!(h.set_security("S:(AU;SA;FA;;;WD)"), Err(inv));
+        assert_eq!(h.set_security(&format!("{now}S:(AU;SA;FA;;;WD)")), Err(inv));
+        assert!(h.set_security("not sddl").is_err());
+        assert!(h.set_security("").is_err());
+        assert_eq!(h.security().unwrap().sddl, now);
+
+        // An owner the token may not assign is an error; no privilege is enabled for it.
+        let trusted_installer = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+        assert_eq!(
+            h.set_security(&format!("O:{trusted_installer}")),
+            Err(FsError::Other(1307))
+        );
+        assert_eq!(
+            h.set_security(&cases[3].replacen(
+                &format!("O:{me}"),
+                &format!("O:{trusted_installer}"),
+                1
+            )),
+            Err(FsError::Other(1307))
+        );
+        assert_eq!(h.security().unwrap().sddl, now);
+
+        // A handle without WRITE_DAC / WRITE_OWNER cannot write the descriptor.
+        let plain = MoveHandle::open(&d).unwrap();
+        assert_eq!(
+            plain.set_security(&inherited.sddl),
+            Err(FsError::AccessDenied)
+        );
+        let attrs = MoveHandle::open_with_attribute_write(&d).unwrap();
+        assert_eq!(
+            attrs.set_security(&protected_dacl),
+            Err(FsError::AccessDenied)
+        );
+        assert_eq!(h.security().unwrap().sddl, now);
+
+        // Back to the inherited descriptor, so the scratch directory goes as usual.
+        h.set_security(&inherited.sddl).unwrap();
+        assert_eq!(sddl_of(&d), inherited.sddl);
+    }
+
+    #[test]
+    fn strip_marker_is_public_and_strips_only_a_leading_marker() {
+        assert_eq!(strip_marker(r"*1\??\C:\x"), r"\??\C:\x");
+        assert_eq!(strip_marker(r"*12\??\C:\x"), r"\??\C:\x");
+        assert_eq!(strip_marker(r"\??\C:\x"), r"\??\C:\x");
+        assert_eq!(strip_marker(r"!\??\C:\x"), r"!\??\C:\x");
+        assert_eq!(strip_marker(r"\??\C:\*1\2"), r"\??\C:\*1\2");
+        assert_eq!(strip_marker(""), "");
+    }
+
+    #[test]
+    fn pending_exact_removal_cuts_only_an_exact_count() {
+        let ours = pair(r"\??\C:\App\locked.dll", r"\??\C:\Q\1\locked.dll");
+        let ours_b = multi(&[&ours.src, &ours.dst]);
+        let foreign_a = multi(&[r"\??\C:\Windows\a.tmp", ""]);
+        let foreign_b = multi(&[r"\??\C:\x\Old.exe", r"!\??\C:\x\New.exe"]);
+        let foreign_c = multi(&[r"\??\C:\y", r"\??\C:\z"]);
+        // Near misses: letter case of either half, a marker, a delete or replacing variant.
+        let near = [
+            multi(&[r"\??\c:\app\locked.dll", &ours.dst]),
+            multi(&[&ours.src, r"\??\C:\q\1\locked.dll"]),
+            multi(&[&format!("*1{}", ours.src), &ours.dst]),
+            multi(&[&ours.src, &format!("*1{}", ours.dst)]),
+            multi(&[&ours.src, ""]),
+            multi(&[&ours.src, &format!("!{}", ours.dst)]),
+        ]
+        .concat();
+        let term = vec![0u8, 0];
+        let value = [
+            &foreign_a[..],
+            &ours_b,
+            &foreign_b,
+            &near,
+            &ours_b,
+            &foreign_c,
+            &term,
+        ]
+        .concat();
+        let expect = [&foreign_a[..], &foreign_b, &near, &foreign_c, &term].concat();
+
+        let edit = remove_pair_exactly_from_value(&value, &ours, 2).unwrap();
+        assert_eq!(edit.removed, 2);
+        assert_eq!(edit.value.as_deref(), Some(&expect[..]));
+        // Any other count is refused with the count found.
+        for wrong in [0, 1, 3] {
+            assert_eq!(
+                remove_pair_exactly_from_value(&value, &ours, wrong),
+                Err(FsError::PendingCountMismatch { found: 2 })
+            );
+        }
+        // After the cut, only the near misses remain: zero is the count.
+        assert_eq!(
+            remove_pair_exactly_from_value(&expect, &ours, 1),
+            Err(FsError::PendingCountMismatch { found: 0 })
+        );
+        let none = remove_pair_exactly_from_value(&expect, &ours, 0).unwrap();
+        assert_eq!(
+            (none.removed, none.value.as_deref()),
+            (0, Some(&expect[..]))
+        );
+        // A marked spelling is its own pair.
+        let marked = pair(&format!("*1{}", ours.src), &ours.dst);
+        let m = remove_pair_exactly_from_value(&value, &marked, 1).unwrap();
+        assert_eq!(m.removed, 1);
+        assert_eq!(remove_pairs_from_value(&value, &[marked]).value, m.value);
+        // Only ours: the value goes.
+        let only = [&ours_b[..], &term].concat();
+        assert_eq!(
+            remove_pair_exactly_from_value(&only, &ours, 1).unwrap(),
+            PendingEdit {
+                removed: 1,
+                value: None
+            }
+        );
+        assert_eq!(FsError::PendingCountMismatch { found: 3 }.code(), 13);
+    }
+
+    #[test]
+    fn pending_exact_removal_is_one_compared_write() {
+        let ours = pair("src", "dst");
+        let ours_b = multi(&["src", "dst"]);
+        let foreign = multi(&["other", ""]);
+        let late = multi(&["late", "comer"]);
+        let term = vec![0u8, 0];
+        let value = [&foreign[..], &ours_b, &late, &ours_b, &term].concat();
+
+        // The right count: one write, foreign pairs byte-identical and in order.
+        let mut st = FakeStore::new(Some(value.clone()));
+        assert_eq!(remove_pair_exactly_in(&mut st, &ours, 2).unwrap(), 2);
+        assert_eq!(st.primary().unwrap(), [&foreign[..], &late, &term].concat());
+        assert_eq!(st.writes, 1);
+
+        // The wrong count: nothing written, value unchanged, the count found reported.
+        let mut st = FakeStore::new(Some(value.clone()));
+        assert_eq!(
+            remove_pair_exactly_in(&mut st, &ours, 1),
+            Err(FsError::PendingCountMismatch { found: 2 })
+        );
+        assert_eq!((st.writes, st.primary()), (0, Some(&value[..])));
+
+        // No value, or a value of another type: the pair is there zero times.
+        let mut st = FakeStore::new(None);
+        assert_eq!(remove_pair_exactly_in(&mut st, &ours, 0), Ok(0));
+        assert_eq!(
+            remove_pair_exactly_in(&mut st, &ours, 1),
+            Err(FsError::PendingCountMismatch { found: 0 })
+        );
+        st.values
+            .insert(PENDING_VALUE_NAMES[0].to_string(), (3, value.clone()));
+        assert_eq!(
+            remove_pair_exactly_in(&mut st, &ours, 2),
+            Err(FsError::PendingCountMismatch { found: 0 })
+        );
+        assert_eq!(st.writes, 0);
+
+        // The second value is neither counted nor changed.
+        let mut st = FakeStore::new(Some([&foreign[..], &term].concat()));
+        let second = [&ours_b[..], &term].concat();
+        st.values.insert(
+            PENDING_VALUE_NAMES[1].to_string(),
+            (REG_MULTI_SZ, second.clone()),
+        );
+        assert_eq!(
+            remove_pair_exactly_in(&mut st, &ours, 1),
+            Err(FsError::PendingCountMismatch { found: 0 })
+        );
+        assert_eq!(st.values[PENDING_VALUE_NAMES[1]].1, second);
+        assert_eq!(st.writes, 0);
+
+        // Only ours: the value is deleted.
+        let mut st = FakeStore::new(Some([&ours_b[..], &term].concat()));
+        assert_eq!(remove_pair_exactly_in(&mut st, &ours, 1), Ok(1));
+        assert_eq!(st.primary(), None);
+
+        // Another program adds a pair between the first read and the write: nothing stale is
+        // written, the count is taken again on the new content, and the newcomer survives.
+        let start = [&foreign[..], &ours_b, &term].concat();
+        let mut st = FakeStore::new(Some(start.clone()));
+        st.interfere = vec![(2, [&foreign[..], &ours_b, &late, &term].concat())];
+        assert_eq!(remove_pair_exactly_in(&mut st, &ours, 1), Ok(1));
+        assert_eq!(st.primary().unwrap(), [&foreign[..], &late, &term].concat());
+        assert_eq!(st.writes, 1);
+        // If the newcomer is a second copy of ours, the count no longer matches: no write.
+        let mut st = FakeStore::new(Some(start.clone()));
+        let doubled = [&foreign[..], &ours_b, &ours_b, &term].concat();
+        st.interfere = vec![(2, doubled.clone())];
+        assert_eq!(
+            remove_pair_exactly_in(&mut st, &ours, 1),
+            Err(FsError::PendingCountMismatch { found: 2 })
+        );
+        assert_eq!((st.writes, st.primary()), (0, Some(&doubled[..])));
+
+        // A list that changes between every pair of reads ends in ERROR_RETRY, unwritten.
+        let mut st = FakeStore::new(Some(start.clone()));
+        let a = [&ours_b[..], &foreign, &term].concat();
+        let b = [&ours_b[..], &late, &term].concat();
+        st.interfere = (1..=MAX_PENDING_WRITES)
+            .map(|k| (2 * k, if k % 2 == 0 { a.clone() } else { b.clone() }))
+            .collect();
+        assert_eq!(
+            remove_pair_exactly_in(&mut st, &ours, 1),
+            Err(FsError::Other(ERROR_RETRY))
+        );
+        assert_eq!(st.writes, 0);
+    }
+
+    #[test]
+    fn pending_exact_removal_of_an_absent_pair_needs_no_rights() {
+        // Reads the real list only; nothing is written because nothing is to be removed.
+        let absent = pair(
+            r"\??\C:\purge-test\never-registered-4c1d",
+            r"\??\C:\purge-test\y",
+        );
+        let before = pending_renames().unwrap();
+        assert_eq!(remove_pending_pairs_exactly(&absent, 0), Ok(0));
+        assert_eq!(
+            remove_pending_pairs_exactly(&absent, 1),
+            Err(FsError::PendingCountMismatch { found: 0 })
+        );
+        assert_eq!(pending_renames().unwrap(), before);
+    }
+
+    #[test]
+    #[ignore = "needs administrative rights: writes PendingFileRenameOperations in HKLM (VM only)"]
+    fn pending_exact_removal_of_a_registered_boot_move() {
+        let s = Scratch::new("bootexact");
+        let f = s.path("locked.dll");
+        std::fs::write(&f, b"x").unwrap();
+        let before = pending_renames().unwrap();
+        let reg = move_delay_until_reboot(&f, &s.path("q.dll")).unwrap();
+        assert!(reg.confirmed, "{reg:?}");
+        let during = pending_renames().unwrap();
+
+        // A wrong count changes nothing.
+        assert_eq!(
+            remove_pending_pairs_exactly(&reg.pair, 2),
+            Err(FsError::PendingCountMismatch { found: 1 })
+        );
+        assert_eq!(pending_renames().unwrap(), during);
+
+        assert_eq!(remove_pending_pairs_exactly(&reg.pair, 1), Ok(1));
+        assert_eq!(pending_renames().unwrap(), before);
+        assert_eq!(remove_pending_pairs_exactly(&reg.pair, 0), Ok(0));
     }
 }
