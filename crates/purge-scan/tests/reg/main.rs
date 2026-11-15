@@ -454,6 +454,9 @@ fn apppaths_key_of_a_file_that_outlived_the_uninstall_is_not_offered() {
     let found = world.scan(&RegAppPaths);
     // The registration of a program that still works, which nothing shows to be the app's.
     assert!(find(&found, &key(format!(r"{paths}\rg.exe"))).is_none());
+    // The key of the program the uninstaller removed is the app's as before.
+    let gone = expect(&found, &key(format!(r"{paths}\git-bash.exe")));
+    assert!(tier_a_in_scope(gone) && score(gone) >= 8);
     // While the app is not verified gone its files are all still there: a file that is present
     // says nothing, and the key is listed (never Tier A) as before.
     let live = World::new(fixture().file(&own, 5_000), fp.clone());
@@ -467,9 +470,31 @@ fn apppaths_key_of_a_file_that_outlived_the_uninstall_is_not_offered() {
         let c = expect(&found, &key(format!(r"{paths}\{exe}")));
         assert!(c.evidence.iter().all(|e| e.tier != Tier::A), "{c:?}");
     }
-    // The key of the program the uninstaller removed is the app's as before.
-    let gone = expect(&found, &key(format!(r"{paths}\git-bash.exe")));
-    assert!(tier_a_in_scope(gone) && score(gone) >= 8);
+    // The uninstaller removed the programs and left its Uninstall key behind: verify-gone fails as
+    // a whole, and the files tell the same story as before.
+    let half = World::new(fixture(), fp.clone());
+    let ctx = purge_scan::framework::ScanCtx {
+        verify_gone: Some(purge_model::VerifyGone::new(false, true, true)),
+        ..half.ctx()
+    };
+    let view = purge_scan::framework::AppIdentityView::from_fingerprint(&half.fp, &half.env);
+    let found = ctx.run(&RegAppPaths, &view);
+    assert!(find(&found, &key(format!(r"{paths}\rg.exe"))).is_none());
+    assert!(find(&found, &key(format!(r"{paths}\git-bash.exe"))).is_some());
+    // With no main exe known, "the main exes are gone" holds of nothing: only the whole check
+    // counts, and the key is listed as while the app is installed.
+    let mut blind = fp.clone();
+    for exe in &mut blind.exes {
+        exe.main = false;
+    }
+    let world = World::new(fixture(), blind);
+    let ctx = purge_scan::framework::ScanCtx {
+        verify_gone: Some(purge_model::VerifyGone::new(false, true, true)),
+        ..world.ctx()
+    };
+    let view = purge_scan::framework::AppIdentityView::from_fingerprint(&world.fp, &world.env);
+    let found = ctx.run(&RegAppPaths, &view);
+    assert!(find(&found, &key(format!(r"{paths}\rg.exe"))).is_some());
 
     // A file the installer's log names stays the app's when it survives (it was locked).
     fp.inno = vec![purge_model::InnoRecord {
@@ -538,6 +563,23 @@ fn apppaths_bare_exe_name_is_not_ownership() {
         .flat_map(u16::to_le_bytes)
         .collect();
     assert!(scan(machine().binary(&named, "Target", bytes), &fp).is_empty());
+    // Data that may hold a path unseen counts as holding one: binary data too large to be read
+    // for text, and a string with text after its end.
+    let plain = machine().sz(&named, "FriendlyAppName", "Firefox");
+    assert_eq!(
+        scan(plain.clone().binary(&named, "Small", vec![0x41; 64]), &fp).len(),
+        1
+    );
+    assert!(scan(plain.clone().binary(&named, "Large", vec![0x41; 5000]), &fp).is_empty());
+    let after_end: Vec<u8> = "Firefox\0D:\\Portable\\firefox.exe\0"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let hidden = purge_source::types::RegData {
+        ty: purge_source::types::REG_SZ,
+        ..purge_source::types::RegData::from_binary(after_end)
+    };
+    assert!(scan(plain.value(&named, "Note", hidden), &fp).is_empty());
 
     // A sibling install that is known claims the name: the key is listed as kept for it.
     let portable = machine().sz(&named, "FriendlyAppName", "Firefox").sz(

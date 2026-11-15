@@ -1148,9 +1148,14 @@ pub(crate) mod common {
     }
 
     /// Whether the value's data names a path of any kind: a drive path, a UNC path or one below a
-    /// `%NAME%` reference. Data that is cut short or unknown may hold one, so it counts.
+    /// `%NAME%` reference. Data that may hold one unseen counts: cut short or unknown, binary data
+    /// too large to be read for text, a string with text after its end.
     pub(crate) fn names_a_path(value: &RegValue) -> bool {
-        !value.data.is_complete()
+        let data = &value.data;
+        let text_type = data.string().is_some() || data.multi_sz().is_some();
+        !data.is_complete()
+            || (!text_type && data.bytes.len() > BINARY_UTF16_SCAN_MAX)
+            || (data.string().is_some() && data.has_text_after_nul())
             || data_strings(value).iter().any(|s| {
                 s.contains(":\\") || s.contains(":/") || s.contains("\\\\") || s.contains("%\\")
             })

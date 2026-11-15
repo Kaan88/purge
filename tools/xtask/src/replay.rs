@@ -16,6 +16,18 @@
 //! overlay), REG_BINARY and other non-string data are unknown, and string previews are cut at 1024
 //! characters.
 //!
+//! `replay --live` is the scan of the still-installed app instead (the rig's `engine-scan-live`, vm/RIG.md
+//! §4b): the phase-1 fixture is scanned in `external` mode with the fingerprint as harvested, so there is
+//! no uninstall window, no verify-gone result and no co-removed product.
+//!
+//! `--fp <fp.json>` scans with a recorded fingerprint (the run's own `fp.json`, harvested in the VM, which
+//! holds the installer log a snapshot cannot give) instead of the one harvested offline. What the
+//! uninstall step wrote into it (window end points, verify-gone, co-removed products) is dropped and set
+//! again from the replay.
+//!
+//! `replay` also writes the scan sidecar `<plan>.scan.json` next to the plan; `replay-all` does not (its
+//! plans sit in the run's `plans` directory, which the scorer reads).
+//!
 //! `replay-all` replays the frozen M0 runs [`M0_RUNS`] into `vm/runs/<id>/plans/purge-replay.json` (the
 //! runs directory is git-ignored; the plan is a new file next to the other tools' plans) and then, when
 //! `vm/rigtool/target/release/rigtool(.exe)` exists, prints `rigtool score --set …` over them.
@@ -45,7 +57,7 @@ pub const REPLAY_PLAN: &str = "purge-replay.json";
 pub const RUNS_DIR_VAR: &str = "PURGE_RUNS_DIR";
 
 const REPLAY_USAGE: &str = "usage: cargo xtask replay --run <vm/runs/<id>> --app <truth id> -o <plan.json> \
-                            [--overlay <dir>] [--baselines <dir>]";
+                            [--overlay <dir>] [--baselines <dir>] [--fp <fp.json>] [--live]";
 const REPLAY_ALL_USAGE: &str = "usage: cargo xtask replay-all [--runs <vm/runs>] [--overlay-root <dir>] [--if-present] [--no-score]";
 
 // ---------------------------------------------------------------------------------------------------------
@@ -149,6 +161,12 @@ pub struct ReplayOpts {
     pub overlay: Option<PathBuf>,
     /// The baseline directory (`kb/baselines`).
     pub baselines: Option<PathBuf>,
+    /// A recorded fingerprint to scan with instead of the one harvested offline.
+    pub fp: Option<PathBuf>,
+    /// Also write the scan sidecar (`<plan>.scan.json`: evidence, blockers, notes) next to the plan.
+    pub sidecar: bool,
+    /// Scan the still-installed app (phase 1, `external` mode) instead of the state after the uninstall.
+    pub live: bool,
 }
 
 /// A replay's result, for the summary.
@@ -194,7 +212,27 @@ fn entry_for<'d>(entries: &'d [InventoryEntry], key: &str) -> Result<&'d Invento
     }
 }
 
-fn limits(before: &Fixture, after: &Fixture, overlay: Option<&Path>) -> Vec<String> {
+fn write_plan(
+    opts: &ReplayOpts,
+    plan: &purge_model::Plan,
+    scan: &impl serde::Serialize,
+) -> Result<()> {
+    let out = &opts.out;
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    output::write_atomic(out, &output::json_text(plan))
+        .with_context(|| format!("writing {}", out.display()))?;
+    if opts.sidecar {
+        let sidecar = output::sidecar_path(out);
+        output::write_atomic(&sidecar, &output::json_text(scan))
+            .with_context(|| format!("writing {}", sidecar.display()))?;
+    }
+    Ok(())
+}
+
+fn limits(before: &Fixture, after: Option<&Fixture>, overlay: Option<&Path>) -> Vec<String> {
     let mut out = vec![match overlay {
         Some(o) => format!(
             "file contents, version info and signers come only from the overlay {} (no Inno log unless \
@@ -205,8 +243,8 @@ fn limits(before: &Fixture, after: &Fixture, overlay: Option<&Path>) -> Vec<Stri
             "no overlay: file contents, version info and signers are unknown (no Inno log)".into()
         }
     }];
-    for (phase, f) in [(1, before), (2, after)] {
-        if let Some(st) = f.snap_stats() {
+    for (phase, f) in [(1, Some(before)), (2, after)] {
+        if let Some(st) = f.and_then(Fixture::snap_stats) {
             out.push(format!(
                 "phase {phase}: {} keys, {} values ({} with unknown data such as REG_BINARY, {} previews \
                  cut at 1024 characters), {} dirs, {} files, {} denied, {} errors",
@@ -252,6 +290,36 @@ pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
     let mut warnings = harvested.warnings;
     let report = harvested.report;
     let mut fp = report.fingerprint;
+    if let Some(path) = &opts.fp {
+        fp = output::read_json(path).map_err(|e| anyhow!("fingerprint {e}"))?;
+        fp.window.t_start = None;
+        fp.window.t_end = None;
+        fp.verify_gone = None;
+        fp.co_removed.clear();
+        progress(&format!("fingerprint from {}", path.display()));
+    }
+
+    if opts.live {
+        progress("live: scanning phase 1 (the app is still installed), no uninstall step");
+        let scanned = pipeline::scan(
+            Sources::of(&before),
+            &fp,
+            ScanMode::External,
+            Some(&opts.app),
+            &settings,
+            &mut progress,
+        )
+        .map_err(|e| anyhow!("scan at phase 1: {e}"))?;
+        warnings.extend(scanned.warnings);
+        write_plan(opts, &scanned.built.plan, &scanned.built.scan)?;
+        return Ok(Replayed {
+            plan: scanned.built.plan,
+            warnings,
+            limits: limits(&before, None, overlay),
+            verify_passed: false,
+            co_removed: 0,
+        });
+    }
 
     let after = load_phase(&opts.run_dir, &info.run, 2, overlay)?;
     let verify = verify_gone::check(
@@ -296,16 +364,11 @@ pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
     .map_err(|e| anyhow!("scan at phase 2: {e}"))?;
     warnings.extend(scanned.warnings);
 
-    if let Some(parent) = opts.out.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    output::write_atomic(&opts.out, &output::json_text(&scanned.built.plan))
-        .with_context(|| format!("writing {}", opts.out.display()))?;
+    write_plan(opts, &scanned.built.plan, &scanned.built.scan)?;
     Ok(Replayed {
         plan: scanned.built.plan,
         warnings,
-        limits: limits(&before, &after, overlay),
+        limits: limits(&before, Some(&after), overlay),
         verify_passed: verify.is_passed(),
         co_removed: fp.co_removed.len(),
     })
@@ -398,8 +461,9 @@ pub fn run_one(root: &Path, args: &[String]) -> Result<bool> {
             "--out",
             "--overlay",
             "--baselines",
+            "--fp",
         ],
-        &[],
+        &["--live"],
         REPLAY_USAGE,
     )?;
     let run_dir = f
@@ -420,6 +484,9 @@ pub fn run_one(root: &Path, args: &[String]) -> Result<bool> {
             .get(&["--baselines"])
             .map(PathBuf::from)
             .or_else(|| default_baselines(root)),
+        fp: f.get(&["--fp"]).map(PathBuf::from),
+        sidecar: true,
+        live: f.has("--live"),
     };
     let r = replay(&opts)?;
     report(app, &opts.out, &r);
@@ -469,6 +536,9 @@ pub fn run_all(root: &Path, args: &[String]) -> Result<bool> {
                 .map(|o| Path::new(o).join(id))
                 .filter(|o| o.is_dir()),
             baselines: default_baselines(root),
+            fp: None,
+            sidecar: false,
+            live: false,
         };
         match replay(&opts) {
             Ok(r) => {
@@ -605,6 +675,9 @@ mod tests {
             out: out.clone(),
             overlay: None,
             baselines: default_baselines(&crate::workspace_root()),
+            fp: None,
+            sidecar: false,
+            live: false,
         })
         .unwrap();
         assert!(r.verify_passed, "{:?}", r.warnings);

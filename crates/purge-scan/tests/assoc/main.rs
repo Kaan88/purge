@@ -818,6 +818,62 @@ fn file_exts_entry_of_a_portable_copy_is_not_offered() {
     );
 }
 
+/// The same with a key in each hive: the machine's key leading into the removed install does not
+/// answer for the user's key of a portable copy, nor the other way round. Whichever hive is asked
+/// first, a key that leads elsewhere means the bare name is not the app's alone.
+#[test]
+fn file_exts_entry_is_not_offered_when_either_hives_key_leads_elsewhere() {
+    let md = file_exts(".md");
+    let user_key = format!(r"HKU\{SID}_Classes\Applications\Code.exe");
+    let machine_key = r"HKLM\SOFTWARE\Classes\Applications\Code.exe";
+    let own = format!(r#""{}\Code.exe" "%1""#, world::CODE_ROOT);
+    let portable = r#""C:\Users\tester\Tools\VSCode\Code.exe" "%1""#;
+    let listed = |machine: Option<&str>, user: Option<&str>| {
+        let mut b = Fixture::builder()
+            .os(EDITION, BUILD, UBR)
+            .user_sid(SID)
+            .sz(&format!(r"{md}\OpenWithList"), "a", "Code.exe")
+            .sz(&format!(r"{md}\OpenWithList"), "MRUList", "a");
+        if let Some(command) = machine {
+            b = b.sz(&format!(r"{machine_key}\shell\open\command"), "", command);
+        }
+        if let Some(command) = user {
+            b = b.sz(&format!(r"{user_key}\shell\open\command"), "", command);
+        }
+        let mut fp = fingerprint(&["VSCode.md"]);
+        let mut entry = journal(".md", &["VSCode.md"]);
+        entry.file_exts_key = Some(md.clone());
+        fp.ext_journal = vec![entry];
+        World::new(b.build(), fp).scan(&ClsFileExts).len()
+    };
+    assert_eq!(listed(Some(&own), None), 2);
+    assert_eq!(listed(Some(&own), Some(&own)), 2);
+    assert_eq!(listed(Some(&own), Some(portable)), 0);
+    assert_eq!(listed(Some(portable), Some(&own)), 0);
+    assert_eq!(listed(Some(portable), None), 0);
+
+    // A key that cannot be read in full (a link below it) may lead anywhere.
+    let unread = |machine: Option<&str>| {
+        let mut b = Fixture::builder()
+            .os(EDITION, BUILD, UBR)
+            .user_sid(SID)
+            .sz(&format!(r"{md}\OpenWithList"), "a", "Code.exe")
+            .sz(&format!(r"{md}\OpenWithList"), "MRUList", "a")
+            .sz(&user_key, "FriendlyAppName", "Code")
+            .link(&format!(r"{user_key}\shell"), r"HKLM\SOFTWARE\Elsewhere");
+        if let Some(command) = machine {
+            b = b.sz(&format!(r"{machine_key}\shell\open\command"), "", command);
+        }
+        let mut fp = fingerprint(&["VSCode.md"]);
+        let mut entry = journal(".md", &["VSCode.md"]);
+        entry.file_exts_key = Some(md.clone());
+        fp.ext_journal = vec![entry];
+        World::new(b.build(), fp).scan(&ClsFileExts).len()
+    };
+    assert_eq!(unread(None), 0);
+    assert_eq!(unread(Some(&own)), 0);
+}
+
 #[test]
 fn file_exts_key_outside_file_exts_is_ignored() {
     let mut world = file_exts_world();

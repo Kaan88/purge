@@ -339,11 +339,7 @@ fn fold(s: &str) -> String {
             continue;
         }
         after_sep = false;
-        if c.is_ascii() {
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.extend(c.to_lowercase());
-        }
+        out.extend(purge_guard::prefix::fold_char(c));
     }
     out
 }

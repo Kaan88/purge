@@ -1014,3 +1014,126 @@ fn a_co_removed_products_value_is_judged_as_the_products() {
             .all(|c| c.owner.display_name != "Mozilla Maintenance Service" || !tier_a(c))
     );
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// The eleventh review's cases
+// ---------------------------------------------------------------------------------------------------------
+
+/// Whatever the fingerprint records about the planted value, nothing on it is Safe or ticked. As
+/// in the table, a key the log deletes whole is the app's own place unless it is a `container`
+/// (a key that holds other parties' values, like the start places).
+fn assert_never_safe(what: &str, place: &Place, data: &Data, container: bool) {
+    for record in RECORDS {
+        if record == Record::WholeKey && !container {
+            continue;
+        }
+        for (c, band, ticked) in decided(&world(place, data, record)) {
+            if touches(&c, place) {
+                assert!(
+                    band != Band::Safe && !ticked,
+                    "{what}, {record:?}: {} {band:?} ticked={ticked}\n{c:?}",
+                    c.scanner
+                );
+            }
+        }
+    }
+}
+
+fn foreign_key_place() -> Place {
+    places()
+        .into_iter()
+        .find(|p| p.what == "foreign key, named like a program of the app")
+        .unwrap()
+}
+
+/// A number is four or eight bytes. Text stored under a number's type is text: the type tag of a
+/// value is whatever its writer said.
+#[test]
+fn text_under_a_number_type_is_read_as_text() {
+    let command = format!(r#""{TOOL}" --with "{}\x.exe""#, app_dir());
+    let place = foreign_key_place();
+    // REG_DWORD, REG_DWORD_BIG_ENDIAN, REG_QWORD, and REG_LINK for good measure.
+    for ty in [4u32, 5, 11, 6, REG_BINARY] {
+        let data = Data::Raw(ty, utf16(&format!("{command}\0")));
+        assert_never_safe(&format!("type {ty}"), &place, &data, false);
+    }
+}
+
+/// Binary data is read for paths that do not start at a drive, and for text of one byte per
+/// character.
+#[test]
+fn binary_text_that_is_a_path_of_any_shape_is_judged() {
+    let app = app_dir();
+    let place = foreign_key_place();
+    let ansi = {
+        let mut bytes = format!("{TOOL};{app}\\x.exe").into_bytes();
+        bytes.push(0);
+        if bytes.len() % 2 == 1 {
+            bytes.push(0);
+        }
+        bytes
+    };
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "below a variable",
+            utf16(&format!("%USERPROFILE%\\my tool.exe\0{app}\\x.exe\0")),
+        ),
+        (
+            "from the root of the drive",
+            utf16(&format!("\\Users\\tester\\my tool.exe\0{app}\\x.exe\0")),
+        ),
+        ("at a drive", utf16(&format!("{TOOL}\0{app}\\x.exe\0"))),
+        (
+            "relative",
+            utf16(&format!("tools\\my tool.exe\0{app}\\x.exe\0")),
+        ),
+        (
+            "something before the root",
+            utf16(&format!("2\\Users\\tester\\my tool.exe\0{app}\\x.exe\0")),
+        ),
+        (
+            "forward slashes",
+            utf16(&format!("/Users/tester/my tool.exe\0{app}\\x.exe\0")),
+        ),
+        (
+            "a variable alone",
+            utf16(&format!("%MYTOOL%\0{app}\\x.exe\0")),
+        ),
+        ("one byte per character", ansi),
+    ];
+    for (what, bytes) in cases {
+        assert_never_safe(what, &place, &Data::Raw(REG_BINARY, bytes), false);
+    }
+}
+
+/// An id of the app somewhere in a value name does not make the value the app's: the name must be
+/// the id, with at most something attached. And every place that starts programs at logon is a
+/// command place, where the name decides nothing.
+#[test]
+fn an_id_inside_a_name_does_not_excuse_the_data() {
+    let command = format!(r#""{TOOL}" --with "{}\x.exe""#, app_dir());
+    let leak = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
+    let foreign = r"HKLM\SOFTWARE\Other Vendor\Tool";
+    let rows: Vec<(String, &'static str)> = vec![
+        (foreign.to_owned(), leak(format!("my {HASH} thing"))),
+        (
+            foreign.to_owned(),
+            leak(format!(r"{TOOLS}\{HASH}\notes.txt")),
+        ),
+        (foreign.to_owned(), leak(format!("{HASH};{TOOL}"))),
+        (
+            format!(r"HKLM\SOFTWARE\{CV}\Policies\Explorer\Run"),
+            leak(format!("my {HASH} thing")),
+        ),
+        // In a start place not even the id itself as the name excuses the command.
+        (format!(r"HKLM\SOFTWARE\{CV}\Policies\Explorer\Run"), HASH),
+        (format!(r"HKLM\SOFTWARE\{CV}\RunOnceEx\0001"), HASH),
+        (format!(r"HKLM\SOFTWARE\{CV}\RunServices"), HASH),
+    ];
+    for (key, name) in rows {
+        let container = key != foreign;
+        let place = place("an id inside the name", key.clone(), name);
+        let what = format!("{key} | {name}");
+        assert_never_safe(&what, &place, &Data::Sz(command.clone()), container);
+    }
+}

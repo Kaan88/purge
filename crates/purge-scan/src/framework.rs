@@ -553,9 +553,11 @@ impl<'a> ScanCtx<'a> {
     /// ([`ScanCtx::value_content_unproven`]).
     pub fn owns_list_entry(&self, key: &str) -> bool {
         // A key that only holds other parties' single values (`Run`, `Environment`,
-        // `RegisteredApplications`) is nobody's place, whatever a log says about deleting it.
+        // `RegisteredApplications`) is nobody's place, whatever a log says about deleting it. So
+        // is every key that starts programs at logon, whether or not a scanner reads it.
         (self.installer_recorded(key, None)
-            && !purge_guard::containers::is_value_container(key, self.guard))
+            && !purge_guard::containers::is_value_container(key, self.guard)
+            && !is_start_place(key))
             || self.owns_place(key, false)
     }
 
@@ -707,7 +709,12 @@ impl<'a> ScanCtx<'a> {
                 Ok(data) => self.data_unproven(path, name, &data),
                 // Nothing is there to delete; what is offered is a record of the harvest.
                 Err(purge_source::types::SourceError::NotFound) => None,
-                Err(_) if self.owns_list_entry(path) || self.named_after_app(name) => None,
+                Err(_)
+                    if self.owns_list_entry(path)
+                        || (!is_command_place(path) && self.named_after_app(name)) =>
+                {
+                    None
+                }
                 Err(_) => Some("the value could not be read"),
             },
             _ => None,
@@ -739,21 +746,16 @@ impl<'a> ScanCtx<'a> {
             // (`RegData::binary_utf16_strings`): a run of text that is shaped like a path must
             // be exactly one path of the app, like an entry of a list. Runs that are no path
             // (a switch, a counter, a timestamp) say nothing about anybody.
-            let number = matches!(
-                data.ty,
-                purge_source::types::REG_DWORD
-                    | purge_source::types::REG_DWORD_BIG_ENDIAN
-                    | purge_source::types::REG_QWORD
-            );
+            // A number is four or eight bytes of its type; a "number" of any other length is
+            // data like any other, whatever its type says.
+            let number = data.dword().is_some() || data.qword().is_some();
             if number || own {
                 None
             } else if data.bytes.len() > purge_source::types::BINARY_UTF16_SCAN_MAX {
                 Some("the data is too large to be read for text")
             } else {
-                data.binary_utf16_strings()
-                    .unwrap_or_default()
+                binary_path_runs(data)
                     .iter()
-                    .filter(|run| is_path_shaped(run))
                     .find_map(|run| self.entry_unproven(resource_path(run.trim())))
             }
         } else if string && !own && command {
@@ -850,12 +852,14 @@ impl<'a> ScanCtx<'a> {
         if self.entry_standing(name) == EntryStanding::Plain {
             return true;
         }
-        // An id of the app as a delimited part of the name (`<ProgID>_.ext`, `<hash>`): the
-        // matcher finds an id only at a boundary that fits its kind, never inside a word.
-        self.app_refs()
-            .find_all(name)
-            .iter()
-            .any(|m| !m.name_only && !matches!(m.anchor.kind, AnchorKind::Root | AnchorKind::Exe))
+        // An id of the app with at most something attached to it (`<ProgID>_.ext`, `<hash>`): the
+        // matcher finds an id only at a boundary that fits its kind, never inside a word. A
+        // sentence or a path that has the id somewhere in it (`my <hash> thing`,
+        // `C:\tools\<hash>\notes.txt`) is somebody's text, not the app's name.
+        is_id_shaped(name)
+            && self.app_refs().find_all(name).iter().any(|m| {
+                !m.name_only && !matches!(m.anchor.kind, AnchorKind::Root | AnchorKind::Exe)
+            })
     }
 
     /// The app's anchors as a matcher, for the content rule. Built on demand: the rule needs it
@@ -1290,22 +1294,93 @@ pub enum EntryStanding {
     Plain,
 }
 
-/// Whether the string values of `key` are command lines: a `Run` or `RunOnce` key of any hive
-/// and view, or a `command` key (a shell verb).
+/// Whether the string values of `key` are command lines: a start place ([`is_start_place`]) or a
+/// `command` key (a shell verb).
 fn is_command_place(key: &str) -> bool {
-    let mut up = prefix::segments(key).rev();
-    let (leaf, above) = (up.next().unwrap_or(""), up.next().unwrap_or(""));
-    prefix::eq_ci(leaf, "command")
-        || (["Run", "RunOnce", "RunOnceEx"]
-            .iter()
-            .any(|run| prefix::eq_ci(leaf, run))
-            && prefix::eq_ci(above, "CurrentVersion"))
+    prefix::leaf(key).is_some_and(|leaf| prefix::eq_ci(leaf, "command")) || is_start_place(key)
 }
 
-/// Whether a run of text read from binary data is shaped like a path: it holds a drive path
-/// (`X:\`, `X:/`) or a UNC start (`\\`).
+/// Whether `key` holds the programs Windows starts at logon, in any hive and view:
+/// `CurrentVersion\Run`, `RunOnce`, `RunServices`, `RunServicesOnce`, `Policies\Explorer\Run`,
+/// and `CurrentVersion\RunOnceEx` with the keys below it, which hold its entries. Every party
+/// writes its own value there, so the key is nobody's place.
+fn is_start_place(key: &str) -> bool {
+    let parts: Vec<&str> = prefix::segments(key).collect();
+    let from_end = |n: usize| parts.len().checked_sub(n).map_or("", |i| parts[i]);
+    let (leaf, above, third) = (from_end(1), from_end(2), from_end(3));
+    (["Run", "RunOnce", "RunServices", "RunServicesOnce"]
+        .iter()
+        .any(|run| prefix::eq_ci(leaf, run))
+        && prefix::eq_ci(above, "CurrentVersion"))
+        || (prefix::eq_ci(leaf, "Run")
+            && prefix::eq_ci(above, "Explorer")
+            && prefix::eq_ci(third, "Policies"))
+        || parts.windows(2).any(|pair| {
+            prefix::eq_ci(pair[0], "CurrentVersion") && prefix::eq_ci(pair[1], "RunOnceEx")
+        })
+}
+
+/// Whether a value name can be an id of the app with at most something attached to it
+/// (`<ProgID>_.ext`, `<hash>`), as against a sentence or a path that has one in it: no blank, no
+/// path separator, no drive colon, no variable, no list, quote or redirection character.
+fn is_id_shaped(name: &str) -> bool {
+    !name.trim().chars().any(|c| {
+        c.is_whitespace()
+            || c.is_control()
+            || matches!(
+                c,
+                '\\' | '/' | ':' | ';' | ',' | '"' | '|' | '<' | '>' | '*' | '?' | '%'
+            )
+    })
+}
+
+/// The runs of text in binary data that may be paths: the UTF-16 runs the scanners read
+/// (`RegData::binary_utf16_strings`) that are [`is_path_shaped`], and the runs of one byte per
+/// character ([`ansi_runs`]) that hold a drive or UNC path.
+fn binary_path_runs(data: &purge_source::types::RegData) -> Vec<String> {
+    let mut runs: Vec<String> = data
+        .binary_utf16_strings()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|run| is_path_shaped(run))
+        .collect();
+    runs.extend(
+        ansi_runs(&data.bytes)
+            .into_iter()
+            .filter(|run| holds_drive_or_unc_path(run)),
+    );
+    runs
+}
+
+/// Whether a run of UTF-16 text read from binary data is shaped like a path: it holds a
+/// separator (`\`, `/`: a drive, UNC, rooted or relative path, with whatever stands before it)
+/// or a variable (`%NAME%`).
 fn is_path_shaped(run: &str) -> bool {
-    run.contains(":\\") || run.contains(":/") || run.contains("\\\\")
+    run.contains(['\\', '/']) || run.matches('%').count() >= 2
+}
+
+/// Whether a run of 8-bit text holds a drive path (`X:\`, `X:/`) or a UNC start (`\\`). Bytes
+/// that happen to be printable are everywhere in binary data (a timestamp's `\`), so a
+/// separator alone says nothing here.
+fn holds_drive_or_unc_path(run: &str) -> bool {
+    run.contains("\\\\")
+        || run
+            .as_bytes()
+            .windows(3)
+            .any(|w| w[0].is_ascii_alphabetic() && w[1] == b':' && matches!(w[2], b'\\' | b'/'))
+}
+
+/// Text stored one byte per character in binary data: the runs of at least
+/// [`purge_source::types::BINARY_UTF16_MIN_CHARS`] printable ASCII characters within the first
+/// [`purge_source::types::BINARY_UTF16_SCAN_MAX`] bytes. UTF-16 text has a NUL in every second
+/// byte and yields no run here.
+fn ansi_runs(bytes: &[u8]) -> Vec<String> {
+    let window = &bytes[..bytes.len().min(purge_source::types::BINARY_UTF16_SCAN_MAX)];
+    window
+        .split(|b| !(0x20..=0x7e).contains(b))
+        .filter(|run| run.len() >= purge_source::types::BINARY_UTF16_MIN_CHARS)
+        .map(|run| run.iter().map(|b| char::from(*b)).collect())
+        .collect()
 }
 
 /// Whether the values of `key` are registrations that name a key: `RegisteredApplications`
@@ -2608,6 +2683,50 @@ mod tests {
 
     fn key(path: &str) -> Target {
         Target::RegKey { path: path.into() }
+    }
+
+    /// Which runs of binary data are read as paths. A switch or timestamp whose bytes happen to
+    /// be printable is none (a disabled `StartupApproved` entry with 0x5C in its time; UTF-16
+    /// text with U+5C3A, whose bytes are `:\`).
+    #[test]
+    fn binary_runs_read_as_paths() {
+        use purge_source::types::RegData;
+        let utf16 =
+            |text: &str| -> Vec<u8> { text.encode_utf16().flat_map(u16::to_le_bytes).collect() };
+        let runs = |bytes: Vec<u8>| binary_path_runs(&RegData::from_binary(bytes));
+        for switch in [
+            vec![0x03, 0, 0, 0, 0x5c, 0x41, 0x7b, 0x9a, 0x22, 0xdc, 0x31, 0],
+            vec![0x03, 0, 0, 0, 0x5c, 0x41, 0x7b, 0x3a, 0x22, 0x2f, 0x31, 0],
+            vec![0x02, 0, 0, 0, 0x5c, 0x5c, 0x41, 0xe9, 0xff, 0x80, 0x90, 0],
+            utf16("settings \u{5c3a} of the window\0"),
+            utf16("version 12.5 (64-bit)\0"),
+            b"plain text, 50% done\0\0".to_vec(),
+            b"tools\\x.exe and /usr/bin\0".to_vec(),
+        ] {
+            assert_eq!(runs(switch.clone()), Vec::<String>::new(), "{switch:02x?}");
+        }
+        for (text, wide) in [
+            (r"C:\Users\me\tool.exe", true),
+            (r"\\server\share\tool.exe", true),
+            (r"\Users\me\tool.exe", true),
+            (r"%USERPROFILE%\tool.exe", true),
+            (r"tools\my tool.exe", true),
+            (r"2\Users\me\tool.exe", true),
+            ("/Users/me/tool.exe", true),
+            ("%MYTOOL%", true),
+            (r"C:\Users\me\tool.exe", false),
+            ("x=D:/tools/tool.exe", false),
+            (r"\\server\share\tool.exe", false),
+        ] {
+            let bytes = if wide {
+                utf16(&format!("{text}\0"))
+            } else {
+                let mut bytes = text.as_bytes().to_vec();
+                bytes.push(0);
+                bytes
+            };
+            assert_eq!(runs(bytes), vec![text.to_owned()], "{text} wide={wide}");
+        }
     }
 
     fn value(path: &str, name: &str) -> Target {

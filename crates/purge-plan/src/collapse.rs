@@ -482,6 +482,102 @@ mod tests {
         );
     }
 
+    /// Every way a descendant is kept for another owner counts, and so does every band a parent is
+    /// offered in.
+    #[test]
+    fn every_other_owner_blocker_reaches_a_parent_in_any_offered_band() {
+        let scheme = r"HKLM\SOFTWARE\Vendor\App\scheme";
+        let parent = |kind: EvidenceKind| {
+            let mut c = cand("parent", key(scheme), "CLS-PROTOCOL");
+            c.evidence.push(ev(kind, Scope::Key, "name"));
+            c
+        };
+        let child = |blocker: Blocker| {
+            let mut c = owned_value("child", &format!(r"{scheme}\shell\open\command"), "");
+            c.blockers.push(blocker);
+            c
+        };
+        let app = || "VS Code (User)".to_owned();
+        let kept_for = |blocker: Blocker, owner: &str| {
+            let out = run(vec![parent(EvidenceKind::ExactFullName), child(blocker)]);
+            assert_eq!(
+                out.top[0].blockers,
+                vec![Blocker::ContainsOtherApp { app: owner.into() }]
+            );
+            assert_eq!(verdict(&out.top[0]), (Band::Blocked, false));
+        };
+        kept_for(
+            Blocker::ReferencedByOtherApp { app: app() },
+            "VS Code (User)",
+        );
+        kept_for(Blocker::InsideOtherApp { app: app() }, "VS Code (User)");
+        kept_for(Blocker::ContainsOtherApp { app: app() }, "VS Code (User)");
+        kept_for(
+            Blocker::OwnedByInstalledMsi {
+                product: "{11111111-2222-3333-4444-555555555555}".into(),
+                row: "Registry:reg1".into(),
+            },
+            "{11111111-2222-3333-4444-555555555555}",
+        );
+        // A parent short of evidence (Weak) is offered all the same.
+        let weak = parent(EvidenceKind::VendorContainer);
+        let out = run(vec![weak.clone()]);
+        assert_eq!(verdict(&out.top[0]), (Band::Weak, false));
+        let out = run(vec![
+            weak,
+            child(Blocker::ReferencedByOtherApp { app: app() }),
+        ]);
+        assert_eq!(verdict(&out.top[0]), (Band::Blocked, false));
+    }
+
+    /// The repeat-until-quiet loop of [`collapse`] ends only if no blocker is reported twice. That must
+    /// not depend on the band the blocker led to: here the parent carries the blocker and is still
+    /// offered, as it would be if deciding it again had left it where it was.
+    #[test]
+    fn a_blocker_the_parent_carries_is_not_reported_again() {
+        let deny = deny();
+        let ctx = ctx(&deny);
+        let other = Blocker::ReferencedByOtherApp {
+            app: "VS Code (User)".into(),
+        };
+        // An unticked parent with a value kept for another owner below it.
+        let scheme = r"HKLM\SOFTWARE\Vendor\App\scheme";
+        let mut parent = cand("parent", key(scheme), "CLS-PROTOCOL");
+        parent
+            .evidence
+            .push(ev(EvidenceKind::ExactFullName, Scope::Key, "name"));
+        let mut child = owned_value("child", &format!(r"{scheme}\shell\open\command"), "");
+        child.blockers.push(other);
+        // An absorbing parent with a child that was never cleared for removal.
+        let mut unmatched = owned_path("leaf", r"C:\Program Files\App\keep.dll");
+        unmatched.blockers.push(Blocker::HardLinkOutsidePlan);
+        let mut decided = decide(
+            vec![parent, child, owned_path("root", ROOT), unmatched],
+            &ctx,
+        );
+
+        let first = objections(&decided);
+        assert_eq!(
+            first,
+            vec![
+                (
+                    0,
+                    vec![Blocker::ContainsOtherApp {
+                        app: "VS Code (User)".into()
+                    }]
+                ),
+                (2, vec![Blocker::UnmatchedChildren { n: 1 }]),
+            ]
+        );
+        // The blockers are attached and the decisions left as they were.
+        for (index, blockers) in first {
+            decided[index].blockers.extend(blockers);
+        }
+        assert_eq!(verdict(&decided[0]), (Band::Likely, false));
+        assert_eq!(verdict(&decided[2]), (Band::Safe, true));
+        assert_eq!(objections(&decided), Vec::new());
+    }
+
     #[test]
     fn held_back_child_keeps_the_parent_from_being_safe() {
         let mut data = owned_path("data", r"C:\Program Files\App\profiles");

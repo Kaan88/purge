@@ -157,15 +157,23 @@ fn own_paths<'v>(app: &AppIdentityView, values: impl Iterator<Item = &'v RegValu
 }
 
 /// Whether `path` is a file that outlived the app's removal without being shown to be the app's
-/// (`ScanCtx::survived_unproven`). While the app is not verified gone its own files are all still
-/// there, and a file that is present says nothing.
+/// (`ScanCtx::survived_unproven`). The rule rests on the uninstaller having removed the app's
+/// programs (verify-gone: the main exes are gone; an Uninstall key or MSI state it left behind
+/// changes nothing about the files). While they are still there, or nothing was checked, the app's
+/// own files are all present and a file that is present says nothing. With no main exe known
+/// "the main exes are gone" holds of nothing, and only the whole check counts.
 fn outlived(ctx: &ScanCtx<'_>, path: &str) -> bool {
-    ctx.verify_gone_passed() && ctx.survived_unproven(path)
+    let programs_gone = ctx.verify_gone.is_some_and(|v| {
+        v.is_passed() || (v.main_exes_gone && ctx.fp.main_exes().next().is_some())
+    });
+    programs_gone && ctx.survived_unproven(path)
 }
 
-/// Whether the `Classes\Applications\<exe>` keys show that the bare name `exe` is not this app's: one
-/// of them holds a path, and none holds a path that leads into the app (a file that outlived the
-/// uninstall unproven does not count as the app's). With no such key, or none that names a path,
+/// Whether a `Classes\Applications\<exe>` key shows that the bare name `exe` is not this app's
+/// alone: the key of one hive names a path and none that leads into the app (a file that outlived
+/// the uninstall unproven does not count as the app's), or it could not be read in full. The
+/// machine's key leading into the app does not answer for the user's (a portable copy registers
+/// there, and the user's key is the one in effect). With no such key, or none that names a path,
 /// nothing is known and the answer is `false`.
 pub(crate) fn bare_name_leads_elsewhere(
     ctx: &ScanCtx<'_>,
@@ -177,12 +185,20 @@ pub(crate) fn bare_name_leads_elsewhere(
         if app_paths {
             continue;
         }
-        let walk = common::walk(ctx, &format!(r"{container}\{exe}"));
-        let own = own_paths(app, walk.values.iter().map(|(_, value)| value));
-        if own.iter().any(|path| !outlived(ctx, path)) {
-            return false;
+        let key = format!(r"{container}\{exe}");
+        if matches!(
+            ctx.reg.key_info(&key),
+            Err(purge_source::types::SourceError::NotFound)
+        ) {
+            continue;
         }
-        elsewhere |= !own.is_empty()
+        let walk = common::walk(ctx, &key);
+        let own = own_paths(app, walk.values.iter().map(|(_, value)| value));
+        if walk.complete && own.iter().any(|path| !outlived(ctx, path)) {
+            continue;
+        }
+        elsewhere |= !walk.complete
+            || !own.is_empty()
             || walk
                 .values
                 .iter()

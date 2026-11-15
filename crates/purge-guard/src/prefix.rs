@@ -10,9 +10,13 @@
 //! (`...\Content Type\application/pdf`). Empty segments (doubled or trailing separators) are ignored, so
 //! `C:\X\` and `C:\X` are the same path.
 //!
-//! Case folding uses Unicode lower-casing. NTFS and the registry fold with their own upper-case tables;
-//! the two agree on everything but a handful of exotic code points, and a mismatch there can only make two
-//! names look different (never equal), which errs on the side of "unrelated".
+//! Case folding uses Unicode lower-casing, except for a character whose lower-case form belongs to
+//! another letter ([`fold_char`]). NTFS and the registry fold with their own upper-case tables, in which
+//! the Kelvin sign U+212A is not `K`, the Angstrom sign U+212B is not `Å` and the Ohm sign U+2126 is not
+//! `Ω` (checked on a volume and in a hive: `Kodi` and `\u{212A}odi` are two folders and two keys), while
+//! Unicode lower-casing maps each pair to one letter. Such a character is left as it is, so a mismatch
+//! with the system's tables can only make two names look different (never equal), which errs on the side
+//! of "unrelated".
 
 use std::collections::BTreeMap;
 
@@ -32,9 +36,63 @@ pub enum Relation {
     Unrelated,
 }
 
+/// Ranges of letters that Unicode gives a lower-case form and Windows does not fold: the name with
+/// the capital and the name with the small letter are two folders and two keys (letters cased
+/// after the Windows table was drawn up: Georgian Mtavruli, Cherokee, late Latin and Cyrillic
+/// additions, the title-case digraphs). Measured on Windows 11 build 26300, on an NTFS volume and
+/// in a registry hive, for every pair below U+10000 that the rule of [`fold_char`] would join;
+/// both gave the same 194 letters. The small letters inside a range fold to themselves anyway.
+const WINDOWS_KEEPS_APART: &[(u32, u32)] = &[
+    (0x01C5, 0x01C5),
+    (0x01C8, 0x01C8),
+    (0x01CB, 0x01CB),
+    (0x01F2, 0x01F2),
+    (0x037F, 0x037F),
+    (0x0524, 0x052F),
+    (0x10C7, 0x10CD),
+    (0x13A0, 0x13F5),
+    (0x1C90, 0x1CBF),
+    (0x2C2F, 0x2C2F),
+    (0x2C70, 0x2C70),
+    (0x2C7E, 0x2C7F),
+    (0x2CEB, 0x2CF2),
+    (0xA660, 0xA660),
+    (0xA698, 0xA69A),
+    (0xA78D, 0xA7F5),
+];
+
+/// One character folded for case-insensitive comparison: its lower-case form when that is the same
+/// letter (upper-casing the lower-case form gives what upper-casing the character gives), else the
+/// character itself. `K` and `k` fold to `k`; the Kelvin sign, whose lower-case form is the `k` of
+/// another letter, stays the Kelvin sign.
+///
+/// Windows folds less than Unicode does, and folding more than Windows calls two different names
+/// one. A character outside the Basic Multilingual Plane is never folded (NTFS and the registry
+/// compare UTF-16 units and cannot join a surrogate pair), and neither is a letter of
+/// [`WINDOWS_KEEPS_APART`].
+pub fn fold_char(c: char) -> impl Iterator<Item = char> {
+    let code = u32::from(c);
+    let apart = code > 0xFFFF
+        || WINDOWS_KEEPS_APART
+            .iter()
+            .any(|(first, last)| (*first..=*last).contains(&code));
+    let (lower, keep) = if c.is_ascii() {
+        (None, Some(c.to_ascii_lowercase()))
+    } else if !apart
+        && c.to_lowercase()
+            .flat_map(char::to_uppercase)
+            .eq(c.to_uppercase())
+    {
+        (Some(c.to_lowercase()), None)
+    } else {
+        (None, Some(c))
+    };
+    lower.into_iter().flatten().chain(keep)
+}
+
 /// Folds a string for case-insensitive comparison or use as a map key.
 pub fn fold(s: &str) -> String {
-    s.to_lowercase()
+    s.chars().flat_map(fold_char).collect()
 }
 
 /// Case-insensitive equality of two names (single segments or whole strings).
@@ -43,8 +101,8 @@ pub fn eq_ci(a: &str, b: &str) -> bool {
         a.eq_ignore_ascii_case(b)
     } else {
         a.chars()
-            .flat_map(char::to_lowercase)
-            .eq(b.chars().flat_map(char::to_lowercase))
+            .flat_map(fold_char)
+            .eq(b.chars().flat_map(fold_char))
     }
 }
 
@@ -374,6 +432,55 @@ impl<'a> ListEntry<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// NTFS and the registry keep `Kodi` and `\u{212A}odi` apart (two folders, two keys on a real
+    /// volume and hive), and so must every containment test.
+    #[test]
+    fn letters_that_only_unicode_lower_casing_joins_stay_apart() {
+        for (sign, letter) in [
+            ('\u{212A}', "K"),
+            ('\u{212B}', "\u{C5}"),
+            ('\u{2126}', "\u{3A9}"),
+        ] {
+            let sign = sign.to_string();
+            assert!(!eq_ci(&sign, letter), "{sign} {letter}");
+            assert!(!eq_ci(&sign, &letter.to_lowercase()), "{sign} {letter}");
+            assert_ne!(fold(&sign), fold(letter));
+            assert!(eq_ci(&sign, &sign));
+        }
+        let root = r"C:\Users\u\AppData\Local\Programs\Kodi";
+        let other = "C:\\Users\\u\\AppData\\Local\\Programs\\\u{212A}odi\\x.exe";
+        assert_eq!(relation(other, root), Relation::Unrelated);
+        assert!(is_same_or_inside(
+            r"c:\users\U\appdata\local\programs\KODI\x.exe",
+            root
+        ));
+        // Ordinary letters fold as before, whatever their script.
+        assert!(eq_ci("STRASSE.\u{C4}\u{416}", "strasse.\u{E4}\u{436}"));
+        assert_eq!(fold("\u{C4}B\u{416}"), "\u{E4}b\u{436}");
+    }
+
+    /// Letters Windows does not fold: outside the BMP (Deseret), Georgian, Cherokee, a late Latin
+    /// addition, a title-case digraph. Each pair is two folders on an NTFS volume.
+    #[test]
+    fn letters_windows_does_not_fold_stay_apart() {
+        for (capital, small) in [
+            ('\u{10400}', '\u{10428}'),
+            ('\u{1C90}', '\u{10D0}'),
+            ('\u{13A0}', '\u{AB70}'),
+            ('\u{A7B0}', '\u{29E}'),
+            ('\u{A78D}', '\u{265}'),
+            ('\u{52E}', '\u{52F}'),
+            ('\u{1C5}', '\u{1C6}'),
+        ] {
+            let (a, b) = (format!("{capital}pp"), format!("{small}pp"));
+            assert!(!eq_ci(&a, &b), "{a} {b}");
+            assert_ne!(fold(&a), fold(&b));
+            assert!(eq_ci(&a, &a) && eq_ci(&b, &b));
+        }
+        // Its neighbours in the same blocks, which Windows folds, still fold.
+        assert!(eq_ci("\u{1C4}\u{522}\u{A78B}", "\u{1C6}\u{523}\u{A78C}"));
+    }
 
     #[test]
     fn list_entries_keep_a_quoted_semicolon() {
