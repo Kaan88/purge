@@ -872,6 +872,23 @@ fn file_exts_entry_is_not_offered_when_either_hives_key_leads_elsewhere() {
     };
     assert_eq!(unread(None), 0);
     assert_eq!(unread(Some(&own)), 0);
+
+    // Also when what was read of it leads into the app: the rest may lead anywhere.
+    let b = Fixture::builder()
+        .os(EDITION, BUILD, UBR)
+        .user_sid(SID)
+        .sz(&format!(r"{md}\OpenWithList"), "a", "Code.exe")
+        .sz(&format!(r"{md}\OpenWithList"), "MRUList", "a")
+        .sz(&format!(r"{machine_key}\shell\open\command"), "", &own)
+        .link(
+            &format!(r"{machine_key}\shell\edit"),
+            r"HKLM\SOFTWARE\Elsewhere",
+        );
+    let mut fp = fingerprint(&["VSCode.md"]);
+    let mut entry = journal(".md", &["VSCode.md"]);
+    entry.file_exts_key = Some(md.clone());
+    fp.ext_journal = vec![entry];
+    assert_eq!(World::new(b.build(), fp).scan(&ClsFileExts).len(), 0);
 }
 
 #[test]

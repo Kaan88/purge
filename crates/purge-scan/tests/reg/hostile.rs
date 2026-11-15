@@ -1106,6 +1106,46 @@ fn binary_text_that_is_a_path_of_any_shape_is_judged() {
     }
 }
 
+/// A value that cannot be read is excused by a name of the app's, except where values start
+/// programs: there the name decides nothing, read or unread.
+#[test]
+fn an_unreadable_value_in_a_command_place_is_not_excused_by_its_name() {
+    use purge_model::Tier;
+    use purge_scan::framework::AppIdentityView;
+    let tier_a = |c: &Candidate| c.evidence.iter().any(|e| e.weight > 0 && e.tier == Tier::A);
+    let first = places().remove(0);
+    let clean = world(&first, &Data::Sz(app_dir()), Record::Value);
+    let template = catalog::all_scanners()
+        .iter()
+        .flat_map(|scanner| clean.scan(scanner.as_ref()))
+        .find(|c| touches(c, &first) && tier_a(c))
+        .expect("the control is not Tier A");
+    for (key, excused) in [
+        (r"HKLM\SOFTWARE\Other Vendor\Tool".to_owned(), true),
+        (format!(r"HKLM\SOFTWARE\{CV}\Policies\Explorer\Run"), false),
+        (format!(r"HKLM\SOFTWARE\{CV}\RunOnceEx\0001"), false),
+        (
+            r"HKLM\SOFTWARE\Classes\Other.Tool\shell\open\command".to_owned(),
+            false,
+        ),
+    ] {
+        let place = place("unreadable", key.clone(), HASH);
+        let mut unread = world(&place, &Data::Sz(app_dir()), Record::None);
+        assert!(unread.fixture.remove_value(&place.key, place.name));
+        unread.fixture.set_values_captured(false);
+        let mut candidate = template.clone();
+        candidate.target = Target::RegValue {
+            path: place.plan_key.clone(),
+            name: HASH.to_owned(),
+        };
+        let scanner = Handmade(vec![candidate]);
+        let app = AppIdentityView::from_fingerprint(&unread.fp, &unread.env);
+        let sealed = unread.ctx().run(&scanner, &app);
+        assert!(!sealed.is_empty(), "{key}");
+        assert_eq!(sealed.iter().any(tier_a), excused, "{key}: {sealed:#?}");
+    }
+}
+
 /// An id of the app somewhere in a value name does not make the value the app's: the name must be
 /// the id, with at most something attached. And every place that starts programs at logon is a
 /// command place, where the name decides nothing.

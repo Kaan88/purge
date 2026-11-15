@@ -214,7 +214,29 @@ leaves it out) as a second `--labels` file, writes `truth/m1a-sanity.md`, `m1a-s
 gate apps; add `7zip` for MSI coverage). Exit codes: 0 ok; 1 an invdiff phase did not exit 0 (gate E);
 2 missing input (an app run, fewer than 2 null runs, or null runs more than 12 h from the app runs);
 3 stopped before scoring because the sanity check against the frozen truth left a residual beyond random
-names (`--accept-sanity-diff` or `M1A_ACCEPT_SANITY_DIFF=1` scores anyway and records it in `m1a-status.json`).
+names. `--accept-sanity-diff` (or `M1A_ACCEPT_SANITY_DIFF=1`) scores past it only when every residual item is
+classified in `<out>/m1a-sanity-classified.json` (`M1A_SANITY_CLASSIFIED`; schema
+`purge.rig.m1a-sanity-classified/1`: per item `app`, `side`, `key`, `class`, `evidence`); an unclassified item
+still stops with exit 3, and the status file records the classification file used (2026-11-15: the gate run's
+11 differences had been accepted by the wrapper script without anyone looking).
+
+`M1A_SANITY=skip` leaves out the sanity step and the frozen cross-check. It is for campaigns the frozen M0 truth
+(Inbound, clean `rig-base`) does not describe: dirty-base, Clean-Pro and no-baseline runs. Such campaigns
+usually have no null runs of their own either; `M1A_AMBIENT=truth/f0/ambient-f0.json` gives them a reviewed
+ambient set and `M1A_M0_RUNS=runs/_none` switches the M0 lookup off.
+
+`mk_labels.py` (step 1 of `m1a.sh`) rewrites every label file with LF line endings. On a checkout with CRLF the
+files then show as changed although nothing in them is: save `truth/labels/*.json` before a scoring run and put
+back the files whose content is equal apart from line endings (the Linux campaign score scripts in
+`tools/linux/campaigns/` do this; on Windows it is done by hand).
+
+Scoring on Windows (Git Bash, from `vm\`), the short live check of 2026-11-15 as the example:
+
+```
+M1A_PREFIX=r3- M1A_APPS="firefox firefox-tb ff-esr" M1A_AMBIENT=truth/f0/ambient-f0.json \
+M1A_M0_RUNS=runs/_none M1A_SANITY=skip M1A_OUT=truth/r3 RIGTOOL=rigtool/target/release/rigtool.exe \
+bash truth/m1a.sh
+```
 
 M1a corpus additions (`apps.ps1`): `vscode-user` (VS Code per-user build, installed at medium integrity),
 `thunderbird`, and `firefox-tb` (the `firefox` definition with `pre = thunderbird`).
@@ -267,6 +289,14 @@ label file stops with exit 2. Sibling footprint (M-FP): `bash truth/footprint.sh
 
 Input: `snap-0`, `snap-1`, `snap-2`, `lists-0..2`, `run.json`, the ambient set, and the app's label rules
 `vm\truth\labels\<id>.json`. Output `vm\runs\<id>\truth.json`.
+
+**Microsoft Store self-updates** (built-in rule, 2026-11-15). A non-sparse package under
+`C:\Program Files\WindowsApps` published by Microsoft (publisher id `8wekyb3d8bbwe`) whose full name is in exactly
+one of `lists-0` and `lists-2` updated itself during the run (Photos, VCLibs and OneDrive.Photos did inside 9 of
+the 16 extended runs on Clean-Pro). `leftover` and `user_data` items that name such a package's full name or
+family are relabelled `ambient`, with the rule text "Microsoft Store self-update of <family>". No installer of
+the corpus deploys such a package; the apps' own packages are sparse. Not covered: the Store's other registry
+churn on Clean-Pro (about 550 rows per run), which still inflates the truth sets there.
 
 Item kinds (the **Target**, same names as `purge-model`):
 - `Path {path}`: file or dir in snap2, absent in snap0. Top-most only (a new dir implies its content).
@@ -382,14 +412,31 @@ path); with `lists-<run>-0.json` (`score --set` loads it, `--lists0` in single-p
 service name, task path, firewall rule id or package full name is in `lists-0` is `danger` ("existed in
 lists-0"), even if it is gone in `lists-2`.
 
+**Danger counts** (2026-11-15, after the dirty-base and extended reviews). A `danger` item is counted by what
+the plan does with it:
+- `danger`: offered for removal (any band but Blocked);
+- `danger_kept`: listed read-only as Blocked (the engine shows it as kept for another owner);
+- `danger_listed`: both (the number reported as "danger" before this date);
+- `danger_blocking`: Safe or preselected. This is the gate criterion, on a clean and on a dirty base.
+
+**An earlier install of the same app in snap 0** (reinstall and upgrade runs, whose `pre[]` installs the app
+itself first). With `score --set`, the scorer picks a reference run of the same campaign without that pre-step
+(restored from the same snapshot). An offered item that exists in this run's snap 0, is absent from the
+reference's snap 0 and was last written at or after the earlier install started (less two minutes) is the
+app's own leftover of the first install: it is not `danger` ("excused", listed with the reference run's name
+in the score). `lists-0` objects are excused the same way, without the time test.
+
 **Reporting classes** (`score --classes`; on by default for extra campaigns in `m1a.sh`): every `danger` item
 and every offer that covers a `user_data` item gets a class, and the score lists each class separately (never
 hidden, only labelled): `danger_blocking` / `userdata_blocking` (Safe or preselected: gate-blocking),
-`danger_unticked` / `userdata_unticked` (listed Likely/Weak, not preselected: reported), and two danger
+`danger_unticked` / `userdata_unticked` (listed Likely/Weak, not preselected: reported), and three danger
 sub-classes reported in their own lists: `preexisting_value_ref` (a value that existed in snap 0 with the same
-data, created by the user or another product, whose data path dangles after the uninstall) and
+data, created by the user or another product, whose data path dangles after the uninstall),
 `old_empty_ext_key` (a `Classes\.<ext>` key, or its `OpenWithProgids`/`OpenWithList`, that existed empty in
-snap 0). `userdata_safe` counts Safe items covering `user_data`, preselected or not.
+snap 0) and `replaced_value` (a value that existed in snap 0 and whose data changed by snap 2: the slot now
+holds the app's record, e.g. a shortcut-history slot Windows reused; unticked it is reported, Safe or
+preselected it is blocking like any other). `userdata_safe` counts Safe items covering `user_data`,
+preselected or not.
 
 **Package coverage.** An `AppxPackage {full_name}` offer covers every truth item whose canonical string
 contains the full name or the family name (`Name_PublisherId`), an `AppContainer\Mappings\S-1-15-2-*` key
@@ -398,7 +445,7 @@ whose `Moniker` is the family, and a `PackagedCom\ClassIndex\{CLSID}` key that h
 Metrics per (app, tool), then macro-averaged per tool over apps:
 `truth_n`, `recall_listed` (covered by any band), `recall_visible` (Safe ∪ Likely), `recall_safe`,
 `partial_n`, `precision_safe` (Safe items that are hits ÷ Safe items that are not `gone`),
-`danger_listed`, `danger_preselected`, `userdata_preselected`,
+`danger`, `danger_kept`, `danger_listed`, `danger_blocking`, `danger_preselected`, `userdata_preselected`,
 **Recall rule:** only offered items whose outcome is not `danger` earn coverage (the `*_nd` columns of
 `rigtool score`; these are the gated numbers). Coverage from a danger item is still shown in the plain
 `recall_*` columns for comparison with how the old tools behaved.

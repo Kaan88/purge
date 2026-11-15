@@ -1,107 +1,120 @@
-# Handoff: M1a gate, state at 2026-11-15 ~07:30 (Linux host to Windows)
+# Handoff: M1a gate, state at 2026-11-15 (Windows host)
 
-Written when the user paused the Linux session to move to Windows. Everything is committed on branch `m1a` and
-pushed. Decisions taken along the way are in `docs/DECISIONS.md`; review reports are in `docs/reviews/m1a/`.
+Decisions taken along the way are in `docs/DECISIONS.md`; review reports are in `docs/reviews/m1a/`; the gate
+report is `docs/M1A_GATE.md`.
 
 ## One-paragraph state
 
-The M1a gate campaign passed on the **m1a.5** engine (clean base: both reviews pass; dirty base, extended set and
-no-baseline set: nothing dangerous ticked after the scorer fixes). The engine source has since moved to **m1a.6**
-with fixes the reviews asked for. **The m1a.6 tree compiles but is not fully verified, and one known regression
-fix in it is untested.** The gate is not declared passed until the m1a.6 engine is verified and the captures are
-re-planned with it. `docs/M1A_GATE.md` still says FAIL from the first gate and has not been rewritten.
+**The M1a gate is declared passed** (`docs/M1A_GATE.md`, verdict PASS with two recorded deviations). The engine
+is at policy **m1a.6** and verified: full CI, snapshot tests, an independent review of pass eleven with a
+follow-up ("accept"), a mutation run, an offline re-plan of every capture, and a short live campaign with the
+final binary. The work is committed locally on `m1a` on top of `f0923b2`; **nothing of it is pushed.** One
+point is a judgement the user may want to look at: the live repeat of the two Firefox gate runs was done on
+Clean-Pro, because the Inbound VM cannot be loaded on Windows at present (below).
 
 ## Engine
 
-| Tree | Hash (crates+bins) | Policy | Status |
+| Tree | Hash | Policy | Status |
 |---|---|---|---|
-| Gate tree | `90727292…` | m1a.5 | What the VM campaigns ran. Binary sha256 `1d7524d4cd0c…`. |
-| Pass ten | `24226d69…` | m1a.6 | Central "value content is wholly the app's" rule. Fully verified, reviewed: accept with required changes. |
-| Pass eleven, verified | `43f24f9c…` | m1a.6 | Review fixes 1 to 8 plus additions A and B. CI, table test, replay, 59 of 60 mutations. **Has a live-mode regression** (below). |
-| **Committed tree** | `4f2f036d…` | m1a.6 | Pass eleven plus four small edits that fix the regression and a non-termination risk. **Compiles; no test, re-plan or mutation has run on it.** |
+| Gate tree | `90727292…` (raw bytes) | m1a.5 | What the four VM campaigns ran. Binary sha256 `1d7524d4cd0c…`, kept as `target/release/purge-engine.exe.bak-m1a5-gate-20261115`. |
+| Committed at `f0923b2` | `4f2f036d…` (raw bytes), `abadd0a2…` (git content) | m1a.6 | Pass eleven as handed over from Linux. |
+| **Commit `622c64d`** | `8fcaab30…` (git content) | m1a.6 | Review fixes. `target/release/purge-engine.exe` (sha256 `128556f84e2b…`, Windows msvc build) is built from it; the live check ran this binary. |
+| Later commits | | m1a.6 | Tests and documents only; no engine source change. |
 
-Hash command: `find crates bins -type f | sort | xargs -d "\n" sha256sum | sha256sum` (Git Bash on Windows; line
-endings must be as committed).
+Hash command: `python -I docs/reviews/m1a/pass11/treehash.py . [<commit>]`. It hashes what git stores, so line
+endings of the checkout do not matter. The older hashes in the table and in the reviews are over the raw bytes
+of the Linux working tree and compare only with each other (`docs/DECISIONS.md`, 2026-11-15).
 
-Full engine detail, per change and per file: `docs/reviews/m1a/engine-pass11-handoff.md`. Diffs of the re-plans:
-`docs/reviews/m1a/pass11/`. The pass-ten review: `docs/reviews/m1a/engine-pass10-review.md`.
+What was done on the six open engine items of the previous handoff:
 
-**Open on the engine, in order:**
+1. **Suite.** `cargo xtask ci` passes on the final tree (all steps; 981 tests at `622c64d`, more after the
+   added tests). The 10 ignored snapshot tests pass with `PURGE_RUNS_DIR=vm\runs`. The one failure met on the
+   first run was a slip in a test, fixed in the test.
+2. **Live-mode regression: fixed.** Of the 65 lost Likely rows 51 are back; the 14 that stay away are the
+   intended bare-name rows. `outlived()` now rests on "verify-gone passed, or the main exes are gone and at
+   least one is known".
+3. **Collapse loop.** B8b no longer hangs; B8d survived and got a test. Full mutation run on Windows: 86 of 90
+   killed; the 4 survivors were unpinned review fixes and got tests. Rerun of those and of the mutations whose
+   code changed afterwards: see "Mutation rerun" at the end of `docs/reviews/m1a/engine-pass11-review.md`.
+4. **The 610 Likely to Blocked rows: right**, kept. Each has a child already Blocked for the sibling install.
+5. **Independent review:** `docs/reviews/m1a/engine-pass11-review.md`. First verdict "accept with required
+   changes" (three constructed inputs reached Safe); all required changes made; follow-up verdict "accept";
+   its three remaining points fixed as well. No real capture changes in any of 177 re-plans.
+6. **Final binary, re-plan, live check.** Built on Windows. Offline re-plan of the 29 campaign captures shows
+   only the intended differences against m1a.5. Live campaign `r3-` on Clean-Pro (firefox, firefox-tb, ff-esr,
+   extra checks): all runs ok, plans as predicted, nothing dangerous offered, scores in `vm/truth/r3`.
 
-1. Run the full suite on the committed tree (`cargo xtask ci` on Windows; all tests pass there, the 10 wine-only
-   failures do not exist on Windows). Then the ignored snapshot tests with `PURGE_RUNS_DIR` set.
-2. **Live-mode regression** (on `43f24f9c`): with the app still installed, 65 Likely rows vanished, among them the
-   app's own `App Paths\firefox.exe` and `Applications\<exe>`, because every file counted as "survived the
-   uninstall". The fix (`outlived()` in `crates/purge-scan/src/reg_apppaths.rs`: the surviving-file rule applies
-   only when verify-gone passed) is in the committed tree, untested. Re-plan the 74 older captures in live and
-   live-cutoff modes and confirm those rows are back.
-3. **Collapse non-termination**: under mutation B8b the `collapse` loop in `crates/purge-plan/src/collapse.rs`
-   never ended. The hardening (`objections` never reports a blocker the parent already carries) is in the
-   committed tree, untested. Rerun mutations B4b, B8b, B8c, B8d, T1 to T4.
-4. 610 keys go Likely to Blocked (`ContainsOtherApp`) in live modes where another VS Code or Firefox install
-   stays. Nobody has looked at those rows one by one. Decide whether that is right or too broad.
-5. One more independent review of pass eleven (critical routing: Fable, medium effort).
-6. Build the msvc binary from the final tree, install it as `target/release/purge-engine.exe`, and re-plan the new
-   captures (`vm/runs/r2-*`, `f2d-*`, `x2-*`, `x2-nb-*`; these folders are gitignored and exist only on this
-   disk). Expected differences against the m1a.5 plans are listed in the engine handoff, section 3. Rows that
-   moved on purpose: Firefox and Thunderbird profile folders Weak to Likely (Blocked when a sibling is installed);
-   the bare-exe-name rows gone; `HKU_Classes\vscode` Likely to Blocked. Then one short live campaign on the
-   Firefox runs with the final binary.
+Left open on purpose (all in `docs/DECISIONS.md`):
 
-## VM campaigns (all on the m1a.5 binary)
+- **M2 executor requirement:** a ticked whole-tree parent with a Blocked item below it is refused, or the
+  Blocked item is spared (review finding 6).
+- Case folding follows Windows only in the central fold functions; about 150 direct `to_lowercase()` calls are
+  untouched (M1b).
+- Known limits of the content rule: relative commands in `names_a_path`, 8-bit relative paths in binary data,
+  `Winlogon` / `Active Setup` / `Image File Execution Options` are not start places, no test for the
+  vendor-word filter of `other_app_named`.
+- `x1-git-toolsdir` and `x2-git-toolsdir`: the Windows replay lists three Likely rows fewer than the Linux
+  harness did (cautious side, cause not found).
+- The "12 deferred limitations from the pass-seven review" named by the previous handoff are not in the
+  repository; if that review still exists in the Linux scratch space, copy it to `docs/reviews/m1a/`.
 
-| Campaign | VM, snapshot | Runs | Result |
-|---|---|---|---|
-| `r2-` gate | Inbound, rig-base | 7 apps + 3 nulls | Score review: pass. Bands review: pass with notes. |
-| `f2d-` dirty | Inbound, dirty-base | 5 apps + 2 nulls | 7 "danger" items, none ticked: 4 Blocked/kept, 3 shortcut-history slots. No engine fault. |
-| `x2-` extended | Clean-Pro, rig-base | 16 | Nothing dangerous ticked after scorer fixes. 7 foreign items Likely and unticked: fixed in m1a.6 (addition B). |
-| `x2-nb-` no baseline | Clean-Pro, rig-base | 5 | 2 items, both the shortcut-history slot, unticked. |
+## Tools added on Windows
 
-Scores are in `vm/truth/{r2,f2d,x2,x2-nb}`. Clean-base recall (visible, the gate column): VS Code 88.4%, VS Code
-user 88.3%, Git 23.5%, Firefox 28.0%, Firefox with Thunderbird 31.6%, Notepad++ 82.1%. Firefox clears its 20.8%
-bar with or without the three servicing noise rules.
+- `cargo xtask replay --run <dir> --app <id> -o <plan> [--live] [--fp <fp.json>] [--overlay <fixture>]`: plans one
+  capture offline and writes the scan sidecar next to the plan. `--live` scans the still-installed app.
+- `docs/reviews/m1a/pass11/mutwin.py`: the mutation table of `mut11.py` brought up to the current source, plus
+  V1 to V28 for the review fixes. `python -I mutwin.py <repo> <scratch dir> [names…]`; about 3.5 minutes per
+  mutation, safe to run in several scratch directories at once.
+- `docs/reviews/m1a/pass11/treehash.py`.
+- The re-plan comparison scripts (offline harvest with the run's Inno log laid over the fixture, diff of
+  sidecars) are session scratch and were not kept; `docs/DECISIONS.md` describes the method.
 
-Scorer and truth changes made after the campaigns (all re-scored): `vm/rigtool/src/score.rs` (danger split into
-offered / kept / blocking; replaced-value class; an earlier install of the same app in snap 0), `truth.rs` (Store
-self-update), `vm/truth/m1a.sh` (sanity acceptance needs `vm/truth/r2/m1a-sanity-classified.json`; `M1A_SANITY=skip`
-off rig-base), `mk_labels.py` and labels. Not done: Store registry churn (about 550 rows per Clean-Pro run still
-inflate denominators), `vm/RIG.md` not updated for these, null runs inside the extended campaign.
+## VM campaigns
 
-## Still to do before M1a closes
+| Campaign | Engine | VM, snapshot | Runs | Result |
+|---|---|---|---|---|
+| `r2-` gate | m1a.5 | Inbound, rig-base | 7 apps + 3 nulls | Score review: pass. Bands review: pass with notes. |
+| `f2d-` dirty | m1a.5 | Inbound, dirty-base | 5 apps + 2 nulls | 7 "danger" items, none ticked, no engine fault. |
+| `x2-` extended | m1a.5 | Clean-Pro, rig-base | 16 | Nothing dangerous ticked; 7 foreign items Likely, fixed in m1a.6. |
+| `x2-nb-` no baseline | m1a.5 | Clean-Pro, rig-base | 5 | 2 items, both the shortcut-history slot, unticked. |
+| `r3-` live check | m1a.6 | Clean-Pro, rig-base | 3 | Danger offered 0; ff-esr keeps 7 items Blocked; live scan 0 Safe; repeat scan identical. |
 
-- Engine items 1 to 6 above.
-- Rewrite `docs/M1A_GATE.md` (verdict, the sanity classification, the waivers and deviations from
-  `docs/DECISIONS.md`, the 12 deferred limitations from the pass-seven review).
-- Update `vm/RIG.md` for the scorer changes.
+Scores: `vm/truth/{r2,f2d,x2,x2-nb,r3}`. `vm/runs/` (the captures) is gitignored and exists only on this disk.
+`vm/RIG.md` now describes the scorer changes (danger split, replaced values, earlier install of the same app,
+Store self-updates, classified sanity residual, scoring on Windows).
 
 ## After M1a
 
+- **Ask the user** before pushing `m1a` or merging it.
 - **M2 executor** is next (design `docs/M2_DESIGN.json`, 27 packages, 9 waves). Start with M2-S0 (scaffolding),
-  then wave 1. On Linux the wave workflow is `tools/linux/workflows/m2-wave-linux.js`; on Windows use the original
-  wave workflow. Uncommitted-before, now committed: `install/`, `vm/guest/m2-*.ps1`, `vm/truth/m2-traps.json`.
-  The M2 VM gate needs an `m2-base` snapshot and a D: disk in the VM.
-- **UI shell** exists already: commit `973a791` on local branch `claude/ui-shell-7a9c31` (WinUI 3, sample data),
-  not pushed. M3 builds on it. WinUI cannot be built on Linux.
-- M1b, M3 to M7 have no design files yet.
+  then wave 1. The M2 VM gate needs an `m2-base` snapshot and a D: disk in the VM.
+- **UI shell**: commit `973a791` on local branch `claude/ui-shell-7a9c31` (WinUI 3, sample data), not pushed.
+- M1b, M3 to M7 have no design files yet. Items deferred to M1b are in `docs/M1A_GATE.md` section 6.
 
 ## Host notes
 
-- **Windows:** run `chkdsk C: /f` first; the Linux side logged NTFS index errors on C: on 2026-11-14.
-  `target/release/purge-engine.exe` and `vm/rigtool/target/release/rigtool.exe` are the **m1a.5 gate binaries built
-  on Linux** (cargo-xwin, LLD); the original Windows builds sit beside them as `.bak-20261114-*`. A Windows
-  `cargo build --release` will replace them, which is what you want once the engine is verified.
-- Both rig VMs are powered off. Inbound's current snapshot is `dirty-base`, Clean-Pro's is `rig-base`. The Linux
-  side changed NVRAM snapshot paths in the `.vbox` files from `\` to `/`; originals are in each VM folder under
-  `_vbox-backup-20261114/`. If VirtualBox on Windows complains about the VMs, restore those.
+- **Windows, for the user:** run `chkdsk C: /f` (needs elevation and a restart); the Linux side logged NTFS
+  index errors on C: on 2026-11-14. Not done by the assistant.
+- **Inbound-Win11-Test cannot be loaded by VirtualBox on Windows.** `VBoxManage list vms` shows it as
+  `<inaccessible>`: "Could not find an open hard disk with UUID {85ca7a67-…}". Its
+  `E:\inbound-vm\Inbound-Win11-Test\Inbound-Win11-Test.vbox` was last written by the Linux build (settings
+  version 1.20-linux) and has no `<MediaRegistry>`; on Linux the disks are registered in that host's global
+  `VirtualBox.xml`. The backup in `_vbox-backup-20261114/` has the registry but names the current-state disk
+  `{0ffb9df5-…}`, which no longer exists (the current one is `{acaf0b8e-…}`, child of `{f85c3eb0-…}`). A repair
+  is to put the backup's `<MediaRegistry>` block into the current `.vbox` with that one UUID changed, with
+  VirtualBox closed and a copy of the file kept. Nothing was changed. From Linux the VM presumably still works.
+- Purge-CleanPro works on Windows, is powered off, current snapshot `rig-base`.
 - The VM password file is outside the repo and is never committed.
-- **Linux:** scripts are in `tools/linux/` (copies of `~/purge-target/*`): `ci-linux.sh` replaces `cargo xtask ci`,
-  `build-msvc.sh` builds the msvc binaries, `campaigns/*.sh` run and score the four campaigns. Restart wine
-  (`wineserver -k`) before testing: it broke with `version mismatch 971/979` at the end of the session. Keep
-  builds at `CARGO_BUILD_JOBS=8` while VMs run; an earlier session was killed for lack of memory.
+- `target/release/purge-engine.exe` and `vm/rigtool/target/release/rigtool.exe` are now Windows msvc builds of
+  the final tree; the Linux-built gate binaries sit beside them (`.bak-m1a5-gate-20261115`,
+  `.bak-gate-20261115`).
+- **Linux:** scripts are in `tools/linux/`. The campaign scripts there refuse an engine that does not contain
+  `m1a.5`; change that check before reusing them. Restart wine (`wineserver -k`) before testing. Keep builds at
+  `CARGO_BUILD_JOBS=8` while VMs run.
 - Model routing for agents: engine code and its reviews on the strongest model at medium effort; rig and UI on
   Opus medium; campaign babysitting on Haiku.
 
 ## History
 
-The earlier text of this file (first gate, 2026-11-13, engine m1a.3) is superseded. The first gate failed on
-shared Mozilla items offered with Thunderbird installed; those are no longer offered.
+The earlier texts of this file (first gate 2026-11-13 on m1a.3; Linux to Windows handoff 2026-11-15 with six
+open engine items) are superseded by this one.

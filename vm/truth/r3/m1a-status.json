@@ -1,0 +1,48 @@
+{
+  "schema": "purge.rig.m1a-status/1",
+  "time": "2026-11-15T09:40:11+03:00",
+  "prefix": "r3-",
+  "classes": true,
+  "bcu": true,
+  "exit": 0,
+  "stage": "done",
+  "ambient": "truth/f0/ambient-f0.json",
+  "servicing_rules": true,
+  "sanity": "skipped",
+  "label_overrides": null,
+  "sanity_residual": null,
+  "accept_sanity_diff": false,
+  "sanity_classified": null,
+  "invdiff": [
+    {
+      "run": "r3-firefox",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "r3-firefox",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "r3-firefox-tb",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "r3-firefox-tb",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "r3-ff-esr",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "r3-ff-esr",
+      "phase": "2",
+      "exit": 0
+    }
+  ]
+}

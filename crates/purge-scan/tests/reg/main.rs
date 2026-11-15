@@ -579,7 +579,14 @@ fn apppaths_bare_exe_name_is_not_ownership() {
         ty: purge_source::types::REG_SZ,
         ..purge_source::types::RegData::from_binary(after_end)
     };
-    assert!(scan(plain.value(&named, "Note", hidden), &fp).is_empty());
+    assert!(scan(plain.clone().value(&named, "Note", hidden), &fp).is_empty());
+    // So does data that was not read in full.
+    let mut cut_short = purge_source::types::RegData::from_sz("Firefox");
+    cut_short.truncated = true;
+    assert!(scan(plain.clone().value(&named, "Cut", cut_short), &fp).is_empty());
+    // And a key that was not read in full (a link below it): the rest may hold a path.
+    let linked = plain.link(&format!(r"{named}\shell"), r"HKLM\SOFTWARE\Elsewhere");
+    assert!(scan(linked, &fp).is_empty());
 
     // A sibling install that is known claims the name: the key is listed as kept for it.
     let portable = machine().sz(&named, "FriendlyAppName", "Firefox").sz(

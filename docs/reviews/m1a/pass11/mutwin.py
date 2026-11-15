@@ -170,9 +170,7 @@ for name, path, a, b, pkgs in M:
         continue
     total += 1
     full = os.path.join(WS, path)
-    text = open(full, encoding='utf-8', newline='').read().replace('
-', '
-')
+    text = open(full, encoding='utf-8', newline='').read().replace(chr(13) + chr(10), chr(10))
     if text.count(a) != 1:
         print(name, 'NOT APPLIED (count %d)' % text.count(a), flush=True)
         continue
