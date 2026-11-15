@@ -11,11 +11,16 @@
 //!   read-only handle, its facts are read, the guard decides with [`Binding::Capture`], and the result is a
 //!   [`Stamp`] (what the act will be bound to) plus the [`ItemFacts`] for the journal's `validated`
 //!   record. No handle that could change anything is opened.
+//! - **Record**: the journal's `validated` record of each op is handed to [`GateCtx::record`] once it is
+//!   written (and, for a resumed run, once it is read back). That record is the only source of the
+//!   act's stamp and exemptions: the act-time functions take an op id and nothing else, so an act can
+//!   be gated only with what was journalled.
 //! - **Act** ([`open_and_check_path`], [`open_and_check_key`]) immediately before each action: the item is
 //!   opened with the access the action needs, every fact is read from **that** handle, the guard decides
-//!   with [`Binding::Recheck`] against the stamp, and on a pass the open handle is returned inside
-//!   [`CheckedPath`] / [`CheckedKey`]. The action must be performed on it; nothing is reopened between
-//!   check and act. On any other outcome the handle is closed before the function returns.
+//!   with [`Binding::Recheck`] against the recorded stamp (for a key: the recorded counts, owner, link
+//!   state and last write time), and on a pass the open handle is returned inside [`CheckedPath`] /
+//!   [`CheckedKey`]. The action must be performed on it; nothing is reopened between check and act. On
+//!   any other outcome the handle is closed before the function returns.
 //!
 //! # Outcomes
 //!
@@ -53,10 +58,12 @@ use purge_guard::live::{
     is_cloud_reparse_tag,
 };
 use purge_guard::prefix;
-use purge_model::exec::journal::{FileFacts, GateExemptions, ItemFacts, RegFacts, ValueFacts};
+use purge_model::exec::journal::{
+    FileFacts, GateExemptions, ItemFacts, RegFacts, Validated, ValueFacts,
+};
 use purge_model::exec::op::{ExecOp, FileIdHex, OpId, Sha256Hex};
-use purge_model::{Blocker, Candidate, FileTime, ScanMode, Target, VerifyGone, View};
-use purge_win::fs::{FileHandle, FileMeta, list_dir, volume_info};
+use purge_model::{Blocker, Candidate, CandidateId, FileTime, ScanMode, Target, VerifyGone, View};
+use purge_win::fs::{FileHandle, FileMeta, volume_info};
 use purge_win::fs_write::{DestDir, FsError, MoveHandle, extended_path};
 use purge_win::os::Win32Error;
 use purge_win::reg::{RegRoot, RegValue, RegView};
@@ -64,6 +71,8 @@ use purge_win::reg_write::{KeyAccess, NAME_NOT_REPRESENTABLE, WKey, WKeyInfo};
 use purge_win::secure::{Security, handle_security, open_for_security};
 use purge_win::sid::{TRUSTED_INSTALLER_SID, is_admin_only_writable};
 use sha2::{Digest, Sha256};
+
+use crate::storage::QuarantineDir;
 
 mod ffi;
 #[cfg(test)]
@@ -80,10 +89,24 @@ pub mod reason {
     pub const NAME_NOT_REPRESENTABLE: &str = "gate.name-not-representable";
     /// Facts the journal needs (counts, class, owner, value size) could not be read.
     pub const FACTS_UNREADABLE: &str = "gate.facts-unreadable";
-    /// The stamp given to the act does not fit the item's operation.
+    /// The validated facts do not fit the item's operation (a file stamp for a key action, ...).
     pub const STAMP_KIND: &str = "gate.stamp-kind";
     /// The executor op has no file-system or registry gate (wrong function for the op).
     pub const OP_KIND: &str = "gate.op-kind";
+    /// The act-time gate was asked about an op id with no recorded validation ([`super::GateCtx::record`]).
+    pub const NOT_VALIDATED: &str = "gate.not-validated";
+    /// A `validated` record does not belong to the op it was recorded for (other target), or the op id
+    /// already has one.
+    pub const VALIDATION_MISMATCH: &str = "gate.validation-mismatch";
+    /// A key to delete is not the one validated: subkey or value count, owner, link state or last write
+    /// time differ from the `validated` record. Soft: changed since the scan.
+    pub const KEY_CHANGED: &str = "gate.key-changed";
+    /// The key a restore acts on does not exist: the parent of a key to re-create, or the key a value or
+    /// segment goes back into. Soft: an undo conflict, skipped and reported.
+    pub const UNDO_KEY_MISSING: &str = "gate.undo-key-missing";
+    /// The destination directory opened by path is not the store's op directory (other volume serial or
+    /// file id).
+    pub const QUARANTINE_DIR_DIFFERS: &str = "gate.quarantine-dir-differs";
 }
 
 /// A refusal for which no dedicated blocker exists: reported as a deny rule named after the reason, as
@@ -137,8 +160,13 @@ impl<T> GateOutcome<T> {
     }
 
     fn map<U>(self, f: impl FnOnce(T) -> U) -> GateOutcome<U> {
+        self.and_then(|value| GateOutcome::Pass(f(value)))
+    }
+
+    /// `f` of the value of a `Pass`; every other outcome unchanged.
+    fn and_then<U>(self, f: impl FnOnce(T) -> GateOutcome<U>) -> GateOutcome<U> {
         match self {
-            GateOutcome::Pass(value) => GateOutcome::Pass(f(value)),
+            GateOutcome::Pass(value) => f(value),
             GateOutcome::Vanished => GateOutcome::Vanished,
             GateOutcome::Locked(locked) => GateOutcome::Locked(locked),
             GateOutcome::Refused(refusal) => GateOutcome::Refused(refusal),
@@ -260,7 +288,28 @@ pub struct GateCtx {
     removed_whole: Vec<String>,
     scope: StoreScope,
     host: Box<dyn HostFacts>,
-    validated: BTreeMap<OpId, Stamp>,
+    validated: BTreeMap<OpId, Recorded>,
+}
+
+/// What the act-time gate takes for one op: the stamp and the exemptions of its journal `validated`
+/// record, the op that record was accepted for, and the blast-radius limit.
+#[derive(Debug, Clone)]
+struct Recorded {
+    op: ExecOp,
+    stamp: Stamp,
+    exemptions: Exemptions,
+    max_files: u32,
+}
+
+impl Recorded {
+    /// The item as the gate functions take it, with the recorded exemptions and limit.
+    fn item(&self) -> GateItem<'_> {
+        GateItem {
+            op: &self.op,
+            exemptions: self.exemptions,
+            max_files: self.max_files,
+        }
+    }
 }
 
 impl GateCtx {
@@ -330,15 +379,57 @@ impl GateCtx {
         &self.scope
     }
 
-    /// Records the stamp of a validated op (done by [`validate_all`]; for a resumed run, rebuild it from
-    /// the journal with [`Stamp::from_item_facts`]).
-    pub fn record(&mut self, op: OpId, stamp: Stamp) {
-        self.validated.insert(op, stamp);
+    /// Records the journal's `validated` record of `op`, the only source of the stamp and the exemptions
+    /// the act-time gate ([`open_and_check_path`], [`open_and_check_key`]) uses for `validated.op`. Call it
+    /// once the record is written (a fresh run: from [`Validation::to_journal`]) or read back (a resumed
+    /// run). `max_files` is the item's blast-radius limit ([`GateItem::max_files`]; not journalled).
+    ///
+    /// Refused, recording nothing: `op` acts on another target than the record
+    /// ([`reason::VALIDATION_MISMATCH`]), the op id already has a record (the same), or the facts do not
+    /// fit the op ([`reason::STAMP_KIND`]). A record of an absent item ([`ItemFacts::Absent`]) is accepted
+    /// and records nothing: there is nothing to act on, and the act-time gate refuses the id.
+    pub fn record(
+        &mut self,
+        op: &ExecOp,
+        validated: &Validated,
+        max_files: u32,
+    ) -> Result<(), Refusal> {
+        if self.validated.contains_key(&validated.op) || op.target() != validated.target {
+            return Err(rule(reason::VALIDATION_MISMATCH));
+        }
+        let Some(stamp) = Stamp::from_item_facts(&validated.facts) else {
+            return Ok(());
+        };
+        if !stamp.fits(op) {
+            return Err(rule(reason::STAMP_KIND));
+        }
+        self.validated.insert(
+            validated.op,
+            Recorded {
+                op: op.clone(),
+                stamp,
+                exemptions: exemptions_from_journal(&validated.exemptions),
+                max_files,
+            },
+        );
+        Ok(())
     }
 
     /// The stamp recorded for `op`.
     pub fn stamp(&self, op: OpId) -> Option<&Stamp> {
-        self.validated.get(&op)
+        self.validated.get(&op).map(|recorded| &recorded.stamp)
+    }
+
+    /// The exemptions recorded for `op` (those of its journal `validated` record).
+    pub fn exemptions(&self, op: OpId) -> Option<Exemptions> {
+        self.validated.get(&op).map(|recorded| recorded.exemptions)
+    }
+
+    /// The record of `op`, or the refusal for an op id that has none.
+    fn recorded(&self, op: OpId) -> Result<&Recorded, Refusal> {
+        self.validated
+            .get(&op)
+            .ok_or_else(|| rule(reason::NOT_VALIDATED))
     }
 }
 
@@ -379,8 +470,9 @@ pub fn exemptions_to_journal(exemptions: &Exemptions) -> GateExemptions {
 }
 
 /// The exemptions a journal `validated` record holds, as the gate takes them: what undo and recovery
-/// pass to [`check_undo_path`], [`check_undo_key`] and the act-time gate, instead of deriving them again
-/// from the scan. The exact inverse of [`exemptions_to_journal`].
+/// pass to [`check_undo_path`] and [`check_undo_key`], and what [`GateCtx::record`] keeps for the
+/// act-time gate, instead of deriving them again from the scan. The exact inverse of
+/// [`exemptions_to_journal`].
 pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions {
     let GateExemptions {
         proven_owned_skeleton,
@@ -400,12 +492,14 @@ pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions {
 // Items and stamps
 // ---------------------------------------------------------------------------------------------------
 
-/// One item as the gate sees it.
+/// One item as the validate pass sees it. The act-time gate does not take one: it rebuilds the item
+/// from the op's journal record ([`GateCtx::record`]).
 #[derive(Debug, Clone, Copy)]
 pub struct GateItem<'a> {
     /// What the executor does with the item.
     pub op: &'a ExecOp,
-    /// The candidate's exemptions ([`exemptions_for`]).
+    /// The candidate's exemptions ([`exemptions_for`]). The validation hands them back for the journal
+    /// ([`Validation::exemptions`]).
     pub exemptions: Exemptions,
     /// The most files, and separately the most directories, the tree below a directory moved whole may
     /// hold; more is refused with [`Blocker::TooLarge`]. The plan's limit: 5,000, or 50,000 for a
@@ -425,12 +519,15 @@ impl<'a> GateItem<'a> {
 }
 
 /// What the validate pass binds an item to, and the act re-checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Stamp {
     /// A file or directory: identity and kind.
     Path(PathStamp),
-    /// A key action. Keys have no identity to bind; the act re-checks every rule but no identity.
-    Key,
+    /// A key action. A key has no identity Windows reports, so the act is bound to every fact the
+    /// journal records about it: subkey and value counts, link state, owner and last write time. Any
+    /// change to the key's values or direct subkeys moves its last write time, and so does re-creating
+    /// it. A difference is [`reason::KEY_CHANGED`].
+    Key(RegFacts),
     /// A value or segment action: type, length and hash of the raw data.
     Value(ValueStamp),
     /// A package removal (no live facts).
@@ -438,8 +535,7 @@ pub enum Stamp {
 }
 
 impl Stamp {
-    /// The stamp a journal `validated` record stands for (crash recovery). `None` for
-    /// [`ItemFacts::Absent`].
+    /// The stamp a journal `validated` record stands for. `None` for [`ItemFacts::Absent`].
     pub fn from_item_facts(facts: &ItemFacts) -> Option<Stamp> {
         Some(match facts {
             ItemFacts::File(file) => Stamp::Path(PathStamp {
@@ -449,7 +545,7 @@ impl Stamp {
                 },
                 is_dir: file.is_dir,
             }),
-            ItemFacts::Key(_) => Stamp::Key,
+            ItemFacts::Key(key) => Stamp::Key(key.clone()),
             ItemFacts::Value(value) => Stamp::Value(ValueStamp {
                 ty: value.value_type,
                 len: u64::from(value.size),
@@ -458,6 +554,23 @@ impl Stamp {
             ItemFacts::Package => Stamp::Package,
             ItemFacts::Absent => return None,
         })
+    }
+
+    /// Whether the stamp is of the kind `op` is validated with.
+    fn fits(&self, op: &ExecOp) -> bool {
+        matches!(
+            (op, self),
+            (
+                ExecOp::QuarantineMove { .. } | ExecOp::RemoveDirIfEmpty { .. },
+                Stamp::Path(_)
+            ) | (
+                ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. },
+                Stamp::Key(_)
+            ) | (
+                ExecOp::DeleteValue { .. } | ExecOp::EditSegment { .. },
+                Stamp::Value(_)
+            ) | (ExecOp::RemovePackage { .. }, Stamp::Package)
+        )
     }
 }
 
@@ -468,9 +581,24 @@ pub struct Validation {
     pub stamp: Stamp,
     /// The journal form of the facts.
     pub facts: ItemFacts,
-    /// The exemptions the verdict was given ([`GateItem::exemptions`]), for the journal. The act must be
-    /// gated with the same ones.
+    /// The exemptions the verdict was given ([`GateItem::exemptions`]), for the journal. The act is gated
+    /// with the ones of the journal record ([`GateCtx::record`]).
     pub exemptions: Exemptions,
+}
+
+impl Validation {
+    /// The journal `validated` record of this validation: its facts and exemptions, for op `op` of plan
+    /// item `item` acting on `target` (the op's [`ExecOp::target`]). Write it, then hand the same record
+    /// to [`GateCtx::record`].
+    pub fn to_journal(&self, op: OpId, item: CandidateId, target: Target) -> Validated {
+        Validated {
+            op,
+            item,
+            target,
+            facts: self.facts.clone(),
+            exemptions: exemptions_to_journal(&self.exemptions),
+        }
+    }
 }
 
 impl GateOutcome<Validation> {
@@ -509,22 +637,18 @@ pub fn validate(ctx: &GateCtx, item: &GateItem<'_>) -> GateOutcome<Validation> {
     }
 }
 
-/// The validate pass over every selected item, in the order given. Records each pass's stamp in `ctx`.
-/// The caller writes one journal `validated` record per item from
-/// [`GateOutcome::item_facts`].
+/// The validate pass over every selected item, in the order given. Records nothing: the caller writes
+/// one journal `validated` record per item (from [`Validation::to_journal`], or with
+/// [`GateOutcome::item_facts`]) and hands each written record to [`GateCtx::record`], so that the act
+/// is gated with exactly what was journalled.
 pub fn validate_all<'a>(
-    ctx: &mut GateCtx,
+    ctx: &GateCtx,
     items: impl IntoIterator<Item = (OpId, GateItem<'a>)>,
 ) -> Vec<(OpId, GateOutcome<Validation>)> {
-    let mut out = Vec::new();
-    for (op, item) in items {
-        let outcome = validate(ctx, &item);
-        if let GateOutcome::Pass(validation) = &outcome {
-            ctx.record(op, validation.stamp);
-        }
-        out.push((op, outcome));
-    }
-    out
+    items
+        .into_iter()
+        .map(|(op, item)| (op, validate(ctx, &item)))
+        .collect()
 }
 
 fn path_op(op: &ExecOp) -> Option<PathOp> {
@@ -610,7 +734,8 @@ fn plain_dir(dir: &str, identity: Option<FileIdentity>) -> Option<PathBuf> {
 }
 
 /// The bounded walk below a directory that is moved whole (G6, G7, blast radius). Never descends into a
-/// reparse point; opens every non-directory entry without following it to read its link count.
+/// reparse point; opens every non-directory entry without following it to read its link count. Holds at
+/// most `2 * max` listed entries of one directory at a time.
 fn walk_tree(ctx: &GateCtx, root: &str, identity: FileIdentity, max: u32) -> Result<Walk, Refusal> {
     let max = u64::from(max);
     let mut walk = Walk {
@@ -627,9 +752,17 @@ fn walk_tree(ctx: &GateCtx, root: &str, identity: FileIdentity, max: u32) -> Res
             walk.facts.complete = false;
             continue;
         };
-        let Ok(entries) = list_dir(&dir_ext) else {
-            walk.facts.complete = false;
-            continue;
+        // More than `2 * max` entries in all means more than `max` files or more than `max`
+        // directories, so no listing is read past what is left of that budget (M5 of the wave 2
+        // review: memory stays bounded by the limit, not by the largest directory).
+        let budget = (2 * max).saturating_sub(files + dirs);
+        let entries = match ffi::list_dir_capped(&dir_ext, budget) {
+            Ok(Some(entries)) => entries,
+            Ok(None) => return Err(too_large()),
+            Err(_) => {
+                walk.facts.complete = false;
+                continue;
+            }
         };
         for entry in entries {
             let child = format!(r"{}\{}", dir.trim_end_matches('\\'), entry.name);
@@ -880,21 +1013,27 @@ impl CheckedPath {
     }
 }
 
-/// The act-time gate for a file-system item (`QuarantineMove`, `RemoveDirIfEmpty`): opens the acting
-/// handle first, reads every fact from it, and checks them against `stamp` ([`Binding::Recheck`]). On a
-/// pass the open handle is returned for the action.
+/// The act-time gate for the file-system item of op `op` (`QuarantineMove`, `RemoveDirIfEmpty`). The op,
+/// its stamp, its exemptions and its blast-radius limit are those of its journal record
+/// ([`GateCtx::record`]); an op id without one is refused ([`reason::NOT_VALIDATED`]). Opens the acting
+/// handle first, reads every fact from it, and checks them against the recorded stamp
+/// ([`Binding::Recheck`]). On a pass the open handle is returned for the action.
 ///
 /// When the acting handle cannot be opened (sharing violation, access denied, ...) the item is looked at
 /// through a read-only handle: a refusal is reported as `Refused`; otherwise a sharing violation is
 /// `Locked` and any other error `Failed`.
-pub fn open_and_check_path(
-    ctx: &GateCtx,
-    item: &GateItem<'_>,
-    stamp: &PathStamp,
-) -> GateOutcome<CheckedPath> {
+pub fn open_and_check_path(ctx: &GateCtx, op: OpId) -> GateOutcome<CheckedPath> {
+    let recorded = match ctx.recorded(op) {
+        Ok(recorded) => recorded,
+        Err(refusal) => return GateOutcome::Refused(refusal),
+    };
+    let item = &recorded.item();
     let (path, op) = match op_path(item) {
         Ok(found) => found,
         Err(refusal) => return GateOutcome::Refused(refusal),
+    };
+    let Stamp::Path(stamp) = &recorded.stamp else {
+        return GateOutcome::Refused(rule(reason::STAMP_KIND));
     };
     let Some(p) = ext(path) else {
         return GateOutcome::Refused(rule(reason::PATH_FORM));
@@ -1076,14 +1215,22 @@ fn open_destination(destination: &str) -> (DestinationFacts, Option<(DestDir, St
     }
 }
 
-/// Whether `source` may be moved to `destination` in this session's quarantine
+/// Whether `source` may be moved to `<op_dir>\<leaf>` in this session's quarantine
 /// ([`live::check_quarantine_destination`]): `<quarantine dir>\<op>\<leaf>`, same volume, parent the plain
-/// directory its path names, nothing there yet. The op directory must exist (the store creates it).
+/// directory its path names, nothing there yet.
+///
+/// `op_dir` is the store's checked op directory (`SessionDir::create_op_dir`). The directory the gate
+/// opens by path to read the facts from must be that very directory: equal volume serial and file id
+/// with the store's handle, else [`reason::QUARANTINE_DIR_DIFFERS`]. So the directory the verdict is
+/// about, the one the store checked, and the one [`CheckedDest::dir`] renames into are one object.
 pub fn check_quarantine_destination(
     ctx: &GateCtx,
     source: &CheckedPath,
-    destination: &str,
+    op_dir: &QuarantineDir,
+    leaf: &str,
 ) -> Result<CheckedDest, Refusal> {
+    let item_path = op_dir.item_path(leaf);
+    let destination = item_path.to_str().ok_or_else(|| rule(reason::PATH_FORM))?;
     let (facts, parent) = open_destination(destination);
     let check = QuarantineCheck {
         source: source.path(),
@@ -1092,6 +1239,16 @@ pub fn check_quarantine_destination(
     };
     live::check_quarantine_destination(&check, &facts, &ctx.scope)?;
     let (dir, leaf) = parent.ok_or_else(|| rule(reason::FACTS_UNREADABLE))?;
+    let store_id = op_dir.dir().file_id();
+    let same_dir = dir.facts().is_ok_and(|now| {
+        now.file_id.volume_serial == store_id.volume_serial && now.file_id.id == store_id.id
+    });
+    if !same_dir {
+        return Err(Refusal {
+            blocker: Blocker::CannotBackUp,
+            reason: reason::QUARANTINE_DIR_DIFFERS,
+        });
+    }
     Ok(CheckedDest {
         dir,
         leaf,
@@ -1439,10 +1596,10 @@ fn gate_key(
     match (key_item_facts(op, &seen), seen.info) {
         (Some(item_facts), Some(info)) => GateOutcome::Pass(Gated {
             key,
+            address: probe.open,
             facts: seen.facts,
             info,
             value: seen.value,
-            op,
             item_facts,
         }),
         _ => GateOutcome::Refused(rule(reason::FACTS_UNREADABLE)),
@@ -1453,26 +1610,25 @@ fn gate_key(
 #[derive(Debug)]
 struct Gated {
     key: WKey,
+    address: KeyAddress,
     facts: KeyFacts,
     info: WKeyInfo,
     value: Option<RegValue>,
-    op: KeyOp,
     item_facts: ItemFacts,
 }
 
 fn validate_key(ctx: &GateCtx, item: &GateItem<'_>) -> GateOutcome<Validation> {
-    gate_key(ctx, item, KeyAccess::READ, Binding::Capture).map(|gated| {
-        let stamp = match (gated.op, gated.facts.value) {
-            (KeyOp::DeleteValue | KeyOp::EditSegment, ValueState::Present(stamp)) => {
-                Stamp::Value(stamp)
-            }
-            _ => Stamp::Key,
+    gate_key(ctx, item, KeyAccess::READ, Binding::Capture).and_then(|gated| {
+        let stamp = match (&gated.item_facts, gated.facts.value) {
+            (ItemFacts::Key(facts), _) => Stamp::Key(facts.clone()),
+            (ItemFacts::Value(_), ValueState::Present(stamp)) => Stamp::Value(stamp),
+            _ => return GateOutcome::Refused(rule(reason::FACTS_UNREADABLE)),
         };
-        Validation {
+        GateOutcome::Pass(Validation {
             stamp,
             facts: gated.item_facts,
             exemptions: item.exemptions,
-        }
+        })
     })
 }
 
@@ -1486,6 +1642,7 @@ fn validate_key(ctx: &GateCtx, item: &GateItem<'_>) -> GateOutcome<Validation> {
 #[derive(Debug)]
 pub struct CheckedKey {
     key: WKey,
+    address: KeyAddress,
     facts: KeyFacts,
     info: WKeyInfo,
     value: Option<RegValue>,
@@ -1497,6 +1654,12 @@ impl CheckedKey {
     /// or segment action.
     pub fn key(&self) -> &WKey {
         &self.key
+    }
+
+    /// The canonical address [`CheckedKey::key`] was opened at (aliases resolved, the 32-bit view by its
+    /// flag): what a registry backup should record, rather than the plan's spelling (review finding S3).
+    pub fn address(&self) -> &KeyAddress {
+        &self.address
     }
 
     /// The facts the verdict was given.
@@ -1526,47 +1689,257 @@ impl CheckedKey {
     }
 }
 
-/// The act-time gate for a registry item (`DeleteKeyTree`, `DeleteKeyIfEmpty`, `DeleteValue`,
-/// `EditSegment`): opens the key with the access the action needs, reads every fact from that handle and
-/// probes each ancestor by itself (G11), then asks [`live::check_key`]; value actions are re-checked
-/// against the stamped type and data. On a pass the open key is returned for the action.
+/// The act-time gate for the registry item of op `op` (`DeleteKeyTree`, `DeleteKeyIfEmpty`,
+/// `DeleteValue`, `EditSegment`). The op, its stamp and its exemptions are those of its journal record
+/// ([`GateCtx::record`]); an op id without one is refused ([`reason::NOT_VALIDATED`]). Opens the key with
+/// the access the action needs, reads every fact from that handle and probes each ancestor by itself
+/// (G11), then asks [`live::check_key`]. Value actions are re-checked against the recorded type and data;
+/// key actions against the recorded [`RegFacts`] (counts, link state, owner, last write time), a
+/// difference being [`reason::KEY_CHANGED`]. On a pass the open key is returned for the action.
 ///
 /// A missing key or value is `Vanished`. Access denied is `Failed` unless a read-only look refuses the
 /// item, which is then `Refused`.
-pub fn open_and_check_key(
-    ctx: &GateCtx,
-    item: &GateItem<'_>,
-    stamp: &Stamp,
-) -> GateOutcome<CheckedKey> {
+pub fn open_and_check_key(ctx: &GateCtx, op: OpId) -> GateOutcome<CheckedKey> {
+    let recorded = match ctx.recorded(op) {
+        Ok(recorded) => recorded,
+        Err(refusal) => return GateOutcome::Refused(refusal),
+    };
+    let item = &recorded.item();
     let Some(op) = key_op(item.op) else {
         return GateOutcome::Refused(rule(reason::OP_KIND));
     };
-    let binding = match (op, stamp) {
-        (KeyOp::DeleteKeyTree | KeyOp::DeleteKeyIfEmpty, Stamp::Key) => Binding::Capture,
-        (KeyOp::DeleteValue | KeyOp::EditSegment, Stamp::Value(value)) => Binding::Recheck(value),
+    // The guard compares values itself; it ignores the binding for key actions, whose recorded facts
+    // are compared below, from the same handle.
+    let (binding, key_facts) = match (op, &recorded.stamp) {
+        (KeyOp::DeleteKeyTree | KeyOp::DeleteKeyIfEmpty, Stamp::Key(facts)) => {
+            (Binding::Capture, Some(facts))
+        }
+        (KeyOp::DeleteValue | KeyOp::EditSegment, Stamp::Value(value)) => {
+            (Binding::Recheck(value), None)
+        }
         _ => return GateOutcome::Refused(rule(reason::STAMP_KIND)),
     };
-    gate_key(ctx, item, act_access(op), binding).map(|gated| CheckedKey {
-        key: gated.key,
-        facts: gated.facts,
-        info: gated.info,
-        value: gated.value,
-        item_facts: gated.item_facts,
+    gate_key(ctx, item, act_access(op), binding).and_then(|gated| {
+        if let Some(recorded) = key_facts {
+            if !matches!(&gated.item_facts, ItemFacts::Key(now) if now == recorded) {
+                // The acting handle is closed when `gated` drops here.
+                return GateOutcome::Refused(Refusal {
+                    blocker: Blocker::ChangedSinceScan,
+                    reason: reason::KEY_CHANGED,
+                });
+            }
+        }
+        GateOutcome::Pass(CheckedKey {
+            key: gated.key,
+            address: gated.address,
+            facts: gated.facts,
+            info: gated.info,
+            value: gated.value,
+            item_facts: gated.item_facts,
+        })
     })
 }
 
-/// Whether a key, value or segment may be restored at `target` (§7.8, [`live::check_undo_key`]): the key
-/// and every ancestor probed by itself with `REG_OPTION_OPEN_LINK`; missing ones are allowed as long as
-/// everything below them is missing too.
+// ---------------------------------------------------------------------------------------------------
+// Registry undo destinations (§7.8)
+// ---------------------------------------------------------------------------------------------------
+
+/// A place a registry backup may be restored to ([`check_undo_key`]), with the open key the restore must
+/// act on. As with [`CheckedDest`], the facts of the verdict were read from that handle, so whatever
+/// happens to the key's path afterwards, the restore lands in the key that was checked.
+#[derive(Debug)]
+pub enum CheckedUndoKey {
+    /// A key target ([`Target::RegKey`]): the key is re-created (or merged into) below its parent.
+    Recreate(CheckedKeyParent),
+    /// A value or segment target: the value goes back into the key that held it.
+    Restore(CheckedValueKey),
+}
+
+impl CheckedUndoKey {
+    /// The parent of a key to re-create; `None` for a value or segment target.
+    pub fn into_parent(self) -> Option<CheckedKeyParent> {
+        match self {
+            CheckedUndoKey::Recreate(parent) => Some(parent),
+            CheckedUndoKey::Restore(_) => None,
+        }
+    }
+
+    /// The key a value or segment goes back into; `None` for a key target.
+    pub fn into_value_key(self) -> Option<CheckedValueKey> {
+        match self {
+            CheckedUndoKey::Recreate(_) => None,
+            CheckedUndoKey::Restore(key) => Some(key),
+        }
+    }
+}
+
+/// The parent of a key to re-create, open with `KEY_CREATE_SUB_KEY` (and `KEY_READ`) at the parent's
+/// [`KeyAddress`], every component with `REG_OPTION_OPEN_LINK`. Create or merge the key as
+/// [`CheckedKeyParent::leaf`] below [`CheckedKeyParent::parent`]; never reopen the parent by path.
+#[derive(Debug)]
+pub struct CheckedKeyParent {
+    parent: WKey,
+    leaf: String,
+    address: KeyAddress,
+    facts: UndoKeyFacts,
+}
+
+impl CheckedKeyParent {
+    /// The parent key the verdict was given for; the key is created below it.
+    pub fn parent(&self) -> &WKey {
+        &self.parent
+    }
+
+    /// The name of the key to re-create, one component below [`CheckedKeyParent::parent`].
+    pub fn leaf(&self) -> &str {
+        &self.leaf
+    }
+
+    /// The canonical address of the key to re-create (the one the gate resolved: aliases resolved, the
+    /// 32-bit view by its flag); what a backup should record, not the plan's spelling.
+    pub fn address(&self) -> &KeyAddress {
+        &self.address
+    }
+
+    /// The facts the verdict was given: the parent's link state read from [`CheckedKeyParent::parent`],
+    /// the key's own state read below it.
+    pub fn facts(&self) -> &UndoKeyFacts {
+        &self.facts
+    }
+
+    /// Whether the key to re-create exists already (a plain key; the restore then merges or refuses).
+    pub fn key_exists(&self) -> bool {
+        self.facts.node == KeyNode::Plain
+    }
+
+    /// The parent handle, giving up the rest.
+    pub fn into_parent(self) -> WKey {
+        self.parent
+    }
+}
+
+/// The key a value or segment goes back into, open with `KEY_SET_VALUE` (and `KEY_READ`) at its
+/// [`KeyAddress`], every component with `REG_OPTION_OPEN_LINK`. Restore through
+/// [`CheckedValueKey::key`]; never reopen the key by path.
+#[derive(Debug)]
+pub struct CheckedValueKey {
+    key: WKey,
+    address: KeyAddress,
+    facts: UndoKeyFacts,
+}
+
+impl CheckedValueKey {
+    /// The key the verdict was given for.
+    pub fn key(&self) -> &WKey {
+        &self.key
+    }
+
+    /// The canonical address of the key (see [`CheckedKeyParent::address`]).
+    pub fn address(&self) -> &KeyAddress {
+        &self.address
+    }
+
+    /// The facts the verdict was given; the key's link state was read from [`CheckedValueKey::key`].
+    pub fn facts(&self) -> &UndoKeyFacts {
+        &self.facts
+    }
+
+    /// The key handle, giving up the rest.
+    pub fn into_key(self) -> WKey {
+        self.key
+    }
+}
+
+/// The link state of an open key.
+fn node_of(key: &WKey) -> KeyNode {
+    match key.is_link() {
+        Ok(true) => KeyNode::Link,
+        Ok(false) => KeyNode::Plain,
+        Err(_) => KeyNode::Unknown,
+    }
+}
+
+/// The state of `leaf` below the open `parent`, opened by itself with `REG_OPTION_OPEN_LINK`.
+fn child_node(parent: &WKey, leaf: &str) -> KeyNode {
+    match parent.open_subkey(leaf, KeyAccess::READ) {
+        Ok(key) => node_of(&key),
+        Err(e) if e.is_not_found() => KeyNode::Missing,
+        Err(e) if e == Win32Error::LINK_ON_PATH => KeyNode::Link,
+        Err(_) => KeyNode::Unknown,
+    }
+}
+
+/// Whether a key, value or segment may be restored at `target` (§7.8, [`live::check_undo_key`]), and the
+/// open key the restore must act on.
+///
+/// The acting key is opened **first**, with the access the restore needs: for a key target its parent
+/// (`KEY_CREATE_SUB_KEY`), for a value or segment target the key itself (`KEY_SET_VALUE`), each at its
+/// canonical [`KeyAddress`] with `REG_OPTION_OPEN_LINK` on every component. Its link state is read from
+/// that handle, the key to re-create is probed below it, and the ancestors above are probed each by
+/// itself; the guard decides on those facts, and on a pass the handle is returned in a
+/// [`CheckedUndoKey`]. The restore must act through it.
+///
+/// After the guard's verdict the gate refuses what it has no handle for: a missing parent or key is
+/// [`reason::UNDO_KEY_MISSING`] (soft, an undo conflict: a parent removed by this session is restored
+/// first by undo's reverse order; a key directly below a hive root has no parent to open), and any
+/// other open failure is [`reason::FACTS_UNREADABLE`].
 pub fn check_undo_key(
     ctx: &GateCtx,
     target: &Target,
     exemptions: &Exemptions,
-) -> Result<(), Refusal> {
+) -> Result<CheckedUndoKey, Refusal> {
     let probe = live::key_probe(target, ctx.deny.env())?;
-    let facts = UndoKeyFacts {
-        node: probe_node(&probe.open),
-        ancestors: probe_ancestors(&probe),
+    let recreate = matches!(target, Target::RegKey { .. });
+    let missing = || Refusal {
+        blocker: Blocker::ChangedSinceScan,
+        reason: reason::UNDO_KEY_MISSING,
     };
-    live::check_undo_key(target, &facts, &ctx.deny, exemptions)
+    // The address of the key acted on, and the access the restore needs on it.
+    let (acting, access) = if recreate {
+        (probe.ancestors.last(), KeyAccess::CREATE_SUB_KEY)
+    } else {
+        (Some(&probe.open), KeyAccess::SET_VALUE)
+    };
+    let opened = acting.map(|addr| open_addr(addr, access));
+    let held = opened.as_ref().and_then(|opened| opened.as_ref().ok());
+
+    // Every ancestor by itself, except the one held open, whose state is read from its handle.
+    let mut ancestors = probe_ancestors(&probe);
+    let node = match (held, recreate) {
+        (Some(parent), true) => {
+            if let Some(last) = ancestors.last_mut() {
+                last.node = node_of(parent);
+            }
+            prefix::leaf(&probe.open.path).map_or(KeyNode::Unknown, |leaf| child_node(parent, leaf))
+        }
+        (Some(key), false) => node_of(key),
+        (None, _) => probe_node(&probe.open),
+    };
+    let facts = UndoKeyFacts { node, ancestors };
+    live::check_undo_key(target, &facts, &ctx.deny, exemptions)?;
+
+    let key = match opened {
+        Some(Ok(key)) => key,
+        None => return Err(missing()),
+        Some(Err(e)) if e.is_not_found() => return Err(missing()),
+        Some(Err(_)) => return Err(rule(reason::FACTS_UNREADABLE)),
+    };
+    let address = probe.open;
+    if recreate {
+        let leaf = prefix::leaf(&address.path)
+            .ok_or_else(|| rule(reason::FACTS_UNREADABLE))?
+            .to_owned();
+        Ok(CheckedUndoKey::Recreate(CheckedKeyParent {
+            parent: key,
+            leaf,
+            address,
+            facts,
+        }))
+    } else {
+        Ok(CheckedUndoKey::Restore(CheckedValueKey {
+            key,
+            address,
+            facts,
+        }))
+    }
 }

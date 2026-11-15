@@ -16,6 +16,7 @@ use purge_win::reg::{REG_DWORD, REG_LINK, REG_SZ};
 use purge_win::sid::current_user_sid;
 
 use super::*;
+use crate::storage::StorageRoots;
 
 // ---------------------------------------------------------------------------------------------------
 // Fixtures
@@ -155,13 +156,13 @@ fn no_store() -> StoreScope {
     store_scope(root.to_str().unwrap())
 }
 
-/// The scope of a store at `<scratch>\store`, with the session directory and the data root's
-/// quarantine directory of [`test_session`] created.
-fn scope_in(s: &Scratch) -> StoreScope {
-    let scope = store_scope(&s.path("store"));
-    std::fs::create_dir_all(scope.session_dir()).unwrap();
-    std::fs::create_dir_all(&scope.quarantine_dirs()[0]).unwrap();
-    scope
+/// A session in a relaxed store at `<scratch>\store` (the store creates and checks its op directories),
+/// and its scope.
+fn relaxed_session(s: &Scratch) -> (crate::storage::SessionDir, StoreScope) {
+    let roots = StorageRoots::install_relaxed(Path::new(&s.path("store"))).unwrap();
+    let session = roots.create_session().unwrap();
+    let scope = roots.store_scope::<&Path>(session.id(), &[]).unwrap();
+    (session, scope)
 }
 
 fn ctx_with(selected: &[ExecOp], scope: StoreScope, host: Box<dyn HostFacts>) -> GateCtx {
@@ -216,11 +217,36 @@ fn assert_refused<T: fmt::Debug>(outcome: &GateOutcome<T>, blocker: Blocker, rea
     }
 }
 
-/// Validates `op` and runs the act-time gate for it against the stamp.
-fn validate_then_act(ctx: &GateCtx, op: &ExecOp) -> GateOutcome<CheckedPath> {
-    let item = GateItem::new(op, long());
-    let stamp = path_stamp(&validate(ctx, &item));
-    open_and_check_path(ctx, &item, &stamp)
+/// The journal `validated` record of a passed validation of `item`, as op `id`.
+#[track_caller]
+fn journal_record(id: OpId, item: &GateItem<'_>, outcome: &GateOutcome<Validation>) -> Validated {
+    let GateOutcome::Pass(validation) = outcome else {
+        panic!("expected a pass, got {outcome:?}");
+    };
+    validation.to_journal(id, CandidateId(format!("c-{:03}", id.0)), item.op.target())
+}
+
+/// Writes (in memory) the journal record of a passed validation of `item` and records it in `ctx` under
+/// a fresh op id, as the execute pipeline does once the record is written. Returns the op id.
+#[track_caller]
+fn record(ctx: &mut GateCtx, item: &GateItem<'_>, outcome: &GateOutcome<Validation>) -> OpId {
+    let id = OpId(u32::try_from(ctx.validated.len()).unwrap() + 1);
+    ctx.record(item.op, &journal_record(id, item, outcome), item.max_files)
+        .unwrap();
+    id
+}
+
+/// Validates `item` and records the pass; returns the op id for the act-time gate.
+#[track_caller]
+fn validate_and_record(ctx: &mut GateCtx, item: &GateItem<'_>) -> OpId {
+    let outcome = validate(ctx, item);
+    record(ctx, item, &outcome)
+}
+
+/// Validates `op`, records the pass and runs the act-time gate for it.
+fn validate_then_act(ctx: &mut GateCtx, op: &ExecOp) -> GateOutcome<CheckedPath> {
+    let id = validate_and_record(ctx, &GateItem::new(op, long()));
+    open_and_check_path(ctx, id)
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -233,11 +259,14 @@ fn read_only_hidden_file_passes_and_the_inspected_handle_acts() {
     let f = s.file("data.bin", b"hello");
     attrib(&["+R", "+H"], &f);
     let op = mv(&f);
-    let ctx = ctx(std::slice::from_ref(&op));
+    let mut ctx = ctx(std::slice::from_ref(&op));
     let item = GateItem::new(&op, long());
 
     let validated = validate(&ctx, &item);
     let stamp = path_stamp(&validated);
+    let id = record(&mut ctx, &item, &validated);
+    assert_eq!(ctx.stamp(id), Some(&Stamp::Path(stamp)));
+    assert_eq!(ctx.exemptions(id), Some(long()));
     // The exemptions the verdict used come back for the journal.
     let GateOutcome::Pass(Validation { exemptions, .. }) = &validated else {
         panic!("{validated:?}");
@@ -258,7 +287,7 @@ fn read_only_hidden_file_passes_and_the_inspected_handle_acts() {
         Some(Stamp::Path(stamp))
     );
 
-    let checked = open_and_check_path(&ctx, &item, &stamp).pass().unwrap();
+    let checked = open_and_check_path(&ctx, id).pass().unwrap();
     assert_eq!(checked.stamp(), stamp);
     assert_eq!(checked.path(), f);
     assert!(checked.security().is_some());
@@ -287,17 +316,33 @@ fn vanished_items() {
     let s = Scratch::new("vanish");
     let missing = s.path("never-there.txt");
     let op = mv(&missing);
-    let ctx = ctx(std::slice::from_ref(&op));
+    let mut ctx = ctx(std::slice::from_ref(&op));
     let outcome = validate(&ctx, &GateItem::new(&op, long()));
     assert!(outcome.is_vanished(), "{outcome:?}");
     assert_eq!(outcome.item_facts(), Some(ItemFacts::Absent));
+    // The journal record of an absent item records nothing: the act-time gate refuses its id.
+    let absent = Validated {
+        op: OpId(40),
+        item: CandidateId("c-040".into()),
+        target: op.target(),
+        facts: ItemFacts::Absent,
+        exemptions: exemptions_to_journal(&long()),
+    };
+    assert_eq!(ctx.record(&op, &absent, 5_000), Ok(()));
+    assert_eq!(ctx.stamp(OpId(40)), None);
+    assert_refused(
+        &open_and_check_path(&ctx, OpId(40)),
+        Blocker::DenyListed {
+            rule: reason::NOT_VALIDATED.into(),
+        },
+        reason::NOT_VALIDATED,
+    );
 
     let f = s.file("gone.txt", b"x");
     let op = mv(&f);
-    let item = GateItem::new(&op, long());
-    let stamp = path_stamp(&validate(&ctx, &item));
+    let id = validate_and_record(&mut ctx, &GateItem::new(&op, long()));
     std::fs::remove_file(&f).unwrap();
-    assert!(open_and_check_path(&ctx, &item, &stamp).is_vanished());
+    assert!(open_and_check_path(&ctx, id).is_vanished());
 }
 
 #[test]
@@ -306,12 +351,11 @@ fn swap_between_validate_and_act_is_changed_since_scan() {
     // A file replaced by another file of the same name.
     let f = s.file("app.dll", b"one");
     let op = mv(&f);
-    let ctx = ctx(std::slice::from_ref(&op));
-    let item = GateItem::new(&op, long());
-    let stamp = path_stamp(&validate(&ctx, &item));
+    let mut ctx = ctx(std::slice::from_ref(&op));
+    let id = validate_and_record(&mut ctx, &GateItem::new(&op, long()));
     std::fs::remove_file(&f).unwrap();
     std::fs::write(&f, b"one").unwrap();
-    let outcome = open_and_check_path(&ctx, &item, &stamp);
+    let outcome = open_and_check_path(&ctx, id);
     assert_refused(
         &outcome,
         Blocker::ChangedSinceScan,
@@ -323,12 +367,11 @@ fn swap_between_validate_and_act_is_changed_since_scan() {
     let d = s.dir("cache");
     s.file(r"cache\a.txt", b"a");
     let op = mv(&d);
-    let item = GateItem::new(&op, long());
-    let stamp = path_stamp(&validate(&ctx, &item));
+    let id = validate_and_record(&mut ctx, &GateItem::new(&op, long()));
     std::fs::remove_dir_all(&d).unwrap();
     s.dir("cache");
     assert_refused(
-        &open_and_check_path(&ctx, &item, &stamp),
+        &open_and_check_path(&ctx, id),
         Blocker::ChangedSinceScan,
         live_reason::IDENTITY_CHANGED,
     );
@@ -336,12 +379,11 @@ fn swap_between_validate_and_act_is_changed_since_scan() {
     // A file replaced by a directory.
     let g = s.file("kind.txt", b"g");
     let op = mv(&g);
-    let item = GateItem::new(&op, long());
-    let stamp = path_stamp(&validate(&ctx, &item));
+    let id = validate_and_record(&mut ctx, &GateItem::new(&op, long()));
     std::fs::remove_file(&g).unwrap();
     std::fs::create_dir(&g).unwrap();
     assert_refused(
-        &open_and_check_path(&ctx, &item, &stamp),
+        &open_and_check_path(&ctx, id),
         Blocker::ChangedSinceScan,
         live_reason::IDENTITY_CHANGED,
     );
@@ -356,18 +398,22 @@ fn junction_as_the_item_is_refused_and_its_target_untouched() {
     junction(&link, &real);
 
     let op = mv(&link);
-    let ctx = ctx(std::slice::from_ref(&op));
+    let mut ctx = ctx(std::slice::from_ref(&op));
     let item = GateItem::new(&op, long());
     assert_refused(
         &validate(&ctx, &item),
         Blocker::ReparseMismatch,
         live_reason::ITEM_IS_REPARSE_POINT,
     );
-    // Even with the stamp of the real directory the act refuses the link.
+    // Even with a journal record that gives the link the facts of the real directory, the act refuses
+    // the link.
     let real_op = mv(&real);
-    let stamp = path_stamp(&validate(&ctx, &GateItem::new(&real_op, long())));
+    let real_item = GateItem::new(&real_op, long());
+    let mut forged = journal_record(OpId(1), &real_item, &validate(&ctx, &real_item));
+    forged.target = op.target();
+    ctx.record(&op, &forged, item.max_files).unwrap();
     assert_refused(
-        &open_and_check_path(&ctx, &item, &stamp),
+        &open_and_check_path(&ctx, OpId(1)),
         Blocker::ReparseMismatch,
         live_reason::ITEM_IS_REPARSE_POINT,
     );
@@ -383,7 +429,7 @@ fn junction_on_the_path_is_refused_also_when_swapped_in_after_validation() {
     junction(&via, &elsewhere);
 
     let op = mv(&format!(r"{via}\app.exe"));
-    let ctx = ctx(std::slice::from_ref(&op));
+    let mut ctx = ctx(std::slice::from_ref(&op));
     assert_refused(
         &validate(&ctx, &GateItem::new(&op, long())),
         Blocker::ReparseMismatch,
@@ -394,11 +440,10 @@ fn junction_on_the_path_is_refused_also_when_swapped_in_after_validation() {
     s.dir("install");
     let target = s.file(r"install\app.exe", b"mine");
     let op = mv(&target);
-    let item = GateItem::new(&op, long());
-    let stamp = path_stamp(&validate(&ctx, &item));
+    let id = validate_and_record(&mut ctx, &GateItem::new(&op, long()));
     std::fs::rename(s.path("install"), s.path("install-moved")).unwrap();
     junction(&s.path("install"), &elsewhere);
-    let outcome = open_and_check_path(&ctx, &item, &stamp);
+    let outcome = open_and_check_path(&ctx, id);
     assert_refused(
         &outcome,
         Blocker::ReparseMismatch,
@@ -426,8 +471,8 @@ fn hard_link_outside_the_plan_blocks_file_and_tree() {
         live_reason::LINK_OUTSIDE_PLAN,
     );
     let both = [op.clone(), mv(&other)];
-    let both_ctx = ctx(&both);
-    let outcome = validate_then_act(&both_ctx, &op);
+    let mut both_ctx = ctx(&both);
+    let outcome = validate_then_act(&mut both_ctx, &op);
     assert!(matches!(outcome, GateOutcome::Pass(_)), "{outcome:?}");
 
     // The same file found by the walk below a directory moved whole.
@@ -439,7 +484,7 @@ fn hard_link_outside_the_plan_blocks_file_and_tree() {
         live_reason::LINK_OUTSIDE_PLAN_IN_TREE,
     );
     let with_outside = [dir_op.clone(), mv(&s.path("outside"))];
-    let outcome = validate_then_act(&ctx(&with_outside), &dir_op);
+    let outcome = validate_then_act(&mut ctx(&with_outside), &dir_op);
     assert!(matches!(outcome, GateOutcome::Pass(_)), "{outcome:?}");
 }
 
@@ -457,7 +502,7 @@ fn tree_walk_does_not_traverse_a_junction_and_enforces_the_blast_radius() {
     junction(&s.path(r"app\sub\to-big"), &big);
 
     let op = mv(&app);
-    let ctx = ctx(std::slice::from_ref(&op));
+    let mut ctx = ctx(std::slice::from_ref(&op));
     let item = GateItem {
         max_files: 5,
         ..GateItem::new(&op, long())
@@ -468,8 +513,18 @@ fn tree_walk_does_not_traverse_a_junction_and_enforces_the_blast_radius() {
     };
     // a.txt, sub, sub\b.txt, sub\to-big: the junction is an entry, its target is not walked.
     assert_eq!((facts.tree_entries, facts.tree_bytes), (Some(4), Some(7)));
-    let checked = open_and_check_path(&ctx, &item, &path_stamp(&validated));
+    let id = record(&mut ctx, &item, &validated);
+    let checked = open_and_check_path(&ctx, id);
     assert_eq!(checked.pass().unwrap().file_facts().tree_entries, Some(4));
+    // The act uses the recorded limit: the tree grows past it after validation.
+    for i in 0..4 {
+        s.file(&format!(r"app\late{i}.txt"), b"x");
+    }
+    assert_refused(
+        &open_and_check_path(&ctx, id),
+        Blocker::TooLarge,
+        reason::BLAST_RADIUS,
+    );
 
     // The same limit on a directory with more files than it allows.
     let op = mv(&big);
@@ -616,12 +671,13 @@ fn injected_trusted_installer_and_volume_facts_are_refused() {
         no_store(),
         Box::<Injected>::default(),
     );
-    let stamp = path_stamp(&validate(&plain, &GateItem::new(&op, long())));
+    let item = GateItem::new(&op, long());
+    let journal = journal_record(OpId(1), &item, &validate(&plain, &item));
     for (host, blocker, reason) in cases {
-        let ctx = ctx_with(std::slice::from_ref(&op), no_store(), Box::new(host));
-        let item = GateItem::new(&op, long());
+        let mut ctx = ctx_with(std::slice::from_ref(&op), no_store(), Box::new(host));
         assert_refused(&validate(&ctx, &item), blocker.clone(), reason);
-        assert_refused(&open_and_check_path(&ctx, &item, &stamp), blocker, reason);
+        ctx.record(&op, &journal, item.max_files).unwrap();
+        assert_refused(&open_and_check_path(&ctx, OpId(1)), blocker, reason);
     }
 }
 
@@ -630,16 +686,18 @@ fn a_file_held_without_delete_sharing_is_locked() {
     let s = Scratch::new("lock");
     let f = s.file("busy.log", b"busy");
     let op = mv(&f);
-    let ctx = ctx(std::slice::from_ref(&op));
+    let mut ctx = ctx(std::slice::from_ref(&op));
     let item = GateItem::new(&op, long());
-    let stamp = path_stamp(&validate(&ctx, &item));
+    let validated = validate(&ctx, &item);
+    let stamp = path_stamp(&validated);
+    let id = record(&mut ctx, &item, &validated);
     {
         let _held = std::fs::OpenOptions::new()
             .read(true)
             .share_mode(0x1) // FILE_SHARE_READ only
             .open(&f)
             .unwrap();
-        match open_and_check_path(&ctx, &item, &stamp) {
+        match open_and_check_path(&ctx, id) {
             GateOutcome::Locked(locked) => {
                 assert_eq!(locked.stamp, stamp);
                 assert_eq!(locked.error.code(), FsError::SharingViolation.code());
@@ -648,7 +706,7 @@ fn a_file_held_without_delete_sharing_is_locked() {
         }
     }
     assert!(matches!(
-        open_and_check_path(&ctx, &item, &stamp),
+        open_and_check_path(&ctx, id),
         GateOutcome::Pass(_)
     ));
 }
@@ -672,9 +730,11 @@ fn a_directory_whose_delete_is_denied_is_locked_not_failed() {
     let d = s.dir("held");
     s.file(r"held\inside.txt", b"x");
     let op = mv(&d);
-    let ctx = ctx(std::slice::from_ref(&op));
+    let mut ctx = ctx(std::slice::from_ref(&op));
     let item = GateItem::new(&op, long());
-    let stamp = path_stamp(&validate(&ctx, &item));
+    let validated = validate(&ctx, &item);
+    let stamp = path_stamp(&validated);
+    let id = record(&mut ctx, &item, &validated);
     // Our own deny ACEs: DELETE on the directory and delete-child on its parent (which would grant DELETE
     // otherwise), so the acting open is refused with access denied while a read-only look still works.
     let sid = current_user_sid().unwrap();
@@ -690,19 +750,18 @@ fn a_directory_whose_delete_is_denied_is_locked_not_failed() {
     // The same denial on a file is a plain failure: a file is never "in use" through access denied.
     let f = s.file("denied.txt", b"x");
     let file_op = mv(&f);
-    let file_ctx = GateCtx::new(
+    let mut file_ctx = GateCtx::new(
         DenyList::compile(&live_env(None)),
         std::slice::from_ref(&file_op),
         no_store(),
     )
     .unwrap();
-    let file_item = GateItem::new(&file_op, long());
-    let file_stamp = path_stamp(&validate(&file_ctx, &file_item));
+    let file_id = validate_and_record(&mut file_ctx, &GateItem::new(&file_op, long()));
     icacls(&d, ["/deny".into(), format!("*{sid}:(DE)")]);
     icacls(&f, ["/deny".into(), format!("*{sid}:(DE)")]);
     icacls(&s.root, ["/deny".into(), format!("*{sid}:(DC)")]);
-    let outcome = open_and_check_path(&ctx, &item, &stamp);
-    let file_outcome = open_and_check_path(&file_ctx, &file_item, &file_stamp);
+    let outcome = open_and_check_path(&ctx, id);
+    let file_outcome = open_and_check_path(&file_ctx, file_id);
     icacls(&s.root, ["/remove:d".into(), format!("*{sid}")]);
     icacls(&f, ["/remove:d".into(), format!("*{sid}")]);
     icacls(&d, ["/remove:d".into(), format!("*{sid}")]);
@@ -723,7 +782,7 @@ fn a_directory_whose_delete_is_denied_is_locked_not_failed() {
 fn remove_dir_if_empty_needs_a_directory_and_skips_the_walk() {
     let s = Scratch::new("rmdir");
     let f = s.file("not-a-dir", b"x");
-    let ctx = ctx(&[]);
+    let mut ctx = ctx(&[]);
     let op = rmdir(&f);
     assert_refused(
         &validate(&ctx, &GateItem::new(&op, long())),
@@ -732,7 +791,7 @@ fn remove_dir_if_empty_needs_a_directory_and_skips_the_walk() {
     );
     let d = s.dir("empty");
     let op = rmdir(&d);
-    let checked = validate_then_act(&ctx, &op).pass().unwrap();
+    let checked = validate_then_act(&mut ctx, &op).pass().unwrap();
     assert_eq!(checked.file_facts().tree_entries, None);
     assert!(checked.meta().is_dir);
 }
@@ -761,38 +820,41 @@ fn deny_listed_paths_are_refused_with_the_rule() {
 #[test]
 fn quarantine_destination_store_item_and_undo_path() {
     let s = Scratch::new("dest");
-    let scope = scope_in(&s);
-    let q = scope.quarantine_dirs()[0].clone();
+    let (session, scope) = relaxed_session(&s);
     let f = s.file(r"src\app.cfg", b"cfg");
     let op = mv(&f);
-    let ctx = ctx_with(std::slice::from_ref(&op), scope, Box::new(LiveHost));
-    let checked = validate_then_act(&ctx, &op).pass().unwrap();
+    let mut ctx = ctx_with(std::slice::from_ref(&op), scope, Box::new(LiveHost));
+    let checked = validate_then_act(&mut ctx, &op).pass().unwrap();
     let serial = checked.stamp().identity.volume_serial;
+    let op_dir = |n: u32| {
+        session
+            .create_op_dir(Path::new(&f), serial, OpId(n))
+            .unwrap()
+    };
 
-    // The op directory must exist and be plain; the destination must be free.
-    let op_dir = format!(r"{q}\000001");
-    std::fs::create_dir(&op_dir).unwrap();
-    let taken = format!(r"{op_dir}\taken");
-    std::fs::write(&taken, b"t").unwrap();
+    // The destination must be free.
+    let q1 = op_dir(1);
+    std::fs::write(q1.item_path("taken"), b"t").unwrap();
     assert_refused(
-        &verdict(check_quarantine_destination(&ctx, &checked, &taken)),
+        &verdict(check_quarantine_destination(&ctx, &checked, &q1, "taken")),
         Blocker::CannotBackUp,
         live_reason::QUARANTINE_OCCUPIED,
     );
+    // The op directory the store checked, swapped for a junction: the parent is not plain.
     let elsewhere = s.dir("elsewhere");
-    junction(&format!(r"{q}\000002"), &elsewhere);
+    let q2 = op_dir(2);
+    let q2_path = q2.path().to_str().unwrap().to_owned();
+    std::fs::rename(&q2_path, format!("{q2_path}-moved")).unwrap();
+    junction(&q2_path, &elsewhere);
     assert_refused(
-        &verdict(check_quarantine_destination(
-            &ctx,
-            &checked,
-            &format!(r"{q}\000002\app.cfg"),
-        )),
+        &verdict(check_quarantine_destination(&ctx, &checked, &q2, "app.cfg")),
         Blocker::ReparseMismatch,
         live_reason::QUARANTINE_PARENT,
     );
 
-    let dest_path = format!(r"{op_dir}\app.cfg");
-    let dest = check_quarantine_destination(&ctx, &checked, &dest_path).unwrap();
+    let op_dir = q1.path().to_str().unwrap().to_owned();
+    let dest_path = q1.item_path("app.cfg").to_str().unwrap().to_owned();
+    let dest = check_quarantine_destination(&ctx, &checked, &q1, "app.cfg").unwrap();
     assert_eq!((dest.leaf(), dest.path()), ("app.cfg", dest_path.as_str()));
     let facts = dest.facts();
     assert_eq!(
@@ -852,6 +914,35 @@ fn quarantine_destination_store_item_and_undo_path() {
     );
 }
 
+/// Review finding M3 (wave 2): the gate opened the destination's parent by path and never compared it
+/// with the store's op directory. Here the op directory the store checked and holds open is renamed away
+/// and an ordinary directory takes its path: every fact the guard sees is that of a plain, empty
+/// directory in the session's quarantine, so before the fix the destination passed and the move went
+/// into a directory the store never checked. Now its file id is compared with the store's handle.
+#[test]
+fn a_quarantine_dir_replaced_after_the_store_checked_it_is_refused() {
+    let s = Scratch::new("destswap");
+    let (session, scope) = relaxed_session(&s);
+    let f = s.file(r"src\app.cfg", b"cfg");
+    let op = mv(&f);
+    let mut ctx = ctx_with(std::slice::from_ref(&op), scope, Box::new(LiveHost));
+    let checked = validate_then_act(&mut ctx, &op).pass().unwrap();
+    let serial = checked.stamp().identity.volume_serial;
+    let q = session
+        .create_op_dir(Path::new(&f), serial, OpId(1))
+        .unwrap();
+    let q_path = q.path().to_str().unwrap().to_owned();
+    std::fs::rename(&q_path, format!("{q_path}-moved")).unwrap();
+    std::fs::create_dir(&q_path).unwrap();
+    assert_refused(
+        &verdict(check_quarantine_destination(&ctx, &checked, &q, "app.cfg")),
+        Blocker::CannotBackUp,
+        reason::QUARANTINE_DIR_DIFFERS,
+    );
+    // Nothing was moved anywhere.
+    assert_eq!(std::fs::read(&f).unwrap(), b"cfg");
+}
+
 /// A destination check as an outcome, for [`assert_refused`].
 fn verdict(result: Result<CheckedDest, Refusal>) -> GateOutcome<()> {
     match result {
@@ -874,21 +965,35 @@ fn boot_moves_below_a_user_writable_directory_are_held() {
     );
 }
 
+/// `validate_all` records nothing (changed with review finding S5: it used to record each stamp in the
+/// context itself); the context takes the records the caller wrote to the journal, and each record's
+/// stamp is the one its facts stand for.
 #[test]
-fn validate_all_records_the_stamps() {
+fn validate_all_leaves_recording_to_the_journal_records() {
     let s = Scratch::new("all");
     let a = s.file("a.txt", b"a");
     let ops = [mv(&a), mv(&s.path("missing.txt")), rmdir(&s.dir("d"))];
     let mut ctx = ctx(&ops);
     let results = validate_all(
-        &mut ctx,
+        &ctx,
         ops.iter()
             .enumerate()
             .map(|(i, op)| (OpId(i as u32 + 1), GateItem::new(op, long()))),
     );
     assert_eq!(results.len(), 3);
-    assert!(matches!(ctx.stamp(OpId(1)), Some(Stamp::Path(s)) if !s.is_dir));
     assert!(results[1].1.is_vanished());
+    assert!(ctx.validated.is_empty());
+    for ((id, outcome), op) in results.iter().zip(&ops) {
+        let record = Validated {
+            op: *id,
+            item: CandidateId(format!("c-{:03}", id.0)),
+            target: op.target(),
+            facts: outcome.item_facts().unwrap(),
+            exemptions: exemptions_to_journal(&long()),
+        };
+        ctx.record(op, &record, 5_000).unwrap();
+    }
+    assert!(matches!(ctx.stamp(OpId(1)), Some(Stamp::Path(s)) if !s.is_dir));
     assert_eq!(ctx.stamp(OpId(2)), None);
     assert!(matches!(ctx.stamp(OpId(3)), Some(Stamp::Path(s)) if s.is_dir));
     for (op, outcome) in &results {
@@ -897,36 +1002,160 @@ fn validate_all_records_the_stamps() {
     }
 }
 
+/// The act-time functions take an op id only. A record must belong to its op and fit it; the wrong gate
+/// for an op is refused. (Changed with review finding S5: the old test handed a wrong stamp to the act
+/// directly, which the API no longer accepts; the same mismatches are now refused when recorded.)
 #[test]
 fn wrong_stamp_or_op_kind_is_refused() {
     let s = Scratch::new("kind");
     let f = s.file("a.txt", b"a");
-    let ctx = ctx(&[]);
-    let key_op = ExecOp::DeleteKeyTree {
-        key: r"HKLM\SOFTWARE\PurgeNoSuchVendor".into(),
+    let k = TestKey::new();
+    let mut ctx = ctx(&[]);
+    let file_op = mv(&f);
+    let key_op = ExecOp::DeleteKeyTree { key: k.wire("") };
+    let file_item = GateItem::new(&file_op, long());
+    let key_item = GateItem::new(&key_op, long());
+    let file_validated = validate(&ctx, &file_item);
+    let key_validated = validate(&ctx, &key_item);
+
+    // A record of another target, a second record for one op id, facts of another kind.
+    let mut other_target = journal_record(OpId(9), &file_item, &file_validated);
+    other_target.target = Target::Path {
+        path: s.path("b.txt"),
     };
-    let stamp = path_stamp(&validate(&ctx, &GateItem::new(&mv(&f), long())));
+    let mismatch = rule(reason::VALIDATION_MISMATCH);
+    assert_eq!(
+        ctx.record(&file_op, &other_target, 5_000),
+        Err(mismatch.clone())
+    );
+    let mut file_facts_for_key = journal_record(OpId(9), &file_item, &file_validated);
+    file_facts_for_key.target = key_op.target();
+    assert_eq!(
+        ctx.record(&key_op, &file_facts_for_key, 5_000),
+        Err(rule(reason::STAMP_KIND))
+    );
+    let file_id = record(&mut ctx, &file_item, &file_validated);
+    assert_eq!(
+        ctx.record(
+            &file_op,
+            &journal_record(file_id, &file_item, &file_validated),
+            5_000
+        ),
+        Err(mismatch)
+    );
+    let key_id = record(&mut ctx, &key_item, &key_validated);
+
+    let op_kind = Blocker::DenyListed {
+        rule: reason::OP_KIND.into(),
+    };
     assert_refused(
-        &open_and_check_path(&ctx, &GateItem::new(&key_op, long()), &stamp),
-        Blocker::DenyListed {
-            rule: reason::OP_KIND.into(),
-        },
+        &open_and_check_path(&ctx, key_id),
+        op_kind.clone(),
         reason::OP_KIND,
     );
+    assert_refused(&open_and_check_key(&ctx, file_id), op_kind, reason::OP_KIND);
+    // An op id that was never recorded.
     assert_refused(
-        &open_and_check_key(&ctx, &GateItem::new(&mv(&f), long()), &Stamp::Key),
+        &open_and_check_key(&ctx, OpId(77)),
         Blocker::DenyListed {
-            rule: reason::OP_KIND.into(),
+            rule: reason::NOT_VALIDATED.into(),
         },
-        reason::OP_KIND,
+        reason::NOT_VALIDATED,
     );
+}
+
+/// Review finding S5, part 1: the act-time gate took the exemptions (and the stamp) from its caller, so
+/// nothing tied them to the journal. Now they come from the `validated` record alone. A file whose name
+/// looks like an 8.3 short name passes with `long_names_resolved` and is refused without it: the act
+/// follows the journal record, whatever the validation in memory said.
+#[test]
+fn the_act_takes_its_exemptions_from_the_journal_record() {
+    let s = Scratch::new("exempt");
+    let f = s.file("ABCDEF~1.TXT", b"x");
+    let op = mv(&f);
+    let item = GateItem::new(&op, long());
+    let validated = validate(&ctx(&[]), &item);
+    assert!(matches!(validated, GateOutcome::Pass(_)), "{validated:?}");
+
+    let mut as_journalled = ctx(&[]);
+    let id = record(&mut as_journalled, &item, &validated);
+    assert!(matches!(
+        open_and_check_path(&as_journalled, id),
+        GateOutcome::Pass(_)
+    ));
+
+    let mut narrower = journal_record(OpId(1), &item, &validated);
+    narrower.exemptions.long_names_resolved = false;
+    let mut from_journal = ctx(&[]);
+    from_journal.record(&op, &narrower, item.max_files).unwrap();
+    assert_eq!(
+        from_journal.exemptions(OpId(1)),
+        Some(Exemptions::default())
+    );
+    let outcome = open_and_check_path(&from_journal, OpId(1));
+    let refusal = outcome.refusal().unwrap();
+    assert_eq!(
+        (&refusal.blocker, refusal.reason),
+        (
+            &Blocker::DenyListed {
+                rule: "canon.short-name-unresolved".into()
+            },
+            live_reason::DENY_LEXICAL
+        ),
+        "{outcome:?}"
+    );
+}
+
+/// Review finding M5 (wave 2): the walk read a whole directory listing before it tested the limit. The
+/// capped listing stops once it holds more than the budget, and the walk refuses a directory with more
+/// entries than twice the limit without listing it whole.
+#[test]
+fn the_tree_walk_never_holds_more_than_its_budget() {
+    let s = Scratch::new("capped");
+    let d = s.dir("many");
+    for i in 0..9 {
+        s.file(&format!(r"many\f{i}.txt"), b"x");
+    }
+    s.dir(r"many\sub");
+    let p = ext(&d).unwrap();
+    assert_eq!(
+        ffi::list_dir_capped(&p, 10).unwrap().map(|e| e.len()),
+        Some(10)
+    );
+    assert_eq!(ffi::list_dir_capped(&p, 9).unwrap().map(|e| e.len()), None);
+    assert_eq!(ffi::list_dir_capped(&p, 0).unwrap().map(|e| e.len()), None);
+    // The listing is the one `purge-win` gives.
+    let mut capped = ffi::list_dir_capped(&p, 100).unwrap().unwrap();
+    let mut full = purge_win::fs::list_dir(&p).unwrap();
+    capped.sort_by(|a, b| a.name.cmp(&b.name));
+    full.sort_by(|a, b| a.name.cmp(&b.name));
+    assert_eq!(capped, full);
+    // An empty directory.
+    let empty = ext(&s.dir("empty")).unwrap();
+    assert_eq!(ffi::list_dir_capped(&empty, 0).unwrap(), Some(Vec::new()));
+
+    // 10 entries, limit 4: refused from a listing capped at 8 entries.
+    let op = mv(&d);
+    let ctx = ctx(std::slice::from_ref(&op));
+    let item = GateItem {
+        max_files: 4,
+        ..GateItem::new(&op, long())
+    };
     assert_refused(
-        &open_and_check_key(&ctx, &GateItem::new(&key_op, long()), &Stamp::Path(stamp)),
-        Blocker::DenyListed {
-            rule: reason::STAMP_KIND.into(),
-        },
-        reason::STAMP_KIND,
+        &validate(&ctx, &item),
+        Blocker::TooLarge,
+        reason::BLAST_RADIUS,
     );
+    // Limit 9: 9 files and 1 directory pass.
+    let item = GateItem {
+        max_files: 9,
+        ..GateItem::new(&op, long())
+    };
+    let validated = validate(&ctx, &item);
+    let Some(ItemFacts::File(facts)) = validated.item_facts() else {
+        panic!("{validated:?}");
+    };
+    assert_eq!(facts.tree_entries, Some(10));
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1110,10 +1339,11 @@ fn value_actions_bind_to_the_validated_data() {
     k.create("App");
     k.set("App", "InstallDir", REG_SZ, &utf16z(r"C:\App"));
     let op = value_op(&k.wire("App"), "InstallDir");
-    let ctx = ctx(&[]);
+    let mut ctx = ctx(&[]);
     let item = GateItem::new(&op, long());
 
     let validated = validate(&ctx, &item);
+    let id = record(&mut ctx, &item, &validated);
     let GateOutcome::Pass(Validation {
         stamp: stamp @ Stamp::Value(value),
         facts: ItemFacts::Value(facts),
@@ -1130,7 +1360,7 @@ fn value_actions_bind_to_the_validated_data() {
         Some(stamp)
     );
 
-    let checked = open_and_check_key(&ctx, &item, stamp).pass().unwrap();
+    let checked = open_and_check_key(&ctx, id).pass().unwrap();
     assert_eq!(checked.value().unwrap().data, utf16z(r"C:\App"));
     assert_eq!(checked.item_facts(), &ItemFacts::Value(facts.clone()));
     // The handle can act: it was opened for setting values.
@@ -1142,7 +1372,7 @@ fn value_actions_bind_to_the_validated_data() {
 
     // Same type, other data: changed since the scan.
     k.set("App", "InstallDir", REG_SZ, &utf16z(r"C:\Elsewhere"));
-    let outcome = open_and_check_key(&ctx, &item, stamp);
+    let outcome = open_and_check_key(&ctx, id);
     assert_refused(
         &outcome,
         Blocker::ChangedSinceScan,
@@ -1151,7 +1381,7 @@ fn value_actions_bind_to_the_validated_data() {
     // Same bytes, other type.
     k.set("App", "InstallDir", 2, &utf16z(r"C:\App"));
     assert_refused(
-        &open_and_check_key(&ctx, &item, stamp),
+        &open_and_check_key(&ctx, id),
         Blocker::ChangedSinceScan,
         live_reason::VALUE_CHANGED,
     );
@@ -1159,7 +1389,7 @@ fn value_actions_bind_to_the_validated_data() {
     k.open("App", KeyAccess::SET_VALUE)
         .delete_value("InstallDir")
         .unwrap();
-    assert!(open_and_check_key(&ctx, &item, stamp).is_vanished());
+    assert!(open_and_check_key(&ctx, id).is_vanished());
     assert!(validate(&ctx, &item).is_vanished());
 
     // A segment edit is gated on its value the same way.
@@ -1171,10 +1401,10 @@ fn value_actions_bind_to_the_validated_data() {
         index: Some(1),
     };
     let seg_item = GateItem::new(&seg, long());
-    let stamp = validate(&ctx, &seg_item).pass().unwrap().stamp;
-    assert!(matches!(stamp, Stamp::Value(_)));
+    let seg_id = validate_and_record(&mut ctx, &seg_item);
+    assert!(matches!(ctx.stamp(seg_id), Some(Stamp::Value(_))));
     assert!(matches!(
-        open_and_check_key(&ctx, &seg_item, &stamp),
+        open_and_check_key(&ctx, seg_id),
         GateOutcome::Pass(_)
     ));
 }
@@ -1184,18 +1414,20 @@ fn key_actions_and_emptiness() {
     let k = TestKey::new();
     k.create(r"Vendor\App\Sub");
     k.set(r"Vendor\App", "v", REG_DWORD, &[1, 0, 0, 0]);
-    let ctx = ctx(&[]);
+    let mut ctx = ctx(&[]);
     let sid = current_user_sid().unwrap();
 
     let tree = ExecOp::DeleteKeyTree {
         key: k.wire(r"Vendor\App"),
     };
     let item = GateItem::new(&tree, long());
-    let validated = validate(&ctx, &item).pass().unwrap();
-    assert_eq!(validated.stamp, Stamp::Key);
+    let outcome = validate(&ctx, &item);
+    let id = record(&mut ctx, &item, &outcome);
+    let validated = outcome.pass().unwrap();
     let ItemFacts::Key(facts) = &validated.facts else {
         panic!("{validated:?}");
     };
+    assert_eq!(validated.stamp, Stamp::Key(facts.clone()));
     assert_eq!(
         (
             facts.subkeys,
@@ -1205,7 +1437,16 @@ fn key_actions_and_emptiness() {
         ),
         (1, 1, false, sid.as_str())
     );
-    let checked = open_and_check_key(&ctx, &item, &Stamp::Key).pass().unwrap();
+    let checked = open_and_check_key(&ctx, id).pass().unwrap();
+    assert_eq!(checked.item_facts(), &validated.facts);
+    assert_eq!(
+        (checked.address().root, checked.address().view),
+        (KeyRoot::Hku, View::K64)
+    );
+    assert!(prefix::is_same(
+        &checked.address().path,
+        &k.rel(r"Vendor\App")
+    ));
     assert_eq!(checked.info().n_subkeys, 1);
     assert_eq!(checked.facts().node, KeyNode::Plain);
     assert!(
@@ -1230,14 +1471,12 @@ fn key_actions_and_emptiness() {
         key: k.wire(r"Vendor\App\Sub"),
     };
     let empty_item = GateItem::new(&empty, long());
-    assert!(matches!(validate(&ctx, &empty_item), GateOutcome::Pass(_)));
-    let checked = open_and_check_key(&ctx, &empty_item, &Stamp::Key)
-        .pass()
-        .unwrap();
+    let empty_id = validate_and_record(&mut ctx, &empty_item);
+    let checked = open_and_check_key(&ctx, empty_id).pass().unwrap();
     // The handle can act: it was opened with DELETE, and the key really is deleted through it.
     checked.key().delete().unwrap();
     drop(checked);
-    assert!(open_and_check_key(&ctx, &empty_item, &Stamp::Key).is_vanished());
+    assert!(open_and_check_key(&ctx, empty_id).is_vanished());
 
     // A key that never existed.
     let missing = ExecOp::DeleteKeyTree {
@@ -1252,7 +1491,7 @@ fn registry_links_at_the_leaf_and_on_the_path_are_refused() {
     k.create(r"Real\Sub");
     k.set(r"Real\Sub", "v", REG_DWORD, &[7, 0, 0, 0]);
     k.link("Link", "Real");
-    let ctx = ctx(&[]);
+    let mut ctx = ctx(&[]);
 
     // The link itself as the item.
     let leaf = ExecOp::DeleteKeyTree {
@@ -1264,8 +1503,16 @@ fn registry_links_at_the_leaf_and_on_the_path_are_refused() {
         Blocker::RegLink,
         live_reason::KEY_IS_LINK,
     );
+    // Even with a journal record that gives the link the facts of the plain key it points to.
+    let real = ExecOp::DeleteKeyTree {
+        key: k.wire("Real"),
+    };
+    let real_item = GateItem::new(&real, long());
+    let mut forged = journal_record(OpId(50), &real_item, &validate(&ctx, &real_item));
+    forged.target = leaf.target();
+    ctx.record(&leaf, &forged, leaf_item.max_files).unwrap();
     assert_refused(
-        &open_and_check_key(&ctx, &leaf_item, &Stamp::Key),
+        &open_and_check_key(&ctx, OpId(50)),
         Blocker::RegLink,
         live_reason::KEY_IS_LINK,
     );
@@ -1292,11 +1539,11 @@ fn registry_links_at_the_leaf_and_on_the_path_are_refused() {
         key: k.wire(r"Plain\Sub"),
     };
     let plain_item = GateItem::new(&plain, long());
-    assert!(matches!(validate(&ctx, &plain_item), GateOutcome::Pass(_)));
+    let plain_id = validate_and_record(&mut ctx, &plain_item);
     TestKey::nuke(&k.open("Plain", KeyAccess::DELETE));
     k.link("Plain", "Real");
     assert_refused(
-        &open_and_check_key(&ctx, &plain_item, &Stamp::Key),
+        &open_and_check_key(&ctx, plain_id),
         Blocker::RegLink,
         live_reason::ANCESTOR_IS_LINK,
     );
@@ -1310,16 +1557,188 @@ fn registry_links_at_the_leaf_and_on_the_path_are_refused() {
         vec![7, 0, 0, 0]
     );
 
-    // Undo destinations: below a link refused, a missing key below plain keys allowed.
+    // Undo destinations: below a link refused, a missing key below plain keys allowed by the guard.
     let below_link = Target::RegKey {
         path: k.wire(r"Link\New"),
     };
     let refusal = check_undo_key(&ctx, &below_link, &long()).unwrap_err();
     assert_eq!(refusal.blocker, Blocker::RegLink);
+    let value_below_link = Target::RegValue {
+        path: k.wire(r"Link\Sub"),
+        name: "v".into(),
+    };
+    let refusal = check_undo_key(&ctx, &value_below_link, &long()).unwrap_err();
+    assert_eq!(refusal.blocker, Blocker::RegLink);
     let fresh = Target::RegKey {
+        path: k.wire(r"Real\New"),
+    };
+    let parent = check_undo_key(&ctx, &fresh, &long())
+        .unwrap()
+        .into_parent()
+        .unwrap();
+    assert_eq!(parent.leaf(), "New");
+    assert!(!parent.key_exists());
+    // Changed with review finding S4: a missing parent used to pass (`Ok(())`); with no parent to hand
+    // out for the re-create, it is now an undo conflict.
+    let deeper = Target::RegKey {
         path: k.wire(r"Real\New\Deeper"),
     };
-    assert_eq!(check_undo_key(&ctx, &fresh, &long()), Ok(()));
+    let refusal = check_undo_key(&ctx, &deeper, &long()).unwrap_err();
+    assert_eq!(
+        (refusal.blocker, refusal.reason),
+        (Blocker::ChangedSinceScan, reason::UNDO_KEY_MISSING)
+    );
+}
+
+/// Review finding S4: `check_undo_key` returned `()`, so the undo had to open the parent again by path
+/// after the check, and a key swapped in between was never checked. Now the check hands out the parent it
+/// opened and judged. The parent is replaced after the check (deleted and re-created at the same path):
+/// the re-create through the checked handle fails on the deleted key instead of landing in the
+/// replacement, which stays untouched.
+#[test]
+fn the_undo_key_check_hands_out_the_key_it_checked() {
+    let k = TestKey::new();
+    k.create(r"Vendor\App");
+    k.set(r"Vendor\App", "InstallDir", REG_SZ, &utf16z(r"C:\App"));
+    let ctx = ctx(&[]);
+
+    // A key to re-create below an existing parent: the parent handle can create it.
+    let target = Target::RegKey {
+        path: k.wire(r"Vendor\Gone"),
+    };
+    let parent = check_undo_key(&ctx, &target, &long())
+        .unwrap()
+        .into_parent()
+        .unwrap();
+    assert_eq!(parent.leaf(), "Gone");
+    assert_eq!(parent.address().root, KeyRoot::Hku);
+    assert!(prefix::is_same(
+        &parent.address().path,
+        &k.rel(r"Vendor\Gone")
+    ));
+    assert_eq!(parent.facts().node, KeyNode::Missing);
+    assert!(
+        parent
+            .facts()
+            .ancestors
+            .iter()
+            .all(|a| a.node == KeyNode::Plain)
+    );
+    parent
+        .parent()
+        .create_subkey(parent.leaf(), "", None, false)
+        .unwrap();
+    assert!(k.open(r"Vendor\Gone", KeyAccess::READ).info().is_ok());
+
+    // The parent replaced after the check.
+    let target = Target::RegKey {
+        path: k.wire(r"Vendor\Again"),
+    };
+    let parent = check_undo_key(&ctx, &target, &long())
+        .unwrap()
+        .into_parent()
+        .unwrap();
+    TestKey::nuke(&k.open("Vendor", KeyAccess::DELETE));
+    k.create("Vendor");
+    assert!(
+        parent
+            .parent()
+            .create_subkey(parent.leaf(), "", None, false)
+            .is_err()
+    );
+    assert_eq!(
+        k.open("Vendor", KeyAccess::READ).info().unwrap().n_subkeys,
+        0
+    );
+
+    // A value goes back into the key itself, opened for setting values.
+    k.create(r"Vendor\App");
+    let value = Target::RegValue {
+        path: k.wire(r"Vendor\App"),
+        name: "InstallDir".into(),
+    };
+    let key = check_undo_key(&ctx, &value, &long())
+        .unwrap()
+        .into_value_key()
+        .unwrap();
+    assert_eq!(key.facts().node, KeyNode::Plain);
+    key.key()
+        .set_value_raw("InstallDir", REG_SZ, &utf16z(r"C:\App"))
+        .unwrap();
+    assert!(
+        k.open(r"Vendor\App", KeyAccess::READ)
+            .value("InstallDir")
+            .unwrap()
+            .is_some()
+    );
+    // The key of a value that no longer exists: nothing to restore into.
+    let orphan = Target::RegValue {
+        path: k.wire(r"Vendor\Nowhere"),
+        name: "v".into(),
+    };
+    let refusal = check_undo_key(&ctx, &orphan, &long()).unwrap_err();
+    assert_eq!(
+        (refusal.blocker, refusal.reason),
+        (Blocker::ChangedSinceScan, reason::UNDO_KEY_MISSING)
+    );
+}
+
+/// Review finding S5, part 2: a key action was re-checked at act time with `Binding::Capture`, so a key
+/// that changed after validation passed. Now the act compares the facts of the acting handle with the
+/// journal record: a new subkey, a new value, or only a moved last write time (a value set and
+/// removed again, counts unchanged) is "changed since the scan".
+#[test]
+fn a_key_changed_after_validation_is_refused_at_the_act() {
+    let k = TestKey::new();
+    k.create(r"Vendor\App");
+    k.set(r"Vendor\App", "v", REG_DWORD, &[1, 0, 0, 0]);
+    let op = ExecOp::DeleteKeyTree {
+        key: k.wire(r"Vendor\App"),
+    };
+    let item = GateItem::new(&op, long());
+    let validated = validate(&ctx(&[]), &item);
+    let fresh = |validated: &GateOutcome<Validation>| {
+        let mut ctx = ctx(&[]);
+        let id = record(&mut ctx, &item, validated);
+        (ctx, id)
+    };
+    let (unchanged, id) = fresh(&validated);
+    assert!(matches!(
+        open_and_check_key(&unchanged, id),
+        GateOutcome::Pass(_)
+    ));
+
+    let changed = |what: &str| {
+        let (ctx, id) = fresh(&validated);
+        let outcome = open_and_check_key(&ctx, id);
+        assert_refused(&outcome, Blocker::ChangedSinceScan, reason::KEY_CHANGED);
+        assert!(!outcome.refusal().unwrap().is_hard(), "{what}");
+    };
+    // Counts unchanged, last write time moved.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    k.set(r"Vendor\App", "w", REG_DWORD, &[2, 0, 0, 0]);
+    k.open(r"Vendor\App", KeyAccess::SET_VALUE)
+        .delete_value("w")
+        .unwrap();
+    changed("last write time");
+    // A value more.
+    let validated_again = validate(&ctx(&[]), &item);
+    k.set(r"Vendor\App", "w", REG_DWORD, &[2, 0, 0, 0]);
+    let (ctx2, id2) = fresh(&validated_again);
+    assert_refused(
+        &open_and_check_key(&ctx2, id2),
+        Blocker::ChangedSinceScan,
+        reason::KEY_CHANGED,
+    );
+    // A subkey more.
+    let validated_again = validate(&ctx(&[]), &item);
+    k.create(r"Vendor\App\Late");
+    let (ctx3, id3) = fresh(&validated_again);
+    assert_refused(
+        &open_and_check_key(&ctx3, id3),
+        Blocker::ChangedSinceScan,
+        reason::KEY_CHANGED,
+    );
 }
 
 /// Review finding S1, the half the pure guard cannot check: the addresses [`live::key_probe`] hands out
