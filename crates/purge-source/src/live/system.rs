@@ -686,6 +686,7 @@ mod tests {
             is_framework: false,
             is_resource_package: false,
             users: Vec::new(),
+            dependencies: None,
         }
     }
 

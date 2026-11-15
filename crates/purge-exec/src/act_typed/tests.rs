@@ -176,6 +176,7 @@ fn info(full_name: &str) -> PackageInfo {
             is_framework: false,
             is_resource_package: false,
             users: Vec::new(),
+            dependencies: None,
         },
         dependencies: Some(Vec::new()),
     }
@@ -951,18 +952,64 @@ fn undo_of_a_removed_package_is_an_irreversible_record() {
 // Real backend
 // ---------------------------------------------------------------------------------------------------
 
-/// Enumeration only: a framework package of this machine is refused before anything is written, and a
-/// package that does not exist is vanished. `prepare_remove_package` never calls `remove`.
+/// Enumeration only: the real listing carries dependencies; a framework package of this machine that
+/// another package depends on is refused before anything is written (as a framework, and as referenced
+/// when the framework rule is set aside), and a package that does not exist is vanished.
+/// `prepare_remove_package` never calls `remove`.
 #[test]
 fn real_backend_refuses_a_framework_and_finds_nothing_for_a_missing_name() {
     let s = Session::new("real", &[]);
     let backend = WinPackages::new();
     let listing = backend.list(RemovalScope::CurrentUser).unwrap();
-    assert!(listing.iter().all(|p| p.dependencies.is_none()));
+    assert!(
+        listing.iter().all(|p| p.package.dependencies.is_none()),
+        "the dependencies live in PackageInfo only"
+    );
+    assert!(
+        listing
+            .iter()
+            .any(|p| p.dependencies.as_ref().is_some_and(|d| !d.is_empty())),
+        "a desktop has packages that depend on a framework"
+    );
+    let depended_on = |p: &&PackageInfo| {
+        listing.iter().any(|o| {
+            o.dependencies
+                .iter()
+                .flatten()
+                .any(|d| d.eq_ignore_ascii_case(&p.package.full_name))
+        })
+    };
     let framework = listing
         .iter()
-        .find(|p| p.package.is_framework)
-        .expect("a desktop has framework packages");
+        .filter(|p| p.package.is_framework)
+        .find(depended_on)
+        .expect("a desktop has framework packages that other packages depend on");
+
+    // Set the framework rule aside: what depends on the package refuses it.
+    let mut not_framework = framework.clone();
+    not_framework.package.is_framework = false;
+    not_framework.package.signature_kind = Some(SignatureKind::Developer);
+    match refusal(&not_framework, &listing) {
+        Some((Blocker::ReferencedByOtherApp { app }, why)) => {
+            let dependent = listing
+                .iter()
+                .find(|o| o.package.full_name == app)
+                .expect("the dependent is listed");
+            assert!(
+                dependent
+                    .dependencies
+                    .iter()
+                    .flatten()
+                    .any(|d| d.eq_ignore_ascii_case(&framework.package.full_name)),
+                "{why}"
+            );
+        }
+        other => panic!(
+            "{} has dependents but is not refused as referenced: {other:?}",
+            framework.package.full_name
+        ),
+    }
+
     let r = decided(s.prepare(
         &backend,
         1,
@@ -981,8 +1028,8 @@ fn real_backend_refuses_a_framework_and_finds_nothing_for_a_missing_name() {
 }
 
 /// Removes a disposable package installed by the VM rig and named in `PURGE_TEST_APPX_FULL_NAME`, through
-/// the whole sequence. Until `purge_win::appx` reports dependencies the real backend refuses every
-/// removal with `appx.dependents_unknown`, so this test fails there by design.
+/// the whole sequence. The package must be unsigned, developer- or enterprise-signed, not a framework or
+/// resource package, nothing may depend on it, and every package's dependencies must be readable.
 #[test]
 #[ignore = "removes a real package irreversibly; runs only in the VM gate with PURGE_TEST_APPX_FULL_NAME set"]
 fn real_backend_removes_a_disposable_package() {

@@ -65,7 +65,7 @@ use std::time::Duration;
 use purge_model::exec::journal::{Intent, ItemFacts, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{BackupRef, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::{Blocker, CandidateId, Target};
-use purge_win::appx::{self, AppxPackage, AppxScope, SignatureKind};
+use purge_win::appx::{self, AppxPackage, AppxScope, ListOptions, SignatureKind};
 use purge_win::appx_write::{self, DeploymentError, RemovalScope, RemoveOutcome};
 use purge_win::fs_write::{self, FsError};
 use serde::{Deserialize, Serialize};
@@ -181,7 +181,8 @@ pub fn unsupported_target(target: &Target) -> Option<TypedResult> {
 /// One package as the backend lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageInfo {
-    /// What `purge_win::appx` reports.
+    /// What `purge_win::appx` reports. Its own `dependencies` are moved to [`PackageInfo::dependencies`]
+    /// and left `None` here, so the dependencies have one place.
     pub package: AppxPackage,
     /// Full names of the packages this package depends on (`Package.Dependencies`), or `None` when the
     /// backend cannot tell. One unknown entry in a listing makes the dependents of every package in it
@@ -210,9 +211,11 @@ pub trait PackageBackend {
 
 /// The real backend over `purge_win::appx` (enumeration) and `purge_win::appx_write` (removal).
 ///
-/// `purge_win::appx` does not report a package's dependencies yet, so [`PackageInfo::dependencies`] is
-/// always `None` and every removal through this backend is refused with [`RULE_DEPENDENTS_UNKNOWN`]
-/// until it does.
+/// Its listings read every package's dependencies (`ListOptions::dependencies`); a package whose list
+/// cannot be read has [`PackageInfo::dependencies`] `None`, which refuses every removal from that listing
+/// with [`RULE_DEPENDENTS_UNKNOWN`]. Whether a package is marked non-removable is not available through
+/// the public package API, so it is not checked here; the deployment service is expected to refuse such a
+/// removal itself, which ends `Failed` with the package still listed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WinPackages {
     timeout: Duration,
@@ -244,15 +247,19 @@ impl PackageBackend for WinPackages {
             RemovalScope::CurrentUser => AppxScope::CurrentUser,
             RemovalScope::AllUsers => AppxScope::AllUsers,
         };
-        let packages = appx::list_packages(scope).map_err(|e| ListError {
+        let options = ListOptions { dependencies: true };
+        let packages = appx::list_packages_with(scope, options).map_err(|e| ListError {
             code: e.raw_os_error(),
             detail: e.to_string(),
         })?;
         Ok(packages
             .into_iter()
-            .map(|package| PackageInfo {
-                package,
-                dependencies: None,
+            .map(|mut package| {
+                let dependencies = package.dependencies.take();
+                PackageInfo {
+                    package,
+                    dependencies,
+                }
             })
             .collect())
     }
