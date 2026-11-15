@@ -156,16 +156,16 @@ exemption). The reviewer did not mutation-test the new tests.
 
 ## Mutation run on Windows
 
-`pass11/mutwin.py`, 94 mutations: the 66 of `mut11.py` that still apply, brought up to the current source, and
+`pass11/mutwin.py`, 95 mutations: the 67 of `mut11.py`, brought up to the current source, and
 V1 to V28 for the fixes above and the test gaps the review named.
 
-- Full run of 90 (all but V25 to V28) on the tree with the first review's fixes: 86 killed, none hung. B8b,
+- Full run of 90 (all but V24 to V28, which were written later) on the tree with the first review's fixes: 86 killed, none hung. B8b,
   which never ended on the pass-eleven tree, is killed.
 - The 4 survivors were review fixes with no test of their own. Each got one: V10 (an unreadable value in a
   command place is not excused by its name), V13 (a key read in part with an own path), V16 (data read in
   part names a path), V17 (a bare-name key read in part).
-- Rerun on the final tree of those 4, of the 8 whose code the follow-up fixes or the `outlived` change touched
-  (B4b, V6, V7, V8, V12, V18, V23, V24) and of the new V25 to V28: 16 of 16 killed.
+- Rerun on the final tree of those 4, of the 7 whose code the follow-up fixes or the `outlived` change touched
+  (B4b, V6, V7, V8, V12, V18, V23) and of V24 to V28: 16 of 16 killed.
 
-So every mutation of the table is killed, 78 on the earlier tree (their code and tests did not change
+So every mutation of the table is killed, 79 on the earlier tree (their code and tests did not change
 afterwards) and 16 on the final one. Not covered by any mutation: the vendor-word filter of `other_app_named`.

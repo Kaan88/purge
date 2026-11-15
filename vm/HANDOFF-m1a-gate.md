@@ -34,8 +34,8 @@ What was done on the six open engine items of the previous handoff:
    intended bare-name rows. `outlived()` now rests on "verify-gone passed, or the main exes are gone and at
    least one is known".
 3. **Collapse loop.** B8b no longer hangs; B8d survived and got a test. Full mutation run on Windows: 86 of 90
-   killed; the 4 survivors were unpinned review fixes and got tests. Those 4, the 8 whose code changed
-   afterwards and 4 new ones were rerun on the final tree: 16 of 16 killed (end of
+   killed; the 4 survivors were unpinned review fixes and got tests. Those 4, the 7 whose code changed
+   afterwards and 5 new ones were rerun on the final tree: 16 of 16 killed (end of
    `docs/reviews/m1a/engine-pass11-review.md`).
 4. **The 610 Likely to Blocked rows: right**, kept. Each has a child already Blocked for the sibling install.
 5. **Independent review:** `docs/reviews/m1a/engine-pass11-review.md`. First verdict "accept with required
