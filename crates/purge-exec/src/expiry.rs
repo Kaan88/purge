@@ -10,13 +10,37 @@
 //!   `RETAIN_JOURNAL_DAYS`, all counted from the journal header's `created`. It reads the store and the
 //!   journals and changes nothing. The time is a parameter; this module reads no clock and no
 //!   environment variable.
-//! - [`purge`] permanently deletes quarantined items. It is irreversible, so it takes a
-//!   [`PurgeConsent`] that names every item, and an item whose plan candidate is user data (or whose
-//!   category cannot be read back from the session's scan copy) is excluded unless the consent confirms
-//!   it individually. Nothing else in Purge calls it; nothing is ever deleted on a schedule.
+//! - [`purge`] permanently deletes quarantined items, and the registry backup and definition files of an
+//!   op ([`ExpiringBackup`]). It is irreversible, so it takes a [`PurgeConsent`] that names every item,
+//!   and every backup file by its session-relative path ([`PurgeConsent::name_files`]); an item whose
+//!   plan candidate is user data (or whose category cannot be read back from the session's scan copy) is
+//!   excluded unless the consent confirms it individually. Nothing else in Purge calls it; nothing is
+//!   ever deleted on a schedule.
 //!
-//! Only the quarantine class is purged here. Registry backups, definitions and journals are listed as
-//! due ([`DueClass`]) but the store has no call yet to delete an existing session file or directory.
+//! Journals are listed as due ([`DueClass`]) but not purged: the store has no call to delete a session
+//! directory. The backup class is listed as due as a whole too, and per op in
+//! [`ExpiryListing::backups`].
+//!
+//! # Every session is read against its index entry
+//!
+//! A session's journal is read with [`journal::read_indexed`] and the [`JournalMark`] of the session's
+//! index entry. A journal cut at a line boundary or replaced since the index last recorded it is never
+//! taken as it reads: [`expiring`] reports the session in [`ExpiryListing::problems`] and lists nothing
+//! of it, and [`purge`] refuses every item of it ([`Refused::JournalMismatch`], with an [`Alert`]). A
+//! session without an entry or without a mark, and every session while the index cannot be read (it is
+//! then rebuilt from the journals, not guessed), is read as it is.
+//!
+//! # Backup files
+//!
+//! An op whose intent names backup files (a registry backup, a package definition) is purged, once its
+//! class is due ([`RETAIN_BACKUP_DAYS`](purge_model::exec::session::RETAIN_BACKUP_DAYS) after the
+//! journal's `created`), by deleting each file through the store ([`SessionDir::delete_backup_file`]:
+//! `reg\` and `def\` only, by handle, after the store's file check). Before that, never: an op that can
+//! still be undone needs its backup, and the class is due for every op of the session at once. The
+//! holds are those of quarantined items (an open run, an undo in progress, an op waiting for recovery
+//! or with a retry in flight). The `expire` record of the backup class is written first, as for the
+//! quarantine; a file left behind (a reader holding it, an I/O error) is listed as
+//! [`ExpiringBackup::unfinished`] and a later [`purge`] continues without a second record.
 //!
 //! # The delete walk never leaves the quarantine
 //!
@@ -60,9 +84,9 @@
 //! lists one whose item is still there as [`ExpiringItem::unfinished`]; [`purge`] then continues it
 //! without writing a second record. A session with an undo in progress, an unfinished run, a boot-time
 //! move that has not happened, or an op whose undo restored it, is not expired. After the walks, the
-//! session index is updated through [`StorageRoots::update_index`] (bytes, and the quarantine class marked
-//! purged once every quarantined op of the session is gone); an unavailable index is reported, never
-//! guessed ([`IndexUpdate`]).
+//! session index is updated through [`StorageRoots::update_index`] (bytes, and the quarantine or backup
+//! class marked purged once every op of the session with data of that class is expired and its data
+//! gone); an unavailable index is reported, never guessed ([`IndexUpdate`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -77,14 +101,16 @@ use purge_guard::live::{
 };
 use purge_model::exec::journal::{Expire, Intent, ItemFacts, ReconcileResult, UndoOutcome};
 use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId};
-use purge_model::exec::session::{Expiry, RetentionClass, SessionId, SessionIndex};
+use purge_model::exec::session::{Expiry, JournalMark, RetentionClass, SessionId, SessionIndex};
 use purge_model::{Blocker, CandidateId, Category, FileTime};
 use purge_win::fs::FileId;
 use purge_win::fs_write::FsError;
 use purge_win::os::Win32Error;
 
 use crate::fault;
-use crate::journal::{self, JournalState, JournalWriter, OpState, OpStatus, UndoState};
+use crate::journal::{
+    self, JournalError, JournalState, JournalWriter, OpState, OpStatus, UndoState,
+};
 use crate::storage::{QuarantineDir, SCAN_FILE, SessionDir, StorageError, StorageRoots};
 
 #[cfg(test)]
@@ -105,7 +131,8 @@ const LIST_BUFFER_BYTES: usize = 64 << 10;
 // Public types
 // ---------------------------------------------------------------------------------------------------
 
-/// One purgeable unit: the quarantined item of one op of one session. Spelled `<session>/<op>`
+/// One purgeable unit: the quarantined item, or the backup files, of one op of one session (an op has
+/// one or the other, never both). Spelled `<session>/<op>`
 /// (`20261115T101502Z-9f3a6c1d2b7e4a50/3`) by [`fmt::Display`] and [`FromStr`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ExpiryId {
@@ -168,6 +195,29 @@ pub struct ExpiringItem {
     pub unfinished: bool,
 }
 
+/// The backup files of one op (its registry backup, its package definition) whose class is due:
+/// expired at the time [`expiring`] was asked about, or left unfinished by an earlier [`purge`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpiringBackup {
+    /// Which op.
+    pub id: ExpiryId,
+    /// The plan candidate of the op.
+    pub item: CandidateId,
+    /// The files, by the session-relative paths the op's intent records (`reg\000042.regbackup.json`),
+    /// in the intent's order. A consent must name each one ([`PurgeConsent::name_files`]).
+    pub files: Vec<String>,
+    /// When the backup class's retention ended.
+    pub expires: FileTime,
+    /// The bytes the intent recorded for the files.
+    pub bytes: u64,
+    /// The plan candidate is user data, or its category could not be read back; purged only when the
+    /// consent confirms it individually ([`PurgeConsent::confirm_user_data`]).
+    pub user_data: bool,
+    /// An earlier purge recorded the expiry and stopped before every file was gone; [`purge`]
+    /// continues.
+    pub unfinished: bool,
+}
+
 /// Why an expired item is not offered for purging now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HoldReason {
@@ -219,20 +269,25 @@ pub struct SessionProblem {
 pub struct ExpiryListing {
     /// Quarantined items that may be purged now, in session and op order.
     pub items: Vec<ExpiringItem>,
-    /// Quarantined items past retention that are held, with the reason.
+    /// Quarantined items and backup files past retention that are held, with the reason.
     pub held: Vec<(ExpiryId, HoldReason)>,
-    /// Backup and journal classes past retention (proposed only; not purged by [`purge`]).
+    /// Backup and journal classes past retention, per session (journals are not purged by [`purge`];
+    /// the backups are, per op, from [`ExpiryListing::backups`]).
     pub due: Vec<DueClass>,
-    /// Sessions that could not be read.
+    /// Sessions that could not be read, or whose journal does not match their index entry.
     pub problems: Vec<SessionProblem>,
+    /// Backup files that may be purged now, per op, in session and op order.
+    pub backups: Vec<ExpiringBackup>,
 }
 
-/// The consent for one irreversible [`purge`]: the items the user saw and confirmed, by id, and among
-/// them the user-data items confirmed one by one. Built by the broker from its own prompt.
+/// The consent for one irreversible [`purge`]: the items the user saw and confirmed, by id, among them
+/// the user-data items confirmed one by one, and for backup files every file by name. Built by the
+/// broker from its own prompt.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PurgeConsent {
     items: BTreeSet<ExpiryId>,
     user_data: BTreeSet<ExpiryId>,
+    files: BTreeMap<ExpiryId, BTreeSet<String>>,
 }
 
 impl PurgeConsent {
@@ -240,8 +295,20 @@ impl PurgeConsent {
     pub fn naming(items: impl IntoIterator<Item = ExpiryId>) -> PurgeConsent {
         PurgeConsent {
             items: items.into_iter().collect(),
-            user_data: BTreeSet::new(),
+            ..PurgeConsent::default()
         }
+    }
+
+    /// Names backup files of op `id` (the session-relative paths [`ExpiringBackup::files`] lists). They
+    /// count only if the consent also names `id`; [`purge`] deletes an op's backup files only when every
+    /// one of them is named.
+    pub fn name_files(&mut self, id: ExpiryId, files: impl IntoIterator<Item = String>) {
+        self.files.entry(id).or_default().extend(files);
+    }
+
+    /// Whether `id` is named and its backup file `file` named with it (exactly as listed).
+    pub fn names_file(&self, id: &ExpiryId, file: &str) -> bool {
+        self.names(id) && self.files.get(id).is_some_and(|files| files.contains(file))
     }
 
     /// Confirms one user-data item individually. It counts only if the consent also names it.
@@ -280,10 +347,16 @@ pub enum Exclusion {
         expires: FileTime,
     },
     /// The op has nothing in the quarantine (not a quarantine move, not moved, undone, or already
-    /// purged).
+    /// purged) and no backup files.
     NotInQuarantine,
     /// It is held.
     Held(HoldReason),
+    /// Backup files of the op the consent does not name ([`PurgeConsent::name_files`]); none of the
+    /// op's files was deleted.
+    FilesNotNamed {
+        /// The files not named, as the intent records them.
+        files: Vec<String>,
+    },
 }
 
 /// Why an item was refused: something is not what the journal recorded. Nothing of it was deleted.
@@ -296,10 +369,13 @@ pub enum Refused {
         /// What the handle showed.
         found: FileIdentity,
     },
-    /// The store refused the session or the op directory (integrity, volume, path).
+    /// The store refused the session, the op directory or a backup file (integrity, volume, path).
     Store(StorageError),
     /// The guard refused the item itself.
     Gate(Refusal),
+    /// The session's journal does not match the mark of its index entry: it was cut or replaced since
+    /// the index recorded it ([`JournalError::IndexMismatch`]). Nothing of the session is touched.
+    JournalMismatch(String),
 }
 
 /// Why the walk stopped at an entry.
@@ -414,6 +490,7 @@ pub struct PurgeReport {
 /// [`ExpiryListing::problems`].
 pub fn expiring(roots: &StorageRoots, now: FileTime) -> Result<ExpiryListing, StorageError> {
     let listing_of_sessions = roots.list_sessions()?;
+    let marks = index_marks(roots);
     let mut listing = ExpiryListing::default();
     for rejected in listing_of_sessions.rejected {
         listing.problems.push(SessionProblem {
@@ -433,7 +510,8 @@ pub fn expiring(roots: &StorageRoots, now: FileTime) -> Result<ExpiryListing, St
                 continue;
             }
         };
-        let state = match journal::read(&session) {
+        // A journal cut or replaced since its index entry was written is a problem, not a session.
+        let state = match journal::read_indexed(&session, marks.get(&id)) {
             Ok(read) => read.state,
             Err(e) => {
                 listing.problems.push(problem(e.to_string()));
@@ -443,6 +521,70 @@ pub fn expiring(roots: &StorageRoots, now: FileTime) -> Result<ExpiryListing, St
         list_session(&session, &state, now, &mut listing);
     }
     Ok(listing)
+}
+
+/// The journal mark of every session the index has one for. An index that cannot be read gives none:
+/// it is rebuilt from the journals, and there is nothing in it to compare them with.
+fn index_marks(roots: &StorageRoots) -> BTreeMap<SessionId, JournalMark> {
+    roots
+        .read_index()
+        .map(|index| {
+            index
+                .sessions
+                .into_iter()
+                .filter_map(|summary| Some((summary.id, summary.journal?)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The backup and definition files op `op`'s intent names, by their session-relative paths, each once
+/// in the intent's order; `None` when it names none.
+fn backup_files(op: &OpState) -> Option<Vec<String>> {
+    let intent = op.intent.as_ref()?;
+    let mut files: Vec<String> = Vec::new();
+    for backup in intent.backups() {
+        if !files.contains(&backup.path) {
+            files.push(backup.path.clone());
+        }
+    }
+    (!files.is_empty()).then_some(files)
+}
+
+/// The bytes the intent of `op` recorded for its backup files.
+fn backup_bytes_of(op: &OpState) -> u64 {
+    op.intent.as_ref().map_or(0, |intent| {
+        intent
+            .backups()
+            .fold(0u64, |sum, backup| sum.saturating_add(backup.bytes))
+    })
+}
+
+/// Why the backup files of `op` are held, apart from the session's holds.
+fn backup_hold(op: &OpState) -> Option<HoldReason> {
+    if op.retry_in_flight || matches!(op.status(), OpStatus::IntentOnly) {
+        Some(HoldReason::Unresolved)
+    } else if op.undo == UndoState::InProgress {
+        Some(HoldReason::SessionUndoInProgress)
+    } else {
+        None
+    }
+}
+
+/// Whether any of the backup files `files` is still in the session, probed through the store.
+fn backup_presence(session: &SessionDir, files: &[String]) -> Presence {
+    let mut presence = Presence::Gone;
+    for rel in files {
+        match session.open_file(rel) {
+            Ok(_) => return Presence::Present,
+            Err(StorageError::Io {
+                source: FsError::NotFound,
+                ..
+            }) => {}
+            Err(_) => presence = Presence::Unknown,
+        }
+    }
+    presence
 }
 
 /// Adds one session's due items and classes to `listing`.
@@ -485,6 +627,39 @@ fn list_session(
                     .items
                     .push(record.item(id, op, expiry.quarantine, &categories, false))
             }
+        }
+    }
+    for op in state.ops() {
+        let Some(files) = backup_files(op) else {
+            continue;
+        };
+        let id = ExpiryId {
+            session: session.id().clone(),
+            op: op.op,
+        };
+        let entry = |unfinished: bool| ExpiringBackup {
+            id: id.clone(),
+            item: op.item.clone(),
+            files: files.clone(),
+            expires: expiry.backups,
+            bytes: backup_bytes_of(op),
+            user_data: categories.is_user_data(&op.item),
+            unfinished,
+        };
+        if op.expired.contains(&RetentionClass::Backup) {
+            // Expiry was recorded; the files are due until they are gone.
+            if backup_presence(session, &files) == Presence::Present {
+                listing.backups.push(entry(true));
+            }
+            continue;
+        }
+        if expiry.backups > now {
+            continue;
+        }
+        match (&session_hold, backup_hold(op)) {
+            (Some(reason), _) => listing.held.push((id, reason.clone())),
+            (None, Some(reason)) => listing.held.push((id, reason)),
+            (None, None) => listing.backups.push(entry(false)),
         }
     }
     let has_backups = state.ops().any(|op| {
@@ -789,10 +964,12 @@ pub fn purge(
     let mut results: BTreeMap<ExpiryId, PurgeResult> = BTreeMap::new();
     let mut alerts = Vec::new();
     let mut changes: Vec<SessionChange> = Vec::new();
+    let marks = index_marks(roots);
     for (session_id, wanted) in by_session {
         let change = purge_session(
             roots,
             session_id,
+            marks.get(session_id),
             &wanted,
             consent,
             now,
@@ -820,6 +997,8 @@ struct SessionChange {
     freed: BTreeMap<u64, u64>,
     /// Every quarantined op of the session is expired and gone.
     quarantine_purged: bool,
+    /// Every op of the session with backup files is expired and its files are gone.
+    backup_purged: bool,
 }
 
 /// A result that touched nothing.
@@ -835,10 +1014,12 @@ fn untouched(id: &ExpiryId, outcome: PurgeOutcome) -> PurgeResult {
 }
 
 /// Purges the requested items of one session, under one journal writer (which keeps any other writer,
-/// an undo included, out until it is dropped).
+/// an undo included, out until it is dropped). `mark` is the journal mark of the session's index entry.
+#[allow(clippy::too_many_arguments)]
 fn purge_session(
     roots: &StorageRoots,
     session_id: &SessionId,
+    mark: Option<&JournalMark>,
     wanted: &[&ExpiryId],
     consent: &PurgeConsent,
     now: FileTime,
@@ -861,6 +1042,31 @@ fn purge_session(
             return None;
         }
     };
+    // The journal as its index entry knows it, then the writer on that same journal: a writer excludes
+    // other writers but also the reader, so the check comes first and the writer must find the very
+    // journal that was checked (the chain value of its last line).
+    let checked = match journal::read_indexed(&session, mark) {
+        Ok(read) => read.head,
+        Err(e @ JournalError::IndexMismatch { .. }) => {
+            for id in wanted {
+                alerts.push(Alert {
+                    id: (*id).clone(),
+                    path: session.path().display().to_string(),
+                    detail: format!(
+                        "the session's journal is not the one its index entry records: {e}"
+                    ),
+                });
+            }
+            fail_all(PurgeOutcome::Refused(Refused::JournalMismatch(
+                e.to_string(),
+            )));
+            return None;
+        }
+        Err(e) => {
+            fail_all(PurgeOutcome::Failed(Failure::Journal(e.to_string())));
+            return None;
+        }
+    };
     let mut writer = match JournalWriter::open_append(&session) {
         Ok(w) => w,
         Err(e) => {
@@ -868,6 +1074,14 @@ fn purge_session(
             return None;
         }
     };
+    if writer.head() != checked {
+        fail_all(PurgeOutcome::Failed(Failure::Journal(
+            "the journal changed between its check against the index and its opening; nothing was \
+             done, try again"
+                .to_owned(),
+        )));
+        return None;
+    }
     let volume_roots: Vec<String> = writer
         .state()
         .header()
@@ -890,6 +1104,7 @@ fn purge_session(
         session: session_id.clone(),
         freed: BTreeMap::new(),
         quarantine_purged: false,
+        backup_purged: false,
     };
     let mut wrote_any = false;
     for id in wanted {
@@ -902,6 +1117,7 @@ fn purge_session(
                 consent,
                 categories: &categories,
                 expires: expiry.quarantine,
+                backups_expire: expiry.backups,
                 session_hold: session_hold.as_ref(),
                 now,
             },
@@ -909,12 +1125,19 @@ fn purge_session(
         );
         if result.expire_recorded {
             wrote_any = true;
-            if let Some(record) = writer.state().op(id.op).and_then(QuarantineRecord::of) {
-                let slot = change
-                    .freed
-                    .entry(record.stamp.identity.volume_serial)
-                    .or_insert(0);
-                *slot = slot.saturating_add(record.bytes);
+            // Quarantined bytes on the item's volume; backup files on the data root's, where the
+            // session directory is.
+            let freed = writer.state().op(id.op).and_then(|op| {
+                QuarantineRecord::of(op)
+                    .map(|record| (record.stamp.identity.volume_serial, record.bytes))
+                    .or_else(|| {
+                        backup_files(op)
+                            .map(|_| (session.dir().volume_serial(), backup_bytes_of(op)))
+                    })
+            });
+            if let Some((serial, bytes)) = freed {
+                let slot = change.freed.entry(serial).or_insert(0);
+                *slot = slot.saturating_add(bytes);
             }
         }
         results.insert((*id).clone(), result);
@@ -922,20 +1145,32 @@ fn purge_session(
     if !wrote_any {
         return None;
     }
-    // The quarantine class of the session is purged once every quarantined op has its expire record
-    // and nothing of it is left on disk.
-    change.quarantine_purged = writer
+    // The quarantine class of the session is purged once every quarantined op (there must be one) has
+    // its expire record and nothing of it is left on disk.
+    let mut quarantined = writer
         .state()
         .ops()
-        .all(|op| match QuarantineRecord::of(op) {
-            None => true,
-            Some(record) => {
-                if op.expired.contains(&RetentionClass::Quarantine) {
-                    presence(&session, &record) == Presence::Gone
-                } else {
-                    quarantine_state(op) == InQuarantine::No
-                }
+        .filter_map(|op| QuarantineRecord::of(op).map(|record| (op, record)))
+        .peekable();
+    change.quarantine_purged = quarantined.peek().is_some()
+        && quarantined.all(|(op, record)| {
+            if op.expired.contains(&RetentionClass::Quarantine) {
+                presence(&session, &record) == Presence::Gone
+            } else {
+                quarantine_state(op) == InQuarantine::No
             }
+        });
+    // The backup class likewise, once every op with backup files (there must be one) has its expire
+    // record and none of its files is left.
+    let mut with_backups = writer
+        .state()
+        .ops()
+        .filter_map(|op| backup_files(op).map(|files| (op, files)))
+        .peekable();
+    change.backup_purged = with_backups.peek().is_some()
+        && with_backups.all(|(op, files)| {
+            op.expired.contains(&RetentionClass::Backup)
+                && backup_presence(&session, &files) == Presence::Gone
         });
     Some(change)
 }
@@ -945,7 +1180,10 @@ fn purge_session(
 struct ItemContext<'a> {
     consent: &'a PurgeConsent,
     categories: &'a Categories,
+    /// When the session's quarantine retention ends.
     expires: FileTime,
+    /// When the session's backup retention ends.
+    backups_expire: FileTime,
     session_hold: Option<&'a HoldReason>,
     now: FileTime,
 }
@@ -964,7 +1202,7 @@ fn purge_one(
         return excluded(Exclusion::NotInQuarantine);
     };
     let Some(record) = QuarantineRecord::of(op) else {
-        return excluded(Exclusion::NotInQuarantine);
+        return purge_backup(session, writer, id, cx, alerts);
     };
     let resume = op.expired.contains(&RetentionClass::Quarantine);
     if !resume {
@@ -1110,6 +1348,96 @@ fn purge_one(
     result
 }
 
+/// Decides and deletes the backup files of one op (see "Backup files" in the module docs): holds, the
+/// backup class's retention, the user-data confirmation, every file named by the consent; then the
+/// `expire` record of the backup class (write-ahead, once), then each file through the store. A file
+/// already gone is skipped; the first file the store refuses or fails to delete stops the op, and a
+/// later purge continues it.
+fn purge_backup(
+    session: &SessionDir,
+    writer: &mut JournalWriter,
+    id: &ExpiryId,
+    cx: ItemContext<'_>,
+    alerts: &mut Vec<Alert>,
+) -> PurgeResult {
+    let excluded = |e: Exclusion| untouched(id, PurgeOutcome::Excluded(e));
+    let Some(op) = writer.state().op(id.op) else {
+        return excluded(Exclusion::NotInQuarantine);
+    };
+    let Some(files) = backup_files(op) else {
+        return excluded(Exclusion::NotInQuarantine);
+    };
+    let bytes = backup_bytes_of(op);
+    let resume = op.expired.contains(&RetentionClass::Backup);
+    if !resume {
+        if let Some(reason) = cx.session_hold {
+            return excluded(Exclusion::Held(reason.clone()));
+        }
+        if let Some(reason) = backup_hold(op) {
+            return excluded(Exclusion::Held(reason));
+        }
+        // Never before the class is due: until then the op may be undone from these files.
+        if cx.backups_expire > cx.now {
+            return excluded(Exclusion::NotExpired {
+                expires: cx.backups_expire,
+            });
+        }
+    }
+    if cx.categories.is_user_data(&op.item) && !cx.consent.confirms_user_data(id) {
+        return excluded(Exclusion::UserDataNotConfirmed);
+    }
+    let not_named: Vec<String> = files
+        .iter()
+        .filter(|file| !cx.consent.names_file(id, file))
+        .cloned()
+        .collect();
+    if !not_named.is_empty() {
+        return excluded(Exclusion::FilesNotNamed { files: not_named });
+    }
+
+    let mut result = untouched(id, PurgeOutcome::AlreadyGone);
+    // Write-ahead: from here on the op is not undone (`Violation::UndoAfterExpire`).
+    if !resume {
+        let expire = Expire {
+            at: cx.now,
+            op: id.op,
+            class: RetentionClass::Backup,
+            bytes,
+        };
+        if let Err(e) = writer.expire(expire) {
+            return untouched(id, PurgeOutcome::Failed(Failure::Journal(e.to_string())));
+        }
+        result.expire_recorded = true;
+    }
+    for rel in &files {
+        match session.delete_backup_file(rel) {
+            Ok(Some(size)) => {
+                result.entries_deleted += 1;
+                result.bytes_deleted = result.bytes_deleted.saturating_add(size);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                if matches!(e, StorageError::Integrity { .. }) {
+                    alerts.push(Alert {
+                        id: id.clone(),
+                        path: session.path().join(rel).display().to_string(),
+                        detail: e.to_string(),
+                    });
+                }
+                result.outcome = match e {
+                    StorageError::Io { .. } => PurgeOutcome::Failed(Failure::Store(e)),
+                    e => PurgeOutcome::Refused(Refused::Store(e)),
+                };
+                return result;
+            }
+        }
+    }
+    if result.entries_deleted > 0 {
+        result.outcome = PurgeOutcome::Purged;
+    }
+    result
+}
+
 /// Writes and flushes the op's `expire` record of the quarantine class.
 fn write_expire(
     writer: &mut JournalWriter,
@@ -1193,6 +1521,9 @@ fn apply_changes(index: &mut SessionIndex, changes: &[SessionChange]) {
         }
         if change.quarantine_purged && !summary.purged.contains(&RetentionClass::Quarantine) {
             summary.purged.push(RetentionClass::Quarantine);
+        }
+        if change.backup_purged && !summary.purged.contains(&RetentionClass::Backup) {
+            summary.purged.push(RetentionClass::Backup);
         }
     }
 }

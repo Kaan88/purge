@@ -404,6 +404,12 @@ impl Run {
         };
         let mut journal = JournalWriter::create(&session, header).unwrap();
         let mut ctx = GateCtx::new(DenyList::compile(&live_env()), &ops, no_store()).unwrap();
+        // As the executor does before the validate pass: the run's ops with their ids.
+        ctx.set_run_ops(
+            ops.iter()
+                .enumerate()
+                .map(|(i, op)| (OpId(i as u32 + 1), op.clone())),
+        );
         for (i, op) in ops.iter().enumerate() {
             let n = i as u32 + 1;
             let mut facts = ItemFacts::Absent;
@@ -500,10 +506,33 @@ impl Run {
                 fault::point(fault::ACT_BEFORE);
                 let result = act_reg(action, &token);
                 self.journal.done(token, result.outcome.clone()).unwrap();
+                // As the executor does after each done: the op's effect on its key is the run's own.
+                self.ctx
+                    .note_done(self.journal.state().op(OpId(n)).unwrap());
                 self.log.insert(n, (intent, Some(result.outcome.clone())));
                 result
             }
         }
+    }
+
+    /// A gate context made again from the journal alone, as a resumed run makes it: the run's ops, every
+    /// `validated` record of a passed validation, and the effects of the completed ops
+    /// (`GateCtx::note_journal`). Replaces the context the run had.
+    fn reopen_ctx(&mut self) {
+        let mut ctx = GateCtx::new(DenyList::compile(&live_env()), &self.ops, no_store()).unwrap();
+        ctx.set_run_ops(
+            self.ops
+                .iter()
+                .enumerate()
+                .map(|(i, op)| (OpId(i as u32 + 1), op.clone())),
+        );
+        let state = self.journal.state().clone();
+        for op_state in state.ops() {
+            let op = &self.ops[op_state.op.0 as usize - 1];
+            ctx.record(op, &op_state.validated(), 5_000).unwrap();
+        }
+        ctx.note_journal(&state);
+        self.ctx = ctx;
     }
 
     /// Prepares op `n` and journals its intent, then stops as a crash during the action would.
@@ -519,6 +548,12 @@ impl Run {
 
     /// The undo of op `n` as the executor runs it, journalled.
     fn undo(&mut self, n: u32) -> RegUndoResult {
+        self.undo_with(n, || {})
+    }
+
+    /// [`Run::undo`] with `between` run after the undo gate checked the destination and the undo intent
+    /// is durable, before the inverse runs.
+    fn undo_with(&mut self, n: u32, between: impl FnOnce()) -> RegUndoResult {
         let (intent, done) = self.log.get(&n).cloned().expect("op has an intent");
         let op = OpId(n);
         // The undo is gated with the exemptions of the op's journalled record in `ctx`.
@@ -543,6 +578,7 @@ impl Run {
             RegUndoPrepared::Ready(inverse) => {
                 assert_eq!(inverse.op(), op);
                 let token = self.journal.undo_intent(op).unwrap();
+                between();
                 let result = run_undo_reg(inverse, &token);
                 match &result {
                     RegUndoResult::Done { outcome, .. } => {
@@ -1556,6 +1592,350 @@ fn nothing_to_undo_for_an_op_that_changed_nothing() {
         })) if rule == gate::reason::NOT_VALIDATED
     ));
     assert!(k.exists("Item"));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Items of one run that depend on each other
+// ---------------------------------------------------------------------------------------------------
+
+/// [`shape`] with every key's values in name order: a value restored by its own undo is appended to its
+/// key, so a chain undone in reverse puts the same values back in another enumeration order.
+fn sorted_shape(doc: &RegBackup) -> RegTree {
+    let mut tree = shape(doc);
+    for key in &mut tree.keys {
+        key.values.sort_by(|a, b| a.name_b64.0.cmp(&b.name_b64.0));
+    }
+    tree
+}
+
+/// Longer than one tick of the registry's write clock: a write after it is later than any time the gate
+/// noted before it.
+fn past_a_clock_tick() {
+    std::thread::sleep(std::time::Duration::from_millis(50));
+}
+
+/// Case (a): `App` with two values and a subkey (with a value of its own); the run removes both values,
+/// the subkey's tree, then `App` if empty.
+fn emptied_app(k: &TestKey) -> Vec<ExecOp> {
+    k.create(r"App\Sub");
+    k.set("App", "a", REG_SZ, &utf16z("a"));
+    k.set("App", "b", REG_DWORD, &[2, 0, 0, 0]);
+    k.set(r"App\Sub", "s", REG_SZ, &utf16z("s"));
+    vec![
+        value_op(k.wire("App"), "a"),
+        value_op(k.wire("App"), "b"),
+        tree_op(k.wire(r"App\Sub")),
+        empty_op(k.wire("App")),
+    ]
+}
+
+#[track_caller]
+fn undo_all_in_reverse(run: &mut Run, last: u32) {
+    for n in (1..=last).rev() {
+        assert_undo(&run.undo(n), UndoOutcome::Restored);
+    }
+}
+
+#[test]
+fn a_key_the_earlier_items_empty_is_deleted_and_undone_in_reverse_order() {
+    let k = TestKey::new();
+    let ops = emptied_app(&k);
+    let before = k.capture("App");
+    let mut run = Run::new("dep-empty", ops);
+    // Not empty when the run starts, and still validated: everything in it is an earlier item. The
+    // journal records its counts as they were.
+    assert!((1..=4).all(|n| run.validated(n)));
+    assert!(
+        matches!(run.ctx.stamp(OpId(4)), Some(gate::Stamp::Key(facts)) if (facts.values, facts.subkeys) == (2, 1))
+    );
+
+    for n in 1..=4 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    assert!(!k.exists("App"));
+    assert!(matches!(run.log[&4].0.inverse, Inverse::RecreateKey { .. }));
+
+    // Undo in reverse op order: the key first (re-created empty), then what was in it.
+    undo_all_in_reverse(&mut run, 4);
+    assert_eq!(sorted_shape(&k.capture("App")), sorted_shape(&before));
+}
+
+#[test]
+fn a_key_the_earlier_items_empty_is_still_refused_after_outside_changes() {
+    // A value added by someone else: not empty at the act.
+    let k = TestKey::new();
+    let ops = emptied_app(&k);
+    let mut run = Run::new("dep-empty-added", ops);
+    for n in 1..=3 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    k.set("App", "late", REG_SZ, &utf16z("late"));
+    assert_outcome(&run.run(4), skipped(SkipReason::NoLongerEmpty));
+    assert_eq!(k.get("App", "late"), Some((REG_SZ, utf16z("late"))));
+    drop(run);
+    drop(k);
+
+    // Replaced by another empty key after the run's own items.
+    let k = TestKey::new();
+    let ops = emptied_app(&k);
+    let mut run = Run::new("dep-empty-replaced", ops);
+    for n in 1..=3 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    past_a_clock_tick();
+    k.remove("App");
+    k.create("App");
+    assert_outcome(&run.run(4), skipped(SkipReason::ChangedSinceScan));
+    assert!(k.exists("App"));
+    drop(run);
+    drop(k);
+
+    // Replaced by a link.
+    let mut k = TestKey::new();
+    k.create("Real");
+    let ops = emptied_app(&k);
+    let mut run = Run::new("dep-empty-link", ops);
+    for n in 1..=3 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    k.remove("App");
+    k.link("App", "Real");
+    assert_outcome(&run.run(4), blocked(Blocker::RegLink));
+    assert!(k.is_link("App") && k.exists("Real"));
+}
+
+#[test]
+fn a_key_after_its_own_value_and_segment_items_is_deleted_and_undone_in_reverse_order() {
+    let k = TestKey::new();
+    k.create("Env");
+    k.set("Env", "Path", REG_EXPAND_SZ, &utf16z(r"C:\a;C:\b"));
+    k.set("Env", "gone", REG_SZ, &utf16z("g"));
+    k.set("Env", "keep", REG_DWORD, &[1, 0, 0, 0]);
+    let before = k.capture("Env");
+    let mut run = Run::new(
+        "dep-value",
+        vec![
+            segment_op(k.wire("Env"), "Path", r"C:\b", None),
+            value_op(k.wire("Env"), "Path"),
+            value_op(k.wire("Env"), "gone"),
+            tree_op(k.wire("Env")),
+        ],
+    );
+    assert!((1..=4).all(|n| run.validated(n)));
+
+    assert_outcome(&run.run(1), ItemOutcome::Done);
+    assert_eq!(k.get("Env", "Path"), Some((REG_EXPAND_SZ, utf16z(r"C:\a"))));
+    // The value the edit rewrote is deleted as the edit left it; the key after both values.
+    for n in 2..=4 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    assert!(!k.exists("Env"));
+
+    // The tree comes back with `keep`, the value as the edit left it, then the segment.
+    undo_all_in_reverse(&mut run, 4);
+    assert_eq!(sorted_shape(&k.capture("Env")), sorted_shape(&before));
+    assert_eq!(
+        k.get("Env", "Path"),
+        Some((REG_EXPAND_SZ, utf16z(r"C:\a;C:\b")))
+    );
+}
+
+#[test]
+fn a_key_after_its_own_value_items_is_still_refused_after_outside_changes() {
+    let k = TestKey::new();
+    k.create("Env");
+    k.set("Env", "Path", REG_EXPAND_SZ, &utf16z(r"C:\a;C:\b"));
+    k.set("Env", "gone", REG_SZ, &utf16z("g"));
+    let ops = vec![
+        segment_op(k.wire("Env"), "Path", r"C:\b", None),
+        value_op(k.wire("Env"), "Path"),
+        value_op(k.wire("Env"), "gone"),
+        tree_op(k.wire("Env")),
+    ];
+    let mut run = Run::new("dep-value-outside", ops.clone());
+    assert_outcome(&run.run(1), ItemOutcome::Done);
+    // Someone else rewrites the value the edit wrote: not deleted.
+    k.set("Env", "Path", REG_EXPAND_SZ, &utf16z(r"C:\theirs"));
+    assert_outcome(&run.run(2), skipped(SkipReason::ChangedSinceScan));
+    assert_eq!(
+        k.get("Env", "Path"),
+        Some((REG_EXPAND_SZ, utf16z(r"C:\theirs")))
+    );
+    assert_outcome(&run.run(3), ItemOutcome::Done);
+    // ... and adds a value: the key holds one value more than the run's items leave.
+    k.set("Env", "late", REG_SZ, &utf16z("late"));
+    assert_outcome(&run.run(4), skipped(SkipReason::ChangedSinceScan));
+    assert!(k.exists("Env"));
+    assert_eq!(k.get("Env", "late"), Some((REG_SZ, utf16z("late"))));
+    drop(run);
+    drop(k);
+
+    // Replaced by a key with the same values after the run's own items.
+    let k = TestKey::new();
+    k.create("Env");
+    k.set("Env", "Path", REG_EXPAND_SZ, &utf16z(r"C:\a;C:\b"));
+    k.set("Env", "gone", REG_SZ, &utf16z("g"));
+    let ops: Vec<ExecOp> = vec![
+        segment_op(k.wire("Env"), "Path", r"C:\b", None),
+        value_op(k.wire("Env"), "gone"),
+        tree_op(k.wire("Env")),
+    ];
+    let mut run = Run::new("dep-value-replaced", ops);
+    for n in 1..=2 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    past_a_clock_tick();
+    k.remove("Env");
+    k.create("Env");
+    k.set("Env", "Path", REG_EXPAND_SZ, &utf16z(r"C:\a"));
+    assert_outcome(&run.run(3), skipped(SkipReason::ChangedSinceScan));
+    assert_eq!(k.get("Env", "Path"), Some((REG_EXPAND_SZ, utf16z(r"C:\a"))));
+}
+
+/// Case (c): `App` holds a value and two subkeys besides the run's items.
+fn tree_with_items(k: &TestKey) -> Vec<ExecOp> {
+    k.create(r"App\Sub\Deep");
+    k.create(r"App\Other");
+    k.set("App", "a", REG_SZ, &utf16z("a"));
+    k.set("App", "keep", REG_DWORD, &[1, 0, 0, 0]);
+    k.set(r"App\Sub", "s", REG_SZ, &utf16z("s"));
+    vec![
+        tree_op(k.wire(r"App\Sub")),
+        value_op(k.wire("App"), "a"),
+        tree_op(k.wire("App")),
+    ]
+}
+
+#[test]
+fn a_tree_after_items_inside_it_is_deleted_and_undone_in_reverse_order() {
+    let k = TestKey::new();
+    let ops = tree_with_items(&k);
+    let before = k.capture("App");
+    let mut run = Run::new("dep-tree", ops);
+    assert!((1..=3).all(|n| run.validated(n)));
+    for n in 1..=3 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    assert!(!k.exists("App"));
+    // The tree's backup holds the key as it was at its own act: without the run's earlier items.
+    let (intent, _) = run.log[&3].clone();
+    let doc = regbackup::read_verified(&run.session, intent.inverse.backup().unwrap()).unwrap();
+    let keys = &doc.doc().tree().unwrap().keys;
+    assert_eq!(keys.len(), 2, "App and App\\Other");
+    assert_eq!(keys[0].values.len(), 1, "only keep");
+
+    undo_all_in_reverse(&mut run, 3);
+    assert_eq!(sorted_shape(&k.capture("App")), sorted_shape(&before));
+}
+
+#[test]
+fn a_tree_after_items_inside_it_is_still_refused_after_outside_changes() {
+    // A subkey added by someone else.
+    let k = TestKey::new();
+    let ops = tree_with_items(&k);
+    let mut run = Run::new("dep-tree-added", ops);
+    for n in 1..=2 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    k.create(r"App\Late");
+    assert_outcome(&run.run(3), skipped(SkipReason::ChangedSinceScan));
+    assert!(k.exists(r"App\Late") && k.exists(r"App\Other"));
+    drop(run);
+    drop(k);
+
+    // Replaced by a link.
+    let mut k = TestKey::new();
+    k.create(r"Real\Kept");
+    let ops = tree_with_items(&k);
+    let mut run = Run::new("dep-tree-link", ops);
+    for n in 1..=2 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    k.remove("App");
+    k.link("App", "Real");
+    assert_outcome(&run.run(3), blocked(Blocker::RegLink));
+    assert!(k.is_link("App") && k.exists(r"Real\Kept"));
+}
+
+/// A run stopped in the middle of a chain continues with a context rebuilt from the journal alone: the
+/// effects of the completed ops come from their journalled intents and `done` records.
+#[test]
+fn a_chain_continues_with_a_context_rebuilt_from_the_journal() {
+    let k = TestKey::new();
+    let ops = emptied_app(&k);
+    let before = k.capture("App");
+    let mut run = Run::new("dep-resume", ops);
+    for n in 1..=3 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    run.reopen_ctx();
+    assert_outcome(&run.run(4), ItemOutcome::Done);
+    assert!(!k.exists("App"));
+    undo_all_in_reverse(&mut run, 4);
+    assert_eq!(sorted_shape(&k.capture("App")), sorted_shape(&before));
+    drop(run);
+    drop(k);
+
+    // Rebuilt between two items of the chain, then changed by someone else: refused as before.
+    let k = TestKey::new();
+    let ops = tree_with_items(&k);
+    let mut run = Run::new("dep-resume-changed", ops);
+    assert_outcome(&run.run(1), ItemOutcome::Done);
+    run.reopen_ctx();
+    assert_outcome(&run.run(2), ItemOutcome::Done);
+    run.reopen_ctx();
+    k.set("App", "late", REG_SZ, &utf16z("late"));
+    assert_outcome(&run.run(3), skipped(SkipReason::ChangedSinceScan));
+    assert!(k.exists("App"));
+}
+
+/// Item 2: a restore whose key (or parent key) is still gone is `ParentMissing`, changes nothing, and
+/// succeeds once the op that removed that key is undone.
+#[test]
+fn undo_into_a_key_that_is_still_gone_is_parent_missing_until_its_own_undo() {
+    let k = TestKey::new();
+    let ops = emptied_app(&k);
+    let before = k.capture("App");
+    let mut run = Run::new("dep-undo-order", ops);
+    for n in 1..=4 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    // Forward order: a value and a subkey of a key that is not back yet.
+    assert_conflict(&run.undo(1), UndoConflict::ParentMissing);
+    assert_conflict(&run.undo(3), UndoConflict::ParentMissing);
+    assert!(!k.exists("App"));
+    // The key's own undo, then the others again.
+    assert_undo(&run.undo(4), UndoOutcome::Restored);
+    for n in [3, 1, 2] {
+        assert_undo(&run.undo(n), UndoOutcome::Restored);
+    }
+    assert_eq!(sorted_shape(&k.capture("App")), sorted_shape(&before));
+}
+
+/// Item 2: the key a restore goes into (the parent of a key, the key of a value) deleted after the undo
+/// gate opened it, before anything was created.
+#[test]
+fn a_key_deleted_after_the_undo_gate_is_parent_missing() {
+    let k = TestKey::new();
+    k.create(r"Parent\Item\Sub");
+    k.create("Holder");
+    k.set("Holder", "v", REG_SZ, &utf16z("v"));
+    let mut run = Run::new(
+        "undo-gone",
+        vec![
+            tree_op(k.wire(r"Parent\Item")),
+            value_op(k.wire("Holder"), "v"),
+        ],
+    );
+    for n in 1..=2 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    let result = run.undo_with(1, || k.remove("Parent"));
+    assert_conflict(&result, UndoConflict::ParentMissing);
+    assert!(!k.exists("Parent"));
+    let result = run.undo_with(2, || k.remove("Holder"));
+    assert_conflict(&result, UndoConflict::ParentMissing);
+    assert!(!k.exists("Holder"));
 }
 
 // ---------------------------------------------------------------------------------------------------

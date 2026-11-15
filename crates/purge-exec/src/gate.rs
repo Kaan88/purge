@@ -22,6 +22,16 @@
 //!   [`CheckedKey`]. The action must be performed on it; nothing is reopened between check and act. On
 //!   any other outcome the handle is closed before the function returns.
 //!
+//! # Same-run dependencies (registry)
+//!
+//! Items of one run can depend on each other: a key deleted if empty after its values and subkeys, a
+//! key tree after separate items inside it, a value deleted after a segment edit of it. The plan puts
+//! inner items first. The gate learns the run's ops ([`GateCtx::set_run_ops`], before the validate pass)
+//! and, as the run goes, what its own completed ops did ([`GateCtx::note_done`] after each `done`;
+//! [`GateCtx::note_journal`] for a resumed run). The validate pass does not refuse a delete-if-empty key
+//! that earlier items empty; the act-time gate compares a key with its recorded facts as the run's own
+//! ops changed them, and refuses every other difference as before. See [`GateCtx::note_done`].
+//!
 //! # Outcomes
 //!
 //! Every gate call ends in a [`GateOutcome`]: `Pass`, `Vanished` (the item is gone: success, nothing to
@@ -59,9 +69,9 @@ use purge_guard::live::{
 };
 use purge_guard::prefix;
 use purge_model::exec::journal::{
-    FileFacts, GateExemptions, ItemFacts, RegFacts, Validated, ValueFacts,
+    FileFacts, GateExemptions, Intent, ItemFacts, RegFacts, Validated, ValueFacts,
 };
-use purge_model::exec::op::{ExecOp, FileIdHex, OpId, Sha256Hex};
+use purge_model::exec::op::{ExecOp, FileIdHex, Inverse, ItemOutcome, OpId, Sha256Hex};
 use purge_model::{Blocker, Candidate, CandidateId, FileTime, ScanMode, Target, VerifyGone, View};
 use purge_win::fs::{FileHandle, FileMeta, volume_info};
 use purge_win::fs_write::{DestDir, FsError, MoveHandle, extended_path};
@@ -72,6 +82,7 @@ use purge_win::secure::{Security, handle_security, open_for_security};
 use purge_win::sid::{TRUSTED_INSTALLER_SID, is_admin_only_writable};
 use sha2::{Digest, Sha256};
 
+use crate::journal::{JournalState, OpState};
 use crate::storage::QuarantineDir;
 
 mod ffi;
@@ -208,7 +219,7 @@ pub struct SecurityFacts {
 /// The facts the gate reads through this trait rather than directly, so tests can put in owners and
 /// volumes a test machine cannot produce unelevated (TrustedInstaller ownership, removable or FAT
 /// volumes). Releases always use [`LiveHost`]; only `cfg(test)` and the `test-support` feature can install
-/// another one ([`GateCtx::with_host`]).
+/// another one (`GateCtx::with_host`, which exists only in those builds).
 pub trait HostFacts: Send + Sync + fmt::Debug {
     /// Owner and TrustedInstaller facts of a file or directory from its security descriptor (`None` when
     /// the descriptor could not be read from the handle).
@@ -289,6 +300,130 @@ pub struct GateCtx {
     scope: StoreScope,
     host: Box<dyn HostFacts>,
     validated: BTreeMap<OpId, Recorded>,
+    /// The run's ops by op id ([`GateCtx::set_run_ops`]), for the same-run dependencies.
+    run_ops: Vec<RunOp>,
+    /// What this run's own completed registry ops did to the keys later ops are bound to
+    /// ([`GateCtx::note_done`]), by the op that did it.
+    effects: BTreeMap<OpId, OwnEffect>,
+}
+
+/// One op of the run, with the canonical address of the key it acts on (the key itself for a key op,
+/// the key holding the value for a value or segment op; `None` for other ops and for a target the guard
+/// cannot canonicalise, which then counts for nothing).
+#[derive(Debug, Clone)]
+struct RunOp {
+    op: OpId,
+    exec_op: ExecOp,
+    key: Option<KeyAddress>,
+}
+
+/// The effect a completed registry op of this run had on one key (see "Same-run dependencies" on
+/// [`GateCtx::note_done`]).
+#[derive(Debug, Clone)]
+struct OwnEffect {
+    /// The key whose facts the op changed: the key holding a deleted or edited value, or the parent of a
+    /// deleted key.
+    key: KeyAddress,
+    /// Values the op removed from `key`.
+    values: u32,
+    /// Direct subkeys the op removed from `key`.
+    subkeys: u32,
+    /// For a segment edit: the value (by name) and the SHA-256 of the data the op wrote into it.
+    rewritten: Option<(String, [u8; 32])>,
+    /// When the gate learned of the effect: the op's own change to `key` happened no later than this
+    /// (registry times come from the coarse system clock, which never runs ahead of the precise one).
+    noted_at: FileTime,
+}
+
+/// What this run's own completed ops explain about one key: the facts recorded at validation may
+/// differ from the live ones by exactly this much.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct OwnChanges {
+    /// Values removed by own ops.
+    values: u32,
+    /// Direct subkeys removed by own ops.
+    subkeys: u32,
+    /// The latest time an own op may have written the key (`None`: no own op touched it).
+    touched_until: Option<FileTime>,
+}
+
+impl OwnChanges {
+    /// Whether the live facts `now` are the recorded ones changed only by these own effects: subkey and
+    /// value counts exactly the recorded ones less the own removals, link state and owner equal, and the
+    /// last write time equal or, when an own op wrote the key, at least the recorded one and no later
+    /// than the latest own write could have been. With no own effect this is plain equality (review S5).
+    fn explain(&self, recorded: &RegFacts, now: &RegFacts) -> bool {
+        // Destructured without `..`, so a field added to the record fails to compile here.
+        let RegFacts {
+            subkeys,
+            values,
+            is_link,
+            owner,
+            last_write_time,
+        } = recorded;
+        let time_explained = now.last_write_time == *last_write_time
+            || self.touched_until.is_some_and(|until| {
+                now.last_write_time.0 >= last_write_time.0 && now.last_write_time.0 <= until.0
+            });
+        subkeys.checked_sub(self.subkeys) == Some(now.subkeys)
+            && values.checked_sub(self.values) == Some(now.values)
+            && *is_link == now.is_link
+            && *owner == now.owner
+            && time_explained
+    }
+}
+
+/// The current time as a FILETIME (100 ns ticks since 1601-01-01 UTC), from the precise system clock.
+fn filetime_now() -> FileTime {
+    /// FILETIME of 1970-01-01.
+    const UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let ticks = u64::try_from(since.as_nanos() / 100).unwrap_or(u64::MAX);
+    FileTime(UNIX_EPOCH_TICKS.saturating_add(ticks))
+}
+
+/// The canonical address of the key `op` acts on (for a value or segment op: the key holding it).
+fn op_key(op: &ExecOp, deny: &DenyList) -> Option<KeyAddress> {
+    if !op.is_registry() {
+        return None;
+    }
+    live::key_probe(&op.target(), deny.env())
+        .ok()
+        .map(|probe| probe.open)
+}
+
+/// The effect a completed op (`intent`, whose `done` is `Done`) had on the key a later op may be bound
+/// to; `None` for an op that changes no key's facts (file and package ops, a key directly below its hive
+/// root, a target that does not canonicalise).
+fn own_effect(intent: &Intent, deny: &DenyList, noted_at: FileTime) -> Option<OwnEffect> {
+    let probe = live::key_probe(&intent.exec_op.target(), deny.env()).ok()?;
+    let effect = |key, values, subkeys, rewritten| OwnEffect {
+        key,
+        values,
+        subkeys,
+        rewritten,
+        noted_at,
+    };
+    match &intent.exec_op {
+        ExecOp::DeleteValue { .. } => Some(effect(probe.open, 1, 0, None)),
+        ExecOp::EditSegment { name, .. } => {
+            let rewritten = match &intent.inverse {
+                Inverse::ReinsertSegment {
+                    written_value_hash, ..
+                } => Some((name.clone(), written_value_hash.0)),
+                _ => None,
+            };
+            Some(effect(probe.open, 0, 0, rewritten))
+        }
+        ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. } => {
+            Some(effect(probe.ancestors.last()?.clone(), 0, 1, None))
+        }
+        ExecOp::QuarantineMove { .. }
+        | ExecOp::RemoveDirIfEmpty { .. }
+        | ExecOp::RemovePackage { .. } => None,
+    }
 }
 
 /// What the act-time gate takes for one op: the stamp and the exemptions of its journal `validated`
@@ -362,7 +497,159 @@ impl GateCtx {
             scope,
             host,
             validated: BTreeMap::new(),
+            run_ops: Vec::new(),
+            effects: BTreeMap::new(),
         })
+    }
+
+    /// Tells the gate every op of the run with its op id (plan order is op order: an item inside another
+    /// comes first). The executor calls it once, right after making the context and before the validate
+    /// pass; a later call replaces the list. Without it nothing below changes the gate's verdicts.
+    ///
+    /// The validate pass uses it for a `DeleteKeyIfEmpty` that is not empty when the run starts: such a
+    /// key is not refused as not empty when every value and every direct subkey it holds is the target
+    /// of an earlier op of the run that removes it whole (a `DeleteValue` of that value, a
+    /// `DeleteKeyTree` or `DeleteKeyIfEmpty` of that subkey). Its facts are journalled as they are
+    /// (counts above zero); whether it is empty is decided at the act, on the handle, as always.
+    pub fn set_run_ops(&mut self, ops: impl IntoIterator<Item = (OpId, ExecOp)>) {
+        self.run_ops = ops
+            .into_iter()
+            .map(|(op, exec_op)| RunOp {
+                op,
+                key: op_key(&exec_op, &self.deny),
+                exec_op,
+            })
+            .collect();
+    }
+
+    /// Notes what op `op` of this run did, once its `done` record is written (or read back), so that
+    /// later ops bound to a key it changed are judged against the recorded facts **as this run's own
+    /// ops changed them**. Only an op with an intent and the outcome `Done` counts; any other op is
+    /// ignored. Noting the same op again changes nothing.
+    ///
+    /// # Same-run dependencies
+    ///
+    /// A key op is bound to the facts its `validated` record holds (review S5): counts, link state, owner
+    /// and last write time, read when the run started. Items of the same run that act inside the key
+    /// before it (a value of the key, a subkey) change those facts. What is noted, per completed op:
+    ///
+    /// | Op (outcome `Done`) | Key whose facts it changed | Noted effect |
+    /// |---|---|---|
+    /// | `DeleteValue` | the key holding the value | one value less; the key written |
+    /// | `EditSegment` | the key holding the value | the key written; the value now holds the data whose hash the intent's inverse records |
+    /// | `DeleteKeyTree`, `DeleteKeyIfEmpty` | the parent key | one subkey less; the key written |
+    ///
+    /// with the time the gate noted it, which the op's own write to the key cannot be later than. The
+    /// act-time gate ([`open_and_check_key`]) then accepts a key whose live facts are exactly the
+    /// recorded ones adjusted by the effects on that key: both counts exactly the recorded counts less
+    /// the own removals, link state and owner equal, the last write time equal or (only when an own op
+    /// wrote the key) between the recorded one and the latest noted time. A `DeleteValue` of a value an
+    /// own `EditSegment` rewrote is bound to the recorded type and the data that edit wrote. Anything
+    /// else is still [`reason::KEY_CHANGED`] / `VALUE_CHANGED`: a value or subkey added or removed by
+    /// someone else, a key replaced or written after the own ops were noted, a key that became a link,
+    /// another owner. Outcomes other than `Done` note nothing (a vanished item, a failed or partial
+    /// delete): what changed then is not this run's doing, and the key is refused as changed.
+    ///
+    /// The effects come from journal records only (the intent's op and inverse, the done's outcome), so a
+    /// resumed run rebuilds them with [`GateCtx::note_journal`].
+    pub fn note_done(&mut self, op: &OpState) {
+        if self.effects.contains_key(&op.op) {
+            return;
+        }
+        let (Some(intent), Some(ItemOutcome::Done)) = (&op.intent, &op.outcome) else {
+            return;
+        };
+        if intent.op != op.op {
+            return;
+        }
+        if let Some(effect) = own_effect(intent, &self.deny, filetime_now()) {
+            self.effects.insert(op.op, effect);
+        }
+    }
+
+    /// [`GateCtx::note_done`] for every op of `state`: how a resumed run (and a run whose journal was
+    /// written by someone else meanwhile, such as recovery ending an open intent) learns what its own
+    /// earlier ops did. Ops already noted keep their effect.
+    pub fn note_journal(&mut self, state: &JournalState) {
+        for op in state.ops() {
+            self.note_done(op);
+        }
+    }
+
+    /// The op id `op` has in the run ([`GateCtx::set_run_ops`]), when it is in the run.
+    fn run_op_id(&self, op: &ExecOp) -> Option<OpId> {
+        self.run_ops
+            .iter()
+            .find(|run_op| run_op.exec_op == *op)
+            .map(|run_op| run_op.op)
+    }
+
+    /// What this run's own completed ops explain about the key at `key`.
+    fn own_changes(&self, key: &KeyAddress) -> OwnChanges {
+        self.effects
+            .values()
+            .filter(|effect| effect.key.is_same(key))
+            .fold(OwnChanges::default(), |sum, effect| OwnChanges {
+                values: sum.values.saturating_add(effect.values),
+                subkeys: sum.subkeys.saturating_add(effect.subkeys),
+                touched_until: Some(
+                    sum.touched_until
+                        .map_or(effect.noted_at, |t| t.max(effect.noted_at)),
+                ),
+            })
+    }
+
+    /// The hash of the data the last own segment edit (by op id: run order) wrote into value `name` of
+    /// the key at `key`, if one did.
+    fn own_rewrite(&self, key: &KeyAddress, name: &str) -> Option<[u8; 32]> {
+        self.effects
+            .values()
+            .filter(|effect| effect.key.is_same(key))
+            .filter_map(|effect| effect.rewritten.as_ref())
+            .filter(|(value, _)| prefix::eq_ci(value, name))
+            .map(|(_, hash)| *hash)
+            .next_back()
+    }
+
+    /// Whether every value and every direct subkey of `key` (at `addr`, with the counts `info`) is the
+    /// target of an op of this run before op `before` that removes it whole. Any read that fails, or a
+    /// listing whose length is not the count, answers no.
+    fn emptied_by_earlier_ops(
+        &self,
+        key: &WKey,
+        addr: &KeyAddress,
+        info: &WKeyInfo,
+        before: OpId,
+    ) -> bool {
+        let (Ok(values), Ok(subkeys)) = (key.values(), key.subkey_names()) else {
+            return false;
+        };
+        if u32::try_from(values.len()).ok() != Some(info.n_values)
+            || u32::try_from(subkeys.len()).ok() != Some(info.n_subkeys)
+        {
+            return false;
+        }
+        let earlier = || self.run_ops.iter().filter(move |run_op| run_op.op < before);
+        let value_removed = |value: &RegValue| {
+            earlier().any(|run_op| {
+                matches!(&run_op.exec_op, ExecOp::DeleteValue { name, .. } if prefix::eq_ci(name, &value.name))
+                    && run_op.key.as_ref().is_some_and(|k| k.is_same(addr))
+            })
+        };
+        let subkey_removed = |name: &String| {
+            let child = KeyAddress {
+                root: addr.root,
+                view: addr.view,
+                path: format!(r"{}\{name}", addr.path),
+            };
+            earlier().any(|run_op| {
+                matches!(
+                    run_op.exec_op,
+                    ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. }
+                ) && run_op.key.as_ref().is_some_and(|k| k.is_same(&child))
+            })
+        };
+        values.iter().all(value_removed) && subkeys.iter().all(subkey_removed)
     }
 
     /// The deny-list.
@@ -626,8 +913,16 @@ impl GateOutcome<Validation> {
     }
 }
 
-/// The validate pass for one item: read-only handles, [`Binding::Capture`].
+/// The validate pass for one item: read-only handles, [`Binding::Capture`]. The item's op id is the one
+/// the run gives its op ([`GateCtx::set_run_ops`]; the first op equal to it), which decides which ops
+/// of the run come before it; [`validate_all`] passes the op ids it is given instead.
 pub fn validate(ctx: &GateCtx, item: &GateItem<'_>) -> GateOutcome<Validation> {
+    validate_as(ctx, item, ctx.run_op_id(item.op))
+}
+
+/// [`validate`] for the item of op `op` (`None`: an item outside the run, before which no op of the run
+/// counts).
+fn validate_as(ctx: &GateCtx, item: &GateItem<'_>, op: Option<OpId>) -> GateOutcome<Validation> {
     match item.op {
         ExecOp::QuarantineMove { .. } | ExecOp::RemoveDirIfEmpty { .. } => match op_path(item) {
             Ok((path, op)) => validate_path(ctx, path, op, item).map(|(stamp, facts)| Validation {
@@ -640,7 +935,7 @@ pub fn validate(ctx: &GateCtx, item: &GateItem<'_>) -> GateOutcome<Validation> {
         ExecOp::DeleteKeyTree { .. }
         | ExecOp::DeleteKeyIfEmpty { .. }
         | ExecOp::DeleteValue { .. }
-        | ExecOp::EditSegment { .. } => validate_key(ctx, item),
+        | ExecOp::EditSegment { .. } => validate_key(ctx, item, op),
         // Packages are not locations: the guard has no live rule for them.
         ExecOp::RemovePackage { .. } => GateOutcome::Pass(Validation {
             stamp: Stamp::Package,
@@ -653,14 +948,15 @@ pub fn validate(ctx: &GateCtx, item: &GateItem<'_>) -> GateOutcome<Validation> {
 /// The validate pass over every selected item, in the order given. Records nothing: the caller writes
 /// one journal `validated` record per item (from [`Validation::to_journal`], or with
 /// [`GateOutcome::item_facts`]) and hands each written record to [`GateCtx::record`], so that the act
-/// is gated with exactly what was journalled.
+/// is gated with exactly what was journalled. Each item is validated as the op id it comes with (see
+/// [`GateCtx::set_run_ops`] for what the ops before it change).
 pub fn validate_all<'a>(
     ctx: &GateCtx,
     items: impl IntoIterator<Item = (OpId, GateItem<'a>)>,
 ) -> Vec<(OpId, GateOutcome<Validation>)> {
     items
         .into_iter()
-        .map(|(op, item)| (op, validate(ctx, &item)))
+        .map(|(op, item)| (op, validate_as(ctx, &item, Some(op))))
         .collect()
 }
 
@@ -1640,11 +1936,15 @@ fn act_access(op: KeyOp) -> KeyAccess {
 }
 
 /// Opens, reads and judges a registry item. `binding` is the guard's binding for value actions.
+/// `emptied_before`: the validate pass of the run's op with this id; a `DeleteKeyIfEmpty` key that
+/// [`GateCtx::emptied_by_earlier_ops`] says the run's earlier ops empty is judged by the guard as the
+/// empty key it will be (every other fact as read). Never at the act, where emptiness is the live one.
 fn gate_key(
     ctx: &GateCtx,
     item: &GateItem<'_>,
     access: KeyAccess,
     binding: Binding<'_, ValueStamp>,
+    emptied_before: Option<OpId>,
 ) -> GateOutcome<Gated> {
     let Some(op) = key_op(item.op) else {
         return GateOutcome::Refused(rule(reason::OP_KIND));
@@ -1686,7 +1986,24 @@ fn gate_key(
     if value_vanished(&seen.facts) {
         return GateOutcome::Vanished;
     }
-    if let Err(refusal) = live::check_key(&check, &seen.facts, &ctx.deny) {
+    // A delete-if-empty key that this run's earlier items empty is judged as empty at validation; its
+    // real counts are what the journal records and what the act is bound to.
+    let emptied = match (op, emptied_before, &seen.info) {
+        (KeyOp::DeleteKeyIfEmpty, Some(before), Some(info))
+            if (info.n_subkeys, info.n_values) != (0, 0)
+                && ctx.emptied_by_earlier_ops(&key, &probe.open, info, before) =>
+        {
+            Some(KeyFacts {
+                subkeys: Some(0),
+                values: Some(0),
+                ..seen.facts.clone()
+            })
+        }
+        _ => None,
+    };
+    if let Err(refusal) =
+        live::check_key(&check, emptied.as_ref().unwrap_or(&seen.facts), &ctx.deny)
+    {
         return GateOutcome::Refused(refusal);
     }
     match (key_item_facts(op, &seen), seen.info) {
@@ -1713,8 +2030,8 @@ struct Gated {
     item_facts: ItemFacts,
 }
 
-fn validate_key(ctx: &GateCtx, item: &GateItem<'_>) -> GateOutcome<Validation> {
-    gate_key(ctx, item, KeyAccess::READ, Binding::Capture).and_then(|gated| {
+fn validate_key(ctx: &GateCtx, item: &GateItem<'_>, op: Option<OpId>) -> GateOutcome<Validation> {
+    gate_key(ctx, item, KeyAccess::READ, Binding::Capture, op).and_then(|gated| {
         let stamp = match (&gated.item_facts, gated.facts.value) {
             (ItemFacts::Key(facts), _) => Stamp::Key(facts.clone()),
             (ItemFacts::Value(_), ValueState::Present(stamp)) => Stamp::Value(stamp),
@@ -1793,6 +2110,10 @@ impl CheckedKey {
 /// key actions against the recorded [`RegFacts`] (counts, link state, owner, last write time), a
 /// difference being [`reason::KEY_CHANGED`]. On a pass the open key is returned for the action.
 ///
+/// The recorded facts are compared as this run's own completed ops changed them, and only by what those
+/// ops explain ([`GateCtx::note_done`]): a key whose values or subkeys earlier items of the run removed,
+/// or a value an earlier segment edit of the run rewrote. With nothing noted the comparison is exact.
+///
 /// A missing key or value is `Vanished`. Access denied is `Failed` unless a read-only look refuses the
 /// item, which is then `Refused`.
 pub fn open_and_check_key(ctx: &GateCtx, op: OpId) -> GateOutcome<CheckedKey> {
@@ -1804,23 +2125,44 @@ pub fn open_and_check_key(ctx: &GateCtx, op: OpId) -> GateOutcome<CheckedKey> {
     let Some(op) = key_op(item.op) else {
         return GateOutcome::Refused(rule(reason::OP_KIND));
     };
+    // A value this run's own segment edit rewrote is bound to what that edit wrote, not to the data
+    // recorded at validation: compared below, on the same handle, as the guard would.
+    let rewritten = match (item.op, &recorded.stamp) {
+        (ExecOp::DeleteValue { name, .. }, Stamp::Value(value)) => op_key(item.op, &ctx.deny)
+            .and_then(|key| ctx.own_rewrite(&key, name))
+            .map(|hash| (value.ty, hash)),
+        _ => None,
+    };
     // The guard compares values itself; it ignores the binding for key actions, whose recorded facts
     // are compared below, from the same handle. A segment edit has its own binding (see below).
     let (binding, key_facts, segment_type) = match (op, &recorded.stamp) {
         (KeyOp::DeleteKeyTree | KeyOp::DeleteKeyIfEmpty, Stamp::Key(facts)) => {
             (Binding::Capture, Some(facts), None)
         }
+        (KeyOp::DeleteValue, Stamp::Value(_)) if rewritten.is_some() => {
+            (Binding::Capture, None, None)
+        }
         (KeyOp::DeleteValue, Stamp::Value(value)) => (Binding::Recheck(value), None, None),
         (KeyOp::EditSegment, Stamp::Value(value)) => (Binding::Capture, None, Some(value.ty)),
         _ => return GateOutcome::Refused(rule(reason::STAMP_KIND)),
     };
-    gate_key(ctx, item, act_access(op), binding).and_then(|gated| {
+    gate_key(ctx, item, act_access(op), binding, None).and_then(|gated| {
         if let Some(recorded) = key_facts {
-            if !matches!(&gated.item_facts, ItemFacts::Key(now) if now == recorded) {
+            let own = ctx.own_changes(&gated.address);
+            if !matches!(&gated.item_facts, ItemFacts::Key(now) if own.explain(recorded, now)) {
                 // The acting handle is closed when `gated` drops here.
                 return GateOutcome::Refused(Refusal {
                     blocker: Blocker::ChangedSinceScan,
                     reason: reason::KEY_CHANGED,
+                });
+            }
+        }
+        if let Some((ty, hash)) = rewritten {
+            if !matches!(gated.facts.value, ValueState::Present(now) if now.ty == ty && now.sha256 == hash)
+            {
+                return GateOutcome::Refused(Refusal {
+                    blocker: Blocker::ChangedSinceScan,
+                    reason: live::reason::VALUE_CHANGED,
                 });
             }
         }

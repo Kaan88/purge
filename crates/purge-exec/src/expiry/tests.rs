@@ -1209,6 +1209,405 @@ fn a_busy_index_is_reported_and_not_guessed() {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// The journal against its index entry
+// ---------------------------------------------------------------------------------------------------
+
+/// Writes an index whose only entry is `built`'s session with the journal mark `mark`.
+fn index_with_mark(fx: &Fx, built: &Built, mark: Option<JournalMark>) {
+    let mut index = SessionIndex::default();
+    index.upsert(SessionSummary {
+        journal: mark,
+        ..summary(built, 3)
+    });
+    fx.roots.write_index(&index).unwrap();
+}
+
+#[test]
+fn a_journal_cut_or_replaced_since_its_index_entry_is_a_problem_and_never_purged() {
+    let fx = Fx::new("mark");
+    let a = fx.scratch.file(r"src\a.txt", b"aaa");
+    let built = build(&fx, at_day(0), &[app(a)], false, true);
+    let read = journal::read(&built.session).unwrap();
+    let lines = read.line_heads.len() as u64;
+    let real = JournalMark {
+        records: lines,
+        head: read.head,
+    };
+    let cut = JournalMark {
+        records: lines + 1,
+        head: read.head,
+    };
+    let replaced = JournalMark {
+        records: lines,
+        head: purge_model::exec::op::Sha256Hex([9; 32]),
+    };
+
+    for (what, mark) in [("cut", cut), ("replaced", replaced)] {
+        index_with_mark(&fx, &built, Some(mark));
+        let listing = expiring(&fx.roots, at_day(30)).unwrap();
+        assert_eq!(listing.problems.len(), 1, "{what}");
+        assert_eq!(
+            listing.problems[0].session.as_ref(),
+            Some(built.session.id())
+        );
+        assert!(listing.items.is_empty() && listing.due.is_empty(), "{what}");
+
+        let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(30)).unwrap();
+        assert!(
+            matches!(
+                outcome_of(&report, &built.ids[0]),
+                PurgeOutcome::Refused(Refused::JournalMismatch(_))
+            ),
+            "{what}: {report:?}"
+        );
+        assert_eq!(report.alerts.len(), 1, "{what}");
+        assert_eq!(report.index, IndexUpdate::NotNeeded);
+        assert!(exists(&built.quarantined[0]));
+        assert!(expire_records(&built.session).is_empty());
+    }
+    assert_eq!(
+        assert_deletes_inside(&fx.quarantine_of(built.session.id())),
+        0
+    );
+
+    // The journal its index entry records (later lines are allowed): read and purged as usual.
+    index_with_mark(&fx, &built, Some(real));
+    let listing = expiring(&fx.roots, at_day(30)).unwrap();
+    assert!(listing.problems.is_empty(), "{:?}", listing.problems);
+    assert_eq!(listing.items.len(), 1);
+    let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(30)).unwrap();
+    assert_eq!(outcome_of(&report, &built.ids[0]), &PurgeOutcome::Purged);
+    assert!(!exists(&built.quarantined[0]));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Backup files
+// ---------------------------------------------------------------------------------------------------
+
+/// A session whose ops kept backup files that exist in the session.
+struct Backups {
+    session: SessionDir,
+    /// Op 1: a key tree with its registry backup; op 2: a package removal with its definition.
+    ids: Vec<ExpiryId>,
+    /// The file of each op, as its intent names it.
+    files: Vec<String>,
+}
+
+/// Runs a session started at `created` with the two ops of [`Backups`], writing each backup file for
+/// real. Committed unless `committed` is false (the run then has not ended). With `scan_copy` the
+/// candidates are app data; without it every op counts as user data.
+fn build_backups(fx: &Fx, created: FileTime, committed: bool, scan_copy: bool) -> Backups {
+    let session = fx.roots.create_session().unwrap();
+    let header = Header {
+        schema: JournalSchema,
+        session: session.id().clone(),
+        created,
+        engine_version: "0.1.0".into(),
+        app: "vendor-app".into(),
+        plan_hash: sha256_bytes(b"plan"),
+        selection_hash: sha256_bytes(b"selection"),
+        policy_version: "test".into(),
+        mode: ScanMode::Post,
+        items: 2,
+        allow_irreversible: true,
+        volumes: Vec::new(),
+    };
+    let mut w = JournalWriter::create(&session, header).unwrap();
+    let key = r"HKU\S-1-5-21-1-2-3-1001\Software\VendorApp".to_owned();
+    let ops = [
+        (
+            ExecOp::DeleteKeyTree { key },
+            ItemFacts::Key(reg_facts()),
+            backup_rel(BackupKind::Registry, OpId(1)),
+        ),
+        (
+            ExecOp::RemovePackage {
+                full_name: "Vendor.App_1.0.0.0_x64__abcdefghjkmnp".into(),
+            },
+            ItemFacts::Package,
+            backup_rel(BackupKind::Definition, OpId(2)),
+        ),
+    ];
+    for (i, (exec_op, pre, _)) in ops.iter().enumerate() {
+        let n = i as u32 + 1;
+        w.validated(Validated {
+            op: OpId(n),
+            item: item_id(n),
+            target: exec_op.target(),
+            facts: pre.clone(),
+            exemptions: GateExemptions::default(),
+        })
+        .unwrap();
+    }
+    let mut files = Vec::new();
+    for (i, (exec_op, pre, rel)) in ops.into_iter().enumerate() {
+        let n = i as u32 + 1;
+        let mut file = session.create_file(&rel).unwrap();
+        file.write_all(b"backup").unwrap();
+        file.sync().unwrap();
+        drop(file);
+        let backup = BackupRef {
+            path: rel.clone(),
+            sha256: sha256_bytes(b"backup"),
+            bytes: 6,
+        };
+        let (inverse, definition) = match &exec_op {
+            ExecOp::RemovePackage { .. } => (Inverse::None, Some(backup)),
+            _ => (Inverse::RestoreKeyTree { backup }, None),
+        };
+        let token = w
+            .intent(Intent {
+                op: OpId(n),
+                item: item_id(n),
+                exec_op,
+                inverse,
+                definition,
+                pre,
+            })
+            .unwrap();
+        w.done(token, ItemOutcome::Done).unwrap();
+        files.push(rel);
+    }
+    if committed {
+        w.commit(FileTime(created.0 + 1), 12).unwrap();
+    }
+    drop(w);
+    if scan_copy {
+        write_scan_copy(&session, &[app("x".into()), app("y".into())]);
+    }
+    let ids = (1..=2)
+        .map(|n| ExpiryId {
+            session: session.id().clone(),
+            op: OpId(n),
+        })
+        .collect();
+    Backups {
+        session,
+        ids,
+        files,
+    }
+}
+
+/// A consent naming every op of `b` and each op's file.
+fn naming_files(b: &Backups) -> PurgeConsent {
+    let mut consent = all(&b.ids);
+    for (id, file) in b.ids.iter().zip(&b.files) {
+        consent.name_files(id.clone(), [file.clone()]);
+    }
+    consent
+}
+
+fn backup_exists(b: &Backups, rel: &str) -> bool {
+    exists(&b.session.path().join(rel).to_string_lossy())
+}
+
+#[test]
+fn backup_files_are_purged_only_when_due_and_every_file_is_named() {
+    let fx = Fx::new("backups");
+    let b = build_backups(&fx, at_day(0), true, true);
+    let serial = b.session.dir().volume_serial();
+    let mut index = SessionIndex::default();
+    index.upsert(SessionSummary {
+        id: b.session.id().clone(),
+        app: "vendor-app".into(),
+        owner: None,
+        plan_hash: sha256_bytes(b"plan"),
+        state: SessionState::Committed,
+        started: at_day(0),
+        finished: Some(at_day(0)),
+        counts: Default::default(),
+        undone: 0,
+        backup_bytes: 12,
+        usage: vec![VolumeUsage {
+            serial,
+            root: r"C:\".into(),
+            bytes: 12,
+        }],
+        expires: Expiry::from_start(at_day(0)),
+        purged: Vec::new(),
+        pending_reboot: false,
+        journal: None,
+    });
+    fx.roots.write_index(&index).unwrap();
+    let before_due = FileTime::from_unix_secs(START + 180 * DAY - 1);
+
+    // Listed per op from the day the class is due, with every file.
+    assert!(expiring(&fx.roots, before_due).unwrap().backups.is_empty());
+    let listing = expiring(&fx.roots, at_day(180)).unwrap();
+    assert!(listing.problems.is_empty(), "{:?}", listing.problems);
+    let listed: Vec<(ExpiryId, Vec<String>, u64, bool, bool)> = listing
+        .backups
+        .iter()
+        .map(|e| {
+            assert_eq!(e.expires, at_day(180));
+            (
+                e.id.clone(),
+                e.files.clone(),
+                e.bytes,
+                e.user_data,
+                e.unfinished,
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (b.ids[0].clone(), vec![b.files[0].clone()], 6, false, false),
+            (b.ids[1].clone(), vec![b.files[1].clone()], 6, false, false),
+        ]
+    );
+
+    // Not before the class is due: the op can still be undone from them.
+    let report = purge(&fx.roots, &b.ids, &naming_files(&b), before_due).unwrap();
+    for id in &b.ids {
+        assert_eq!(
+            outcome_of(&report, id),
+            &PurgeOutcome::Excluded(Exclusion::NotExpired {
+                expires: at_day(180)
+            })
+        );
+    }
+    // Not with a consent that names the ops but not their files, or another file.
+    let mut other = all(&b.ids);
+    other.name_files(b.ids[0].clone(), [b.files[1].clone()]);
+    let report = purge(&fx.roots, &b.ids, &other, at_day(180)).unwrap();
+    assert_eq!(
+        outcome_of(&report, &b.ids[0]),
+        &PurgeOutcome::Excluded(Exclusion::FilesNotNamed {
+            files: vec![b.files[0].clone()]
+        })
+    );
+    assert_eq!(
+        outcome_of(&report, &b.ids[1]),
+        &PurgeOutcome::Excluded(Exclusion::FilesNotNamed {
+            files: vec![b.files[1].clone()]
+        })
+    );
+    // A file named for an op the consent does not name counts for nothing.
+    let mut stray = PurgeConsent::default();
+    stray.name_files(b.ids[0].clone(), [b.files[0].clone()]);
+    assert!(!stray.names_file(&b.ids[0], &b.files[0]));
+    assert!(b.files.iter().all(|f| backup_exists(&b, f)));
+    assert!(expire_records(&b.session).is_empty());
+
+    // Due and named: the expire record, then the files.
+    let report = purge(&fx.roots, &b.ids, &naming_files(&b), at_day(180)).unwrap();
+    for result in &report.items {
+        assert_eq!(result.outcome, PurgeOutcome::Purged, "{report:?}");
+        assert!(result.expire_recorded);
+        assert_eq!((result.entries_deleted, result.bytes_deleted), (1, 6));
+    }
+    assert!(b.files.iter().all(|f| !backup_exists(&b, f)));
+    assert_eq!(
+        expire_records(&b.session),
+        [
+            (OpId(1), RetentionClass::Backup),
+            (OpId(2), RetentionClass::Backup)
+        ]
+    );
+    assert_eq!(report.index, IndexUpdate::Updated);
+    let s = fx.roots.read_index().unwrap().sessions[0].clone();
+    assert_eq!((s.backup_bytes, s.usage[0].bytes), (0, 0));
+    assert_eq!(s.purged, [RetentionClass::Backup]);
+    // The op is not undone any more.
+    let mut w = JournalWriter::open_append(&b.session).unwrap();
+    assert!(w.undo_intent(OpId(1)).is_err());
+    drop(w);
+
+    // Nothing is listed any more, and a second purge finds nothing to do.
+    let listing = expiring(&fx.roots, at_day(200)).unwrap();
+    assert!(listing.backups.is_empty());
+    assert!(
+        !listing
+            .due
+            .iter()
+            .any(|d| d.class == RetentionClass::Backup)
+    );
+    let report = purge(&fx.roots, &b.ids, &naming_files(&b), at_day(200)).unwrap();
+    assert!(
+        report
+            .items
+            .iter()
+            .all(|r| r.outcome == PurgeOutcome::AlreadyGone && !r.expire_recorded)
+    );
+    assert_eq!(expire_records(&b.session).len(), 2);
+}
+
+#[test]
+fn user_data_backups_and_held_sessions_are_left_alone() {
+    let fx = Fx::new("backups-held");
+    // Without a scan copy every op counts as user data: confirmed one by one.
+    let b = build_backups(&fx, at_day(0), true, false);
+    let report = purge(&fx.roots, &b.ids, &naming_files(&b), at_day(180)).unwrap();
+    for id in &b.ids {
+        assert_eq!(
+            outcome_of(&report, id),
+            &PurgeOutcome::Excluded(Exclusion::UserDataNotConfirmed)
+        );
+    }
+    let mut consent = naming_files(&b);
+    consent.confirm_user_data(b.ids[0].clone());
+    let report = purge(&fx.roots, &b.ids, &consent, at_day(180)).unwrap();
+    assert_eq!(outcome_of(&report, &b.ids[0]), &PurgeOutcome::Purged);
+    assert!(!backup_exists(&b, &b.files[0]) && backup_exists(&b, &b.files[1]));
+
+    // A run that has not ended: held, listed as such.
+    let open = build_backups(&fx, at_day(0), false, true);
+    let listing = expiring(&fx.roots, at_day(200)).unwrap();
+    for id in &open.ids {
+        assert!(
+            listing
+                .held
+                .contains(&(id.clone(), HoldReason::SessionOpen))
+        );
+        assert!(!listing.backups.iter().any(|e| e.id == *id));
+    }
+    let report = purge(&fx.roots, &open.ids, &naming_files(&open), at_day(200)).unwrap();
+    for id in &open.ids {
+        assert_eq!(
+            outcome_of(&report, id),
+            &PurgeOutcome::Excluded(Exclusion::Held(HoldReason::SessionOpen))
+        );
+    }
+    assert!(open.files.iter().all(|f| backup_exists(&open, f)));
+    assert!(expire_records(&open.session).is_empty());
+}
+
+#[test]
+fn an_unfinished_backup_purge_is_continued_without_a_second_record() {
+    let fx = Fx::new("backups-resume");
+    let b = build_backups(&fx, at_day(0), true, true);
+    // An earlier purge wrote op 1's record and stopped before deleting.
+    let mut w = JournalWriter::open_append(&b.session).unwrap();
+    w.expire(Expire {
+        at: at_day(180),
+        op: OpId(1),
+        class: RetentionClass::Backup,
+        bytes: 6,
+    })
+    .unwrap();
+    drop(w);
+
+    let listing = expiring(&fx.roots, at_day(181)).unwrap();
+    let unfinished: Vec<(OpId, bool)> = listing
+        .backups
+        .iter()
+        .map(|e| (e.id.op, e.unfinished))
+        .collect();
+    assert_eq!(unfinished, [(OpId(1), true), (OpId(2), false)]);
+
+    let report = purge(&fx.roots, &b.ids[..1], &naming_files(&b), at_day(181)).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged);
+    assert!(!report.items[0].expire_recorded);
+    assert_eq!(report.index, IndexUpdate::NotNeeded);
+    assert!(!backup_exists(&b, &b.files[0]) && backup_exists(&b, &b.files[1]));
+    assert_eq!(
+        expire_records(&b.session),
+        [(OpId(1), RetentionClass::Backup)]
+    );
+}
+
+// ---------------------------------------------------------------------------------------------------
 // A crash in the middle of the walk
 // ---------------------------------------------------------------------------------------------------
 

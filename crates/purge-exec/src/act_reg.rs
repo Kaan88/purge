@@ -93,7 +93,7 @@
 //! | any | the op changed nothing (`Vanished`, `Skipped`, `Failed` but `VerifyFailed`) | `NothingToUndo` |
 //! | any | no journalled `validated` record for the op in the undo's gate context | conflict `GateBlocked{DenyListed{gate.not-validated}}` |
 //! | any | the gate refuses the destination (deny-list, container, link on the chain) | conflict `GateBlocked{<blocker>}` |
-//! | any | the parent (key target) or the key holding the value is missing | conflict `GateBlocked{ChangedSinceScan}` (`gate.undo-key-missing`) |
+//! | any | the parent (key target) or the key holding the value is missing (at the undo gate, or deleted after it before anything was created) | conflict `ParentMissing` |
 //! | any | backup file missing | conflict `BackupMissing` |
 //! | any | backup file unreadable, size or SHA-256 differs, or not the op's backup | conflict `BackupTampered` |
 //! | `RestoreKeyTree`, `RecreateKey` | key absent | `Restored` (all or nothing) |
@@ -114,6 +114,20 @@
 //! | | key is a link | conflict `GateBlocked{RegLink}` |
 //!
 //! Nothing that exists is ever overwritten: a conflict changes nothing.
+//!
+//! # Items that depend on each other
+//!
+//! A run may delete values and subkeys of a key and then the key (delete-if-empty, or a tree that
+//! still holds other things); the plan puts the inner items first. The executor tells the gate context
+//! the run's ops and each completed op (`GateCtx::set_run_ops`, `GateCtx::note_done`), and the gate
+//! accepts the key as changed by exactly those own ops (see `crate::gate`). Each item keeps its own
+//! backup and inverse: the key's backup holds the key as it was at its act (without what the earlier
+//! items removed), each earlier item's backup holds what it removed. Undo must run the session's
+//! registry ops in **reverse op order**: the key is put back first (`RecreateKey` re-creates the empty
+//! key, `RestoreKeyTree` the tree as it was at its act), then the subkeys below it and the values into
+//! it. In any other order a child's restore finds its parent missing and is the conflict
+//! `ParentMissing`, changing nothing; undoing it again after the parent's restore succeeds. The undo
+//! package needs no other knowledge of the dependency.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1083,6 +1097,20 @@ fn read_backup(
     Ok(backup)
 }
 
+/// The conflict for a restore whose parent key (for a key) or key (for a value or segment) is gone:
+/// [`UndoConflict::ParentMissing`]. Nothing was created: the key comes back only through an inverse of
+/// this session that re-creates it, which must run first (undo runs the session's ops in reverse op
+/// order, so a key's own restore comes before the restores of what was inside it).
+fn parent_missing(at: &str, why: &str) -> RegUndoResult {
+    RegUndoResult::conflict(
+        UndoConflict::ParentMissing,
+        format!(
+            "{at}: the key it goes back into is gone ({why}); nothing restored, it comes back only \
+             with an undo of the op that removed that key"
+        ),
+    )
+}
+
 /// Decides how the registry op of `intent` is undone. `done` is the op's `done` outcome, or `None` when
 /// the journal holds only its intent (the run stopped during the action). `None` for an op that is not a
 /// registry op. Changes nothing.
@@ -1140,6 +1168,9 @@ pub fn prepare_undo_reg(
     };
     let checked = match gate::check_undo_key(ctx, &exec_op.target(), &exemptions) {
         Ok(checked) => checked,
+        Err(refusal) if refusal.reason == gate::reason::UNDO_KEY_MISSING => {
+            return decided(parent_missing(&at, &refusal.to_string()));
+        }
         Err(refusal) => {
             return decided(RegUndoResult::conflict(
                 UndoConflict::GateBlocked {
@@ -1318,6 +1349,14 @@ fn restore_result(result: Result<RestoreReport, RestoreError>, at: &str) -> RegU
             UndoConflict::BackupTampered,
             format!("{at}: the backup is not of the key the undo gate checked; nothing restored"),
         ),
+        // The checked parent (or the key a value goes back into) was deleted after the undo gate opened
+        // it, before anything was created: the same conflict as a parent missing at the gate.
+        Err(RestoreError::Failed {
+            failure,
+            rollback: Rollback::NotNeeded,
+        }) if failure.error == KEY_DELETED && failure.at.is_empty() => {
+            parent_missing(at, &failure.to_string())
+        }
         Err(RestoreError::Failed { failure, rollback }) => {
             let undone = match &rollback {
                 Rollback::NotNeeded => "nothing had been created".to_owned(),

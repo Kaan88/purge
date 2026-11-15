@@ -10,9 +10,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use purge_guard::canon::{GuardEnv, ProfileEnv};
 use purge_guard::live::reason as live_reason;
+use purge_model::exec::op::SkipReason;
 use purge_model::exec::session::SessionId;
 use purge_win::fs_write::{FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY};
-use purge_win::reg::{REG_DWORD, REG_LINK, REG_SZ};
+use purge_win::reg::{REG_DWORD, REG_EXPAND_SZ, REG_LINK, REG_SZ};
 use purge_win::sid::current_user_sid;
 
 use super::*;
@@ -1961,6 +1962,326 @@ fn a_key_changed_after_validation_is_refused_at_the_act() {
         Blocker::ChangedSinceScan,
         reason::KEY_CHANGED,
     );
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Same-run dependencies (registry)
+// ---------------------------------------------------------------------------------------------------
+
+/// `ops` with their op ids 1..=n, as the executor hands them to [`GateCtx::set_run_ops`].
+fn numbered(ops: &[ExecOp]) -> Vec<(OpId, ExecOp)> {
+    ops.iter()
+        .enumerate()
+        .map(|(i, op)| (OpId(u32::try_from(i).unwrap() + 1), op.clone()))
+        .collect()
+}
+
+/// A backup reference the intent of a synthetic op names; nothing reads it here.
+fn named_backup(id: u32) -> purge_model::exec::op::BackupRef {
+    purge_model::exec::op::BackupRef {
+        path: format!(r"reg\{id:06}.regbackup.json"),
+        sha256: crate::journal::sha256_bytes(b"backup"),
+        bytes: 6,
+    }
+}
+
+/// What the journal says of op `id` (`exec_op`, undone by `inverse`) once its intent and a `done` with
+/// `outcome` are written: what [`GateCtx::note_done`] reads.
+fn done_state(id: u32, exec_op: &ExecOp, inverse: Inverse, outcome: ItemOutcome) -> OpState {
+    let op = OpId(id);
+    let item = CandidateId(format!("c-{id:03}"));
+    OpState {
+        op,
+        item: item.clone(),
+        target: exec_op.target(),
+        facts: ItemFacts::Absent,
+        exemptions: exemptions_to_journal(&long()),
+        intent: Some(Intent {
+            op,
+            item,
+            exec_op: exec_op.clone(),
+            inverse,
+            definition: None,
+            pre: ItemFacts::Absent,
+        }),
+        outcome: Some(outcome),
+        reconciles: Vec::new(),
+        undo: crate::journal::UndoState::NotStarted,
+        undo_attempts: 0,
+        expired: Vec::new(),
+        retry_in_flight: false,
+    }
+}
+
+fn value_done(id: u32, op: &ExecOp, outcome: ItemOutcome) -> OpState {
+    let backup = named_backup(id);
+    done_state(id, op, Inverse::RestoreValue { backup }, outcome)
+}
+
+fn tree_done(id: u32, op: &ExecOp, outcome: ItemOutcome) -> OpState {
+    let backup = named_backup(id);
+    done_state(id, op, Inverse::RestoreKeyTree { backup }, outcome)
+}
+
+/// Longer than one tick of the registry's write clock: a write after it is later than any time the gate
+/// noted before it.
+fn past_a_clock_tick() {
+    std::thread::sleep(std::time::Duration::from_millis(50));
+}
+
+/// Case (a) at validation: a delete-if-empty key whose every value and direct subkey is an earlier item
+/// of the run that removes it whole is not refused as not empty; its real counts are what is recorded.
+/// Partial coverage, coverage by later ops and no run ops at all leave the refusal as it was.
+#[test]
+fn a_key_the_earlier_items_of_the_run_empty_passes_validation() {
+    let k = TestKey::new();
+    k.create(r"App\Sub");
+    k.set("App", "a", REG_SZ, &utf16z("a"));
+    k.set("App", "b", REG_DWORD, &[2, 0, 0, 0]);
+    let app = k.wire("App");
+    let value_a = value_op(&app, "a");
+    // Value names compare as the registry compares them.
+    let value_b = value_op(&app, "B");
+    let sub = ExecOp::DeleteKeyTree {
+        key: k.wire(r"App\Sub"),
+    };
+    let empty = ExecOp::DeleteKeyIfEmpty { key: app.clone() };
+    let item = GateItem::new(&empty, long());
+
+    let mut covered = ctx(&[]);
+    covered.set_run_ops(numbered(&[
+        value_a.clone(),
+        value_b.clone(),
+        sub.clone(),
+        empty.clone(),
+    ]));
+    let outcome = validate(&covered, &item);
+    let validation = outcome.pass().expect("emptied by the earlier items");
+    assert!(
+        matches!(&validation.facts, ItemFacts::Key(facts) if (facts.values, facts.subkeys) == (2, 1)),
+        "{validation:?}"
+    );
+
+    let not_empty = |run: &[ExecOp]| {
+        let mut ctx = ctx(&[]);
+        ctx.set_run_ops(numbered(run));
+        assert_refused(
+            &validate(&ctx, &item),
+            Blocker::ChangedSinceScan,
+            live_reason::NOT_EMPTY,
+        );
+    };
+    // A value no item removes.
+    not_empty(&[value_a.clone(), sub.clone(), empty.clone()]);
+    // A subkey no item removes.
+    not_empty(&[value_a.clone(), value_b.clone(), empty.clone()]);
+    // The items come after the key.
+    not_empty(&[empty.clone(), value_a.clone(), value_b.clone(), sub.clone()]);
+    // A value of another key with the same name.
+    not_empty(&[
+        value_op(&k.wire(r"App\Sub"), "a"),
+        value_b.clone(),
+        sub.clone(),
+        empty.clone(),
+    ]);
+    // No run ops (the context of the S5 tests).
+    not_empty(&[]);
+    // A key the run does not hold.
+    let mut other = ctx(&[]);
+    other.set_run_ops(numbered(&[value_a, value_b, sub]));
+    assert_refused(
+        &validate(&other, &item),
+        Blocker::ChangedSinceScan,
+        live_reason::NOT_EMPTY,
+    );
+}
+
+/// Cases (a) and (c) at the act: the key's recorded facts are compared as the run's own completed ops
+/// changed them, and only by what those ops explain. Before `note_done` (and for an op that vanished)
+/// the comparison is the exact S5 one.
+#[test]
+fn own_effects_explain_only_what_the_runs_completed_ops_did() {
+    let mut k = TestKey::new();
+    k.create(r"App\Sub");
+    k.create("Real");
+    k.set("App", "a", REG_SZ, &utf16z("a"));
+    k.set("App", "keep", REG_DWORD, &[1, 0, 0, 0]);
+    let app = k.wire("App");
+    let value_a = value_op(&app, "a");
+    let sub = ExecOp::DeleteKeyTree {
+        key: k.wire(r"App\Sub"),
+    };
+    let tree = ExecOp::DeleteKeyTree { key: app.clone() };
+    let ops = [value_a.clone(), sub.clone(), tree.clone()];
+    let mut ctx = ctx(&[]);
+    ctx.set_run_ops(numbered(&ops));
+    for op in &ops {
+        validate_and_record(&mut ctx, &GateItem::new(op, long()));
+    }
+    let tree_id = OpId(3);
+
+    // The run's first two items act.
+    k.open("App", KeyAccess::SET_VALUE)
+        .delete_value("a")
+        .unwrap();
+    TestKey::nuke(&k.open(r"App\Sub", KeyAccess::DELETE));
+    assert_refused(
+        &open_and_check_key(&ctx, tree_id),
+        Blocker::ChangedSinceScan,
+        reason::KEY_CHANGED,
+    );
+    // Outcomes that changed nothing of this run's doing note nothing.
+    ctx.note_done(&value_done(1, &value_a, ItemOutcome::Vanished));
+    ctx.note_done(&tree_done(
+        2,
+        &sub,
+        ItemOutcome::Skipped {
+            reason: SkipReason::ChangedSinceScan,
+        },
+    ));
+    // An intent of another op id under this op is not this op's.
+    ctx.note_done(&OpState {
+        op: OpId(2),
+        ..value_done(1, &value_a, ItemOutcome::Done)
+    });
+    assert_refused(
+        &open_and_check_key(&ctx, tree_id),
+        Blocker::ChangedSinceScan,
+        reason::KEY_CHANGED,
+    );
+    ctx.note_done(&value_done(1, &value_a, ItemOutcome::Done));
+    assert_refused(
+        &open_and_check_key(&ctx, tree_id),
+        Blocker::ChangedSinceScan,
+        reason::KEY_CHANGED,
+    );
+    ctx.note_done(&tree_done(2, &sub, ItemOutcome::Done));
+    assert!(open_and_check_key(&ctx, tree_id).pass().is_some());
+    // Noting again changes nothing (the counts are not taken twice).
+    ctx.note_done(&value_done(1, &value_a, ItemOutcome::Done));
+    assert!(open_and_check_key(&ctx, tree_id).pass().is_some());
+
+    // Someone else adds a value: one value more than the own ops leave.
+    k.set("App", "late", REG_SZ, &utf16z("late"));
+    assert_refused(
+        &open_and_check_key(&ctx, tree_id),
+        Blocker::ChangedSinceScan,
+        reason::KEY_CHANGED,
+    );
+    // ... and removes it after the own ops were noted: the counts fit, the write is not the run's.
+    past_a_clock_tick();
+    k.open("App", KeyAccess::SET_VALUE)
+        .delete_value("late")
+        .unwrap();
+    assert_refused(
+        &open_and_check_key(&ctx, tree_id),
+        Blocker::ChangedSinceScan,
+        reason::KEY_CHANGED,
+    );
+
+    // Replaced by a key with the same counts, later than the own ops: refused. (A fresh run over the
+    // same items, so that the recorded facts are those of the key as it is now.)
+    let state_1 = value_done(1, &value_a, ItemOutcome::Done);
+    let state_2 = tree_done(2, &sub, ItemOutcome::Done);
+    let mut replaced = self::ctx(&[]);
+    replaced.set_run_ops(numbered(&ops));
+    k.set("App", "a", REG_SZ, &utf16z("a"));
+    k.create(r"App\Sub");
+    for op in &ops {
+        validate_and_record(&mut replaced, &GateItem::new(op, long()));
+    }
+    k.open("App", KeyAccess::SET_VALUE)
+        .delete_value("a")
+        .unwrap();
+    TestKey::nuke(&k.open(r"App\Sub", KeyAccess::DELETE));
+    replaced.note_done(&state_1);
+    replaced.note_done(&state_2);
+    assert!(open_and_check_key(&replaced, tree_id).pass().is_some());
+    past_a_clock_tick();
+    TestKey::nuke(&k.open("App", KeyAccess::DELETE));
+    k.create("App");
+    k.set("App", "keep", REG_DWORD, &[1, 0, 0, 0]);
+    assert_refused(
+        &open_and_check_key(&replaced, tree_id),
+        Blocker::ChangedSinceScan,
+        reason::KEY_CHANGED,
+    );
+
+    // Became a link: the link refusal, whatever the own ops explain.
+    TestKey::nuke(&k.open("App", KeyAccess::DELETE));
+    k.link("App", "Real");
+    let outcome = open_and_check_key(&replaced, tree_id);
+    assert_eq!(
+        outcome.refusal().map(|r| r.blocker.clone()),
+        Some(Blocker::RegLink),
+        "{outcome:?}"
+    );
+}
+
+/// Case (b): a value an earlier segment edit of the run rewrote is bound, when it is deleted, to the
+/// recorded type and the data that edit wrote (from its intent's inverse), not to the data validated.
+#[test]
+fn a_value_an_own_segment_edit_rewrote_is_bound_to_what_the_edit_wrote() {
+    let k = TestKey::new();
+    k.create("Env");
+    k.set("Env", "Path", REG_EXPAND_SZ, &utf16z(r"C:\a;C:\b"));
+    let env = k.wire("Env");
+    let edit = ExecOp::EditSegment {
+        key: env.clone(),
+        name: "Path".into(),
+        segment: r"C:\b".into(),
+        index: None,
+    };
+    let delete = value_op(&env, "path");
+    let mut ctx = ctx(&[]);
+    ctx.set_run_ops(numbered(&[edit.clone(), delete.clone()]));
+    for op in [&edit, &delete] {
+        validate_and_record(&mut ctx, &GateItem::new(op, long()));
+    }
+    let written = utf16z(r"C:\a");
+    let hash = crate::journal::sha256_bytes(&written);
+    let edit_done = done_state(
+        1,
+        &edit,
+        Inverse::ReinsertSegment {
+            key: env.clone(),
+            name: "Path".into(),
+            index: 1,
+            segment: r"C:\b".into(),
+            original_value_hash: crate::journal::sha256_bytes(&utf16z(r"C:\a;C:\b")),
+            written_value_hash: hash,
+            backup: None,
+        },
+        ItemOutcome::Done,
+    );
+
+    // The edit wrote the value: without the edit noted, the delete is bound to the validated data.
+    k.set("Env", "Path", REG_EXPAND_SZ, &written);
+    assert_refused(
+        &open_and_check_key(&ctx, OpId(2)),
+        Blocker::ChangedSinceScan,
+        live_reason::VALUE_CHANGED,
+    );
+    ctx.note_done(&edit_done);
+    assert!(open_and_check_key(&ctx, OpId(2)).pass().is_some());
+    // Someone else wrote it afterwards: other data, or the same data as another type.
+    k.set("Env", "Path", REG_EXPAND_SZ, &utf16z(r"C:\theirs"));
+    assert_refused(
+        &open_and_check_key(&ctx, OpId(2)),
+        Blocker::ChangedSinceScan,
+        live_reason::VALUE_CHANGED,
+    );
+    k.set("Env", "Path", REG_SZ, &written);
+    assert_refused(
+        &open_and_check_key(&ctx, OpId(2)),
+        Blocker::ChangedSinceScan,
+        live_reason::VALUE_CHANGED,
+    );
+    // The value is gone: vanished, as always.
+    k.open("Env", KeyAccess::SET_VALUE)
+        .delete_value("Path")
+        .unwrap();
+    assert!(open_and_check_key(&ctx, OpId(2)).is_vanished());
 }
 
 /// Review finding S1, the half the pure guard cannot check: the addresses [`live::key_probe`] hands out

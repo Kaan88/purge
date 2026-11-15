@@ -1921,3 +1921,252 @@ fn a_resumed_run_keeps_to_the_size_cap() {
     };
     assert!(without_other.allows(serial, 4096));
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Registry items of one run that depend on each other
+// ---------------------------------------------------------------------------------------------------
+
+/// The registry items of a chain, inner items first:
+///
+/// - (a) `App`'s two values and its subkey, then `App` if empty (ops 1-4);
+/// - (b) a segment of `Seg`'s list, then that list value, then `Seg`'s other value (ops 5-7);
+/// - (c) then `Seg`'s tree, whose remaining value is kept in its backup (op 8).
+fn chain_plan(k: &TestKey) -> Vec<Candidate> {
+    k.create(r"App\Sub");
+    k.set("App", "a", REG_SZ, &utf16z("a"));
+    k.set("App", "b", REG_SZ, &utf16z("b"));
+    k.set(r"App\Sub", "s", REG_SZ, &utf16z("s"));
+    k.create("Seg");
+    k.set(
+        "Seg",
+        "List",
+        REG_MULTI_SZ,
+        &multi_sz(&["keep", "vendor", "also"]),
+    );
+    k.set("Seg", "Other", REG_SZ, &utf16z("o"));
+    k.set("Seg", "Stays", REG_SZ, &utf16z("s"));
+    vec![
+        safe("c-a", value(&k.wire("App"), "a"), Action::DeleteValue),
+        safe("c-b", value(&k.wire("App"), "b"), Action::DeleteValue),
+        safe("c-sub", key(&k.wire(r"App\Sub")), Action::DeleteKey),
+        safe("c-app", key(&k.wire("App")), Action::RemoveDirIfEmpty),
+        safe(
+            "c-seg",
+            Target::RegMultiSzSegment {
+                path: k.wire("Seg"),
+                name: "List".into(),
+                segment: "vendor".into(),
+                index: None,
+            },
+            Action::EditSegment,
+        ),
+        safe("c-list", value(&k.wire("Seg"), "List"), Action::DeleteValue),
+        safe(
+            "c-other",
+            value(&k.wire("Seg"), "Other"),
+            Action::DeleteValue,
+        ),
+        safe("c-segkey", key(&k.wire("Seg")), Action::DeleteKey),
+    ]
+}
+
+/// A key's values as (name, type, data), sorted by name, and its subkey names.
+type KeyContent = (Vec<(String, u32, Vec<u8>)>, Vec<String>);
+
+/// The content of `sub`: what a restore must bring back, whatever order the values are enumerated in.
+fn key_content(k: &TestKey, sub: &str) -> KeyContent {
+    let key = k.open(sub, KeyAccess::READ);
+    let mut values: Vec<_> = key
+        .values()
+        .unwrap()
+        .into_iter()
+        .map(|v| (v.name, v.ty, v.data))
+        .collect();
+    values.sort();
+    (values, key.subkey_names().unwrap())
+}
+
+/// Undoes ops `ops` of session `id`, in that order, through the registry undo functions of `act_reg`,
+/// with a gate context given the journal's `validated` records, as an undo driver does; journals each
+/// undo and returns its result.
+fn undo_registry(
+    rig: &Rig,
+    id: &SessionId,
+    ops: impl IntoIterator<Item = u32>,
+) -> Vec<crate::act_reg::RegUndoResult> {
+    use crate::act_reg::{RegUndoPrepared, RegUndoResult, prepare_undo_reg, run_undo_reg};
+    let session = rig.session(id);
+    let mut journal = JournalWriter::open_append(&session).unwrap();
+    let state = journal.state().clone();
+    let scope = rig.roots.store_scope::<&Path>(id, &[]).unwrap();
+    let deny = DenyList::compile(&live_env(rig.roots.data_root().to_str().unwrap()));
+    let selected: Vec<ExecOp> = state
+        .ops()
+        .filter_map(|op| op.intent.as_ref().map(|intent| intent.exec_op.clone()))
+        .collect();
+    let mut ctx = GateCtx::new(deny, &selected, scope).unwrap();
+    for op in state.ops() {
+        if let Some(intent) = &op.intent {
+            ctx.record(&intent.exec_op, &op.validated(), 5_000).unwrap();
+        }
+    }
+    let mut results = Vec::new();
+    for n in ops {
+        let op = state.op(OpId(n)).unwrap();
+        let intent = op.intent.as_ref().expect("an op with an intent");
+        let result = match prepare_undo_reg(&ctx, &session, intent, op.outcome.as_ref()).unwrap() {
+            RegUndoPrepared::Decided(result) => {
+                match &result {
+                    RegUndoResult::Done { outcome, .. } => journal
+                        .undo_done_without_intent(OpId(n), outcome.clone())
+                        .unwrap(),
+                    RegUndoResult::Conflict { conflict, detail } => journal
+                        .undo_conflict_without_intent(OpId(n), conflict.clone(), detail.clone())
+                        .unwrap(),
+                }
+                result
+            }
+            RegUndoPrepared::Ready(inverse) => {
+                let token = journal.undo_intent(OpId(n)).unwrap();
+                let result = run_undo_reg(inverse, &token);
+                match &result {
+                    RegUndoResult::Done { outcome, .. } => {
+                        journal.undo_done(token, outcome.clone()).unwrap()
+                    }
+                    RegUndoResult::Conflict { conflict, detail } => journal
+                        .undo_conflict(token, conflict.clone(), detail.clone())
+                        .unwrap(),
+                }
+                result
+            }
+        };
+        results.push(result);
+    }
+    results
+}
+
+#[track_caller]
+fn assert_restored(results: &[crate::act_reg::RegUndoResult]) {
+    for result in results {
+        assert!(
+            matches!(
+                result,
+                crate::act_reg::RegUndoResult::Done {
+                    outcome: purge_model::exec::journal::UndoOutcome::Restored,
+                    ..
+                }
+            ),
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
+fn dependent_registry_items_run_in_one_execute_and_undo_in_reverse_order() {
+    let mut rig = Rig::new("reg-chain");
+    let k = TestKey::new();
+    let items = chain_plan(&k);
+    let before = (key_content(&k, "App"), key_content(&k, r"App\Sub"));
+    let seg_before = key_content(&k, "Seg");
+    let output = rig.run(preselected(items, Vec::new()));
+    assert_eq!(output.report.state, SessionState::Committed);
+    let read = rig.journal(&output.session);
+    assert_eq!(outcomes(&read), vec![Some(ItemOutcome::Done); 8]);
+    assert_report_is_the_journal(&output.report, &read);
+    assert!(!k.exists("App") && !k.exists("Seg"));
+
+    // Reverse op order: each key comes back before what was inside it.
+    assert_restored(&undo_registry(&rig, &output.session, (1..=8).rev()));
+    assert_eq!(
+        (key_content(&k, "App"), key_content(&k, r"App\Sub")),
+        before
+    );
+    assert_eq!(key_content(&k, "Seg"), seg_before);
+}
+
+#[test]
+fn an_outside_change_inside_a_chain_is_still_refused_in_one_execute() {
+    let mut rig = Rig::new("reg-chain-outside");
+    let k = TestKey::new();
+    let items = chain_plan(&k);
+    // Before the key ops act, someone else adds a value to each key.
+    let progress = |event: &Progress<'_>| match event {
+        Progress::ItemStarting { op: OpId(4), .. } => {
+            k.set("App", "late", REG_SZ, &utf16z("late"));
+        }
+        Progress::ItemStarting { op: OpId(8), .. } => {
+            k.set("Seg", "late", REG_SZ, &utf16z("late"));
+        }
+        _ => {}
+    };
+    let output = rig
+        .try_run(preselected(items, Vec::new()), Some(&progress))
+        .unwrap();
+    let read = rig.journal(&output.session);
+    let mut expected = vec![Some(ItemOutcome::Done); 8];
+    expected[3] = Some(ItemOutcome::Skipped {
+        reason: SkipReason::NoLongerEmpty,
+    });
+    expected[7] = Some(ItemOutcome::Skipped {
+        reason: SkipReason::ChangedSinceScan,
+    });
+    assert_eq!(outcomes(&read), expected);
+    assert_eq!(k.get("App", "late"), Some((REG_SZ, utf16z("late"))));
+    assert_eq!(k.get("Seg", "late"), Some((REG_SZ, utf16z("late"))));
+    assert_eq!(k.get("Seg", "Stays"), Some((REG_SZ, utf16z("s"))));
+}
+
+/// A run stopped in the middle of a chain: one op's intent is open (the action ran, no `done`), and
+/// recovery ends it through `journal_mut` after the resume. The ops after it are judged with the effects
+/// of every completed op, the one recovery ended included.
+#[test]
+fn a_chain_resumed_in_the_middle_completes() {
+    let mut rig = Rig::new("reg-chain-resume");
+    let k = TestKey::new();
+    let items = chain_plan(&k);
+    let before = (key_content(&k, "App"), key_content(&k, r"App\Sub"));
+    let request = preselected(items, Vec::new());
+
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    run.validate().unwrap();
+    assert_eq!(
+        run.run_item(OpId(1)).unwrap(),
+        ItemStep::Finished(ItemOutcome::Done)
+    );
+    // Op 2 acts after its intent is durable, and the run stops before its `done`.
+    let RegPrepared::Ready(action) =
+        prepare_reg(&run.ctx, &run.session, OpId(2), run.settings.key_limit).unwrap()
+    else {
+        panic!("op 2 was decided");
+    };
+    let token = run.ledger.intent(action.intent().clone()).unwrap();
+    assert_eq!(act_reg(action, &token).outcome, ItemOutcome::Done);
+    drop(token);
+    let id = run.session().id().clone();
+    drop(run);
+    assert_eq!(k.get("App", "b"), None);
+
+    let session = rig.session(&id);
+    let copy = read_scan_copy(&session).unwrap();
+    let mut run = Run::resume(rig.env(None), session, &copy).unwrap();
+    assert_eq!(run.run_item(OpId(2)).unwrap(), ItemStep::OpenIntent);
+    // Recovery found the value gone and ends the open intent.
+    let token = run.journal_mut().resume_intent(OpId(2)).unwrap();
+    run.journal_mut().done(token, ItemOutcome::Done).unwrap();
+    for n in 3..=8 {
+        assert_eq!(
+            run.run_item(OpId(n)).unwrap(),
+            ItemStep::Finished(ItemOutcome::Done),
+            "op {n}"
+        );
+    }
+    let output = run.finish();
+    assert_eq!(output.report.state, SessionState::Committed);
+    assert!(!k.exists("App") && !k.exists("Seg"));
+
+    assert_restored(&undo_registry(&rig, &id, (1..=8).rev()));
+    assert_eq!(
+        (key_content(&k, "App"), key_content(&k, r"App\Sub")),
+        before
+    );
+}

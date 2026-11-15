@@ -48,6 +48,13 @@
 //!    `regdelete.mid` and verify).
 //! 6. **Done** (`done.before`, `done` with the token; `group_end` after 64 intents).
 //!
+//! Registry items of one run may depend on each other (a key deleted if empty after the values and
+//! subkeys inside it, a key tree after separate items inside it). The gate context is told the run's
+//! ops before the validate pass (`GateCtx::set_run_ops`) and every completed registry op right after
+//! its `done` (`GateCtx::note_done`); a resumed run notes the journal's completed ops when it is made,
+//! and again after recovery wrote through [`Run::journal_mut`] (`GateCtx::note_journal`). The act-time
+//! gate then accepts exactly the changes those own ops explain; see `crate::gate`.
+//!
 //! A file that stays locked goes to the ladder ([`crate::locked`]): Restart Manager names the holders
 //! (nothing is closed), then the item is held for the next run (`HeldRetry`) or a boot-time move into
 //! quarantine is registered (`PendingReboot`; `bootmove.registered` before its flushed `done`). A
@@ -726,6 +733,17 @@ pub struct Run<'a> {
     budget: Budget,
     data_volume: Option<DataVolume>,
     prepared: Option<Prepared>,
+    /// The journal was handed out ([`Run::journal_mut`]) and may hold `done` records the gate context
+    /// has not noted: [`Run::run_item`] notes the journal's completed ops again before the next item.
+    journal_lent: bool,
+}
+
+/// The run's ops with their op ids, for [`GateCtx::set_run_ops`].
+fn run_ops(plan: &BoundPlan) -> Vec<(OpId, ExecOp)> {
+    plan.items()
+        .iter()
+        .filter_map(|item| Some((item.op, item.exec_op.clone()?)))
+        .collect()
 }
 
 impl<'a> Run<'a> {
@@ -754,7 +772,8 @@ impl<'a> Run<'a> {
             write_scan_copy(&session, plan.scan())?;
             let volume_roots: Vec<&Path> = volumes.iter().map(|(v, _)| v.root.as_path()).collect();
             let scope = env.roots.store_scope(session.id(), &volume_roots)?;
-            let ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
+            let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
+            ctx.set_run_ops(run_ops(&plan));
             let header = Header {
                 schema: JournalSchema,
                 session: session.id().clone(),
@@ -792,6 +811,7 @@ impl<'a> Run<'a> {
             ledger: Ledger { journal, notes },
             budget,
             prepared: None,
+            journal_lent: false,
         })
     }
 
@@ -842,6 +862,7 @@ impl<'a> Run<'a> {
             .collect();
         let scope = env.roots.store_scope(session.id(), &volume_roots)?;
         let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
+        ctx.set_run_ops(run_ops(&plan));
         let mut notes = RunNotes::default();
         let data_volume = data_volume(env.roots);
         let index = read_index_for_cap(env.roots, &mut notes.warnings)?;
@@ -859,6 +880,9 @@ impl<'a> Run<'a> {
                 }
             }
         }
+        // What the run's completed registry ops did to the keys later ops are bound to, from their
+        // journalled intent and done records (`GateCtx::note_done`).
+        ctx.note_journal(state);
         Ok(Run {
             data_volume,
             env,
@@ -869,6 +893,7 @@ impl<'a> Run<'a> {
             ledger: Ledger { journal, notes },
             budget,
             prepared: None,
+            journal_lent: false,
         })
     }
 
@@ -898,8 +923,11 @@ impl<'a> Run<'a> {
     }
 
     /// The journal writer, for recovery to end an op whose intent was open
-    /// (`JournalWriter::resume_intent`, then `done`).
+    /// (`JournalWriter::resume_intent`, then `done`). The next [`Run::run_item`] hands the `done` records
+    /// written through it to the gate context ([`GateCtx::note_journal`]), so an op recovery completed
+    /// counts as this run's own change for the items after it.
     pub fn journal_mut(&mut self) -> &mut JournalWriter {
+        self.journal_lent = true;
         &mut self.ledger.journal
     }
 
@@ -1020,6 +1048,9 @@ impl<'a> Run<'a> {
     /// module docs). Returns `Err` only when the run must stop: the caller then calls [`Run::abort`]
     /// and runs no further item.
     pub fn run_item(&mut self, op: OpId) -> Result<ItemStep, Abort> {
+        if std::mem::take(&mut self.journal_lent) {
+            self.ctx.note_journal(self.ledger.journal.state());
+        }
         let (item, standing) = match self.state().op(op) {
             None => return Ok(ItemStep::NotInRun),
             Some(state) => (state.item.clone(), state.status()),
@@ -1267,7 +1298,13 @@ impl<'a> Run<'a> {
                 let token = self.ledger.intent(action.intent().clone())?;
                 fault::point(fault::ACT_BEFORE);
                 let result = act_reg(action, &token);
-                self.ledger.done(token, result.outcome, result.detail)
+                let outcome = self.ledger.done(token, result.outcome, result.detail)?;
+                // What the op did to its key (or its parent) is this run's own change from now on, for
+                // the items after it that are bound to that key.
+                if let Some(state) = self.ledger.journal.state().op(op) {
+                    self.ctx.note_done(state);
+                }
+                Ok(outcome)
             }
         }
     }
