@@ -2346,12 +2346,12 @@
         },
         {
           "k": "file",
-          "path": "System.Collections.Hashtable\\expiry\\payload\\expiry-marker.txt",
+          "path": "C:\\Program Files\\PurgeTrapApp\\expiry\\payload\\expiry-marker.txt",
           "text": "PURGE-EXPIRY-MARKER m2-traps\n"
         },
         {
           "k": "file",
-          "path": "System.Collections.Hashtable\\expiry\\payload\\own.txt",
+          "path": "C:\\Program Files\\PurgeTrapApp\\expiry\\payload\\own.txt",
           "text": "own\n"
         }
       ],
@@ -2360,7 +2360,7 @@
           "id": "expiry-junction.dir",
           "target": {
             "type": "Path",
-            "path": "System.Collections.Hashtable\\expiry\\payload"
+            "path": "C:\\Program Files\\PurgeTrapApp\\expiry\\payload"
           },
           "action": "Quarantine",
           "group": "main",
@@ -2375,7 +2375,7 @@
         }
       ],
       "fs_roots": [
-        "System.Collections.Hashtable\\expiry",
+        "C:\\Program Files\\PurgeTrapApp\\expiry",
         "C:\\PurgeCanary\\expiry"
       ],
       "reg_roots": [],

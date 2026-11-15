@@ -994,18 +994,18 @@ function Get-M2TrapTable([string]$Sid, [string]$LocalAppData) {
     }
 
     # --- swap-after-validate races -------------------------------------------------------------------
-    foreach ($r in @(
+    foreach ($race in @(
             @{ id = 'race-validate-open'; dir = 'race-a'; group = 'race-a'; pause = 'intent.flushed:8000'; expect = (EBlocked 'ReparseMismatch'); accept = @((ESkipped 'ChangedSinceScan'), (EDone 'the original directory object moved through the handle; the junction and its target untouched')) },
             @{ id = 'race-open-act'; dir = 'race-b'; group = 'race-b'; pause = 'act.before:8000'; expect = (EDone 'the handle opened before the swap moves the original directory object; the planted junction and its target are untouched'); accept = @((EBlocked 'ReparseMismatch'), (ESkipped 'ChangedSinceScan')) })) {
-        Add-Trap $r.id 'G1' "A validated directory is replaced by a junction to a canary while the engine is paused at $($r.pause) (PURGE_FAULT_PAUSE; separate exec, group $($r.group))." @(
-            (O 'canary-file' @{ id = "$($r.dir).own1"; path = "$C\$($r.dir)\target\own1.txt" }),
+        Add-Trap $race.id 'G1' "A validated directory is replaced by a junction to a canary while the engine is paused at $($race.pause) (PURGE_FAULT_PAUSE; separate exec, group $($race.group))." @(
+            (O 'canary-file' @{ id = "$($race.dir).own1"; path = "$C\$($race.dir)\target\own1.txt" }),
             (O 'dir' @{ path = $U }),
             (O 'file-sddl' @{ path = $U; sddl = $M2SddlUwDir }),
-            (O 'file' @{ path = "$U\$($r.dir)\payload\own1.txt"; text = "payload`n" })
-        ) @((TItem "$($r.id).dir" (TPath "$U\$($r.dir)\payload") 'Quarantine' $r.expect $r.group $r.accept)) @("$U\$($r.dir)", "$C\$($r.dir)") @() @{
+            (O 'file' @{ path = "$U\$($race.dir)\payload\own1.txt"; text = "payload`n" })
+        ) @((TItem "$($race.id).dir" (TPath "$U\$($race.dir)\payload") 'Quarantine' $race.expect $race.group $race.accept)) @("$U\$($race.dir)", "$C\$($race.dir)") @() @{
             helper = [ordered]@{
-                action = 'swap'; fault_pause = $r.pause; env = [ordered]@{ PURGE_FAULT_PAUSE = $r.pause }
-                dir = "$U\$($r.dir)\payload"; link_to = "$C\$($r.dir)\target"
+                action = 'swap'; fault_pause = $race.pause; env = [ordered]@{ PURGE_FAULT_PAUSE = $race.pause }
+                dir = "$U\$($race.dir)\payload"; link_to = "$C\$($race.dir)\target"
                 trigger = 'a line of the newest sessions\*\journal.jsonl that names the item path and contains "intent"'
                 when = 'start before exec of this group'
             }

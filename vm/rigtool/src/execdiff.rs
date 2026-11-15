@@ -1,10 +1,1856 @@
-//! Executed-effects check: escape and collateral (M2-RIG-EXECDIFF).
+//! `rigtool execdiff`: the executed-effects check of an exec run (M2-RIG-EXECDIFF; ENGINE_PLAN.md §1.3
+//! `guard_escapes`, `collateral`; §10.2).
 //!
-//! Stub from M2-S0; the owning package fills it.
+//! Inputs: snapshots before and after the exec (`snap`), the session's `journal.jsonl` and `report.json`
+//! (`purge.exec/1`), the trap / fixture manifests (`purge.rig.m2traps/*`, `purge.rig.m2fixtures/*`), optionally
+//! the ambient set and deep snapshots before and after.
+//!
+//! Definitions (all counts in the output's `counts`):
+//! - **collateral**: a record of `diff(before, after)` that was removed (`-`) or changed (`~`) and is not
+//!   authorised. Authorised are: (op) a record covered by the target of a journal op whose effective outcome is
+//!   `Done` or `Vanished`: a path at or inside a `QuarantineMove` target, the exact `RemoveDirIfEmpty`
+//!   directory, a key or value at or inside a `DeleteKeyTree` key, the exact `DeleteKeyIfEmpty` key, the exact
+//!   `DeleteValue` value (removed) and the exact `EditSegment` value (changed); (store) Purge's own stores:
+//!   `C:\ProgramData\Purge`, the header's per-volume quarantine directories and any `X:\.purge-q`; (rig) the rig's
+//!   own files (`items::RigRules`); (pending-rename) `Session Manager|PendingFileRenameOperations` when an op was
+//!   left `PendingReboot` or reconciled; (ambient) the ambient set; (parent) a directory whose only change is
+//!   its LastWriteTime, or a key whose only changes are LastWriteTime / value count / subkey count, when an
+//!   authorised record was added or removed directly inside it.
+//! - **unexplained**: an added (`+`) record that is not authorised. Reported, never failing on its own.
+//! - **guard_escapes**: canaries of the manifests (protected objects) that are missing or changed after the run:
+//!   by the snapshots (file: kind, size, attributes, LastWriteTime, reparse tag; key: every value's type and data
+//!   hash; value: type and data hash) and, when given, by the deep snapshots (file: content SHA-256 equal to the
+//!   manifest's, no reparse tag, and with `--deep-before` every other deep field except LastWriteTime and the
+//!   8.3 name; key and value: type, length and SHA-256 of every value, link flag, SDDL). A canary that no input
+//!   can verify is `unverified`, which also fails the run.
+//! - **missing_effects**: journal ops with effective outcome `Done` whose effect does not show in the after
+//!   snapshot (the path, key or value is still there; an edited value has the same data).
+//! - **changed_not_done**: ops with any other outcome whose target is gone or changed anyway (unless a removed
+//!   op above it took it).
+//! - **trap_mismatches**: trap items of the selected groups whose outcome is neither the manifest's `expect`
+//!   nor one of its `accept` outcomes, or that the run did not contain. An item whose `condition` the build
+//!   record shows as unmet is `not-scored`.
+//! - **inconsistencies**: report and journal disagree (op set, outcomes without a reconcile, counts, state).
+//!
+//! `ok` = guard_escapes, collateral, missing_effects, changed_not_done, trap_mismatches, unverified_canaries and
+//! inconsistencies all zero. Exit code 1 otherwise.
 
-use crate::err::{Result, bail};
+use crate::ambient::AmbientSet;
+use crate::canon;
+use crate::deep::{DeepDoc, FileRec, KeyRec as DeepKey};
+use crate::diff::{self, Change};
+use crate::err::{Context, Result, bail};
+use crate::fidelity::journal::{
+    Counts as OutcomeCounts, ExecOp, JOp, Journal, Outcome, parse_journal, read_journal_text,
+};
+use crate::fidelity::read_deep;
+use crate::items::RigRules;
+use crate::jsonio;
+use crate::snap::{LoadOpts, Snap};
+use crate::target::Target;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
 
-/// `rigtool execdiff`: not implemented yet.
-pub fn cmd_execdiff(_args: &[String]) -> Result<()> {
-    bail!("execdiff is not implemented yet")
+pub const SCHEMA: &str = "purge.rig.execdiff/1";
+/// purge-model `ExecReportSchema`.
+pub const EXEC_REPORT_SCHEMA: &str = "purge.exec/1";
+/// Purge's own store (install\install.ps1).
+pub const PURGE_STORE: &str = "C:\\ProgramData\\Purge";
+const SESSION_MANAGER: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager";
+const PFRO: &str = "PendingFileRenameOperations";
+
+pub struct ExecdiffArgs {
+    pub before: PathBuf,
+    pub after: PathBuf,
+    pub journal: PathBuf,
+    pub report: PathBuf,
+    pub traps: Vec<PathBuf>,
+    pub ambient: Option<PathBuf>,
+    pub deep_before: Option<PathBuf>,
+    pub deep_after: Option<PathBuf>,
+    /// Trap item groups to score; empty = `main`.
+    pub groups: Vec<String>,
+    pub sid: Option<String>,
+    pub out: PathBuf,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Exec report (purge-model `exec::session::ExecReport`)
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Deserialize, Clone, Debug)]
+#[allow(dead_code)] // fields are read to check the document's shape
+pub struct ExecReport {
+    pub schema: String,
+    pub session: String,
+    pub app: String,
+    pub plan_hash: String,
+    pub selection_hash: String,
+    pub state: String,
+    pub started: u64,
+    pub finished: u64,
+    pub items: Vec<ReportItem>,
+    pub counts: OutcomeCounts,
+    pub backup_bytes: u64,
+    pub pending_reboot: bool,
+    pub restore_point: RestorePoint,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[allow(dead_code)] // fields are read to check the document's shape
+pub struct ReportItem {
+    pub item: String,
+    pub op: u32,
+    pub target: Target,
+    pub exec_op: ExecOp,
+    pub outcome: Outcome,
+    #[serde(default)]
+    pub backup_bytes: u64,
+    #[serde(default)]
+    pub lockers: Vec<Value>,
+}
+
+/// purge-model `RestorePointOutcome` (tagged by `"kind"`).
+#[derive(Deserialize, Clone, Debug)]
+pub struct RestorePoint {
+    pub kind: String,
+}
+
+pub fn parse_report(text: &str) -> Result<ExecReport> {
+    let v: Value = serde_json::from_str(text)?;
+    let schema = v.get("schema").and_then(Value::as_str).unwrap_or("");
+    if schema != EXEC_REPORT_SCHEMA {
+        bail!("report schema {schema:?}, want {EXEC_REPORT_SCHEMA}");
+    }
+    Ok(serde_json::from_value(v)?)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Trap / fixture manifests
+// ---------------------------------------------------------------------------------------------
+
+/// An expected outcome of a trap item (`EBlocked`, `ESkipped`, `EOutcome` in m2-traps.ps1).
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct Expect {
+    pub outcome: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub blocker: Option<String>,
+}
+
+impl Expect {
+    pub fn matches(&self, o: &Outcome) -> bool {
+        self.outcome == o.name()
+            && self.reason.as_deref().is_none_or(|r| o.reason() == Some(r))
+            && self.blocker.as_deref().is_none_or(|b| o.blocker() == Some(b))
+    }
+    pub fn summary(&self) -> String {
+        let mut s = self.outcome.clone();
+        for x in [&self.reason, &self.blocker].into_iter().flatten() {
+            s.push('/');
+            s.push_str(x);
+        }
+        s
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TrapItem {
+    pub id: String,
+    pub group: String,
+    pub target: Target,
+    pub action: String,
+    pub expect: Expect,
+    pub accept: Vec<Expect>,
+    pub condition: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuildObj {
+    pub k: String,
+    pub path: String,
+    pub ok: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Trap {
+    pub id: String,
+    pub gate: String,
+    /// `None` = no build record (dry-run manifest).
+    pub built: Option<bool>,
+    pub build_objects: Vec<BuildObj>,
+    pub items: Vec<TrapItem>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Canary {
+    pub id: String,
+    pub trap: String,
+    /// `file`, `regkey` or `regvalue`.
+    pub kind: String,
+    pub path: String,
+    pub name: Option<String>,
+    pub sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Manifest {
+    pub source: String,
+    pub dry_run: bool,
+    pub traps: Vec<Trap>,
+    pub canaries: Vec<Canary>,
+}
+
+fn s_of(v: &Value, k: &str) -> Option<String> {
+    v.get(k).and_then(Value::as_str).map(str::to_string)
+}
+
+/// Parses a manifest. `{user-sid}` placeholders (dry-run manifests) are replaced by `sid` when known.
+pub fn parse_manifest(text: &str, source: &str, sid: Option<&str>) -> Result<(Manifest, Vec<String>)> {
+    let mut warnings = Vec::new();
+    let text = match sid {
+        Some(s) => text.replace("{user-sid}", s),
+        None => text.to_string(),
+    };
+    let v: Value = serde_json::from_str(&text)?;
+    let schema = v.get("schema").and_then(Value::as_str).unwrap_or("");
+    if !schema.starts_with("purge.rig.m2traps/") && !schema.starts_with("purge.rig.m2fixtures/") {
+        bail!("{source}: schema {schema:?} is not an m2 trap or fixture manifest");
+    }
+    let mut m = Manifest {
+        source: source.to_string(),
+        dry_run: v.get("dry_run").and_then(Value::as_bool).unwrap_or(false),
+        ..Default::default()
+    };
+    for t in v.get("traps").and_then(Value::as_array).into_iter().flatten() {
+        let id = s_of(t, "id").context("traps[].id")?;
+        let build = t.get("build").filter(|b| b.is_object());
+        let mut trap = Trap {
+            gate: s_of(t, "gate").unwrap_or_default(),
+            built: build.map(|b| b.get("ok").and_then(Value::as_bool).unwrap_or(false)),
+            build_objects: build
+                .and_then(|b| b.get("objects"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|o| BuildObj {
+                    k: s_of(o, "k").unwrap_or_default(),
+                    path: s_of(o, "path").unwrap_or_default(),
+                    ok: o.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                })
+                .collect(),
+            items: Vec::new(),
+            id: id.clone(),
+        };
+        for it in t.get("items").and_then(Value::as_array).into_iter().flatten() {
+            let iid = s_of(it, "id").with_context(|| format!("trap {id}: items[].id"))?;
+            let target: Target = serde_json::from_value(it.get("target").cloned().unwrap_or(Value::Null))
+                .with_context(|| format!("trap item {iid}: target"))?;
+            let expect: Expect = serde_json::from_value(it.get("expect").cloned().unwrap_or(Value::Null))
+                .with_context(|| format!("trap item {iid}: expect"))?;
+            let accept: Vec<Expect> = match it.get("accept") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(a) => serde_json::from_value(a.clone()).with_context(|| format!("trap item {iid}: accept"))?,
+            };
+            if target.path().contains("{user-sid}") || target.path().contains("{localappdata}") {
+                warnings.push(format!("{source}: trap item {iid}: unresolved placeholder in {}", target.path()));
+            }
+            trap.items.push(TrapItem {
+                id: iid,
+                group: s_of(it, "group").unwrap_or_else(|| "main".into()),
+                target,
+                action: s_of(it, "action").unwrap_or_default(),
+                expect,
+                accept,
+                condition: s_of(it, "condition"),
+            });
+        }
+        m.traps.push(trap);
+    }
+    for c in v.get("canaries").and_then(Value::as_array).into_iter().flatten() {
+        let id = s_of(c, "id").context("canaries[].id")?;
+        let kind = s_of(c, "kind").with_context(|| format!("canary {id}: kind"))?;
+        if !matches!(kind.as_str(), "file" | "regkey" | "regvalue") {
+            bail!("{source}: canary {id}: unknown kind {kind:?}");
+        }
+        let path = s_of(c, "path").with_context(|| format!("canary {id}: path"))?;
+        let path = if kind == "file" { canon::canon_path(&path) } else { canon::canon_reg(&path, sid) };
+        if path.contains("{user-sid}") {
+            warnings.push(format!("{source}: canary {id}: unresolved placeholder in {path}"));
+        }
+        m.canaries.push(Canary {
+            trap: s_of(c, "trap").unwrap_or_default(),
+            name: s_of(c, "name"),
+            sha256: s_of(c, "sha256"),
+            id,
+            kind,
+            path,
+        });
+    }
+    Ok((m, warnings))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Output
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+pub struct Inputs {
+    pub before: String,
+    pub after: String,
+    pub journal: String,
+    pub report: String,
+    pub traps: Vec<String>,
+    pub ambient: Option<String>,
+    pub deep_before: Option<String>,
+    pub deep_after: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+pub struct Counts {
+    pub guard_escapes: u64,
+    pub collateral: u64,
+    pub unexplained: u64,
+    pub missing_effects: u64,
+    pub changed_not_done: u64,
+    pub trap_mismatches: u64,
+    pub not_scored: u64,
+    pub unverified_canaries: u64,
+    pub unverified_effects: u64,
+    pub inconsistencies: u64,
+    /// Records of diff(before, after).
+    pub diff_records: u64,
+    /// Authorised diff records by reason: op, store, rig, pending-rename, ambient, parent.
+    pub authorised: BTreeMap<String, u64>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct DiffRow {
+    /// `-F`, `~K`, `+V`, ...
+    pub change: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct CanaryRow {
+    pub id: String,
+    pub trap: String,
+    pub kind: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `intact`, `changed`, `missing` or `unverified`.
+    pub verdict: String,
+    /// Inputs that verified it intact (`snap`, `deep`).
+    pub verified_by: Vec<String>,
+    pub evidence: Vec<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ItemRow {
+    pub id: String,
+    pub group: String,
+    pub target: String,
+    pub action: String,
+    pub expect: String,
+    pub accept: Vec<String>,
+    pub op: Option<u32>,
+    pub candidate: Option<String>,
+    pub actual: Option<String>,
+    /// `pass`, `accepted`, `mismatch`, `not-run`, `not-built` or `not-scored`.
+    pub verdict: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    /// The op's effect verdict (see `effects`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct TrapRow {
+    pub id: String,
+    pub gate: String,
+    /// The manifest the trap comes from.
+    pub manifest: String,
+    /// `pass`, `fail` or `not-scored`.
+    pub verdict: String,
+    pub canaries: u64,
+    pub canaries_intact: u64,
+    pub guard_escapes: u64,
+    pub canaries_unverified: u64,
+    pub items: Vec<ItemRow>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct EffectRow {
+    pub op: u32,
+    pub item: String,
+    pub kind: Option<String>,
+    pub target: Option<String>,
+    pub outcome: Option<String>,
+    /// `ok`, `missing` (Done, not visible), `changed` (not Done, changed anyway) or `unverified`.
+    pub verdict: String,
+    pub detail: String,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ExecdiffReport {
+    pub schema: String,
+    pub inputs: Inputs,
+    pub groups: Vec<String>,
+    pub sid: Option<String>,
+    pub session: String,
+    pub plan_hash: String,
+    pub journal_state: String,
+    /// The report's restore point outcome kind.
+    pub restore_point: String,
+    pub ok: bool,
+    pub counts: Counts,
+    pub canaries: Vec<CanaryRow>,
+    pub traps: Vec<TrapRow>,
+    pub collateral: Vec<DiffRow>,
+    pub unexplained: Vec<DiffRow>,
+    pub effects: Vec<EffectRow>,
+    pub inconsistencies: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Check
+// ---------------------------------------------------------------------------------------------
+
+pub struct Ctx<'a> {
+    pub a: &'a Snap,
+    pub b: &'a Snap,
+    pub journal: &'a Journal,
+    pub report: &'a ExecReport,
+    pub manifests: &'a [Manifest],
+    pub ambient: Option<&'a AmbientSet>,
+    pub deep_a: Option<&'a DeepDoc>,
+    pub deep_b: Option<&'a DeepDoc>,
+    /// Empty = `main`.
+    pub groups: &'a [String],
+    pub sid: Option<&'a str>,
+}
+
+/// An op as the checks use it: canonical target, ExecOp kind (journal intent, else the report's exec_op),
+/// effective outcome.
+struct OpT<'a> {
+    j: &'a JOp,
+    kind: Option<String>,
+    target: Option<Target>,
+}
+
+impl OpT<'_> {
+    fn removed(&self) -> bool {
+        self.j.removed()
+    }
+
+    /// Does this op's target cover diff record `c` (see the module comment)?
+    fn covers(&self, c: &Change) -> bool {
+        let (Some(kind), Some(t)) = (self.kind.as_deref(), self.target.as_ref()) else { return false };
+        if c.op == '+' {
+            return false;
+        }
+        match (c.rec, t) {
+            ('D' | 'F', Target::Path { path }) => match kind {
+                "QuarantineMove" => canon::is_under_or_eq(&c.path, path),
+                "RemoveDirIfEmpty" => canon::ci_eq(&c.path, path),
+                _ => false,
+            },
+            ('K', Target::RegKey { path }) => match kind {
+                "DeleteKeyTree" => canon::is_under_or_eq(&c.path, path),
+                "DeleteKeyIfEmpty" => canon::ci_eq(&c.path, path),
+                _ => false,
+            },
+            ('V', Target::RegKey { path }) => match kind {
+                "DeleteKeyTree" => canon::is_under_or_eq(&c.path, path),
+                "DeleteKeyIfEmpty" => canon::ci_eq(&c.path, path),
+                _ => false,
+            },
+            ('V', Target::RegValue { path, name }) => {
+                kind == "DeleteValue"
+                    && c.op == '-'
+                    && canon::ci_eq(&c.path, path)
+                    && canon::ci_eq(c.name.as_deref().unwrap_or(""), name)
+            }
+            ('V', Target::RegMultiSzSegment { path, name, .. }) => {
+                kind == "EditSegment"
+                    && c.op == '~'
+                    && canon::ci_eq(&c.path, path)
+                    && canon::ci_eq(c.name.as_deref().unwrap_or(""), name)
+            }
+            _ => false,
+        }
+    }
+}
+
+fn is_purge_q(p: &str) -> bool {
+    let b = p.as_bytes();
+    if b.len() < 11 || !b[0].is_ascii_alphabetic() || &b[1..3] != b":\\" {
+        return false;
+    }
+    let rest = &p[3..];
+    rest.len() >= 8 && rest[..8].eq_ignore_ascii_case(".purge-q") && (rest.len() == 8 || rest.as_bytes()[8] == b'\\')
+}
+
+fn row_of(c: &Change) -> DiffRow {
+    DiffRow {
+        change: format!("{}{}", c.op, c.rec),
+        path: c.path.clone(),
+        name: c.name.clone(),
+        changes: c.changes.clone(),
+    }
+}
+
+/// The diff record as a target, for the ambient matcher and the rig rules.
+fn target_of(c: &Change) -> Target {
+    match c.rec {
+        'D' | 'F' => Target::Path { path: c.path.clone() },
+        'K' => Target::RegKey { path: c.path.clone() },
+        _ if c.op == '~' => Target::RegValueChanged {
+            path: c.path.clone(),
+            name: c.name.clone().unwrap_or_default(),
+            before: String::new(),
+            after: String::new(),
+        },
+        _ => Target::RegValue { path: c.path.clone(), name: c.name.clone().unwrap_or_default() },
+    }
+}
+
+fn only_changes(c: &Change, prefixes: &[&str]) -> bool {
+    !c.changes.is_empty() && c.changes.iter().all(|x| prefixes.iter().any(|p| x.starts_with(p)))
+}
+
+enum Src {
+    Intact,
+    Changed(Vec<String>),
+    Missing(String),
+    Unverified(String),
+}
+
+fn canary_snap(c: &Canary, a: &Snap, b: &Snap) -> Src {
+    match c.kind.as_str() {
+        "file" => {
+            let Some(ra) = a.path(&c.path) else {
+                return Src::Unverified(if a.captures_path(&c.path) {
+                    "snap: absent in the before snapshot".into()
+                } else {
+                    "snap: not captured by the before snapshot".into()
+                });
+            };
+            let Some(rb) = b.path(&c.path) else { return Src::Missing("snap: absent after".into()) };
+            let mut d = Vec::new();
+            if ra.dir != rb.dir {
+                d.push(format!("snap: kind {}->{}", if ra.dir { "D" } else { "F" }, if rb.dir { "D" } else { "F" }));
+            }
+            if ra.size != rb.size {
+                d.push(format!("snap: size {}->{}", ra.size, rb.size));
+            }
+            if ra.attrs != rb.attrs {
+                d.push(format!("snap: attrs {:x}->{:x}", ra.attrs, rb.attrs));
+            }
+            if ra.mtime != rb.mtime {
+                d.push(format!("snap: mtime {}->{}", ra.mtime, rb.mtime));
+            }
+            if ra.reparse != rb.reparse || rb.reparse != 0 {
+                d.push(format!("snap: reparse {:x}->{:x}", ra.reparse, rb.reparse));
+            }
+            if d.is_empty() { Src::Intact } else { Src::Changed(d) }
+        }
+        "regkey" => {
+            let Some(ka) = a.key(&c.path) else {
+                return Src::Unverified(if a.captures_key(&c.path) {
+                    "snap: absent in the before snapshot".into()
+                } else {
+                    "snap: not captured by the before snapshot".into()
+                });
+            };
+            if !a.values_known(&c.path) {
+                return Src::Unverified("snap: values not listed in the before snapshot".into());
+            }
+            let Some(kb) = b.key(&c.path) else { return Src::Missing("snap: key absent after".into()) };
+            if !b.values_known(&c.path) {
+                return Src::Unverified("snap: values not listed in the after snapshot".into());
+            }
+            let m = |k: &crate::snap::KeyRec| -> BTreeMap<String, (u32, u64)> {
+                k.values.iter().map(|v| (canon::fold(&v.name), (v.typ, v.hash))).collect()
+            };
+            let (va, vb) = (m(ka), m(kb));
+            let mut d = Vec::new();
+            for n in va.keys().chain(vb.keys()).collect::<std::collections::BTreeSet<_>>() {
+                match (va.get(n), vb.get(n)) {
+                    (Some(x), Some(y)) if x == y => {}
+                    (Some(_), None) => d.push(format!("snap: value {n:?} removed")),
+                    (None, Some(_)) => d.push(format!("snap: value {n:?} added")),
+                    _ => d.push(format!("snap: value {n:?} changed")),
+                }
+            }
+            if d.is_empty() { Src::Intact } else { Src::Changed(d) }
+        }
+        _ => {
+            let name = c.name.as_deref().unwrap_or("");
+            let Some(va) = a.value(&c.path, name) else {
+                return Src::Unverified(if a.values_known(&c.path) {
+                    "snap: absent in the before snapshot".into()
+                } else {
+                    "snap: not captured by the before snapshot".into()
+                });
+            };
+            let Some(vb) = b.value(&c.path, name) else { return Src::Missing("snap: value absent after".into()) };
+            if (va.typ, va.hash) == (vb.typ, vb.hash) {
+                Src::Intact
+            } else {
+                Src::Changed(vec![format!(
+                    "snap: type/data {}:{:016x} -> {}:{:016x}",
+                    va.typ, va.hash, vb.typ, vb.hash
+                )])
+            }
+        }
+    }
+}
+
+struct DeepIdx<'a> {
+    files: HashMap<String, &'a FileRec>,
+    keys: HashMap<String, &'a DeepKey>,
+}
+
+impl<'a> DeepIdx<'a> {
+    fn new(d: &'a DeepDoc) -> Self {
+        DeepIdx {
+            files: d.files.iter().map(|f| (canon::fold(&f.path), f)).collect(),
+            keys: d.keys.iter().map(|k| (canon::fold(&k.key), k)).collect(),
+        }
+    }
+}
+
+const DEEP_FILE_FIELDS: &[&str] = &[
+    "present",
+    "is_dir",
+    "attributes",
+    "size",
+    "sha256",
+    "streams",
+    "links",
+    "file_id",
+    "volume_serial",
+    "reparse_tag",
+    "link_target",
+    "reparse_sha256",
+    "owner",
+    "sddl",
+    "error",
+];
+
+fn field_diffs<T: Serialize>(a: &T, b: &T, fields: &[&str]) -> Vec<String> {
+    let (va, vb) = (serde_json::to_value(a).unwrap_or(Value::Null), serde_json::to_value(b).unwrap_or(Value::Null));
+    fields
+        .iter()
+        .filter(|f| va.get(**f) != vb.get(**f))
+        .map(|f| format!("deep: {f} {} -> {}", va.get(*f).unwrap_or(&Value::Null), vb.get(*f).unwrap_or(&Value::Null)))
+        .collect()
+}
+
+fn deep_values(k: &DeepKey) -> BTreeMap<String, (u32, u32, String)> {
+    k.values.iter().map(|v| (canon::fold(&v.name), (v.typ, v.len, v.sha256.clone()))).collect()
+}
+
+fn canary_deep(c: &Canary, da: Option<&DeepIdx>, db: &DeepIdx) -> Src {
+    let f = canon::fold(&c.path);
+    match c.kind.as_str() {
+        "file" => {
+            let Some(rb) = db.files.get(&f) else {
+                return Src::Unverified("deep: not in the after deep snapshot".into());
+            };
+            if let Some(e) = &rb.error {
+                return Src::Unverified(format!("deep: {e}"));
+            }
+            if !rb.present {
+                return Src::Missing("deep: absent after".into());
+            }
+            let mut d = Vec::new();
+            if rb.is_dir == Some(true) {
+                d.push("deep: is a directory".to_string());
+            }
+            if let Some(t) = &rb.reparse_tag {
+                d.push(format!("deep: reparse tag {t}"));
+            }
+            if let Some(want) = &c.sha256
+                && rb.sha256.as_deref() != Some(want.as_str())
+            {
+                d.push(format!("deep: sha256 {} (manifest {want})", rb.sha256.as_deref().unwrap_or("none")));
+            }
+            if let Some(ra) = da.and_then(|x| x.files.get(&f)) {
+                d.extend(field_diffs(*ra, *rb, DEEP_FILE_FIELDS));
+            }
+            if d.is_empty() { Src::Intact } else { Src::Changed(d) }
+        }
+        kind => {
+            let Some(kb) = db.keys.get(&f) else {
+                return Src::Unverified("deep: not in the after deep snapshot".into());
+            };
+            if let Some(e) = &kb.error {
+                return Src::Unverified(format!("deep: {e}"));
+            }
+            if !kb.present {
+                return Src::Missing("deep: key absent after".into());
+            }
+            let Some(ka) = da.and_then(|x| x.keys.get(&f)) else {
+                return Src::Unverified("deep: values need the before deep snapshot".into());
+            };
+            let mut d = Vec::new();
+            if kb.is_link == Some(true) {
+                d.push("deep: key is a registry link".into());
+            }
+            let (va, vb) = (deep_values(ka), deep_values(kb));
+            if kind == "regkey" {
+                if va != vb {
+                    d.push("deep: values differ".into());
+                }
+                d.extend(field_diffs(*ka, *kb, &["sddl", "is_link", "link_target", "class"]));
+            } else {
+                let n = canon::fold(c.name.as_deref().unwrap_or(""));
+                match (va.get(&n), vb.get(&n)) {
+                    (_, None) => return Src::Missing("deep: value absent after".into()),
+                    (Some(x), Some(y)) if x == y => {}
+                    (None, Some(_)) => return Src::Unverified("deep: value absent before".into()),
+                    _ => d.push("deep: value type/data differ".into()),
+                }
+            }
+            if d.is_empty() { Src::Intact } else { Src::Changed(d) }
+        }
+    }
+}
+
+/// Effect of one op in the snapshots.
+fn effect(o: &OpT, all: &[OpT], a: &Snap, b: &Snap) -> (String, String) {
+    let ok = |d: &str| ("ok".to_string(), d.to_string());
+    let unv = |d: &str| ("unverified".to_string(), d.to_string());
+    let (Some(kind), Some(t)) = (o.kind.as_deref(), o.target.as_ref()) else {
+        // No ExecOp known: neither journal intent nor report entry.
+        return unv("op kind unknown");
+    };
+    let outcome = o.j.outcome.as_deref();
+    // (present before, present after, verifiable, same data) of the target object.
+    let (pa, pb, verifiable, same) = match t {
+        Target::Path { path } => {
+            let (ra, rb) = (a.path(path), b.path(path));
+            let same = match (ra, rb) {
+                (Some(x), Some(y)) => {
+                    x.dir == y.dir
+                        && x.attrs == y.attrs
+                        && x.reparse == y.reparse
+                        && (x.dir || (x.size, x.mtime) == (y.size, y.mtime))
+                }
+                _ => false,
+            };
+            (ra.is_some(), rb.is_some(), ra.is_some() || a.captures_path(path), same)
+        }
+        Target::RegKey { path } => {
+            let (pa, pb) = (a.has_key(path), b.has_key(path));
+            (pa, pb, pa || a.captures_key(path), pa && pb)
+        }
+        Target::RegValue { path, name } | Target::RegMultiSzSegment { path, name, .. } => {
+            let (va, vb) = (a.value(path, name), b.value(path, name));
+            let same = matches!((va, vb), (Some(x), Some(y)) if (x.typ, x.hash) == (y.typ, y.hash));
+            (va.is_some(), vb.is_some(), va.is_some() || a.values_known(path), same)
+        }
+        Target::AppxPackage { .. } => return unv("packages are not in snapshots"),
+        _ => return unv("target kind not checked"),
+    };
+    if !verifiable {
+        return unv("not captured by the before snapshot");
+    }
+    // A removed op whose target covers this one (nested items).
+    let taken_by = || {
+        all.iter()
+            .filter(|x| x.j.op != o.j.op && x.removed())
+            .find(|x| {
+                let probe = Change {
+                    op: '-',
+                    rec: match t {
+                        Target::Path { .. } => 'F',
+                        Target::RegKey { .. } => 'K',
+                        _ => 'V',
+                    },
+                    path: t.path().to_string(),
+                    name: t.value_name().map(str::to_string),
+                    changes: Vec::new(),
+                };
+                x.covers(&probe)
+            })
+            .map(|x| x.j.op)
+    };
+    match outcome {
+        Some("Done") => {
+            if !pa {
+                return unv("absent in the before snapshot");
+            }
+            if kind == "EditSegment" {
+                return match (pb, same) {
+                    (true, false) => ok("value data changed"),
+                    (true, true) => ("missing".into(), "value data unchanged".into()),
+                    (false, _) => ("changed".into(), "the edited value is gone".into()),
+                };
+            }
+            if pb { ("missing".into(), "still present after".into()) } else { ok("gone after") }
+        }
+        Some("Vanished") => match (pa, pb) {
+            (_, true) => ok("vanished per journal, present after"),
+            (true, false) => match taken_by() {
+                Some(n) => ok(&format!("removed with op {n}")),
+                None => ok("present before, gone after (not by this op)"),
+            },
+            (false, false) => ok("absent before and after"),
+        },
+        _ => {
+            if pa == pb && (!pa || same) {
+                return ok("unchanged");
+            }
+            if pa
+                && !pb
+                && let Some(n) = taken_by()
+            {
+                return ok(&format!("removed with op {n}"));
+            }
+            let what = match (pa, pb) {
+                (true, false) => "gone after",
+                (false, true) => "appeared after",
+                _ => "changed",
+            };
+            ("changed".into(), format!("{what}, outcome {}", outcome.unwrap_or("none")))
+        }
+    }
+}
+
+pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
+    let (j, rep) = (cx.journal, cx.report);
+    let h = &j.header;
+    if h.session != rep.session {
+        bail!("journal session {} is not the report's {}", h.session, rep.session);
+    }
+    if h.plan_hash != rep.plan_hash || h.selection_hash != rep.selection_hash {
+        bail!("journal and report name different plan or selection hashes");
+    }
+    let mut warnings: Vec<String> = j.warnings.iter().map(|w| format!("journal: {w}")).collect();
+    let mut incons: Vec<String> = Vec::new();
+    if j.undo_records > 0 {
+        warnings.push(format!("journal holds {} undo records: execdiff checks an exec run", j.undo_records));
+    }
+
+    // Report vs journal.
+    let by_op: HashMap<u32, &ReportItem> = rep.items.iter().map(|i| (i.op, i)).collect();
+    for i in &rep.items {
+        match j.op(i.op) {
+            None => incons.push(format!("report item {} (op {}) is not in the journal", i.item, i.op)),
+            Some(o) => {
+                if o.item != i.item {
+                    incons.push(format!("op {}: journal item {}, report item {}", i.op, o.item, i.item));
+                }
+                if o.reconciled.is_empty()
+                    && let Some(d) = &o.done
+                    && d != &i.outcome
+                {
+                    incons.push(format!(
+                        "op {}: journal outcome {}, report {}",
+                        i.op,
+                        d.summary(),
+                        i.outcome.summary()
+                    ));
+                }
+                if let Some(e) = &o.exec_op
+                    && e != &i.exec_op
+                {
+                    incons.push(format!("op {}: journal exec_op {}, report {}", i.op, e.name(), i.exec_op.name()));
+                }
+            }
+        }
+    }
+    for o in &j.ops {
+        if !by_op.contains_key(&o.op) {
+            incons.push(format!("journal op {} (item {}) is not in the report", o.op, o.item));
+        }
+    }
+    let mut tally = OutcomeCounts::default();
+    for i in &rep.items {
+        tally.record(&i.outcome);
+    }
+    if tally != rep.counts {
+        incons.push(format!("report counts {:?} differ from its items {:?}", rep.counts, tally));
+    }
+    let state_ok = match rep.state.as_str() {
+        "Committed" => j.committed,
+        "Aborted" => j.aborted.is_some(),
+        _ => true,
+    };
+    if !state_ok {
+        incons.push(format!("report state {} but journal {}", rep.state, j.state()));
+    }
+
+    // Ops.
+    let ops: Vec<OpT> = j
+        .ops
+        .iter()
+        .map(|o| {
+            let ri = by_op.get(&o.op);
+            let kind = o.kind.clone().or_else(|| ri.map(|i| i.exec_op.name().to_string()));
+            let target = o
+                .exec_op
+                .as_ref()
+                .map(ExecOp::target)
+                .or_else(|| ri.map(|i| i.exec_op.target()))
+                .or_else(|| o.target.clone())
+                .map(|t| t.canonical(cx.sid));
+            OpT { j: o, kind, target }
+        })
+        .collect();
+    let pending = j.ops.iter().any(|o| {
+        o.outcome.as_deref() == Some("PendingReboot")
+            || o.done.as_ref().is_some_and(|d| d.name() == "PendingReboot")
+            || !o.reconciled.is_empty()
+    });
+    let mut stores: Vec<String> = vec![PURGE_STORE.to_string()];
+    stores.extend(h.volumes.iter().map(|v| canon::canon_path(&v.quarantine)));
+    let rig = RigRules::new(&[cx.a, cx.b]);
+
+    // Classify diff records.
+    let d = diff::diff(cx.a, cx.b);
+    let mut counts = Counts { diff_records: d.len() as u64, ..Default::default() };
+    let mut auth: Vec<Option<&'static str>> = Vec::with_capacity(d.len());
+    for c in &d {
+        let t = target_of(c);
+        let a: Option<&'static str> = if ops.iter().any(|o| o.removed() && o.covers(c)) {
+            Some("op")
+        } else if matches!(c.rec, 'D' | 'F')
+            && (stores.iter().any(|s| canon::is_under_or_eq(&c.path, s)) || is_purge_q(&c.path))
+        {
+            Some("store")
+        } else if rig.check(&t.canon_string()).is_some() {
+            Some("rig")
+        } else if pending
+            && c.rec == 'V'
+            && canon::ci_eq(&c.path, SESSION_MANAGER)
+            && canon::ci_eq(c.name.as_deref().unwrap_or(""), PFRO)
+        {
+            Some("pending-rename")
+        } else if cx.ambient.and_then(|m| m.union.matches(&t)).is_some() {
+            Some("ambient")
+        } else {
+            None
+        };
+        auth.push(a);
+    }
+    // Parents of authorised additions and removals.
+    let mut dir_parents: HashSet<String> = HashSet::new();
+    let mut key_parents: HashSet<String> = HashSet::new();
+    for (c, a) in d.iter().zip(&auth) {
+        if a.is_none() {
+            continue;
+        }
+        match (c.rec, c.op) {
+            ('D' | 'F', '+' | '-') => {
+                if let Some(p) = canon::parent(&c.path) {
+                    dir_parents.insert(canon::fold(p));
+                }
+            }
+            ('K', '+' | '-') => {
+                if let Some(p) = canon::parent(&c.path) {
+                    key_parents.insert(canon::fold(p));
+                }
+            }
+            ('V', _) => {
+                key_parents.insert(canon::fold(&c.path));
+            }
+            _ => {}
+        }
+    }
+    let mut collateral = Vec::new();
+    let mut unexplained = Vec::new();
+    for (c, a) in d.iter().zip(auth.iter_mut()) {
+        if a.is_none() && c.op == '~' {
+            let parent = match c.rec {
+                'D' => only_changes(c, &["mtime "]) && dir_parents.contains(&canon::fold(&c.path)),
+                'K' => {
+                    only_changes(c, &["lwt ", "n_values ", "n_subkeys "]) && key_parents.contains(&canon::fold(&c.path))
+                }
+                _ => false,
+            };
+            if parent {
+                *a = Some("parent");
+            }
+        }
+        match a {
+            Some(r) => *counts.authorised.entry(r.to_string()).or_default() += 1,
+            None if c.op == '+' => unexplained.push(row_of(c)),
+            None => collateral.push(row_of(c)),
+        }
+    }
+
+    // Effects.
+    let mut effects = Vec::new();
+    for o in &ops {
+        let (verdict, detail) = effect(o, &ops, cx.a, cx.b);
+        match verdict.as_str() {
+            "missing" => counts.missing_effects += 1,
+            "changed" => counts.changed_not_done += 1,
+            "unverified" => counts.unverified_effects += 1,
+            _ => {}
+        }
+        effects.push(EffectRow {
+            op: o.j.op,
+            item: o.j.item.clone(),
+            kind: o.kind.clone(),
+            target: o.target.as_ref().map(Target::canon_string),
+            outcome: o.j.outcome.clone(),
+            verdict,
+            detail,
+        });
+    }
+
+    // Canaries.
+    let da = cx.deep_a.map(DeepIdx::new);
+    let db = cx.deep_b.map(DeepIdx::new);
+    let mut canaries = Vec::new();
+    for m in cx.manifests {
+        for c in &m.canaries {
+            let mut srcs = vec![("snap", canary_snap(c, cx.a, cx.b))];
+            if let Some(db) = &db {
+                srcs.push(("deep", canary_deep(c, da.as_ref(), db)));
+            }
+            let mut evidence = Vec::new();
+            let mut verified_by = Vec::new();
+            let mut verdict = "unverified";
+            for (name, s) in srcs {
+                match s {
+                    Src::Intact => verified_by.push(name.to_string()),
+                    Src::Changed(v) => {
+                        evidence.extend(v);
+                        if verdict != "missing" {
+                            verdict = "changed";
+                        }
+                    }
+                    Src::Missing(e) => {
+                        evidence.push(e);
+                        verdict = "missing";
+                    }
+                    Src::Unverified(e) => evidence.push(e),
+                }
+            }
+            if verdict == "unverified" && !verified_by.is_empty() {
+                verdict = "intact";
+            }
+            match verdict {
+                "changed" | "missing" => counts.guard_escapes += 1,
+                "unverified" => counts.unverified_canaries += 1,
+                _ => {}
+            }
+            canaries.push(CanaryRow {
+                id: c.id.clone(),
+                trap: c.trap.clone(),
+                kind: c.kind.clone(),
+                path: c.path.clone(),
+                name: c.name.clone(),
+                verdict: verdict.to_string(),
+                verified_by,
+                evidence,
+            });
+        }
+    }
+
+    // Trap items.
+    let groups: Vec<String> = if cx.groups.is_empty() { vec!["main".into()] } else { cx.groups.to_vec() };
+    let eff_by_op: HashMap<u32, &EffectRow> = effects.iter().map(|e| (e.op, e)).collect();
+    let mut traps = Vec::new();
+    for m in cx.manifests {
+        for t in &m.traps {
+            let mut items = Vec::new();
+            for it in t.items.iter().filter(|i| groups.contains(&i.group)) {
+                let tc = it.target.canonical(cx.sid).canon_string();
+                let ri = rep.items.iter().find(|r| r.item == it.id).or_else(|| {
+                    rep.items.iter().find(|r| canon::ci_eq(&r.target.canonical(cx.sid).canon_string(), &tc))
+                });
+                let jo = ri.and_then(|r| j.op(r.op));
+                let actual: Option<Outcome> =
+                    jo.and_then(|o| o.effective.clone()).or_else(|| ri.map(|r| r.outcome.clone()));
+                // Condition: the build record's attribute / reparse-tag objects at or under the item's target.
+                let cond = it.condition.as_ref().map(|_| {
+                    let rel: Vec<&BuildObj> = t
+                        .build_objects
+                        .iter()
+                        .filter(|o| {
+                            matches!(o.k.as_str(), "attrs" | "cloud-tag")
+                                && canon::is_under_or_eq(&o.path, it.target.path())
+                        })
+                        .collect();
+                    if rel.is_empty() {
+                        "unknown"
+                    } else if rel.iter().all(|o| o.ok) {
+                        "met"
+                    } else {
+                        "unmet"
+                    }
+                });
+                let matched = actual.as_ref().map(|a| {
+                    if it.expect.matches(a) {
+                        "pass"
+                    } else if it.accept.iter().any(|e| e.matches(a)) {
+                        "accepted"
+                    } else {
+                        "mismatch"
+                    }
+                });
+                let verdict = if cond == Some("unmet") && matched != Some("pass") {
+                    "not-scored"
+                } else if !m.dry_run && t.built != Some(true) {
+                    "not-built"
+                } else {
+                    matched.unwrap_or("not-run")
+                };
+                match verdict {
+                    "mismatch" | "not-run" | "not-built" => counts.trap_mismatches += 1,
+                    "not-scored" => counts.not_scored += 1,
+                    _ => {}
+                }
+                items.push(ItemRow {
+                    id: it.id.clone(),
+                    group: it.group.clone(),
+                    target: tc,
+                    action: it.action.clone(),
+                    expect: it.expect.summary(),
+                    accept: it.accept.iter().map(Expect::summary).collect(),
+                    op: ri.map(|r| r.op),
+                    candidate: ri.map(|r| r.item.clone()),
+                    actual: actual.as_ref().map(Outcome::summary),
+                    verdict: verdict.to_string(),
+                    condition: it.condition.as_ref().map(|c| format!("{} ({c})", cond.unwrap_or("unknown"))),
+                    effect: ri.and_then(|r| eff_by_op.get(&r.op)).map(|e| format!("{}: {}", e.verdict, e.detail)),
+                });
+            }
+            let mine: Vec<&CanaryRow> = canaries.iter().filter(|c| c.trap == t.id).collect();
+            if items.is_empty() && mine.is_empty() {
+                continue;
+            }
+            let esc = mine.iter().filter(|c| matches!(c.verdict.as_str(), "changed" | "missing")).count() as u64;
+            let unv = mine.iter().filter(|c| c.verdict == "unverified").count() as u64;
+            let bad_item = items.iter().any(|i| matches!(i.verdict.as_str(), "mismatch" | "not-run" | "not-built"));
+            let verdict = if esc > 0 || unv > 0 || bad_item {
+                "fail"
+            } else if !items.is_empty() && items.iter().all(|i| i.verdict == "not-scored") {
+                "not-scored"
+            } else {
+                "pass"
+            };
+            traps.push(TrapRow {
+                id: t.id.clone(),
+                gate: t.gate.clone(),
+                manifest: m.source.clone(),
+                verdict: verdict.to_string(),
+                canaries: mine.len() as u64,
+                canaries_intact: mine.iter().filter(|c| c.verdict == "intact").count() as u64,
+                guard_escapes: esc,
+                canaries_unverified: unv,
+                items,
+            });
+        }
+    }
+    if cx.manifests.is_empty() {
+        warnings.push("no trap or fixture manifest: no canaries and no trap items checked".into());
+    }
+
+    counts.collateral = collateral.len() as u64;
+    counts.unexplained = unexplained.len() as u64;
+    counts.inconsistencies = incons.len() as u64;
+    let ok = counts.guard_escapes == 0
+        && counts.collateral == 0
+        && counts.missing_effects == 0
+        && counts.changed_not_done == 0
+        && counts.trap_mismatches == 0
+        && counts.unverified_canaries == 0
+        && counts.inconsistencies == 0;
+    Ok(ExecdiffReport {
+        schema: SCHEMA.to_string(),
+        inputs: Inputs::default(),
+        groups,
+        sid: cx.sid.map(str::to_string),
+        session: h.session.clone(),
+        plan_hash: h.plan_hash.clone(),
+        journal_state: j.state().to_string(),
+        restore_point: rep.restore_point.kind.clone(),
+        ok,
+        counts,
+        canaries,
+        traps,
+        collateral,
+        unexplained,
+        effects,
+        inconsistencies: incons,
+        warnings,
+    })
+}
+
+pub fn cmd_execdiff(a: &ExecdiffArgs) -> Result<ExecdiffReport> {
+    let sa = Snap::load(&a.before, LoadOpts::default())?;
+    let sb = Snap::load(&a.after, LoadOpts::default())?;
+    let journal =
+        parse_journal(&read_journal_text(&a.journal)?).with_context(|| format!("journal {}", a.journal.display()))?;
+    let report =
+        parse_report(&jsonio::read_text(&a.report)?).with_context(|| format!("report {}", a.report.display()))?;
+    let deep_a = a.deep_before.as_deref().map(read_deep).transpose()?;
+    let deep_b = a.deep_after.as_deref().map(read_deep).transpose()?;
+    if deep_a.is_some() && deep_b.is_none() {
+        bail!("--deep-before needs --deep-after");
+    }
+    let ambient = a.ambient.as_deref().map(AmbientSet::load).transpose()?;
+    // SID for HKCU and the manifests' {user-sid}: --sid, a built manifest's user_sid, the deep doc, the snapshot.
+    let mut texts = Vec::new();
+    for p in &a.traps {
+        texts.push((p, jsonio::read_text(p)?));
+    }
+    let manifest_sid = texts.iter().find_map(|(_, t)| {
+        let v: Value = serde_json::from_str(t).ok()?;
+        v.get("user_sid").and_then(Value::as_str).filter(|s| !s.starts_with('{')).map(str::to_string)
+    });
+    let sid = a
+        .sid
+        .clone()
+        .or(manifest_sid)
+        .or_else(|| deep_a.as_ref().and_then(|d| d.sid.clone()))
+        .or_else(|| sa.guess_user_sid());
+    let mut manifests = Vec::new();
+    let mut mw = Vec::new();
+    for (p, t) in &texts {
+        let (m, w) = parse_manifest(t, &p.display().to_string(), sid.as_deref())
+            .with_context(|| format!("manifest {}", p.display()))?;
+        manifests.push(m);
+        mw.extend(w);
+    }
+    let mut rep = check(&Ctx {
+        a: &sa,
+        b: &sb,
+        journal: &journal,
+        report: &report,
+        manifests: &manifests,
+        ambient: ambient.as_ref(),
+        deep_a: deep_a.as_ref(),
+        deep_b: deep_b.as_ref(),
+        groups: &a.groups,
+        sid: sid.as_deref(),
+    })?;
+    rep.warnings.extend(mw);
+    let s = |p: &std::path::Path| p.display().to_string();
+    rep.inputs = Inputs {
+        before: s(&a.before),
+        after: s(&a.after),
+        journal: s(&a.journal),
+        report: s(&a.report),
+        traps: a.traps.iter().map(|p| s(p)).collect(),
+        ambient: a.ambient.as_deref().map(s),
+        deep_before: a.deep_before.as_deref().map(s),
+        deep_after: a.deep_after.as_deref().map(s),
+    };
+    jsonio::write(&a.out, &rep)?;
+    let c = &rep.counts;
+    eprintln!(
+        "execdiff: guard_escapes {}  collateral {}  unexplained {}  missing_effects {}  changed_not_done {}  \
+         trap_mismatches {}  unverified canaries {} effects {}  inconsistencies {}",
+        c.guard_escapes,
+        c.collateral,
+        c.unexplained,
+        c.missing_effects,
+        c.changed_not_done,
+        c.trap_mismatches,
+        c.unverified_canaries,
+        c.unverified_effects,
+        c.inconsistencies
+    );
+    for t in rep.traps.iter().filter(|t| t.verdict != "pass") {
+        eprintln!("execdiff: trap {} {}", t.id, t.verdict);
+    }
+    for w in &rep.warnings {
+        eprintln!("execdiff: warning: {w}");
+    }
+    eprintln!("execdiff: {} -> {}", if rep.ok { "ok" } else { "FAILED" }, a.out.display());
+    Ok(rep)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fidelity::journal::fixture::{self, HASH_A, HASH_B, SESSION, blocked, done};
+    use crate::snap::{write_d, write_f, write_k, write_v};
+    use crate::testutil::snap_with_roots;
+    use serde_json::json;
+
+    const R: &str = "C:\\Program Files\\PurgeTrapApp";
+    const C: &str = "C:\\PurgeCanary";
+    const K: &str = "HKLM\\SOFTWARE\\PurgeTrapApp";
+    const KC: &str = "HKLM\\SOFTWARE\\PurgeCanary";
+    const ROOTS: &[&str] = &[
+        "C:\\Program Files",
+        "C:\\ProgramData",
+        "C:\\PurgeCanary",
+        "C:\\cr",
+        "HKLM\\SOFTWARE",
+        "HKLM\\SYSTEM\\CurrentControlSet",
+    ];
+    const Q: &str = "C:\\ProgramData\\Purge\\Quarantine\\20261115T101502Z-9f3a6c1d2b7e4a50";
+
+    /// What a test changes in the after snapshot.
+    #[derive(Default, Clone)]
+    struct Var {
+        drop_canary: bool,
+        drop_keep_value: bool,
+        moved_file_stays: bool,
+        canary_size: Option<u64>,
+    }
+
+    fn before_text(t: &mut String) {
+        write_d(t, "C:\\Program Files", 0x10, 1, 0);
+        write_d(t, R, 0x10, 1, 0);
+        write_d(t, &format!("{R}\\odd"), 0x10, 5, 0);
+        write_f(t, &format!("{R}\\odd\\name."), 13, 0x20, 5, 0);
+        write_f(t, &format!("{R}\\odd\\name"), 7, 0x20, 5, 0);
+        write_d(t, &format!("{R}\\links-j"), 0x10, 6, 0);
+        write_d(t, &format!("{R}\\links-j\\j"), 0x410, 6, 0xA000_0003);
+        write_d(t, "C:\\ProgramData", 0x10, 1, 0);
+        write_d(t, "C:\\ProgramData\\Purge", 0x10, 1, 0);
+        write_d(t, "C:\\ProgramData\\Purge\\Quarantine", 0x10, 1, 0);
+        write_d(t, "C:\\ProgramData\\Microsoft", 0x10, 1, 0);
+        write_f(t, "C:\\ProgramData\\Microsoft\\churn.log", 10, 0x20, 1, 0);
+        write_d(t, C, 0x10, 1, 0);
+        write_d(t, &format!("{C}\\links-j"), 0x10, 1, 0);
+        write_d(t, &format!("{C}\\links-j\\target"), 0x10, 1, 0);
+        write_f(t, &format!("{C}\\links-j\\target\\a.txt"), 20, 0x20, 1, 0);
+        write_d(t, "C:\\cr", 0x10, 1, 0);
+        write_k(t, "HKLM\\SOFTWARE", 1, Some(0), Some(3));
+        write_k(t, K, 1, Some(0), Some(3));
+        write_k(t, &format!("{K}\\Values"), 1, Some(3), Some(0));
+        write_v(t, &format!("{K}\\Values"), "del", 1, 4, 0x11, "x");
+        write_v(t, &format!("{K}\\Values"), "keep", 1, 4, 0x12, "k");
+        write_v(t, &format!("{K}\\Values"), "Path", 2, 8, 0x13, "a;b");
+        write_k(t, &format!("{K}\\Tree"), 1, Some(1), Some(1));
+        write_v(t, &format!("{K}\\Tree"), "", 1, 2, 0x21, "d");
+        write_k(t, &format!("{K}\\Tree\\Sub"), 1, Some(1), Some(0));
+        write_v(t, &format!("{K}\\Tree\\Sub"), "v", 4, 4, 0x22, "1");
+        write_k(t, &format!("{K}\\Link"), 1, Some(1), Some(0));
+        write_v(
+            t,
+            &format!("{K}\\Link"),
+            "SymbolicLinkValue",
+            6,
+            40,
+            0x23,
+            "\\REGISTRY\\MACHINE\\SOFTWARE\\PurgeCanary\\Target",
+        );
+        write_k(t, KC, 1, Some(0), Some(1));
+        write_k(t, &format!("{KC}\\Target"), 1, Some(2), Some(0));
+        write_v(t, &format!("{KC}\\Target"), "CanaryValue", 1, 8, 0x31, "c");
+        write_v(t, &format!("{KC}\\Target"), "CanaryDword", 4, 4, 0x32, "1");
+        write_k(t, "HKLM\\SYSTEM\\CurrentControlSet", 1, Some(0), Some(0));
+    }
+
+    fn snaps(v: &Var) -> (Snap, Snap) {
+        let a = snap_with_roots(ROOTS, before_text);
+        let b = snap_with_roots(ROOTS, |t| {
+            write_d(t, "C:\\Program Files", 0x10, 1, 0);
+            write_d(t, R, 0x10, 1, 0);
+            // Moved out: the parent's mtime changes.
+            write_d(t, &format!("{R}\\odd"), 0x10, if v.moved_file_stays { 5 } else { 9 }, 0);
+            if v.moved_file_stays {
+                write_f(t, &format!("{R}\\odd\\name."), 13, 0x20, 5, 0);
+            }
+            write_f(t, &format!("{R}\\odd\\name"), 7, 0x20, 5, 0);
+            write_d(t, &format!("{R}\\links-j"), 0x10, 6, 0);
+            write_d(t, &format!("{R}\\links-j\\j"), 0x410, 6, 0xA000_0003);
+            write_d(t, "C:\\ProgramData", 0x10, 1, 0);
+            write_d(t, "C:\\ProgramData\\Purge", 0x10, 1, 0);
+            write_d(t, "C:\\ProgramData\\Purge\\Quarantine", 0x10, 9, 0);
+            write_d(t, Q, 0x10, 9, 0);
+            write_d(t, &format!("{Q}\\000001"), 0x10, 9, 0);
+            write_f(t, &format!("{Q}\\000001\\name."), 13, 0x20, 5, 0);
+            write_d(t, "C:\\ProgramData\\Microsoft", 0x10, 1, 0);
+            write_f(t, "C:\\ProgramData\\Microsoft\\churn.log", 99, 0x20, 2, 0);
+            write_d(t, C, 0x10, 1, 0);
+            write_d(t, &format!("{C}\\links-j"), 0x10, 1, 0);
+            write_d(t, &format!("{C}\\links-j\\target"), 0x10, if v.drop_canary { 9 } else { 1 }, 0);
+            if !v.drop_canary {
+                write_f(t, &format!("{C}\\links-j\\target\\a.txt"), v.canary_size.unwrap_or(20), 0x20, 1, 0);
+            }
+            write_d(t, "C:\\cr", 0x10, 7, 0);
+            write_d(t, "C:\\cr\\out", 0x10, 7, 0);
+            write_k(t, "HKLM\\SOFTWARE", 1, Some(0), Some(3));
+            write_k(t, K, 2, Some(0), Some(2));
+            write_k(t, &format!("{K}\\Values"), 2, Some(if v.drop_keep_value { 1 } else { 2 }), Some(0));
+            if !v.drop_keep_value {
+                write_v(t, &format!("{K}\\Values"), "keep", 1, 4, 0x12, "k");
+            }
+            write_v(t, &format!("{K}\\Values"), "Path", 2, 4, 0x14, "a");
+            write_k(t, &format!("{K}\\Link"), 1, Some(1), Some(0));
+            write_v(
+                t,
+                &format!("{K}\\Link"),
+                "SymbolicLinkValue",
+                6,
+                40,
+                0x23,
+                "\\REGISTRY\\MACHINE\\SOFTWARE\\PurgeCanary\\Target",
+            );
+            write_k(t, KC, 1, Some(0), Some(1));
+            write_k(t, &format!("{KC}\\Target"), 1, Some(2), Some(0));
+            write_v(t, &format!("{KC}\\Target"), "CanaryValue", 1, 8, 0x31, "c");
+            write_v(t, &format!("{KC}\\Target"), "CanaryDword", 4, 4, 0x32, "1");
+            write_k(t, "HKLM\\SYSTEM\\CurrentControlSet", 1, Some(0), Some(0));
+        });
+        (a, b)
+    }
+
+    /// (op, kind, a, b, c, dir, intent, journal outcome)
+    type PlanRow = (u32, &'static str, String, &'static str, &'static str, bool, bool, Value);
+
+    fn plan(junction_outcome: Value) -> Vec<PlanRow> {
+        let jdone = junction_outcome.get("kind") == Some(&json!("Done"));
+        vec![
+            (1, "QuarantineMove", format!("{R}\\odd\\name."), "", "", false, true, done()),
+            (2, "QuarantineMove", format!("{R}\\links-j\\j"), "", "", true, jdone, junction_outcome),
+            (3, "DeleteValue", format!("{K}\\Values"), "del", "", false, true, done()),
+            (4, "DeleteKeyTree", format!("{K}\\Tree"), "", "", false, true, done()),
+            (5, "EditSegment", format!("{K}\\Values"), "Path", "b", false, true, done()),
+            (6, "DeleteKeyTree", format!("{K}\\Link"), "", "", false, false, blocked("RegLink")),
+        ]
+    }
+
+    fn journal_text(p: &[PlanRow]) -> String {
+        let recs: Vec<Value> = p
+            .iter()
+            .flat_map(|(op, k, a, b, c, dir, i, o)| fixture::op(*op, k, a, b, c, *dir, *i, o.clone()))
+            .collect();
+        fixture::text(p.len(), &recs)
+    }
+
+    fn exec_op_json(kind: &str, a: &str, b: &str, c: &str) -> Value {
+        match kind {
+            "QuarantineMove" | "RemoveDirIfEmpty" => json!({"kind": kind, "path": a}),
+            "DeleteKeyTree" | "DeleteKeyIfEmpty" => json!({"kind": kind, "key": a}),
+            "DeleteValue" => json!({"kind": kind, "key": a, "name": b}),
+            "EditSegment" => json!({"kind": kind, "key": a, "name": b, "segment": c}),
+            _ => json!({"kind": kind, "full_name": a}),
+        }
+    }
+
+    fn target_json(kind: &str, a: &str, b: &str, c: &str) -> Value {
+        match kind {
+            "QuarantineMove" | "RemoveDirIfEmpty" => json!({"type": "Path", "path": a}),
+            "DeleteKeyTree" | "DeleteKeyIfEmpty" => json!({"type": "RegKey", "path": a}),
+            "DeleteValue" => json!({"type": "RegValue", "path": a, "name": b}),
+            "EditSegment" => json!({"type": "RegMultiSzSegment", "path": a, "name": b, "segment": c}),
+            _ => json!({"type": "AppxPackage", "full_name": a}),
+        }
+    }
+
+    /// A `purge.exec/1` report as purge-model writes it.
+    fn report_text(p: &[PlanRow]) -> String {
+        let mut counts = OutcomeCounts::default();
+        let items: Vec<Value> = p
+            .iter()
+            .map(|(op, k, a, b, c, _, _, o)| {
+                counts.record(&serde_json::from_value(o.clone()).unwrap());
+                json!({"item": format!("c-{op:02}"), "op": op, "target": target_json(k, a, b, c),
+                    "exec_op": exec_op_json(k, a, b, c), "outcome": o, "backup_bytes": 0})
+            })
+            .collect();
+        json!({"schema": "purge.exec/1", "session": SESSION, "app": "fixture", "plan_hash": HASH_A,
+            "selection_hash": HASH_B, "state": "Committed", "started": 1, "finished": 2, "items": items,
+            "counts": counts, "backup_bytes": 0, "pending_reboot": false, "restore_point": {"kind": "NotRequested"},
+            "warnings": []})
+        .to_string()
+    }
+
+    fn manifest_text() -> String {
+        let blockedx = |b: &str| json!({"outcome": "Skipped", "reason": "GateBlocked", "blocker": b, "summary": "x"});
+        let donex = json!({"outcome": "Done", "reason": null, "blocker": null, "summary": "x"});
+        json!({
+            "schema": "purge.rig.m2traps/0", "dry_run": true, "user_sid": "{user-sid}",
+            "traps": [
+                {"id": "link-junction-item", "gate": "G1", "build": null, "items": [
+                    {"id": "link-junction-item.link", "target": {"type": "Path", "path": format!("{R}\\links-j\\j")},
+                     "action": "Quarantine", "group": "main", "expect": blockedx("ReparseMismatch"), "accept": [], "condition": null}]},
+                {"id": "odd-names", "gate": "G1", "build": null, "items": [
+                    {"id": "odd-names.dot", "target": {"type": "Path", "path": format!("{R}\\odd\\name.")},
+                     "action": "Quarantine", "group": "main", "expect": donex, "accept": [], "condition": null},
+                    {"id": "odd-names.race", "target": {"type": "Path", "path": format!("{R}\\race")},
+                     "action": "Quarantine", "group": "race-a", "expect": donex, "accept": [], "condition": null}]},
+                {"id": "reglink-leaf", "gate": "G1", "build": null, "items": [
+                    {"id": "reglink-leaf.key", "target": {"type": "RegKey", "path": format!("{K}\\Link")},
+                     "action": "DeleteKey", "group": "main", "expect": blockedx("RegLink"), "accept": [], "condition": null}]}
+            ],
+            "canaries": [
+                {"id": "links-j.a", "trap": "link-junction-item", "kind": "file", "path": format!("{C}\\links-j\\target\\a.txt"),
+                 "sha256": HASH_A},
+                {"id": "odd.sibling", "trap": "odd-names", "kind": "file", "path": format!("{R}\\odd\\name"), "sha256": HASH_B},
+                {"id": "reglink.target", "trap": "reglink-leaf", "kind": "regkey", "path": format!("{KC}\\Target"), "sha256": HASH_A},
+                {"id": "reglink.value", "trap": "reglink-leaf", "kind": "regvalue", "path": format!("{KC}\\Target"),
+                 "name": "CanaryValue", "sha256": HASH_A}
+            ]
+        })
+        .to_string()
+    }
+
+    fn ambient() -> AmbientSet {
+        AmbientSet {
+            union: crate::ambient::Matcher::new("u", &["P:C:\\ProgramData\\Microsoft\\churn.log".to_string()], &[])
+                .unwrap(),
+            runs: Vec::new(),
+        }
+    }
+
+    struct Case {
+        var: Var,
+        junction: Value,
+        report_override: Option<String>,
+        manifest: String,
+        deep: Option<(DeepDoc, DeepDoc)>,
+    }
+
+    impl Default for Case {
+        fn default() -> Self {
+            Case {
+                var: Var::default(),
+                junction: blocked("ReparseMismatch"),
+                report_override: None,
+                manifest: manifest_text(),
+                deep: None,
+            }
+        }
+    }
+
+    fn run(c: Case) -> ExecdiffReport {
+        let (a, b) = snaps(&c.var);
+        let p = plan(c.junction.clone());
+        let j = parse_journal(&journal_text(&p)).unwrap();
+        let rep = parse_report(&c.report_override.unwrap_or_else(|| report_text(&p))).unwrap();
+        let (m, w) = parse_manifest(&c.manifest, "m2-traps.json", Some("S-1-5-21-1")).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        let amb = ambient();
+        let (da, db) = match &c.deep {
+            Some((x, y)) => (Some(x), Some(y)),
+            None => (None, None),
+        };
+        check(&Ctx {
+            a: &a,
+            b: &b,
+            journal: &j,
+            report: &rep,
+            manifests: &[m],
+            ambient: Some(&amb),
+            deep_a: da,
+            deep_b: db,
+            groups: &[],
+            sid: Some("S-1-5-21-1"),
+        })
+        .unwrap()
+    }
+
+    fn trap<'a>(r: &'a ExecdiffReport, id: &str) -> &'a TrapRow {
+        r.traps.iter().find(|t| t.id == id).unwrap_or_else(|| panic!("trap {id}"))
+    }
+
+    #[test]
+    fn clean_run_is_zero_zero() {
+        let r = run(Case::default());
+        assert!(r.ok, "{:#?}", (&r.counts, &r.collateral, &r.effects, &r.canaries, &r.inconsistencies));
+        assert_eq!(
+            (r.counts.guard_escapes, r.counts.collateral, r.counts.unexplained),
+            (0, 0, 0),
+            "{:#?}",
+            r.unexplained
+        );
+        assert_eq!(r.counts.missing_effects, 0);
+        for k in ["op", "store", "rig", "ambient", "parent"] {
+            assert!(r.counts.authorised.get(k).copied().unwrap_or(0) > 0, "{k}: {:?}", r.counts.authorised);
+        }
+        assert_eq!(r.canaries.len(), 4);
+        assert!(r.canaries.iter().all(|c| c.verdict == "intact" && c.verified_by == ["snap"]), "{:#?}", r.canaries);
+        assert!(r.traps.iter().all(|t| t.verdict == "pass"), "{:#?}", r.traps);
+        // The race item belongs to another group.
+        assert_eq!(trap(&r, "odd-names").items.len(), 1);
+        let jt = &trap(&r, "link-junction-item").items[0];
+        assert_eq!((jt.verdict.as_str(), jt.actual.as_deref()), ("pass", Some("Skipped/GateBlocked/ReparseMismatch")));
+        assert_eq!(jt.op, Some(2));
+        let e: Vec<(&str, &str)> = r.effects.iter().map(|e| (e.verdict.as_str(), e.detail.as_str())).collect();
+        assert_eq!(e[0], ("ok", "gone after"));
+        assert_eq!(e[1], ("ok", "unchanged"));
+        assert_eq!(e[4], ("ok", "value data changed"));
+    }
+
+    #[test]
+    fn removed_canary_is_one_escape_naming_the_trap() {
+        let r = run(Case { var: Var { drop_canary: true, ..Default::default() }, ..Default::default() });
+        assert!(!r.ok);
+        assert_eq!(r.counts.guard_escapes, 1);
+        let c: Vec<&CanaryRow> = r.canaries.iter().filter(|c| c.verdict != "intact").collect();
+        assert_eq!(c.len(), 1);
+        assert_eq!((c[0].trap.as_str(), c[0].verdict.as_str()), ("link-junction-item", "missing"));
+        let t = trap(&r, "link-junction-item");
+        assert_eq!((t.verdict.as_str(), t.guard_escapes), ("fail", 1));
+        // The deleted canary is also collateral; its parent's mtime change is not explained by it.
+        assert!(r.collateral.iter().any(|d| d.change == "-F" && d.path.ends_with("a.txt")));
+    }
+
+    #[test]
+    fn changed_canary_is_an_escape() {
+        let r = run(Case { var: Var { canary_size: Some(21), ..Default::default() }, ..Default::default() });
+        assert_eq!(r.counts.guard_escapes, 1);
+        assert_eq!(r.counts.collateral, 1);
+        assert!(
+            r.canaries.iter().any(|c| c.verdict == "changed" && c.evidence.iter().any(|e| e.contains("size 20->21")))
+        );
+    }
+
+    #[test]
+    fn extra_deleted_value_is_one_collateral() {
+        let r = run(Case { var: Var { drop_keep_value: true, ..Default::default() }, ..Default::default() });
+        assert!(!r.ok);
+        assert_eq!(r.counts.collateral, 1, "{:#?}", r.collateral);
+        assert_eq!(
+            r.collateral[0],
+            DiffRow { change: "-V".into(), path: format!("{K}\\Values"), name: Some("keep".into()), changes: vec![] }
+        );
+        assert_eq!(r.counts.guard_escapes, 0);
+    }
+
+    #[test]
+    fn done_without_visible_effect_is_flagged() {
+        let r = run(Case { var: Var { moved_file_stays: true, ..Default::default() }, ..Default::default() });
+        assert!(!r.ok);
+        assert_eq!(r.counts.missing_effects, 1);
+        let e = r.effects.iter().find(|e| e.op == 1).unwrap();
+        assert_eq!((e.verdict.as_str(), e.detail.as_str()), ("missing", "still present after"));
+        assert_eq!(trap(&r, "odd-names").items[0].effect.as_deref(), Some("missing: still present after"));
+        // The quarantine copy is in the store, the parent mtime change has an authorised neighbour.
+        assert_eq!(r.counts.collateral, 0, "{:#?}", r.collateral);
+    }
+
+    #[test]
+    fn wrong_trap_outcome_is_a_mismatch() {
+        // The engine moved the junction (Done) instead of refusing it; the snapshot still shows it, so the
+        // effect is missing too.
+        let r = run(Case { junction: done(), ..Default::default() });
+        assert!(!r.ok);
+        let it = &trap(&r, "link-junction-item").items[0];
+        assert_eq!((it.verdict.as_str(), it.actual.as_deref()), ("mismatch", Some("Done")));
+        assert_eq!(r.counts.trap_mismatches, 1);
+        assert_eq!(r.counts.missing_effects, 1);
+    }
+
+    #[test]
+    fn accepted_outcome_and_unmet_condition() {
+        let mut m: Value = serde_json::from_str(&manifest_text()).unwrap();
+        m["traps"][0]["items"][0]["accept"] =
+            json!([{"outcome": "Skipped", "reason": "GateBlocked", "blocker": "ReparseMismatch"}]);
+        m["traps"][0]["items"][0]["expect"] = json!({"outcome": "Done"});
+        let r = run(Case { manifest: m.to_string(), ..Default::default() });
+        assert_eq!(trap(&r, "link-junction-item").items[0].verdict, "accepted");
+        assert!(r.ok);
+
+        // Built manifest: the condition's attribute object did not stick -> not scored.
+        let mut m: Value = serde_json::from_str(&manifest_text()).unwrap();
+        m["dry_run"] = json!(false);
+        for t in m["traps"].as_array_mut().unwrap() {
+            t["build"] = json!({"ok": true, "objects": []});
+        }
+        m["traps"][0]["items"][0]["expect"] =
+            json!({"outcome": "Skipped", "reason": "GateBlocked", "blocker": "SyncRoot"});
+        m["traps"][0]["items"][0]["condition"] = json!("scored only when build.objects shows the attribute set");
+        m["traps"][0]["build"]["objects"] = json!([{"k": "attrs", "path": format!("{R}\\links-j\\j"), "ok": false}]);
+        let r = run(Case { manifest: m.to_string(), ..Default::default() });
+        let it = &trap(&r, "link-junction-item").items[0];
+        assert_eq!(it.verdict, "not-scored");
+        assert!(it.condition.as_deref().unwrap().starts_with("unmet"));
+        assert_eq!((r.counts.not_scored, r.counts.trap_mismatches), (1, 0));
+        assert!(r.ok);
+
+        // A built manifest whose trap was not built.
+        m["traps"][2]["build"]["ok"] = json!(false);
+        let r = run(Case { manifest: m.to_string(), ..Default::default() });
+        assert_eq!(trap(&r, "reglink-leaf").items[0].verdict, "not-built");
+        assert!(!r.ok);
+    }
+
+    #[test]
+    fn report_and_journal_must_agree() {
+        let p = plan(blocked("ReparseMismatch"));
+        let good = report_text(&p);
+        // Another outcome for op 2 (and counts to match): an inconsistency.
+        let mut v: Value = serde_json::from_str(&good).unwrap();
+        v["items"][1]["outcome"] = blocked("SyncRoot");
+        let r = run(Case { report_override: Some(v.to_string()), ..Default::default() });
+        assert_eq!(r.counts.inconsistencies, 1, "{:?}", r.inconsistencies);
+        assert!(!r.ok);
+        // Wrong schema, other session: refused.
+        assert!(parse_report(&good.replace("purge.exec/1", "purge.exec/2")).is_err());
+        let mut v: Value = serde_json::from_str(&good).unwrap();
+        v["session"] = json!("20261115T101502Z-0000000000000000");
+        let (a, b) = snaps(&Var::default());
+        let j = parse_journal(&journal_text(&p)).unwrap();
+        let rep = parse_report(&v.to_string()).unwrap();
+        let cx = Ctx {
+            a: &a,
+            b: &b,
+            journal: &j,
+            report: &rep,
+            manifests: &[],
+            ambient: None,
+            deep_a: None,
+            deep_b: None,
+            groups: &[],
+            sid: None,
+        };
+        assert!(check(&cx).is_err());
+    }
+
+    fn deep_doc(canary_sha: &str) -> DeepDoc {
+        let file = |p: &str, sha: &str| FileRec {
+            path: p.into(),
+            present: true,
+            is_dir: Some(false),
+            attributes: Some("0x00000020".into()),
+            size: Some(20),
+            sha256: Some(sha.into()),
+            links: Some(1),
+            file_id: Some("01".into()),
+            volume_serial: Some(1),
+            last_write: Some(1),
+            ..Default::default()
+        };
+        let key = |k: &str, sha: &str| DeepKey {
+            key: k.into(),
+            present: true,
+            is_link: Some(false),
+            sddl: Some("O:BAG:SYD:(A;;KA;;;BA)".into()),
+            values: vec![crate::deep::ValueRec {
+                name: "CanaryValue".into(),
+                name_hex: None,
+                typ: 1,
+                len: 8,
+                sha256: sha.into(),
+            }],
+            ..Default::default()
+        };
+        DeepDoc {
+            schema: crate::deep::SCHEMA.into(),
+            files: vec![
+                file(&format!("{C}\\links-j\\target\\a.txt"), canary_sha),
+                file(&format!("{R}\\odd\\name"), HASH_B),
+            ],
+            keys: vec![key(&format!("{KC}\\Target"), canary_sha)],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn deep_hash_catches_what_the_snapshot_cannot() {
+        // Same size and mtime in the snapshots, other content in the deep snapshot.
+        let r = run(Case { deep: Some((deep_doc(HASH_A), deep_doc(HASH_A))), ..Default::default() });
+        assert!(r.ok, "{:#?}", r.canaries);
+        assert!(r.canaries.iter().filter(|c| c.kind == "file").all(|c| c.verified_by == ["snap", "deep"]));
+        let r = run(Case { deep: Some((deep_doc(HASH_A), deep_doc(HASH_B))), ..Default::default() });
+        assert!(!r.ok);
+        // The file canary (sha and manifest), the key and the value canary (values differ).
+        assert_eq!(r.counts.guard_escapes, 3, "{:#?}", r.canaries);
+        assert_eq!(r.counts.collateral, 0);
+    }
+
+    #[test]
+    fn canary_nobody_captured_is_unverified() {
+        let mut m: Value = serde_json::from_str(&manifest_text()).unwrap();
+        m["canaries"].as_array_mut().unwrap().push(
+            json!({"id": "far", "trap": "odd-names", "kind": "file", "path": "D:\\Elsewhere\\x.txt", "sha256": HASH_A}),
+        );
+        let r = run(Case { manifest: m.to_string(), ..Default::default() });
+        assert_eq!(r.counts.unverified_canaries, 1);
+        assert_eq!(trap(&r, "odd-names").verdict, "fail");
+        assert!(!r.ok);
+    }
+
+    #[test]
+    fn purge_q_and_placeholders() {
+        assert!(is_purge_q("D:\\.purge-q"));
+        assert!(is_purge_q("D:\\.PURGE-Q\\s\\x"));
+        assert!(!is_purge_q("D:\\.purge-qx"));
+        assert!(!is_purge_q("D:\\x\\.purge-q"));
+        let t = r#"{"schema":"purge.rig.m2traps/0","traps":[],"canaries":[{"id":"k","trap":"t","kind":"regkey","path":"HKU\\{user-sid}\\Software\\PurgeCanary"}]}"#;
+        let (m, w) = parse_manifest(t, "m", Some("S-1-5-21-7")).unwrap();
+        assert!(w.is_empty());
+        assert_eq!(m.canaries[0].path, "HKU\\S-1-5-21-7\\Software\\PurgeCanary");
+        let (_, w) = parse_manifest(t, "m", None).unwrap();
+        assert_eq!(w.len(), 1);
+        assert!(parse_manifest(r#"{"schema":"purge.rig.targets/0"}"#, "m", None).is_err());
+    }
+
+    /// The checked-in trap manifest parses, every item of it has an expectation and every canary a kind.
+    #[test]
+    fn real_trap_manifest_parses() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..\\truth\\m2-traps.json");
+        let (m, w) = parse_manifest(&jsonio::read_text(&p).unwrap(), "m2-traps.json", Some("S-1-5-21-1")).unwrap();
+        assert!(w.iter().all(|x| x.contains("{localappdata}")), "{w:?}");
+        assert!(m.dry_run);
+        assert_eq!(m.traps.len(), 29);
+        assert_eq!(m.canaries.len(), 35);
+        assert!(m.traps.iter().flat_map(|t| &t.items).all(|i| !i.expect.outcome.is_empty()));
+        assert!(m.traps.iter().flat_map(|t| &t.items).all(|i| !i.target.path().contains("System.Collections")));
+    }
+
+    /// End to end through files and `cmd_execdiff`.
+    #[test]
+    fn command_writes_the_document() {
+        let dir = std::env::temp_dir().join(format!("rigtool-execdiff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let w = |n: &str, s: &str| {
+            let p = dir.join(n);
+            std::fs::write(&p, s).unwrap();
+            p
+        };
+        let mut ta = crate::snap::header_line(&Default::default());
+        ta.push_str(&crate::snap::meta_line("roots", &ROOTS.iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+        let mut tb = ta.clone();
+        before_text(&mut ta);
+        before_text(&mut tb);
+        let p = plan(blocked("ReparseMismatch"));
+        let args = ExecdiffArgs {
+            before: w("a.tsv", &ta),
+            after: w("b.tsv", &tb),
+            journal: w("journal.jsonl", &journal_text(&p)),
+            report: w("report.json", &report_text(&p)),
+            traps: vec![w("m2-traps.json", &manifest_text())],
+            ambient: None,
+            deep_before: None,
+            deep_after: None,
+            groups: vec![],
+            sid: Some("S-1-5-21-1".into()),
+            out: dir.join("execdiff.json"),
+        };
+        // Nothing changed: every Done op lacks its effect.
+        let rep = cmd_execdiff(&args).unwrap();
+        assert!(!rep.ok);
+        assert_eq!(rep.counts.missing_effects, 4);
+        assert_eq!((rep.counts.guard_escapes, rep.counts.collateral), (0, 0));
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&args.out).unwrap()).unwrap();
+        assert_eq!(v["schema"], SCHEMA);
+        assert_eq!(v["counts"]["missing_effects"], 4);
+        assert_eq!(v["inputs"]["traps"][0], args.traps[0].display().to_string());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

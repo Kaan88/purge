@@ -48,6 +48,11 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
                 (FILE: purge.rig.deepscope/0, purge.rig.targets/0 or an m2-traps / m2-fixtures manifest)
   rigtool fidelity --before A.json --after C.json --journal journal.jsonl [--ambient ambient.json]
                    [--sid SID] -o fidelity.json     (exit 1 = a differing object or an unverifiable row)
+  rigtool execdiff --before A.tsv.gz --after B.tsv.gz --journal journal.jsonl --report report.json
+                   [--traps m2-traps.json [m2-fixtures.json]...] [--group main ...] [--ambient ambient.json]
+                   [--deep-before A.json --deep-after B.json] [--sid SID] -o execdiff.json
+                (exit 1 = a guard escape, collateral, a missing effect, a trap outcome mismatch,
+                 an unverified canary or a report/journal inconsistency)
 ";
 
 struct Args {
@@ -269,7 +274,52 @@ fn run(argv: Vec<String>) -> Result<()> {
             }
             Ok(())
         }
-        "execdiff" => execdiff::cmd_execdiff(rest),
+        "execdiff" => {
+            let a = Args::parse(
+                rest,
+                &[],
+                &["--traps", "--group"],
+                &[
+                    "--before",
+                    "--after",
+                    "--journal",
+                    "--report",
+                    "--ambient",
+                    "--deep-before",
+                    "--deep-after",
+                    "--sid",
+                    "-o",
+                ],
+            )?;
+            let rep = execdiff::cmd_execdiff(&execdiff::ExecdiffArgs {
+                before: a.req("--before")?,
+                after: a.req("--after")?,
+                journal: a.req("--journal")?,
+                report: a.req("--report")?,
+                traps: a.all("--traps").into_iter().map(PathBuf::from).collect(),
+                ambient: a.path("--ambient"),
+                deep_before: a.path("--deep-before"),
+                deep_after: a.path("--deep-after"),
+                groups: a.all("--group"),
+                sid: a.get("--sid"),
+                out: a.req("-o")?,
+            })?;
+            if !rep.ok {
+                let c = &rep.counts;
+                bail!(
+                    "execdiff: {} guard escapes, {} collateral, {} missing effects, {} changed though not done, \
+                     {} trap mismatches, {} unverified canaries, {} inconsistencies",
+                    c.guard_escapes,
+                    c.collateral,
+                    c.missing_effects,
+                    c.changed_not_done,
+                    c.trap_mismatches,
+                    c.unverified_canaries,
+                    c.inconsistencies
+                );
+            }
+            Ok(())
+        }
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             Ok(())

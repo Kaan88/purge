@@ -7,15 +7,11 @@
 //! of the object or of a directory above it); a directory recreated by undo has a new FileId by design.
 //!
 //! Attribution: each object goes to the journal op that covers it (exact value ops first, then ops that ran
-//! (outcome Done or unknown) before absorbed or skipped ones, then the deepest target). Objects no op covers form
-//! the "outside plan" row: parents and siblings, which must not change either.
+//! (effective outcome Done, PendingReboot, HeldRetry or none) before the others, then the deepest target).
+//! Objects of ops that never got an intent record form the "not executed" row; objects no op covers form the
+//! "outside plan" row: parents and siblings, which must not change either.
 //!
-//! The journal is read loosely (rigtool does not link purge-model): every JSON line is a record whose kind is the
-//! `record` / `kind` / `rec` / `t` / `type` string field, or the single key of an externally tagged object. From
-//! `Intent` records it takes the op id (`op_id`, else a scalar `op` / `id` / `seq`), the op kind (an ExecOp name
-//! found in `op`, `kind`, `op_kind` or `exec_op`, else anywhere in the record), the first purge-model Target object
-//! in the record (`target` first), `is_dir`, and `renamed`. `Done` records give the outcome per op id. One torn
-//! final line is tolerated.
+//! The journal is read by [`journal::parse_journal`], shared with `execdiff`.
 
 use crate::ambient::AmbientSet;
 use crate::canon;
@@ -28,34 +24,9 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA: &str = "purge.rig.fidelity/1";
+pub use journal::{JOp, parse_journal};
 
-/// ExecOp names (purge-model `op.rs`).
-pub const OP_KINDS: &[&str] = &[
-    "QuarantineMove",
-    "RemoveDirIfEmpty",
-    "DeleteKeyTree",
-    "DeleteKeyIfEmpty",
-    "DeleteValue",
-    "EditSegment",
-    "RemovePackage",
-    "DeleteService",
-    "DeleteTask",
-    "DeleteFirewallRule",
-];
-const PLAN_ACTIONS: &[&str] = &["Quarantine", "DeleteKey", "DeleteValue", "EditSegment", "RemoveDirIfEmpty"];
-const OUTCOMES: &[&str] = &["Done", "Vanished", "Skipped", "HeldRetry", "PendingReboot", "Failed"];
-const TARGET_TYPES: &[&str] = &[
-    "Path",
-    "RegKey",
-    "RegValue",
-    "RegValueChanged",
-    "RegMultiSzSegment",
-    "Service",
-    "Task",
-    "FirewallRule",
-    "AppxPackage",
-];
+pub const SCHEMA: &str = "purge.rig.fidelity/1";
 
 /// Row labels, in report order.
 pub const ROWS: &[&str] = &[
@@ -70,9 +41,12 @@ pub const ROWS: &[&str] = &[
     "DeleteTask",
     "DeleteFirewallRule",
     "RemovePackage",
+    NOT_EXECUTED,
     OUTSIDE,
 ];
 pub const OUTSIDE: &str = "outside plan";
+/// Ops that ended without an intent record (refused by a gate, already gone, failed before any backup).
+pub const NOT_EXECUTED: &str = "not executed";
 
 /// Fields never compared (documented in the report).
 pub const EXCLUDED: &[&str] = &[
@@ -100,226 +74,1009 @@ pub struct FidelityArgs {
 // Journal
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
-pub struct JOp {
-    pub id: String,
-    pub kind: Option<String>,
-    pub target: Option<Target>,
-    pub renamed: bool,
-    pub is_dir: Option<bool>,
-    pub outcome: Option<String>,
-    pub line: usize,
-}
+/// Reader of a session's `journal.jsonl` (`purge.journal/1`, purge-model `exec::journal::Record`), shared by
+/// `fidelity` and `execdiff`. rigtool does not link purge-model: the record types below mirror its serde
+/// shapes (records tagged by `"rec"` in snake case; ExecOp, Inverse, ItemOutcome, SkipReason, ItemFacts and the
+/// undo / reconcile results tagged by `"kind"`), with every required field required here too.
+///
+/// Strict: the first line must be the header with the exact schema id; every line must parse as a record;
+/// a `validated` record must precede the `intent` and `done` of its op; an intent's inverse must fit its op;
+/// `Done`, `HeldRetry` and `PendingReboot` need an intent before them. The one tolerance is a torn final line
+/// (the file does not end with a newline and the last line is an incomplete JSON text), which is reported as a
+/// warning and ignored.
+pub mod journal {
+    use crate::canon;
+    use crate::err::{Result, bail};
+    use crate::target::Target;
+    use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
 
-fn norm(s: &str) -> String {
-    s.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
-}
+    pub const JOURNAL_SCHEMA: &str = "purge.journal/1";
 
-fn pick<'a>(names: &[&'a str], s: &str) -> Option<&'a str> {
-    let n = norm(s);
-    names.iter().copied().find(|x| norm(x) == n)
-}
-
-/// First string value or object key (document order, depth-limited) equal to one of `names`.
-fn find_name<'a>(v: &Value, names: &[&'a str], skip: Option<&str>, depth: u32) -> Option<&'a str> {
-    if depth > 6 {
-        return None;
+    /// purge-model `ExecOp`.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+    #[serde(tag = "kind")]
+    pub enum ExecOp {
+        QuarantineMove {
+            path: String,
+        },
+        RemoveDirIfEmpty {
+            path: String,
+        },
+        DeleteKeyTree {
+            key: String,
+        },
+        DeleteKeyIfEmpty {
+            key: String,
+        },
+        DeleteValue {
+            key: String,
+            name: String,
+        },
+        EditSegment {
+            key: String,
+            name: String,
+            segment: String,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            index: Option<u32>,
+        },
+        RemovePackage {
+            full_name: String,
+        },
     }
-    match v {
-        Value::String(s) => pick(names, s),
-        Value::Object(m) => {
-            for (k, x) in m {
-                if skip == Some(k.as_str()) {
+
+    impl ExecOp {
+        pub fn name(&self) -> &'static str {
+            match self {
+                ExecOp::QuarantineMove { .. } => "QuarantineMove",
+                ExecOp::RemoveDirIfEmpty { .. } => "RemoveDirIfEmpty",
+                ExecOp::DeleteKeyTree { .. } => "DeleteKeyTree",
+                ExecOp::DeleteKeyIfEmpty { .. } => "DeleteKeyIfEmpty",
+                ExecOp::DeleteValue { .. } => "DeleteValue",
+                ExecOp::EditSegment { .. } => "EditSegment",
+                ExecOp::RemovePackage { .. } => "RemovePackage",
+            }
+        }
+
+        /// The target the op acts on (purge-model `ExecOp::target`).
+        pub fn target(&self) -> Target {
+            match self.clone() {
+                ExecOp::QuarantineMove { path } | ExecOp::RemoveDirIfEmpty { path } => Target::Path { path },
+                ExecOp::DeleteKeyTree { key } | ExecOp::DeleteKeyIfEmpty { key } => Target::RegKey { path: key },
+                ExecOp::DeleteValue { key, name } => Target::RegValue { path: key, name },
+                ExecOp::EditSegment { key, name, segment, .. } => {
+                    Target::RegMultiSzSegment { path: key, name, segment }
+                }
+                ExecOp::RemovePackage { full_name } => Target::AppxPackage { full_name },
+            }
+        }
+    }
+
+    /// purge-model `Blocker`: an object tagged by `"kind"`; other fields are kept as they are.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+    pub struct Blocker {
+        pub kind: String,
+        #[serde(flatten)]
+        pub fields: serde_json::Map<String, serde_json::Value>,
+    }
+
+    /// purge-model `SkipReason`.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+    #[serde(tag = "kind")]
+    pub enum SkipReason {
+        ChangedSinceScan,
+        NoLongerEmpty,
+        GateBlocked { blocker: Blocker },
+        NoVerifiedBackup,
+        CapExceeded,
+        NotAttempted,
+    }
+
+    /// purge-model `ItemOutcome`.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+    #[serde(tag = "kind")]
+    pub enum Outcome {
+        Done,
+        Vanished,
+        Skipped {
+            reason: SkipReason,
+        },
+        HeldRetry,
+        PendingReboot,
+        Failed {
+            code: String,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            os_error: Option<u32>,
+            #[serde(default, skip_serializing_if = "String::is_empty")]
+            detail: String,
+        },
+    }
+
+    impl Outcome {
+        pub fn name(&self) -> &'static str {
+            match self {
+                Outcome::Done => "Done",
+                Outcome::Vanished => "Vanished",
+                Outcome::Skipped { .. } => "Skipped",
+                Outcome::HeldRetry => "HeldRetry",
+                Outcome::PendingReboot => "PendingReboot",
+                Outcome::Failed { .. } => "Failed",
+            }
+        }
+        /// The skip reason's kind (Skipped only).
+        pub fn reason(&self) -> Option<&'static str> {
+            match self {
+                Outcome::Skipped { reason } => Some(match reason {
+                    SkipReason::ChangedSinceScan => "ChangedSinceScan",
+                    SkipReason::NoLongerEmpty => "NoLongerEmpty",
+                    SkipReason::GateBlocked { .. } => "GateBlocked",
+                    SkipReason::NoVerifiedBackup => "NoVerifiedBackup",
+                    SkipReason::CapExceeded => "CapExceeded",
+                    SkipReason::NotAttempted => "NotAttempted",
+                }),
+                _ => None,
+            }
+        }
+        /// The blocker's kind (Skipped / GateBlocked only).
+        pub fn blocker(&self) -> Option<&str> {
+            match self {
+                Outcome::Skipped { reason: SkipReason::GateBlocked { blocker } } => Some(&blocker.kind),
+                _ => None,
+            }
+        }
+        /// `Done`, `Skipped/GateBlocked/RegLink`, ...
+        pub fn summary(&self) -> String {
+            let mut s = self.name().to_string();
+            for x in [self.reason(), self.blocker()].into_iter().flatten() {
+                s.push('/');
+                s.push_str(x);
+            }
+            s
+        }
+        /// purge-model `ItemOutcome::allowed_without_intent`.
+        pub fn allowed_without_intent(&self) -> bool {
+            matches!(self, Outcome::Vanished | Outcome::Skipped { .. } | Outcome::Failed { .. })
+        }
+    }
+
+    /// purge-model `BackupRef`.
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    pub struct BackupRef {
+        pub path: String,
+        pub sha256: String,
+        pub bytes: u64,
+    }
+
+    /// purge-model `Inverse`.
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    #[serde(tag = "kind")]
+    #[allow(dead_code)] // fields are read to check the record's shape
+    pub enum Inverse {
+        MoveBack {
+            quarantine_path: String,
+            original_path: String,
+            file_id: String,
+            volume_serial: u64,
+        },
+        RestoreKeyTree {
+            backup: BackupRef,
+        },
+        RestoreValue {
+            backup: BackupRef,
+        },
+        ReinsertSegment {
+            key: String,
+            name: String,
+            index: u32,
+            segment: String,
+            original_value_hash: String,
+            written_value_hash: String,
+            #[serde(default)]
+            backup: Option<BackupRef>,
+        },
+        RecreateDir {
+            path: String,
+            attributes: u32,
+            sddl: String,
+            #[serde(default)]
+            creation_time: Option<u64>,
+            #[serde(default)]
+            last_write_time: Option<u64>,
+        },
+        RecreateKey {
+            backup: BackupRef,
+        },
+        None,
+    }
+
+    impl Inverse {
+        /// purge-model `Inverse::fits`.
+        pub fn fits(&self, op: &ExecOp) -> bool {
+            matches!(
+                (op, self),
+                (ExecOp::QuarantineMove { .. }, Inverse::MoveBack { .. })
+                    | (ExecOp::RemoveDirIfEmpty { .. }, Inverse::RecreateDir { .. })
+                    | (ExecOp::DeleteKeyTree { .. }, Inverse::RestoreKeyTree { .. })
+                    | (ExecOp::DeleteKeyIfEmpty { .. }, Inverse::RecreateKey { .. })
+                    | (ExecOp::DeleteValue { .. }, Inverse::RestoreValue { .. })
+                    | (ExecOp::EditSegment { .. }, Inverse::ReinsertSegment { .. })
+                    | (ExecOp::RemovePackage { .. }, Inverse::None)
+            )
+        }
+    }
+
+    /// purge-model `ItemFacts`.
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    #[serde(tag = "kind")]
+    #[allow(dead_code)] // fields are read to check the record's shape
+    pub enum Facts {
+        File {
+            final_path: String,
+            file_id: String,
+            volume_serial: u64,
+            reparse_tag: u32,
+            attributes: u32,
+            n_links: u32,
+            is_dir: bool,
+            size: u64,
+            #[serde(default)]
+            tree_entries: Option<u64>,
+            #[serde(default)]
+            tree_bytes: Option<u64>,
+        },
+        Key {
+            subkeys: u32,
+            values: u32,
+            is_link: bool,
+            owner: String,
+            last_write_time: u64,
+        },
+        Value {
+            #[serde(rename = "type")]
+            value_type: u32,
+            size: u32,
+            data_sha256: String,
+        },
+        Package,
+        Absent,
+    }
+
+    impl Facts {
+        fn is_dir(&self) -> Option<bool> {
+            match self {
+                Facts::File { is_dir, .. } => Some(*is_dir),
+                _ => None,
+            }
+        }
+    }
+
+    /// purge-model `VolumeRecord`.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+    pub struct Volume {
+        pub root: String,
+        pub serial: u64,
+        pub file_system: String,
+        pub quarantine: String,
+    }
+
+    /// purge-model `exec::journal::Header`.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
+    pub struct Header {
+        pub schema: String,
+        pub session: String,
+        pub created: u64,
+        pub engine_version: String,
+        pub app: String,
+        pub plan_hash: String,
+        pub selection_hash: String,
+        pub policy_version: String,
+        pub mode: String,
+        pub items: u32,
+        pub allow_irreversible: bool,
+        pub volumes: Vec<Volume>,
+    }
+
+    /// purge-model `OutcomeCounts` (every field defaults to 0).
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+    #[serde(default)]
+    pub struct Counts {
+        pub done: u32,
+        pub vanished: u32,
+        pub skipped: u32,
+        pub held_retry: u32,
+        pub pending_reboot: u32,
+        pub failed: u32,
+    }
+
+    impl Counts {
+        pub fn record(&mut self, o: &Outcome) {
+            *match o {
+                Outcome::Done => &mut self.done,
+                Outcome::Vanished => &mut self.vanished,
+                Outcome::Skipped { .. } => &mut self.skipped,
+                Outcome::HeldRetry => &mut self.held_retry,
+                Outcome::PendingReboot => &mut self.pending_reboot,
+                Outcome::Failed { .. } => &mut self.failed,
+            } += 1;
+        }
+    }
+
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    pub struct Validated {
+        pub op: u32,
+        pub item: String,
+        pub target: Target,
+        pub facts: Facts,
+    }
+
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    #[allow(dead_code)] // fields are read to check the record's shape
+    pub struct Intent {
+        pub op: u32,
+        pub item: String,
+        pub exec_op: ExecOp,
+        pub inverse: Inverse,
+        #[serde(default)]
+        pub definition: Option<BackupRef>,
+        pub pre: Facts,
+    }
+
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    pub struct DoneRec {
+        pub op: u32,
+        pub item: String,
+        pub outcome: Outcome,
+    }
+
+    #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+    pub enum AbortReason {
+        BackupWriteFailed,
+        JournalWriteFailed,
+        StorageIntegrity,
+        Cancelled,
+        RolledBack,
+    }
+
+    #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+    pub enum RetentionClass {
+        Quarantine,
+        Backup,
+        Journal,
+    }
+
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    #[serde(tag = "kind")]
+    #[allow(dead_code)] // fields are read to check the record's shape
+    pub enum UndoOutcome {
+        Restored,
+        AlreadyRestored,
+        NothingToUndo,
+        Failed {
+            code: String,
+            #[serde(default)]
+            os_error: Option<u32>,
+            #[serde(default)]
+            detail: String,
+        },
+    }
+
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    #[serde(tag = "kind")]
+    #[allow(dead_code)] // fields are read to check the record's shape
+    pub enum UndoConflict {
+        BackupTampered,
+        BackupMissing,
+        Expired,
+        QuarantineMissing,
+        FileIdMismatch,
+        DestinationExists,
+        KeyExists,
+        ValueDiffers,
+        ValueChanged,
+        GateBlocked { blocker: Blocker },
+        Irreversible,
+    }
+
+    /// purge-model `ReconcileResult`.
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    #[serde(tag = "kind")]
+    pub enum ReconcileResult {
+        Completed,
+        MismatchMovedBack,
+        StillPending,
+        Cancelled,
+        Retried { outcome: Outcome },
+    }
+
+    /// purge-model `exec::journal::Record`.
+    #[derive(Deserialize, Clone, Debug, PartialEq)]
+    #[serde(tag = "rec", rename_all = "snake_case")]
+    #[allow(dead_code)] // fields are read to check the record's shape
+    #[allow(clippy::large_enum_variant)] // read and dropped one line at a time
+    pub enum Record {
+        Header(Header),
+        Validated(Validated),
+        Intent(Intent),
+        Done(DoneRec),
+        GroupEnd {
+            group: u32,
+            ops: u32,
+        },
+        Commit {
+            at: u64,
+            counts: Counts,
+            backup_bytes: u64,
+        },
+        Aborted {
+            at: u64,
+            reason: AbortReason,
+            #[serde(default)]
+            detail: String,
+        },
+        UndoIntent {
+            op: u32,
+        },
+        UndoDone {
+            op: u32,
+            outcome: UndoOutcome,
+        },
+        UndoConflict {
+            op: u32,
+            conflict: UndoConflict,
+            #[serde(default)]
+            detail: String,
+        },
+        Reconcile {
+            at: u64,
+            op: u32,
+            result: ReconcileResult,
+        },
+        Expire {
+            at: u64,
+            op: u32,
+            class: RetentionClass,
+            bytes: u64,
+        },
+    }
+
+    /// One op of the session, folded from its records.
+    #[derive(Serialize, Clone, Debug, PartialEq)]
+    pub struct JOp {
+        /// The op id as text (`OpId`).
+        pub id: String,
+        pub op: u32,
+        /// Candidate id of the plan item.
+        pub item: String,
+        /// ExecOp name from the intent; `None` when the op never got an intent.
+        pub kind: Option<String>,
+        /// The intent's ExecOp, when there is one.
+        pub exec_op: Option<ExecOp>,
+        /// From the intent's ExecOp, else the validated target.
+        pub target: Option<Target>,
+        /// A quarantine move (the object keeps its FileId).
+        pub renamed: bool,
+        /// From the intent's or the validated record's file facts.
+        pub is_dir: Option<bool>,
+        /// The `done` record's outcome.
+        pub done: Option<Outcome>,
+        /// Effective outcome name: the done outcome, changed by later reconcile records (Completed -> Done,
+        /// StillPending -> PendingReboot, Retried -> its outcome, MismatchMovedBack -> MovedBack, Cancelled ->
+        /// Cancelled). `None` = no done record yet.
+        pub outcome: Option<String>,
+        /// Effective outcome as a purge-model ItemOutcome, when it is one.
+        pub effective: Option<Outcome>,
+        /// Reconcile results seen, in order.
+        pub reconciled: Vec<String>,
+        /// Undo records seen for the op (`undo_done:<kind>` / `undo_conflict:<kind>`).
+        pub undo: Vec<String>,
+        /// Line of the validated record.
+        pub line: usize,
+    }
+
+    impl JOp {
+        /// The effective outcome lets the op's change stand (Done) or says the item was already gone.
+        pub fn removed(&self) -> bool {
+            matches!(self.outcome.as_deref(), Some("Done" | "Vanished"))
+        }
+    }
+
+    #[derive(Serialize, Clone, Debug, PartialEq, Default)]
+    pub struct Journal {
+        pub header: Header,
+        pub ops: Vec<JOp>,
+        pub committed: bool,
+        /// Abort reason, when the run stopped early.
+        pub aborted: Option<String>,
+        /// The commit record's counts.
+        pub commit_counts: Option<Counts>,
+        pub undo_records: usize,
+        pub reconcile_records: usize,
+        pub warnings: Vec<String>,
+    }
+
+    impl Journal {
+        pub fn op(&self, id: u32) -> Option<&JOp> {
+            self.ops.iter().find(|o| o.op == id)
+        }
+        /// `committed`, `aborted` or `open`.
+        pub fn state(&self) -> &'static str {
+            if self.committed {
+                "committed"
+            } else if self.aborted.is_some() {
+                "aborted"
+            } else {
+                "open"
+            }
+        }
+    }
+
+    fn undo_name<T: std::fmt::Debug>(prefix: &str, x: &T) -> String {
+        let d = format!("{x:?}");
+        let k: String = d.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+        format!("{prefix}:{k}")
+    }
+
+    /// The text of a journal file. A torn final line can end inside a multi-byte character: an incomplete
+    /// UTF-8 sequence at the very end is dropped (the torn-line rule then applies); invalid UTF-8 anywhere else
+    /// is an error.
+    pub fn read_journal_text(path: &std::path::Path) -> Result<String> {
+        let b = std::fs::read(path).map_err(|e| crate::err::Error(format!("read {}: {e}", path.display())))?;
+        utf8_torn_tail(&b).map_err(|e| crate::err::Error(format!("{}: {e}", path.display())))
+    }
+
+    pub fn utf8_torn_tail(b: &[u8]) -> std::result::Result<String, std::str::Utf8Error> {
+        let b = b.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(b);
+        match std::str::from_utf8(b) {
+            Ok(s) => Ok(s.to_string()),
+            Err(e) if e.error_len().is_none() && !b.ends_with(b"\n") => {
+                Ok(String::from_utf8_lossy(&b[..e.valid_up_to()]).into_owned())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Reads a journal (see the module comment).
+    pub fn parse_journal(text: &str) -> Result<Journal> {
+        let mut j = Journal::default();
+        let mut idx: HashMap<u32, usize> = HashMap::new();
+        let mut have_header = false;
+        let parts: Vec<&str> = text.split('\n').collect();
+        // `split` yields one empty part after a final newline.
+        let n = if text.ends_with('\n') { parts.len() - 1 } else { parts.len() };
+        for (i, raw) in parts.iter().take(n).enumerate() {
+            let ln = i + 1;
+            let line = raw.strip_suffix('\r').unwrap_or(raw);
+            let rec: Record = match serde_json::from_str(line) {
+                Ok(r) => r,
+                Err(e) if i + 1 == n && !text.ends_with('\n') && e.is_eof() => {
+                    j.warnings.push(format!("journal line {ln}: torn final record ignored ({e})"));
                     continue;
                 }
-                if let Some(n) = pick(names, k) {
-                    return Some(n);
+                Err(e) => bail!("journal line {ln}: {e}"),
+            };
+            if !have_header {
+                let Record::Header(h) = rec else { bail!("journal line {ln}: the first record is not the header") };
+                if h.schema != JOURNAL_SCHEMA {
+                    bail!("journal line {ln}: schema {:?}, want {JOURNAL_SCHEMA}", h.schema);
                 }
-                if let Some(n) = find_name(x, names, None, depth + 1) {
-                    return Some(n);
-                }
-            }
-            None
-        }
-        Value::Array(a) => a.iter().find_map(|x| find_name(x, names, None, depth + 1)),
-        _ => None,
-    }
-}
-
-fn find_target(v: &Value, depth: u32) -> Option<Target> {
-    if depth > 6 {
-        return None;
-    }
-    match v {
-        Value::Object(m) => {
-            if m.get("type").and_then(Value::as_str).is_some_and(|t| TARGET_TYPES.contains(&t))
-                && let Ok(t) = serde_json::from_value::<Target>(v.clone())
-            {
-                return Some(t);
-            }
-            if let Some(t) = m.get("target").and_then(|x| find_target(x, depth + 1)) {
-                return Some(t);
-            }
-            m.values().find_map(|x| find_target(x, depth + 1))
-        }
-        Value::Array(a) => a.iter().find_map(|x| find_target(x, depth + 1)),
-        _ => None,
-    }
-}
-
-fn find_bool(v: &Value, key: &str, depth: u32) -> Option<bool> {
-    if depth > 6 {
-        return None;
-    }
-    match v {
-        Value::Object(m) => {
-            if let Some(b) = m.get(key).and_then(Value::as_bool) {
-                return Some(b);
-            }
-            m.values().find_map(|x| find_bool(x, key, depth + 1))
-        }
-        Value::Array(a) => a.iter().find_map(|x| find_bool(x, key, depth + 1)),
-        _ => None,
-    }
-}
-
-fn scalar(v: Option<&Value>) -> Option<String> {
-    match v? {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    }
-}
-
-fn op_id(body: &Value) -> Option<String> {
-    for k in ["op_id", "op", "id", "seq"] {
-        if let Some(s) = scalar(body.get(k)) {
-            return Some(s);
-        }
-    }
-    body.get("op").and_then(|o| scalar(o.get("id")).or_else(|| scalar(o.get("op_id"))))
-}
-
-/// (kind, body, field that held the kind).
-fn record_kind(v: &Value) -> Option<(String, &Value, Option<&'static str>)> {
-    let m = v.as_object()?;
-    for f in ["record", "kind", "rec", "t", "type"] {
-        if let Some(s) = m.get(f).and_then(Value::as_str) {
-            return Some((norm(s), v, Some(f)));
-        }
-    }
-    if m.len() == 1 {
-        let (k, x) = m.iter().next()?;
-        if x.is_object() {
-            return Some((norm(k), x, None));
-        }
-    }
-    None
-}
-
-/// ExecOp kind for a target and an op or plan action name (the legal pairs of purge-model `resolve`).
-fn resolve_kind(t: Option<&Target>, kind: Option<&str>) -> Option<String> {
-    let k = match (t, kind) {
-        (Some(Target::Service { .. }), _) => "DeleteService",
-        (Some(Target::Task { .. }), _) => "DeleteTask",
-        (Some(Target::FirewallRule { .. }), _) => "DeleteFirewallRule",
-        (Some(Target::AppxPackage { .. }), _) => "RemovePackage",
-        (Some(Target::RegKey { .. }), Some("RemoveDirIfEmpty" | "DeleteKeyIfEmpty")) => "DeleteKeyIfEmpty",
-        (Some(Target::RegKey { .. }), Some("DeleteKey" | "DeleteKeyTree" | "Quarantine")) => "DeleteKeyTree",
-        (Some(Target::Path { .. }), Some("Quarantine" | "QuarantineMove")) => "QuarantineMove",
-        (_, Some(k)) => return Some(k.to_string()),
-        (_, None) => return None,
-    };
-    Some(k.to_string())
-}
-
-/// Ops of a journal (see the module comment), plus warnings.
-pub fn parse_journal(text: &str) -> Result<(Vec<JOp>, Vec<String>)> {
-    let mut ops: Vec<JOp> = Vec::new();
-    let mut idx: HashMap<String, usize> = HashMap::new();
-    let mut warnings = Vec::new();
-    let lines: Vec<(usize, &str)> =
-        text.lines().enumerate().map(|(i, l)| (i + 1, l.trim())).filter(|(_, l)| !l.is_empty()).collect();
-    let n = lines.len();
-    for (pos, (ln, l)) in lines.into_iter().enumerate() {
-        let v: Value = match serde_json::from_str(l) {
-            Ok(v) => v,
-            Err(e) if pos + 1 == n => {
-                warnings.push(format!("journal line {ln}: torn final record ignored ({e})"));
+                j.header = h;
+                have_header = true;
                 continue;
             }
-            Err(e) => bail!("journal line {ln}: {e}"),
-        };
-        let Some((kind, body, kf)) = record_kind(&v) else {
-            warnings.push(format!("journal line {ln}: record kind not found"));
-            continue;
-        };
-        match kind.as_str() {
-            "header" => {
-                if let Some(s) = body.get("schema").and_then(Value::as_str)
-                    && !s.starts_with("purge.journal/")
-                {
-                    warnings.push(format!("journal header schema {s:?} is not purge.journal/*"));
+            let get = |idx: &HashMap<u32, usize>, op: u32, what: &str| -> Result<usize> {
+                match idx.get(&op) {
+                    Some(&p) => Ok(p),
+                    None => bail!("journal line {ln}: {what} for op {op}, which has no validated record"),
                 }
-            }
-            "intent" => {
-                let id = op_id(body).unwrap_or_else(|| format!("line:{ln}"));
-                if idx.contains_key(&id) {
-                    continue;
-                }
-                let target = find_target(body, 0);
-                let mut kind = None;
-                for f in ["op", "kind", "op_kind", "exec_op"] {
-                    if Some(f) == kf {
-                        continue;
+            };
+            match rec {
+                Record::Header(_) => bail!("journal line {ln}: a second header"),
+                Record::Validated(v) => {
+                    if idx.contains_key(&v.op) {
+                        bail!("journal line {ln}: op {} validated twice", v.op);
                     }
-                    if let Some(x) = body.get(f)
-                        && let Some(k) = find_name(x, OP_KINDS, None, 0)
+                    idx.insert(v.op, j.ops.len());
+                    j.ops.push(JOp {
+                        id: v.op.to_string(),
+                        op: v.op,
+                        item: v.item,
+                        kind: None,
+                        exec_op: None,
+                        target: Some(v.target),
+                        renamed: false,
+                        is_dir: v.facts.is_dir(),
+                        done: None,
+                        outcome: None,
+                        effective: None,
+                        reconciled: Vec::new(),
+                        undo: Vec::new(),
+                        line: ln,
+                    });
+                }
+                Record::Intent(x) => {
+                    let p = get(&idx, x.op, "intent")?;
+                    if !x.inverse.fits(&x.exec_op) {
+                        bail!("journal line {ln}: op {}: inverse does not fit {}", x.op, x.exec_op.name());
+                    }
+                    let o = &mut j.ops[p];
+                    if o.item != x.item {
+                        bail!("journal line {ln}: op {} intent names item {:?}, validated {:?}", x.op, x.item, o.item);
+                    }
+                    if o.kind.is_some() {
+                        j.warnings
+                            .push(format!("journal line {ln}: second intent for op {}; the last one counts", x.op));
+                    }
+                    let t = x.exec_op.target();
+                    if let Some(v) = &o.target
+                        && o.kind.is_none()
+                        && !canon::ci_eq(&v.canonical(None).canon_string(), &t.canonical(None).canon_string())
                     {
-                        kind = Some(k);
-                        break;
+                        j.warnings.push(format!(
+                            "journal line {ln}: op {}: exec_op target {} differs from the validated target {}",
+                            x.op,
+                            t.canon_string(),
+                            v.canon_string()
+                        ));
                     }
+                    o.kind = Some(x.exec_op.name().to_string());
+                    o.renamed = matches!(x.exec_op, ExecOp::QuarantineMove { .. });
+                    o.is_dir = x.pre.is_dir().or(o.is_dir);
+                    o.target = Some(t);
+                    o.exec_op = Some(x.exec_op);
                 }
-                let kind =
-                    kind.or_else(|| find_name(body, OP_KINDS, kf, 0)).or_else(|| find_name(body, PLAN_ACTIONS, kf, 0));
-                let kind = resolve_kind(target.as_ref(), kind);
-                if target.is_none() {
-                    warnings
-                        .push(format!("journal line {ln}: op {id} has no target; its objects count as outside plan"));
+                Record::Done(d) => {
+                    let p = get(&idx, d.op, "done")?;
+                    let o = &mut j.ops[p];
+                    if o.item != d.item {
+                        bail!("journal line {ln}: op {} done names item {:?}, validated {:?}", d.op, d.item, o.item);
+                    }
+                    if o.kind.is_none() && !d.outcome.allowed_without_intent() {
+                        bail!("journal line {ln}: op {}: outcome {} without an intent", d.op, d.outcome.name());
+                    }
+                    if o.done.is_some() {
+                        j.warnings.push(format!("journal line {ln}: second done for op {}; the last one counts", d.op));
+                    }
+                    o.outcome = Some(d.outcome.name().to_string());
+                    o.effective = Some(d.outcome.clone());
+                    o.done = Some(d.outcome);
+                    o.reconciled.clear();
                 }
-                let renamed = kind.as_deref() == Some("QuarantineMove") || find_bool(body, "renamed", 0) == Some(true);
-                idx.insert(id.clone(), ops.len());
-                ops.push(JOp {
-                    id,
-                    kind,
-                    target,
-                    renamed,
-                    is_dir: find_bool(body, "is_dir", 0),
-                    outcome: None,
-                    line: ln,
-                });
+                Record::Reconcile { op, result, .. } => {
+                    j.reconcile_records += 1;
+                    let p = get(&idx, op, "reconcile")?;
+                    let o = &mut j.ops[p];
+                    let (name, eff): (&str, Option<Outcome>) = match &result {
+                        ReconcileResult::Completed => ("Completed", Some(Outcome::Done)),
+                        ReconcileResult::StillPending => ("StillPending", Some(Outcome::PendingReboot)),
+                        ReconcileResult::Retried { outcome } => ("Retried", Some(outcome.clone())),
+                        ReconcileResult::MismatchMovedBack => ("MismatchMovedBack", None),
+                        ReconcileResult::Cancelled => ("Cancelled", None),
+                    };
+                    o.reconciled.push(name.to_string());
+                    o.outcome = Some(match (&eff, &result) {
+                        (Some(e), _) => e.name().to_string(),
+                        (None, ReconcileResult::MismatchMovedBack) => "MovedBack".to_string(),
+                        _ => "Cancelled".to_string(),
+                    });
+                    o.effective = eff;
+                }
+                Record::UndoDone { op, outcome } => {
+                    j.undo_records += 1;
+                    let p = get(&idx, op, "undo_done")?;
+                    j.ops[p].undo.push(undo_name("undo_done", &outcome));
+                }
+                Record::UndoConflict { op, conflict, .. } => {
+                    j.undo_records += 1;
+                    let p = get(&idx, op, "undo_conflict")?;
+                    j.ops[p].undo.push(undo_name("undo_conflict", &conflict));
+                }
+                Record::UndoIntent { op } => {
+                    j.undo_records += 1;
+                    get(&idx, op, "undo_intent")?;
+                }
+                Record::Expire { op, .. } => {
+                    get(&idx, op, "expire")?;
+                }
+                Record::Commit { counts, .. } => {
+                    j.committed = true;
+                    j.commit_counts = Some(counts);
+                }
+                Record::Aborted { reason, .. } => j.aborted = Some(format!("{reason:?}")),
+                Record::GroupEnd { .. } => {}
             }
-            "done" => {
-                let Some(id) = op_id(body) else {
-                    warnings.push(format!("journal line {ln}: done record without op id"));
-                    continue;
-                };
-                let outcome = body
-                    .get("outcome")
-                    .and_then(|o| find_name(o, OUTCOMES, None, 0))
-                    .or_else(|| find_name(body, OUTCOMES, kf, 0));
-                match idx.get(&id) {
-                    Some(&i) => ops[i].outcome = outcome.map(str::to_string),
-                    None => warnings.push(format!("journal line {ln}: done for unknown op {id}")),
-                }
+        }
+        if !have_header {
+            bail!("journal has no header");
+        }
+        if j.ops.len() != j.header.items as usize {
+            j.warnings.push(format!(
+                "journal: header announces {} items, {} validated records",
+                j.header.items,
+                j.ops.len()
+            ));
+        }
+        Ok(j)
+    }
+
+    /// Journal lines for tests, written the way purge-model serialises its records.
+    #[cfg(test)]
+    pub mod fixture {
+        use serde_json::{Value, json};
+
+        pub const SESSION: &str = "20261115T101502Z-9f3a6c1d2b7e4a50";
+        pub const HASH_A: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        pub const HASH_B: &str = "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752";
+
+        pub fn header(items: usize) -> Value {
+            json!({"rec": "header", "schema": "purge.journal/1", "session": SESSION, "created": 134078121020000000u64,
+                "engine_version": "0.1.0", "app": "fixture", "plan_hash": HASH_A, "selection_hash": HASH_B,
+                "policy_version": "m1a.6", "mode": "post", "items": items, "allow_irreversible": false,
+                "volumes": [{"root": "C:\\", "serial": 1, "file_system": "NTFS",
+                    "quarantine": format!("C:\\ProgramData\\Purge\\Quarantine\\{SESSION}")}]})
+        }
+
+        fn file_facts(path: &str, is_dir: bool) -> Value {
+            json!({"kind": "File", "final_path": path, "file_id": "000102030405060708090a0b0c0d0e0f",
+                "volume_serial": 1, "reparse_tag": 0, "attributes": if is_dir { 16 } else { 32 }, "n_links": 1,
+                "is_dir": is_dir, "size": 0})
+        }
+
+        fn key_facts() -> Value {
+            json!({"kind": "Key", "subkeys": 0, "values": 1, "is_link": false, "owner": "S-1-5-32-544",
+                "last_write_time": 1})
+        }
+
+        fn value_facts() -> Value {
+            json!({"kind": "Value", "type": 1, "size": 4, "data_sha256": HASH_A})
+        }
+
+        fn backup(op: u32) -> Value {
+            json!({"path": format!("reg\\{op:06}.regbackup.json"), "sha256": HASH_A, "bytes": 10})
+        }
+
+        /// (target, exec_op, inverse, facts) for an ExecOp kind.
+        fn parts(op: u32, kind: &str, a: &str, b: &str, c: &str, dir: bool) -> (Value, Value, Value, Value) {
+            match kind {
+                "QuarantineMove" => (
+                    json!({"type": "Path", "path": a}),
+                    json!({"kind": kind, "path": a}),
+                    json!({"kind": "MoveBack", "quarantine_path": format!("C:\\ProgramData\\Purge\\Quarantine\\{SESSION}\\{op:06}\\x"),
+                        "original_path": a, "file_id": "000102030405060708090a0b0c0d0e0f", "volume_serial": 1}),
+                    file_facts(a, dir),
+                ),
+                "RemoveDirIfEmpty" => (
+                    json!({"type": "Path", "path": a}),
+                    json!({"kind": kind, "path": a}),
+                    json!({"kind": "RecreateDir", "path": a, "attributes": 16, "sddl": "O:BAG:SYD:(A;;FA;;;BA)"}),
+                    file_facts(a, true),
+                ),
+                "DeleteKeyTree" => (
+                    json!({"type": "RegKey", "path": a}),
+                    json!({"kind": kind, "key": a}),
+                    json!({"kind": "RestoreKeyTree", "backup": backup(op)}),
+                    key_facts(),
+                ),
+                "DeleteKeyIfEmpty" => (
+                    json!({"type": "RegKey", "path": a}),
+                    json!({"kind": kind, "key": a}),
+                    json!({"kind": "RecreateKey", "backup": backup(op)}),
+                    key_facts(),
+                ),
+                "DeleteValue" => (
+                    json!({"type": "RegValue", "path": a, "name": b}),
+                    json!({"kind": kind, "key": a, "name": b}),
+                    json!({"kind": "RestoreValue", "backup": backup(op)}),
+                    value_facts(),
+                ),
+                "EditSegment" => (
+                    json!({"type": "RegMultiSzSegment", "path": a, "name": b, "segment": c}),
+                    json!({"kind": kind, "key": a, "name": b, "segment": c}),
+                    json!({"kind": "ReinsertSegment", "key": a, "name": b, "index": 1, "segment": c,
+                        "original_value_hash": HASH_A, "written_value_hash": HASH_B}),
+                    value_facts(),
+                ),
+                "RemovePackage" => (
+                    json!({"type": "AppxPackage", "full_name": a}),
+                    json!({"kind": kind, "full_name": a}),
+                    json!({"kind": "None"}),
+                    json!({"kind": "Package"}),
+                ),
+                k => panic!("fixture: unknown kind {k}"),
             }
-            _ => {}
+        }
+
+        /// One op: `validated`, then (when `intent`) `intent`, then (when `outcome` is not null) `done`.
+        /// `a` is the path or key, `b` the value name, `c` the segment.
+        #[allow(clippy::too_many_arguments)]
+        pub fn op(
+            op: u32,
+            kind: &str,
+            a: &str,
+            b: &str,
+            c: &str,
+            dir: bool,
+            intent: bool,
+            outcome: Value,
+        ) -> Vec<Value> {
+            let item = format!("c-{op:02}");
+            let (target, exec_op, inverse, facts) = parts(op, kind, a, b, c, dir);
+            let mut v = vec![json!({"rec": "validated", "op": op, "item": item, "target": target, "facts": facts})];
+            if intent {
+                v.push(json!({"rec": "intent", "op": op, "item": item, "exec_op": exec_op, "inverse": inverse,
+                    "pre": facts}));
+            }
+            if !outcome.is_null() {
+                v.push(json!({"rec": "done", "op": op, "item": item, "outcome": outcome}));
+            }
+            v
+        }
+
+        pub fn done() -> Value {
+            json!({"kind": "Done"})
+        }
+
+        pub fn blocked(blocker: &str) -> Value {
+            json!({"kind": "Skipped", "reason": {"kind": "GateBlocked", "blocker": {"kind": blocker}}})
+        }
+
+        pub fn skipped(reason: &str) -> Value {
+            json!({"kind": "Skipped", "reason": {"kind": reason}})
+        }
+
+        pub fn commit() -> Value {
+            json!({"rec": "commit", "at": 134078121950000000u64,
+                "counts": {"done": 0, "vanished": 0, "skipped": 0, "held_retry": 0, "pending_reboot": 0, "failed": 0},
+                "backup_bytes": 0})
+        }
+
+        /// Lines (each ending in a newline) of a journal: header, the records, commit.
+        pub fn text(items: usize, records: &[Value]) -> String {
+            let mut s = format!("{}\n", header(items));
+            for r in records {
+                s.push_str(&format!("{r}\n"));
+            }
+            s.push_str(&format!("{}\n", commit()));
+            s
         }
     }
-    if ops.is_empty() {
-        warnings.push("journal: no intent records".into());
+
+    #[cfg(test)]
+    mod tests {
+        use super::fixture::*;
+        use super::*;
+        use serde_json::json;
+
+        /// The sample journal of purge-model `exec::journal` tests, line for line (one record of each kind).
+        const MODEL_SAMPLE: &[&str] = &[
+            r#"{"rec":"header","schema":"purge.journal/1","session":"20261115T101502Z-9f3a6c1d2b7e4a50","created":134078121020000000,"engine_version":"0.1.0","app":"vendor-app","plan_hash":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","selection_hash":"60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752","policy_version":"m1a.6","mode":"post","items":3,"allow_irreversible":false,"volumes":[{"root":"C:\\","serial":13902625541364831864,"file_system":"NTFS","quarantine":"C:\\ProgramData\\Purge\\Quarantine\\20261115T101502Z-9f3a6c1d2b7e4a50"}]}"#,
+            r#"{"rec":"validated","op":1,"item":"c-01","target":{"type":"Path","path":"C:\\Program Files\\Vendor App\\app.exe"},"facts":{"kind":"File","final_path":"C:\\Program Files\\Vendor App\\app.exe","file_id":"000102030405060708090a0b0c0d0e0f","volume_serial":13902625541364831864,"reparse_tag":0,"attributes":32,"n_links":1,"is_dir":false,"size":1048576}}"#,
+            r#"{"rec":"validated","op":2,"item":"c-02","target":{"type":"RegKey","path":"HKLM\\SOFTWARE\\Vendor"},"facts":{"kind":"Key","subkeys":2,"values":5,"is_link":false,"owner":"S-1-5-32-544","last_write_time":134078000000000000}}"#,
+            r#"{"rec":"validated","op":3,"item":"c-03","target":{"type":"RegValue","path":"HKLM\\SOFTWARE\\Other","name":""},"facts":{"kind":"Value","type":2,"size":38,"data_sha256":"60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752"}}"#,
+            r#"{"rec":"validated","op":4,"item":"c-04","target":{"type":"Path","path":"C:\\Program Files\\Vendor App"},"facts":{"kind":"File","final_path":"C:\\Program Files\\Vendor App","file_id":"ffffffffffffffffffffffffffffffff","volume_serial":1,"reparse_tag":0,"attributes":16,"n_links":1,"is_dir":true,"size":0,"tree_entries":12,"tree_bytes":4096}}"#,
+            r#"{"rec":"validated","op":5,"item":"c-05","target":{"type":"AppxPackage","full_name":"Vendor.App_1.0.0.0_x64__abc"},"facts":{"kind":"Package"}}"#,
+            r#"{"rec":"validated","op":6,"item":"c-06","target":{"type":"RegKey","path":"HKLM\\SOFTWARE\\Gone"},"facts":{"kind":"Absent"}}"#,
+            r#"{"rec":"intent","op":1,"item":"c-01","exec_op":{"kind":"QuarantineMove","path":"C:\\Program Files\\Vendor App\\app.exe"},"inverse":{"kind":"MoveBack","quarantine_path":"C:\\ProgramData\\Purge\\Quarantine\\20261115T101502Z-9f3a6c1d2b7e4a50\\000001\\app.exe","original_path":"C:\\Program Files\\Vendor App\\app.exe","file_id":"000102030405060708090a0b0c0d0e0f","volume_serial":13902625541364831864},"pre":{"kind":"File","final_path":"C:\\Program Files\\Vendor App\\app.exe","file_id":"000102030405060708090a0b0c0d0e0f","volume_serial":13902625541364831864,"reparse_tag":0,"attributes":32,"n_links":1,"is_dir":false,"size":1048576}}"#,
+            r#"{"rec":"done","op":1,"item":"c-01","outcome":{"kind":"Done"}}"#,
+            r#"{"rec":"intent","op":2,"item":"c-02","exec_op":{"kind":"DeleteKeyTree","key":"HKLM\\SOFTWARE\\Vendor"},"inverse":{"kind":"RestoreKeyTree","backup":{"path":"reg\\000002.regbackup.json","sha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","bytes":4096}},"pre":{"kind":"Key","subkeys":2,"values":5,"is_link":false,"owner":"S-1-5-32-544","last_write_time":134078000000000000}}"#,
+            r#"{"rec":"done","op":2,"item":"c-02","outcome":{"kind":"Failed","code":"AccessDenied","os_error":5}}"#,
+            r#"{"rec":"done","op":3,"item":"c-03","outcome":{"kind":"Skipped","reason":{"kind":"GateBlocked","blocker":{"kind":"RegLink"}}}}"#,
+            r#"{"rec":"intent","op":5,"item":"c-05","exec_op":{"kind":"RemovePackage","full_name":"Vendor.App_1.0.0.0_x64__abc"},"inverse":{"kind":"None"},"definition":{"path":"def\\000005.json","sha256":"60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752","bytes":900},"pre":{"kind":"Package"}}"#,
+            r#"{"rec":"done","op":5,"item":"c-05","outcome":{"kind":"Done"}}"#,
+            r#"{"rec":"group_end","group":1,"ops":3}"#,
+            r#"{"rec":"commit","at":134078121950000000,"counts":{"done":2,"vanished":1,"skipped":1,"held_retry":0,"pending_reboot":0,"failed":1},"backup_bytes":1053572}"#,
+            r#"{"rec":"aborted","at":134078121950000000,"reason":"BackupWriteFailed","detail":"disk full"}"#,
+            r#"{"rec":"aborted","at":1,"reason":"RolledBack"}"#,
+            r#"{"rec":"undo_intent","op":1}"#,
+            r#"{"rec":"undo_done","op":1,"outcome":{"kind":"Restored"}}"#,
+            r#"{"rec":"undo_done","op":3,"outcome":{"kind":"NothingToUndo"}}"#,
+            r#"{"rec":"undo_done","op":2,"outcome":{"kind":"Failed","code":"Os","os_error":1392,"detail":"x"}}"#,
+            r#"{"rec":"undo_conflict","op":2,"conflict":{"kind":"BackupTampered"}}"#,
+            r#"{"rec":"undo_conflict","op":2,"conflict":{"kind":"GateBlocked","blocker":{"kind":"DenyListed","rule":"fs.purge"}},"detail":"the path is protected now"}"#,
+            r#"{"rec":"reconcile","at":134078999990000000,"op":5,"result":{"kind":"Completed"}}"#,
+            r#"{"rec":"reconcile","at":2,"op":5,"result":{"kind":"Retried","outcome":{"kind":"Vanished"}}}"#,
+            r#"{"rec":"expire","at":134104041020000000,"op":1,"class":"Quarantine","bytes":1048576}"#,
+        ];
+
+        #[test]
+        fn reads_the_model_sample() {
+            let text: String = MODEL_SAMPLE.iter().map(|l| format!("{l}\n")).collect();
+            let j = parse_journal(&text).unwrap();
+            assert_eq!(j.header.session, SESSION);
+            assert_eq!(j.ops.len(), 6);
+            let o1 = j.op(1).unwrap();
+            assert_eq!(
+                (o1.kind.as_deref(), o1.outcome.as_deref(), o1.renamed),
+                (Some("QuarantineMove"), Some("Done"), true)
+            );
+            assert_eq!(o1.is_dir, Some(false));
+            assert_eq!(o1.target, Some(Target::Path { path: "C:\\Program Files\\Vendor App\\app.exe".into() }));
+            assert_eq!(o1.undo, ["undo_done:Restored"]);
+            let o2 = j.op(2).unwrap();
+            assert_eq!(o2.outcome.as_deref(), Some("Failed"));
+            assert_eq!(o2.undo.len(), 3);
+            let o3 = j.op(3).unwrap();
+            assert_eq!(o3.kind, None);
+            assert_eq!(o3.effective.as_ref().unwrap().summary(), "Skipped/GateBlocked/RegLink");
+            assert_eq!(o3.target, Some(Target::RegValue { path: "HKLM\\SOFTWARE\\Other".into(), name: String::new() }));
+            let o4 = j.op(4).unwrap();
+            assert_eq!((o4.is_dir, o4.outcome.as_deref()), (Some(true), None));
+            // Reconcile: Completed, then Retried(Vanished).
+            let o5 = j.op(5).unwrap();
+            assert_eq!(o5.done, Some(Outcome::Done));
+            assert_eq!(o5.outcome.as_deref(), Some("Vanished"));
+            assert_eq!(o5.reconciled, ["Completed", "Retried"]);
+            assert!(j.committed);
+            assert_eq!(j.aborted.as_deref(), Some("RolledBack"));
+            assert_eq!(j.commit_counts.unwrap().failed, 1);
+            assert_eq!(j.undo_records, 6);
+            assert_eq!(j.reconcile_records, 2);
+            assert!(j.warnings.iter().any(|w| w.contains("announces 3 items")), "{:?}", j.warnings);
+        }
+
+        #[test]
+        fn torn_final_line_only() {
+            let mut text =
+                fixture::text(1, &fixture::op(1, "DeleteValue", "HKLM\\SOFTWARE\\X", "v", "", false, true, done()));
+            let full = text.clone();
+            text.push_str("{\"rec\":\"done\",\"op\":");
+            let j = parse_journal(&text).unwrap();
+            assert!(j.warnings.iter().any(|w| w.contains("torn")));
+            assert_eq!(j.op(1).unwrap().outcome.as_deref(), Some("Done"));
+            // A torn line followed by a newline, or anywhere but last, is corruption.
+            assert!(parse_journal(&format!("{text}\n")).is_err());
+            let mut lines: Vec<&str> = full.lines().collect();
+            lines.insert(2, "{\"rec\":\"done\",\"op\":");
+            assert!(parse_journal(&lines.join("\n")).is_err());
+            // Torn inside a multi-byte character (a path with a non-ASCII name).
+            let mut bytes = full.clone().into_bytes();
+            bytes.extend_from_slice(b"{\"rec\":\"done\",\"op\":1,\"item\":\"c-\xC3");
+            let j = parse_journal(&utf8_torn_tail(&bytes).unwrap()).unwrap();
+            assert!(j.warnings.iter().any(|w| w.contains("torn")));
+            let mut bad = full.clone().into_bytes();
+            bad.insert(10, 0xFF);
+            assert!(utf8_torn_tail(&bad).is_err());
+            // A complete final line of the wrong shape is not torn.
+            assert!(parse_journal(&format!("{full}{{\"rec\":\"done\",\"op\":1}}")).is_err());
+        }
+
+        #[test]
+        fn refuses_what_the_model_refuses() {
+            let ok = fixture::op(1, "QuarantineMove", "C:\\A\\f", "", "", false, true, done());
+            let good = fixture::text(1, &ok);
+            assert!(parse_journal(&good).is_ok());
+            let bad_cases: Vec<String> = vec![
+                // Other schema id.
+                good.replace("purge.journal/1", "purge.journal/2"),
+                // Header missing / not first.
+                good.lines().skip(1).map(|l| format!("{l}\n")).collect(),
+                // Old guessed shapes.
+                format!("{}\n{}\n", header(1), json!({"record": "Intent", "op_id": 1, "op": "QuarantineMove"})),
+                // Tag spelled like the Rust variant.
+                good.replace("\"rec\":\"done\"", "\"rec\":\"Done\""),
+                // Unknown outcome kind.
+                good.replace("{\"kind\":\"Done\"}", "{\"kind\":\"Maybe\"}"),
+                // Inverse that does not fit the op.
+                good.replace("\"MoveBack\"", "\"RecreateDir\""),
+                // Done for an op that was never validated.
+                format!("{}\n{}\n", header(0), json!({"rec": "done", "op": 9, "item": "c-09", "outcome": done()})),
+                // Done without an intent.
+                fixture::text(1, &fixture::op(1, "QuarantineMove", "C:\\A\\f", "", "", false, false, done())),
+                // A required field missing.
+                good.replace(",\"pre\":", ",\"pre_\":"),
+                // A blank line inside.
+                good.replacen('\n', "\n\n", 2),
+            ];
+            for (i, b) in bad_cases.iter().enumerate() {
+                assert!(parse_journal(b).is_err(), "case {i} parsed: {b}");
+            }
+            // Skipped, Vanished and Failed may come without an intent.
+            let j = fixture::text(
+                1,
+                &fixture::op(1, "QuarantineMove", "C:\\A\\f", "", "", false, false, blocked("SyncRoot")),
+            );
+            assert_eq!(parse_journal(&j).unwrap().op(1).unwrap().outcome.as_deref(), Some("Skipped"));
+        }
     }
-    Ok((ops, warnings))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -519,7 +1276,8 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
     let mut op_rows: Vec<OpRow> = Vec::new();
     for o in ops {
         let t = o.target.as_ref().map(|t| t.canonical(sid));
-        let kind = o.kind.clone().unwrap_or_else(|| "unknown".into());
+        // No intent: the op never acted (refused by a gate, already gone, or failed before any backup).
+        let kind = o.kind.clone().unwrap_or_else(|| NOT_EXECUTED.into());
         let label = if kind == "QuarantineMove" {
             let dir = t
                 .as_ref()
@@ -531,8 +1289,8 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
         } else {
             kind.clone()
         };
-        if o.kind.is_none() {
-            warnings.push(format!("op {} (journal line {}): op kind not found", o.id, o.line));
+        if o.outcome.is_none() {
+            warnings.push(format!("op {} (journal line {}): no done record", o.id, o.line));
         }
         op_rows.push(OpRow {
             id: o.id.clone(),
@@ -544,7 +1302,8 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
             differing: 0,
         });
         if let Some(t) = t {
-            let ran = !matches!(o.outcome.as_deref(), Some("Vanished" | "Skipped" | "Failed"));
+            let ran = o.kind.is_some()
+                && !matches!(o.outcome.as_deref(), Some("Vanished" | "Skipped" | "Failed" | "MovedBack" | "Cancelled"));
             preps.push(Prep { id: o.id.clone(), label, kind, prims: t.primitives(), renamed: o.renamed, ran });
         }
     }
@@ -679,7 +1438,7 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
             if n_obj > 0 {
                 r.percent = Some(((r.identical as f64) * 10000.0 / n_obj as f64).round() / 100.0);
                 r.pass = Some(n_diff == 0);
-            } else if l == OUTSIDE {
+            } else if l == OUTSIDE || l == NOT_EXECUTED {
                 r.pass = Some(true);
             } else {
                 r.pass = Some(false);
@@ -704,7 +1463,7 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
     }
 }
 
-fn read_deep(p: &Path) -> Result<DeepDoc> {
+pub(crate) fn read_deep(p: &Path) -> Result<DeepDoc> {
     let d: DeepDoc = jsonio::read(p)?;
     if d.schema != deep::SCHEMA {
         bail!("{}: schema {:?}, want {}", p.display(), d.schema, deep::SCHEMA);
@@ -715,8 +1474,9 @@ fn read_deep(p: &Path) -> Result<DeepDoc> {
 pub fn cmd_fidelity(a: &FidelityArgs) -> Result<FidelityReport> {
     let before = read_deep(&a.before)?;
     let after = read_deep(&a.after)?;
-    let text = jsonio::read_text(&a.journal)?;
-    let (ops, jw) = parse_journal(&text).with_context(|| format!("journal {}", a.journal.display()))?;
+    let text = journal::read_journal_text(&a.journal)?;
+    let j = parse_journal(&text).with_context(|| format!("journal {}", a.journal.display()))?;
+    let (ops, jw) = (j.ops, j.warnings);
     let amb = match &a.ambient {
         Some(p) => Some(AmbientSet::load(p)?),
         None => None,
@@ -845,27 +1605,32 @@ mod tests {
     }
 
     fn journal() -> String {
-        let lines = [
-            json!({"record": "Header", "schema": "purge.journal/1"}),
-            json!({"record": "Intent", "op_id": 1, "op": {"QuarantineMove": {"target": {"type": "Path", "path": format!("{R}\\ads\\ads.bin")}}}}),
-            json!({"record": "Intent", "op_id": 2, "op": {"kind": "QuarantineMove"}, "target": {"type": "Path", "path": format!("{R}\\hl")}}),
-            json!({"record": "Intent", "op_id": 3, "op": "QuarantineMove", "target": {"type": "Path", "path": format!("{R}\\single.txt")}}),
-            json!({"record": "Intent", "op_id": 4, "op": "RemoveDirIfEmpty", "target": {"type": "Path", "path": format!("{R}\\empty-dir")}}),
-            json!({"record": "Intent", "op_id": 5, "op": "DeleteKeyTree", "target": {"type": "RegKey", "path": format!("{K}\\Tree")}}),
-            json!({"record": "Intent", "op_id": 6, "action": "RemoveDirIfEmpty", "target": {"type": "RegKey", "path": format!("{K}\\Empty")}}),
-            json!({"record": "Intent", "op_id": 7, "op": "DeleteValue", "target": {"type": "RegValue", "path": format!("{K}\\Values"), "name": "del"}}),
-            json!({"Intent": {"op_id": 8, "op": "EditSegment", "target": {"type": "RegMultiSzSegment", "path": format!("{K}\\Values"), "name": "Path", "segment": "b"}}}),
-            json!({"record": "Done", "op_id": 1, "outcome": "Done"}),
-            json!({"record": "Done", "op_id": 6, "outcome": {"Skipped": {"reason": "NoLongerEmpty"}}}),
+        use journal::fixture::{done, header, op, skipped};
+        let n = Value::Null;
+        let ops = [
+            op(1, "QuarantineMove", &format!("{R}\\ads\\ads.bin"), "", "", false, true, done()),
+            op(2, "QuarantineMove", &format!("{R}\\hl"), "", "", true, true, n.clone()),
+            op(3, "QuarantineMove", &format!("{R}\\single.txt"), "", "", false, true, n.clone()),
+            op(4, "RemoveDirIfEmpty", &format!("{R}\\empty-dir"), "", "", true, true, n.clone()),
+            op(5, "DeleteKeyTree", &format!("{K}\\Tree"), "", "", false, true, n.clone()),
+            op(6, "DeleteKeyIfEmpty", &format!("{K}\\Empty"), "", "", false, true, skipped("NoLongerEmpty")),
+            op(7, "DeleteValue", &format!("{K}\\Values"), "del", "", false, true, n.clone()),
+            op(8, "EditSegment", &format!("{K}\\Values"), "Path", "b", false, true, n),
         ];
-        let mut s: String = lines.iter().map(|l| format!("{l}\n")).collect();
-        s.push_str("{\"record\":\"Done\",\"op_");
+        let mut s = format!("{}\n", header(8));
+        for l in ops.iter().flatten() {
+            s.push_str(&format!("{l}\n"));
+        }
+        s.push_str("{\"rec\":\"done\",\"op\":3,\"it");
         s
     }
 
+    fn ops_of(text: &str) -> Vec<JOp> {
+        parse_journal(text).unwrap().ops
+    }
+
     fn run(a: &DeepDoc, c: &DeepDoc) -> FidelityReport {
-        let (ops, _) = parse_journal(&journal()).unwrap();
-        compare(a, c, &ops, None, None)
+        compare(a, c, &ops_of(&journal()), None, None)
     }
 
     fn row<'a>(r: &'a FidelityReport, l: &str) -> &'a Row {
@@ -874,7 +1639,8 @@ mod tests {
 
     #[test]
     fn journal_shapes() {
-        let (ops, w) = parse_journal(&journal()).unwrap();
+        let j = parse_journal(&journal()).unwrap();
+        let (ops, w) = (j.ops, j.warnings);
         assert_eq!(ops.len(), 8);
         let k: Vec<&str> = ops.iter().map(|o| o.kind.as_deref().unwrap()).collect();
         assert_eq!(
@@ -895,7 +1661,7 @@ mod tests {
         assert_eq!(ops[5].outcome.as_deref(), Some("Skipped"));
         assert_eq!(ops[7].id, "8");
         assert!(w.iter().any(|x| x.contains("torn")));
-        assert!(parse_journal("{bad\n{\"record\":\"Intent\"}\n").is_err());
+        assert!(parse_journal("{bad\n{\"rec\":\"intent\"}\n").is_err());
     }
 
     #[test]
@@ -1172,8 +1938,7 @@ mod tests {
             union: crate::ambient::Matcher::new("u", &[format!("P:{R}\\sibling.txt")], &[]).unwrap(),
             runs: Vec::new(),
         };
-        let (ops, _) = parse_journal(&journal()).unwrap();
-        let r = compare(&a, &c, &ops, Some(&amb), None);
+        let r = compare(&a, &c, &ops_of(&journal()), Some(&amb), None);
         assert!(r.ok, "{:#?}", r.differences);
         assert_eq!(r.excluded.ambient_objects, 1);
     }
@@ -1181,22 +1946,15 @@ mod tests {
     #[test]
     fn op_without_objects_fails_its_row() {
         let a = doc();
-        let j = format!(
-            "{}\n",
-            json!({"record": "Intent", "op_id": 1, "op": "DeleteKeyTree", "target": {"type": "RegKey", "path": "HKLM\\SOFTWARE\\NotCaptured"}})
-        );
-        let (ops, _) = parse_journal(&j).unwrap();
-        let r = compare(&a, &a, &ops, None, None);
+        use journal::fixture::{done, op, text};
+        let j = text(1, &op(1, "DeleteKeyTree", "HKLM\\SOFTWARE\\NotCaptured", "", "", false, true, done()));
+        let r = compare(&a, &a, &ops_of(&j), None, None);
         assert!(!r.ok);
         let x = row(&r, "DeleteKeyTree");
         assert_eq!((x.objects, x.pass), (0, Some(false)));
         // RemovePackage is reported, never compared.
-        let j = format!(
-            "{}\n",
-            json!({"record": "Intent", "op_id": 1, "target": {"type": "AppxPackage", "full_name": "A_1"}})
-        );
-        let (ops, _) = parse_journal(&j).unwrap();
-        let r = compare(&a, &a, &ops, None, None);
+        let j = text(1, &op(1, "RemovePackage", "A_1", "", "", false, true, done()));
+        let r = compare(&a, &a, &ops_of(&j), None, None);
         assert!(r.ok);
         assert_eq!(row(&r, "RemovePackage").pass, None);
     }
@@ -1207,19 +1965,13 @@ mod tests {
         let mut c = doc();
         let i = c.files.iter().position(|f| f.path.ends_with("a-link.dll")).unwrap();
         c.files[i].file_id = Some("ff".into());
-        let j: String = [
-            json!({"record": "Intent", "op_id": "child", "op": "QuarantineMove", "target": {"type": "Path", "path": format!("{R}\\hl\\copy")}}),
-            json!({"record": "Intent", "op_id": "parent", "op": "QuarantineMove", "target": {"type": "Path", "path": format!("{R}\\hl")}}),
-            json!({"record": "Done", "op_id": "child", "outcome": "Vanished"}),
-            json!({"record": "Done", "op_id": "parent", "outcome": "Done"}),
-        ]
-        .iter()
-        .map(|l| format!("{l}\n"))
-        .collect();
-        let (ops, _) = parse_journal(&j).unwrap();
-        let r = compare(&a, &c, &ops, None, None);
+        use journal::fixture::{done, op, text};
+        let child = op(1, "QuarantineMove", &format!("{R}\\hl\\copy"), "", "", true, true, json!({"kind": "Vanished"}));
+        let parent = op(2, "QuarantineMove", &format!("{R}\\hl"), "", "", true, true, done());
+        let j = text(2, &[child, parent].concat());
+        let r = compare(&a, &c, &ops_of(&j), None, None);
         assert_eq!(r.differences.len(), 1);
-        assert_eq!(r.differences[0].op.as_deref(), Some("parent"));
+        assert_eq!(r.differences[0].op.as_deref(), Some("2"));
         assert_eq!(r.differences[0].fields[0].field, "file_id");
     }
 
@@ -1255,17 +2007,17 @@ mod tests {
         b.add_doc(&targets).unwrap();
         let scope: Scope = b.finish();
         assert!(scope.warnings.is_empty(), "{:?}", scope.warnings);
-        let j: String = [
-            json!({"record": "Intent", "op_id": 1, "op": "QuarantineMove", "target": {"type": "Path", "path": format!("{root}\\app\\tree")}}),
-            json!({"record": "Intent", "op_id": 2, "op": "QuarantineMove", "target": {"type": "Path", "path": single}}),
-            json!({"record": "Intent", "op_id": 3, "op": "DeleteKeyTree", "target": {"type": "RegKey", "path": k.canon("Tree")}}),
-            json!({"record": "Intent", "op_id": 4, "op": "DeleteValue", "target": {"type": "RegValue", "path": k.canon("Vals"), "name": "del"}}),
+        use journal::fixture::{done, op, text};
+        let recs = [
+            op(1, "QuarantineMove", &format!("{root}\\app\\tree"), "", "", true, true, done()),
+            op(2, "QuarantineMove", &single, "", "", false, true, done()),
+            op(3, "DeleteKeyTree", &k.canon("Tree"), "", "", false, true, done()),
+            op(4, "DeleteValue", &k.canon("Vals"), "del", "", false, true, done()),
         ]
-        .iter()
-        .map(|l| format!("{l}\n"))
-        .collect();
-        let (ops, w) = parse_journal(&j).unwrap();
-        assert!(w.is_empty(), "{w:?}");
+        .concat();
+        let j = parse_journal(&text(4, &recs)).unwrap();
+        assert!(j.warnings.is_empty(), "{:?}", j.warnings);
+        let ops = j.ops;
 
         let a = capture(&scope, None);
         assert_eq!(a.errors, 0, "{:#?}", a.files.iter().chain([]).filter(|f| f.error.is_some()).collect::<Vec<_>>());
