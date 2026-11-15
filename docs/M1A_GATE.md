@@ -5,7 +5,8 @@
 - Procedure: `docs/M1A_DESIGN.json` `gate_procedure` A to E, `vm/RIG.md` §4a and §4b, `docs/ENGINE_PLAN.md` §1.4.
 - Decisions taken on the way (waivers, deviations, deferrals): `docs/DECISIONS.md`. Reviews: `docs/reviews/m1a/`.
 
-**Verdict: PASS**, with two recorded deviations (section 5) and the limits of section 6. The verdict was reached
+**Verdict: PASS**, with two recorded deviations (section 5) and the limits of section 6. (The live check was
+repeated on Inbound later the same day, `r3i-`; the judgement in section 1 is settled by it.) The verdict was reached
 without the user, under the standing instruction to decide and record; the points a reader may want to judge
 again are marked "judgement" below.
 
@@ -20,6 +21,7 @@ again are marked "judgement" below.
 | Engine m1a.6 | commit `622c64d` (tree `8fcaab30…` by `docs/reviews/m1a/pass11/treehash.py`) | host | `cargo xtask ci` passes (981 tests); the 10 snapshot tests pass; two independent reviews of pass eleven, the second "accept"; mutation run in `docs/reviews/m1a/engine-pass11-review.md` |
 | Offline re-plan | m1a.6 | 74 older captures (post and live modes), 29 captures of the four campaigns | Differences against m1a.5 are the intended ones only (section 3) |
 | Live check `r3-` | m1a.6, `purge-engine.exe` sha256 `128556f84e2b…` built on Windows (msvc) from `622c64d` | Clean-Pro, `rig-base`: firefox, firefox-tb, ff-esr, with extra checks | All engine calls exit 0; plans as predicted (section 3); score in `vm/truth/r3` |
+| Live check `r3i-` | the same m1a.6 binary | Inbound, `rig-base`: firefox, firefox-tb, with extra checks (run after the VM was repaired) | Both runs ok; plans equal r2 except the two intended rows; score in `vm/truth/r3i` |
 
 The gate campaign ran on m1a.5 and the engine then moved to m1a.6. By the decision of 2026-11-14 the result
 carries over where the m1a.6 plan of a capture is identical, and a run whose plan differs is repeated live.
@@ -28,6 +30,10 @@ carries over where the m1a.6 plan of a capture is identical, and a run whose pla
 Inbound: VirtualBox on Windows cannot load the Inbound VM at present (its settings file was last written by the
 Linux build and no longer carries the disk registry). The repeated plans equal the r2 plans row for row except
 the two profile rows that were meant to change, so the r2 numbers are taken to stand for m1a.6.
+
+**Settled the same day.** The Inbound VM was repaired (`vm/RIG.md`, Linux host section) and the two runs were
+repeated there as `r3i-firefox` and `r3i-firefox-tb`, same snapshot and VM as r2. Result in section 3: the
+plans differ from r2 only in the two profile rows.
 
 ## 2. Criteria (gate section D), r2 campaign
 
@@ -89,6 +95,22 @@ scan of the still-installed app has 0 Safe and 0 preselected items and the insta
 items); the repeated post scan gives the same plan hash. Recall figures of r3-firefox and r3-firefox-tb are not
 comparable with r2: Clean-Pro has no null runs in this campaign and its Store churn inflates the truth set.
 
+The same check on Inbound (`r3i-`, m1a.6, `rig-base`, the VM and snapshot of r2):
+
+| Run | Items | Safe (= preselected) | Likely | Weak | Blocked | Against r2 (m1a.5) |
+|---|---:|---:|---:|---:|---:|---|
+| r3i-firefox | 20 | 10 | 7 | 2 | 1 | The two profile folders Weak to Likely; nothing else |
+| r3i-firefox-tb | 14 | 8 | 3 | 2 | 1 | The same two rows; nothing else |
+
+Against r3 (Clean-Pro) the plans differ only in the user's SID. Score (`vm/truth/r3i/m1a-score.md`, with the
+ambient set of the r2 null runs): danger listed 0, precision_safe 100% (10 of 10 and 8 of 8), user data
+preselected 0, every offered item a hit, `invdiff` 0 differences. Extra checks: the scan of the installed app
+has 0 Safe and 0 preselected items and the install root Blocked (100 and 93 items); the repeated post scan
+gives the same plan hash. recall_visible_nd is 25.9% (firefox) and 25.0% (firefox-tb) against BCU's 18.5% on
+this truth, so the bar is cleared. The figures are lower than r2's 28.0% and 31.6% because the truth set is
+larger (27 and 24 entries against 25 and 19): no null runs were made on the day, and the r2 nulls remove less
+of this day's Windows churn. The number of covered entries is the same as in r2.
+
 ## 4. Bands (§1.4), by hand on r2 and on the live check
 
 Safety invariant, from the bands review: all 299 Safe items of the seven r2 plans are provably the app's; no item
@@ -124,7 +146,7 @@ These bands rest on unit tests and replay only.
 | Extended set, ff-reinstall: 7 Safe "danger" items accepted as a scorer artefact | They are Firefox's own leftovers from the first of two installs; scored against a snapshot without it danger is 0 | ext review, DECISIONS 2026-11-15 |
 | Three ambient-noise rules in the scorer (TrustedInstaller service values, `SIH\SLS\{GUID}`, WER `TermReason`) | Written by Windows servicing with no app involved; Firefox passes without them too | DECISIONS 2026-11-14 |
 | The gate campaign ran with 3D acceleration off, on a Linux host (VirtualBox KVM build), with binaries built by cargo-xwin | The Windows host froze during the first attempts | DECISIONS 2026-11-14 |
-| The live check of m1a.6 ran on Clean-Pro, not Inbound | Section 1, judgement | this report |
+| The live check of m1a.6 ran on Clean-Pro, not Inbound | Section 1, judgement. Closed: repeated on Inbound as `r3i-` with the same result | this report |
 
 ## 6. Limits carried forward
 

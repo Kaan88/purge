@@ -10,8 +10,8 @@ is at policy **m1a.6** and verified: full CI, snapshot tests, an independent rev
 follow-up ("accept"), a mutation run, an offline re-plan of every capture, and a short live campaign with the
 final binary. The work is committed locally on `m1a` on top of `f0923b2`; **nothing of it is pushed.** One
 point is a judgement the user may want to look at: the live repeat of the two Firefox gate runs was done on
-Clean-Pro, because the Inbound VM could not be loaded on Windows at the time. It has been repaired since
-(below), so the repeat can now be run on Inbound itself if wanted; it has not been.
+Clean-Pro, because the Inbound VM could not be loaded on Windows at the time. The VM was repaired afterwards
+(below) and the repeat was run on Inbound too (`r3i-`): same result, so that judgement is closed.
 
 ## Engine
 
@@ -80,8 +80,9 @@ Left open on purpose (all in `docs/DECISIONS.md`):
 | `x2-` extended | m1a.5 | Clean-Pro, rig-base | 16 | Nothing dangerous ticked; 7 foreign items Likely, fixed in m1a.6. |
 | `x2-nb-` no baseline | m1a.5 | Clean-Pro, rig-base | 5 | 2 items, both the shortcut-history slot, unticked. |
 | `r3-` live check | m1a.6 | Clean-Pro, rig-base | 3 | Danger offered 0; ff-esr keeps 7 items Blocked; live scan 0 Safe; repeat scan identical. |
+| `r3i-` live check | m1a.6 | Inbound, rig-base | 2 | Plans equal r2 except the two profile rows; danger 0; live scan 0 Safe; repeat scan identical. |
 
-Scores: `vm/truth/{r2,f2d,x2,x2-nb,r3}`. `vm/runs/` (the captures) is gitignored and exists only on this disk.
+Scores: `vm/truth/{r2,f2d,x2,x2-nb,r3,r3i}`. `vm/runs/` (the captures) is gitignored and exists only on this disk.
 `vm/RIG.md` now describes the scorer changes (danger split, replaced values, earlier install of the same app,
 Store self-updates, classified sanity residual, scoring on Windows).
 
