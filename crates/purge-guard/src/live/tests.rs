@@ -1037,6 +1037,38 @@ fn key_probe_lists_the_chain_below_the_hive() {
     assert_eq!(why, reason::KEY_IS_HIVE_ROOT);
 }
 
+/// Review M2 final, S6: a key path with an empty segment canonicalises, but its last segment is not the
+/// key's leaf; such a spelling is refused, so that nothing whose backup could not be read back as the
+/// op's is ever deleted. One leading backslash (the NT form) is not an empty segment.
+#[test]
+fn key_probe_refuses_a_spelling_with_an_empty_segment() {
+    for spelled in [
+        r"HKLM\SOFTWARE\Vendor\App\",
+        r"HKLM\SOFTWARE\Vendor\App\\",
+        r"HKLM\SOFTWARE\Vendor\\App",
+        r"\\HKLM\SOFTWARE\Vendor\App",
+    ] {
+        let refusal = key_probe(&key(spelled), LIST.env()).unwrap_err();
+        assert_eq!(
+            (refusal.blocker, refusal.reason),
+            (
+                Blocker::DenyListed {
+                    rule: EMPTY_SEGMENT_RULE.to_owned()
+                },
+                reason::KEY_NOT_CANONICAL
+            ),
+            "{spelled}"
+        );
+        let refusal = key_probe(&value(spelled.to_owned(), "v"), LIST.env()).unwrap_err();
+        assert_eq!(refusal.reason, reason::KEY_NOT_CANONICAL, "{spelled}");
+    }
+    let probe = key_probe(&key(r"\REGISTRY\MACHINE\SOFTWARE\Vendor\App"), LIST.env()).unwrap();
+    assert_eq!(
+        probe.open,
+        at(KeyRoot::Hklm, View::K64, r"SOFTWARE\Vendor\App")
+    );
+}
+
 /// Review M2 wave 1, S1: the probe of a 32-bit `HKLM` class key must not lead through
 /// `HKLM\SOFTWARE\WOW6432Node\Classes`, which on Windows 11 is a registry link to
 /// `HKLM\SOFTWARE\Classes\Wow6432Node`. The route that opens is the 32-bit view of

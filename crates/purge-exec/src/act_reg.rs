@@ -120,7 +120,11 @@
 //! A run may delete values and subkeys of a key and then the key (delete-if-empty, or a tree that
 //! still holds other things); the plan puts the inner items first. The executor tells the gate context
 //! the run's ops and each completed op (`GateCtx::set_run_ops`, `GateCtx::note_done`), and the gate
-//! accepts the key as changed by exactly those own ops (see `crate::gate`). Each item keeps its own
+//! accepts the key as changed by exactly those own ops (see `crate::gate`). A key action's backup is
+//! also bound to the whole tree its validation read (`gate::bind_tree`): the captured tree, with what
+//! those own ops changed in it put back, must have the digest the `validated` record holds, so a change
+//! by anyone else anywhere in the tree, also one made before an own op on the same key, is refused before
+//! anything is deleted (review M2 final S4, S5). Each item keeps its own
 //! backup and inverse: the key's backup holds the key as it was at its act (without what the earlier
 //! items removed), each earlier item's backup holds what it removed. Undo must run the session's
 //! registry ops in **reverse op order**: the key is put back first (`RecreateKey` re-creates the empty
@@ -134,9 +138,9 @@ use std::path::PathBuf;
 use purge_guard::containers;
 use purge_guard::deny::Exemptions;
 use purge_guard::live::{self, Refusal};
-use purge_model::exec::journal::{Intent, UndoConflict, UndoOutcome};
+use purge_model::exec::journal::{Intent, ItemFacts, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{BackupRef, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
-use purge_model::exec::regbackup::{RegBackup, RegBackupBody, RegBackupSchema};
+use purge_model::exec::regbackup::{RegBackup, RegBackupBody, RegBackupSchema, WideB64};
 use purge_model::{Blocker, Target};
 use purge_win::fs_write::FsError;
 use purge_win::os::Win32Error;
@@ -577,18 +581,24 @@ pub fn prepare_reg(
             Ok(doc) => (doc, Act::Empty),
             Err(result) => return decided(result),
         },
-        ExecOp::DeleteValue { name, .. } => {
-            match regbackup::capture_value(checked.key(), &key, name) {
-                Ok(Some(doc)) => (doc, Act::Value { name: name.clone() }),
-                Ok(None) => {
-                    return decided(RegResult::new(
-                        ItemOutcome::Vanished,
-                        format!("{} no longer exists", what(exec_op)),
-                    ));
-                }
+        // The value as the gate read and checked it on the acting handle, not read again (review M2
+        // final M11); the delete removes it only while it is still exactly this.
+        ExecOp::DeleteValue { name, .. } => match checked.value().cloned() {
+            Some(value) => match regbackup::value_backup(&key, value) {
+                Ok(doc) => (doc, Act::Value { name: name.clone() }),
                 Err(e) => return decided(capture_refused(&e, exec_op)),
+            },
+            None => {
+                return decided(RegResult::failed(
+                    FailCode::Internal,
+                    None,
+                    format!(
+                        "the gate passed {} without the value it read; left untouched",
+                        what(exec_op)
+                    ),
+                ));
             }
-        }
+        },
         ExecOp::EditSegment {
             name,
             segment,
@@ -610,7 +620,29 @@ pub fn prepare_reg(
         | ExecOp::RemoveDirIfEmpty { .. }
         | ExecOp::RemovePackage { .. } => unreachable!("checked by is_registry above"),
     };
+    // A key action is bound to the whole tree it validated, not only to the root's facts: the tree the
+    // backup will hold must be that tree as this run's own completed ops left it (review M2 final S4,
+    // S5). The digest of the capture goes into the intent's `pre`.
+    let mut pre = checked.item_facts().clone();
+    if let (Act::Tree | Act::Empty, Some(tree)) = (&act, doc.tree()) {
+        if let Err(refusal) = gate::bind_tree(ctx, op, &checked, tree) {
+            return decided(refused(&refusal, exec_op));
+        }
+        if let ItemFacts::Key(facts) = &mut pre {
+            facts.tree_sha256 = regbackup::tree_digest(tree);
+        }
+    }
+    // The document must be this op's backup before it is written (review M2 final S6).
+    if let Err(detail) = backup_for_op(ctx, &doc, exec_op, &checked) {
+        return decided(not_this_ops_backup(exec_op, &detail));
+    }
     let backup = write_backup(session, op, &doc)?;
+    // ... and the file as written and read back (or adopted) too, before anything is deleted.
+    if let Err(detail) = backup_for_op(ctx, backup.doc(), exec_op, &checked)
+        .and_then(|()| same_capture(backup.doc(), &doc))
+    {
+        return decided(not_this_ops_backup(exec_op, &detail));
+    }
     let reference = backup.reference().clone();
     let inverse = match &act {
         Act::Tree => Inverse::RestoreKeyTree { backup: reference },
@@ -632,7 +664,7 @@ pub fn prepare_reg(
         exec_op: exec_op.clone(),
         inverse,
         definition: None,
-        pre: checked.item_facts().clone(),
+        pre,
     };
     Ok(RegPrepared::Ready(Box::new(RegAction {
         intent,
@@ -640,6 +672,90 @@ pub fn prepare_reg(
         backup,
         act,
     })))
+}
+
+/// Whether `doc` is the backup of `exec_op` as the gate opened it (`checked`), checked before the
+/// backup is written and again on the file as read back, so that nothing is deleted whose backup undo,
+/// probe or completion would refuse (review M2 final S6):
+///
+/// - the document is the op's backup as every reader checks it (`RegBackup::validate_for`: the op's
+///   key text, a tree whose root name is the leaf of that text, or the op's value);
+/// - its key text leads to the address, view and root the gate opened ([`live::key_probe`]);
+/// - a tree's root name is the leaf of that address (the name undo re-creates below the parent);
+/// - a value is the value the gate read on the acting handle (name, type, data).
+fn backup_for_op(
+    ctx: &GateCtx,
+    doc: &RegBackup,
+    exec_op: &ExecOp,
+    checked: &CheckedKey,
+) -> Result<(), String> {
+    doc.validate_for(exec_op)
+        .map_err(|e| format!("it is not the op's backup: {e}"))?;
+    let target = match exec_op {
+        ExecOp::DeleteValue { name, .. } | ExecOp::EditSegment { name, .. } => Target::RegValue {
+            path: doc.key.clone(),
+            name: name.clone(),
+        },
+        _ => Target::RegKey {
+            path: doc.key.clone(),
+        },
+    };
+    let probe = live::key_probe(&target, ctx.deny().env())
+        .map_err(|refusal| format!("its key does not lead to a key: {refusal}"))?;
+    if !probe.open.is_same(checked.address()) {
+        return Err(format!(
+            "its key leads to {}, not to {}",
+            probe.open,
+            checked.address()
+        ));
+    }
+    match (&doc.body, exec_op) {
+        (RegBackupBody::Tree(tree), _) => {
+            let leaf = purge_guard::prefix::leaf(&checked.address().path).unwrap_or_default();
+            let root = tree.keys.first().map(|key| key.name_b64.0.clone());
+            if root.map(|units| regbackup::fold_units(&units)) != Some(regbackup::fold_str(leaf)) {
+                return Err(format!("its root key is not {leaf:?}"));
+            }
+        }
+        (RegBackupBody::Value(value), ExecOp::DeleteValue { .. }) => {
+            let read = checked.value();
+            let same = read.is_some_and(|read| {
+                value.name_b64 == WideB64::from(read.name.as_str())
+                    && value.value_type == read.ty
+                    && value.data_b64.0 == read.data
+            });
+            if !same {
+                return Err("its value is not the one the gate read".to_owned());
+            }
+        }
+        (RegBackupBody::Value(_), _) => {}
+    }
+    Ok(())
+}
+
+/// Whether the backup file holds what was captured (`doc`), the capture time aside (an adopted file
+/// keeps its own).
+fn same_capture(found: &RegBackup, doc: &RegBackup) -> Result<(), String> {
+    let fresh = RegBackup {
+        captured: found.captured,
+        ..doc.clone()
+    };
+    if *found == fresh {
+        Ok(())
+    } else {
+        Err("the file does not hold what was captured".to_owned())
+    }
+}
+
+/// The result of a backup that is not the op's backup: skipped, nothing deleted.
+fn not_this_ops_backup(exec_op: &ExecOp, detail: &str) -> RegResult {
+    RegResult::skipped(
+        SkipReason::NoVerifiedBackup,
+        format!(
+            "{}: the backup was not used: {detail}; left untouched",
+            what(exec_op)
+        ),
+    )
 }
 
 /// Delete-if-empty: the counts read again on the gated handle, then the one-key capture.

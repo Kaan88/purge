@@ -1380,6 +1380,7 @@ mod tests {
                     is_link: false,
                     owner: "S-1-5-32-544".into(),
                     last_write_time: purge_model::FileTime(1),
+                    tree_sha256: None,
                 }),
             ),
             validated(4, path(r"C:\Vendor\gone.txt"), ItemFacts::Absent),

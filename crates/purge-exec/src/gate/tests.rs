@@ -1735,8 +1735,17 @@ fn key_actions_and_emptiness() {
         ),
         (1, 1, false, sid.as_str())
     );
+    // The validate pass reads the whole tree for its digest; the act-time gate reads the key's own facts
+    // and leaves the tree to `bind_tree` (on the backup's capture).
+    assert!(facts.tree_sha256.is_some());
     let checked = open_and_check_key(&ctx, id).pass().unwrap();
-    assert_eq!(checked.item_facts(), &validated.facts);
+    assert_eq!(
+        checked.item_facts(),
+        &ItemFacts::Key(RegFacts {
+            tree_sha256: None,
+            ..facts.clone()
+        })
+    );
     assert_eq!(
         (checked.address().root, checked.address().view),
         (KeyRoot::Hku, View::K64)
@@ -2084,6 +2093,53 @@ fn a_key_changed_after_validation_is_refused_at_the_act() {
         Blocker::ChangedSinceScan,
         reason::KEY_CHANGED,
     );
+
+    // A change below the root (review M2 final S5) moves none of the root's facts: the act-time gate
+    // passes, and the binding of the tree its backup captures refuses it. Unchanged, it is bound.
+    let validated_again = validate(&ctx(&[]), &item);
+    let (ctx4, id4) = fresh(&validated_again);
+    let bound = |ctx: &GateCtx, id| {
+        let checked = open_and_check_key(ctx, id)
+            .pass()
+            .expect("the root is as validated");
+        let doc = regbackup::capture_tree(checked.key(), &k.wire(r"Vendor\App"), 50).unwrap();
+        bind_tree(ctx, id, &checked, doc.tree().unwrap())
+    };
+    assert_eq!(bound(&ctx4, id4), Ok(()));
+    for (what, below) in [
+        ("a value added one level down", r"Vendor\App\Below1"),
+        ("a value added two levels down", r"Vendor\App\Below2\Deeper"),
+    ] {
+        k.create(below);
+        let validated_again = validate(&ctx(&[]), &item);
+        let (ctx5, id5) = fresh(&validated_again);
+        k.set(below, "late", REG_SZ, &utf16z("late"));
+        let refusal = bound(&ctx5, id5).unwrap_err();
+        assert_eq!(
+            (refusal.blocker, refusal.reason),
+            (Blocker::ChangedSinceScan, reason::TREE_CHANGED),
+            "{what}"
+        );
+    }
+    // A record without a digest (a journal written before the field) binds nothing: refused.
+    let validated_again = validate(&ctx(&[]), &item);
+    let mut record = ctx4.journalled(id4).unwrap().1.clone();
+    if let (ItemFacts::Key(facts), Some(again)) = (&mut record.facts, validated_again.item_facts())
+    {
+        *facts = match again {
+            ItemFacts::Key(again) => RegFacts {
+                tree_sha256: None,
+                ..again
+            },
+            other => panic!("{other:?}"),
+        };
+    }
+    let mut bare = self::ctx(&[]);
+    bare.record(&op, &record, 5_000).unwrap();
+    assert_eq!(
+        bound(&bare, record.op).unwrap_err().reason,
+        reason::TREE_CHANGED
+    );
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -2338,6 +2394,65 @@ fn own_effects_explain_only_what_the_runs_completed_ops_did() {
         Some(Blocker::RegLink),
         "{outcome:?}"
     );
+
+    // Changed by someone else before the own ops (review M2 final S4): `keep` rewritten with data of
+    // the same size, then the own ops act. The root's counts balance and its last write time is the own
+    // ops', so the root's facts are explained; the tree binding on the capture is not.
+    for outside in [false, true] {
+        let k = TestKey::new();
+        k.create(r"App\Sub");
+        k.set("App", "a", REG_SZ, &utf16z("a"));
+        k.set("App", "keep", REG_DWORD, &[1, 0, 0, 0]);
+        let app = k.wire("App");
+        let value_a = value_op(&app, "a");
+        let sub = ExecOp::DeleteKeyTree {
+            key: k.wire(r"App\Sub"),
+        };
+        let ops = [
+            value_a.clone(),
+            sub.clone(),
+            ExecOp::DeleteKeyTree { key: app.clone() },
+        ];
+        let mut ctx = self::ctx(&[]);
+        ctx.set_run_ops(numbered(&ops));
+        for op in &ops {
+            validate_and_record(&mut ctx, &GateItem::new(op, long()));
+        }
+        if outside {
+            k.set("App", "keep", REG_DWORD, &[2, 0, 0, 0]);
+        }
+        k.open("App", KeyAccess::SET_VALUE)
+            .delete_value("a")
+            .unwrap();
+        TestKey::nuke(&k.open(r"App\Sub", KeyAccess::DELETE));
+        ctx.note_done(&with_validated_pre(
+            &ctx,
+            value_done(1, &value_a, ItemOutcome::Done),
+        ));
+        ctx.note_done(&tree_done(2, &sub, ItemOutcome::Done));
+        let checked = open_and_check_key(&ctx, tree_id)
+            .pass()
+            .expect("the root's facts are explained");
+        let doc = regbackup::capture_tree(checked.key(), &app, 50).unwrap();
+        let bound = bind_tree(&ctx, tree_id, &checked, doc.tree().unwrap());
+        if outside {
+            let refusal = bound.unwrap_err();
+            assert_eq!(
+                (refusal.blocker, refusal.reason),
+                (Blocker::ChangedSinceScan, reason::TREE_CHANGED)
+            );
+        } else {
+            assert_eq!(bound, Ok(()));
+        }
+    }
+}
+
+/// `state` with the intent's `pre` the facts of the op's journalled `validated` record in `ctx`: what a
+/// real intent of a value delete carries (the value as read on the acting handle, equal to the record).
+fn with_validated_pre(ctx: &GateCtx, mut state: OpState) -> OpState {
+    let pre = ctx.journalled(state.op).unwrap().1.facts.clone();
+    state.intent.as_mut().unwrap().pre = pre;
+    state
 }
 
 /// Case (b): a value an earlier segment edit of the run rewrote is bound, when it is deleted, to the

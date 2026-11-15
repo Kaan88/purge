@@ -551,6 +551,112 @@ fn the_recorded_form_takes_item_and_op_from_the_journalled_record() {
     );
 }
 
+/// Live host facts, except that the process token's user is the one a test names (`None`: unreadable).
+#[derive(Debug)]
+struct TokenUser(Option<&'static str>);
+
+impl crate::gate::HostFacts for TokenUser {
+    fn file_security(
+        &self,
+        security: Option<&purge_win::secure::Security>,
+    ) -> crate::gate::SecurityFacts {
+        crate::gate::LiveHost.file_security(security)
+    }
+
+    fn key_security(&self, key: &purge_win::reg_write::WKey) -> crate::gate::SecurityFacts {
+        crate::gate::LiveHost.key_security(key)
+    }
+
+    fn volume(
+        &self,
+        final_path: &str,
+        volume_serial: u64,
+    ) -> Option<purge_guard::live::VolumeFacts> {
+        crate::gate::LiveHost.volume(final_path, volume_serial)
+    }
+
+    fn process_user_sid(&self) -> Option<String> {
+        self.0.map(str::to_owned)
+    }
+}
+
+/// Review M2 final M12: a removal is for the process token's user, so it runs only when that is the user
+/// the scan was made for; another user, or a token whose user cannot be read, is refused before anything
+/// is looked at, in the run and in recovery's forward completion.
+#[test]
+fn a_package_is_not_removed_for_a_user_the_scan_was_not_made_for() {
+    /// A gate context of `s` holding the record of op 1, for a scan made for `scan` and a process token
+    /// of user `token`.
+    fn with_user(s: &Session, token: Option<&'static str>, scan: Option<&str>) -> GateCtx {
+        let scope = s
+            .session
+            .roots()
+            .store_scope::<&std::path::Path>(s.session.id(), &[])
+            .unwrap();
+        let (op, record) = package_record(1, NAME, ItemFacts::Package);
+        let deny = purge_guard::deny::DenyList::compile(&purge_guard::canon::GuardEnv::default());
+        let mut ctx = GateCtx::with_host(
+            deny,
+            std::slice::from_ref(&op),
+            scope,
+            Box::new(TokenUser(token)),
+        )
+        .unwrap();
+        ctx.record(&op, &record, 5_000).unwrap();
+        ctx.bind_user(scan);
+        ctx
+    }
+    fn prepare(s: &Session, ctx: &GateCtx, fake: &Fake) -> Prepared {
+        prepare_remove_package_recorded(
+            fake,
+            ctx,
+            &s.session,
+            OpId(1),
+            IrreversibleAck::Acknowledged,
+        )
+        .unwrap()
+    }
+    const SCAN_USER: &str = "S-1-5-21-1-2-3-1001";
+    let mut s = Session::new("otheruser", &[NAME]);
+
+    // Another user, or one that cannot be read: refused, nothing listed or removed.
+    for token in [Some("S-1-5-21-1-2-3-1002"), None] {
+        let ctx = with_user(&s, token, Some(SCAN_USER));
+        assert!(ctx.package_user_refusal().is_some());
+        let fake = Fake::new(vec![info(NAME)]);
+        let r = decided(prepare(&s, &ctx, &fake));
+        assert_eq!(r.outcome, denied(RULE_OTHER_USER), "{r:?}");
+        assert_eq!((fake.lists.get(), fake.removes()), (0, 0));
+    }
+    // The same user (SIDs compare without case), or no user named: the removal is prepared.
+    for (token, scan) in [
+        (Some("s-1-5-21-1-2-3-1001"), Some(SCAN_USER)),
+        (Some("S-1-5-21-1-2-3-1002"), None),
+    ] {
+        let ctx = with_user(&s, token, scan);
+        assert_eq!(ctx.package_user_refusal(), None);
+        let fake = Fake::new(vec![info(NAME)]);
+        ready(prepare(&s, &ctx, &fake));
+        assert_eq!(fake.removes(), 0);
+    }
+
+    // Recovery's forward completion of a durable intent checks the same, before any listing.
+    let fake = Fake::new(vec![info(NAME)]);
+    let same = with_user(&s, Some(SCAN_USER), Some(SCAN_USER));
+    let other = with_user(&s, Some("S-1-5-21-1-2-3-1002"), Some(SCAN_USER));
+    let removal = ready(prepare(&s, &same, &fake));
+    let intent = removal.intent().clone();
+    let token = s.journal.intent(intent.clone()).unwrap();
+    let lists = fake.lists.get();
+    let r = complete_package(&fake, &other, &s.session, &intent, true, &token);
+    assert_eq!(r.outcome, denied(RULE_OTHER_USER), "{r:?}");
+    assert_eq!((fake.lists.get(), fake.removes()), (lists, 0));
+    // The run's own user completes it.
+    let r = complete_package(&fake, &same, &s.session, &intent, true, &token);
+    assert_eq!(r.outcome, ItemOutcome::Done, "{r:?}");
+    assert_eq!(fake.removes(), 1);
+}
+
 #[test]
 fn a_failed_listing_fails_the_item_untouched() {
     let mut s = Session::new("listfail", &[NAME]);

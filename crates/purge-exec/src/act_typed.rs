@@ -32,7 +32,10 @@
 //!
 //! **Scope.** [`Target::AppxPackage`] records only the full name, not whose registration to remove, so
 //! the removal is always for the current user ([`RemovalScope::CurrentUser`]), the narrowest scope.
-//! `RemoveForAllUsers` is never chosen here until the plan target can name it.
+//! `RemoveForAllUsers` is never chosen here until the plan target can name it. The current user is the
+//! process token's: when the run names the user the scan was made for (`GateCtx::bind_user`) and the
+//! token belongs to another user, or its user cannot be read, the removal is refused before anything is
+//! listed ([`RULE_OTHER_USER`]; review M2 final M12).
 //!
 //! # Journal contract
 //!
@@ -96,6 +99,9 @@ pub const RULE_SYSTEM_SIGNED: &str = "appx.system_signed";
 pub const RULE_SIGNATURE_UNKNOWN: &str = "appx.signature_unknown";
 /// Deny rule id: whether other packages depend on the package cannot be determined.
 pub const RULE_DEPENDENTS_UNKNOWN: &str = "appx.dependents_unknown";
+/// Deny rule id: the run's scan was made for another user than the one Purge runs as, whose
+/// registration a removal for the current user would change ([`GateCtx::package_user_refusal`]).
+pub const RULE_OTHER_USER: &str = "appx.other_user";
 
 /// `E_INVALIDARG`, reported when the real backend is handed a name that is not a full name.
 const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
@@ -789,7 +795,26 @@ pub fn prepare_remove_package_recorded(
             ),
         )));
     }
+    if let Some(why) = ctx.package_user_refusal() {
+        return Ok(Prepared::Decided(other_user(exec_op, &why)));
+    }
     prepare_remove_package(backend, session, op, &record.item, exec_op, ack)
+}
+
+/// The result of a package removal refused because Purge does not run as the user the scan was made
+/// for ([`GateCtx::package_user_refusal`]): `Skipped{GateBlocked{DenyListed{appx.other_user}}}`, before
+/// any package call.
+fn other_user(exec_op: &ExecOp, why: &str) -> TypedResult {
+    let full_name = match exec_op {
+        ExecOp::RemovePackage { full_name } => full_name.as_str(),
+        _ => "",
+    };
+    TypedResult::blocked(
+        Blocker::DenyListed {
+            rule: RULE_OTHER_USER.to_owned(),
+        },
+        format!("package {full_name}: {why}; left untouched"),
+    )
 }
 
 /// Decides whether op `op` (plan item `item`, `exec_op` an [`ExecOp::RemovePackage`]) may remove its
@@ -1146,10 +1171,12 @@ pub fn probe_package(backend: &dyn PackageBackend, intent: &Intent) -> Probe {
 /// for it (recovery's resume of an op its probe found still listed), after the checks of the run: the
 /// header's acknowledgement of irreversible removals (`allow_irreversible`), the package as listed now
 /// being the one the intent's definition file (its backup reference) records, and no [`refusal`] against
-/// the fresh listing. Verified as [`remove_package`] verifies. A token of another op is
-/// `Failed{Internal}` and nothing is called.
+/// the fresh listing, and Purge running as the user the scan was made for
+/// ([`GateCtx::package_user_refusal`] of `ctx`, the resumed run's context). Verified as
+/// [`remove_package`] verifies. A token of another op is `Failed{Internal}` and nothing is called.
 pub fn complete_package(
     backend: &dyn PackageBackend,
+    ctx: &GateCtx,
     session: &SessionDir,
     intent: &Intent,
     allow_irreversible: bool,
@@ -1178,6 +1205,9 @@ pub fn complete_package(
             Blocker::ReversibilityNone,
             format!("package {full_name}: irreversible removals were not acknowledged"),
         );
+    }
+    if let Some(why) = ctx.package_user_refusal() {
+        return other_user(&intent.exec_op, &why);
     }
     let scope = removal_scope(full_name);
     let listing = match backend.list(scope) {

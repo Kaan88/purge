@@ -750,6 +750,7 @@ impl<'a> Run<'a> {
             let scope = env.roots.store_scope(session.id(), &volume_roots)?;
             let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
             ctx.set_run_ops(run_ops(&plan));
+            ctx.bind_user(request.settings.user_sid.as_deref());
             let header = Header {
                 schema: JournalSchema,
                 session: session.id().clone(),
@@ -847,6 +848,7 @@ impl<'a> Run<'a> {
         let scope = env.roots.store_scope(session.id(), &volume_roots)?;
         let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
         ctx.set_run_ops(run_ops(&plan));
+        ctx.bind_user(settings.user_sid.as_deref());
         let mut notes = RunNotes::default();
         let data_volume = report::data_volume(env.roots);
         let index = read_index_for_cap(env.roots, &mut notes.warnings)?;
@@ -1190,6 +1192,7 @@ impl<'a> Run<'a> {
             ExecOp::RemovePackage { .. } => {
                 let result = act_typed::complete_package(
                     self.env.packages,
+                    &self.ctx,
                     &self.session,
                     intent,
                     self.ledger.journal.state().header().allow_irreversible,

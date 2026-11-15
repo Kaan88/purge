@@ -82,6 +82,12 @@ pub struct RegFacts {
     pub owner: String,
     /// The key's last write time.
     pub last_write_time: FileTime,
+    /// For a key to delete: the digest of the whole subtree as it was read (every key's class, security,
+    /// volatility, values by name, type and data hash, and subkeys by name and digest; last write times
+    /// are not in it). A key action is bound to it at the act; a record without one binds nothing and is
+    /// refused there. Absent in journals written before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree_sha256: Option<Sha256Hex>,
 }
 
 /// What one registry value showed.
@@ -1118,6 +1124,7 @@ mod tests {
             is_link: false,
             owner: "S-1-5-32-544".into(),
             last_write_time: FileTime(1),
+            tree_sha256: None,
         });
         let backup = BackupRef {
             path: r"reg\000003.regbackup.json".into(),

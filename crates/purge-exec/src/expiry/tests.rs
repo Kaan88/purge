@@ -371,6 +371,7 @@ fn reg_facts() -> RegFacts {
         is_link: false,
         owner: "S-1-5-32-544".into(),
         last_write_time: FileTime(1),
+        tree_sha256: None,
     }
 }
 

@@ -41,7 +41,7 @@
 //! The last write time of a key cannot be set and is not compared. Every value is read through [`WKey`],
 //! whose reads are exact; the Win32 reads of `reg::Key` may change the last byte of odd-length strings.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 
 use purge_guard::live::KeyAddress;
@@ -526,13 +526,12 @@ fn name_of(wide: &WideB64) -> Option<String> {
     String::from_utf16(&wide.0).ok()
 }
 
-/// The last component of a key path; `None` when it is empty.
+/// The last component of a key path: the text after the last `\`, exactly as
+/// `RegBackup::validate_for` takes it when the backup is read back; `None` when it is empty (a trailing
+/// backslash). One rule in both places, so that no backup is written whose root name the reader would
+/// not accept (review M2 final S6; the gate refuses such spellings before anything is read).
 fn leaf_name(key_path: &str) -> Option<&str> {
-    key_path
-        .trim_end_matches('\\')
-        .rsplit('\\')
-        .next()
-        .filter(|leaf| !leaf.is_empty())
+    key_path.rsplit('\\').next().filter(|leaf| !leaf.is_empty())
 }
 
 /// `parent\name`, or `name` below the root.
@@ -575,6 +574,16 @@ fn upcase_unit(unit: u16) -> u16 {
 /// A name folded for case-insensitive comparison.
 fn fold(units: &[u16]) -> Vec<u16> {
     units.iter().map(|&u| upcase_unit(u)).collect()
+}
+
+/// A key or value name folded as [`fold`] folds it.
+pub(crate) fn fold_str(name: &str) -> Vec<u16> {
+    name.encode_utf16().map(upcase_unit).collect()
+}
+
+/// [`fold`], for the crate.
+pub(crate) fn fold_units(units: &[u16]) -> Vec<u16> {
+    fold(units)
 }
 
 /// The direct children of every key, in stored order.
@@ -901,10 +910,22 @@ pub fn capture_value(
     let Some(value) = value else {
         return Ok(None);
     };
+    value_backup(key_path, value).map(Some)
+}
+
+/// The value document of `value` (`name` as the caller read it), without reading it again: what
+/// [`capture_value`] builds from its own read, for a caller that already holds the value as the gate
+/// read and checked it on the acting handle (review M2 final M11: no second read whose result could
+/// differ from the checked one). Refuses a `REG_LINK` value and a name with a NUL; whether the key is a
+/// link is the caller's (the gate's) to have checked.
+pub fn value_backup(key_path: &str, value: RegValue) -> Result<RegBackup, CaptureError> {
+    if value.name.contains('\0') {
+        return Err(CaptureError::NameNotRepresentable { at: String::new() });
+    }
     if value.ty == REG_LINK {
         return Err(CaptureError::LinkValue { at: String::new() });
     }
-    Ok(Some(RegBackup {
+    Ok(RegBackup {
         schema: RegBackupSchema,
         key: key_path.to_owned(),
         captured: now(),
@@ -913,7 +934,128 @@ pub fn capture_value(
             value_type: value.ty,
             data_b64: BytesB64(value.data),
         }),
-    }))
+    })
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Tree digest
+// ---------------------------------------------------------------------------------------------------
+
+/// What one key holds as the tree digest sees it: its values by folded name (raw type and SHA-256 of
+/// the raw data) and its direct subkeys by folded name (their digests).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct KeyContent {
+    /// Values by folded name: raw type and SHA-256 of the raw data.
+    pub values: BTreeMap<Vec<u16>, (u32, [u8; 32])>,
+    /// Direct subkeys by folded name: their digests.
+    pub subkeys: BTreeMap<Vec<u16>, [u8; 32]>,
+}
+
+/// Feeds a length-prefixed run of UTF-16 units.
+fn digest_units(hasher: &mut Sha256, units: &[u16]) {
+    hasher.update((units.len() as u64).to_le_bytes());
+    for unit in units {
+        hasher.update(unit.to_le_bytes());
+    }
+}
+
+/// The digest of one key: its class, security descriptor, volatility and [`KeyContent`]. The key's own
+/// name and its last write time are not in it (the parent holds the name; a write that leaves the
+/// content as it was changes nothing the delete or the backup would see).
+fn key_digest(node: &KeyNode, content: &KeyContent) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"purge.keydigest/1\0");
+    digest_units(
+        &mut hasher,
+        node.class_b64.as_ref().map_or(&[][..], |class| &class.0),
+    );
+    hasher.update((node.sddl.len() as u64).to_le_bytes());
+    hasher.update(node.sddl.as_bytes());
+    hasher.update([u8::from(node.volatile), u8::from(node.link)]);
+    hasher.update((content.values.len() as u64).to_le_bytes());
+    for (name, (ty, sha)) in &content.values {
+        digest_units(&mut hasher, name);
+        hasher.update(ty.to_le_bytes());
+        hasher.update(sha);
+    }
+    hasher.update((content.subkeys.len() as u64).to_le_bytes());
+    for (name, digest) in &content.subkeys {
+        digest_units(&mut hasher, name);
+        hasher.update(digest);
+    }
+    hasher.finalize().into()
+}
+
+/// The digest of a whole tree ([`tree_digest_with`] with nothing adjusted): what the validate pass
+/// journals for a key to delete (`RegFacts::tree_sha256`), and what the act compares a fresh capture
+/// with. `None` for a tree that does not hang together (a parent after its child, a duplicate name).
+pub fn tree_digest(tree: &RegTree) -> Option<Sha256Hex> {
+    tree_digest_with(tree, |_, _| true)
+}
+
+/// The digest of `tree` with every key's content first handed to `adjust`, with the key's path below the
+/// root as folded names (empty for the root), the subkeys' digests already in it. `adjust` changes the
+/// content to what it stood for at another time (the gate puts back what the run's own completed ops
+/// removed or rewrote) and answers `false` when it cannot, which makes the whole digest `None`. Each key
+/// is hashed bottom-up: a key's digest holds its subkeys' digests by name, so the root's digest covers
+/// every key of the tree. `None` also for a tree that does not hang together.
+pub(crate) fn tree_digest_with(
+    tree: &RegTree,
+    mut adjust: impl FnMut(&[Vec<u16>], &mut KeyContent) -> bool,
+) -> Option<Sha256Hex> {
+    let n = tree.keys.len();
+    // Paths, parent first (a parent always comes before its subkeys).
+    let mut paths: Vec<Vec<Vec<u16>>> = Vec::with_capacity(n);
+    for (i, node) in tree.keys.iter().enumerate() {
+        let path = match node.parent.map(|p| p as usize) {
+            None if i == 0 => Vec::new(),
+            Some(p) if p < i => {
+                let mut path = paths.get(p)?.clone();
+                path.push(fold(&node.name_b64.0));
+                path
+            }
+            _ => return None,
+        };
+        paths.push(path);
+    }
+    let mut contents: Vec<KeyContent> = vec![KeyContent::default(); n];
+    for (i, node) in tree.keys.iter().enumerate() {
+        let content = contents.get_mut(i)?;
+        for value in &node.values {
+            let entry = (value.value_type, Sha256::digest(&value.data_b64.0).into());
+            if content
+                .values
+                .insert(fold(&value.name_b64.0), entry)
+                .is_some()
+            {
+                return None;
+            }
+        }
+    }
+    // Children have larger indexes than their parents: deepest first is plain reverse order.
+    let mut root = None;
+    for i in (0..n).rev() {
+        let node = tree.keys.get(i)?;
+        let mut content = std::mem::take(contents.get_mut(i)?);
+        if !adjust(paths.get(i)?, &mut content) {
+            return None;
+        }
+        let digest = key_digest(node, &content);
+        match node.parent.map(|p| p as usize) {
+            Some(p) => {
+                let parent = contents.get_mut(p)?;
+                if parent
+                    .subkeys
+                    .insert(fold(&node.name_b64.0), digest)
+                    .is_some()
+                {
+                    return None;
+                }
+            }
+            None => root = Some(digest),
+        }
+    }
+    root.map(Sha256Hex)
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -3283,6 +3425,47 @@ mod tests {
         let again = restore_tree(&parent_of(&backup), &backup).unwrap();
         assert_eq!(again.outcome, RestoreOutcome::AlreadyRestored);
         assert_eq!(shape(&capture(&root, "Rich")), shape(&doc));
+    }
+
+    /// The digest a validation journals and an act is bound to (review M2 final S5): any value or subkey
+    /// change anywhere in the tree changes it; content written back as it was gives the same digest again.
+    /// A key path with an empty last segment is no capture (S6).
+    #[test]
+    fn the_tree_digest_follows_the_content_of_every_key() {
+        let root = TestRoot::new();
+        small_tree(&root);
+        let digest = || {
+            let doc = capture(&root, "T");
+            doc.tree().and_then(tree_digest).unwrap()
+        };
+        let before = digest();
+        assert_eq!(digest(), before);
+        let a1 = root.open(r"T\A\A1", KeyAccess::SET_VALUE);
+        let a2 = root.open(r"T\A\A2", KeyAccess::SET_VALUE);
+        let b = root.open(r"T\B", KeyAccess::CREATE_SUB_KEY);
+        // One change at a time, two levels down, each undone with the same content.
+        a1.set_value_raw("y", REG_BINARY, &[8]).unwrap();
+        assert_ne!(digest(), before);
+        a1.set_value_raw("y", REG_BINARY, &[7]).unwrap();
+        assert_eq!(digest(), before);
+        a1.set_value_raw("y", REG_DWORD, &[7, 0, 0, 0]).unwrap();
+        assert_ne!(digest(), before);
+        a1.set_value_raw("y", REG_BINARY, &[7]).unwrap();
+        a2.set_value_raw("new", REG_SZ, &utf16z("n")).unwrap();
+        assert_ne!(digest(), before);
+        a2.delete_value("new").unwrap();
+        assert_eq!(digest(), before);
+        b.create_subkey("Child", "", None, false).unwrap();
+        assert_ne!(digest(), before);
+        b.delete_subkey("Child").unwrap();
+        assert_eq!(digest(), before);
+
+        for spelled in [format!("{}\\", root.key_path("T")), String::new()] {
+            assert!(
+                capture_tree(&root.open("T", KeyAccess::READ), &spelled, 10_000).is_err(),
+                "{spelled:?}"
+            );
+        }
     }
 
     #[test]
