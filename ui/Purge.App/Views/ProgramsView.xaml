@@ -1,0 +1,405 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- S1: program list (ENGINE_PLAN.md §9.2, §9.4; board "02 Programs, refined").
+     First frame: header with plain command buttons, tabs, the column header and the virtualized list with 40 px rows
+     whose template has 5 elements (Grid, tile Border + letter, two-line name, size). After the first Rendering tick
+     the view loads the CommandBar, the "Needs attention" group, tab counts and status strip, and turns on each row's
+     deferred parts (size bar, expected leftovers, install date). Expected leftovers arrive later, batch by batch. -->
+<UserControl
+    x:Class="Purge.App.Views.ProgramsView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Purge.App.Views">
+
+    <UserControl.Resources>
+        <Style x:Key="TabSelection" TargetType="Border">
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Visibility" Value="Collapsed" />
+        </Style>
+        <Style x:Key="ColumnHeader" TargetType="Button" BasedOn="{StaticResource SubtleButton}">
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="MinHeight" Value="24" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        </Style>
+        <Style x:Key="DetailLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        </Style>
+        <Style x:Key="DetailValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="DetailMono" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Cascadia Mono, Consolas" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="IsTextSelectionEnabled" Value="True" />
+        </Style>
+        <Style x:Key="LinkButton" TargetType="HyperlinkButton">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+        <Style x:Key="LeftoverCell" TargetType="TextBlock">
+            <Setter Property="Grid.Column" Value="3" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Padding="28,20,28,8" Spacing="12">
+            <!-- Title and commands. The plain buttons are the first frame; the CommandBar replaces the secondary
+                 ones on the first tick (§9.2 step 3: no CommandBar on the first frame). -->
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <TextBlock Text="Programs" Style="{StaticResource TitleTextBlockStyle}" />
+                    <TextBlock x:Name="Summary" VerticalAlignment="Bottom" Margin="0,0,0,5" Style="{StaticResource SecondaryText}" />
+                </StackPanel>
+                <Button Grid.Column="1" Style="{StaticResource AccentButtonStyle}" Click="OnCommand" Tag="uninstall" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE74D;" FontSize="14" />
+                        <TextBlock Text="Uninstall" />
+                    </StackPanel>
+                </Button>
+                <StackPanel x:Name="PlainCommands" Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                    <Button Style="{StaticResource SubtleButton}" Content="Force remove" Click="OnCommand" Tag="force" />
+                    <Button Style="{StaticResource SubtleButton}" Content="Modify" Click="OnCommand" Tag="modify" />
+                    <Button Style="{StaticResource SubtleButton}" Click="OnCommand" Tag="more-pending" AutomationProperties.Name="More actions">
+                        <FontIcon Glyph="&#xE712;" FontSize="14" />
+                    </Button>
+                </StackPanel>
+                <CommandBar x:Name="Commands" x:Load="False" Grid.Column="2" VerticalAlignment="Center"
+                            DefaultLabelPosition="Right" IsDynamicOverflowEnabled="False" Background="Transparent">
+                    <AppBarButton Label="Force remove" Click="OnCommand" Tag="force"
+                                  ToolTipService.ToolTip="Remove without running its uninstaller">
+                        <AppBarButton.Icon><FontIcon Glyph="&#xE945;" /></AppBarButton.Icon>
+                    </AppBarButton>
+                    <AppBarButton Label="Modify" Click="OnCommand" Tag="modify">
+                        <AppBarButton.Icon><FontIcon Glyph="&#xE9E9;" /></AppBarButton.Icon>
+                    </AppBarButton>
+                    <CommandBar.SecondaryCommands>
+                        <AppBarButton Label="Remove entry only" Click="OnCommand" Tag="remove-entry">
+                            <AppBarButton.Icon><FontIcon Glyph="&#xE738;" /></AppBarButton.Icon>
+                        </AppBarButton>
+                        <AppBarSeparator />
+                        <AppBarButton Label="Open install folder" Click="OnCommand" Tag="open-folder">
+                            <AppBarButton.Icon><FontIcon Glyph="&#xE838;" /></AppBarButton.Icon>
+                        </AppBarButton>
+                        <AppBarButton Label="Open registry entry" Click="OnCommand" Tag="open-key">
+                            <AppBarButton.Icon><FontIcon Glyph="&#xE74C;" /></AppBarButton.Icon>
+                        </AppBarButton>
+                        <AppBarButton Label="Search the web for this program" Click="OnCommand" Tag="web">
+                            <AppBarButton.Icon><FontIcon Glyph="&#xE774;" /></AppBarButton.Icon>
+                        </AppBarButton>
+                        <AppBarSeparator />
+                        <AppBarButton Label="Export list as JSON" Click="OnCommand" Tag="export">
+                            <AppBarButton.Icon><FontIcon Glyph="&#xEDE1;" /></AppBarButton.Icon>
+                        </AppBarButton>
+                        <AppBarButton Label="Refresh list" Click="OnCommand" Tag="refresh">
+                            <AppBarButton.Icon><FontIcon Glyph="&#xE72C;" /></AppBarButton.Icon>
+                        </AppBarButton>
+                    </CommandBar.SecondaryCommands>
+                </CommandBar>
+            </Grid>
+
+            <StackPanel x:Name="InfoBarHost" Spacing="6" />
+
+            <!-- Tabs, then filter and sort on the right. -->
+            <Grid>
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Button x:Name="TabApps" Style="{StaticResource SubtleButton}" Padding="0" Tag="Apps" Click="OnTab" AutomationProperties.Name="Apps">
+                        <Grid>
+                            <Border x:Name="TabAppsSel" Style="{StaticResource TabSelection}" Visibility="Visible" />
+                            <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
+                                <TextBlock x:Name="TabAppsLabel" Text="Apps" FontWeight="SemiBold" />
+                                <TextBlock x:Name="TabAppsCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="TabComponents" Style="{StaticResource SubtleButton}" Padding="0" Tag="Components" Click="OnTab" AutomationProperties.Name="Components">
+                        <Grid>
+                            <Border x:Name="TabComponentsSel" Style="{StaticResource TabSelection}" />
+                            <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
+                                <TextBlock x:Name="TabComponentsLabel" Text="Components" />
+                                <TextBlock x:Name="TabComponentsCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="TabUnnamed" Style="{StaticResource SubtleButton}" Padding="0" Tag="Unnamed" Click="OnTab" AutomationProperties.Name="Unnamed">
+                        <Grid>
+                            <Border x:Name="TabUnnamedSel" Style="{StaticResource TabSelection}" />
+                            <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
+                                <TextBlock x:Name="TabUnnamedLabel" Text="Unnamed" />
+                                <TextBlock x:Name="TabUnnamedCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="TabStore" Style="{StaticResource SubtleButton}" Padding="0" Tag="Store" Click="OnTab" AutomationProperties.Name="Store">
+                        <Grid>
+                            <Border x:Name="TabStoreSel" Style="{StaticResource TabSelection}" />
+                            <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
+                                <TextBlock x:Name="TabStoreLabel" Text="Store" />
+                                <TextBlock x:Name="TabStoreCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="TabRecent" Style="{StaticResource SubtleButton}" Padding="0" Tag="Recent" Click="OnTab" AutomationProperties.Name="Recent">
+                        <Grid>
+                            <Border x:Name="TabRecentSel" Style="{StaticResource TabSelection}" />
+                            <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
+                                <TextBlock x:Name="TabRecentLabel" Text="Recent" />
+                                <TextBlock x:Name="TabRecentCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                    <TextBlock x:Name="SelectedCount" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                    <Button x:Name="FilterButton" Style="{StaticResource SubtleButton}" Click="OnFilter" AutomationProperties.Name="Filter">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE71C;" FontSize="13" />
+                            <TextBlock x:Name="FilterText" Text="Filter" />
+                        </StackPanel>
+                    </Button>
+                    <DropDownButton x:Name="SortButton" Content="Sort: Name" Background="Transparent" BorderThickness="0">
+                        <DropDownButton.Flyout>
+                            <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                <MenuFlyoutItem Text="Name" Tag="name" Click="OnSortMenu" />
+                                <MenuFlyoutItem Text="Publisher" Tag="publisher" Click="OnSortMenu" />
+                                <MenuFlyoutItem Text="Size" Tag="size" Click="OnSortMenu" />
+                                <MenuFlyoutItem Text="Expected leftovers" Tag="junk" Click="OnSortMenu" />
+                                <MenuFlyoutItem Text="Install date" Tag="date" Click="OnSortMenu" />
+                            </MenuFlyout>
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+
+        <Grid Grid.Row="1" Padding="28,0,28,12" ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="330" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Program list card. -->
+            <Border Style="{StaticResource Card}" Padding="6">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid x:Name="ListHeader" Height="32" Padding="40,0,16,0" ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="100" />
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="92" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="SortName" Grid.Column="1" Style="{StaticResource ColumnHeader}" Tag="name" Click="OnSort" Content="Name" Margin="-4,0,0,0" />
+                        <Button x:Name="SortSize" Grid.Column="2" Style="{StaticResource ColumnHeader}" Tag="size" Click="OnSort" Content="Size" Margin="-4,0,0,0" />
+                        <Button x:Name="SortJunk" Grid.Column="3" Style="{StaticResource ColumnHeader}" Tag="junk" Click="OnSort" Content="Expected leftovers" Margin="-4,0,0,0" />
+                        <Button x:Name="SortDate" Grid.Column="4" Style="{StaticResource ColumnHeader}" Tag="date" Click="OnSort" Content="Installed" Margin="-4,0,0,0" />
+                    </Grid>
+
+                    <!-- "Needs attention": programs removed outside Purge. Loaded on the first tick. Sample rows, labelled as such:
+                         the engine has no "removed outside Purge" report yet (engine question). -->
+                    <StackPanel x:Name="Attention" x:Load="False" Grid.Row="1" Spacing="2" Margin="0,0,0,4">
+                        <TextBlock Margin="12,4,0,2" FontSize="11" CharacterSpacing="50" Foreground="{ThemeResource SystemFillColorCautionBrush}">
+                            <Run Text="&#xE7BA;" FontFamily="Segoe Fluent Icons" /><Run Text="  NEEDS ATTENTION · 2" FontWeight="SemiBold" /><Run Text="   SAMPLE · removed-outside-Purge detection isn't in the engine yet" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                        </TextBlock>
+                        <Grid Padding="12,6" ColumnSpacing="12" CornerRadius="4" Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <Border Width="28" Height="28" CornerRadius="6" Background="{ThemeResource ControlStrongFillColorDisabledBrush}">
+                                <TextBlock Text="N" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="Notion" />
+                                <TextBlock Text="Removed outside Purge today · 4 leftovers found" FontSize="12" Style="{StaticResource SecondaryText}" />
+                            </StackPanel>
+                            <Button Grid.Column="2" Content="Review leftovers" Click="OnReviewRemoved" Tag="Notion" />
+                        </Grid>
+                        <Grid Padding="12,6" ColumnSpacing="12" CornerRadius="4" Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <Border Width="28" Height="28" CornerRadius="6" Background="{ThemeResource ControlStrongFillColorDisabledBrush}">
+                                <TextBlock Text="S" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="Slack" />
+                                <TextBlock Text="Removed outside Purge today · 7 leftovers found" FontSize="12" Style="{StaticResource SecondaryText}" />
+                            </StackPanel>
+                            <Button Grid.Column="2" Content="Review leftovers" Click="OnReviewRemoved" Tag="Slack" />
+                        </Grid>
+                        <TextBlock x:Name="AllAppsLabel" Margin="12,8,0,0" FontSize="11" CharacterSpacing="50" FontWeight="SemiBold"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    </StackPanel>
+
+                    <ListView x:Name="ProgramList" Grid.Row="2" SelectionMode="Multiple"
+                              SelectionChanged="OnSelectionChanged">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                                <Setter Property="MinHeight" Value="40" />
+                                <Setter Property="Height" Value="40" />
+                                <Setter Property="Padding" Value="8,0,12,0" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <!-- 5 elements on the first frame. The x:Load parts are created only once Extras is on. -->
+                            <DataTemplate x:DataType="local:ProgramRow">
+                                <Grid ColumnSpacing="10" Padding="{x:Bind Indent}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="28" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="100" />
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="92" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Width="26" Height="26" CornerRadius="6" Background="{x:Bind TileBrush}">
+                                        <TextBlock Text="{x:Bind Initial}" Foreground="White" FontSize="12" FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxLines="2" LineStackingStrategy="BlockLineHeight">
+                                        <Run Text="{x:Bind Name}" FontSize="14" /><Run Text="{x:Bind NewTag}" FontSize="11" FontWeight="SemiBold"
+                                             Foreground="{ThemeResource SystemFillColorSuccessBrush}" /><LineBreak /><Run Text="{x:Bind SubLine}" FontSize="12"
+                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </TextBlock>
+                                    <TextBlock Grid.Column="2" x:Phase="1" Text="{x:Bind SizeText}" FontSize="13" VerticalAlignment="Center" Margin="0,0,0,6" />
+                                    <Rectangle x:Name="RowBar" x:Load="{x:Bind Extras, Mode=OneWay}" Grid.Column="2" Height="3" RadiusX="1.5" RadiusY="1.5"
+                                               Width="{x:Bind BarWidth}" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,22,0,0"
+                                               Fill="{ThemeResource AccentFillColorDefaultBrush}" Opacity="0.7" />
+                                    <TextBlock x:Name="RowClean" x:Load="{x:Bind ShowClean, Mode=OneWay}" Style="{StaticResource LeftoverCell}">
+                                        <Run Text="&#xE73E;" FontFamily="Segoe Fluent Icons" Foreground="{ThemeResource SystemFillColorSuccessBrush}" /><Run Text="  Clean" />
+                                    </TextBlock>
+                                    <TextBlock x:Name="RowSome" x:Load="{x:Bind ShowSome, Mode=OneWay}" Style="{StaticResource LeftoverCell}">
+                                        <Run Text="&#xE7BA;" FontFamily="Segoe Fluent Icons" Foreground="{ThemeResource SystemFillColorCautionBrush}" /><Run Text="  " /><Run Text="{x:Bind LeftoverText, Mode=OneWay}" />
+                                    </TextBlock>
+                                    <TextBlock x:Name="RowLarge" x:Load="{x:Bind ShowLarge, Mode=OneWay}" Style="{StaticResource LeftoverCell}" FontWeight="SemiBold">
+                                        <Run Text="&#xEA39;" FontFamily="Segoe Fluent Icons" Foreground="{ThemeResource SystemFillColorCriticalBrush}" /><Run Text="  " /><Run Text="{x:Bind LeftoverText, Mode=OneWay}" />
+                                    </TextBlock>
+                                    <TextBlock x:Name="RowUnknown" x:Load="{x:Bind ShowUnknown, Mode=OneWay}" Style="{StaticResource LeftoverCell}"
+                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}">
+                                        <Run Text="&#xE9CE;" FontFamily="Segoe Fluent Icons" /><Run Text="  Not known yet" />
+                                    </TextBlock>
+                                    <TextBlock x:Name="RowDate" x:Load="{x:Bind Extras, Mode=OneWay}" Grid.Column="4" Text="{x:Bind InstalledText}" FontSize="13"
+                                               VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+            </Border>
+
+            <!-- Details card. -->
+            <Border Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top">
+                <ScrollViewer x:Name="Details" Padding="18" Visibility="Collapsed">
+                    <StackPanel Spacing="12">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="DTile" Width="44" Height="44" CornerRadius="10">
+                                <TextBlock x:Name="DInitial" Foreground="White" FontSize="20" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock x:Name="DName" FontSize="18" LineHeight="24" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="2" />
+                                <TextBlock x:Name="DSub" FontSize="13" TextWrapping="Wrap" Style="{StaticResource SecondaryText}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <Button Style="{StaticResource AccentButtonStyle}" Content="Uninstall" HorizontalAlignment="Stretch" Click="OnCommand" Tag="uninstall" />
+                            <Button Grid.Column="1" Content="Modify" Click="OnCommand" Tag="modify" />
+                        </Grid>
+
+                        <Border Style="{StaticResource Divider}" />
+                        <TextBlock Text="What Purge expects" FontWeight="SemiBold" />
+                        <ItemsControl x:Name="DExpects">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="local:ExpectLine">
+                                    <Grid ColumnSpacing="8" Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="{ThemeResource SystemFillColorSuccessBrush}" VerticalAlignment="Top" Margin="0,2,0,0" Visibility="{x:Bind OkVisibility}" />
+                                        <FontIcon Glyph="&#xE7BA;" FontSize="14" Foreground="{ThemeResource SystemFillColorCautionBrush}" VerticalAlignment="Top" Margin="0,2,0,0" Visibility="{x:Bind WarnVisibility}" />
+                                        <FontIcon Glyph="&#xE77B;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" VerticalAlignment="Top" Margin="0,2,0,0" Visibility="{x:Bind UserVisibility}" />
+                                        <FontIcon Glyph="&#xE9CE;" FontSize="14" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Top" Margin="0,2,0,0" Visibility="{x:Bind UnknownVisibility}" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind Text}" Style="{StaticResource Body13}" />
+                                        <TextBlock Grid.Column="2" Text="{x:Bind Detail}" FontSize="12" Style="{StaticResource SecondaryText}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Border Style="{StaticResource Divider}" />
+
+                        <Grid ColumnSpacing="14" RowSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="76" />
+                                <ColumnDefinition />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Uninstaller" Style="{StaticResource DetailLabel}" />
+                            <TextBlock x:Name="DUninstaller" Grid.Column="1" Style="{StaticResource DetailValue}" />
+                            <TextBlock Grid.Row="1" Text="Location" Style="{StaticResource DetailLabel}" />
+                            <HyperlinkButton x:Name="DLocation" Grid.Row="1" Grid.Column="1" Style="{StaticResource LinkButton}"
+                                             Click="OnCommand" Tag="open-folder" />
+                            <TextBlock Grid.Row="2" Text="Installed" Style="{StaticResource DetailLabel}" />
+                            <TextBlock x:Name="DInstalled" Grid.Row="2" Grid.Column="1" Style="{StaticResource DetailValue}" />
+                            <TextBlock Grid.Row="3" Text="Size" Style="{StaticResource DetailLabel}" />
+                            <TextBlock x:Name="DSize" Grid.Row="3" Grid.Column="1" Style="{StaticResource DetailValue}" />
+                            <TextBlock Grid.Row="4" Text="Platform" Style="{StaticResource DetailLabel}" />
+                            <TextBlock x:Name="DPlatform" Grid.Row="4" Grid.Column="1" Style="{StaticResource DetailValue}" />
+                            <TextBlock x:Name="DOwnsLabel" Grid.Row="5" Text="Also owns" Style="{StaticResource DetailLabel}" />
+                            <TextBlock x:Name="DOwns" Grid.Row="5" Grid.Column="1" Style="{StaticResource DetailValue}" />
+                        </Grid>
+
+                        <Expander Header="Commands and registry key" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Uninstall" Style="{StaticResource DetailLabel}" />
+                                <TextBlock x:Name="DUninstall" Style="{StaticResource DetailMono}" />
+                                <TextBlock Text="Quiet" Margin="0,6,0,0" Style="{StaticResource DetailLabel}" />
+                                <TextBlock x:Name="DQuiet" Style="{StaticResource DetailMono}" />
+                                <TextBlock x:Name="DProductLabel" Text="Product code" Margin="0,6,0,0" Style="{StaticResource DetailLabel}" />
+                                <TextBlock x:Name="DProduct" Style="{StaticResource DetailMono}" />
+                                <TextBlock Text="Registry key" Margin="0,6,0,0" Style="{StaticResource DetailLabel}" />
+                                <TextBlock x:Name="DKey" Style="{StaticResource DetailMono}" />
+                            </StackPanel>
+                        </Expander>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- Status strip (filled after the first tick). -->
+        <Grid Grid.Row="2" Height="30" Padding="28,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+            <TextBlock x:Name="StatusLeft" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+            <TextBlock x:Name="StatusRight" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right" Style="{StaticResource SecondaryText}" />
+        </Grid>
+    </Grid>
+</UserControl>

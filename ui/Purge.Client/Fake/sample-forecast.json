@@ -1,0 +1,226 @@
+[
+ {
+  "program_id": "HKLM|64|7-Zip",
+  "verdict": "Some",
+  "estimate_bytes": 3145728,
+  "what": "shell menu entries",
+  "holds_user_data": false,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "Its uninstaller removes the program files",
+    "detail": null
+   },
+   {
+    "kind": "Stays",
+    "text": "Shell menu entries may stay",
+    "detail": "2 keys"
+   },
+   {
+    "kind": "Removed",
+    "text": "No user data in AppData",
+    "detail": null
+   }
+  ]
+ },
+ {
+  "program_id": "HKLM|64|Mozilla Firefox 146.0.1 (x64 en-US)",
+  "verdict": "Some",
+  "estimate_bytes": 5242880,
+  "what": "profile and cache",
+  "holds_user_data": true,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "Its uninstaller removes the program files",
+    "detail": null
+   },
+   {
+    "kind": "Stays",
+    "text": "Cache and update data stay",
+    "detail": "about 2.7 MB"
+   },
+   {
+    "kind": "UserData",
+    "text": "Your profile stays: bookmarks, history, logins",
+    "detail": "2.1 MB"
+   }
+  ]
+ },
+ {
+  "program_id": "HKLM|64|{771FD6B0-FA20-440A-A002-3B3BAC16DC50}_is1",
+  "verdict": "Some",
+  "estimate_bytes": 29360128,
+  "what": "settings and file types",
+  "holds_user_data": true,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "Its uninstaller removes the program files",
+    "detail": null
+   },
+   {
+    "kind": "Stays",
+    "text": "135 file-type values stay",
+    "detail": "registry"
+   },
+   {
+    "kind": "UserData",
+    "text": "Your settings and extensions stay",
+    "detail": "27.9 MB"
+   }
+  ]
+ },
+ {
+  "program_id": "HKLM|64|Notepad++",
+  "verdict": "Clean",
+  "estimate_bytes": null,
+  "what": null,
+  "holds_user_data": false,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "Its uninstaller removes everything it installed",
+    "detail": null
+   },
+   {
+    "kind": "Removed",
+    "text": "Settings are kept only if you choose so",
+    "detail": null
+   }
+  ]
+ },
+ {
+  "program_id": "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|Discord",
+  "verdict": "Large",
+  "estimate_bytes": 1288490188,
+  "what": "cache",
+  "holds_user_data": false,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "Its uninstaller removes the app",
+    "detail": null
+   },
+   {
+    "kind": "Stays",
+    "text": "Its cache stays in AppData",
+    "detail": "about 1.2 GB"
+   }
+  ]
+ },
+ {
+  "program_id": "HKLM|64|Docker Desktop",
+  "verdict": "Large",
+  "estimate_bytes": 6442450944,
+  "what": "WSL data",
+  "holds_user_data": true,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "Its uninstaller removes the program files",
+    "detail": null
+   },
+   {
+    "kind": "UserData",
+    "text": "The WSL disk with your containers and images stays",
+    "detail": "about 5.8 GB"
+   },
+   {
+    "kind": "Stays",
+    "text": "Settings in AppData stay",
+    "detail": "142 MB"
+   }
+  ]
+ },
+ {
+  "program_id": "HKLM|64|{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}",
+  "verdict": "Clean",
+  "estimate_bytes": null,
+  "what": null,
+  "holds_user_data": false,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "MSI removes everything it recorded",
+    "detail": null
+   }
+  ]
+ },
+ {
+  "program_id": "HKLM|64|GIMP-3_is1",
+  "verdict": "Clean",
+  "estimate_bytes": null,
+  "what": null,
+  "holds_user_data": false,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "Its uninstaller removes everything it installed",
+    "detail": null
+   }
+  ]
+ },
+ {
+  "program_id": "HKLM|64|KeePassXC",
+  "verdict": "Clean",
+  "estimate_bytes": null,
+  "what": null,
+  "holds_user_data": false,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "MSI removes everything it recorded",
+    "detail": null
+   },
+   {
+    "kind": "UserData",
+    "text": "Your password databases are never touched",
+    "detail": null
+   }
+  ]
+ },
+ {
+  "program_id": "HKLM|64|VLC media player",
+  "verdict": "Some",
+  "estimate_bytes": 1048576,
+  "what": "settings",
+  "holds_user_data": false,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "Its uninstaller removes the program files",
+    "detail": null
+   },
+   {
+    "kind": "Stays",
+    "text": "Settings in AppData stay",
+    "detail": "about 1 MB"
+   }
+  ]
+ },
+ {
+  "program_id": "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|{2B8A61C4-7A3F-4E5D-9C1B-3F0E2D4A5B6C}",
+  "verdict": "Some",
+  "estimate_bytes": 432013312,
+  "what": "pip cache",
+  "holds_user_data": false,
+  "lines": [
+   {
+    "kind": "Removed",
+    "text": "Its uninstaller removes the program files",
+    "detail": null
+   },
+   {
+    "kind": "Stays",
+    "text": "pip's download cache stays",
+    "detail": "about 412 MB"
+   },
+   {
+    "kind": "Stays",
+    "text": "File types stay while Python Launcher is installed",
+    "detail": "13 values"
+   }
+  ]
+ }
+]
