@@ -23,4 +23,6 @@ pub mod regbackup;
 pub mod regfile;
 pub mod report;
 pub mod storage;
+#[cfg(test)]
+mod test_ffi;
 pub mod undo;

@@ -46,17 +46,18 @@ use std::path::{Path, PathBuf};
 
 use purge_guard::deny::{DenyList, Exemptions};
 use purge_guard::live::{
-    self, AncestorWrite, Binding, BootMove, DestinationFacts, FileIdentity, KeyAncestor, KeyCheck,
-    KeyFacts, KeyNode, KeyOp, KeyProbe, PLACEHOLDER_ATTRIBUTES, PathCheck, PathFacts, PathOp,
-    PathStamp, QuarantineCheck, Refusal, StoreCheck, StoreOp, StoreScope, TreeFacts, UndoKeyFacts,
-    UndoPathCheck, ValueStamp, ValueState, VolumeFacts, is_cloud_reparse_tag,
+    self, AncestorWrite, Binding, BootMove, DestinationFacts, FileIdentity, KeyAddress,
+    KeyAncestor, KeyCheck, KeyFacts, KeyNode, KeyOp, KeyProbe, KeyRoot, PLACEHOLDER_ATTRIBUTES,
+    PathCheck, PathFacts, PathOp, PathStamp, QuarantineCheck, Refusal, StoreCheck, StoreOp,
+    StoreScope, TreeFacts, UndoKeyFacts, UndoPathCheck, ValueStamp, ValueState, VolumeFacts,
+    is_cloud_reparse_tag,
 };
 use purge_guard::prefix;
-use purge_model::exec::journal::{FileFacts, ItemFacts, RegFacts, ValueFacts};
+use purge_model::exec::journal::{FileFacts, GateExemptions, ItemFacts, RegFacts, ValueFacts};
 use purge_model::exec::op::{ExecOp, FileIdHex, OpId, Sha256Hex};
-use purge_model::{Blocker, Candidate, FileTime, ScanMode, Target, VerifyGone};
+use purge_model::{Blocker, Candidate, FileTime, ScanMode, Target, VerifyGone, View};
 use purge_win::fs::{FileHandle, FileMeta, list_dir, volume_info};
-use purge_win::fs_write::{FsError, MoveHandle, extended_path};
+use purge_win::fs_write::{DestDir, FsError, MoveHandle, extended_path};
 use purge_win::os::Win32Error;
 use purge_win::reg::{RegRoot, RegValue, RegView};
 use purge_win::reg_write::{KeyAccess, NAME_NOT_REPRESENTABLE, WKey, WKeyInfo};
@@ -75,8 +76,6 @@ pub mod reason {
     pub const PATH_FORM: &str = "gate.path-form";
     /// The tree below a directory moved whole holds more files or directories than the item may.
     pub const BLAST_RADIUS: &str = "gate.blast-radius";
-    /// The key path does not start with `HKLM\` or `HKU\` followed by a key.
-    pub const KEY_PATH: &str = "gate.key-path";
     /// A name on the key path cannot be addressed exactly (not valid UTF-16).
     pub const NAME_NOT_REPRESENTABLE: &str = "gate.name-not-representable";
     /// Facts the journal needs (counts, class, owner, value size) could not be read.
@@ -358,6 +357,43 @@ pub fn exemptions_for(
     ctx.user_sid = user_sid;
     ctx.long_names_resolved = long_names_resolved;
     purge_plan::decide::exemptions(candidate, &ctx)
+}
+
+/// The journal form of the exemptions a verdict was given ([`Validation::exemptions`]), for the
+/// `validated` record's `exemptions` field. Every field is carried over unchanged;
+/// [`exemptions_from_journal`] is the exact inverse.
+pub fn exemptions_to_journal(exemptions: &Exemptions) -> GateExemptions {
+    // Destructured without `..`, so a field added to either type fails to compile here.
+    let Exemptions {
+        proven_owned_skeleton,
+        environment_segment_edit,
+        tier_a_start_menu_entry,
+        long_names_resolved,
+    } = *exemptions;
+    GateExemptions {
+        proven_owned_skeleton,
+        environment_segment_edit,
+        tier_a_start_menu_entry,
+        long_names_resolved,
+    }
+}
+
+/// The exemptions a journal `validated` record holds, as the gate takes them: what undo and recovery
+/// pass to [`check_undo_path`], [`check_undo_key`] and the act-time gate, instead of deriving them again
+/// from the scan. The exact inverse of [`exemptions_to_journal`].
+pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions {
+    let GateExemptions {
+        proven_owned_skeleton,
+        environment_segment_edit,
+        tier_a_start_menu_entry,
+        long_names_resolved,
+    } = *exemptions;
+    Exemptions {
+        proven_owned_skeleton,
+        environment_segment_edit,
+        tier_a_start_menu_entry,
+        long_names_resolved,
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -951,10 +987,12 @@ fn look_without_acting<T>(
 /// **The one place** that decides whether an open error on the acting handle may mean "in use" (for the
 /// locked-file ladder) rather than a final failure: a sharing or lock violation always; access denied on
 /// a directory too, because a directory with an open handle anywhere below it can refuse with access
-/// denied. Integration note: when `FsError` gains its distinct variant for that case, add it here.
-fn may_be_in_use(error: FsError, is_dir: bool) -> bool {
+/// denied; and [`FsError::DirInUseOrDenied`], which `MoveHandle::rename_into` reports for exactly that
+/// case on a directory. An open of the acting handle reports plain [`FsError::AccessDenied`], so that
+/// variant still counts for a directory.
+pub(crate) fn may_be_in_use(error: FsError, is_dir: bool) -> bool {
     match error {
-        FsError::SharingViolation => true,
+        FsError::SharingViolation | FsError::DirInUseOrDenied => true,
         FsError::AccessDenied => is_dir,
         _ => false,
     }
@@ -964,32 +1002,33 @@ fn may_be_in_use(error: FsError, is_dir: bool) -> bool {
 // Destinations and the session's own store
 // ---------------------------------------------------------------------------------------------------
 
-/// A checked destination of a rename: the directory to rename into, open, the leaf name, and the
-/// [`DestinationFacts`] the verdict was given (read from that open directory handle).
+/// A checked destination of a rename: the destination's parent directory, open as a
+/// [`purge_win::fs_write::DestDir`] (no-follow), the leaf name, and the [`DestinationFacts`] the verdict
+/// was given (read from that open directory handle). The one destination type the gate hands out.
 ///
 /// Rename with `MoveHandle::rename_into(dest.dir(), dest.leaf())`, so the directory that was checked is
-/// the one the item lands in, whatever happens to its path. Never rename by path (`rename_to`).
+/// the one the item lands in, whatever happens to its path. There is no rename by path.
 #[derive(Debug)]
-pub struct DestDir {
-    dir: FileHandle,
+pub struct CheckedDest {
+    dir: DestDir,
     leaf: String,
     path: String,
     facts: DestinationFacts,
 }
 
-impl DestDir {
+impl CheckedDest {
     /// The destination's parent directory, opened without following a reparse point
-    /// (`READ_CONTROL | FILE_READ_ATTRIBUTES`).
-    pub fn dir(&self) -> &FileHandle {
+    /// (`FILE_READ_ATTRIBUTES | SYNCHRONIZE`); pass it to `MoveHandle::rename_into`.
+    pub fn dir(&self) -> &DestDir {
         &self.dir
     }
 
-    /// The facts of the destination, taken from [`DestDir::dir`].
+    /// The facts of the destination, taken from [`CheckedDest::dir`].
     pub fn facts(&self) -> &DestinationFacts {
         &self.facts
     }
 
-    /// The name the item gets inside [`DestDir::dir`].
+    /// The name the item gets inside [`CheckedDest::dir`].
     pub fn leaf(&self) -> &str {
         &self.leaf
     }
@@ -1000,41 +1039,39 @@ impl DestDir {
     }
 }
 
-/// Opens the parent directory of `destination` (without following a reparse point) and reads the
-/// [`DestinationFacts`] from that handle. The parent facts come from the handle; whether the leaf is
-/// taken is probed by path (there is no handle-relative open here) and counts only while the parent
-/// handle's final path is the same before and after the probe. A rename into the handle never replaces
+/// Opens the parent directory of `destination` as a [`DestDir`] (without following a reparse point)
+/// and reads the [`DestinationFacts`] from that handle ([`DestDir::facts`]). Whether the leaf is taken
+/// is probed by path (there is no handle-relative open here) and counts only while the parent handle's
+/// final path is the same before and after the probe. A rename into the handle never replaces
 /// anything, so a name taken after the probe makes the rename fail, never overwrite.
-fn destination_facts(destination: &str) -> Option<(FileHandle, String, DestinationFacts)> {
+fn destination_facts(destination: &str) -> Option<(DestDir, String, DestinationFacts)> {
     let target = Path::new(destination);
     let leaf = target.file_name()?.to_str()?.to_owned();
     let parent_ext = target.parent()?.to_str().and_then(ext)?;
-    let handle = open_for_security(&parent_ext).ok()?;
-    let mut facts = DestinationFacts {
-        parent_final_path: handle.final_path().ok(),
-        ..DestinationFacts::default()
-    };
-    if let Ok(meta) = handle.metadata() {
-        facts.parent_reparse_tag = Some(meta.reparse_tag);
-        facts.parent_is_dir = Some(meta.is_dir);
-        facts.parent_volume_serial = Some(meta.file_id.volume_serial);
+    let dir = DestDir::open(&parent_ext).ok()?;
+    let mut facts = DestinationFacts::default();
+    if let Ok(dir_facts) = dir.facts() {
+        facts.parent_reparse_tag = Some(dir_facts.reparse_tag);
+        facts.parent_is_dir = Some(dir_facts.is_dir);
+        facts.parent_volume_serial = Some(dir_facts.volume_serial());
+        facts.parent_final_path = Some(dir_facts.final_path);
     }
     let occupied = match ext(destination).map(|p| FileHandle::open(&p)) {
         Some(Ok(_)) => Some(true),
         Some(Err(e)) if e.is_not_found() => Some(false),
         _ => None,
     };
-    let unchanged =
-        facts.parent_final_path.is_some() && handle.final_path().ok() == facts.parent_final_path;
+    let unchanged = facts.parent_final_path.is_some()
+        && dir.as_file().final_path().ok() == facts.parent_final_path;
     facts.occupied = occupied.filter(|_| unchanged);
-    Some((handle, leaf, facts))
+    Some((dir, leaf, facts))
 }
 
 /// [`destination_facts`], or empty facts and no handle when the parent could not be opened at all (the
 /// guard is still asked, with nothing known, so it names the rule).
-fn open_destination(destination: &str) -> (DestinationFacts, Option<(FileHandle, String)>) {
+fn open_destination(destination: &str) -> (DestinationFacts, Option<(DestDir, String)>) {
     match destination_facts(destination) {
-        Some((handle, leaf, facts)) => (facts, Some((handle, leaf))),
+        Some((dir, leaf, facts)) => (facts, Some((dir, leaf))),
         None => (DestinationFacts::default(), None),
     }
 }
@@ -1046,7 +1083,7 @@ pub fn check_quarantine_destination(
     ctx: &GateCtx,
     source: &CheckedPath,
     destination: &str,
-) -> Result<DestDir, Refusal> {
+) -> Result<CheckedDest, Refusal> {
     let (facts, parent) = open_destination(destination);
     let check = QuarantineCheck {
         source: source.path(),
@@ -1055,7 +1092,7 @@ pub fn check_quarantine_destination(
     };
     live::check_quarantine_destination(&check, &facts, &ctx.scope)?;
     let (dir, leaf) = parent.ok_or_else(|| rule(reason::FACTS_UNREADABLE))?;
-    Ok(DestDir {
+    Ok(CheckedDest {
         dir,
         leaf,
         path: destination.to_owned(),
@@ -1071,7 +1108,7 @@ pub fn check_undo_path(
     original: &str,
     volume_serial: u64,
     exemptions: Exemptions,
-) -> Result<DestDir, Refusal> {
+) -> Result<CheckedDest, Refusal> {
     let (facts, parent) = open_destination(original);
     let check = UndoPathCheck {
         original,
@@ -1080,7 +1117,7 @@ pub fn check_undo_path(
     };
     live::check_undo_path(&check, &facts, &ctx.deny)?;
     let (dir, leaf) = parent.ok_or_else(|| rule(reason::FACTS_UNREADABLE))?;
-    Ok(DestDir {
+    Ok(CheckedDest {
         dir,
         leaf,
         path: original.to_owned(),
@@ -1198,63 +1235,23 @@ pub fn admin_only_ancestors(source: &str) -> BootMove {
 // Registry
 // ---------------------------------------------------------------------------------------------------
 
-/// One key as [`WKey::open`] takes it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct KeyAddr {
-    root: RegRoot,
-    path: String,
-    view: RegView,
-}
-
-/// Where the key of a [`KeyProbe`] and each of its ancestors are opened. Each ancestor keeps the name the
-/// guard knows it by ([`KeyAncestor::path`]).
-#[derive(Debug, Clone)]
-struct ProbeAddrs {
-    key: KeyAddr,
-    ancestors: Vec<(String, KeyAddr)>,
-}
-
-/// Splits a canonical wire key path (`HKLM\...`, `HKU\...`) into the arguments of [`WKey::open`]. The wire
-/// spelling names the physical key (`WOW6432Node` included), so it is opened in the native view, where
-/// `WOW6432Node` is an ordinary key.
-fn wire_addr(key_path: &str) -> Option<KeyAddr> {
-    let (root, rest) = key_path.split_once('\\')?;
-    let root = if root.eq_ignore_ascii_case("HKLM") {
-        RegRoot::Hklm
-    } else if root.eq_ignore_ascii_case("HKU") {
-        RegRoot::Hku
-    } else {
-        return None;
+/// **The one place** where a guard [`KeyAddress`] becomes the arguments of [`WKey::open`]: the root and
+/// view one-to-one, the path as it is (the 32-bit view is reached by the view flag, never through a
+/// `WOW6432Node` segment; see [`KeyAddress`]). Every component is opened with `REG_OPTION_OPEN_LINK`.
+fn open_addr(addr: &KeyAddress, access: KeyAccess) -> Result<WKey, Win32Error> {
+    let root = match addr.root {
+        KeyRoot::Hklm => RegRoot::Hklm,
+        KeyRoot::Hku => RegRoot::Hku,
     };
-    (!rest.trim_matches('\\').is_empty()).then(|| KeyAddr {
-        root,
-        path: rest.to_owned(),
-        view: RegView::K64,
-    })
-}
-
-/// **The one place** where a [`KeyProbe`] becomes [`WKey::open`] arguments, for the key and for every
-/// ancestor. `None` refuses the item ([`reason::KEY_PATH`]).
-///
-/// Integration note: `KeyProbe` currently hands out wire spellings; the fix of wave 1 changes it to hand
-/// out `(root, view, path)` triples. Only this function has to follow that change.
-fn probe_addrs(probe: &KeyProbe) -> Option<ProbeAddrs> {
-    let key = wire_addr(&probe.key_path)?;
-    let ancestors = probe
-        .ancestors
-        .iter()
-        .map(|ancestor| wire_addr(ancestor).map(|addr| (ancestor.clone(), addr)))
-        .collect::<Option<Vec<_>>>()?;
-    Some(ProbeAddrs { key, ancestors })
-}
-
-/// Opens one key, every component with `REG_OPTION_OPEN_LINK`.
-fn open_addr(addr: &KeyAddr, access: KeyAccess) -> Result<WKey, Win32Error> {
-    WKey::open(addr.root, &addr.path, addr.view, access)
+    let view = match addr.view {
+        View::K64 => RegView::K64,
+        View::K32 => RegView::K32,
+    };
+    WKey::open(root, &addr.path, view, access)
 }
 
 /// The link state of one key, probed by itself.
-fn probe_node(addr: &KeyAddr) -> KeyNode {
+fn probe_node(addr: &KeyAddress) -> KeyNode {
     match open_addr(addr, KeyAccess::READ) {
         Ok(key) => match key.is_link() {
             Ok(true) => KeyNode::Link,
@@ -1268,12 +1265,13 @@ fn probe_node(addr: &KeyAddr) -> KeyNode {
     }
 }
 
-fn probe_ancestors(addrs: &ProbeAddrs) -> Vec<KeyAncestor> {
-    addrs
+/// Every ancestor of the probe, each opened by itself at its own address (G11).
+fn probe_ancestors(probe: &KeyProbe) -> Vec<KeyAncestor> {
+    probe
         .ancestors
         .iter()
-        .map(|(path, addr)| KeyAncestor {
-            path: path.clone(),
+        .map(|addr| KeyAncestor {
+            key: addr.clone(),
             node: probe_node(addr),
         })
         .collect()
@@ -1303,7 +1301,7 @@ struct KeySeen {
     value: Option<RegValue>,
 }
 
-fn collect_key(ctx: &GateCtx, key: &WKey, addrs: &ProbeAddrs, target: &Target) -> KeySeen {
+fn collect_key(ctx: &GateCtx, key: &WKey, probe: &KeyProbe, target: &Target) -> KeySeen {
     let node = match key.is_link() {
         Ok(true) => KeyNode::Link,
         Ok(false) => KeyNode::Plain,
@@ -1325,7 +1323,7 @@ fn collect_key(ctx: &GateCtx, key: &WKey, addrs: &ProbeAddrs, target: &Target) -
     KeySeen {
         facts: KeyFacts {
             node,
-            ancestors: probe_ancestors(addrs),
+            ancestors: probe_ancestors(probe),
             owner_is_ti: security.owner_is_ti,
             has_ti_ace: security.ti_ace,
             subkeys: info.as_ref().map(|i| i.n_subkeys),
@@ -1403,22 +1401,19 @@ fn gate_key(
         Ok(probe) => probe,
         Err(refusal) => return GateOutcome::Refused(refusal),
     };
-    let Some(addrs) = probe_addrs(&probe) else {
-        return GateOutcome::Refused(rule(reason::KEY_PATH));
-    };
     let check = KeyCheck {
         target: &target,
         op,
         binding,
         exemptions: item.exemptions,
     };
-    let key = match open_addr(&addrs.key, access) {
+    let key = match open_addr(&probe.open, access) {
         Ok(key) => key,
         Err(e) if e == Win32Error::ACCESS_DENIED => {
             // Report a refusal as a refusal: look through a read-only handle first.
-            return match open_addr(&addrs.key, KeyAccess::READ) {
+            return match open_addr(&probe.open, KeyAccess::READ) {
                 Ok(read) => {
-                    let seen = collect_key(ctx, &read, &addrs, &target);
+                    let seen = collect_key(ctx, &read, &probe, &target);
                     if seen.facts.value == ValueState::Absent {
                         return GateOutcome::Vanished;
                     }
@@ -1433,7 +1428,7 @@ fn gate_key(
         }
         Err(e) => return key_open_error(e),
     };
-    let seen = collect_key(ctx, &key, &addrs, &target);
+    let seen = collect_key(ctx, &key, &probe, &target);
     // "Not found" is the executor's business, not the guard's.
     if seen.facts.value == ValueState::Absent {
         return GateOutcome::Vanished;
@@ -1483,7 +1478,8 @@ fn validate_key(ctx: &GateCtx, item: &GateItem<'_>) -> GateOutcome<Validation> {
 
 /// A registry item that passed the gate, with the key handle to act on.
 ///
-/// The key was opened component by component with `REG_OPTION_OPEN_LINK` in the native view, with the
+/// The key was opened component by component with `REG_OPTION_OPEN_LINK` at the guard's
+/// [`KeyProbe::open`] address (root, view flag, logical path), with the
 /// access the action needs (`DELETE` for key actions, `KEY_SET_VALUE` for value and segment actions,
 /// `KEY_READ` always), and every fact here was read from it. Perform the action on
 /// [`CheckedKey::key`]; never reopen the key.
@@ -1568,10 +1564,9 @@ pub fn check_undo_key(
     exemptions: &Exemptions,
 ) -> Result<(), Refusal> {
     let probe = live::key_probe(target, ctx.deny.env())?;
-    let addrs = probe_addrs(&probe).ok_or_else(|| rule(reason::KEY_PATH))?;
     let facts = UndoKeyFacts {
-        node: probe_node(&addrs.key),
-        ancestors: probe_ancestors(&addrs),
+        node: probe_node(&probe.open),
+        ancestors: probe_ancestors(&probe),
     };
     live::check_undo_key(target, &facts, &ctx.deny, exemptions)
 }

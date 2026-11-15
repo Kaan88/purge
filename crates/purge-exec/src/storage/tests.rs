@@ -914,6 +914,65 @@ fn system_volumes_report_the_temp_volume() {
 }
 
 #[test]
+fn layout_names_are_the_guards() {
+    // Re-exported from the guard, so `StoreScope` derives the same directories the store creates.
+    assert_eq!(SESSIONS_DIR, purge_guard::live::SESSIONS_DIR);
+    assert_eq!(QUARANTINE_DIR, purge_guard::live::QUARANTINE_DIR);
+    assert_eq!(
+        VOLUME_QUARANTINE_DIR,
+        purge_guard::live::VOLUME_QUARANTINE_DIR
+    );
+    assert_eq!(
+        [SESSIONS_DIR, QUARANTINE_DIR, VOLUME_QUARANTINE_DIR],
+        ["sessions", "Quarantine", ".purge-q"]
+    );
+}
+
+#[test]
+fn store_scope_covers_the_directories_the_store_creates() {
+    let (s, roots) = fixture("scope");
+    let session = roots.create_session().unwrap();
+    let id = session.id().clone();
+    let serial = real_serial(&s.0);
+    let op = session
+        .create_op_dir(&s.path(r"app\a.txt"), serial, OpId(1))
+        .unwrap();
+    let canonical = |p: &Path| plain(p).to_string_lossy().into_owned();
+
+    // No other volume, or only the data root's own: the session directory and `Quarantine\<id>`.
+    for volumes in [Vec::new(), vec![s.0.clone()]] {
+        let scope = roots.store_scope(&id, &volumes).unwrap();
+        assert_eq!(scope.session(), &id);
+        assert!(same_path(Path::new(scope.session_dir()), session.path()));
+        assert_eq!(scope.quarantine_dirs().len(), 1);
+        assert!(same_path(
+            Path::new(&scope.quarantine_dirs()[0]),
+            op.path().parent().unwrap()
+        ));
+        assert!(scope.authorises(&canonical(&op.item_path("a.txt"))));
+        assert!(scope.authorises(&canonical(&session.path().join(JOURNAL_FILE))));
+        assert!(!scope.authorises(&canonical(&roots.index_path())));
+    }
+
+    // Another volume at a drive root: its `.purge-q\<id>` joins the scope (nothing is opened there).
+    let scope = roots.store_scope(&id, &[Path::new(r"Z:\")]).unwrap();
+    assert_eq!(scope.quarantine_dirs().len(), 2);
+    assert!(same_path(
+        Path::new(&scope.quarantine_dirs()[1]),
+        &Path::new(r"Z:\.purge-q").join(id.as_str())
+    ));
+    assert!(scope.authorises(&format!(r"Z:\.purge-q\{id}\000001\a.txt")));
+    assert!(!scope.authorises(r"Z:\.purge-q\other\000001\a.txt"));
+
+    // A volume mounted in a folder (the fixture's fake volumes are): the guard accepts no
+    // `.purge-q` below a drive root, so no scope is built.
+    assert!(matches!(
+        roots.store_scope(&id, &[s.path("volb")]),
+        Err(StorageError::InvalidPath(_))
+    ));
+}
+
+#[test]
 fn path_helpers() {
     assert_eq!(plain(Path::new(r"\\?\C:\a")), Path::new(r"C:\a"));
     assert_eq!(plain(Path::new(r"\\?\UNC\s\x")), Path::new(r"\\s\x"));

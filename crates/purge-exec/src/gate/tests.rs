@@ -10,8 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use purge_guard::canon::{GuardEnv, ProfileEnv};
 use purge_guard::live::reason as live_reason;
+use purge_model::exec::session::SessionId;
 use purge_win::fs_write::{FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY};
-use purge_win::reg::{REG_DWORD, REG_SZ};
+use purge_win::reg::{REG_DWORD, REG_LINK, REG_SZ};
 use purge_win::sid::current_user_sid;
 
 use super::*;
@@ -137,22 +138,30 @@ fn live_env(extra_purge_dir: Option<&str>) -> GuardEnv {
     }
 }
 
-/// **The one place** the tests build a [`StoreScope`]. Integration note: when it gets private fields and
-/// a constructor from the store roots plus a session id, adapt this function alone.
-fn store_scope(session_dir: String, quarantine_dirs: Vec<String>) -> StoreScope {
-    StoreScope {
-        session_dir,
-        quarantine_dirs,
-    }
+/// The session the tests' store scopes belong to.
+fn test_session() -> SessionId {
+    SessionId::new(FileTime(133_000_000_000_000_000), 0x5eed)
 }
 
-/// A scope with no store directories: nothing is in this session's store.
+/// **The one place** the tests build a [`StoreScope`]: the scope of [`test_session`] in the store at
+/// `data_root`, with no quarantine root on another volume.
+fn store_scope(data_root: &str) -> StoreScope {
+    StoreScope::new::<&str>(data_root, &[], &test_session()).unwrap()
+}
+
+/// A scope whose store does not exist: nothing is in this session's store.
 fn no_store() -> StoreScope {
-    store_scope(String::new(), Vec::new())
+    let root = std::env::temp_dir().join(unique("purge-gate-no-store"));
+    store_scope(root.to_str().unwrap())
 }
 
+/// The scope of a store at `<scratch>\store`, with the session directory and the data root's
+/// quarantine directory of [`test_session`] created.
 fn scope_in(s: &Scratch) -> StoreScope {
-    store_scope(s.dir(r"store\sessions\S1"), vec![s.dir(r"store\q\S1")])
+    let scope = store_scope(&s.path("store"));
+    std::fs::create_dir_all(scope.session_dir()).unwrap();
+    std::fs::create_dir_all(&scope.quarantine_dirs()[0]).unwrap();
+    scope
 }
 
 fn ctx_with(selected: &[ExecOp], scope: StoreScope, host: Box<dyn HostFacts>) -> GateCtx {
@@ -651,6 +660,8 @@ fn in_use_errors_for_the_locked_file_ladder() {
     // A directory refuses with access denied while something below it is open.
     assert!(may_be_in_use(FsError::AccessDenied, true));
     assert!(!may_be_in_use(FsError::AccessDenied, false));
+    // The rename of a directory reports that case with its own variant.
+    assert!(may_be_in_use(FsError::DirInUseOrDenied, true));
     assert!(!may_be_in_use(FsError::NotFound, true));
     assert!(!may_be_in_use(FsError::Other(1), true));
 }
@@ -751,7 +762,7 @@ fn deny_listed_paths_are_refused_with_the_rule() {
 fn quarantine_destination_store_item_and_undo_path() {
     let s = Scratch::new("dest");
     let scope = scope_in(&s);
-    let q = scope.quarantine_dirs[0].clone();
+    let q = scope.quarantine_dirs()[0].clone();
     let f = s.file(r"src\app.cfg", b"cfg");
     let op = mv(&f);
     let ctx = ctx_with(std::slice::from_ref(&op), scope, Box::new(LiveHost));
@@ -759,8 +770,10 @@ fn quarantine_destination_store_item_and_undo_path() {
     let serial = checked.stamp().identity.volume_serial;
 
     // The op directory must exist and be plain; the destination must be free.
-    let op_dir = s.dir(r"store\q\S1\000001");
-    let taken = s.file(r"store\q\S1\000001\taken", b"t");
+    let op_dir = format!(r"{q}\000001");
+    std::fs::create_dir(&op_dir).unwrap();
+    let taken = format!(r"{op_dir}\taken");
+    std::fs::write(&taken, b"t").unwrap();
     assert_refused(
         &verdict(check_quarantine_destination(&ctx, &checked, &taken)),
         Blocker::CannotBackUp,
@@ -840,7 +853,7 @@ fn quarantine_destination_store_item_and_undo_path() {
 }
 
 /// A destination check as an outcome, for [`assert_refused`].
-fn verdict(result: Result<DestDir, Refusal>) -> GateOutcome<()> {
+fn verdict(result: Result<CheckedDest, Refusal>) -> GateOutcome<()> {
     match result {
         Ok(_) => GateOutcome::Pass(()),
         Err(refusal) => GateOutcome::Refused(refusal),
@@ -920,58 +933,6 @@ fn wrong_stamp_or_op_kind_is_refused() {
 // Registry
 // ---------------------------------------------------------------------------------------------------
 
-mod reg_ffi {
-    use std::ffi::c_void;
-
-    pub const HKEY_USERS: isize = 0x8000_0003_u32 as i32 as isize;
-    pub const REG_OPTION_CREATE_LINK: u32 = 0x2;
-    pub const REG_OPTION_OPEN_LINK: u32 = 0x8;
-    pub const KEY_ALL_ACCESS: u32 = 0xF_003F;
-    pub const KEY_WOW64_64KEY: u32 = 0x100;
-    pub const DELETE: u32 = 0x1_0000;
-    pub const REG_LINK: u32 = 6;
-
-    #[link(name = "advapi32", kind = "raw-dylib")]
-    unsafe extern "system" {
-        pub fn RegCreateKeyExW(
-            key: isize,
-            sub_key: *const u16,
-            reserved: u32,
-            class: *const u16,
-            options: u32,
-            sam: u32,
-            security: *const c_void,
-            out: *mut isize,
-            disposition: *mut u32,
-        ) -> u32;
-        pub fn RegSetValueExW(
-            key: isize,
-            name: *const u16,
-            reserved: u32,
-            ty: u32,
-            data: *const u8,
-            len: u32,
-        ) -> u32;
-        pub fn RegOpenKeyExW(
-            key: isize,
-            sub_key: *const u16,
-            options: u32,
-            sam: u32,
-            out: *mut isize,
-        ) -> u32;
-        pub fn RegCloseKey(key: isize) -> u32;
-    }
-
-    #[link(name = "ntdll", kind = "raw-dylib")]
-    unsafe extern "system" {
-        pub fn NtDeleteKey(key: isize) -> i32;
-    }
-
-    pub fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-}
-
 /// A fresh `HKU\<SID>\Software\PurgeTest-<random>` key, removed on drop (links first, as links).
 struct TestKey {
     sid: String,
@@ -1044,14 +1005,14 @@ impl TestKey {
 
     /// Creates the registry link `sub` pointing at the key `target_sub` below the root.
     fn link(&mut self, sub: &str, target_sub: &str) {
-        use reg_ffi::*;
-        let name = wide(&self.rel(sub));
-        let mut key = 0isize;
+        use crate::test_ffi::*;
+        let name = wz(&self.rel(sub));
+        let mut key: Hkey = std::ptr::null_mut();
         // SAFETY: `name` is NUL-terminated; class, security and disposition are null; `key` is a valid
         // out-pointer.
         let rc = unsafe {
             RegCreateKeyExW(
-                HKEY_USERS,
+                hkey_users(),
                 name.as_ptr(),
                 0,
                 std::ptr::null(),
@@ -1068,7 +1029,7 @@ impl TestKey {
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
             .collect();
-        let value = wide("SymbolicLinkValue");
+        let value = wz("SymbolicLinkValue");
         // SAFETY: live key; `value` is NUL-terminated; `target` has the stated length.
         let rc = unsafe {
             RegSetValueExW(
@@ -1086,16 +1047,16 @@ impl TestKey {
     }
 
     fn remove_link(&self, sub: &str) {
-        use reg_ffi::*;
-        let name = wide(&self.rel(sub));
-        let mut key = 0isize;
+        use crate::test_ffi::*;
+        let name = wz(&self.rel(sub));
+        let mut key: Hkey = std::ptr::null_mut();
         // SAFETY: `name` is NUL-terminated; `key` is a valid out-pointer.
         let rc = unsafe {
             RegOpenKeyExW(
-                HKEY_USERS,
+                hkey_users(),
                 name.as_ptr(),
                 REG_OPTION_OPEN_LINK,
-                DELETE | KEY_WOW64_64KEY,
+                DELETE_ACCESS | KEY_WOW64_64KEY,
                 &mut key,
             )
         };
@@ -1359,4 +1320,117 @@ fn registry_links_at_the_leaf_and_on_the_path_are_refused() {
         path: k.wire(r"Real\New\Deeper"),
     };
     assert_eq!(check_undo_key(&ctx, &fresh, &long()), Ok(()));
+}
+
+/// Review finding S1, the half the pure guard cannot check: the addresses [`live::key_probe`] hands out
+/// for 32-bit and 64-bit machine class keys, and for an ordinary 32-bit key, all open on this machine
+/// with `REG_OPTION_OPEN_LINK` on every component, and none of them (key or ancestor) is a link. Before
+/// the fix, the walk through `SOFTWARE\WOW6432Node\Classes` met a registry link. Read-only, unelevated.
+#[test]
+fn class_and_32_bit_keys_open_at_the_probe_addresses_without_a_link() {
+    let env = live_env(None);
+    let addr = |view: View, path: &str| KeyAddress {
+        root: KeyRoot::Hklm,
+        view,
+        path: path.to_owned(),
+    };
+    let cases = [
+        (
+            r"HKLM\SOFTWARE\WOW6432Node\Classes\CLSID",
+            addr(View::K32, r"SOFTWARE\Classes\CLSID"),
+        ),
+        (
+            r"HKLM\SOFTWARE\Classes\CLSID",
+            addr(View::K64, r"SOFTWARE\Classes\CLSID"),
+        ),
+        (
+            r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion",
+            addr(View::K32, r"SOFTWARE\Microsoft\Windows\CurrentVersion"),
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (spelling, expected) in cases {
+        let target = Target::RegKey {
+            path: spelling.to_owned(),
+        };
+        let probe = match live::key_probe(&target, &env) {
+            Ok(probe) => probe,
+            Err(refusal) => {
+                failures.push(format!("{spelling}: key_probe refused: {refusal:?}"));
+                continue;
+            }
+        };
+        if !probe.open.is_same(&expected) {
+            failures.push(format!(
+                "{spelling}: probe.open is {}, expected {expected}",
+                probe.open
+            ));
+        }
+        let depth = prefix::depth(&expected.path);
+        if probe.ancestors.len() + 1 != depth {
+            failures.push(format!(
+                "{spelling}: {} ancestors for a key of depth {depth}",
+                probe.ancestors.len()
+            ));
+        }
+        for (what, at) in std::iter::once(("open", &probe.open))
+            .chain(probe.ancestors.iter().map(|a| ("ancestor", a)))
+        {
+            // `open_addr` is `WKey::open(root, path, view, access)` with the one-to-one mapping.
+            match open_addr(at, KeyAccess::READ) {
+                Ok(key) => {
+                    let link = (key.is_link(), key.flags().map(|f| f.link));
+                    if link != (Ok(false), Ok(false)) {
+                        failures.push(format!("{spelling}: {what} {at}: link state {link:?}"));
+                    }
+                }
+                Err(e) => failures.push(format!("{spelling}: {what} {at}: open failed: {e:?}")),
+            }
+        }
+        // The gate's own probes agree.
+        if probe_node(&probe.open) != KeyNode::Plain
+            || probe_ancestors(&probe)
+                .iter()
+                .any(|a| a.node != KeyNode::Plain)
+        {
+            failures.push(format!("{spelling}: a probed node is not plain"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Exemptions in the journal
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn exemptions_survive_the_journal_round_trip() {
+    for bits in 0u8..16 {
+        let guard = Exemptions {
+            proven_owned_skeleton: bits & 1 != 0,
+            environment_segment_edit: bits & 2 != 0,
+            tier_a_start_menu_entry: bits & 4 != 0,
+            long_names_resolved: bits & 8 != 0,
+        };
+        let journal = exemptions_to_journal(&guard);
+        assert_eq!(
+            (
+                journal.proven_owned_skeleton,
+                journal.environment_segment_edit,
+                journal.tier_a_start_menu_entry,
+                journal.long_names_resolved
+            ),
+            (
+                guard.proven_owned_skeleton,
+                guard.environment_segment_edit,
+                guard.tier_a_start_menu_entry,
+                guard.long_names_resolved
+            )
+        );
+        assert_eq!(exemptions_from_journal(&journal), guard);
+        // And through the record's JSON, as undo reads it back.
+        let text = serde_json::to_string(&journal).unwrap();
+        let read: GateExemptions = serde_json::from_str(&text).unwrap();
+        assert_eq!(exemptions_from_journal(&read), guard);
+    }
 }

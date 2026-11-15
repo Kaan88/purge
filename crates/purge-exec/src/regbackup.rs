@@ -45,7 +45,9 @@ use purge_model::{Blocker, FileTime, Hive, TypedTarget, View};
 use purge_win::fs_write::{FsError, create_file_secure, flush, flush_dir};
 use purge_win::os::Win32Error;
 use purge_win::reg::{REG_EXPAND_SZ, REG_LINK, REG_MULTI_SZ, REG_SZ, RegRoot, RegValue, RegView};
-use purge_win::reg_write::{CreatedKey, HAS_SUBKEYS, KeyAccess, NAME_NOT_REPRESENTABLE, WKey};
+use purge_win::reg_write::{
+    CreatedKey, HAS_SUBKEYS, HAS_VALUES, KeyAccess, NAME_NOT_REPRESENTABLE, WKey,
+};
 use sha2::{Digest, Sha256};
 
 /// The blast-radius limit for one key tree (ENGINE_PLAN.md §5.10): a tree with more keys is refused
@@ -195,6 +197,9 @@ pub enum Change {
     /// The key's owner, group or DACL differs.
     #[error("the key's security differs from the backup")]
     SecurityDiffers,
+    /// The key is volatile where the backup recorded a stable key, or the other way round.
+    #[error("the key's volatility differs from the backup")]
+    VolatilityDiffers,
     /// A name in the key is not valid UTF-16 or holds a NUL, so it is not one the backup holds.
     #[error("the key holds a name that is not representable")]
     NameNotRepresentable,
@@ -1065,7 +1070,7 @@ fn as_change(error: Win32Error) -> Result<Change, Win32Error> {
     }
 }
 
-/// Compares a live key with its node: link, class, values, security (the owner only when
+/// Compares a live key with its node: link, volatility, class, values, security (the owner only when
 /// `owner_strict`). Subkeys are not looked at. `Ok(None)` when it matches.
 fn compare_node(
     key: &WKey,
@@ -1080,6 +1085,16 @@ fn compare_node(
         Ok(true) => return Ok(Some((Change::BecameLink, "query link value"))),
         Ok(false) => {}
         Err(e) => return check(Err(e), "query link value"),
+    }
+    let flags = match key.flags() {
+        Ok(flags) => flags,
+        Err(e) => return check(Err(e), "query key flags"),
+    };
+    if flags.link {
+        return Ok(Some((Change::BecameLink, "query key flags")));
+    }
+    if flags.volatile != node_volatile(node) {
+        return Ok(Some((Change::VolatilityDiffers, "compare volatility")));
     }
     let info = match key.info() {
         Ok(info) => info,
@@ -1831,19 +1846,34 @@ fn delete_walk(
                 },
             }
         } else {
-            // Fault point for crash tests: between the deletes of two keys.
+            // Fault point for crash tests: between the deletes of two keys. Hit only once a key is
+            // gone, so the process dies with some keys of the tree deleted and this one still there.
+            if count > 0 {
+                crate::fault::point("regdelete.mid");
+            }
             if !hook(index) {
                 return Ok(Walked::Interrupted);
             }
+            let node = &tree.keys[index];
             match compare_step(
                 index,
-                compare_node(handle, &tree.keys[index], true).map(|c| c.map(|(c, _)| c)),
+                compare_node(handle, node, true).map(|c| c.map(|(c, _)| c)),
             ) {
                 Some(step) => step,
-                None => match handle.delete() {
+                // A key backed up without values is deleted only while it is still empty: the
+                // counts are read again on the handle right before the delete, so a value written
+                // since the comparison is not lost with the key.
+                None => match if node.values.is_empty() {
+                    handle.delete_if_empty()
+                } else {
+                    handle.delete()
+                } {
                     Ok(()) => Step::Deleted,
                     Err(e) if e == HAS_SUBKEYS => {
                         Step::Fail(index, DeleteFailure::Changed(Change::ExtraSubkey))
+                    }
+                    Err(e) if e == HAS_VALUES => {
+                        Step::Fail(index, DeleteFailure::Changed(Change::ValuesDiffer))
                     }
                     Err(e) => match as_change(e) {
                         Ok(change) => Step::Fail(index, DeleteFailure::Changed(change)),
@@ -1928,8 +1958,9 @@ fn run_delete(
 /// `root` must be the handle the gate inspected, opened with [`KeyAccess::DELETE`]. Every other key is
 /// opened from its parent's handle by its backed-up name (with `REG_OPTION_OPEN_LINK`, never through a
 /// link), compared with its backup node on the way down and again right before it is deleted through
-/// that same handle ([`WKey::delete`], never by name). A key that is missing, became a link, has a
-/// subkey or a value not in the backup, or another class or security descriptor stops the delete with
+/// that same handle ([`WKey::delete`], or [`WKey::delete_if_empty`] for a key backed up without values;
+/// never by name). A key that is missing, became a link, has a subkey or a value not in the backup, or
+/// another volatility, class or security descriptor stops the delete with
 /// [`DeleteFailure::Changed`]; the keys already deleted are then put back from the backup and
 /// [`DeleteError::rollback`] says how that went. Keys that are not in the backup are never opened.
 pub fn delete_tree(root: &WKey, backup: &VerifiedBackup) -> Result<DeleteReport, DeleteError> {
@@ -2404,57 +2435,16 @@ mod tests {
     //! drop (also on failure), and inside fresh temp directories. They run unelevated.
 
     use super::*;
+    // Raw calls for what `WKey` deliberately cannot do: create and delete links, odd names.
+    use crate::test_ffi::{
+        DELETE_ACCESS, Hkey, KEY_ALL_ACCESS, KEY_SET_VALUE, KEY_WOW64_64KEY, NtDeleteKey,
+        REG_OPTION_CREATE_LINK, REG_OPTION_OPEN_LINK, RegCloseKey, RegCreateKeyExW, RegOpenKeyExW,
+        RegSetValueExW, hkey_users, wz,
+    };
     use purge_win::reg::{REG_BINARY, REG_DWORD, REG_DWORD_BIG_ENDIAN, REG_NONE, REG_QWORD};
     use purge_win::sid::current_user_sid;
-    use std::ffi::c_void;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
-
-    // --- Raw calls for what `WKey` deliberately cannot do: create and delete links, odd names. ---
-
-    type Hkey = *mut c_void;
-    const REG_OPTION_CREATE_LINK: u32 = 0x2;
-    const REG_OPTION_OPEN_LINK: u32 = 0x8;
-    const KEY_ALL_ACCESS: u32 = 0xF_003F;
-    const KEY_SET_VALUE: u32 = 0x2;
-    const DELETE_ACCESS: u32 = 0x1_0000;
-    const KEY_WOW64_64KEY: u32 = 0x100;
-
-    #[link(name = "advapi32", kind = "raw-dylib")]
-    unsafe extern "system" {
-        fn RegOpenKeyExW(key: Hkey, sub: *const u16, options: u32, sam: u32, out: *mut Hkey)
-        -> u32;
-        fn RegCreateKeyExW(
-            key: Hkey,
-            sub: *const u16,
-            reserved: u32,
-            class: *const u16,
-            options: u32,
-            sam: u32,
-            sa: *const c_void,
-            out: *mut Hkey,
-            disposition: *mut u32,
-        ) -> u32;
-        fn RegSetValueExW(
-            key: Hkey,
-            name: *const u16,
-            reserved: u32,
-            ty: u32,
-            data: *const u8,
-            len: u32,
-        ) -> u32;
-        fn RegCloseKey(key: Hkey) -> u32;
-    }
-
-    #[link(name = "ntdll", kind = "raw-dylib")]
-    unsafe extern "system" {
-        fn NtDeleteKey(key: Hkey) -> i32;
-    }
-
-    /// `HKEY_USERS` (sign-extended predefined handle).
-    fn hkey_users() -> Hkey {
-        0x8000_0003_u32 as i32 as isize as Hkey
-    }
 
     /// A raw key handle, closed on drop.
     struct RawKey(Hkey);
@@ -2464,10 +2454,6 @@ mod tests {
             // SAFETY: the handle came from a successful open or create and is closed once here.
             unsafe { RegCloseKey(self.0) };
         }
-    }
-
-    fn wz(text: &str) -> Vec<u16> {
-        text.encode_utf16().chain([0]).collect()
     }
 
     /// Opens `HKU\<path>` raw, as the key itself even when it is a link.
@@ -3523,6 +3509,94 @@ mod tests {
                 Err(RestoreError::WrongBackupKind)
             );
         }
+    }
+
+    /// The volatility of every key of `rel` and below, by display path.
+    fn volatility(root: &TestRoot, rel: &str) -> Vec<(String, bool)> {
+        let doc = capture(root, rel);
+        let tree = doc.tree().unwrap();
+        let mut out: Vec<(String, bool)> = (0..tree.keys.len())
+            .map(|i| (display_path(tree, i), tree.keys[i].volatile))
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_tree_with_volatile_keys_round_trips() {
+        let root = TestRoot::new();
+        // `VT` (stable) with `S` (stable, a value), `E` (stable, empty), `V` (volatile, a value) and
+        // `V\W` (volatile, empty; nothing stable can live below a volatile key).
+        let vt = root.key.create_subkey("VT", "", None, false).unwrap();
+        vt.create_subkey("S", "", None, false)
+            .unwrap()
+            .set_value_raw("s", REG_DWORD, &[1, 0, 0, 0])
+            .unwrap();
+        vt.create_subkey("E", "", None, false).unwrap();
+        let v = vt.create_subkey("V", "ClsV", None, true).unwrap();
+        v.set_value_raw("v", REG_SZ, &utf16z("volatile")).unwrap();
+        v.create_subkey("W", "", None, true).unwrap();
+        drop((v, vt));
+
+        let before = volatility(&root, "VT");
+        assert_eq!(
+            before,
+            [
+                (String::new(), false),
+                ("E".to_owned(), false),
+                ("S".to_owned(), false),
+                ("V".to_owned(), true),
+                (r"V\W".to_owned(), true),
+            ]
+        );
+        let key = root.open("VT", KeyAccess::DELETE);
+        let doc = capture_tree(&key, &root.key_path("VT"), DEFAULT_KEY_LIMIT).unwrap();
+        let dir = TempDir::new();
+        let written = save(&dir, 1, &doc);
+        let backup = read_verified(&dir.0, written.reference()).unwrap();
+        assert_eq!(backup.doc(), &doc);
+
+        assert_eq!(delete_tree(&key, &backup).unwrap().keys_deleted, 5);
+        drop(key);
+        assert!(!root.exists("VT"));
+        let report = restore_tree(&root.key, &backup).unwrap();
+        assert_eq!(
+            (report.outcome, report.keys_created, report.differences),
+            (RestoreOutcome::Restored, 5, Vec::new())
+        );
+        assert_eq!(shape(&capture(&root, "VT")), shape(&doc));
+        assert_eq!(volatility(&root, "VT"), before);
+        assert_eq!(probe_tree(&root.key, &backup).unwrap(), TreeState::Intact);
+
+        // A key whose volatility is not the recorded one stops the delete before anything goes. The
+        // backup is made to record `E` as volatile: re-creating `E` volatile right after deleting the
+        // stable one gave a stable key again on Windows 11 26300, so the live side is left as it is.
+        let mut flipped = doc.clone();
+        let RegBackupBody::Tree(tree) = &mut flipped.body else {
+            panic!("a tree backup");
+        };
+        let e = (0..tree.keys.len())
+            .find(|&i| display_path(tree, i) == "E")
+            .unwrap();
+        tree.keys[e].volatile = true;
+        let flipped = save(&dir, 2, &flipped);
+        let key = root.open("VT", KeyAccess::DELETE);
+        let err = delete_tree(&key, &flipped).unwrap_err();
+        assert_eq!(
+            err.failure,
+            DeleteFailure::Changed(Change::VolatilityDiffers)
+        );
+        assert_eq!(err.at, "E");
+        assert_eq!(err.rollback, Rollback::NotNeeded);
+        assert_eq!(
+            probe_tree(&root.key, &flipped).unwrap(),
+            TreeState::Diverged {
+                at: "E".to_owned(),
+                change: Change::VolatilityDiffers,
+            }
+        );
+        assert_eq!(volatility(&root, "VT"), before);
+        assert_eq!(probe_tree(&root.key, &backup).unwrap(), TreeState::Intact);
     }
 
     #[test]

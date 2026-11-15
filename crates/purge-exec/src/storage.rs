@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use purge_guard::live::{StoreScope, StoreScopeError};
 use purge_model::exec::op::OpId;
 use purge_model::exec::session::{SessionId, SessionIndex, VolumeUsage};
 use purge_win::fs::{FileHandle, FileId, FileMeta};
@@ -63,12 +64,12 @@ pub use integrity::{
     SDDL_SESSIONS, SDDL_STORE, SDDL_STORE_FILE, verdict,
 };
 
-/// Name of the sessions directory under the data root.
-pub const SESSIONS_DIR: &str = "sessions";
-/// Name of the quarantine directory under the data root.
-pub const QUARANTINE_DIR: &str = "Quarantine";
-/// Name of the quarantine directory at the root of every other volume.
-pub const VOLUME_QUARANTINE_DIR: &str = ".purge-q";
+// The three directory names of the layout that the guard's `StoreScope` derives the session's own
+// directories from. They are the guard's constants, not copies, so the store and the gate cannot
+// disagree about where a session's directories are: `SESSIONS_DIR` (`sessions`) under the data root,
+// `QUARANTINE_DIR` (`Quarantine`) under the data root, `VOLUME_QUARANTINE_DIR` (`.purge-q`) at the
+// root of every other volume.
+pub use purge_guard::live::{QUARANTINE_DIR, SESSIONS_DIR, VOLUME_QUARANTINE_DIR};
 /// Name of the session index in the sessions directory.
 pub const INDEX_FILE: &str = "index.json";
 /// Name of the temporary file of the index's atomic rewrite, in the sessions directory.
@@ -575,6 +576,45 @@ impl StorageRoots {
         self.sessions_path().join(INDEX_FILE)
     }
 
+    /// The guard's [`StoreScope`] of `session` in this store, the only way the executor builds one (no
+    /// caller assembles store paths by hand): `<data root>\sessions\<session>`,
+    /// `<data root>\Quarantine\<session>`, and `<volume root>\.purge-q\<session>` for every volume in
+    /// `volume_roots` other than the data root's.
+    ///
+    /// `volume_roots` are the roots of the volumes the session quarantines on, as this store reports
+    /// them: [`StorageRoots::volume`]`(source).root` for the items of a run, or the `root` of the
+    /// journal header's `VolumeRecord`s (the index's `VolumeUsage`s) for undo, recovery and expiry. A
+    /// root naming the data root's volume adds nothing (its items go to `<data root>\Quarantine`, as
+    /// [`SessionDir::create_op_dir`] puts them). A root the guard does not accept as a quarantine root
+    /// (a volume mounted in a folder, whose `.purge-q` is not at the root of a drive) or a data root it
+    /// does not accept is [`StorageError::InvalidPath`].
+    pub fn store_scope<P: AsRef<Path>>(
+        &self,
+        session: &SessionId,
+        volume_roots: &[P],
+    ) -> Result<StoreScope, StorageError> {
+        let text = |path: &Path| {
+            path.to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| StorageError::InvalidPath(path.display().to_string()))
+        };
+        let data_root = text(&self.data_root)?;
+        let data_volume = self.volume(&self.data_root)?;
+        let mut quarantine_roots = Vec::new();
+        for root in volume_roots {
+            let root = plain(root.as_ref());
+            if same_path(&root, &data_volume.root) {
+                continue;
+            }
+            quarantine_roots.push(text(&root.join(VOLUME_QUARANTINE_DIR))?);
+        }
+        StoreScope::new(&data_root, &quarantine_roots, session).map_err(|e| match e {
+            StoreScopeError::DataRoot(path) | StoreScopeError::QuarantineRoot(path) => {
+                StorageError::InvalidPath(path)
+            }
+        })
+    }
+
     /// The facts of the volume holding `path`, from the configured [`VolumeProbe`].
     pub fn volume(&self, path: &Path) -> Result<VolumeFacts, StorageError> {
         self.volumes
@@ -898,6 +938,7 @@ impl StorageRoots {
             .map_err(|e| io("write", &temp, os_error(&e)))?;
         fs_write::flush(&file).map_err(|e| io("flush", &temp, e))?;
         drop(file);
+        crate::fault::point("index.write");
         hook(IndexStep::TempWritten)?;
 
         replace_file(&temp, &dest)?;
