@@ -210,8 +210,8 @@ pub enum FsError {
     /// expected, and changed nothing. [`FsError::code`] is `ERROR_INVALID_DATA`.
     #[error("the boot-time move list holds the pair {found} time(s), not the expected count")]
     PendingCountMismatch {
-        /// How many occurrences of the pair the list holds.
-        found: usize,
+        /// How many occurrences of the pair the list holds (saturating).
+        found: u32,
     },
     /// Any other Win32 error code.
     #[error("Win32 error {0}")]
@@ -1277,7 +1277,7 @@ pub fn remove_pair_exactly_from_value(
     let edit = remove_pairs_from_value(bytes, std::slice::from_ref(pair));
     if edit.removed != expected {
         return Err(FsError::PendingCountMismatch {
-            found: edit.removed,
+            found: u32::try_from(edit.removed).unwrap_or(u32::MAX),
         });
     }
     Ok(edit)

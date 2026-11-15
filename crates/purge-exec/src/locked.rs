@@ -450,14 +450,18 @@ pub trait PendingRenames {
     fn remove_counted(&mut self, pair: &PendingPair, expected: usize) -> Result<usize, FsError> {
         let found = self.list()?.iter().filter(|p| *p == pair).count();
         if found != expected {
-            return Err(FsError::PendingCountMismatch { found });
+            return Err(FsError::PendingCountMismatch {
+                found: u32::try_from(found).unwrap_or(u32::MAX),
+            });
         }
         if expected == 0 {
             return Ok(0);
         }
         let removed = self.remove_exact(pair)?;
         if removed != expected {
-            return Err(FsError::PendingCountMismatch { found: removed });
+            return Err(FsError::PendingCountMismatch {
+                found: u32::try_from(removed).unwrap_or(u32::MAX),
+            });
         }
         Ok(removed)
     }
