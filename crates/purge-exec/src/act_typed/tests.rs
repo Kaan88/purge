@@ -60,9 +60,10 @@ impl Drop for Scratch {
 /// A session in a fresh relaxed store, with a journal of `ops` package ops (op n removes `name(n)`),
 /// all validated.
 struct Session {
-    _scratch: Scratch,
     session: SessionDir,
     journal: JournalWriter,
+    /// Last: removed after the journal and the session's handles are closed.
+    _scratch: Scratch,
 }
 
 fn item(n: u32) -> CandidateId {
@@ -110,9 +111,9 @@ impl Session {
                 .unwrap();
         }
         Session {
-            _scratch: scratch,
             session,
             journal,
+            _scratch: scratch,
         }
     }
 

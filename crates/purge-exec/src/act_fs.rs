@@ -40,6 +40,10 @@
 //! This module never writes the journal. It returns values the executor journals, in the order
 //! [`crate::journal`] fixes (the same shape as [`crate::act_typed`]):
 //!
+//! 0. Before: the executor wrote the op's journal `validated` record (or read it back on resume) and
+//!    handed that record to `GateCtx::record`. Everything [`prepare_fs`] acts with (op, plan item, stamp,
+//!    exemptions, recorded facts) comes from that record (`GateCtx::journalled`); an op id without one
+//!    is `Failed{Internal}` and nothing is opened.
 //! 1. [`prepare_fs`] runs the act-time gate (with the retries), creates the op's quarantine directory
 //!    and checks the destination, and returns [`FsPrepared::Decided`] (journal it with
 //!    `JournalWriter::done_without_intent`; every decided outcome passes
@@ -58,7 +62,9 @@
 //!
 //! # Undo
 //!
-//! [`plan_undo_fs`] decides from the journal alone ([`FsUndoPlan::Decided`]: journal with
+//! The undo driver hands every `validated` record of the session to its `GateCtx::record` first; the
+//! undo of an op is gated with the exemptions of that record (`GateCtx::exemptions`), and an op without
+//! one is a conflict. [`plan_undo_fs`] decides from the journal alone ([`FsUndoPlan::Decided`]: journal with
 //! `undo_done_without_intent` or `undo_conflict_without_intent`) or asks to run ([`FsUndoPlan::Run`]: the
 //! undo driver writes `undo_intent`, then calls [`undo_fs`] with the token and journals the [`FsUndo`] with
 //! `undo_done` or `undo_conflict`). The driver runs every `RecreateDir` inverse of the session first, in
@@ -82,9 +88,7 @@ use purge_guard::live::{
     Binding, FileIdentity, PathStamp, Refusal, StoreOp, reason as live_reason,
 };
 use purge_guard::prefix;
-use purge_model::exec::journal::{
-    FileFacts, GateExemptions, Intent, ItemFacts, UndoConflict, UndoOutcome,
-};
+use purge_model::exec::journal::{FileFacts, Intent, ItemFacts, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{ExecOp, FailCode, FileIdHex, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::{Blocker, CandidateId, FileTime};
 use purge_win::fs::FileHandle;
@@ -94,10 +98,7 @@ use purge_win::fs_write::{
 use purge_win::os::Win32Error;
 
 use crate::fault;
-use crate::gate::{
-    self, CheckedDest, CheckedPath, GateCtx, GateItem, GateOutcome, LockedPath, Stamp, Validation,
-    exemptions_from_journal,
-};
+use crate::gate::{self, CheckedDest, CheckedPath, GateCtx, GateOutcome, LockedPath, Stamp};
 use crate::journal::{IntentToken, UndoToken};
 use crate::storage::{SessionDir, StorageError};
 
@@ -413,14 +414,9 @@ fn strip_verbatim(path: &str) -> &str {
     }
 }
 
-/// Runs the act-time gate for one item until it is not locked or the retries are used up.
-fn gate_with_retry(
-    ctx: &GateCtx,
-    gate_item: &GateItem<'_>,
-    stamp: &PathStamp,
-    retry: &Retry,
-) -> (GateOutcome<CheckedPath>, u32) {
-    let (result, attempts) = retry.run(|| match gate::open_and_check_path(ctx, gate_item, stamp) {
+/// Runs the act-time gate for op `op` until it is not locked or the retries are used up.
+fn gate_with_retry(ctx: &GateCtx, op: OpId, retry: &Retry) -> (GateOutcome<CheckedPath>, u32) {
+    let (result, attempts) = retry.run(|| match gate::open_and_check_path(ctx, op) {
         GateOutcome::Locked(locked) => Err(Box::new(locked)),
         other => Ok(other),
     });
@@ -430,12 +426,14 @@ fn gate_with_retry(
     }
 }
 
-/// Decides whether op `op` (plan item `item`) may act on its file-system item, and gets everything ready
-/// that must exist before its intent: the gate's acting handle, the op's quarantine directory (for a
-/// move) and the inverse with the facts recorded from that handle. Changes nothing outside Purge's store.
+/// Decides whether op `op` may act on its file-system item, and gets everything ready that must exist
+/// before its intent: the gate's acting handle, the op's quarantine directory (for a move) and the inverse
+/// with the facts recorded from that handle. Changes nothing outside Purge's store.
 ///
-/// `gate_item` is the op with the exemptions and limit it was validated with; `validation` is its pass of
-/// the validate pass. A sharing violation on the acting handle is retried per `retry`.
+/// The op, its plan item, its stamp, its exemptions, its blast-radius limit and its recorded facts are
+/// those of its journal `validated` record, handed to `GateCtx::record` before
+/// ([`GateCtx::journalled`]); an op id without a record is `Failed{Internal}`. A sharing violation on the
+/// acting handle is retried per `retry`.
 ///
 /// Returns `Err` only for a store failure that concerns the whole run (integrity, I/O on the data root,
 /// an op directory that already exists); a volume the store cannot quarantine on is a decided skip.
@@ -443,13 +441,15 @@ pub fn prepare_fs(
     ctx: &GateCtx,
     session: &SessionDir,
     op: OpId,
-    item: &CandidateId,
-    gate_item: &GateItem<'_>,
-    validation: &Validation,
     retry: &Retry,
 ) -> Result<FsPrepared, StorageError> {
     let decided = |r: FsResult| Ok(FsPrepared::Decided(r));
-    let exec_op = gate_item.op;
+    let Some((exec_op, record)) = ctx.journalled(op) else {
+        return decided(FsResult::internal(format!(
+            "op {op} has no journalled validated record in this run; nothing done"
+        )));
+    };
+    let item = &record.item;
     let (path, is_move) = match exec_op {
         ExecOp::QuarantineMove { path } => (path.as_str(), true),
         ExecOp::RemoveDirIfEmpty { path } => (path.as_str(), false),
@@ -460,20 +460,15 @@ pub fn prepare_fs(
             )));
         }
     };
-    let Stamp::Path(stamp) = validation.stamp else {
+    let Some(Stamp::Path(stamp)) = ctx.stamp(op) else {
         return decided(FsResult::internal(format!(
             "the validation of {path} is not a file-system stamp; nothing done"
         )));
     };
-    if gate_item.exemptions != validation.exemptions {
-        return decided(FsResult::internal(format!(
-            "{path} is gated with other exemptions than it was validated with; nothing done"
-        )));
-    }
     // A directory moves whole only when the validation counted the tree below it.
     if is_move && stamp.is_dir {
         let counted = matches!(
-            &validation.facts,
+            &record.facts,
             ItemFacts::File(FileFacts {
                 is_dir: true,
                 reparse_tag: 0,
@@ -489,7 +484,7 @@ pub fn prepare_fs(
         }
     }
 
-    let (outcome, attempts) = gate_with_retry(ctx, gate_item, &stamp, retry);
+    let (outcome, attempts) = gate_with_retry(ctx, op, retry);
     let checked = match outcome {
         GateOutcome::Pass(checked) => checked,
         GateOutcome::Vanished => {
@@ -619,18 +614,12 @@ fn quarantine_destination(
     if let Err(result) = same_volume(stamp.identity.volume_serial, quarantine.volume_serial()) {
         return Ok(Err(result));
     }
-    let item_path = quarantine.item_path(leaf);
-    let Some(destination) = item_path.to_str() else {
-        return Ok(Err(FsResult::internal(format!(
-            "the quarantine path of {path} is not valid Unicode; nothing done"
-        ))));
-    };
-    let dest = match gate::check_quarantine_destination(ctx, checked, destination) {
+    let dest = match gate::check_quarantine_destination(ctx, checked, &quarantine, leaf) {
         Ok(dest) => dest,
         Err(refusal) => return Ok(Err(refusal_to_result(&refusal, false))),
     };
     let inverse = Inverse::MoveBack {
-        quarantine_path: destination.to_owned(),
+        quarantine_path: dest.path().to_owned(),
         original_path: path.to_owned(),
         file_id: FileIdHex(stamp.identity.file_id),
         volume_serial: stamp.identity.volume_serial,
@@ -910,7 +899,6 @@ impl FsUndo {
 #[derive(Debug, Clone)]
 pub struct FsUndoJob {
     op: OpId,
-    exemptions: Exemptions,
     kind: UndoKind,
 }
 
@@ -951,8 +939,9 @@ pub enum FsUndoPlan {
 }
 
 /// The undo of a file op, decided from its journal records alone. `intent` is the op's intent, `done` its
-/// `done` outcome or `None` when the journal holds only the intent (the run stopped during the act), and
-/// `exemptions` those of the op's `validated` record. `None` for an op that is not a file op.
+/// `done` outcome or `None` when the journal holds only the intent (the run stopped during the act).
+/// `None` for an op that is not a file op. The exemptions the inverse is gated with are not taken here:
+/// [`undo_fs`] takes those of the op's journalled `validated` record from its `GateCtx`.
 ///
 /// - An outcome that left the system unchanged (`Vanished`, `Skipped`, `HeldRetry`, `Failed` with any
 ///   code but `VerifyFailed`) is `NothingToUndo`.
@@ -961,11 +950,7 @@ pub enum FsUndoPlan {
 ///   `PendingReboot` the driver first has the locked-file ladder take back the registered pair; if the
 ///   boot-time move already happened the item is in quarantine and is moved back, if not the original
 ///   still holds it and the undo ends `AlreadyRestored`.
-pub fn plan_undo_fs(
-    intent: &Intent,
-    done: Option<&ItemOutcome>,
-    exemptions: &GateExemptions,
-) -> Option<FsUndoPlan> {
+pub fn plan_undo_fs(intent: &Intent, done: Option<&ItemOutcome>) -> Option<FsUndoPlan> {
     let is_move = match &intent.exec_op {
         ExecOp::QuarantineMove { .. } => true,
         ExecOp::RemoveDirIfEmpty { .. } => false,
@@ -1054,7 +1039,6 @@ pub fn plan_undo_fs(
     };
     Some(FsUndoPlan::Run(FsUndoJob {
         op: intent.op,
-        exemptions: exemptions_from_journal(exemptions),
         kind,
     }))
 }
@@ -1063,6 +1047,10 @@ pub fn plan_undo_fs(
 /// the inverse changed something. Returns `Err` only for a store integrity failure, which concerns the
 /// whole undo run; every outcome of the item is an [`FsUndo`]. A token of another op is
 /// `Failed{Internal}` and nothing is done.
+///
+/// The original path is checked ([`gate::check_undo_path`]) with the exemptions of the op's journalled
+/// `validated` record, which the undo driver handed to `ctx` (`GateCtx::record`); an op without one is a
+/// conflict ([`gate::reason::NOT_VALIDATED`]) and nothing is done.
 pub fn undo_fs(
     ctx: &GateCtx,
     session: &SessionDir,
@@ -1081,11 +1069,13 @@ pub fn undo_fs(
             ),
         ));
     }
-    let FsUndoJob {
-        op,
-        exemptions,
-        kind,
-    } = job;
+    let FsUndoJob { op, kind } = job;
+    let Some(exemptions) = ctx.exemptions(op) else {
+        return Ok(FsUndo::blocked(
+            rule(gate::reason::NOT_VALIDATED),
+            format!("op {op} has no journalled validated record in this undo run; nothing done"),
+        ));
+    };
     match kind {
         UndoKind::MoveBack {
             quarantine_path,

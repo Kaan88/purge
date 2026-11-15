@@ -11,7 +11,7 @@ use purge_guard::canon::{GuardEnv, ProfileEnv};
 use purge_guard::deny::DenyList;
 use purge_guard::live::StoreScope;
 use purge_model::exec::journal::{
-    Header, ItemFacts, JournalSchema, Record, UndoConflict, UndoOutcome, Validated,
+    Header, ItemFacts, JournalSchema, Record, RegFacts, UndoConflict, UndoOutcome, Validated,
 };
 use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::regbackup::{RegBackup, RegTree};
@@ -24,10 +24,10 @@ use purge_win::reg_write::{KeyAccess, WKey};
 use purge_win::sid::current_user_sid;
 
 use super::*;
-use crate::gate::{self, GateCtx, GateItem, GateOutcome, Stamp};
+use crate::gate::{self, GateCtx, GateItem, GateOutcome};
 use crate::journal::{JournalWriter, read};
 use crate::regbackup;
-use crate::storage::{BackupKind, JOURNAL_FILE, ObjectKind, SessionDir, StorageRoots, backup_rel};
+use crate::storage::{BackupKind, SessionDir, StorageRoots, backup_rel};
 
 // ---------------------------------------------------------------------------------------------------
 // Fixtures
@@ -402,29 +402,35 @@ impl Run {
             allow_irreversible: false,
             volumes: Vec::new(),
         };
-        let sddl = roots.policy().sddl_for(ObjectKind::StoreFile);
-        let mut journal =
-            JournalWriter::create(&session.path().join(JOURNAL_FILE), &sddl, header).unwrap();
+        let mut journal = JournalWriter::create(&session, header).unwrap();
         let mut ctx = GateCtx::new(DenyList::compile(&live_env()), &ops, no_store()).unwrap();
         for (i, op) in ops.iter().enumerate() {
             let n = i as u32 + 1;
             let mut facts = ItemFacts::Absent;
+            let mut passed = false;
             if op.is_registry() {
                 let outcome = gate::validate(&ctx, &GateItem::new(op, Exemptions::default()));
                 facts = outcome.item_facts().unwrap_or(ItemFacts::Absent);
-                if let GateOutcome::Pass(validation) = outcome {
-                    ctx.record(OpId(n), validation.stamp);
-                }
+                passed = matches!(outcome, GateOutcome::Pass(_));
             }
-            journal
-                .validated(Validated {
-                    op: OpId(n),
-                    item: cid(n),
-                    target: op.target(),
-                    facts,
-                    exemptions: gate::exemptions_to_journal(&Exemptions::default()),
-                })
+            let record = Validated {
+                op: OpId(n),
+                item: cid(n),
+                target: op.target(),
+                facts,
+                exemptions: gate::exemptions_to_journal(&Exemptions::default()),
+            };
+            journal.validated(record.clone()).unwrap();
+            // As the executor does: the written record of a pass goes to the gate, the only source of
+            // what the act is gated with.
+            if passed {
+                ctx.record(
+                    op,
+                    &record,
+                    GateItem::new(op, Exemptions::default()).max_files,
+                )
                 .unwrap();
+            }
         }
         Run {
             _scratch: scratch,
@@ -441,14 +447,33 @@ impl Run {
     }
 
     fn prepare(&self, n: u32) -> Result<RegPrepared, BackupWriteError> {
-        let item = cid(n);
-        let reg_item = RegItem::new(
+        prepare_reg(
+            &self.ctx,
+            &self.session,
             OpId(n),
-            &item,
-            &self.ops[n as usize - 1],
-            Exemptions::default(),
-        );
-        prepare_reg(&self.ctx, &self.session, &reg_item)
+            regbackup::DEFAULT_KEY_LIMIT,
+        )
+    }
+
+    /// Hands op `n` a deliberately forged `validated` record of a key (as if the plan had carried and
+    /// validated it), so that the act-time path runs for an op the validation did not pass. The journal
+    /// keeps what the fixture wrote: the gate is given what the journal does not hold.
+    fn forge_key_record(&mut self, n: u32) {
+        let op = self.ops[n as usize - 1].clone();
+        let forged = Validated {
+            op: OpId(n),
+            item: cid(n),
+            target: op.target(),
+            facts: ItemFacts::Key(RegFacts {
+                subkeys: 0,
+                values: 0,
+                is_link: false,
+                owner: "S-1-5-32-544".into(),
+                last_write_time: FileTime(133_000_000_000_000_000),
+            }),
+            exemptions: gate::exemptions_to_journal(&Exemptions::default()),
+        };
+        self.ctx.record(&op, &forged, 5_000).unwrap();
     }
 
     fn run(&mut self, n: u32) -> RegResult {
@@ -496,14 +521,9 @@ impl Run {
     fn undo(&mut self, n: u32) -> RegUndoResult {
         let (intent, done) = self.log.get(&n).cloned().expect("op has an intent");
         let op = OpId(n);
-        let prepared = prepare_undo_reg(
-            &self.ctx,
-            &self.session,
-            &intent,
-            done.as_ref(),
-            &Exemptions::default(),
-        )
-        .expect("a registry op");
+        // The undo is gated with the exemptions of the op's journalled record in `ctx`.
+        let prepared = prepare_undo_reg(&self.ctx, &self.session, &intent, done.as_ref())
+            .expect("a registry op");
         match prepared {
             RegUndoPrepared::Decided(result) => {
                 match &result {
@@ -545,7 +565,7 @@ impl Run {
     }
 
     fn records(&self) -> Vec<Record> {
-        read(self.journal.path()).unwrap().records
+        read(&self.session).unwrap().records
     }
 }
 
@@ -841,13 +861,19 @@ fn edit_segment_round_trips_and_keeps_the_type() {
     assert_eq!(k.get("Env", "List"), Some((REG_MULTI_SZ, list)));
 }
 
+/// Changed in meaning (S5): a segment edit whose value changed after validation is no longer re-bound to
+/// the value as it is now (that took a stamp that was never journalled); the act-time gate refuses it
+/// against the journalled value and nothing is written. The plan step's own cases (segment gone, moved
+/// away from the recorded position) are covered on values that did not change since validation.
 #[test]
-fn edit_segment_follows_a_changed_value_while_the_segment_is_there() {
+fn edit_segment_on_a_value_changed_since_validation_is_skipped() {
     let k = TestKey::new();
     k.create("Env");
     for name in ["Grown", "Gone", "Moved", "Dword"] {
         k.set("Env", name, REG_SZ, &utf16z("a;b;c"));
     }
+    k.set("Env", "Absent", REG_SZ, &utf16z("a;x;c"));
+    k.set("Env", "Elsewhere", REG_SZ, &utf16z("b;a;c"));
     let mut run = Run::new(
         "segment-changed",
         vec![
@@ -856,24 +882,27 @@ fn edit_segment_follows_a_changed_value_while_the_segment_is_there() {
             segment_op(k.wire("Env"), "Moved", "b", Some(1)),
             segment_op(k.wire("Env"), "Dword", "b", Some(1)),
             segment_op(k.wire("Env"), "Missing", "b", None),
+            segment_op(k.wire("Env"), "Absent", "b", None),
+            segment_op(k.wire("Env"), "Elsewhere", "b", Some(1)),
         ],
     );
     assert!((1..=4).all(|n| run.validated(n)));
+    assert!(!run.validated(5));
+    assert!(run.validated(6) && run.validated(7));
 
-    // Changed since validation, segment still at its place: the edit is made on the value as it is.
+    // Changed since validation, segment still at its place: skipped, the value untouched.
     k.set("Env", "Grown", REG_SZ, &utf16z("a;b;c;d"));
-    assert_outcome(&run.run(1), ItemOutcome::Done);
-    assert_eq!(k.get("Env", "Grown"), Some((REG_SZ, utf16z("a;c;d"))));
-    // The backup is the value the edit was made on.
-    assert_undo(&run.undo(1), UndoOutcome::Restored);
+    assert_outcome(&run.run(1), skipped(SkipReason::ChangedSinceScan));
     assert_eq!(k.get("Env", "Grown"), Some((REG_SZ, utf16z("a;b;c;d"))));
+    // Decided before any intent: no backup was written.
+    assert!(!run.backup_path(1).exists());
 
-    // The segment is gone: vanished, the value untouched.
+    // The segment is gone since validation: skipped, the value untouched.
     k.set("Env", "Gone", REG_SZ, &utf16z("a;x;c"));
-    assert_outcome(&run.run(2), ItemOutcome::Vanished);
+    assert_outcome(&run.run(2), skipped(SkipReason::ChangedSinceScan));
     assert_eq!(k.get("Env", "Gone"), Some((REG_SZ, utf16z("a;x;c"))));
 
-    // The segment moved away from the recorded position.
+    // The segment moved away from the recorded position since validation.
     k.set("Env", "Moved", REG_SZ, &utf16z("b;a;c"));
     assert_outcome(&run.run(3), skipped(SkipReason::ChangedSinceScan));
     assert_eq!(k.get("Env", "Moved"), Some((REG_SZ, utf16z("b;a;c"))));
@@ -882,6 +911,14 @@ fn edit_segment_follows_a_changed_value_while_the_segment_is_there() {
     k.set("Env", "Dword", REG_DWORD, &[1, 0, 0, 0]);
     assert_outcome(&run.run(4), skipped(SkipReason::ChangedSinceScan));
     assert_eq!(k.get("Env", "Dword"), Some((REG_DWORD, vec![1, 0, 0, 0])));
+
+    // Unchanged since validation, but the value never held the segment: vanished, untouched.
+    assert_outcome(&run.run(6), ItemOutcome::Vanished);
+    assert_eq!(k.get("Env", "Absent"), Some((REG_SZ, utf16z("a;x;c"))));
+
+    // Unchanged since validation, but the segment is not at the plan's recorded position.
+    assert_outcome(&run.run(7), skipped(SkipReason::ChangedSinceScan));
+    assert_eq!(k.get("Env", "Elsewhere"), Some((REG_SZ, utf16z("b;a;c"))));
 }
 
 #[test]
@@ -960,10 +997,10 @@ fn structural_containers_and_deny_listed_keys_are_refused_even_when_planned() {
     let ops: Vec<ExecOp> = containers.into_iter().chain(denied).collect();
     let n_ops = ops.len() as u32;
     let mut run = Run::new("containers", ops);
-    // As if the plan had carried and validated them.
+    // As if the plan had carried and validated them: forged journalled records.
     for n in 1..=n_ops {
         assert!(!run.validated(n), "op {n} passed validation");
-        run.ctx.record(OpId(n), Stamp::Key);
+        run.forge_key_record(n);
     }
     for n in 1..=n_ops {
         let result = run.run(n);
@@ -1103,7 +1140,7 @@ fn the_32_bit_views_are_addressed_explicitly() {
     let mut run = Run::new("views", ops);
     for n in 1..=4 {
         assert!(!run.validated(n), "op {n} exists?");
-        run.ctx.record(OpId(n), Stamp::Key);
+        run.forge_key_record(n);
         let result = run.run(n);
         assert_outcome(&result, ItemOutcome::Vanished);
     }
@@ -1302,13 +1339,7 @@ fn nothing_to_undo_for_an_op_that_changed_nothing() {
             detail: String::new(),
         },
     ] {
-        let prepared = prepare_undo_reg(
-            &run.ctx,
-            &run.session,
-            &intent,
-            Some(&done),
-            &Exemptions::default(),
-        );
+        let prepared = prepare_undo_reg(&run.ctx, &run.session, &intent, Some(&done));
         assert!(
             matches!(
                 prepared,
@@ -1327,13 +1358,7 @@ fn nothing_to_undo_for_an_op_that_changed_nothing() {
         detail: String::new(),
     };
     assert!(matches!(
-        prepare_undo_reg(
-            &run.ctx,
-            &run.session,
-            &intent,
-            Some(&failed_verify),
-            &Exemptions::default()
-        ),
+        prepare_undo_reg(&run.ctx, &run.session, &intent, Some(&failed_verify)),
         Some(RegUndoPrepared::Ready(_))
     ));
     // Not a registry op.
@@ -1341,18 +1366,27 @@ fn nothing_to_undo_for_an_op_that_changed_nothing() {
     other.exec_op = ExecOp::RemovePackage {
         full_name: "Vendor.App_1.0.0.0_x64__abcdefghjkmnp".into(),
     };
-    assert!(
-        prepare_undo_reg(&run.ctx, &run.session, &other, None, &Exemptions::default()).is_none()
-    );
+    assert!(prepare_undo_reg(&run.ctx, &run.session, &other, None).is_none());
     // An inverse that does not undo the op.
     let mut wrong = intent.clone();
     wrong.exec_op = tree_op(k.wire("Elsewhere"));
     assert!(matches!(
-        prepare_undo_reg(&run.ctx, &run.session, &wrong, None, &Exemptions::default()),
+        prepare_undo_reg(&run.ctx, &run.session, &wrong, None),
         Some(RegUndoPrepared::Decided(RegUndoResult::Conflict {
             conflict: UndoConflict::BackupTampered,
             ..
         }))
+    ));
+    // An undo context that was not handed the op's journalled record: a conflict, nothing opened.
+    let bare = GateCtx::new(DenyList::compile(&live_env()), &run.ops, no_store()).unwrap();
+    assert!(matches!(
+        prepare_undo_reg(&bare, &run.session, &intent, Some(&failed_verify)),
+        Some(RegUndoPrepared::Decided(RegUndoResult::Conflict {
+            conflict: UndoConflict::GateBlocked {
+                blocker: Blocker::DenyListed { ref rule }
+            },
+            ..
+        })) if rule == gate::reason::NOT_VALIDATED
     ));
     assert!(k.exists("Item"));
 }
@@ -1401,7 +1435,8 @@ fn an_existing_backup_file_is_never_replaced() {
     k.create("Item");
     let run = Run::new("existing", vec![tree_op(k.wire("Item"))]);
     let rel = backup_rel(BackupKind::Registry, OpId(1));
-    let (path, mut file) = run.session.create_file(&rel).unwrap();
+    let mut file = run.session.create_file(&rel).unwrap();
+    let path = file.report_path();
     std::io::Write::write_all(&mut file, b"someone else's").unwrap();
     drop(file);
 
@@ -1415,22 +1450,34 @@ fn an_existing_backup_file_is_never_replaced() {
     assert!(k.exists("Item"));
 }
 
+/// Changed in meaning: the op reaches `prepare_reg` only through its journalled record. Without one it
+/// is an internal failure; with a (forged) record of a package it is one too, as not a registry op.
 #[test]
 fn a_non_registry_op_is_an_internal_failure() {
-    let run = Run::new(
-        "not-reg",
-        vec![ExecOp::RemovePackage {
-            full_name: "Vendor.App_1.0.0.0_x64__abcdefghjkmnp".into(),
-        }],
-    );
-    let RegPrepared::Decided(result) = run.prepare(1).unwrap() else {
-        panic!("not decided");
+    let package = ExecOp::RemovePackage {
+        full_name: "Vendor.App_1.0.0.0_x64__abcdefghjkmnp".into(),
     };
-    assert!(matches!(
-        result.outcome,
-        ItemOutcome::Failed {
-            code: FailCode::Internal,
-            ..
-        }
-    ));
+    let mut run = Run::new("not-reg", vec![package.clone()]);
+    let internal = |run: &Run| {
+        let RegPrepared::Decided(result) = run.prepare(1).unwrap() else {
+            panic!("not decided");
+        };
+        matches!(
+            result.outcome,
+            ItemOutcome::Failed {
+                code: FailCode::Internal,
+                ..
+            }
+        )
+    };
+    assert!(internal(&run), "an op without a journalled record");
+    let forged = Validated {
+        op: OpId(1),
+        item: cid(1),
+        target: package.target(),
+        facts: ItemFacts::Package,
+        exemptions: gate::exemptions_to_journal(&Exemptions::default()),
+    };
+    run.ctx.record(&package, &forged, 5_000).unwrap();
+    assert!(internal(&run), "a package op");
 }

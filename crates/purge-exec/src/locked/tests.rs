@@ -12,18 +12,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use purge_guard::canon::{GuardEnv, ProfileEnv};
 use purge_guard::deny::{DenyList, Exemptions};
-use purge_guard::live::reason as live_reason;
-use purge_model::exec::journal::{Header, JournalSchema, Validated};
+use purge_guard::live::{PathFacts, reason as live_reason};
+use purge_model::exec::journal::{GateExemptions, Header, JournalSchema, Record, Validated};
 use purge_model::exec::op::FileIdHex;
 use purge_model::{ScanMode, Target};
 use purge_win::rm::{LockerKind, LockerList};
 use purge_win::sid::current_user_sid;
 
 use super::*;
-use crate::gate::{GateItem, GateOutcome, Stamp};
+use crate::gate::{GateItem, GateOutcome};
 use crate::journal::{JournalWriter, sha256_bytes};
 use crate::prepare::RestartManager;
-use crate::storage::{JOURNAL_FILE, ObjectKind, StorageRoots};
+use crate::storage::StorageRoots;
 
 // ---------------------------------------------------------------------------------------------------
 // Fixtures
@@ -122,6 +122,23 @@ fn facts_of(path: &str) -> FileFacts {
     }
 }
 
+/// The exemptions of an item whose path is in long form, as journalled.
+fn long_names() -> GateExemptions {
+    GateExemptions {
+        long_names_resolved: true,
+        ..GateExemptions::default()
+    }
+}
+
+/// What the gate hands over for a locked item: the stamp its read-only look saw and the open error.
+fn locked_path(seen: PathStamp, error: Win32Error) -> LockedPath {
+    LockedPath {
+        facts: PathFacts::default(),
+        stamp: seen,
+        error,
+    }
+}
+
 fn stamp_of(facts: &FileFacts) -> PathStamp {
     PathStamp {
         identity: FileIdentity {
@@ -140,13 +157,16 @@ struct Item {
 }
 
 /// A session in a fresh relaxed store with a journal whose items are quarantine moves of real files,
-/// all validated, each with its op directory created.
+/// all validated (each `validated` record written, then handed to the gate context `ctx`, as the
+/// executor does), each with its op directory created.
 struct Fx {
-    scratch: Scratch,
     session: SessionDir,
     scope: StoreScope,
     journal: RefCell<JournalWriter>,
+    ctx: GateCtx,
     items: Vec<Item>,
+    /// Last: removed after the journal and the session's handles are closed.
+    scratch: Scratch,
 }
 
 impl Fx {
@@ -196,32 +216,30 @@ impl Fx {
             allow_irreversible: false,
             volumes: Vec::new(),
         };
-        let sddl = roots.policy().sddl_for(ObjectKind::StoreFile);
-        let mut journal =
-            JournalWriter::create(&session.path().join(JOURNAL_FILE), &sddl, header).unwrap();
+        let mut journal = JournalWriter::create(&session, header).unwrap();
+        let ops: Vec<ExecOp> = items.iter().map(|it| mv(&it.source)).collect();
+        let mut ctx = GateCtx::new(DenyList::compile(&live_env()), &ops, scope.clone()).unwrap();
         for (i, it) in items.iter().enumerate() {
             let op = OpId(i as u32 + 1);
-            journal
-                .validated(Validated {
-                    op,
-                    item: item(op.0),
-                    target: Target::Path {
-                        path: it.source.clone(),
-                    },
-                    facts: ItemFacts::File(it.facts.clone()),
-                    exemptions: GateExemptions {
-                        long_names_resolved: true,
-                        ..GateExemptions::default()
-                    },
-                })
-                .unwrap();
+            let record = Validated {
+                op,
+                item: item(op.0),
+                target: Target::Path {
+                    path: it.source.clone(),
+                },
+                facts: ItemFacts::File(it.facts.clone()),
+                exemptions: long_names(),
+            };
+            journal.validated(record.clone()).unwrap();
+            ctx.record(&ops[i], &record, 5_000).unwrap();
         }
         Fx {
-            scratch,
             session,
             scope,
             journal: RefCell::new(journal),
+            ctx,
             items,
+            scratch,
         }
     }
 
@@ -229,18 +247,47 @@ impl Fx {
         &self.items[n as usize - 1]
     }
 
+    /// The `validated` record the fixture journalled for op `n`.
+    fn record(&self, n: u32) -> Validated {
+        let it = self.it(n);
+        Validated {
+            op: OpId(n),
+            item: item(n),
+            target: Target::Path {
+                path: it.source.clone(),
+            },
+            facts: ItemFacts::File(it.facts.clone()),
+            exemptions: long_names(),
+        }
+    }
+
     /// The hand-over for op `n`: locked with a sharing violation, the gate having seen the validated item.
     fn locked(&self, n: u32) -> LockedItem {
         let it = self.it(n);
-        LockedItem {
-            op: OpId(n),
-            item: item(n),
-            exec_op: mv(&it.source),
-            validated: it.facts.clone(),
-            seen: stamp_of(&it.facts),
-            error: FsError::SharingViolation,
-            quarantine_path: it.quarantine.clone(),
-        }
+        let seen = stamp_of(&it.facts);
+        let locked = locked_path(seen, Win32Error(32));
+        LockedItem::from_gate(&self.ctx, OpId(n), &locked, it.quarantine.clone()).unwrap()
+    }
+
+    /// The hand-over as the executor builds it ([`LockedItem::from_gate`]) from a gate context holding
+    /// `record` for `exec_op`: a deliberately forged record (other facts or another op than the
+    /// journalled one), what the gate saw (`seen`), the open error and the quarantine path.
+    fn forged(
+        &self,
+        exec_op: &ExecOp,
+        record: &Validated,
+        seen: PathStamp,
+        error: Win32Error,
+        quarantine: &str,
+    ) -> LockedItem {
+        let mut ctx = GateCtx::new(
+            DenyList::compile(&live_env()),
+            std::slice::from_ref(exec_op),
+            self.scope.clone(),
+        )
+        .unwrap();
+        ctx.record(exec_op, record, 5_000).unwrap();
+        LockedItem::from_gate(&ctx, record.op, &locked_path(seen, error), quarantine).unwrap()
     }
 
     /// Prepares, journals and acts as the executor does, and journals the result.
@@ -260,7 +307,7 @@ impl Fx {
                 assert!(result.outcome.allowed_without_intent(), "{result:?}");
                 self.journal
                     .borrow_mut()
-                    .done_without_intent(locked.op, result.outcome.clone())
+                    .done_without_intent(locked.op(), result.outcome.clone())
                     .unwrap();
                 result
             }
@@ -433,7 +480,7 @@ fn a_locked_file_in_a_user_writable_temp_dir_never_gets_a_pair() {
     let fx = Fx::new("real", 1);
     let source = fx.it(1).source.clone();
     let op = mv(&source);
-    let ctx = GateCtx::new(
+    let mut ctx = GateCtx::new(
         DenyList::compile(&live_env()),
         std::slice::from_ref(&op),
         fx.scope.clone(),
@@ -446,13 +493,12 @@ fn a_locked_file_in_a_user_writable_temp_dir_never_gets_a_pair() {
             ..Exemptions::default()
         },
     );
-    let stamp = match gate::validate(&ctx, &gate_item) {
-        GateOutcome::Pass(v) => match v.stamp {
-            Stamp::Path(stamp) => stamp,
-            other => panic!("{other:?}"),
-        },
+    // The executor's flow: validate, journal the record (the fixture did), hand it to the gate.
+    let record = match gate::validate(&ctx, &gate_item) {
+        GateOutcome::Pass(v) => v.to_journal(OpId(1), item(1), op.target()),
         other => panic!("validate: {other:?}"),
     };
+    ctx.record(&op, &record, gate_item.max_files).unwrap();
 
     // A thread holds the file with read sharing only.
     let (locked_tx, locked_rx) = mpsc::channel();
@@ -470,18 +516,18 @@ fn a_locked_file_in_a_user_writable_temp_dir_never_gets_a_pair() {
     });
     locked_rx.recv().unwrap();
 
-    let locked = match gate::open_and_check_path(&ctx, &gate_item, &stamp) {
+    let locked = match gate::open_and_check_path(&ctx, OpId(1)) {
         GateOutcome::Locked(locked) => locked,
         other => panic!("expected Locked, got {other:?}"),
     };
     assert_eq!(FsError::from(locked.error), FsError::SharingViolation);
-    let item = LockedItem::from_gate(
-        OpId(1),
-        item(1),
-        op.clone(),
-        fx.it(1).facts.clone(),
-        &locked,
-        fx.it(1).quarantine.clone(),
+    let item = LockedItem::from_gate(&ctx, OpId(1), &locked, fx.it(1).quarantine.clone()).unwrap();
+    assert_eq!(
+        item.validated(),
+        &match &record.facts {
+            ItemFacts::File(facts) => facts.clone(),
+            other => panic!("{other:?}"),
+        }
     );
     assert_eq!(
         LiveLadder.ancestors(&source),
@@ -651,15 +697,14 @@ fn an_occupied_destination_and_one_outside_the_session_hold_the_item() {
     assert_eq!(result.code, Some(live_reason::QUARANTINE_OCCUPIED));
 
     // A destination outside this session's quarantine directories.
-    let mut outside = fx.locked(2);
-    outside.quarantine_path = fx
-        .scratch
-        .0
-        .join("elsewhere")
-        .join("f2.dll")
-        .to_str()
-        .unwrap()
-        .to_owned();
+    let elsewhere = fx.scratch.0.join("elsewhere").join("f2.dll");
+    let outside = LockedItem::from_gate(
+        &fx.ctx,
+        OpId(2),
+        &locked_path(stamp_of(&fx.it(2).facts), Win32Error(32)),
+        elsewhere.to_str().unwrap(),
+    )
+    .unwrap();
     std::fs::create_dir(fx.scratch.0.join("elsewhere")).unwrap();
     let result = fx.run_item(&l, &outside, &mut store);
     assert_eq!(result.outcome, ItemOutcome::HeldRetry);
@@ -670,14 +715,27 @@ fn an_occupied_destination_and_one_outside_the_session_hold_the_item() {
 
 #[test]
 fn serial_zero_and_cross_volume_are_held() {
-    // The item's own serial recorded as 0 (the look agrees, so it is still "the same object").
+    // The item's own serial recorded as 0 (the look agrees, so it is still "the same object"): a forged
+    // journalled record.
     let fx = Fx::new("serial0", 1);
-    let mut locked = fx.locked(1);
-    locked.validated.volume_serial = 0;
-    locked.seen = stamp_of(&locked.validated);
+    let mut facts = fx.it(1).facts.clone();
+    facts.volume_serial = 0;
+    let record = Validated {
+        facts: ItemFacts::File(facts.clone()),
+        ..fx.record(1)
+    };
+    let seen = stamp_of(&facts);
+    let locked = fx.forged(
+        &mv(&fx.it(1).source),
+        &record,
+        seen,
+        Win32Error(32),
+        &fx.it(1).quarantine,
+    );
+    assert_eq!(locked.validated().volume_serial, 0);
     let env = Env {
         look: Some(SourceState::Present {
-            identity: locked.seen.identity,
+            identity: seen.identity,
             is_dir: false,
         }),
         ..Env::admin_only()
@@ -710,8 +768,19 @@ fn a_directory_is_never_moved_at_boot() {
         std::fs::remove_file(source).unwrap();
         std::fs::create_dir(source).unwrap();
     });
-    let mut locked = fx.locked(1);
-    locked.error = FsError::DirInUseOrDenied;
+    // A directory's acting handle is refused with access denied when something below it is open (the
+    // gate's `LockedPath` carries the Win32 error; `DirInUseOrDenied` reports as `ACCESS_DENIED`).
+    assert_eq!(
+        FsError::DirInUseOrDenied.code(),
+        Win32Error::ACCESS_DENIED.code()
+    );
+    let locked = LockedItem::from_gate(
+        &fx.ctx,
+        OpId(1),
+        &locked_path(stamp_of(&fx.it(1).facts), Win32Error::ACCESS_DENIED),
+        fx.it(1).quarantine.clone(),
+    )
+    .unwrap();
     let mut store = MemoryPendingRenames::default();
     let (env, rm) = (Env::admin_only(), FakeRm::default());
     let l = ladder(&fx, &env, &rm, &DenyAll);
@@ -737,28 +806,47 @@ fn items_that_are_not_what_was_validated_are_decided_without_an_intent() {
         LockPrepared::Ready(action) => panic!("expected a decision, got {:?}", action.plan()),
     };
     let base = fx.locked(1);
+    let it = fx.it(1);
+    let seen = stamp_of(&it.facts);
     let other = FileIdentity {
-        volume_serial: base.validated.volume_serial,
+        volume_serial: base.validated().volume_serial,
         file_id: [9; 16],
     };
 
-    let mut not_a_move = base.clone();
-    not_a_move.exec_op = ExecOp::DeleteValue {
-        key: r"HKLM\SOFTWARE\Vendor".into(),
-        name: "x".into(),
+    // Changed in meaning: the op comes from the journalled record, and a record of file facts fits only
+    // a file op, so "not a move" is now a (forged) remove-dir-if-empty record of the same path.
+    let rmdir = ExecOp::RemoveDirIfEmpty {
+        path: it.source.clone(),
     };
+    let not_a_move = fx.forged(&rmdir, &fx.record(1), seen, Win32Error(32), &it.quarantine);
     let r = decide(&Env::admin_only(), &not_a_move);
     assert_eq!(r.code, Some(reason::NOT_A_MOVE));
 
-    let mut no_id = base.clone();
-    no_id.validated.file_id = FileIdHex([0; 16]);
+    let mut facts = it.facts.clone();
+    facts.file_id = FileIdHex([0; 16]);
+    let zero_id = Validated {
+        facts: ItemFacts::File(facts),
+        ..fx.record(1)
+    };
+    let no_id = fx.forged(
+        &mv(&it.source),
+        &zero_id,
+        seen,
+        Win32Error(32),
+        &it.quarantine,
+    );
     assert_eq!(
         decide(&Env::admin_only(), &no_id).code,
         Some(reason::IDENTITY_INVALID)
     );
 
-    let mut denied = base.clone();
-    denied.error = FsError::AccessDenied;
+    let denied = LockedItem::from_gate(
+        &fx.ctx,
+        OpId(1),
+        &locked_path(seen, Win32Error::ACCESS_DENIED),
+        it.quarantine.clone(),
+    )
+    .unwrap();
     let r = decide(&Env::admin_only(), &denied);
     assert_eq!(r.code, Some(reason::NOT_IN_USE));
     assert!(matches!(
@@ -769,8 +857,19 @@ fn items_that_are_not_what_was_validated_are_decided_without_an_intent() {
         }
     ));
 
-    let mut seen_other = base.clone();
-    seen_other.seen.identity = other;
+    let seen_other = LockedItem::from_gate(
+        &fx.ctx,
+        OpId(1),
+        &locked_path(
+            PathStamp {
+                identity: other,
+                is_dir: false,
+            },
+            Win32Error(32),
+        ),
+        it.quarantine.clone(),
+    )
+    .unwrap();
     let r = decide(&Env::admin_only(), &seen_other);
     assert_eq!(
         r.outcome,
@@ -1236,8 +1335,23 @@ fn undo_of_held_items_rebooted_moves_and_other_ops() {
 // Reconcile, retry, recovery
 // ---------------------------------------------------------------------------------------------------
 
+/// A gate context with no journalled records.
 fn gate_ctx(fx: &Fx) -> GateCtx {
     GateCtx::new(DenyList::compile(&live_env()), &[], fx.scope.clone()).unwrap()
+}
+
+/// The gate context of a resumed run (reconcile at the next start): every `validated` record read back
+/// from the journal and handed to the gate.
+fn resumed_ctx(fx: &Fx) -> GateCtx {
+    let read = crate::journal::read(&fx.session).unwrap();
+    let ops: Vec<ExecOp> = fx.items.iter().map(|it| mv(&it.source)).collect();
+    let mut ctx = GateCtx::new(DenyList::compile(&live_env()), &ops, fx.scope.clone()).unwrap();
+    for record in &read.records {
+        if let Record::Validated(v) = record {
+            ctx.record(&ops[v.op.0 as usize - 1], v, 5_000).unwrap();
+        }
+    }
+    ctx
 }
 
 fn identity_at(path: &str) -> FileIdentity {
@@ -1276,16 +1390,8 @@ fn reconcile_state_table() {
     // Op 5: nothing moved; the item is still in place. Op 6: gone everywhere.
     std::fs::remove_file(&fx.it(6).source).unwrap();
 
-    let ctx = gate_ctx(&fx);
-    let exemptions = BTreeMap::new();
-    let results = reconcile(
-        &fx.state(),
-        &exemptions,
-        &fx.session,
-        &ctx,
-        &LiveLadder,
-        &store,
-    );
+    let ctx = resumed_ctx(&fx);
+    let results = reconcile(&fx.state(), &fx.session, &ctx, &LiveLadder, &store);
     let verdicts: Vec<_> = results.iter().map(|r| (r.op.0, r.verdict)).collect();
     assert_eq!(
         verdicts,
@@ -1342,14 +1448,7 @@ fn reconcile_state_table() {
         fail: Some(FsError::Other(1450)),
         ..MemoryPendingRenames::default()
     };
-    let results = reconcile(
-        &fx.state(),
-        &exemptions,
-        &fx.session,
-        &ctx,
-        &LiveLadder,
-        &broken,
-    );
+    let results = reconcile(&fx.state(), &fx.session, &ctx, &LiveLadder, &broken);
     assert!(
         results.iter().all(
             |r| r.verdict == ReconcileVerdict::Indeterminate && r.record(FileTime(1)).is_none()
@@ -1357,13 +1456,44 @@ fn reconcile_state_table() {
     );
 }
 
+/// Changed in meaning: `exemptions_of` is gone. The exemptions reconcile checks with are those of the
+/// journalled `validated` records handed to the gate context (here read back from the journal, as a
+/// resumed run does); without a record the item gets none (the strictest check). The hand-over to the
+/// ladder takes the op, plan item and facts from the same records and refuses an op without one.
 #[test]
-fn exemptions_are_read_from_the_validated_records() {
+fn exemptions_and_facts_come_from_the_journalled_records() {
     let fx = Fx::new("exemptions", 2);
-    let read = crate::journal::read(&fx.session.path().join(JOURNAL_FILE)).unwrap();
-    let map = exemptions_of(&read.records);
-    assert_eq!(map.len(), 2);
-    assert!(map[&OpId(1)].long_names_resolved);
+    let ctx = resumed_ctx(&fx);
+    for n in [1, 2] {
+        let ex = ctx.exemptions(OpId(n)).unwrap();
+        assert!(ex.long_names_resolved);
+        assert_eq!(ex, gate::exemptions_from_journal(&long_names()));
+    }
+    assert_eq!(gate_ctx(&fx).exemptions(OpId(1)), None);
+
+    let seen = stamp_of(&fx.it(1).facts);
+    let locked = LockedItem::from_gate(
+        &ctx,
+        OpId(1),
+        &locked_path(seen, Win32Error(32)),
+        fx.it(1).quarantine.clone(),
+    )
+    .unwrap();
+    assert_eq!(locked, fx.locked(1));
+    assert_eq!(locked.item(), &item(1));
+    assert_eq!(locked.exec_op(), &mv(&fx.it(1).source));
+    assert_eq!(locked.validated(), &fx.it(1).facts);
+    assert_eq!(locked.quarantine_path(), fx.it(1).quarantine);
+    assert!(
+        LockedItem::from_gate(
+            &gate_ctx(&fx),
+            OpId(1),
+            &locked_path(seen, Win32Error(32)),
+            fx.it(1).quarantine.clone(),
+        )
+        .is_none(),
+        "no journalled record, no hand-over"
+    );
 }
 
 /// Records what it was given and answers from a script.

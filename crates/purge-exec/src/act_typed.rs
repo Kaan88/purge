@@ -58,8 +58,8 @@
 //! `purge_win::appx_write`; unit tests use a fake.
 
 use std::fmt;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use purge_model::exec::journal::{Intent, ItemFacts, UndoConflict, UndoOutcome};
@@ -67,12 +67,11 @@ use purge_model::exec::op::{BackupRef, ExecOp, FailCode, Inverse, ItemOutcome, O
 use purge_model::{Blocker, CandidateId, Target};
 use purge_win::appx::{self, AppxPackage, AppxScope, ListOptions, SignatureKind};
 use purge_win::appx_write::{self, DeploymentError, RemovalScope, RemoveOutcome};
-use purge_win::fs_write::{self, FsError};
 use serde::{Deserialize, Serialize};
 
 use crate::fault;
 use crate::journal::{IntentToken, sha256_bytes};
-use crate::storage::{BackupKind, SessionDir, StorageError, backup_rel};
+use crate::storage::{BackupKind, SessionDir, StorageError, StoreFile, backup_rel};
 
 #[cfg(test)]
 mod tests;
@@ -411,10 +410,14 @@ impl DefinitionError {
     }
 }
 
-/// Writes `def` to the op's definition file, create-new with the store's file descriptor, flushes the
-/// file and its directory, re-opens it through the store's checks, reads it back, compares bytes and
-/// document, and returns its reference with the SHA-256 of the bytes read back. A file this call created
-/// is removed again when anything after its creation fails.
+/// Writes `def` to the op's definition file through the store's handles only: create-new with the
+/// store's file descriptor ([`SessionDir::create_file`]), write, flush the file and its directory through
+/// that handle and its directory's checked handle (`backup.written`), read the bytes back through the
+/// same handle; then close it, re-open the file through the store's checks ([`SessionDir::open_file`]),
+/// require the same file id, read it back through that handle, compare bytes and document
+/// (`backup.verified`), and return its reference with the SHA-256 of the bytes read back. A failure while
+/// the created handle is open discards the file through that handle ([`StoreFile::discard`]); nothing is
+/// removed by name.
 fn write_definition(
     session: &SessionDir,
     op: OpId,
@@ -428,48 +431,23 @@ fn write_definition(
             text.len()
         )));
     }
-    let created = session.create_file(&rel)?;
-    let path = created.report_path();
-    let result = finish_definition(session, &rel, &path, created.into_file(), &text, def);
-    if result.is_err() {
+    let mut created = session.create_file(&rel)?;
+    if let Err(e) = write_created(&mut created, &text) {
         // The file is Purge's own, created a moment ago, and holds no verified definition.
-        let _ = std::fs::remove_file(&path);
+        let _ = created.discard();
+        return Err(e);
     }
-    result
-}
-
-/// The part of [`write_definition`] after the file exists.
-fn finish_definition(
-    session: &SessionDir,
-    rel: &str,
-    path: &Path,
-    mut file: std::fs::File,
-    text: &[u8],
-    def: &PackageDefinition,
-) -> Result<BackupRef, DefinitionError> {
-    let file_err = |op: &'static str, detail: String| DefinitionError::File {
-        op,
-        path: path.to_path_buf(),
-        detail,
-    };
-    file.write_all(text)
-        .map_err(|e| file_err("write", e.to_string()))?;
-    fs_write::flush(&file).map_err(|e: FsError| file_err("flush", e.to_string()))?;
-    drop(file);
-    if let Some(dir) = path.parent() {
-        fs_write::flush_dir(dir).map_err(|e| file_err("flush the directory of", e.to_string()))?;
-    }
+    let id = created.file_id();
+    drop(created);
     fault::point(fault::BACKUP_WRITTEN);
-    let opened = session.open_file(rel)?;
+
+    let mut opened = session.open_file(&rel)?;
     let checked = opened.report_path();
-    if checked != path {
+    let now = opened.file_id();
+    if now.volume_serial != id.volume_serial || now.id != id.id {
         return Err(DefinitionError::ReadBackMismatch(checked));
     }
-    let mut back = Vec::new();
-    opened
-        .take(MAX_DEFINITION_BYTES + 1)
-        .read_to_end(&mut back)
-        .map_err(|e| file_err("read back", e.to_string()))?;
+    let back = opened.read_all(MAX_DEFINITION_BYTES)?;
     if back != text {
         return Err(DefinitionError::ReadBackMismatch(checked));
     }
@@ -479,12 +457,30 @@ fn finish_definition(
         return Err(DefinitionError::ReadBackMismatch(checked));
     }
     let reference = BackupRef {
-        path: rel.to_owned(),
+        path: rel,
         sha256: sha256_bytes(&back),
         bytes: back.len() as u64,
     };
     fault::point(fault::BACKUP_VERIFIED);
     Ok(reference)
+}
+
+/// Writes `text` through the created store file, flushes it and its directory (through the directory's
+/// checked handle), and reads it back through the same handle.
+fn write_created(file: &mut StoreFile, text: &[u8]) -> Result<(), DefinitionError> {
+    if let Err(e) = file.write_all(text) {
+        return Err(DefinitionError::File {
+            op: "write",
+            path: file.report_path(),
+            detail: e.to_string(),
+        });
+    }
+    file.sync()?;
+    file.sync_dir()?;
+    if file.read_all(MAX_DEFINITION_BYTES)? != text {
+        return Err(DefinitionError::ReadBackMismatch(file.report_path()));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------------

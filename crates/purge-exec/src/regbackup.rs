@@ -1029,11 +1029,27 @@ pub fn read_verified(
         return Err(BackupFileError::NotSessionRelative(reference.path.clone()));
     }
     let bytes = read_file(&session_dir.join(&reference.path), Some(reference.bytes))?;
-    if sha256(&bytes) != reference.sha256 {
+    verify_bytes(reference, &bytes)
+}
+
+/// The checks of [`read_verified`] on the bytes of a backup file the caller read through a checked
+/// handle (`SessionDir::open_file`): a session-relative reference, size and SHA-256 equal to the
+/// reference ([`BackupFileError::Tampered`] otherwise), then the parse and the document checks.
+pub fn verify_bytes(
+    reference: &BackupRef,
+    bytes: &[u8],
+) -> Result<VerifiedBackup, BackupFileError> {
+    if !reference.is_session_relative() {
+        return Err(BackupFileError::NotSessionRelative(reference.path.clone()));
+    }
+    if u64::try_from(bytes.len()).map_or(true, |n| n > MAX_BACKUP_FILE_BYTES) {
+        return Err(BackupFileError::TooBig);
+    }
+    if bytes.len() as u64 != reference.bytes || sha256(bytes) != reference.sha256 {
         return Err(BackupFileError::Tampered);
     }
     let doc: RegBackup =
-        serde_json::from_slice(&bytes).map_err(|e| BackupFileError::Invalid(e.to_string()))?;
+        serde_json::from_slice(bytes).map_err(|e| BackupFileError::Invalid(e.to_string()))?;
     check_doc(&doc).map_err(BackupFileError::Invalid)?;
     Ok(VerifiedBackup {
         doc,

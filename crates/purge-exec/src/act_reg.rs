@@ -11,18 +11,25 @@
 //!   structural container passed as a `DeleteKey`, or a deny-listed key, is skipped with its blocker.
 //!   The act-time gate ([`gate::open_and_check_key`]) then runs every rule again (G1, G2, G3, G11, G13
 //!   and the value binding) on the handle it opens, and that handle is the one acted on.
-//! - **One route to a key.** The gate opens the key at the guard's [`KeyProbe::open`] address (root, view
-//!   flag, logical path; both WOW64 views explicit, never through a `WOW6432Node` segment); undo opens
-//!   the key or its parent at the same address ([`regbackup::open_key_path`], [`regbackup::open_parent`]).
-//!   Every component is opened with `REG_OPTION_OPEN_LINK`, so no registry link is ever followed.
+//! - **Only journalled facts.** The op, its plan item, its stamp and its exemptions are those of its
+//!   journal `validated` record, which the executor handed to `GateCtx::record` after writing it (or
+//!   reading it back): [`prepare_reg`] and [`prepare_undo_reg`] take only the op id. An op without a
+//!   record is `Failed{Internal}` (undo: a conflict) and nothing is opened.
+//! - **One route to a key.** The gate opens the key at the guard's `KeyProbe::open` address (root, view
+//!   flag, logical path; both WOW64 views explicit, never through a `WOW6432Node` segment); undo acts on
+//!   the key or parent handle [`gate::check_undo_key`] opened and checked at the same address, never on
+//!   a second open. Every component is opened with `REG_OPTION_OPEN_LINK`, so no registry link is ever
+//!   followed.
 //! - **Links.** A link as the key, on its path or anywhere in a tree is a skip with
 //!   `GateBlocked{RegLink}`; the link's target is never opened, read or changed. Keys are deleted only
 //!   with `NtDeleteKey` on the inspected handle (`WKey::delete` / `WKey::delete_if_empty` inside
 //!   [`regbackup::delete_tree`]), never by name: `RegDeleteKeyExW` on a link name deletes its target.
 //! - **No verified backup, no delete.** Every op writes a `purge.regbackup/1` file below the session
-//!   (`reg\<op>.regbackup.json`) through the store's checks, flushes it, reads it back through
-//!   [`regbackup::read_verified`] against the hash of the bytes meant to be written, and compares the
-//!   document. Only then is the intent built.
+//!   (`reg\<op>.regbackup.json`) through the store's handles only (`SessionDir::create_file`, then
+//!   `SessionDir::open_file` with the same file id), flushes it and its directory through those handles,
+//!   reads it back through the checked handle and verifies it ([`regbackup::verify_bytes`]) against the
+//!   hash of the bytes meant to be written, and compares the document. Only then is the intent built. No
+//!   path inside the store is opened, removed or flushed by name.
 //! - **Exact data.** Values are read and written as raw type and raw bytes through `WKey` only (never the
 //!   Win32 string reads, which zero the last byte of odd-length strings).
 //!
@@ -35,11 +42,11 @@
 //! | key (or value, or segment) missing at open | `Vanished` |
 //! | registry link: the key (also the key holding a value), an ancestor, anything in the tree, or one swapped in before the delete | `Skipped{GateBlocked{RegLink}}` |
 //! | other gate refusal (TrustedInstaller, ...) | `Skipped{GateBlocked{<blocker>}}` |
-//! | key or value changed since validation (gate), or before the delete (compare on the way down) | `Skipped{ChangedSinceScan}` |
+//! | key or value changed since validation (gate: the journalled facts), or before the delete (compare on the way down) | `Skipped{ChangedSinceScan}` |
 //! | delete-if-empty key with a value or subkey (at the gate, before the backup or at the delete) | `Skipped{NoLongerEmpty}` |
 //! | tree larger than the key limit | `Skipped{GateBlocked{TooLarge}}` |
 //! | what a backup cannot hold (bad name, `REG_LINK` value) | `Skipped{GateBlocked{CannotBackUp}}` |
-//! | segment edit: value changed since validation, segment still there | acted on (re-bound to the live value) |
+//! | segment edit: value changed since validation, segment still there | `Skipped{ChangedSinceScan}` (the act is bound to the journalled value) |
 //! | segment edit: segment no longer at the plan's recorded index | `Skipped{ChangedSinceScan}` |
 //! | segment edit: value no longer a list | `Skipped{ChangedSinceScan}` |
 //! | open or call refused by the system | `Failed{AccessDenied}` / `Failed{Os}` |
@@ -81,7 +88,9 @@
 //! | Inverse | Live state | Result |
 //! |---|---|---|
 //! | any | the op changed nothing (`Vanished`, `Skipped`, `Failed` but `VerifyFailed`) | `NothingToUndo` |
+//! | any | no journalled `validated` record for the op in the undo's gate context | conflict `GateBlocked{DenyListed{gate.not-validated}}` |
 //! | any | the gate refuses the destination (deny-list, container, link on the chain) | conflict `GateBlocked{<blocker>}` |
+//! | any | the parent (key target) or the key holding the value is missing | conflict `GateBlocked{ChangedSinceScan}` (`gate.undo-key-missing`) |
 //! | any | backup file missing | conflict `BackupMissing` |
 //! | any | backup file unreadable, size or SHA-256 differs, or not the op's backup | conflict `BackupTampered` |
 //! | `RestoreKeyTree`, `RecreateKey` | key absent | `Restored` (all or nothing) |
@@ -90,12 +99,10 @@
 //! | | key present elsewhere, empty | merged into it: `Restored` (its own class and security kept, reported) |
 //! | | key present elsewhere with content | conflict `KeyExists` |
 //! | | key or parent is a link | conflict `GateBlocked{RegLink}` |
-//! | | parent missing | `Failed{Os}` (error 2) |
 //! | | intent without done, or `VerifyFailed`: the tree is partly there | missing subtrees completed: `Restored`; diverged: conflict `KeyExists` |
 //! | `RestoreValue` | value absent | `Restored` |
 //! | | same type and data | `AlreadyRestored` |
 //! | | other type or data | conflict `ValueDiffers` |
-//! | | key holding the value missing | `Failed{Os}` (error 2) |
 //! | `ReinsertSegment` | value holds its original data | `AlreadyRestored` |
 //! | | value holds what Purge wrote | original data written back exactly: `Restored` |
 //! | | value changed, segment present | `AlreadyRestored` |
@@ -106,29 +113,29 @@
 //! Nothing that exists is ever overwritten: a conflict changes nothing.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use purge_guard::containers;
 use purge_guard::deny::Exemptions;
-use purge_guard::live::{self, KeyProbe, Refusal, ValueStamp};
+use purge_guard::live::{self, Refusal};
 use purge_model::exec::journal::{Intent, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{BackupRef, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::regbackup::{RegBackup, RegBackupBody, RegBackupSchema};
-use purge_model::{Blocker, CandidateId, FileTime, Target};
-use purge_win::fs_write::{self, FsError};
+use purge_model::{Blocker, FileTime, Target};
+use purge_win::fs_write::FsError;
 use purge_win::os::Win32Error;
 use purge_win::reg_write::{KeyAccess, WKey};
 
 use crate::fault;
-use crate::gate::{self, CheckedKey, GateCtx, GateItem, GateOutcome, Stamp};
+use crate::gate::{self, CheckedKey, CheckedUndoKey, GateCtx, GateOutcome};
 use crate::journal::{IntentToken, UndoToken, sha256_bytes};
 use crate::regbackup::{
     self, BackupFileError, CaptureError, Change, DeleteError, DeleteFailure, Difference,
     DifferenceKind, ReinsertOutcome, RestoreError, RestoreOutcome, RestoreReport, Rollback,
     SegmentError, SegmentRemoval, SegmentUndo, ValueDelete, VerifiedBackup,
 };
-use crate::storage::{BackupKind, SessionDir, StorageError, backup_rel};
+use crate::storage::{BackupKind, SessionDir, StorageError, StoreFile, backup_rel};
 
 #[cfg(test)]
 mod tests;
@@ -196,40 +203,6 @@ fn fail_code(error: Win32Error) -> FailCode {
     }
 }
 
-/// One registry item as the executor hands it over.
-#[derive(Debug, Clone, Copy)]
-pub struct RegItem<'a> {
-    /// The op id in this session.
-    pub op: OpId,
-    /// The plan item.
-    pub item: &'a CandidateId,
-    /// What to do: one of the four registry ops.
-    pub exec_op: &'a ExecOp,
-    /// The exemptions the item was validated with (`Validation::exemptions`).
-    pub exemptions: Exemptions,
-    /// The most keys a tree may hold ([`regbackup::DEFAULT_KEY_LIMIT`], or the counted size of an
-    /// absorbing Safe parent). A larger tree is `Skipped{GateBlocked{TooLarge}}`.
-    pub key_limit: usize,
-}
-
-impl<'a> RegItem<'a> {
-    /// An item with the default key limit ([`regbackup::DEFAULT_KEY_LIMIT`]).
-    pub fn new(
-        op: OpId,
-        item: &'a CandidateId,
-        exec_op: &'a ExecOp,
-        exemptions: Exemptions,
-    ) -> RegItem<'a> {
-        RegItem {
-            op,
-            item,
-            exec_op,
-            exemptions,
-            key_limit: regbackup::DEFAULT_KEY_LIMIT,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------------------------
 // Backup file
 // ---------------------------------------------------------------------------------------------------
@@ -291,11 +264,14 @@ fn now() -> FileTime {
     FileTime(FILETIME_UNIX_EPOCH.saturating_add(ticks))
 }
 
-/// Writes `doc` to op `op`'s backup file `reg\<op>.regbackup.json`: create-new through the store's
-/// checks with the store's file descriptor, write, flush the file and its directory (`backup.written`),
-/// re-open through the store's checks, read back with [`regbackup::read_verified`] against the size and
-/// SHA-256 of the bytes meant to be written, compare the document (`backup.verified`). A file this call
-/// created is removed again when anything after its creation fails.
+/// Writes `doc` to op `op`'s backup file `reg\<op>.regbackup.json`, through the store's handles only:
+/// create-new with the store's file descriptor ([`SessionDir::create_file`]), write, flush the file and
+/// its directory through that handle and its directory's checked handle (`backup.written`), read the
+/// bytes back through the same handle; then close it, re-open the file through the store's checks
+/// ([`SessionDir::open_file`]), require the same file id, read it through that handle and verify it with
+/// [`regbackup::verify_bytes`] against the size and SHA-256 of the bytes meant to be written, and compare
+/// the document (`backup.verified`). A failure while the created handle is open discards the file through
+/// that handle ([`StoreFile::discard`]); nothing is removed by name.
 fn write_backup(
     session: &SessionDir,
     op: OpId,
@@ -310,62 +286,64 @@ fn write_backup(
             regbackup::MAX_BACKUP_FILE_BYTES
         )));
     }
-    let (path, file) = session.create_file(&rel)?;
-    let result = finish_backup(session, &rel, &path, file, &text, doc);
-    if result.is_err() {
+    let mut created = session.create_file(&rel)?;
+    if let Err(e) = write_created(&mut created, &text) {
         // The file is Purge's own, created a moment ago, and holds no verified backup.
-        let _ = std::fs::remove_file(&path);
+        let _ = created.discard();
+        return Err(e);
     }
-    result
-}
-
-/// The part of [`write_backup`] after the file exists.
-fn finish_backup(
-    session: &SessionDir,
-    rel: &str,
-    path: &Path,
-    mut file: std::fs::File,
-    text: &[u8],
-    doc: &RegBackup,
-) -> Result<VerifiedBackup, BackupWriteError> {
-    let file_err = |op: &'static str, detail: String| BackupWriteError::File {
-        op,
-        path: path.to_path_buf(),
-        detail,
-    };
-    let read_back = |detail: String| BackupWriteError::ReadBack {
-        path: path.to_path_buf(),
-        detail,
-    };
-    file.write_all(text)
-        .map_err(|e| file_err("write", e.to_string()))?;
-    fs_write::flush(&file).map_err(|e: FsError| file_err("flush", e.to_string()))?;
-    drop(file);
-    if let Some(dir) = path.parent() {
-        fs_write::flush_dir(dir).map_err(|e| file_err("flush the directory of", e.to_string()))?;
-    }
+    let id = created.file_id();
+    let path = created.report_path();
+    drop(created);
     fault::point(fault::BACKUP_WRITTEN);
-    let checked = session.open_file(rel)?;
-    if checked != path {
-        return Err(read_back(format!(
-            "the store names it {}",
-            checked.display()
-        )));
+
+    let read_back = |detail: String| BackupWriteError::ReadBack {
+        path: path.clone(),
+        detail,
+    };
+    let mut opened = session.open_file(&rel)?;
+    let now = opened.file_id();
+    if now.volume_serial != id.volume_serial || now.id != id.id {
+        return Err(read_back(
+            "the store's file of that name is another file than the one written".into(),
+        ));
     }
+    let back = opened.read_all(regbackup::MAX_BACKUP_FILE_BYTES)?;
     let reference = BackupRef {
-        path: rel.to_owned(),
-        sha256: sha256_bytes(text),
+        path: rel.clone(),
+        sha256: sha256_bytes(&text),
         bytes: text.len() as u64,
     };
-    let verified = regbackup::read_verified(session.path(), &reference).map_err(|e| match e {
-        BackupFileError::Fs { op, error } => file_err(op, error.to_string()),
-        other => read_back(other.to_string()),
-    })?;
+    let verified =
+        regbackup::verify_bytes(&reference, &back).map_err(|e| read_back(e.to_string()))?;
     if verified.doc() != doc {
         return Err(read_back("the document read back differs".into()));
     }
     fault::point(fault::BACKUP_VERIFIED);
     Ok(verified)
+}
+
+/// Writes `text` through the created store file, flushes it and its directory (through the directory's
+/// checked handle), and reads it back through the same handle.
+fn write_created(file: &mut StoreFile, text: &[u8]) -> Result<(), BackupWriteError> {
+    let file_err = |op: &'static str, detail: String, file: &StoreFile| BackupWriteError::File {
+        op,
+        path: file.report_path(),
+        detail,
+    };
+    if let Err(e) = file.write_all(text) {
+        return Err(file_err("write", e.to_string(), file));
+    }
+    file.sync()?;
+    file.sync_dir()?;
+    let back = file.read_all(regbackup::MAX_BACKUP_FILE_BYTES)?;
+    if back != text {
+        return Err(BackupWriteError::ReadBack {
+            path: file.report_path(),
+            detail: "the bytes read back differ from the bytes written".into(),
+        });
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -425,73 +403,26 @@ fn refused(refusal: &Refusal, exec_op: &ExecOp) -> RegResult {
     }
 }
 
-/// The stamp of the value a segment edit is about, as it is now, read through a read-only handle at the
-/// probe address. `Ok(None)` when the key or the value is gone.
-fn live_value_stamp(ctx: &GateCtx, exec_op: &ExecOp) -> Result<Option<ValueStamp>, RegResult> {
-    let ExecOp::EditSegment { name, .. } = exec_op else {
-        return Ok(None);
-    };
-    let probe = live::key_probe(&exec_op.target(), ctx.deny().env())
-        .map_err(|refusal| refused(&refusal, exec_op))?;
-    let key = match regbackup::open_key_path(&probe.open, KeyAccess::READ) {
-        Ok(key) => key,
-        Err(e) if e.is_not_found() => return Ok(None),
-        Err(e) if e == Win32Error::LINK_ON_PATH => {
-            return Err(RegResult::blocked(
-                Blocker::RegLink,
-                format!("{}: a registry link is on the key's path", what(exec_op)),
-            ));
-        }
-        Err(e) => {
-            return Err(RegResult::os(
-                e,
-                format!("{}: reading the value failed: {e}", what(exec_op)),
-            ));
-        }
-    };
-    match key.value(name) {
-        Ok(Some(value)) => Ok(Some(ValueStamp {
-            ty: value.ty,
-            len: value.data.len() as u64,
-            sha256: sha256_bytes(&value.data).0,
-        })),
-        Ok(None) => Ok(None),
-        Err(e) if e == KEY_DELETED || e.is_not_found() => Ok(None),
-        Err(e) => Err(RegResult::os(
-            e,
-            format!("{}: reading the value failed: {e}", what(exec_op)),
-        )),
-    }
-}
-
-/// The act-time gate: the key opened with the access the action needs, every fact read from that handle,
-/// every rule applied. A segment edit whose value changed since validation is gated again against the
-/// value as it is now: the edit only needs the segment, which the plan step checks on the gated handle.
-fn open_checked(ctx: &GateCtx, item: &RegItem<'_>, stamp: &Stamp) -> Result<CheckedKey, RegResult> {
-    let gate_item = GateItem::new(item.exec_op, item.exemptions);
-    let mut outcome = gate::open_and_check_key(ctx, &gate_item, stamp);
-    if let (GateOutcome::Refused(refusal), ExecOp::EditSegment { .. }) = (&outcome, item.exec_op)
-        && refusal.reason == live::reason::VALUE_CHANGED
-    {
-        outcome = match live_value_stamp(ctx, item.exec_op)? {
-            Some(now) => gate::open_and_check_key(ctx, &gate_item, &Stamp::Value(now)),
-            None => return Err(vanished_or_link(ctx, item.exec_op)),
-        };
-    }
-    match outcome {
+/// The act-time gate for op `op`: the key opened with the access the action needs, every fact read from
+/// that handle, every rule applied, against the facts of the op's journal `validated` record (a key's
+/// counts, link state, owner and last write time; a value's type, length and hash). A value or segment
+/// that changed since validation is `Skipped{ChangedSinceScan}`: the act is never re-bound to facts that
+/// were not journalled.
+fn open_checked(ctx: &GateCtx, op: OpId, exec_op: &ExecOp) -> Result<CheckedKey, RegResult> {
+    match gate::open_and_check_key(ctx, op) {
         GateOutcome::Pass(checked) => Ok(checked),
-        GateOutcome::Vanished => Err(vanished_or_link(ctx, item.exec_op)),
-        GateOutcome::Refused(refusal) => Err(refused(&refusal, item.exec_op)),
+        GateOutcome::Vanished => Err(vanished_or_link(ctx, exec_op)),
+        GateOutcome::Refused(refusal) => Err(refused(&refusal, exec_op)),
         GateOutcome::Failed(e) => Err(RegResult::os(
             e,
-            format!("opening {} failed: {e}; left untouched", what(item.exec_op)),
+            format!("opening {} failed: {e}; left untouched", what(exec_op)),
         )),
         GateOutcome::Locked(_) => Err(RegResult::failed(
             FailCode::Internal,
             None,
             format!(
                 "the registry gate reported {} as a locked file; left untouched",
-                what(item.exec_op)
+                what(exec_op)
             ),
         )),
     }
@@ -604,14 +535,19 @@ impl RegAction {
     }
 }
 
-/// Decides whether registry op `item` may run, and if so writes its backup into `session` and builds the
+/// Decides whether registry op `op` may run, and if so writes its backup into `session` and builds the
 /// intent. Never changes the registry.
 ///
-/// Order: the op must be a registry op and validated in `ctx` (its stamp); the deny-list and the
+/// The op, its plan item, its stamp and its exemptions are those of the op's journal `validated` record
+/// that the executor handed to `GateCtx::record` ([`GateCtx::journalled`]). `key_limit` is the most keys
+/// a tree may hold ([`regbackup::DEFAULT_KEY_LIMIT`], or the counted size of an absorbing Safe parent); a
+/// larger tree is `Skipped{GateBlocked{TooLarge}}`.
+///
+/// Order: the op must have a journalled record in `ctx` and be a registry op; the deny-list and the
 /// structural containers on the target; the act-time gate on the handle the action will use; then per op:
 ///
 /// - `DeleteKeyTree`: the subtree is captured through the gated handle ([`regbackup::capture_tree`] with
-///   [`RegItem::key_limit`]); inverse `RestoreKeyTree`.
+///   `key_limit`); inverse `RestoreKeyTree`.
 /// - `DeleteKeyIfEmpty`: zero values and zero subkeys are read again on the handle (else
 ///   `Skipped{NoLongerEmpty}`); the key is captured as a one-key tree with its class, security and
 ///   volatility; inverse `RecreateKey`.
@@ -624,10 +560,18 @@ impl RegAction {
 pub fn prepare_reg(
     ctx: &GateCtx,
     session: &SessionDir,
-    item: &RegItem<'_>,
+    op: OpId,
+    key_limit: usize,
 ) -> Result<RegPrepared, BackupWriteError> {
-    let exec_op = item.exec_op;
     let decided = |result: RegResult| Ok(RegPrepared::Decided(result));
+    let (Some((exec_op, record)), Some(exemptions)) = (ctx.journalled(op), ctx.exemptions(op))
+    else {
+        return decided(RegResult::failed(
+            FailCode::Internal,
+            None,
+            format!("op {op} has no journalled validated record in this run; nothing done"),
+        ));
+    };
     if !exec_op.is_registry() {
         return decided(RegResult::failed(
             FailCode::Internal,
@@ -635,7 +579,7 @@ pub fn prepare_reg(
             format!("{} is not a registry op; nothing done", exec_op.name()),
         ));
     }
-    if let Some((blocker, why)) = execute_time_refusal(ctx, &exec_op.target(), &item.exemptions) {
+    if let Some((blocker, why)) = execute_time_refusal(ctx, &exec_op.target(), &exemptions) {
         return decided(RegResult::blocked(
             blocker.clone(),
             format!(
@@ -645,25 +589,14 @@ pub fn prepare_reg(
             ),
         ));
     }
-    let Some(stamp) = ctx.stamp(item.op).copied() else {
-        return decided(RegResult::failed(
-            FailCode::Internal,
-            None,
-            format!(
-                "op {} was not validated in this run; {} left untouched",
-                item.op,
-                what(exec_op)
-            ),
-        ));
-    };
-    let checked = match open_checked(ctx, item, &stamp) {
+    let checked = match open_checked(ctx, op, exec_op) {
         Ok(checked) => checked,
         Err(result) => return decided(result),
     };
     let key = key_of(exec_op).to_owned();
     let (doc, act) = match exec_op {
         ExecOp::DeleteKeyTree { .. } => {
-            match regbackup::capture_tree(checked.key(), &key, item.key_limit) {
+            match regbackup::capture_tree(checked.key(), &key, key_limit) {
                 Ok(doc) => (doc, Act::Tree),
                 Err(e) => return decided(capture_refused(&e, exec_op)),
             }
@@ -705,7 +638,7 @@ pub fn prepare_reg(
         | ExecOp::RemoveDirIfEmpty { .. }
         | ExecOp::RemovePackage { .. } => unreachable!("checked by is_registry above"),
     };
-    let backup = write_backup(session, item.op, &doc)?;
+    let backup = write_backup(session, op, &doc)?;
     let reference = backup.reference().clone();
     let inverse = match &act {
         Act::Tree => Inverse::RestoreKeyTree { backup: reference },
@@ -722,8 +655,8 @@ pub fn prepare_reg(
         },
     };
     let intent = Intent {
-        op: item.op,
-        item: item.item.clone(),
+        op,
+        item: record.item.clone(),
         exec_op: exec_op.clone(),
         inverse,
         definition: None,
@@ -1161,13 +1094,15 @@ enum Undo {
     Segment(SegmentUndo),
 }
 
-/// A registry inverse whose destination passed the undo gate and whose backup verified. Only
-/// [`prepare_undo_reg`] makes one, and [`run_undo_reg`] consumes it.
+/// A registry inverse whose destination passed the undo gate and whose backup verified, holding the key
+/// handle the gate checked ([`CheckedUndoKey`]: the parent of a key to re-create, or the key holding a
+/// value), which is the one the inverse acts on. Only [`prepare_undo_reg`] makes one, and
+/// [`run_undo_reg`] consumes it.
 #[derive(Debug)]
 pub struct RegInverse {
     op: OpId,
     at: String,
-    probe: KeyProbe,
+    checked: CheckedUndoKey,
     backup: Option<VerifiedBackup>,
     undo: Undo,
 }
@@ -1179,38 +1114,37 @@ impl RegInverse {
     }
 }
 
-/// Reads and checks the backup an inverse needs: through the store's checks, against the journal's size
-/// and SHA-256, and as the backup of `exec_op` (`RegBackup::validate_for`).
+/// Reads and checks the backup an inverse needs: opened through the store's checks and read through that
+/// checked handle ([`SessionDir::open_file`]), checked against the journal's size and SHA-256
+/// ([`regbackup::verify_bytes`]), and as the backup of `exec_op` (`RegBackup::validate_for`).
 fn read_backup(
     session: &SessionDir,
     reference: &BackupRef,
     exec_op: &ExecOp,
 ) -> Result<VerifiedBackup, RegUndoResult> {
     let tampered = |detail: String| RegUndoResult::conflict(UndoConflict::BackupTampered, detail);
-    if let Err(e) = session.open_file(&reference.path) {
-        return Err(match e {
+    let missing = || {
+        RegUndoResult::conflict(
+            UndoConflict::BackupMissing,
+            format!("the backup {} is missing", reference.path),
+        )
+    };
+    let unusable = |e: &dyn std::fmt::Display| {
+        tampered(format!("the backup {} cannot be used: {e}", reference.path))
+    };
+    let bytes = session
+        .open_file(&reference.path)
+        .and_then(|mut file| file.read_all(regbackup::MAX_BACKUP_FILE_BYTES))
+        .map_err(|e| match e {
             StorageError::Io {
                 source: FsError::NotFound,
                 ..
-            } => RegUndoResult::conflict(
-                UndoConflict::BackupMissing,
-                format!("the backup {} is missing", reference.path),
-            ),
-            other => tampered(format!(
-                "the backup {} cannot be used: {other}",
-                reference.path
-            )),
-        });
-    }
-    let backup = regbackup::read_verified(session.path(), reference).map_err(|e| match e {
-        BackupFileError::Missing => RegUndoResult::conflict(
-            UndoConflict::BackupMissing,
-            format!("the backup {} is missing", reference.path),
-        ),
-        other => tampered(format!(
-            "the backup {} cannot be used: {other}",
-            reference.path
-        )),
+            } => missing(),
+            other => unusable(&other),
+        })?;
+    let backup = regbackup::verify_bytes(reference, &bytes).map_err(|e| match e {
+        BackupFileError::Missing => missing(),
+        other => unusable(&other),
     })?;
     backup.doc().validate_for(exec_op).map_err(|e| {
         tampered(format!(
@@ -1222,20 +1156,23 @@ fn read_backup(
 }
 
 /// Decides how the registry op of `intent` is undone. `done` is the op's `done` outcome, or `None` when
-/// the journal holds only its intent (the run stopped during the action). `exemptions` are the ones the
-/// journal's `validated` record holds for the op (`gate::exemptions_from_journal`). `None` for an op
-/// that is not a registry op. Changes nothing.
+/// the journal holds only its intent (the run stopped during the action). `None` for an op that is not a
+/// registry op. Changes nothing.
+///
+/// The destination is checked with the exemptions of the op's journal `validated` record, which the undo
+/// driver handed to `ctx` (`GateCtx::record`, read with `GateCtx::exemptions`); an op without one is a
+/// conflict and nothing is opened.
 ///
 /// In order: the inverse must undo the op ([`Inverse::undoes`]); an op that changed nothing is
-/// `NothingToUndo`; the destination must pass [`gate::check_undo_key`] (deny-list, structural
-/// containers, no link on the key or its ancestors at the probe addresses); the backup must exist, match
-/// the journal and belong to the op.
+/// `NothingToUndo`; the op must have a journalled record in `ctx`; the destination must pass
+/// [`gate::check_undo_key`] (deny-list, structural containers, no link on the key or its ancestors at
+/// the probe addresses), which opens the key the restore acts on; the backup must exist, match the
+/// journal and belong to the op.
 pub fn prepare_undo_reg(
     ctx: &GateCtx,
     session: &SessionDir,
     intent: &Intent,
     done: Option<&ItemOutcome>,
-    exemptions: &Exemptions,
 ) -> Option<RegUndoPrepared> {
     let exec_op = &intent.exec_op;
     if !exec_op.is_registry() {
@@ -1260,17 +1197,21 @@ pub fn prepare_undo_reg(
     if unchanged {
         return decided(RegUndoResult::done(UndoOutcome::NothingToUndo, ""));
     }
-    let target = exec_op.target();
-    if let Err(refusal) = gate::check_undo_key(ctx, &target, exemptions) {
+    let Some(exemptions) = ctx.exemptions(intent.op) else {
         return decided(RegUndoResult::conflict(
             UndoConflict::GateBlocked {
-                blocker: refusal.blocker.clone(),
+                blocker: Blocker::DenyListed {
+                    rule: gate::reason::NOT_VALIDATED.to_owned(),
+                },
             },
-            format!("{at}: the restore is refused: {refusal}"),
+            format!(
+                "{at}: op {} has no journalled validated record in this undo run; nothing restored",
+                intent.op
+            ),
         ));
-    }
-    let probe = match live::key_probe(&target, ctx.deny().env()) {
-        Ok(probe) => probe,
+    };
+    let checked = match gate::check_undo_key(ctx, &exec_op.target(), &exemptions) {
+        Ok(checked) => checked,
         Err(refusal) => {
             return decided(RegUndoResult::conflict(
                 UndoConflict::GateBlocked {
@@ -1317,57 +1258,48 @@ pub fn prepare_undo_reg(
             format!("{at}: the journal names no backup for the restore"),
         ));
     }
+    // The gate hands out the parent for a key target and the key itself for a value or segment target;
+    // the inverse must act on the one it needs.
+    let fits = matches!(
+        (&undo, &checked),
+        (Undo::Tree { .. }, CheckedUndoKey::Recreate(_))
+            | (Undo::Value | Undo::Segment(_), CheckedUndoKey::Restore(_))
+    );
+    if !fits {
+        return decided(RegUndoResult::conflict(
+            UndoConflict::BackupTampered,
+            format!(
+                "{at}: the journal's inverse {} does not fit the op's target; nothing done",
+                intent.inverse.name()
+            ),
+        ));
+    }
     Some(RegUndoPrepared::Ready(Box::new(RegInverse {
         op: intent.op,
         at,
-        probe,
+        checked,
         backup,
         undo,
     })))
-}
-
-/// Opens the key an inverse acts on at the probe address; the errors as results.
-fn open_for_undo(
-    opened: Result<WKey, Win32Error>,
-    at: &str,
-    what_key: &str,
-) -> Result<WKey, RegUndoResult> {
-    opened.map_err(|e| {
-        if e == Win32Error::LINK_ON_PATH {
-            RegUndoResult::conflict(
-                UndoConflict::GateBlocked {
-                    blocker: Blocker::RegLink,
-                },
-                format!("{at}: a registry link is on the path of the {what_key}"),
-            )
-        } else if e.is_not_found() {
-            RegUndoResult::os(
-                e,
-                format!("{at}: the {what_key} no longer exists; nothing restored"),
-            )
-        } else {
-            RegUndoResult::os(
-                e,
-                format!("{at}: opening the {what_key} failed: {e}; nothing restored"),
-            )
-        }
-    })
 }
 
 /// Runs the inverse of `inverse`, whose `undo_intent` `token` proves durable, then hits
 /// `undo.act.after`. The result goes to `JournalWriter::undo_done` or `JournalWriter::undo_conflict`
 /// with the token. See the module's conflict table; a token of another op is `Failed{Internal}`.
 ///
-/// - Tree: [`regbackup::restore_tree`] below the parent opened at the probe address (the last
-///   ancestor), or [`regbackup::complete_tree`] when the op has no `Done` (intent only, or
-///   `VerifyFailed`): only Purge's own missing keys are put back.
-/// - Value: [`regbackup::restore_value`] into the key at the probe address.
-/// - Segment: [`regbackup::reinsert_segment`] into the value, with the value backup when there is one.
+/// Every inverse acts on the key handle [`gate::check_undo_key`] opened and checked in
+/// [`prepare_undo_reg`]; nothing is opened again here.
+///
+/// - Tree: [`regbackup::restore_tree`] below the checked parent, or [`regbackup::complete_tree`] when
+///   the op has no `Done` (intent only, or `VerifyFailed`): only Purge's own missing keys are put back.
+/// - Value: [`regbackup::restore_value`] into the checked key.
+/// - Segment: [`regbackup::reinsert_segment`] into the value of the checked key, with the value backup
+///   when there is one.
 pub fn run_undo_reg(inverse: Box<RegInverse>, token: &UndoToken) -> RegUndoResult {
     let RegInverse {
         op,
         at,
-        probe,
+        checked,
         backup,
         undo,
     } = *inverse;
@@ -1381,23 +1313,25 @@ pub fn run_undo_reg(inverse: Box<RegInverse>, token: &UndoToken) -> RegUndoResul
             ),
         );
     }
+    let wrong_key = || {
+        RegUndoResult::failed(
+            FailCode::Internal,
+            None,
+            format!("{at}: the checked undo key is not the kind the inverse acts on; nothing done"),
+        )
+    };
     match undo {
         Undo::Tree { complete } => {
             let Some(backup) = backup else {
                 return RegUndoResult::conflict(UndoConflict::BackupMissing, "no backup");
             };
-            let parent = match open_for_undo(
-                regbackup::open_parent(&probe, KeyAccess::CREATE_SUB_KEY).map(|(p, _)| p),
-                &at,
-                "parent key",
-            ) {
-                Ok(parent) => parent,
-                Err(result) => return result,
+            let CheckedUndoKey::Recreate(parent) = &checked else {
+                return wrong_key();
             };
             let restored = if complete {
-                regbackup::complete_tree(&parent, &backup)
+                regbackup::complete_tree(parent.parent(), &backup)
             } else {
-                regbackup::restore_tree(&parent, &backup)
+                regbackup::restore_tree(parent.parent(), &backup)
             };
             fault::point(fault::UNDO_ACT_AFTER);
             restore_result(restored, &at)
@@ -1406,28 +1340,18 @@ pub fn run_undo_reg(inverse: Box<RegInverse>, token: &UndoToken) -> RegUndoResul
             let Some(backup) = backup else {
                 return RegUndoResult::conflict(UndoConflict::BackupMissing, "no backup");
             };
-            let key = match open_for_undo(
-                regbackup::open_key_path(&probe.open, KeyAccess::SET_VALUE),
-                &at,
-                "key holding the value",
-            ) {
-                Ok(key) => key,
-                Err(result) => return result,
+            let CheckedUndoKey::Restore(key) = &checked else {
+                return wrong_key();
             };
-            let restored = regbackup::restore_value(&key, &backup);
+            let restored = regbackup::restore_value(key.key(), &backup);
             fault::point(fault::UNDO_ACT_AFTER);
             restore_result(restored, &at)
         }
         Undo::Segment(segment) => {
-            let key = match open_for_undo(
-                regbackup::open_key_path(&probe.open, KeyAccess::SET_VALUE),
-                &at,
-                "key holding the value",
-            ) {
-                Ok(key) => key,
-                Err(result) => return result,
+            let CheckedUndoKey::Restore(key) = &checked else {
+                return wrong_key();
             };
-            let reinserted = regbackup::reinsert_segment(&key, &segment);
+            let reinserted = regbackup::reinsert_segment(key.key(), &segment);
             fault::point(fault::UNDO_ACT_AFTER);
             reinsert_result(reinserted, &at, &segment)
         }

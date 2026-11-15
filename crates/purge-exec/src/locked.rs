@@ -9,9 +9,11 @@
 //!
 //! # The ladder
 //!
-//! The file action hands over an item that stayed locked after its retries as a [`LockedItem`] (built
-//! from the gate's [`LockedPath`] with [`LockedItem::from_gate`], or by hand when a rename met a lock after
-//! the intent). [`Ladder::prepare`] then climbs, in this order:
+//! The file action hands over an item that stayed locked after its retries as a [`LockedItem`], built
+//! only with [`LockedItem::from_gate`] from the gate's [`LockedPath`] (at the open, or when a rename met a
+//! lock after the intent) and the op's journal `validated` record as the executor handed it to
+//! `GateCtx::record`: the op, plan item and validated facts are never taken from the caller.
+//! [`Ladder::prepare`] then climbs, in this order:
 //!
 //! 1. **Name the lockers** ([`LockerQuery`], query only, this process filtered out). Directories are not
 //!    queried (Restart Manager takes files).
@@ -58,9 +60,10 @@
 //!    by `prepare`), so use that token. Then hit `act.before`.
 //! 3. [`Ladder::act`] takes the token as proof of the durable intent. For a hold it changes nothing and
 //!    returns `HeldRetry`. For a boot move it re-checks the source and the whole boot-move rung, looks for
-//!    the pair in the list (one already there is adopted, never doubled), registers it, hits
-//!    `bootmove.registered`, reads the list back and returns `PendingReboot{pair, confirmed}` with the pair
-//!    **as it stands in the list**. Journal the result with `JournalWriter::done(token, ..)`.
+//!    the pair in the list (one already there is adopted, never doubled), registers it, reads the list
+//!    back and returns `PendingReboot{pair, confirmed}` with the pair **as it stands in the list**.
+//!    Journal the result with `JournalWriter::done(token, ..)`, which hits `bootmove.registered` (the
+//!    move is registered, its `done` not yet written) and flushes that `done` before it returns.
 //!
 //! The intent is the one a quarantine move would write: `QuarantineMove{path}` with
 //! `MoveBack{quarantine_path, original_path, file_id, volume_serial}` and `pre` = the validated facts (a
@@ -84,14 +87,14 @@
 //! of other programs are never touched or reordered: registering appends, removing cuts the exact byte
 //! range of our pair and only after the list showed it exactly once.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use purge_guard::deny::Exemptions;
 use purge_guard::live::{
     self, BootMove, DestinationFacts, FileIdentity, PathStamp, QuarantineCheck, StoreScope,
 };
 use purge_model::exec::journal::{
-    FileFacts, GateExemptions, Intent, ItemFacts, Reconcile, ReconcileResult, Record, UndoOutcome,
+    FileFacts, Intent, ItemFacts, Reconcile, ReconcileResult, UndoOutcome,
 };
 use purge_model::exec::op::{
     BootMovePair, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason,
@@ -149,12 +152,14 @@ pub mod reason {
 // Input
 // ---------------------------------------------------------------------------------------------------
 
-/// The hand-over from the file action for an item that stayed locked after its retries.
+/// The hand-over from the file action for an item that stayed locked after its retries. Built only by
+/// [`LockedItem::from_gate`]:
 ///
-/// - `exec_op` must be [`ExecOp::QuarantineMove`]; its `path` is the recorded source path, the plan's
-///   lexical path that the gate judged (G1: equal to the handle's final path).
-/// - `validated` is the item's `validated` record facts (identity, kind, size ...). They become the
-///   intent's `pre`, because a locked item has no acting handle to read them from.
+/// - the op, its plan item and its validated facts (identity, kind, size ...) are those of the op's
+///   journal `validated` record in the gate context; the facts become the intent's `pre`, because a
+///   locked item has no acting handle to read them from. The op must be [`ExecOp::QuarantineMove`]; its
+///   `path` is the recorded source path, the plan's lexical path that the gate judged (G1: equal to the
+///   handle's final path).
 /// - `seen` is what the gate's read-only look showed now ([`LockedPath::stamp`]); it must equal the
 ///   validated identity and kind.
 /// - `error` is the open (or rename) error of the acting handle.
@@ -163,41 +168,64 @@ pub mod reason {
 ///   `MoveBack` records and the destination of a boot move.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockedItem {
-    /// The op id.
-    pub op: OpId,
-    /// The candidate id of the plan item.
-    pub item: CandidateId,
-    /// The op; must be [`ExecOp::QuarantineMove`].
-    pub exec_op: ExecOp,
-    /// The facts of the item's `validated` record.
-    pub validated: FileFacts,
-    /// Identity and kind the gate saw on its read-only look now.
-    pub seen: PathStamp,
-    /// The error that stopped the acting handle.
-    pub error: FsError,
-    /// Absolute path of the item inside this op's quarantine directory.
-    pub quarantine_path: String,
+    op: OpId,
+    item: CandidateId,
+    exec_op: ExecOp,
+    validated: FileFacts,
+    seen: PathStamp,
+    error: FsError,
+    quarantine_path: String,
 }
 
 impl LockedItem {
-    /// The hand-over from a [`gate::open_and_check_path`] that ended in `GateOutcome::Locked`.
+    /// The hand-over for op `op` after the gate ([`gate::open_and_check_path`], or the file action's
+    /// rename after the intent) reported it locked as `locked`. The op, its plan item and its validated
+    /// facts are taken from the op's journal `validated` record ([`GateCtx::journalled`]). `None` when the
+    /// op has no record in `ctx` or the record holds no file facts.
     pub fn from_gate(
+        ctx: &GateCtx,
         op: OpId,
-        item: CandidateId,
-        exec_op: ExecOp,
-        validated: FileFacts,
         locked: &LockedPath,
         quarantine_path: impl Into<String>,
-    ) -> LockedItem {
-        LockedItem {
+    ) -> Option<LockedItem> {
+        let (exec_op, record) = ctx.journalled(op)?;
+        let ItemFacts::File(validated) = &record.facts else {
+            return None;
+        };
+        Some(LockedItem {
             op,
-            item,
-            exec_op,
-            validated,
+            item: record.item.clone(),
+            exec_op: exec_op.clone(),
+            validated: validated.clone(),
             seen: locked.stamp,
             error: FsError::from(locked.error),
             quarantine_path: quarantine_path.into(),
-        }
+        })
+    }
+
+    /// The op id.
+    pub fn op(&self) -> OpId {
+        self.op
+    }
+
+    /// The candidate id of the plan item.
+    pub fn item(&self) -> &CandidateId {
+        &self.item
+    }
+
+    /// The op (a [`ExecOp::QuarantineMove`] for the ladder to apply).
+    pub fn exec_op(&self) -> &ExecOp {
+        &self.exec_op
+    }
+
+    /// The facts of the op's journal `validated` record.
+    pub fn validated(&self) -> &FileFacts {
+        &self.validated
+    }
+
+    /// Absolute path of the item inside this op's quarantine directory.
+    pub fn quarantine_path(&self) -> &str {
+        &self.quarantine_path
     }
 
     /// The source path, when the op is a quarantine move.
@@ -964,9 +992,10 @@ impl<'a> Ladder<'a> {
     ///
     /// A hold changes nothing (`HeldRetry`). A boot move re-checks the source and the boot-move rung (a
     /// hold now is `HeldRetry`), then: our pair already listed once is adopted (`PendingReboot`, nothing
-    /// written), listed more than once is `Failed{Internal}`; otherwise it is registered,
-    /// `bootmove.registered` is hit, and the list is read back: the pair as stored, `confirmed` when it
-    /// stands there exactly once. A registration that fails is `Failed` (nothing registered). A token of
+    /// written), listed more than once is `Failed{Internal}`; otherwise it is registered and the list is
+    /// read back: the pair as stored, `confirmed` when it stands there exactly once. The fault point
+    /// `bootmove.registered` is not hit here: `JournalWriter::done` hits it for the `PendingReboot`
+    /// outcome before it writes and flushes the `done`. A registration that fails is `Failed` (nothing registered). A token of
     /// another op is `Failed{Internal}` and nothing is called.
     pub fn act(
         &self,
@@ -1090,7 +1119,8 @@ impl<'a> Ladder<'a> {
                 );
             }
         };
-        fault::point(fault::BOOTMOVE_REGISTERED);
+        // `bootmove.registered` is hit by `JournalWriter::done` for the `PendingReboot` outcome, before
+        // it writes and flushes that `done`: once per registered move.
         let pending = |pair: BootMovePair, confirmed: bool, detail: String| {
             named.with(ItemOutcome::PendingReboot { pair, confirmed }, None, detail)
         };
@@ -1421,18 +1451,6 @@ impl Reconciled {
     }
 }
 
-/// The exemptions each op was validated with, from a journal's records (`JournalRead::records`), for
-/// [`reconcile`]'s undo-destination check.
-pub fn exemptions_of(records: &[Record]) -> BTreeMap<OpId, GateExemptions> {
-    records
-        .iter()
-        .filter_map(|r| match r {
-            Record::Validated(v) => Some((v.op, v.exemptions)),
-            _ => None,
-        })
-        .collect()
-}
-
 /// What sits at an op's quarantine destination.
 enum Destination {
     Empty,
@@ -1443,12 +1461,14 @@ enum Destination {
 
 /// Reconciles every op of `state` whose boot-time move is pending ([`JournalState::pending_reboot`]); see
 /// [`ReconcileVerdict`] for the table. The list is read once. A mismatch is moved back at once, by
-/// handle, into the parent of the source path after [`gate::check_undo_path`] (with the op's journalled
-/// exemptions, default when missing), and never over anything; the move happens before the caller
-/// journals it.
+/// handle, into the parent of the source path after [`gate::check_undo_path`], and never over anything;
+/// the move happens before the caller journals it.
+///
+/// The undo-destination check takes the exemptions of the op's journal `validated` record, which the
+/// caller handed to `ctx` (`GateCtx::record`, read with `GateCtx::exemptions`). An op without a record
+/// is checked with no exemptions at all (the strictest check), never with wider ones.
 pub fn reconcile(
     state: &JournalState,
-    exemptions: &BTreeMap<OpId, GateExemptions>,
     session: &SessionDir,
     ctx: &GateCtx,
     env: &dyn LadderEnv,
@@ -1511,7 +1531,7 @@ pub fn reconcile(
                     format!("{quarantine_path}: cannot be checked ({why})"),
                 ),
                 Destination::Other(identity, item) => {
-                    let ex = exemptions.get(&op.op).copied().unwrap_or_default();
+                    let ex = ctx.exemptions(op.op).unwrap_or_default();
                     let moved = move_back(ctx, &item, identity, original_path, *volume_serial, ex);
                     let alert = ReconcileAlert {
                         op: op.op,
@@ -1615,20 +1635,15 @@ fn move_back(
     found: FileIdentity,
     original: &str,
     volume_serial: u64,
-    exemptions: GateExemptions,
+    exemptions: Exemptions,
 ) -> Result<(), String> {
     let handle = MoveHandle::open(item).map_err(|e| e.to_string())?;
     let now = handle.file_id().map_err(|e| e.to_string())?;
     if now.volume_serial != found.volume_serial || now.id != found.file_id {
         return Err("the object changed while it was looked at".to_owned());
     }
-    let dest = gate::check_undo_path(
-        ctx,
-        original,
-        volume_serial,
-        gate::exemptions_from_journal(&exemptions),
-    )
-    .map_err(|refusal| refusal.to_string())?;
+    let dest = gate::check_undo_path(ctx, original, volume_serial, exemptions)
+        .map_err(|refusal| refusal.to_string())?;
     handle
         .rename_into(dest.dir(), dest.leaf())
         .map_err(|e| e.to_string())

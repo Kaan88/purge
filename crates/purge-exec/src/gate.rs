@@ -296,6 +296,7 @@ pub struct GateCtx {
 #[derive(Debug, Clone)]
 struct Recorded {
     op: ExecOp,
+    record: Validated,
     stamp: Stamp,
     exemptions: Exemptions,
     max_files: u32,
@@ -407,6 +408,7 @@ impl GateCtx {
             validated.op,
             Recorded {
                 op: op.clone(),
+                record: validated.clone(),
                 stamp,
                 exemptions: exemptions_from_journal(&validated.exemptions),
                 max_files,
@@ -423,6 +425,15 @@ impl GateCtx {
     /// The exemptions recorded for `op` (those of its journal `validated` record).
     pub fn exemptions(&self, op: OpId) -> Option<Exemptions> {
         self.validated.get(&op).map(|recorded| recorded.exemptions)
+    }
+
+    /// The op and the journal `validated` record [`GateCtx::record`] accepted for `op`: what the actions
+    /// build their intents from (plan item, recorded facts), so that an act is never prepared from facts
+    /// other than the journalled ones. `None` for an op id without a record.
+    pub fn journalled(&self, op: OpId) -> Option<(&ExecOp, &Validated)> {
+        self.validated
+            .get(&op)
+            .map(|recorded| (&recorded.op, &recorded.record))
     }
 
     /// The record of `op`, or the refusal for an op id that has none.

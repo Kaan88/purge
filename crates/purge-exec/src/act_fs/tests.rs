@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use purge_guard::canon::{GuardEnv, ProfileEnv};
 use purge_guard::deny::DenyList;
-use purge_model::exec::journal::{GateExemptions, Header, JournalSchema, Validated};
+use purge_model::exec::journal::{Header, JournalSchema, Validated};
 use purge_model::{ScanMode, Target};
 use purge_win::fs::list_dir;
 use purge_win::fs_write::{FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, list_streams};
@@ -23,12 +23,9 @@ use purge_win::secure::{handle_security, open_for_security};
 use purge_win::sid::current_user_sid;
 
 use super::*;
-use crate::gate::{exemptions_to_journal, validate_all};
+use crate::gate::{GateItem, Validation, exemptions_to_journal, validate_all};
 use crate::journal::{JournalWriter, sha256_bytes};
-use crate::storage::{
-    JOURNAL_FILE, ObjectKind, StorageRoots, SystemVolumes, VolumeFacts as StoreVolumeFacts,
-    VolumeProbe,
-};
+use crate::storage::{StorageRoots, SystemVolumes, VolumeFacts as StoreVolumeFacts, VolumeProbe};
 
 // ---------------------------------------------------------------------------------------------------
 // Fixtures
@@ -237,7 +234,7 @@ impl Env {
         let data_root = roots.data_root().to_str().unwrap().to_owned();
         let mut ctx = GateCtx::new(DenyList::compile(&live_env(&data_root)), &ops, scope).unwrap();
         let validations: Vec<_> = validate_all(
-            &mut ctx,
+            &ctx,
             ops.iter()
                 .enumerate()
                 .map(|(i, op)| (OpId(i as u32 + 1), GateItem::new(op, long()))),
@@ -259,19 +256,22 @@ impl Env {
             allow_irreversible: false,
             volumes: Vec::new(),
         };
-        let sddl = roots.policy().sddl_for(ObjectKind::StoreFile);
-        let mut journal =
-            JournalWriter::create(&session.path().join(JOURNAL_FILE), &sddl, header).unwrap();
+        let mut journal = JournalWriter::create(&session, header).unwrap();
+        // As the executor does: write each `validated` record, then hand the written record to the
+        // gate, the only source of what the act is gated with.
         for (i, (op, outcome)) in ops.iter().zip(&validations).enumerate() {
-            journal
-                .validated(Validated {
-                    op: OpId(i as u32 + 1),
-                    item: item(i as u32 + 1),
-                    target: op.target(),
-                    facts: outcome.item_facts().unwrap_or(ItemFacts::Absent),
-                    exemptions: exemptions_to_journal(&long()),
-                })
-                .unwrap();
+            let record = Validated {
+                op: OpId(i as u32 + 1),
+                item: item(i as u32 + 1),
+                target: op.target(),
+                facts: outcome.item_facts().unwrap_or(ItemFacts::Absent),
+                exemptions: exemptions_to_journal(&long()),
+            };
+            journal.validated(record.clone()).unwrap();
+            if matches!(outcome, GateOutcome::Pass(_)) {
+                ctx.record(op, &record, GateItem::new(op, long()).max_files)
+                    .unwrap();
+            }
         }
         Env {
             session,
@@ -293,17 +293,7 @@ impl Env {
     }
 
     fn prepare(&self, n: u32, retry: &Retry) -> FsPrepared {
-        let op = &self.ops[n as usize - 1];
-        prepare_fs(
-            &self.ctx,
-            &self.session,
-            OpId(n),
-            &item(n),
-            &GateItem::new(op, long()),
-            self.validation(n),
-            retry,
-        )
-        .unwrap()
+        prepare_fs(&self.ctx, &self.session, OpId(n), retry).unwrap()
     }
 
     /// The executor's sequence for op `n`, journalled. A locked item is journalled as `Failed{InUse}` (the
@@ -373,11 +363,9 @@ impl Env {
     /// [`Env::undo`] with the op's intent replaced by `intent` (a journal read back with other facts).
     fn undo_intent_as(&mut self, n: u32, intent: Option<Intent>) -> FsUndo {
         let intent = intent.unwrap_or_else(|| self.intents[&n].clone());
-        let exemptions = GateExemptions {
-            long_names_resolved: true,
-            ..GateExemptions::default()
-        };
-        match plan_undo_fs(&intent, self.dones.get(&n), &exemptions).unwrap() {
+        // The undo is gated with the exemptions of the op's journalled `validated` record, which the
+        // fixture handed to `ctx` (`long()`).
+        match plan_undo_fs(&intent, self.dones.get(&n)).unwrap() {
             FsUndoPlan::Decided(undo) => {
                 match &undo {
                     FsUndo::Done { outcome, .. } => self
@@ -855,7 +843,6 @@ fn a_file_replaced_after_validation_is_changed_since_scan_and_a_missing_one_vani
                     pre: ItemFacts::Absent,
                 },
                 env.dones.get(&n),
-                &GateExemptions::default(),
             ),
             Some(FsUndoPlan::Decided(FsUndo::Done {
                 outcome: UndoOutcome::NothingToUndo,
@@ -1259,7 +1246,7 @@ fn volume_serial_zero_is_unknown_and_other_volumes_are_never_copied() {
     };
     for intent in [&moved, &removed] {
         assert!(intent.is_consistent());
-        let plan = plan_undo_fs(intent, Some(&ItemOutcome::Done), &GateExemptions::default());
+        let plan = plan_undo_fs(intent, Some(&ItemOutcome::Done));
         assert!(
             matches!(
                 &plan,
@@ -1282,11 +1269,7 @@ fn volume_serial_zero_is_unknown_and_other_volumes_are_never_copied() {
         volume_serial: 5,
     };
     assert!(matches!(
-        plan_undo_fs(
-            &skewed,
-            Some(&ItemOutcome::Done),
-            &GateExemptions::default()
-        ),
+        plan_undo_fs(&skewed, Some(&ItemOutcome::Done)),
         Some(FsUndoPlan::Decided(FsUndo::Conflict {
             conflict: UndoConflict::GateBlocked { .. },
             ..
@@ -1415,32 +1398,25 @@ fn non_file_ops_are_not_this_modules() {
         definition: None,
         pre: ItemFacts::Absent,
     };
-    assert!(
-        plan_undo_fs(
-            &intent,
-            Some(&ItemOutcome::Done),
-            &GateExemptions::default()
-        )
-        .is_none()
-    );
-    let validation = Validation {
-        stamp: Stamp::Key,
-        facts: ItemFacts::Absent,
-        exemptions: long(),
-    };
+    assert!(plan_undo_fs(&intent, Some(&ItemOutcome::Done)).is_none());
+    // Changed in meaning: `prepare_fs` takes no op or validation from the caller any more. A registry op
+    // journalled as validated (a forged record of a value) reaches it only through the gate's record,
+    // and is refused there.
     let s = Scratch::new("nonfile");
-    let env = Env::new(s, Vec::new());
-    let prepared = prepare_fs(
-        &env.ctx,
-        &env.session,
-        OpId(1),
-        &item(1),
-        &GateItem::new(&intent.exec_op, long()),
-        &validation,
-        &no_wait(),
-    )
-    .unwrap();
-    assert!(
+    let mut env = Env::new(s, Vec::new());
+    let forged = Validated {
+        op: OpId(1),
+        item: item(1),
+        target: intent.exec_op.target(),
+        facts: ItemFacts::Value(purge_model::exec::journal::ValueFacts {
+            value_type: 1,
+            size: 2,
+            data_sha256: sha256_bytes(b"\0\0"),
+        }),
+        exemptions: exemptions_to_journal(&long()),
+    };
+    env.ctx.record(&intent.exec_op, &forged, 5_000).unwrap();
+    let internal = |prepared: &FsPrepared| {
         matches!(
             prepared,
             FsPrepared::Decided(FsResult {
@@ -1450,9 +1426,49 @@ fn non_file_ops_are_not_this_modules() {
                 },
                 ..
             })
+        )
+    };
+    let prepared = prepare_fs(&env.ctx, &env.session, OpId(1), &no_wait()).unwrap();
+    assert!(internal(&prepared), "{prepared:?}");
+    // An op id without a journalled record is never acted on.
+    let prepared = prepare_fs(&env.ctx, &env.session, OpId(2), &no_wait()).unwrap();
+    assert!(internal(&prepared), "{prepared:?}");
+}
+
+#[test]
+fn an_undo_without_a_journalled_record_changes_nothing() {
+    // The undo is gated with the exemptions of the op's `validated` record from the gate context; an
+    // undo context that was not handed the record refuses the op.
+    let s = Scratch::new("undonorecord");
+    let f = s.file(r"src\a.txt", b"a");
+    let mut env = Env::new(s, vec![mv(&f)]);
+    assert_done(&env.run(1));
+    let FsUndoPlan::Run(job) = plan_undo_fs(&env.intents[&1], env.dones.get(&1)).unwrap() else {
+        panic!("a done move is undone");
+    };
+    let scope = env
+        .session
+        .roots()
+        .store_scope::<&Path>(env.session.id(), &[])
+        .unwrap();
+    let data_root = env.session.roots().data_root().to_str().unwrap().to_owned();
+    let bare = GateCtx::new(DenyList::compile(&live_env(&data_root)), &env.ops, scope).unwrap();
+    let token = env.journal.undo_intent(OpId(1)).unwrap();
+    let undo = undo_fs(&bare, &env.session, job, &no_wait(), &token).unwrap();
+    assert!(
+        matches!(
+            &undo,
+            FsUndo::Conflict {
+                conflict: UndoConflict::GateBlocked {
+                    blocker: Blocker::DenyListed { rule }
+                },
+                ..
+            } if rule == gate::reason::NOT_VALIDATED
         ),
-        "{prepared:?}"
+        "{undo:?}"
     );
+    assert!(!exists(&f));
+    assert!(exists(&env.quarantine_path(1)));
 }
 
 #[test]
