@@ -375,6 +375,7 @@ struct FsData {
     times: FileTimes,
     reparse_tag: u32,
     file_id: Option<u128>,
+    volume_serial: Option<u64>,
     short_name: Option<String>,
     content: Option<Content>,
     version_info: Option<VersionInfo>,
@@ -392,6 +393,7 @@ impl Default for FsData {
             times: FileTimes::default(),
             reparse_tag: 0,
             file_id: None,
+            volume_serial: None,
             short_name: None,
             content: None,
             version_info: None,
@@ -414,6 +416,7 @@ impl FsData {
             times: self.times,
             reparse_tag: self.reparse_tag,
             file_id: self.file_id,
+            volume_serial: self.volume_serial,
         }
     }
 }
@@ -758,6 +761,7 @@ impl Fixture {
             d.times = meta.times;
             d.reparse_tag = meta.reparse_tag;
             d.file_id = meta.file_id;
+            d.volume_serial = meta.volume_serial;
         });
     }
 
@@ -1977,6 +1981,8 @@ struct EntryDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     file_id: Option<u128>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    volume_serial: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     short_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     content_b64: Option<String>,
@@ -2171,6 +2177,7 @@ impl Fixture {
             },
             reparse_tag: doc.reparse_tag.unwrap_or(0),
             file_id: doc.file_id,
+            volume_serial: doc.volume_serial,
             short_name: doc.short_name,
             content,
             version_info: doc.version_info,
@@ -2242,6 +2249,7 @@ impl Fixture {
                 accessed: d.times.accessed,
                 reparse_tag: (d.reparse_tag != 0).then_some(d.reparse_tag),
                 file_id: d.file_id,
+                volume_serial: d.volume_serial,
                 short_name: d.short_name.clone(),
                 content_b64,
                 content_text,
@@ -2659,6 +2667,7 @@ mod tests {
                         times: FileTimes::default(),
                         reparse_tag: 0,
                         file_id: Some(u128::MAX - 3),
+                        volume_serial: Some(0x1122_3344_5566_7788),
                     },
                 )
             })
@@ -2745,6 +2754,12 @@ mod tests {
                     .unwrap()
                     .file_id,
                 Some(u128::MAX - 3)
+            );
+            assert_eq!(
+                fx.metadata("C:\\Program Files\\App\\id.bin")
+                    .unwrap()
+                    .volume_serial,
+                Some(0x1122_3344_5566_7788)
             );
             assert_eq!(
                 fx.metadata("C:\\Program Files\\App\\app.exe")

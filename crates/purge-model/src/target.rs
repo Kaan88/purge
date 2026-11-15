@@ -107,6 +107,30 @@ pub enum Target {
 }
 
 impl Target {
+    /// Whether a value name is `MRUList` (compared without regard to case, as the registry does): the
+    /// value of an MRU list (`…\OpenWithList`, and others) that holds the order of its entries as a string
+    /// of one-letter value names, most recent first (`"cab"`).
+    pub fn is_mru_list_name(name: &str) -> bool {
+        name.eq_ignore_ascii_case("MRUList")
+    }
+
+    /// For an MRU-list edit (see the convention table on [`Action`](crate::Action)): the letter a
+    /// [`Target::RegMultiSzSegment`] of an `MRUList` value removes. `Some` only when the value is named
+    /// `MRUList` and the segment is exactly one letter `a`-`z`; `None` for any other target. The segment's
+    /// `index` is the letter's position in the string, which undo restores.
+    pub fn mru_list_letter(&self) -> Option<char> {
+        let Target::RegMultiSzSegment { name, segment, .. } = self else {
+            return None;
+        };
+        let mut chars = segment.chars();
+        match (chars.next(), chars.next()) {
+            (Some(letter), None) if Self::is_mru_list_name(name) && letter.is_ascii_lowercase() => {
+                Some(letter)
+            }
+            _ => None,
+        }
+    }
+
     /// Whether this is one of the registry variants, i.e. whether a [`TypedTarget`] can describe it.
     pub fn is_registry(&self) -> bool {
         matches!(

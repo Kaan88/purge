@@ -131,9 +131,16 @@ pub fn decide(candidates: Vec<Candidate>, ctx: &DecideCtx<'_>) -> Vec<Candidate>
 /// are machine scope. Packages, services, tasks and firewall rules are machine scope.
 #[must_use]
 pub fn target_scope(target: &Target, ctx: &DecideCtx<'_>) -> TargetScope {
+    target_scope_in(target, ctx.env(), ctx.user_sid)
+}
+
+/// [`target_scope`] with its two inputs given directly: the machine layout and the SID of the user the
+/// app is cleaned for (`DecideCtx::user_sid`). Pure.
+#[must_use]
+pub fn target_scope_in(target: &Target, env: &GuardEnv, user_sid: Option<&str>) -> TargetScope {
     match target {
         Target::Path { path } => {
-            let profile = ctx.user_sid.and_then(|sid| ctx.env().profile(sid));
+            let profile = user_sid.and_then(|sid| env.profile(sid));
             let inside = profile.is_some_and(|p| {
                 [&p.root, &p.appdata, &p.local_appdata]
                     .into_iter()
@@ -148,12 +155,10 @@ pub fn target_scope(target: &Target, ctx: &DecideCtx<'_>) -> TargetScope {
         Target::RegKey { path }
         | Target::RegValue { path, .. }
         | Target::RegValueChanged { path, .. }
-        | Target::RegMultiSzSegment { path, .. } => {
-            match canon_key(path, None, ctx.env(), ctx.user_sid) {
-                Ok(key) => TargetScope::of_hive(&key.hive),
-                Err(_) => TargetScope::Machine,
-            }
-        }
+        | Target::RegMultiSzSegment { path, .. } => match canon_key(path, None, env, user_sid) {
+            Ok(key) => TargetScope::of_hive(&key.hive),
+            Err(_) => TargetScope::Machine,
+        },
         Target::Service { .. }
         | Target::Task { .. }
         | Target::FirewallRule { .. }
@@ -161,17 +166,41 @@ pub fn target_scope(target: &Target, ctx: &DecideCtx<'_>) -> TargetScope {
     }
 }
 
-/// The exemptions the candidate's evidence earns from the deny-list (§5.10).
+/// The exemptions the candidate's evidence earns from the deny-list (§5.10): [`deny_exemptions`] with the
+/// context's machine layout, user and long-name flag. The scan mode, verify-gone result and limits of the
+/// context are not consulted.
+#[must_use]
+pub fn exemptions(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Exemptions {
+    deny_exemptions(candidate, ctx.env(), ctx.user_sid, ctx.long_names_resolved)
+}
+
+/// The deny-list exemptions (§5.10) the decide step derives for a candidate, from exactly the inputs it
+/// uses: the candidate (target, action, evidence), the machine layout of the scan (`DenyList::env`), the
+/// SID of the user the app is cleaned for and whether every path was read in long form. Pure: the same
+/// inputs always give the same exemptions. [`guard_and_policy`] calls it (through [`exemptions`]) on the
+/// canonical target, and checks the deny-list with the result.
+///
+/// A caller that re-checks a plan item against the deny-list later (the executor's gate) gets the plan's
+/// verdict back by passing the item as the plan holds it (its target is already canonical) with the
+/// scan's `GuardEnv`, `user_sid` and `long_names_resolved`.
 ///
 /// - `proven_owned_skeleton`: a key target with Tier A, Key-scope `ProvenOwnedSkeleton` evidence.
 /// - `environment_segment_edit`: a segment edit of a list value.
 /// - `tier_a_start_menu_entry`: a `.lnk` file with Tier A Path-scope evidence, or a delete-if-empty folder
 ///   that carries `EmptyAfterPlan` (every item in it is a Safe item of the plan). The guard cannot tell a
 ///   file from a folder, so nothing else below the all-users Start Menu is exempted.
-/// - `long_names_resolved`: as the caller states in the context.
+/// - `long_names_resolved`: as passed.
+///
+/// Tier A is judged after Rule T ([`target_scope_in`]): user-writable evidence earns nothing on a
+/// machine-scope target.
 #[must_use]
-pub fn exemptions(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Exemptions {
-    let scope = target_scope(&candidate.target, ctx);
+pub fn deny_exemptions(
+    candidate: &Candidate,
+    env: &GuardEnv,
+    user_sid: Option<&str>,
+    long_names_resolved: bool,
+) -> Exemptions {
+    let scope = target_scope_in(&candidate.target, env, user_sid);
     let tier_a = |e: &Evidence, wanted: Scope| {
         e.scope == wanted && band::effective_tier(e, scope) == Tier::A && effective_weight(e) > 0
     };
@@ -205,7 +234,7 @@ pub fn exemptions(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Exemptions {
         proven_owned_skeleton,
         environment_segment_edit,
         tier_a_start_menu_entry,
-        long_names_resolved: ctx.long_names_resolved,
+        long_names_resolved,
     }
 }
 
@@ -527,6 +556,7 @@ pub(crate) mod testkit {
             size_bytes: None,
             child_count: None,
             decision: None,
+            item_fp: None,
         }
     }
 
@@ -566,7 +596,7 @@ pub(crate) mod testkit {
 mod tests {
     use super::testkit::*;
     use super::*;
-    use purge_model::{Band, Harm, SourceTrust};
+    use purge_model::{Band, CandidateId, Harm, SourceTrust};
 
     fn band(c: &Candidate) -> Band {
         c.decision.as_ref().expect("decided").band
@@ -781,6 +811,162 @@ mod tests {
         // A folder is not exempt on plain Tier A evidence.
         let folder = one(owned_path("f", &format!(r"{programs}\App")), &ctx);
         assert_eq!(band(&folder), Band::Blocked);
+    }
+
+    /// Candidates for which each exemption is earned, or nearly earned, and some for which none is.
+    fn exemption_cases() -> Vec<Candidate> {
+        let programs = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs";
+        let shell = r"HKLM\SOFTWARE\Classes\Directory\shell";
+        let env_key = r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+        let mut proven = cand("proven", key(shell), "CLS-VERBS");
+        proven
+            .evidence
+            .push(ev(EvidenceKind::ProvenOwnedSkeleton, Scope::Key, "subtree"));
+        let mut user_written = proven.clone();
+        user_written.id = CandidateId("user-written".into());
+        user_written.evidence[0].trust = SourceTrust::UserWritable;
+        let segment = |id: &str, action: Action| {
+            let mut c = cand(
+                id,
+                Target::RegMultiSzSegment {
+                    path: env_key.into(),
+                    name: "Path".into(),
+                    segment: r"C:\Program Files\App\bin".into(),
+                    index: None,
+                },
+                "REG-ENV",
+            );
+            c.action = action;
+            c
+        };
+        let mut named_lnk = cand("named-lnk", path(&format!(r"{programs}\App\App.lnk")), "X");
+        named_lnk
+            .evidence
+            .push(ev(EvidenceKind::ExactFullName, Scope::Path, "name"));
+        let mut emptied = cand("emptied", path(&format!(r"{programs}\App")), "X");
+        emptied.action = Action::RemoveDirIfEmpty;
+        emptied
+            .evidence
+            .push(ev(EvidenceKind::EmptyAfterPlan, Scope::Path, "plan"));
+        let mut user_lnk = owned_path("user-lnk", &format!(r"{programs}\App\Other.lnk"));
+        user_lnk.evidence[0].trust = SourceTrust::UserWritable;
+        let mut report_lnk = owned_path("report-lnk", &format!(r"{programs}\App\Report.lnk"));
+        report_lnk.action = Action::ReportOnly;
+        vec![
+            proven,
+            user_written,
+            owned_key("plain-shell", shell),
+            segment("segment", Action::EditSegment),
+            segment("segment-report", Action::ReportOnly),
+            owned_value("whole-path", env_key, "Path"),
+            owned_path("lnk", &format!(r"{programs}\App\App.lnk")),
+            named_lnk,
+            user_lnk,
+            report_lnk,
+            owned_path("folder", &format!(r"{programs}\App")),
+            emptied,
+            owned_path("short", r"C:\PROGRA~1\App\app.exe"),
+            owned_path("app", r"C:\Program Files\Vendor\App\app.exe"),
+            owned_key("app-key", r"HKLM\SOFTWARE\Vendor\App"),
+            cand(
+                "svc",
+                Target::Service {
+                    name: "AppSvc".into(),
+                },
+                "SYS",
+            ),
+        ]
+    }
+
+    /// `deny_exemptions` is `exemptions` with the inputs spelled out: equal under every context, whatever
+    /// the mode, verify-gone result and limits (which it does not read).
+    #[test]
+    fn deny_exemptions_equals_the_decide_step_derivation() {
+        let deny = deny();
+        let base = ctx(&deny);
+        let mut contexts = Vec::new();
+        for mode in [ScanMode::Post, ScanMode::External, ScanMode::Forced] {
+            for verify_gone in [
+                VerifyGone::new(true, true, true),
+                VerifyGone::new(false, true, false),
+            ] {
+                for user_sid in [Some(SID), None] {
+                    for long_names_resolved in [true, false] {
+                        contexts.push(DecideCtx {
+                            mode,
+                            verify_gone,
+                            user_sid,
+                            long_names_resolved,
+                            limits: Limits {
+                                max_key_items: 1,
+                                ..Limits::default()
+                            },
+                            ..base
+                        });
+                    }
+                }
+            }
+        }
+        let mut earned = [false; 3];
+        for ctx in &contexts {
+            for c in exemption_cases() {
+                // As the decide step sees it: on the canonical target.
+                let canonical = match canon_target(&c.target, ctx.env(), ctx.user_sid) {
+                    Ok(canon) => Candidate {
+                        target: canon.target,
+                        ..c.clone()
+                    },
+                    Err(_) => c.clone(),
+                };
+                for c in [&c, &canonical] {
+                    let ex = deny_exemptions(c, deny.env(), ctx.user_sid, ctx.long_names_resolved);
+                    assert_eq!(ex, exemptions(c, ctx), "{}", c.id.0);
+                    assert_eq!(ex.long_names_resolved, ctx.long_names_resolved);
+                    earned[0] |= ex.proven_owned_skeleton;
+                    earned[1] |= ex.environment_segment_edit;
+                    earned[2] |= ex.tier_a_start_menu_entry;
+                }
+            }
+        }
+        assert_eq!(earned, [true; 3], "every exemption is exercised");
+    }
+
+    /// Pinned to the decide step's result: the deny-list verdict on a decided candidate is exactly
+    /// `deny.check(target, deny_exemptions(...))` on its canonical target, and the exemptions decide it
+    /// (without them the same targets are denied).
+    #[test]
+    fn deny_exemptions_reproduce_the_decide_step_verdict() {
+        let deny = deny();
+        let ctx = ctx(&deny);
+        let mut lifted = Vec::new();
+        for c in exemption_cases() {
+            let decided = guard_and_policy(c.clone(), &ctx);
+            let canonical = Candidate {
+                target: decided.target.clone(),
+                ..c.clone()
+            };
+            let ex = deny_exemptions(
+                &canonical,
+                deny.env(),
+                ctx.user_sid,
+                ctx.long_names_resolved,
+            );
+            let verdict = deny.check(&decided.target, &ex);
+            let denied: Vec<&Blocker> = decided
+                .blockers
+                .iter()
+                .filter(|b| matches!(b, Blocker::DenyListed { .. }))
+                .collect();
+            assert_eq!(denied, verdict.iter().collect::<Vec<_>>(), "{}", c.id.0);
+            let without = Exemptions {
+                long_names_resolved: ex.long_names_resolved,
+                ..Exemptions::default()
+            };
+            if verdict.is_none() && deny.check(&decided.target, &without).is_some() {
+                lifted.push(c.id.0.clone());
+            }
+        }
+        assert_eq!(lifted, ["proven", "segment", "lnk", "emptied"]);
     }
 
     #[test]

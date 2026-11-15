@@ -81,7 +81,8 @@ fn time(ticks: u64) -> Option<FileTime> {
 }
 
 /// `purge-win` handle metadata to the source type. Directories always carry the directory attribute and
-/// size 0; the file id is the 128-bit `FileIdInfo` identifier read little-endian.
+/// size 0; the file id is the 128-bit `FileIdInfo` identifier read little-endian, and the volume serial
+/// the 64-bit serial of the same `FileIdInfo` read (no extra call).
 pub(crate) fn to_file_meta(m: &fs::FileMeta) -> FileMeta {
     let attrs = if m.is_dir {
         m.attributes | FILE_ATTRIBUTE_DIRECTORY
@@ -98,6 +99,7 @@ pub(crate) fn to_file_meta(m: &fs::FileMeta) -> FileMeta {
         },
         reparse_tag: m.reparse_tag,
         file_id: Some(u128::from_le_bytes(m.file_id.id)),
+        volume_serial: Some(m.file_id.volume_serial),
     }
 }
 
@@ -115,6 +117,7 @@ pub(crate) fn to_dir_entry(e: fs::DirEntry) -> DirEntry {
             },
             reparse_tag: e.reparse_tag,
             file_id: None,
+            volume_serial: None,
         },
         name: e.name,
     }

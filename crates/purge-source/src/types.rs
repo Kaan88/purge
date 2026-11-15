@@ -459,6 +459,10 @@ pub struct FileMeta {
     pub reparse_tag: u32,
     /// The 128-bit `FileIdInfo` id, when the source has it.
     pub file_id: Option<u128>,
+    /// The 64-bit volume serial of the same `FileIdInfo` read (`VolumeSerialNumber`), when the source has
+    /// it. Together with `file_id` it is the identity of the object (a scan-time `item_fp`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_serial: Option<u64>,
 }
 
 impl FileMeta {
@@ -991,8 +995,16 @@ mod tests {
             times: FileTimes::default(),
             reparse_tag: 0xA000_0003,
             file_id: Some(u128::MAX - 1),
+            volume_serial: None,
         };
         assert!(m.is_dir() && m.is_reparse_point());
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("volume_serial"), "{json}");
+        assert_eq!(serde_json::from_str::<FileMeta>(&json).unwrap(), m);
+        let m = FileMeta {
+            volume_serial: Some(u64::MAX),
+            ..m
+        };
         let json = serde_json::to_string(&m).unwrap();
         assert_eq!(serde_json::from_str::<FileMeta>(&json).unwrap(), m);
     }

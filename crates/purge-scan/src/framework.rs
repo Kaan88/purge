@@ -40,6 +40,7 @@ use purge_guard::prefix::{self, Relation};
 use purge_identity::identity::{AppIdentity, IdentityMatch};
 use purge_index::baseline::Baseline;
 use purge_index::matcher::{AnchorSet, MatchHow, RefMatcher};
+use purge_model::exec::op::FileIdHex;
 use purge_model::{
     Action, AnchorKind, AnchorRef, AppRef, Blocker, Candidate, CandidateId, Category, Evidence,
     EvidenceKind, Facts, FileTime, Fingerprint, Harm, InnoRecord, InnoRecordKind, ManifestKind,
@@ -652,9 +653,12 @@ impl<'a> ScanCtx<'a> {
     /// this and nothing else, so no scanner can offer a value on Tier A evidence the rule
     /// refuses: not by building a candidate by hand, and not by adding evidence to one after
     /// [`CandidateBuilder::build`].
+    ///
+    /// It also records the scan-time identity of every path item ([`ScanCtx::record_item_fp`]).
     pub fn run(&self, scanner: &dyn Scanner, app: &AppIdentityView) -> Vec<Candidate> {
         let mut found = scanner.scan(self, app);
         for candidate in &mut found {
+            self.record_item_fp(candidate);
             // A candidate of a co-removed product is judged as that product's: its paths and
             // ids are the product's, not the app's (`reg_software::common::for_each_app`).
             let owner = (candidate.owner != self.fp.app)
@@ -672,6 +676,26 @@ impl<'a> ScanCtx<'a> {
             }
         }
         found
+    }
+
+    /// Records the identity a path item has now, as `Candidate::item_fp` (ENGINE_PLAN.md §5.10 G1:
+    /// the executor's `FileIdInfo` must equal the scan's). The identity is the file id and volume serial
+    /// of one [`FileSystemSource::metadata`] read, which opens the path itself and never follows a
+    /// reparse point (a junction or link is identified as the link). Nothing is recorded for other
+    /// targets, for a path that cannot be read, or when the source does not know both numbers (rig
+    /// snapshots and fixtures without them), so such scans give the same documents as before.
+    ///
+    /// The cost is one handle open per path item (directory listings carry no file id); the items are
+    /// a small fraction of the entries a scan reads.
+    pub fn record_item_fp(&self, candidate: &mut Candidate) {
+        let Target::Path { path } = &candidate.target else {
+            return;
+        };
+        if let Ok(meta) = self.fs.metadata(path)
+            && let (Some(file_id), Some(volume_serial)) = (meta.file_id, meta.volume_serial)
+        {
+            candidate.set_item_fp(FileIdHex(file_id.to_le_bytes()), volume_serial);
+        }
     }
 
     /// Applies [`ScanCtx::value_content_unproven`] to a candidate: when the data of its value
@@ -1197,6 +1221,8 @@ impl<'a> ScanCtx<'a> {
                 size_bytes: None,
                 child_count: None,
                 decision: None,
+                // Filled in by `ScanCtx::run` for path items, after the scanner is done.
+                item_fp: None,
             },
         }
     }
@@ -2758,6 +2784,106 @@ mod tests {
             matched: "Git".into(),
             distance: 0,
         }
+    }
+
+    // ---- scan-time identity (item_fp) ------------------------------------------------------------------
+
+    /// Emits a fixed list of targets, each as a bare candidate.
+    struct Emit(Vec<(Target, Action)>);
+
+    impl Scanner for Emit {
+        fn id(&self) -> &'static str {
+            "TEST-EMIT"
+        }
+
+        fn captured_roots(&self) -> &[RootSpec] {
+            &[]
+        }
+
+        fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
+            self.0
+                .iter()
+                .map(|(target, action)| {
+                    ctx.candidate("TEST-EMIT", target.clone(), *action, Category::AppFiles)
+                        .build()
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn run_records_the_identity_of_path_items_only() {
+        use purge_source::types::{FILE_ATTRIBUTE_ARCHIVE, FileMeta, FileTimes};
+        let file = r"C:\Program Files\Git\git.exe";
+        let link = r"C:\Program Files\Git\link";
+        let no_serial = r"C:\Program Files\Git\no-serial.dll";
+        let listed_only = r"C:\Program Files\Git\listed.txt";
+        let meta = |file_id: u128, volume_serial: Option<u64>, reparse_tag: u32| FileMeta {
+            size: 1,
+            attrs: FILE_ATTRIBUTE_ARCHIVE,
+            times: FileTimes::default(),
+            reparse_tag,
+            file_id: Some(file_id),
+            volume_serial,
+        };
+        let fixture = Fixture::builder()
+            .dir(GIT_ROOT)
+            .volume(r"C:\", Some(SERIAL), true, "NTFS")
+            .os(EDITION, BUILD, UBR)
+            .file(listed_only, 3)
+            .with(|f| {
+                f.set_meta(
+                    file,
+                    meta(0x0f0e_0d0c_0b0a_0908_0706_0504_0302_0100, Some(77), 0),
+                );
+                f.set_meta(link, meta(5, Some(77), 0xA000_000C));
+                f.set_meta(no_serial, meta(6, None, 0));
+            })
+            .build();
+        let world = World::new(fixture);
+        let ctx = world.ctx();
+        let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
+        let found = ctx.run(
+            &Emit(vec![
+                (path(file), Action::Quarantine),
+                (path(link), Action::Quarantine),
+                (path(no_serial), Action::Quarantine),
+                (path(listed_only), Action::Quarantine),
+                (path(r"C:\Program Files\Git\gone.exe"), Action::Quarantine),
+                (path(GIT_ROOT), Action::RemoveDirIfEmpty),
+                (key(r"HKLM\SOFTWARE\GitForWindows"), Action::DeleteKey),
+            ]),
+            &app,
+        );
+        let fp = |p: &str| {
+            found
+                .iter()
+                .find(|c| matches!(&c.target, Target::Path { path } if path == p))
+                .unwrap_or_else(|| panic!("{p}"))
+                .item_fp
+        };
+        // The bytes in the order Windows returns them (the source keeps the id as a little-endian u128).
+        let id = FileIdHex([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        assert!(fp(file).is_some_and(|f| f.matches(&id, 77)));
+        // A reparse point is identified as itself, not as what it points to.
+        assert!(fp(link).is_some_and(|f| f.matches(&FileIdHex(5u128.to_le_bytes()), 77)));
+        // Half an identity, no identity: nothing is recorded.
+        assert_eq!(fp(no_serial), None);
+        assert_eq!(fp(listed_only), None);
+        assert_eq!(fp(r"C:\Program Files\Git\gone.exe"), None);
+        assert_eq!(fp(GIT_ROOT), None);
+        let key_item = found
+            .iter()
+            .find(|c| matches!(c.target, Target::RegKey { .. }))
+            .unwrap();
+        assert_eq!(key_item.item_fp, None);
+        // The candidates are otherwise what the scanner built.
+        let mut bare = found.clone();
+        for c in &mut bare {
+            c.item_fp = None;
+        }
+        let built: Vec<Candidate> = Emit(vec![(path(file), Action::Quarantine)]).scan(&ctx, &app);
+        assert_eq!(bare[0], built[0]);
     }
 
     // ---- root specs --------------------------------------------------------------------------------------

@@ -3,8 +3,8 @@
 //!
 //! [`SortKey`] orders, most significant first:
 //!
-//! 1. **Stage**: registry values and value segments, then registry keys, then files and directories, then
-//!    API objects (tasks, firewall rules, services, packages) last.
+//! 1. **Stage** ([`Stage`]): scheduled tasks and firewall rules first, then registry values and value
+//!    segments, then registry keys, then files and directories, then service deletes, then packages.
 //! 2. **Depth, deepest first**: children before parents, so a key or directory is reached only after
 //!    everything offered inside it. A file is always deeper than the directories that hold it, which gives
 //!    "files before folders" without knowing which path is which.
@@ -18,20 +18,39 @@
 use purge_guard::prefix;
 use purge_model::{Action, Candidate, Target};
 
-/// The stage of §7.1 an item belongs to.
+/// The stage of §7.1 an item belongs to, in run order (the derived `Ord` is the order of the variants).
+///
+/// How the stages map onto the order of §7.1:
+///
+/// | §7.1 step | Stage |
+/// |---|---|
+/// | 1, 2: close processes, stop services | not plan items (the executor's prepare step) |
+/// | 3: tasks, firewall | [`Stage::Task`], [`Stage::FirewallRule`] |
+/// | 4, 5: shell/COM/associations; registry values, then keys | [`Stage::RegistryValue`], [`Stage::RegistryKey`] |
+/// | 6, 7: shortcuts; files, then folders | [`Stage::FileSystem`] |
+/// | 8: delete services | [`Stage::Service`] |
+/// | 9: AppX | [`Stage::Package`] |
+/// | 10: prune empty parents | inside each stage (see the module docs) |
+///
+/// Three steps of §7.1 are not separate stages, because making them so would reorder plans the M1a
+/// engine already wrote (their hashes are gate evidence): shell, COM and association keys are ordered
+/// with the other registry items by depth; shortcuts with the other files; and a delete-if-empty
+/// container comes right after the items at its depth in its own stage, not after every stage. No
+/// scanner emits tasks, firewall rules or services yet (M1b), so their place could be aligned with §7.1
+/// without changing any existing plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Stage {
+    /// A scheduled task (§7.1 step 3).
+    Task,
+    /// A firewall rule (§7.1 step 3).
+    FirewallRule,
     /// A registry value or a segment of one.
     RegistryValue,
     /// A registry key.
     RegistryKey,
     /// A file or directory.
     FileSystem,
-    /// A scheduled task.
-    Task,
-    /// A firewall rule.
-    FirewallRule,
-    /// A service.
+    /// A service delete (§7.1 step 8: after the files its image lives in).
     Service,
     /// An AppX/MSIX package.
     Package,
@@ -216,6 +235,9 @@ mod tests {
     }
 
     const EXPECTED: [&str; 15] = [
+        // Tasks and firewall rules first (§7.1 step 3).
+        "task",
+        "fw",
         // Values, deepest key first; within one key by name.
         "segment",
         "value-default",
@@ -230,9 +252,7 @@ mod tests {
         "app-dir",
         "empty-sibling",
         "vendor-dir",
-        // API objects last.
-        "task",
-        "fw",
+        // Service deletes after the files (§7.1 step 8), packages last.
         "svc",
         "pkg",
     ];
@@ -242,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn stages_children_first_and_api_objects_last() {
+    fn stages_children_first_and_tasks_firewall_first_services_after_files() {
         let mut list = sample();
         sort(&mut list);
         assert_eq!(ids(&list), EXPECTED);
@@ -315,9 +335,87 @@ mod tests {
         assert_eq!(Stage::of(&value("k", "v")), Stage::RegistryValue);
         assert_eq!(Stage::of(&key("k")), Stage::RegistryKey);
         assert_eq!(Stage::of(&path("p")), Stage::FileSystem);
-        assert!(Stage::RegistryValue < Stage::RegistryKey);
-        assert!(Stage::RegistryKey < Stage::FileSystem);
-        assert!(Stage::FileSystem < Stage::Task);
-        assert!(Stage::Service < Stage::Package);
+        assert_eq!(Stage::of(&Target::Task { path: "t".into() }), Stage::Task);
+        assert_eq!(
+            Stage::of(&Target::FirewallRule { id: "f".into() }),
+            Stage::FirewallRule
+        );
+        assert_eq!(
+            Stage::of(&Target::Service { name: "s".into() }),
+            Stage::Service
+        );
+        assert_eq!(
+            Stage::of(&Target::AppxPackage {
+                full_name: "p".into()
+            }),
+            Stage::Package
+        );
+    }
+
+    /// The stage order is ENGINE_PLAN.md §7.1 for the steps that are stages: tasks and firewall rules
+    /// (step 3) before registry values and keys (step 5), files (step 7) before service deletes (step 8),
+    /// AppX (step 9) last.
+    #[test]
+    fn stage_order_follows_plan_7_1() {
+        let in_order = [
+            Stage::Task,
+            Stage::FirewallRule,
+            Stage::RegistryValue,
+            Stage::RegistryKey,
+            Stage::FileSystem,
+            Stage::Service,
+            Stage::Package,
+        ];
+        for pair in in_order.windows(2) {
+            assert!(pair[0] < pair[1], "{:?} before {:?}", pair[0], pair[1]);
+        }
+    }
+
+    /// The stage order of M1a, before tasks and firewall rules moved ahead of the registry.
+    fn m1a_stage_rank(stage: Stage) -> u8 {
+        match stage {
+            Stage::RegistryValue => 0,
+            Stage::RegistryKey => 1,
+            Stage::FileSystem => 2,
+            Stage::Task => 3,
+            Stage::FirewallRule => 4,
+            Stage::Service => 5,
+            Stage::Package => 6,
+        }
+    }
+
+    /// Moving tasks and firewall rules changes nothing for a plan without them: every M1a plan (no scanner
+    /// emits tasks or firewall rules) keeps its order, so its plan hash stays the same.
+    #[test]
+    fn plans_without_tasks_or_firewall_rules_keep_the_m1a_order() {
+        let mut base: Vec<Candidate> = sample()
+            .into_iter()
+            .filter(|c| !matches!(c.target, Target::Task { .. } | Target::FirewallRule { .. }))
+            .collect();
+        // More shapes: a report-only file beside the removal, a second service, a value of a deeper key.
+        let mut report = cand("report", path(r"C:\Program Files\Vendor\App\log.txt"), "X");
+        report.action = Action::ReportOnly;
+        base.push(report);
+        base.push(cand(
+            "svc-b",
+            Target::Service {
+                name: "AnotherSvc".into(),
+            },
+            "SYS",
+        ));
+        base.push(cand(
+            "deep-value",
+            value(r"HKLM\SOFTWARE\Vendor\App\Settings\Deep", "x"),
+            "REF-ANY",
+        ));
+        let n = base.len();
+        for (mul, add) in [(1, 0), (3, 1), (5, 2), (7, 4), (11, 3), (13, 6)] {
+            let mut new: Vec<Candidate> =
+                (0..n).map(|i| base[(i * mul + add) % n].clone()).collect();
+            let mut old = new.clone();
+            sort(&mut new);
+            old.sort_by_cached_key(|c| (m1a_stage_rank(Stage::of(&c.target)), sort_key(c)));
+            assert_eq!(ids(&new), ids(&old), "permutation {mul}x+{add}");
+        }
     }
 }

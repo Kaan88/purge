@@ -55,7 +55,7 @@ not reused.
 | Evidence per item | v1 | — (replaces `Junk/Confidence/*`) | Evidence model in place of BCU confidence: typed evidence tiers and blockers, value- vs key-level scope, bands Safe / Likely / Weak / Blocked (ENGINE_PLAN.md §5.3, §5.8). Each item keeps its evidence for explanation and AI review |
 | Ask / automatic / disabled after uninstall | v1 | — | |
 | Delete; locked files → delete on reboot | v1 | `MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT)` | |
-| Backup before delete + restore | v1 | BCU exports .reg backups | Purge: same-volume quarantine + lossless JSON registry backup (.reg on demand) + hashed journal + typed undo; restore point optional (ENGINE_PLAN.md §7) |
+| Backup before delete + restore | v1 | BCU exports .reg backups | Purge: same-volume quarantine + lossless JSON registry backup (.reg on demand) + hashed journal + typed undo; restore point optional (ENGINE_PLAN.md §7). Files go to quarantine on their own volume; registry keys and values are backed up as `purge.regbackup/1` JSON (raw type and bytes, names, class, security, link flag), read back before the delete, and the journal holds the SHA-256 of every backup file, checked on undo. As of M2, undo covers files and registry; services, scheduled tasks and firewall rules get their full definitions and typed undo with M1b, and AppX removal stays irreversible (never preselected) (ENGINE_PLAN.md Appendix B, M2 deviations) |
 | Save log / export results | v1 | — | JSON instead of XML |
 
 ## Install Tracker

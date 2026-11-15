@@ -15,7 +15,9 @@
 //! Items are taken in the order given (the plan order of [`crate::order`]), so reordering changes the
 //! hash. Per item the hash covers what would be done and how it was judged: target, action, band,
 //! preselection, scanner, category, id, and the ids of absorbed children. Scores and explanation texts are
-//! left out: they follow from the evidence and the policy version, which is hashed.
+//! left out: they follow from the evidence and the policy version, which is hashed. The scan-time identity
+//! of a path item (`Candidate::item_fp`) is left out too (decided for M2, so that every M1a plan hash stays
+//! valid): it can only make the executor refuse or skip an item, never act on more.
 //!
 //! # Canonical JSON
 //!
@@ -193,6 +195,30 @@ mod tests {
             plan_hash(&items, "m1a.2", ScanMode::Post),
             plan_hash(&items.clone(), "m1a.2", ScanMode::Post)
         );
+    }
+
+    /// `item_fp` is not hashed (decided for M2): a plan whose path items carry their scan-time identity
+    /// has the golden document and hash of the same plan without it.
+    #[test]
+    fn item_fp_does_not_enter_the_hash() {
+        use purge_model::exec::op::FileIdHex;
+        let mut items = items();
+        assert!(items.iter().all(|c| c.item_fp.is_none()));
+        let file = items
+            .iter_mut()
+            .find(|c| matches!(c.target, purge_model::Target::Path { .. }))
+            .unwrap();
+        file.set_item_fp(FileIdHex([0xab; 16]), u64::MAX);
+        assert!(file.item_fp.is_some());
+        assert_eq!(
+            canonical_plan_json(&items, "m1a.2", ScanMode::Post),
+            GOLDEN_JSON
+        );
+        assert_eq!(plan_hash(&items, "m1a.2", ScanMode::Post), GOLDEN_HASH);
+        // Another identity, same hash: the executor checks the identity, the hash does not.
+        let mut other = items.clone();
+        other[2].set_item_fp(FileIdHex([1; 16]), 7);
+        assert_eq!(plan_hash(&other, "m1a.2", ScanMode::Post), GOLDEN_HASH);
     }
 
     #[test]

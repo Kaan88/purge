@@ -548,6 +548,7 @@ fn snap_meta(size: u64, attrs: u32, mtime: u64, reparse_tag: u32) -> FileMeta {
         },
         reparse_tag,
         file_id: None,
+        volume_serial: None,
     }
 }
 

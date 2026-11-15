@@ -468,6 +468,51 @@ mod tests {
         assert_ne!(f.scan.plan_hash, a.scan.plan_hash);
     }
 
+    /// Scan-time identities on the path items change neither the plan, nor its order, bands or hash. The
+    /// sidecar carries them (top-level and absorbed items alike) for the executor; without them its JSON
+    /// has no `item_fp` member at all.
+    #[test]
+    fn item_fp_reaches_the_sidecar_and_changes_no_plan_or_hash() {
+        use purge_model::exec::op::FileIdHex;
+        let deny = deny();
+        let ctx = ctx(&deny);
+        let plain = build("vendor-app", scan_output(), &ctx);
+        let text = serde_json::to_string(&plain.scan).unwrap();
+        assert!(!text.contains("item_fp"));
+
+        let mut with_fp = scan_output();
+        for (n, c) in with_fp.iter_mut().enumerate() {
+            c.set_item_fp(FileIdHex([n as u8; 16]), 0x5eed + n as u64);
+        }
+        let fp = build("vendor-app", with_fp, &ctx);
+        assert_eq!(fp.plan, plain.plan);
+        assert_eq!(fp.scan.plan_hash, plain.scan.plan_hash);
+        let strip = |list: &[Candidate]| -> Vec<Candidate> {
+            list.iter()
+                .cloned()
+                .map(|mut c| {
+                    c.item_fp = None;
+                    c
+                })
+                .collect()
+        };
+        assert_eq!(strip(&fp.scan.items), plain.scan.items);
+        assert_eq!(strip(&fp.scan.absorbed), plain.scan.absorbed);
+        for c in fp.scan.items.iter().chain(&fp.scan.absorbed) {
+            assert_eq!(
+                c.item_fp.is_some(),
+                matches!(c.target, Target::Path { .. }),
+                "{}",
+                c.id.0
+            );
+        }
+        let exe = fp.scan.absorbed.iter().find(|c| c.id.0 == "exe").unwrap();
+        assert!(exe.item_fp.is_some());
+        let back: ScanDoc =
+            serde_json::from_str(&serde_json::to_string(&fp.scan).unwrap()).unwrap();
+        assert_eq!(back, fp.scan);
+    }
+
     /// The emitted JSON reads with the rig's own structs, and reads back into the model.
     #[test]
     fn emitted_plan_parses_with_the_rig_reader() {

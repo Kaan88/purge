@@ -212,6 +212,7 @@ mod tests {
                 score: 0,
                 explanation: explanation.into(),
             }),
+            item_fp: None,
         }
     }
 

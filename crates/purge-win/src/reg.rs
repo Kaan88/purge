@@ -11,19 +11,27 @@
 //!   resolve; map it to `ControlSet00N` first with [`current_control_set`], and read
 //!   `HKU\<SID>_Classes` instead of `HKU\<SID>\Software\Classes` (both are `purge-guard`
 //!   canonicalisation duties).
-//! - Enumeration uses `RegQueryInfoKeyW` for sizes, `RegEnumKeyExW` and `RegEnumValueW` with the raw
-//!   value bytes and type, and grows its buffers on `ERROR_MORE_DATA` (values can change between the
-//!   size query and the read).
+//! - Subkeys are enumerated with `RegQueryInfoKeyW` for sizes and `RegEnumKeyExW`, growing the buffer on
+//!   `ERROR_MORE_DATA`.
+//! - Values are read with their stored type and exactly their stored bytes through `NtEnumerateValueKey`
+//!   and `NtQueryValueKey`. The Win32 reads (`RegEnumValueW`, `RegQueryValueExW`) zero the last byte of
+//!   a string value (`REG_SZ`, `REG_EXPAND_SZ`, `REG_MULTI_SZ`) whose data has an odd length (seen
+//!   when the caller's buffer has room beyond the data and the data does not already end in a NUL
+//!   character), so the bytes they report are not what is stored. Data of even length reads the same
+//!   either way. The
+//!   predefined roots ([`Key::root`]) are pseudo-handles the NT calls do not take; their values (the
+//!   hive roots hold none in practice) are still read through the Win32 calls.
 //! - [`Key::security`] reports the owner SID and whether any DACL entry names TrustedInstaller, the
 //!   subtree-baseline facts of ENGINE_PLAN.md §5.2.
 //!
 //! All `unsafe` FFI is confined to this module and carries `SAFETY` comments.
 #![cfg(feature = "read")]
 
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::OnceLock;
 
-use windows_sys::Win32::Foundation::FILETIME;
+use windows_sys::Win32::Foundation::{FILETIME, RtlNtStatusToDosError, UNICODE_STRING};
 use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_QUERY_VALUE, KEY_READ, KEY_WOW64_32KEY,
@@ -55,6 +63,84 @@ pub const REG_QWORD: u32 = 11;
 
 /// Name of the value that holds a link key's target.
 const SYMBOLIC_LINK_VALUE: &str = "SymbolicLinkValue";
+
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    /// Reads one value by name, with its stored type and bytes.
+    fn NtQueryValueKey(
+        key: HKEY,
+        name: *const UNICODE_STRING,
+        class: i32,
+        info: *mut c_void,
+        len: u32,
+        result_len: *mut u32,
+    ) -> i32;
+    /// Reads the value at `index`, with its stored name, type and bytes.
+    fn NtEnumerateValueKey(
+        key: HKEY,
+        index: u32,
+        class: i32,
+        info: *mut c_void,
+        len: u32,
+        result_len: *mut u32,
+    ) -> i32;
+}
+
+/// `KEY_VALUE_INFORMATION_CLASS::KeyValueFullInformation`: title index, type, data offset, data
+/// length, name length (bytes), name; five `u32` and then the name.
+const KEY_VALUE_FULL_INFORMATION_CLASS: i32 = 1;
+/// `KEY_VALUE_INFORMATION_CLASS::KeyValuePartialInformation`: title index, type, data length,
+/// data; three `u32` and then the data.
+const KEY_VALUE_PARTIAL_INFORMATION_CLASS: i32 = 2;
+/// `STATUS_BUFFER_OVERFLOW`: the buffer holds the fixed part only; the needed size is returned.
+const STATUS_BUFFER_OVERFLOW: i32 = 0x8000_0005_u32 as i32;
+/// `STATUS_BUFFER_TOO_SMALL`: nothing was written; the needed size is returned.
+const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023_u32 as i32;
+/// `STATUS_NO_MORE_ENTRIES`: the enumeration index is past the end.
+const STATUS_NO_MORE_ENTRIES: i32 = 0x8000_001A_u32 as i32;
+/// `STATUS_OBJECT_NAME_NOT_FOUND`: no value of that name.
+const STATUS_OBJECT_NAME_NOT_FOUND: i32 = 0xC000_0034_u32 as i32;
+/// Upper bound for one NT value read: the largest data plus a name (guards runaway growth).
+const MAX_QUERY_BYTES: usize = MAX_DATA_BYTES + 64 * 1024;
+
+/// Runs a size-probing NT query (`buffer, byte length, needed length -> NTSTATUS`) into an 8-byte
+/// aligned buffer, growing it while the call reports it as too small. Returns the filled buffer as
+/// bytes, or the failing status.
+fn nt_query(mut call: impl FnMut(*mut c_void, u32, *mut u32) -> i32) -> Result<Vec<u8>, i32> {
+    let mut buf = vec![0u64; 64];
+    loop {
+        let mut needed = 0u32;
+        let status = call(buf.as_mut_ptr().cast(), (buf.len() * 8) as u32, &mut needed);
+        if status >= 0 {
+            return Ok(buf.iter().flat_map(|w| w.to_ne_bytes()).collect());
+        }
+        let too_small = status == STATUS_BUFFER_OVERFLOW || status == STATUS_BUFFER_TOO_SMALL;
+        if !too_small || buf.len() * 8 >= MAX_QUERY_BYTES {
+            return Err(status);
+        }
+        let want = (needed as usize).max(buf.len() * 16).min(MAX_QUERY_BYTES);
+        buf.resize(want.div_ceil(8), 0);
+    }
+}
+
+/// The Win32 error of a failed `NTSTATUS`.
+fn nt_error(status: i32) -> Win32Error {
+    // SAFETY: a pure conversion function without pointer arguments.
+    Win32Error(unsafe { RtlNtStatusToDosError(status) })
+}
+
+/// The `u32` at byte offset `at` of an NT information buffer.
+fn u32_at(buf: &[u8], at: usize) -> Result<u32, Win32Error> {
+    let b = buf.get(at..at + 4).ok_or(Win32Error::INVALID_DATA)?;
+    Ok(u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// The `len` bytes at byte offset `at` of an NT information buffer.
+fn bytes_at(buf: &[u8], at: u32, len: u32) -> Result<&[u8], Win32Error> {
+    let (at, len) = (at as usize, len as usize);
+    buf.get(at..at.checked_add(len).ok_or(Win32Error::INVALID_DATA)?)
+        .ok_or(Win32Error::INVALID_DATA)
+}
 
 /// A physical registry root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -434,16 +520,59 @@ impl Key {
         }
     }
 
-    /// All values with raw type and bytes (`RegEnumValueW`), in registry order.
+    /// All values with their stored type and exactly their stored bytes (`NtEnumerateValueKey`), in
+    /// registry order. The default value has the empty name. Names are converted lossily, as the Win32
+    /// enumeration reported them.
     pub fn values(&self) -> Result<Vec<RegValue>, Win32Error> {
-        let info = self.info()?;
-        self.values_with_capacity(
-            info.max_value_name_len as usize + 1,
-            info.max_value_len as usize,
-        )
+        if !self.owned {
+            // A predefined root is a pseudo-handle, which only the Win32 calls accept.
+            let info = self.info()?;
+            return self.values_with_capacity(
+                info.max_value_name_len as usize + 1,
+                info.max_value_len as usize,
+            );
+        }
+        let mut out = Vec::new();
+        for index in 0u32.. {
+            // SAFETY: the closure passes on a writable buffer of the stated byte length and a valid
+            // out-pointer; `hkey` is a live handle for the borrow.
+            let buf = match nt_query(|buf, len, needed| unsafe {
+                NtEnumerateValueKey(
+                    self.hkey,
+                    index,
+                    KEY_VALUE_FULL_INFORMATION_CLASS,
+                    buf,
+                    len,
+                    needed,
+                )
+            }) {
+                Ok(buf) => buf,
+                Err(STATUS_NO_MORE_ENTRIES) => break,
+                Err(status) => return Err(nt_error(status)),
+            };
+            let ty = u32_at(&buf, 4)?;
+            // The data offset of an empty value need not lie inside the buffer.
+            let data = match u32_at(&buf, 12)? {
+                0 => &[][..],
+                len => bytes_at(&buf, u32_at(&buf, 8)?, len)?,
+            };
+            let name: Vec<u16> = bytes_at(&buf, 20, u32_at(&buf, 16)?)?
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            out.push(RegValue {
+                name: String::from_utf16_lossy(&name),
+                ty,
+                data: data.to_vec(),
+            });
+        }
+        Ok(out)
     }
 
-    /// Enumeration with explicit starting buffers; both grow on `ERROR_MORE_DATA`.
+    /// Win32 enumeration (`RegEnumValueW`) with explicit starting buffers; both grow on
+    /// `ERROR_MORE_DATA`. May zero the last byte of odd-length string data (see the module docs); used
+    /// only for the predefined
+    /// roots.
     fn values_with_capacity(
         &self,
         name_cap: usize,
@@ -496,12 +625,53 @@ impl Key {
         }
     }
 
-    /// One value by name (`""` for the default value); `Ok(None)` when it does not exist.
+    /// One value by name (`""` for the default value) with its stored type and exactly its stored bytes
+    /// (`NtQueryValueKey`); `Ok(None)` when it does not exist. As with the Win32 call, the name ends at
+    /// its first NUL.
     pub fn value(&self, name: &str) -> Result<Option<RegValue>, Win32Error> {
-        self.value_with_capacity(name, 256)
+        if !self.owned {
+            // A predefined root is a pseudo-handle, which only the Win32 calls accept.
+            return self.value_with_capacity(name, 256);
+        }
+        let mut units: Vec<u16> = name.encode_utf16().collect();
+        if let Some(nul) = units.iter().position(|&u| u == 0) {
+            units.truncate(nul);
+        }
+        let byte_len = u16::try_from(units.len() * 2).map_err(|_| Win32Error::INVALID_PARAMETER)?;
+        let uname = UNICODE_STRING {
+            Length: byte_len,
+            MaximumLength: byte_len,
+            Buffer: units.as_mut_ptr(),
+        };
+        // SAFETY: `uname` points into `units`, which outlives the call and is only read; the closure
+        // passes on a writable buffer of the stated byte length and a valid out-pointer; `hkey` is a
+        // live handle for the borrow.
+        let buf = match nt_query(|buf, len, needed| unsafe {
+            NtQueryValueKey(
+                self.hkey,
+                &uname,
+                KEY_VALUE_PARTIAL_INFORMATION_CLASS,
+                buf,
+                len,
+                needed,
+            )
+        }) {
+            Ok(buf) => buf,
+            Err(STATUS_OBJECT_NAME_NOT_FOUND) => return Ok(None),
+            Err(status) => return Err(nt_error(status)),
+        };
+        let ty = u32_at(&buf, 4)?;
+        let data = bytes_at(&buf, 12, u32_at(&buf, 8)?)?.to_vec();
+        Ok(Some(RegValue {
+            name: name.to_owned(),
+            ty,
+            data,
+        }))
     }
 
-    /// Query with an explicit starting buffer; grows on `ERROR_MORE_DATA`.
+    /// Win32 query (`RegQueryValueExW`) with an explicit starting buffer; grows on `ERROR_MORE_DATA`.
+    /// May zero the last byte of odd-length string data (see the module docs); used only for the
+    /// predefined roots.
     fn value_with_capacity(
         &self,
         name: &str,
@@ -780,6 +950,235 @@ mod tests {
 
         let un = Key::open(RegRoot::Hklm, UNINSTALL, RegView::K64).unwrap();
         assert_eq!(un.subkeys_with_capacity(1).unwrap(), un.subkeys().unwrap());
+    }
+
+    /// Whether a value is string-typed with an odd byte length: the only data the Win32 reads report
+    /// differently from what is stored.
+    fn odd_string(v: &RegValue) -> bool {
+        matches!(v.ty, REG_SZ | REG_EXPAND_SZ | REG_MULTI_SZ) && v.data.len() % 2 == 1
+    }
+
+    /// The NT reads report what the Win32 reads reported for every well-formed value (the scan output
+    /// for such data cannot change), over the uninstall keys of both views and the keys below them,
+    /// `CurrentVersion` and the current user's `Software` subkeys. A value of odd-length string data
+    /// differs at most in its last byte, which the Win32 read zeroed.
+    #[test]
+    fn nt_reads_equal_win32_reads_for_well_formed_data() {
+        let sid = crate::sid::current_user_sid().unwrap();
+        let mut keys: Vec<Key> = Vec::new();
+        for view in [RegView::K64, RegView::K32] {
+            let un = Key::open(RegRoot::Hklm, UNINSTALL, view).unwrap();
+            for name in un.subkey_names().unwrap() {
+                if let Ok(k) = un.open_subkey(&name) {
+                    keys.push(k);
+                }
+            }
+            keys.push(un);
+        }
+        keys.push(
+            Key::open(
+                RegRoot::Hklm,
+                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+                RegView::K64,
+            )
+            .unwrap(),
+        );
+        let software = Key::open(RegRoot::Hku, &format!(r"{sid}\Software"), RegView::K64).unwrap();
+        for name in software.subkey_names().unwrap() {
+            if let Ok(k) = software.open_subkey(&name) {
+                keys.push(k);
+            }
+        }
+        let (mut compared, mut odd) = (0usize, 0usize);
+        for k in &keys {
+            let nt = k.values().unwrap();
+            // The Win32 reads with the buffers the reader passed before the fix.
+            let info = k.info().unwrap();
+            let win32 = k
+                .values_with_capacity(
+                    info.max_value_name_len as usize + 1,
+                    info.max_value_len as usize,
+                )
+                .unwrap();
+            assert_eq!(nt.len(), win32.len());
+            for (n, w) in nt.iter().zip(&win32) {
+                compared += 1;
+                let q = k.value_with_capacity(&n.name, 256).unwrap().unwrap();
+                assert_eq!(k.value(&n.name).unwrap().as_ref(), Some(n));
+                for old in [w, &q] {
+                    assert_eq!(
+                        (&n.name, n.ty, n.data.len()),
+                        (&old.name, old.ty, old.data.len())
+                    );
+                    if odd_string(n) {
+                        let last = n.data.len() - 1;
+                        assert_eq!(n.data[..last], old.data[..last], "{}", n.name);
+                        assert!(old.data[last] == 0 || old.data[last] == n.data[last]);
+                    } else {
+                        assert_eq!(n, old);
+                    }
+                }
+                if odd_string(n) {
+                    odd += 1;
+                }
+            }
+        }
+        assert!(compared > 100, "only {compared} values compared");
+        eprintln!(
+            "compared {compared} values in {} keys, {odd} odd-length strings",
+            keys.len()
+        );
+    }
+
+    /// The predefined roots are pseudo-handles that the NT calls refuse; their values are still read
+    /// through the Win32 calls.
+    #[test]
+    fn root_values_use_the_win32_reads() {
+        for root in [RegRoot::Hklm, RegRoot::Hku] {
+            let k = Key::root(root, RegView::K64);
+            let all = k.values().unwrap();
+            assert_eq!(all.len(), k.info().unwrap().n_values as usize);
+            assert_eq!(k.value("NoSuchValue-purge-test").unwrap(), None);
+        }
+    }
+
+    /// The reported bytes are exactly the stored ones for odd-length string data, which the Win32 reads
+    /// get wrong. Written raw below `HKU\<SID>\Software\PurgeTest-<random>`, removed afterwards.
+    #[cfg(feature = "write")]
+    #[test]
+    fn odd_length_strings_read_exactly_as_stored() {
+        use crate::reg_write::{KeyAccess, WKey};
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        /// Removes the test key, also when an assertion fails.
+        struct Cleanup {
+            software: WKey,
+            name: String,
+        }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let r = self.software.delete_subkey(&self.name);
+                if !std::thread::panicking() {
+                    r.expect("test key removed");
+                }
+            }
+        }
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let name = format!(
+            "PurgeTest-{:x}-{:x}-{}",
+            std::process::id(),
+            nanos,
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let sid = crate::sid::current_user_sid().unwrap();
+        let software = WKey::open(
+            RegRoot::Hku,
+            &format!(r"{sid}\Software"),
+            RegView::K64,
+            KeyAccess::CREATE_SUB_KEY,
+        )
+        .unwrap();
+        let key = software
+            .create_subkey(&name, "", None, false)
+            .unwrap()
+            .into_key();
+        let cleanup = Cleanup { software, name };
+
+        let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
+        let even_sz = utf16("ab\0");
+        let even_multi = utf16("a\0bc\0\0");
+        let mut odd_multi = utf16("a\0b\0\0");
+        odd_multi.push(0x63);
+        let cases: Vec<(&str, u32, &[u8])> = vec![
+            ("sz-odd", REG_SZ, &[0x61, 0x00, 0x62]),
+            ("sz-one", REG_SZ, &[0x41]),
+            ("expand-odd", REG_EXPAND_SZ, &[1, 2, 3, 4, 5]),
+            ("multi-odd", REG_MULTI_SZ, &odd_multi),
+            ("", REG_SZ, &[0x7A, 0x00, 0x7B]),
+            ("sz-even", REG_SZ, &even_sz),
+            ("multi-even", REG_MULTI_SZ, &even_multi),
+            ("binary-odd", REG_BINARY, &[1, 2, 3]),
+        ];
+        for (name, ty, data) in &cases {
+            key.set_value_raw(name, *ty, data).unwrap();
+        }
+
+        let ro = Key::open(
+            RegRoot::Hku,
+            &format!(r"{sid}\Software\{}", cleanup.name),
+            RegView::K64,
+        )
+        .unwrap();
+        // The flaw, reproduced with the buffers the reader passed before the fix: the Win32 reads zero
+        // the last byte of odd-length string data whenever the buffer has room beyond the data (an
+        // exact-size buffer happens to escape it).
+        let info = ro.info().unwrap();
+        let win32 = ro
+            .values_with_capacity(
+                info.max_value_name_len as usize + 1,
+                info.max_value_len as usize,
+            )
+            .unwrap();
+        assert_eq!(win32.len(), cases.len());
+        let (mut zeroed_enum, mut zeroed_query) = (Vec::new(), Vec::new());
+        for (name, ty, data) in &cases {
+            let w = win32.iter().find(|v| v.name == *name).expect(name);
+            let q = ro.value_with_capacity(name, 256).unwrap().expect(name);
+            let odd = matches!(*ty, REG_SZ | REG_EXPAND_SZ | REG_MULTI_SZ) && data.len() % 2 == 1;
+            for (old, zeroed) in [(w, &mut zeroed_enum), (&q, &mut zeroed_query)] {
+                assert_eq!((old.ty, old.data.len()), (*ty, data.len()), "{name}");
+                if old.data.as_slice() == *data {
+                    continue;
+                }
+                // The only difference ever seen: the last byte of an odd-length string is zero.
+                assert!(odd, "{name}");
+                let last = data.len() - 1;
+                assert_eq!(
+                    (&old.data[..last], old.data[last]),
+                    (&data[..last], 0),
+                    "{name}"
+                );
+                zeroed.push(*name);
+            }
+        }
+        // Which odd-length values are hit depends on the buffer slack (a one-byte string escapes it
+        // here); these are hit with the buffers above.
+        for name in ["sz-odd", "expand-odd", ""] {
+            assert!(zeroed_enum.contains(&name), "{name}: {zeroed_enum:?}");
+            assert!(zeroed_query.contains(&name), "{name}: {zeroed_query:?}");
+        }
+        eprintln!("zeroed by enumeration: {zeroed_enum:?}; by query: {zeroed_query:?}");
+        // With an exact-size buffer the Win32 reads happen to return the stored bytes.
+        let exact = ro.value_with_capacity("sz-odd", 1).unwrap().unwrap();
+        assert_eq!(exact.data, [0x61, 0x00, 0x62]);
+        // The fix: enumeration and lookup report exactly the stored type and bytes.
+        let all = ro.values().unwrap();
+        assert_eq!(all.len(), cases.len());
+        for (name, ty, data) in &cases {
+            let v = all.iter().find(|v| v.name == *name).expect(name);
+            assert_eq!((v.ty, v.data.as_slice()), (*ty, *data), "{name}");
+            let q = ro.value(name).unwrap().expect(name);
+            assert_eq!(&q, v, "{name}");
+        }
+        // Lookup is case-insensitive and stops at an embedded NUL, as the Win32 call did.
+        assert_eq!(
+            ro.value("SZ-ODD").unwrap().unwrap().data,
+            [0x61, 0x00, 0x62]
+        );
+        assert_eq!(
+            ro.value("sz-odd\0tail").unwrap().unwrap().data,
+            [0x61, 0x00, 0x62]
+        );
+        assert_eq!(ro.value("sz-missing").unwrap(), None);
+        drop(ro);
+        drop(key);
+        drop(cleanup);
     }
 
     #[test]
