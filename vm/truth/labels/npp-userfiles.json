@@ -1,0 +1,16 @@
+{
+  "id": "npp-userfiles",
+  "include": [
+    "_os.json",
+    "npp.json"
+  ],
+  "note": "x0 rank 1: npp with a portable copy registered before snap 0 and user files written into the install folder after the launch (apps.ps1 Plant-NppPortable, Plant-NppUserFiles).",
+  "rules": [
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Program Files\\\\Notepad\\+\\+\\\\(my-notes(\\\\.*)?|session-backup\\.txt)$",
+      "why": "User files planted in the install folder after the launch (plant_post): never the app's.",
+      "gen": true
+    }
+  ]
+}

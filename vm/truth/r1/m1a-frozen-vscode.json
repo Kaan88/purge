@@ -1,0 +1,4330 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "bcu",
+      "apps": 1,
+      "truth_n": 154,
+      "recall_listed": 0.0,
+      "recall_visible": 0.0,
+      "recall_safe": 0.0,
+      "recall_listed_nd": 0.0,
+      "recall_visible_nd": 0.0,
+      "recall_safe_nd": 0.0,
+      "precision_safe": null,
+      "partial_n": 0,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.0,
+        "RegKey": 0.0,
+        "RegValue": 0.0,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 202,
+        "hit": 0,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    },
+    {
+      "tool": "purge",
+      "apps": 1,
+      "truth_n": 154,
+      "recall_listed": 0.8896103896103896,
+      "recall_visible": 0.8896103896103896,
+      "recall_safe": 0.8766233766233766,
+      "recall_listed_nd": 0.8896103896103896,
+      "recall_visible_nd": 0.8896103896103896,
+      "recall_safe_nd": 0.8766233766233766,
+      "precision_safe": 1.0,
+      "partial_n": 0,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.07692307692307693,
+        "RegKey": 0.9784172661870504,
+        "RegValue": 0.0,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 0,
+        "hit": 139,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "vscode",
+      "dir": "truth/frozen/vscode",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 171,
+        "kept_owner": 0,
+        "leftover": 152,
+        "rig": 0,
+        "user_data": 2
+      },
+      "ambient_by_run": {
+        "null1": 74,
+        "null2": 76,
+        "null3": 70
+      },
+      "tools": [
+        {
+          "app": "vscode",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/r1-vscode/plans/purge.json",
+          "offered_n": 139,
+          "truth_n": 154,
+          "covered_listed": 137,
+          "covered_visible": 137,
+          "covered_safe": 135,
+          "recall_listed": 0.8896103896103896,
+          "recall_visible": 0.8896103896103896,
+          "recall_safe": 0.8766233766233766,
+          "covered_listed_nd": 137,
+          "covered_visible_nd": 137,
+          "covered_safe_nd": 135,
+          "recall_listed_nd": 0.8896103896103896,
+          "recall_visible_nd": 0.8896103896103896,
+          "recall_safe_nd": 0.8766233766233766,
+          "partial_n": 0,
+          "safe_n": 136,
+          "safe_not_gone": 136,
+          "safe_hits": 136,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 139,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 13,
+              "covered": 1,
+              "recall": 0.07692307692307693
+            },
+            "RegKey": {
+              "n": 139,
+              "covered": 136,
+              "recall": 0.9784172661870504
+            },
+            "RegValue": {
+              "n": 2,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "CLS-PROGID": {
+              "hit": 1
+            },
+            "FS-APPDATA": {
+              "hit": 1
+            },
+            "REF-ANY": {
+              "hit": 137
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\.copilot",
+              "label": "leftover",
+              "partial": false,
+              "size": 15405
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.vscode",
+              "label": "user_data",
+              "partial": false,
+              "size": 800
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.vscode-shared",
+              "label": "leftover",
+              "partial": false,
+              "size": 24576
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\iu-14D2N.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 3494712
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\vscode-inno-updater-1794413062.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1816
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\vscode-stable-system-x64",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\1ced32d74a95c7bc.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA71.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 50631
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA72.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 26401
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA73.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 40081
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA7C.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 11344
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA7F.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 37890
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\DeveloperTools",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PolicyCache\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|Zvpebfbsg.IvfhnyFghqvbPbqr",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.VisualStudioCode",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode\\shell\\open\\command|",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ascx\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.asp\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.aspx\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.c\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cc\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cls\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cpp\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cs\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.csproj\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.css\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.csv\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cxx\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dot\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.h\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hpp\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hxx\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ini\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jav\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.java\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.js\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.json\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.log\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mk\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pl\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ps1\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.psd1\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.psm1\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.sql\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.txt\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.xaml\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash_login",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash_logout",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash_profile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bashrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bib",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bowerrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.c++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cfg",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cjs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.clj",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cljs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cljx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.clojure",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cmake",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.code-workspace",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.coffee",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.config",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.containerfile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cshtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.csx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ctp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dart",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.diff",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dockerfile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dtd",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.editorconfig",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.edn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.erb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.eyaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.eyml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fsi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fsscript",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gemspec",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitattributes",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitconfig",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitignore",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.go",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gradle",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.groovy",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.h++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.handlebars",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hbs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ipynb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jade",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jscsrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jshintrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jshtm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jsp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.less",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.lua",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.m",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.makefile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.markdown",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.md",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdoc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdown",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdtext",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdtxt",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdwn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mjs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mkd",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mkdn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mli",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.npmignore",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.php",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.phtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pl6",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.plist",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pm6",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pod",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.profile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.properties",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.psgi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.py",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pyi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.r",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rhistory",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rprofile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rst",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rt",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.sass",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.scss",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.sh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.t",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.tex",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.toml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.tsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.vb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.vue",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.wxi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.wxl",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.wxs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.yaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.yml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.zsh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "CLS-PROGID",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Code",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ]
+        },
+        {
+          "app": "vscode",
+          "tool": "bcu",
+          "mode": "post",
+          "plan_file": "truth/frozen/vscode/plans/bcu.json",
+          "offered_n": 202,
+          "truth_n": 154,
+          "covered_listed": 0,
+          "covered_visible": 0,
+          "covered_safe": 0,
+          "recall_listed": 0.0,
+          "recall_visible": 0.0,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 0,
+          "covered_visible_nd": 0,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.0,
+          "recall_visible_nd": 0.0,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 202,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 202,
+            "hit": 0,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 13,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 139,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValue": {
+              "n": 2,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "bcu": {
+              "gone": 202
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\.copilot",
+              "label": "leftover",
+              "partial": false,
+              "size": 15405
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.vscode",
+              "label": "user_data",
+              "partial": false,
+              "size": 800
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.vscode-shared",
+              "label": "leftover",
+              "partial": false,
+              "size": 24576
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\iu-14D2N.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 3494712
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\vscode-inno-updater-1794413062.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1816
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\vscode-stable-system-x64",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Code",
+              "label": "user_data",
+              "partial": false,
+              "size": 31729262
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\1ced32d74a95c7bc.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA71.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 50631
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA72.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 26401
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA73.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 40081
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA7C.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 11344
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA7F.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 37890
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ascx\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.asp\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.aspx\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash_login",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash_logout",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash_profile",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bashrc",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bib",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bowerrc",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.c++",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.c\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cc\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cfg",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cjs",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.clj",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cljs",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cljx",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.clojure",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cls\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cmake",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.code-workspace",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.coffee",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.config",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.containerfile",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cpp\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cs\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cshtml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.csproj\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.css\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.csv\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.csx",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ctp",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cxx\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dart",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.diff",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dockerfile",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dot\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dtd",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.editorconfig",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.edn",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.erb",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.eyaml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.eyml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fs",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fsi",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fsscript",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fsx",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gemspec",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitattributes",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitconfig",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitignore",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.go",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gradle",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.groovy",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.h++",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.h\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.handlebars",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hbs",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hh",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hpp\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hxx\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ini\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ipynb",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jade",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jav\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.java\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.js\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jscsrc",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jshintrc",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jshtm",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.json\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jsp",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jsx",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.less",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.log\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.lua",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.m",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.makefile",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.markdown",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.md",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdoc",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdown",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdtext",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdtxt",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdwn",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mjs",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mk\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mkd",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mkdn",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mli",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.npmignore",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.php",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.phtml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pl6",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pl\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.plist",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pm",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pm6",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pod",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pp",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.profile",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.properties",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ps1\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.psd1\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.psgi",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.psm1\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.py",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pyi",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.r",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rb",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rhistory",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rprofile",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rs",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rst",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rt",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.sass",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.scss",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.sh",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.sql\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.t",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.tex",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.toml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.tsx",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.txt\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.vb",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.vue",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.wxi",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.wxl",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.wxs",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.xaml\\OpenWithProgids",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.yaml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.yml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.zsh",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\DeveloperTools",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PolicyCache\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|Zvpebfbsg.IvfhnyFghqvbPbqr",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.VisualStudioCode",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "P:C:\\Program Files\\Microsoft VS Code",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Program Files\\WindowsApps\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Visual Studio Code",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Mappings\\S-1-15-2-1783282539-3115746269-55898877-3955378256-734967466-313783452-978914605",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Storage\\microsoft.visualstudiocode_8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\PackagedCom\\Package\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Applications\\Code.exe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{1C6DF0C0-192A-4451-BE36-6A59A86A692E}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\PackagedCom\\Package\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.ascx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.asp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.aspx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.bash",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.bash_login",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.bash_logout",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.bash_profile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.bashrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.bib",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.bowerrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.c",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.c++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cfg",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cjs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.clj",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cljs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cljx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.clojure",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cls",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cmake",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.code-workspace",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.coffee",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.config",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.containerfile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cpp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cshtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.csproj",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.css",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.csv",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.csx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.ctp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.cxx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.dart",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.diff",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.dockerfile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.dot",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.dtd",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.editorconfig",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.edn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.erb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.eyaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.eyml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.fs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.fsi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.fsscript",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.fsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.gemspec",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.gitattributes",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.gitconfig",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.gitignore",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.go",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.gradle",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.groovy",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.h",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.h++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.handlebars",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.hbs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.hh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.hpp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.htm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.html",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.hxx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.ini",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.ipynb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.jade",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.jav",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.java",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.js",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.jscsrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.jshintrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.jshtm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.json",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.jsp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.jsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.less",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.log",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.lua",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.m",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.makefile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.markdown",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.md",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mdoc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mdown",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mdtext",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mdtxt",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mdwn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mjs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mk",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mkd",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mkdn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.ml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.mli",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.npmignore",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.php",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.phtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.pl",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.pl6",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.plist",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.pm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.pm6",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.pod",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.pp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.profile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.properties",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.ps1",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.psd1",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.psgi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.psm1",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.py",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.pyi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.r",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.rb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.rhistory",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.rprofile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.rs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.rst",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.rt",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.sass",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.scss",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.sh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.shtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.sql",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.svg",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.t",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.tex",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.toml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.ts",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.tsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.txt",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.vb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.vue",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.wxi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.wxl",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.wxs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.xaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.xhtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.xml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.yaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.yml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCode.zsh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VSCodeSourceFile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\SecurityManager\\CapAuthz\\ApplicationsEx\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\code.exe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Data\\58",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Index\\Package\\37\\58",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Index\\PackageAndPackageRelativeApplicationId\\37^VSCode",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Data\\108",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Data\\109",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Application\\58\\108",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Application\\58\\109",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\ApplicationAndCategory\\58^windows.comServer\\109",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\ApplicationAndCategory\\58^windows.fileExplorerContextMenus\\108",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Category\\windows.comServer\\109",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationExtension\\Index\\Category\\windows.fileExplorerContextMenus\\108",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Data\\10a",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\Application\\58\\10a",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\PackageUser\\9e\\10a",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\PackageUserAndApplication\\9e^58",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\User\\2\\10a",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\UserAndApplication\\2^58",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\ApplicationUser\\Index\\UserAndApplicationUserModelId\\2^Microsoft.VisualStudioCode_8wekyb3d8bbwe!VSCode\\10a",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Package\\Data\\37",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Package\\Index\\PackageFamily\\35\\37",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Package\\Index\\PackageFullName\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageExternalLocation\\Data\\4",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageExternalLocation\\Index\\UserAndPackage\\0^37",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Data\\34",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Index\\PackageFamily\\35\\34",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Index\\User\\2\\34",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageFamilyUser\\Index\\UserAndPackageFamily\\2^35",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Data\\16",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Data\\17",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Data\\18",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Name\\AllowExternalContent\\16",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Name\\FileSystemWriteVirtualization\\18",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Name\\RegistryWriteVirtualization\\17",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Package\\37\\16",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Package\\37\\17",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\Package\\37\\18",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\PackageAndName\\37^AllowExternalContent\\16",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\PackageAndName\\37^FileSystemWriteVirtualization\\18",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageProperty\\Index\\PackageAndName\\37^RegistryWriteVirtualization\\17",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageUser\\Data\\9e",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageUser\\Index\\User\\2\\9e",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\PackageUser\\Index\\UserAndPackage\\2^37",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\AppxAllUserStore\\Applications\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageState\\S-1-5-21-1336749127-99101324-1432799918-1000\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{EA457B21-F73E-494C-ACAB-524FDE069978}_is1",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\SecurityManager\\CapAuthz\\ApplicationsEx\\Microsoft.VisualStudioCode_1.0.146.0_neutral__8wekyb3d8bbwe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\code.exe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

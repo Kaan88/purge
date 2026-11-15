@@ -434,12 +434,19 @@ function Get-BlockingProcs($Procs, [datetime]$Since, [int[]]$ExtraRigPids = @())
 # Au_.exe, Inno _iu*.tmp, Burn's %TEMP% copy) is still caught as long as it was seen once, and its own
 # children are caught through it. No start times are used: after a snapshot restore the guest clock jumps
 # by hours, which made time-based filtering count System, Registry and post-boot maintenance as "new".
-function Get-TreeProcs($Procs, $Known) {
+# $Preexisting (optional, from New-ProcKeySet taken BEFORE the root was started) guards against PID reuse:
+# Windows keeps a dead parent's PID in its children's ppid, so a root that reuses such a PID (e.g. that of
+# the exited smss.exe instance that started csrss/wininit) would adopt the whole system. A process that was
+# already running before the root started can never be one of its descendants, so it is never added. The
+# guard compares process identities (PID + kernel creation time) for equality only, never orders times, so a
+# guest clock step (forward or backward, at any point of the wait) cannot change the answer.
+function Get-TreeProcs($Procs, $Known, $Preexisting = $null) {
     $all = @($Procs)
     $grew = $true
     while ($grew) {
         $grew = $false
         foreach ($p in $all) {
+            if ($Preexisting -and $Preexisting.Contains((Get-ProcKey $p))) { continue }
             if (-not $Known.Contains([int]$p.pid) -and $Known.Contains([int]$p.ppid) -and [int]$p.pid -gt 4) {
                 [void]$Known.Add([int]$p.pid); $grew = $true
             }
@@ -447,10 +454,29 @@ function Get-TreeProcs($Procs, $Known) {
     }
     foreach ($p in $all) {
         if (-not $Known.Contains([int]$p.pid)) { continue }
+        if ($Preexisting -and $Preexisting.Contains((Get-ProcKey $p))) { continue }
         if ([int]$p.pid -le 4 -or (Test-RigProc $p)) { continue }
         if ("$($p.name)" -ieq 'conhost.exe') { continue }
         $p
     }
+}
+
+# Identity of a process: PID plus its kernel creation time (as Get-ProcList reports it). The creation time of
+# a process never changes, so the same process gives the same key on every poll, and a later process that
+# reuses the PID gets another key. Only compared for equality (no clock ordering anywhere).
+function Get-ProcKey($P) {
+    $s = ''
+    if ($null -ne $P.start) { try { $s = ([datetime]$P.start).Ticks } catch { $s = "$($P.start)" } }
+    "$([int]$P.pid)|$s"
+}
+
+# The identities of every process in $Procs (default: running now). Take it before starting a root process
+# and pass it to WaitTree/Get-TreeProcs -Preexisting.
+function New-ProcKeySet($Procs = $null) {
+    if ($null -eq $Procs) { $Procs = @(Get-ProcList) }
+    $s = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($p in @($Procs)) { if ($p) { [void]$s.Add((Get-ProcKey $p)) } }
+    , $s
 }
 
 function New-PidSet([int[]]$Pids) {
@@ -485,14 +511,16 @@ function WaitTree {
         [scriptblock]$GetProcs = { Get-ProcList }, [scriptblock]$MsiBusy = { Test-MsiBusy },
         # Root PID(s) of the tree to wait for. When given, only that tree blocks (clock-jump safe, see
         # Get-TreeProcs); $Since is then ignored. $Known is returned so callers can kill the same tree.
-        [int[]]$RootPid = @()
+        [int[]]$RootPid = @(),
+        # PID-reuse guard for -RootPid: New-ProcKeySet taken before the root was started (see Get-TreeProcs).
+        $Preexisting = $null
     )
     $start = Get-Date
     $deadline = $start.AddSeconds($TimeoutSec)
     $quiet = 0; $last = $null; $idleSince = $null
     $known = New-PidSet $RootPid
     while ($true) {
-        if ($RootPid.Count) { $block = @(Get-TreeProcs -Procs (& $GetProcs) -Known $known) }
+        if ($RootPid.Count) { $block = @(Get-TreeProcs -Procs (& $GetProcs) -Known $known -Preexisting $Preexisting) }
         else { $block = @(Get-BlockingProcs -Procs (& $GetProcs) -Since $Since) }
         $msi = [bool](& $MsiBusy)
         $cond = $true
@@ -556,10 +584,11 @@ function LaunchMedium([string]$Exe, [string]$Arguments = '', [string]$WorkDir = 
     # Priority 4 = normal: the default (7) runs the task, and everything the app starts, below normal.
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -Priority 4
     $t = Get-Date
-    $found = $null
+    $found = $null; $pre = $null
     try {
         Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
         Log "launch (medium IL via task $TaskName as $user): $($spec.display)"
+        $pre = New-ProcKeySet    # PID-reuse guard for the tree of the started exe (Get-TreeProcs)
         Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
         $deadline = $t.AddSeconds($StartTimeoutSec)
         while (-not $found -and (Get-Date) -lt $deadline) {
@@ -576,7 +605,7 @@ function LaunchMedium([string]$Exe, [string]$Arguments = '', [string]$WorkDir = 
     if ($found) { Log "  started $($found.name)[$($found.pid)]" } else { Log "  !! $Exe did not appear within $StartTimeoutSec s" }
     [pscustomobject][ordered]@{
         task = $TaskName; exe = $Exe; args = $Arguments; start = $t; pid = $(if ($found) { $found.pid } else { $null })
-        found = [bool]$found
+        found = [bool]$found; pre = $pre
     }
 }
 
@@ -585,7 +614,7 @@ function LaunchMedium([string]$Exe, [string]$Arguments = '', [string]$WorkDir = 
 function Stop-Launch($Launch, [int]$GraceSec = 5) {
     $closed = @(); $killed = @()
     $known = New-PidSet @($(if ($Launch.pid) { [int]$Launch.pid }))
-    $mine = { param($all) @(Get-TreeProcs -Procs $all -Known $known) + @($all | Where-Object { $Launch.exe -and $_.path -and $_.path -ieq $Launch.exe -and -not $known.Contains([int]$_.pid) }) }
+    $mine = { param($all) @(Get-TreeProcs -Procs $all -Known $known -Preexisting $Launch.pre) + @($all | Where-Object { $Launch.exe -and $_.path -and $_.path -ieq $Launch.exe -and -not $known.Contains([int]$_.pid) }) }
     $procs = @(& $mine @(Get-ProcList))
     foreach ($p in $procs) {
         try {
@@ -602,6 +631,110 @@ function Stop-Launch($Launch, [int]$GraceSec = 5) {
     Stop-Procs $left 'launch cleanup'
     Unregister-ScheduledTask -TaskName $Launch.task -Confirm:$false -ErrorAction SilentlyContinue
     [pscustomobject]@{ closed = $closed; killed = $killed }
+}
+
+# ------------------------------------------------------------------------------ Edge updater pause (§4)
+#
+# Microsoft Edge and the WebView2 runtime update themselves through MicrosoftEdgeUpdate.exe: the scheduled tasks
+# MicrosoftEdgeUpdateTaskMachineCore* (logon + daily) and MicrosoftEdgeUpdateTaskMachineUA* (hourly) run it
+# directly, and the services edgeupdate / edgeupdatem host it on demand (Edge and WebView2 ask them over COM).
+# In the r0 campaign an update ran inside Git's install window (about 140 Edge/WebView2 items in git's truth) and
+# once between a lists and an inventory capture (an invdiff failure). Every job (app run and null run alike)
+# therefore calls Suspend-EdgeUpdate first, before anything is captured: both services are stopped and set to
+# Disabled, every MicrosoftEdgeUpdate* task is disabled, and an update already running is waited for (then
+# killed). Disabled services cannot be started on demand and disabled tasks do not fire, so the pause holds for
+# the whole job; the snapshot restore of the next run undoes it (rig-base itself is unchanged). The EdgeUpdate
+# policy (HKLM\SOFTWARE\Policies\Microsoft\EdgeUpdate UpdateDefault=0) is not used: Microsoft documents that the
+# Edge update policies take effect only on domain-joined or MDM-enrolled devices, which the rig VMs are not.
+# Everything the pause changes happens before lists 0 / snap 0, so it is part of the clean state of every run
+# and never appears in a diff. The record goes to run.json `edge_pause`.
+
+$RigEdgeServices = @('edgeupdate', 'edgeupdatem')
+$RigEdgeTaskPattern = 'MicrosoftEdgeUpdate*'
+# Updater and installer processes: MicrosoftEdgeUpdate.exe, its setup and the per-product installer setup.exe
+# (msedge / WebView2 Installer directories).
+function Test-EdgeUpdaterProc($P) {
+    $n = "$($P.name)".ToLowerInvariant()
+    if ($n -like 'microsoftedgeupdate*.exe' -or $n -like 'microsoftedge_x64_*.exe' -or $n -like 'microsoftedgewebview2*setup*.exe') { return $true }
+    ($n -eq 'setup.exe' -or $n -eq 'mini_installer.exe') -and "$($P.path)" -match '(?i)\\(EdgeUpdate|Edge\\Application|EdgeWebView\\Application|EdgeCore)\\'
+}
+
+# Edge/WebView2/updater versions: EdgeUpdate\Clients\{app guid} name + pv (both registry views and the user hive).
+function Get-EdgeVersions {
+    $out = [ordered]@{}
+    $roots = @('HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients', 'HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients', "HKU\$RigUserSid\Software\Microsoft\EdgeUpdate\Clients")
+    foreach ($root in $roots) {
+        $rk = Open-RegKey $root
+        if (-not $rk) { continue }
+        try {
+            foreach ($sub in $rk.GetSubKeyNames()) {
+                $k = $rk.OpenSubKey($sub, $false)
+                if (-not $k) { continue }
+                try { $out["$root\$sub"] = ('{0} {1}' -f $k.GetValue('name'), $k.GetValue('pv')).Trim() } finally { $k.Dispose() }
+            }
+        } finally { $rk.Dispose() }
+    }
+    $u = Open-RegKey 'HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate'
+    if ($u) { try { $out['EdgeUpdate|version'] = "$($u.GetValue('version'))" } finally { $u.Dispose() } }
+    $out
+}
+
+function Suspend-EdgeUpdate {
+    param([int]$WaitSec = 120)
+    $r = [ordered]@{
+        method = 'services stopped+disabled, MicrosoftEdgeUpdate* tasks disabled, running updater waited for/killed'
+        start = (NowIso); end = $null; services = @(); tasks = @(); updater_seen = @(); waited_sec = 0; killed = @(); errors = @()
+        versions_before = $null; versions_after = $null
+    }
+    try { $r.versions_before = Get-EdgeVersions } catch { $r.errors += "versions: $($_.Exception.Message)" }
+    foreach ($n in $RigEdgeServices) {
+        $rec = [ordered]@{ name = $n; present = $false; start_before = $null; state_before = $null; start_after = $null; state_after = $null }
+        try {
+            $s = Get-CimInstance Win32_Service -Filter "Name='$n'" -ErrorAction Stop
+            if ($s) {
+                $rec.present = $true; $rec.start_before = "$($s.StartMode)"; $rec.state_before = "$($s.State)"
+                Set-Service -Name $n -StartupType Disabled -ErrorAction Stop
+                if ("$($s.State)" -ne 'Stopped') { Stop-Service -Name $n -Force -ErrorAction Stop }
+                $s = Get-CimInstance Win32_Service -Filter "Name='$n'" -ErrorAction Stop
+                $rec.start_after = "$($s.StartMode)"; $rec.state_after = "$($s.State)"
+            }
+        } catch { $r.errors += "service ${n}: $($_.Exception.Message)" }
+        $r.services += [pscustomobject]$rec
+    }
+    try {
+        foreach ($t in @(Get-ScheduledTask -TaskName $RigEdgeTaskPattern -ErrorAction SilentlyContinue)) {
+            $rec = [ordered]@{ path = "$($t.TaskPath)$($t.TaskName)"; state_before = "$($t.State)"; state_after = $null }
+            try {
+                $d = Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop
+                $rec.state_after = "$($d.State)"
+            } catch { $r.errors += "task $($rec.path): $($_.Exception.Message)" }
+            $r.tasks += [pscustomobject]$rec
+        }
+    } catch { $r.errors += "tasks: $($_.Exception.Message)" }
+    # An update that was already running when the job started: let it finish (it installs completely, before
+    # snap 0), then kill whatever is left after $WaitSec.
+    $t0 = Get-Date
+    $seen = @{}
+    while ($true) {
+        $ups = @(Get-ProcList | Where-Object { Test-EdgeUpdaterProc $_ })
+        foreach ($p in $ups) { $seen["$($p.name)[$($p.pid)]"] = $true }
+        if (-not $ups.Count) { break }
+        if (((Get-Date) - $t0).TotalSeconds -ge $WaitSec) {
+            $r.killed = @($ups | ForEach-Object { "$($_.name)[$($_.pid)]" })
+            Stop-Procs $ups 'Edge updater still running after the pause wait'
+            break
+        }
+        Start-Sleep -Seconds 3
+    }
+    $r.updater_seen = @($seen.Keys)
+    $r.waited_sec = [int]((Get-Date) - $t0).TotalSeconds
+    try { $r.versions_after = Get-EdgeVersions } catch { $r.errors += "versions: $($_.Exception.Message)" }
+    $r.end = NowIso
+    Log ("edge pause: services {0}; tasks disabled {1}; updater seen [{2}] waited {3} s killed [{4}]{5}" -f
+        (@($r.services | ForEach-Object { "$($_.name)=$($_.start_after)/$($_.state_after)" }) -join ' '),
+        @($r.tasks | Where-Object { $_.state_after -eq 'Disabled' }).Count, ($r.updater_seen -join ','), $r.waited_sec,
+        ($r.killed -join ','), $(if ($r.errors.Count) { '; ERRORS: ' + ($r.errors -join ' | ') } else { '' }))
+    $r
 }
 
 # ---------------------------------------------------------------------------------------------- lists

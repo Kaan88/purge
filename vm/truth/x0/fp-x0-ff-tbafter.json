@@ -1,0 +1,514 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "purge",
+      "apps": 1,
+      "truth_n": 52,
+      "recall_listed": 0.17307692307692307,
+      "recall_visible": 0.11538461538461539,
+      "recall_safe": 0.09615384615384616,
+      "recall_listed_nd": 0.17307692307692307,
+      "recall_visible_nd": 0.11538461538461539,
+      "recall_safe_nd": 0.09615384615384616,
+      "precision_safe": 1.0,
+      "partial_n": 1,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "classes": {
+        "danger_blocking": 0,
+        "userdata_blocking": 0,
+        "danger_unticked": 0,
+        "userdata_unticked": 1,
+        "preexisting_value_ref": 0,
+        "old_empty_ext_key": 0,
+        "userdata_safe": 0
+      },
+      "per_kind_recall": {
+        "Path": 0.2,
+        "RegKey": 0.125,
+        "RegValue": 0.4,
+        "RegValueChanged": 0.0
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 0,
+        "hit": 12,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "ff-tbafter",
+      "dir": "runs/x0-ff-tbafter",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 366,
+        "kept_owner": 31,
+        "leftover": 51,
+        "rig": 1,
+        "user_data": 1
+      },
+      "ambient_by_run": {
+        "r0-null1": 164,
+        "r0-null2": 167,
+        "r0-null3": 166
+      },
+      "tools": [
+        {
+          "app": "ff-tbafter",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/x0-ff-tbafter/plans/purge.json",
+          "offered_n": 12,
+          "truth_n": 52,
+          "covered_listed": 9,
+          "covered_visible": 6,
+          "covered_safe": 5,
+          "recall_listed": 0.17307692307692307,
+          "recall_visible": 0.11538461538461539,
+          "recall_safe": 0.09615384615384616,
+          "covered_listed_nd": 9,
+          "covered_visible_nd": 6,
+          "covered_safe_nd": 5,
+          "recall_listed_nd": 0.17307692307692307,
+          "recall_visible_nd": 0.11538461538461539,
+          "recall_safe_nd": 0.09615384615384616,
+          "partial_n": 1,
+          "safe_n": 7,
+          "safe_not_gone": 7,
+          "safe_hits": 7,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 1,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 12,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 10,
+              "covered": 2,
+              "recall": 0.2
+            },
+            "RegKey": {
+              "n": 24,
+              "covered": 3,
+              "recall": 0.125
+            },
+            "RegValue": {
+              "n": 10,
+              "covered": 4,
+              "recall": 0.4
+            },
+            "RegValueChanged": {
+              "n": 8,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "FS-APPDATA": {
+              "hit": 3
+            },
+            "FS-VENDORPARENT": {
+              "hit": 1
+            },
+            "REF-ANY": {
+              "hit": 4
+            },
+            "REG-SOFTWARE": {
+              "hit": 4
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Diagnosis\\DownloadedSettings\\telemetry.P-Eco3PTelDefault.json.bk",
+              "label": "leftover",
+              "partial": false,
+              "size": 57
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Diagnosis\\DownloadedSettings\\utc.cert.json.bk",
+              "label": "leftover",
+              "partial": false,
+              "size": 2723
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38",
+              "label": "leftover",
+              "partial": true,
+              "size": 2628
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsuA.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 779203
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\CustomDestinations\\f8f05350c84c9d76.customDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 3716
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CRASHHELPER.EXE-C6FC1224.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 4242
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CRASHHELPER.EXE-C774119C.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 4754
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\FIREFOX.EXE-25FC0A66.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 46053
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\AppID\\{4D7FD4F5-27E8-479A-8DF3-C16C917083A2}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{29F458BE-8866-11D5-A3DD-00B0D0F3BAA7}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{4D7FD4F5-27E8-479A-8DF3-C16C917083A2}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{6EDCD38E-8861-11D5-A3DD-00B0D0F3BAA7}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{6EDCD38E-8861-11D5-A3DD-00B0D0F3BAA7}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\MozillaMapi",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\MozillaMapi.1",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\MediaPlayer\\ShimInclusionList\\false",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4432",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4744",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\5736",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7400",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7568",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7860",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\mozilla.org",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-19\\Software\\Microsoft\\Cryptography\\NGC",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.shtml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|Content Type",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated|D78BF5DD33499EC2",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|308046O0NS4N39PO",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RunNotification|StartupTNotiMozilla-Firefox-308046B0AF4A39CB",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|D78BF5DD33499EC2",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags|PatchDbUpdateTickCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|EndTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 48
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|RunCounter",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|StartTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 48
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|StartTimeBin",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\InstallService\\State|AutoUpdateLastSuccessTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 52
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OneSettings\\appcompat\\runtimesdbincloud|RefreshAfter",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\Shell\\Bags\\1\\Desktop|IconLayouts",
+              "label": "leftover",
+              "partial": false,
+              "size": 254
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 2
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{9B918B90-A54C-4CCA-8F8B-59353CAB03EA}",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB;PrivateBrowsingAUMID",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0,
+              "userdata": "unticked"
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates\\308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

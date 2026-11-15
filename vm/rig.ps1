@@ -16,6 +16,20 @@
     Invoke-Campaign -Ids vscode,vscode-user,git,firefox,firefox-tb,npp -Nulls 0 -RunPrefix r0- `
                     -Engine .\target\release\purge-engine.exe
 
+  Null runs inside such a campaign (M1a gate rerun, RIG.md §6): with -RunPrefix they are named
+  <prefix>null<n> (r0-null1 ...), so the M0 null runs vm\runs\null1..3 behind truth\ambient.json stay as they
+  are. -NullWaitSec sets their idle time (default 60 s, as in M0) and -NullOrder spread runs them first,
+  in the middle and last instead of all first:
+    Invoke-Campaign -Ids vscode,vscode-user,git,firefox,firefox-tb,npp -Nulls 3 -NullOrder spread -NullWaitSec 120 `
+                    -RunPrefix r0- -Engine .\target\release\purge-engine.exe
+
+  Extended M1a runs (RIG.md §4b): -ExtraChecks adds the live scan and the repeat scan to every engine app run;
+  -NoBaselines pushes no (edition, build) baseline, so the engine runs values-only. Installer and plant files of a
+  run (apps.ps1 Get-AppFiles) that the host cache vm\cache\inst holds are pushed to C:\cr\inst with the manifest
+  vm\cache\inst\cache-sources.json; the guest checks each SHA-256 against it and downloads only what is missing:
+    Invoke-Campaign -Ids npp-userfiles,git-toolsdir -Nulls 0 -RunPrefix x0- -ExtraChecks -Engine .\target\release\purge-engine.exe
+    Invoke-Campaign -Ids firefox-tb,vscode,git,npp -Nulls 0 -RunPrefix x0-nb- -ExtraChecks -NoBaselines -Engine .\target\release\purge-engine.exe
+
   Before a run starts, an existing vm\runs\<run>\ is moved to vm\runs\_old\<run>-<stamp>\, so a run
   directory never mixes files from two runs.
 
@@ -35,16 +49,52 @@ param(
     # App runs only: run name = <prefix><id> (e.g. 'r0-'); required with -Engine.
     [string] $RunPrefix = '',
     # purge-engine.exe to push; turns on engine mode for the app runs.
-    [string] $Engine = ''
+    [string] $Engine = '',
+    # Null runs: idle seconds standing in for install and uninstall (RIG.md §6), and their place in the campaign.
+    [int] $NullWaitSec = 60,
+    [ValidateSet('first', 'spread')] [string] $NullOrder = 'first',
+    # Engine app runs: also the live scan and the repeat scan (run.json `extra`, RIG.md §4a).
+    [switch] $ExtraChecks,
+    # Push no (edition, build) baseline: the engine runs values-only (x0-nb- campaign).
+    [switch] $NoBaselines,
+    # VirtualBox execution engine set on the powered-off VM after each restore (VBoxManage modifyvm
+    # --vm-execution-engine), e.g. 'native-api' to run on top of KVM next to a KVM/QEMU guest (RIG.md §9).
+    # Default: $env:RIG_VM_EXECUTION_ENGINE, else empty = leave the VM as it is.
+    [string] $ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE,
+    # Turn the VM's 3D acceleration off after each restore of an offline snapshot (modifyvm --accelerate-3d off;
+    # the snapshot keeps its own setting, so the next restore brings it back). Works around guest freezes with
+    # VMSVGA 3D (DXVK on the host GPU) on the Linux host (RIG.md §9). Default: on when $env:RIG_VM_NO_3D is 1.
+    [switch] $No3D = ($env:RIG_VM_NO_3D -eq '1')
 )
 
-$script:VBox      = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
+# Host platform: Windows (PowerShell 5.1 or 7) or Linux (pwsh 7, RIG.md §9). 5.1 has no $IsWindows.
+$script:OnWindows = ($PSVersionTable.PSEdition -ne 'Core') -or [bool]$IsWindows
+# Host-side relative paths are written with '\' below; on Linux they become '/' (guest paths C:\... are never
+# passed through this). On Windows the path is returned unchanged.
+function HostPath([string]$P) { if ($script:OnWindows) { $P } else { $P.Replace('\', '/') } }
+# Host temp dir for job files and a temporary password copy: %TEMP% on Windows; on Linux $RIG_TMP, $TMPDIR or /tmp.
+function Get-HostTemp {
+    if ($script:OnWindows) { return $env:TEMP }
+    foreach ($t in $env:RIG_TMP, $env:TMPDIR) { if ($t) { return $t } }
+    '/tmp'
+}
+
+if ($script:OnWindows) {
+    $script:VBox  = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
+} else {
+    # $VBOXMANAGE overrides; else the real binary /usr/lib/virtualbox/VBoxManage (the /usr/bin wrapper VBox.sh
+    # prints a "vboxdrv kernel module is not loaded" warning on every call under the KVM-backend build, which would
+    # end up in the merged output); else VBoxManage on PATH.
+    $script:VBox  = $env:VBOXMANAGE
+    if (-not $script:VBox -and (Test-Path -LiteralPath '/usr/lib/virtualbox/VBoxManage' -PathType Leaf)) { $script:VBox = '/usr/lib/virtualbox/VBoxManage' }
+    if (-not $script:VBox) { $c = Get-Command VBoxManage -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { $script:VBox = $c.Source } else { $script:VBox = '/usr/bin/VBoxManage' } }
+}
 $script:VmName    = $VmName
 $script:GuestUser = 'tester'
 $script:RigDir    = $PSScriptRoot
 $script:RepoRoot  = Split-Path -Parent $PSScriptRoot
 $script:RunsDir   = Join-Path $PSScriptRoot 'runs'
-$script:FrozenDir = Join-Path $PSScriptRoot 'truth\frozen'   # frozen M0 truth and plans, read only
+$script:FrozenDir = Join-Path $PSScriptRoot (HostPath 'truth\frozen')   # frozen M0 truth and plans, read only
 $script:PwFile    = $null
 $script:PwTemp    = $false
 $script:RigLogFile = $null
@@ -70,6 +120,11 @@ function Get-PwFile {
     $m = [regex]::Match($raw, '(?m)^\s*password\s*=\s*(.+?)\s*$')
     if ($m.Success) {
         $tmp = Join-Path ([IO.Path]::GetTempPath()) ('rigpw-' + [guid]::NewGuid().ToString('N') + '.txt')
+        if (-not $script:OnWindows) {
+            # Linux: owner-only (0600) before the password is written; /tmp is shared.
+            [IO.File]::WriteAllText($tmp, '')
+            [IO.File]::SetUnixFileMode($tmp, [IO.UnixFileMode]'UserRead, UserWrite')
+        }
         [IO.File]::WriteAllText($tmp, $m.Groups[1].Value)
         $script:PwFile = $tmp
         $script:PwTemp = $true
@@ -145,7 +200,8 @@ function Wait-VmState([string[]]$States, [int]$TimeoutSec = 120) {
 # comes back in state 'saved' with the agent already running; an offline one needs autologon and the
 # PurgeRigAgent logon task (up to $AgentTimeoutSec).
 function Restore-Base {
-    param([string]$Snapshot = 'rig-base', [int]$AgentTimeoutSec = 300)
+    param([string]$Snapshot = 'rig-base', [int]$AgentTimeoutSec = 300, [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE,
+          [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'))
     $st = Get-VmState
     Write-RigLog "restore $Snapshot (VM state: $st)"
     if (@('running', 'paused', 'stuck', 'starting', 'stopping', 'saving', 'restoring', 'livesnapshotting', 'teleporting') -contains $st) {
@@ -160,7 +216,21 @@ function Restore-Base {
         if ($r.code -eq 0) { $ok = $true } else { Write-RigLog "  restore try $i failed: $($r.out -join ' ')"; Start-Sleep -Seconds 3 }
     }
     if (-not $ok) { throw "snapshot restore $Snapshot failed" }
+    if ($ExecutionEngine) {
+        # Machine-level setting (not stored in snapshots); the VM is powered off here, as modifyvm requires.
+        $r = Invoke-VBox @('modifyvm', $script:VmName, '--vm-execution-engine', $ExecutionEngine)
+        if ($r.code -ne 0) { throw "modifyvm --vm-execution-engine $ExecutionEngine failed: $($r.out -join ' ')" }
+        Write-RigLog "  execution engine: $ExecutionEngine"
+    }
     $live = ((Get-VmState) -eq 'saved')
+    if ($No3D) {
+        if ($live) { Write-RigLog '  -No3D ignored: a live snapshot (saved state) cannot change its graphics settings' }
+        else {
+            $r = Invoke-VBox @('modifyvm', $script:VmName, '--accelerate-3d', 'off')
+            if ($r.code -ne 0) { throw "modifyvm --accelerate-3d off failed: $($r.out -join ' ')" }
+            Write-RigLog '  3D acceleration: off (until the next restore)'
+        }
+    }
     Write-RigLog "  restored ($(if ($live) { 'live snapshot' } else { 'offline snapshot' })); starting headless"
     $r = Invoke-VBox @('startvm', $script:VmName, '--type', 'headless')
     if ($r.code -ne 0) { throw "startvm failed: $($r.out -join ' ')" }
@@ -196,7 +266,7 @@ function Invoke-GuestJob {
     param([Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][string]$Name, [int]$TimeoutSec = 1800, [string]$LogCopy = '')
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $job = "$stamp-$($Name -replace '[^\w.-]', '_').ps1"
-    $tmpDir = Join-Path $env:TEMP 'vmjobs'
+    $tmpDir = Join-Path (Get-HostTemp) 'vmjobs'
     New-Item -ItemType Directory -Force $tmpDir | Out-Null
     $local = Join-Path $tmpDir $job
     [IO.File]::WriteAllText($local, $Text, (New-Object System.Text.UTF8Encoding($true)))
@@ -231,22 +301,36 @@ function Invoke-GuestJob {
 function Get-EnginePush {
     param([string]$Engine = '', [string]$RepoRoot = $script:RepoRoot)
     $explicit = [bool]$Engine
-    if (-not $Engine) { $Engine = Join-Path $RepoRoot 'target\release\purge-engine.exe' }
+    if ($Engine) { $Engine = HostPath $Engine }   # Linux: a Windows-style '.\target\release\...' works too
+    if (-not $Engine) { $Engine = Join-Path $RepoRoot (HostPath 'target\release\purge-engine.exe') }
     if (-not (Test-Path -LiteralPath $Engine -PathType Leaf)) {
         if ($explicit) { throw "purge-engine not found: $Engine (cargo build --release -p purge-engine)" }
         return [pscustomobject]@{ engine = $null; baselines = @() }
     }
-    $bl = @(Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'kb\baselines') -Filter '*.tsv.gz' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $bl = @(Get-ChildItem -LiteralPath (Join-Path $RepoRoot (HostPath 'kb\baselines')) -Filter '*.tsv.gz' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
     [pscustomobject]@{ engine = (Resolve-Path -LiteralPath $Engine).ProviderPath; baselines = $bl }
 }
 
+# Pure: the files of the host installer cache (vm\cache\inst) a run of app $Id uses: its installer, the
+# installers of its pre / post / upgrade_from apps and its plant files (apps.ps1 Get-AppFiles), where the cache
+# holds them. Returns full paths.
+function Get-CachedRunFiles {
+    param([Parameter(Mandatory)][string]$Id, [string]$CacheDir = (Join-Path $script:RigDir (HostPath 'cache\inst')))
+    if (-not (Test-Path -LiteralPath (Join-Path $CacheDir 'cache-sources.json'))) { return @() }
+    $names = & { . (Join-Path $script:RigDir (HostPath 'guest\apps.ps1')); Get-AppFiles $Id }
+    @($names | ForEach-Object { Join-Path $CacheDir $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+}
+
 # Copies a fresh rigtool.exe to C:\cr\bin, purge-engine.exe to C:\cr\bin and kb\baselines\*.tsv.gz to
-# C:\cr\bin\kb\baselines (see Get-EnginePush), and vm\guest\*.ps1 to C:\cr\guest (old copies deleted first).
+# C:\cr\bin\kb\baselines (see Get-EnginePush; none with -NoBaselines), and vm\guest\*.ps1 to C:\cr\guest (old
+# copies deleted first). -Installers: host cache files (Get-CachedRunFiles) to C:\cr\inst, with the manifest.
 function Push-Tools {
-    param([string]$RigTool = '', [string]$Engine = '')
-    if (-not $RigTool) { $RigTool = Join-Path $script:RigDir 'rigtool\target\release\rigtool.exe' }
+    param([string]$RigTool = '', [string]$Engine = '', [switch]$NoBaselines, [string[]]$Installers = @())
+    # The guest's rigtool is always the Windows build (rigtool.exe), on a Linux host too.
+    if (-not $RigTool) { $RigTool = Join-Path $script:RigDir (HostPath 'rigtool\target\release\rigtool.exe') }
     if (-not (Test-Path -LiteralPath $RigTool)) { throw "rigtool not built: $RigTool (cargo build --release in vm\rigtool)" }
     $ep = Get-EnginePush -Engine $Engine
+    if ($NoBaselines) { $ep.baselines = @() }
     $scripts = @(Get-ChildItem -LiteralPath (Join-Path $script:RigDir 'guest') -Filter '*.ps1' | ForEach-Object { $_.FullName })
     foreach ($d in 'C:\cr\bin', 'C:\cr\bin\kb\baselines', 'C:\cr\guest', 'C:\cr\out', 'C:\cr\stage') { $null = Invoke-Guest @('mkdir', '--parents', $d) }
     $null = Invoke-GuestCmd 'del /f /q C:\cr\guest\*.ps1 C:\cr\bin\rigtool.exe C:\cr\bin\purge-engine.exe C:\cr\bin\kb\baselines\*.tsv.gz'
@@ -267,32 +351,76 @@ function Push-Tools {
     }
     $r = Invoke-Guest (@('copyto', '--target-directory', 'C:\cr\guest\') + $scripts)
     if ($r.code -ne 0) { throw "copy guest scripts failed: $($r.out -join ' ')" }
+    $inst = @($Installers | Where-Object { $_ })
+    if ($inst.Count) {
+        $man = Join-Path $script:RigDir (HostPath 'cache\inst\cache-sources.json')
+        $null = Invoke-Guest @('mkdir', '--parents', 'C:\cr\inst')
+        $r = Invoke-Guest (@('copyto', '--target-directory', 'C:\cr\inst\') + @($man) + $inst)
+        if ($r.code -ne 0) { throw "copy cached installers failed: $($r.out -join ' ')" }
+        $expect += @(@($man) + $inst | ForEach-Object { 'C:\cr\inst\' + (Split-Path -Leaf $_) })
+    }
     $missing = @()
     foreach ($f in $expect + @($scripts | ForEach-Object { 'C:\cr\guest\' + (Split-Path -Leaf $_) })) {
         if ((Invoke-Guest @('stat', $f)).code -ne 0) { $missing += $f }
     }
     if ($missing.Count) { throw "not in the guest after copy: $($missing -join ', ')" }
     $what = 'rigtool.exe'
-    if ($ep.engine) { $what += " + purge-engine.exe ($($ep.engine)) + $($ep.baselines.Count) baseline(s)" }
+    if ($ep.engine) { $what += " + purge-engine.exe ($($ep.engine)) + $($ep.baselines.Count) baseline(s)$(if ($NoBaselines) { ' (-NoBaselines)' })" }
+    if ($inst.Count) { $what += " + cached $(($inst | ForEach-Object { Split-Path -Leaf $_ }) -join ', ')" }
     Write-RigLog "  pushed $what + $($scripts.Count) guest scripts"
 }
 
 # ---------------------------------------------------------------------------------------------- runs
 
 # Pure: the job text for a run. App runs (run-app.ps1): __ID__ = the app id, __RUN__ = the run name (default
-# the id), __ENGINE__ = 1 with -Engine, else 0. Null runs (null-run.ps1): __RUN__ = null<n>.
+# the id), __ENGINE__ = 1 with -Engine, else 0, __EXTRA__ = 1 with -Extra (needs -Engine), else 0. Null runs
+# (null-run.ps1): __RUN__ = the run name (default null<n>, or <prefix>null<n>), __WAIT__ = the idle seconds per
+# wait (default 60).
 function New-RunJobText {
-    param([string]$Id = '', [int]$NullRun = 0, [string]$Run = '', [switch]$Engine)
+    param([string]$Id = '', [int]$NullRun = 0, [string]$Run = '', [switch]$Engine, [switch]$Extra, [int]$NullWaitSec = 60)
     if ($Id) {
         if ($Id -cnotmatch '^[a-z0-9][a-z0-9_-]*$') { throw "bad app id '$Id' (lowercase letters, digits, _ and -)" }
         if (-not $Run) { $Run = $Id }
         if ($Run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$Run' (lowercase letters, digits, _, . and -)" }
-        $tpl = [IO.File]::ReadAllText((Join-Path $script:RigDir 'guest\run-app.ps1'))
-        return $tpl.Replace('__ID__', $Id).Replace('__RUN__', $Run).Replace('__ENGINE__', $(if ($Engine) { '1' } else { '0' }))
+        if ($Extra -and -not $Engine) { throw '-Extra (extra checks) needs -Engine' }
+        $tpl = [IO.File]::ReadAllText((Join-Path $script:RigDir (HostPath 'guest\run-app.ps1')))
+        return $tpl.Replace('__ID__', $Id).Replace('__RUN__', $Run).Replace('__ENGINE__', $(if ($Engine) { '1' } else { '0' })).Replace('__EXTRA__', $(if ($Extra) { '1' } else { '0' }))
     }
     if ($NullRun -lt 1) { throw 'give -Id or -Null n (n >= 1)' }
-    $tpl = [IO.File]::ReadAllText((Join-Path $script:RigDir 'guest\null-run.ps1'))
-    $tpl.Replace('__RUN__', "null$NullRun")
+    if (-not $Run) { $Run = "null$NullRun" }
+    if ($Run -cnotmatch '^([a-z0-9][a-z0-9_.-]*-)?null\d+$') { throw "bad null run name '$Run' (null<n> or <prefix>null<n>)" }
+    if ($NullWaitSec -lt 0 -or $NullWaitSec -gt 3600) { throw "bad -NullWaitSec $NullWaitSec (0..3600)" }
+    $tpl = [IO.File]::ReadAllText((Join-Path $script:RigDir (HostPath 'guest\null-run.ps1')))
+    $tpl.Replace('__RUN__', $Run).Replace('__WAIT__', "$NullWaitSec")
+}
+
+# Pure: the name of null run n. In a prefixed (engine) campaign the null runs carry the prefix too, so the M0
+# null runs vm\runs\null<n>\ (the source of truth\ambient.json) are never archived or overwritten.
+function Get-NullRunName {
+    param([Parameter(Mandatory)][int]$N, [string]$RunPrefix = '')
+    $run = "${RunPrefix}null$N"
+    if ($run -cnotmatch '^([a-z0-9][a-z0-9_.-]*-)?null\d+$') { throw "bad null run name '$run' (prefix '$RunPrefix' must end with '-')" }
+    $run
+}
+
+# Pure: the order of a campaign's runs. 'first' = null runs, then apps (M0). 'spread' = the null runs spread over
+# the campaign (first, between the apps, last), so the ambient set sees the same stretch of guest time as the apps.
+function Get-CampaignOrder {
+    param([object[]]$Nulls = @(), [object[]]$Apps = @(), [string]$NullOrder = 'first')
+    $Nulls = @($Nulls | Where-Object { $_ }); $Apps = @($Apps | Where-Object { $_ })
+    if ($NullOrder -ne 'spread' -or $Nulls.Count -lt 2 -or $Apps.Count -eq 0) { return @($Nulls) + @($Apps) }
+    $out = New-Object System.Collections.ArrayList
+    $gaps = $Nulls.Count - 1
+    $ai = 0
+    for ($k = 0; $k -lt $Nulls.Count; $k++) {
+        [void]$out.Add($Nulls[$k])
+        if ($k -lt $gaps) {
+            $upto = [int][Math]::Round(($k + 1) * $Apps.Count / $gaps)
+            while ($ai -lt $upto -and $ai -lt $Apps.Count) { [void]$out.Add($Apps[$ai]); $ai++ }
+        }
+    }
+    while ($ai -lt $Apps.Count) { [void]$out.Add($Apps[$ai]); $ai++ }
+    @($out)
 }
 
 # Runs one app (-Id) or null run (-Null n) in the guest and pulls its outputs to vm\runs\<run>\.
@@ -304,19 +432,24 @@ function Invoke-Run {
     param(
         [Parameter(ParameterSetName = 'app', Mandatory)][string]$Id,
         [Parameter(ParameterSetName = 'null', Mandatory)][Alias('Null')][int]$NullRun,
-        [Parameter(ParameterSetName = 'app')][string]$RunPrefix = '',
+        [string]$RunPrefix = '',
+        [Parameter(ParameterSetName = 'null')][int]$NullWaitSec = 60,
         [Parameter(ParameterSetName = 'app')][switch]$Engine,
+        [Parameter(ParameterSetName = 'app')][switch]$ExtraChecks,
         [int]$TimeoutSec = 0
     )
     if ($PSCmdlet.ParameterSetName -eq 'app') {
         $run = Get-RunName -Id $Id -RunPrefix $RunPrefix -Engine:$Engine
-        $text = New-RunJobText -Id $Id -Run $run -Engine:$Engine; $to = 5400
-    } else { $run = "null$NullRun"; $text = New-RunJobText -NullRun $NullRun; $to = 2400 }
+        $text = New-RunJobText -Id $Id -Run $run -Engine:$Engine -Extra:$ExtraChecks; $to = 5400
+    } else {
+        $run = Get-NullRunName -N $NullRun -RunPrefix $RunPrefix
+        $text = New-RunJobText -NullRun $NullRun -Run $run -NullWaitSec $NullWaitSec; $to = 2400
+    }
     if ($TimeoutSec -gt 0) { $to = $TimeoutSec }
     $null = Move-RunToOld -Run $run
     $dst = Join-Path $script:RunsDir $run
     New-Item -ItemType Directory -Force $dst | Out-Null
-    Write-RigLog "run $run (timeout $to s$(if ($Engine) { ', engine mode' }))"
+    Write-RigLog "run $run (timeout $to s$(if ($Engine) { ', engine mode' })$(if ($ExtraChecks) { ', extra checks' }))"
     $j = Invoke-GuestJob -Text $text -Name $run -TimeoutSec $to -LogCopy (Join-Path $dst 'job.log')
     Write-RigLog "  job $($j.name) done=$($j.done) after $($j.seconds) s"
     $pulled = Pull-Run -Run $run
@@ -348,13 +481,17 @@ function Copy-RunPlans {
         Copy-Item -LiteralPath $src -Destination (Join-Path $plans 'purge.json') -Force
         $copied += 'purge.json'
     } else { Write-RigLog "  !! no plan-purge.json in $dir" }
-    $bcu = Join-Path $script:FrozenDir "$Id\plans\bcu.json"
+    $bcu = Join-Path $script:FrozenDir (HostPath "$Id\plans\bcu.json")
     if (Test-Path -LiteralPath $bcu) {
         New-Item -ItemType Directory -Force $plans | Out-Null
         Copy-Item -LiteralPath $bcu -Destination (Join-Path $plans 'bcu.json') -Force
         $copied += 'bcu.json'
     }
-    Write-RigLog "  plans for $Run`: $(if ($copied.Count) { $copied -join ', ' } else { 'none' })"
+    # The extra-check plans (plan-live.json: scan of the still-installed app; plan-purge-b.json: the repeat scan)
+    # stay in the run directory on purpose: in plans\ `rigtool score --set` would score them as offers on this
+    # run's post-uninstall state. truth\m1a.sh reads them there (m1a-extra.md).
+    $extra = @('plan-live.json', 'plan-purge-b.json' | Where-Object { Test-Path -LiteralPath (Join-Path $dir $_) })
+    Write-RigLog "  plans for $Run`: $(if ($copied.Count) { $copied -join ', ' } else { 'none' })$(if ($extra.Count) { "; extra-check plans kept in the run dir: $($extra -join ', ')" })"
     $copied
 }
 
@@ -437,22 +574,29 @@ function Test-RunResult {
 # Runs null runs then apps, each from a fresh restore. Keeps going after a failed run; writes
 # vm\runs\campaign-<stamp>.log and .json. A run is ok only when its job finished and the run.json pulled
 # for it is from this run (Test-RunResult) with every phase ok. -RunPrefix names the app runs <prefix><id>
-# (null runs keep null<n>); -Engine <purge-engine.exe> pushes that engine and runs the apps in engine mode.
+# and the null runs <prefix>null<n> (without a prefix: null<n>, as in M0); -Engine <purge-engine.exe> pushes
+# that engine and runs the apps in engine mode. -NullWaitSec / -NullOrder: see the header.
 function Invoke-Campaign {
     param([string[]]$Ids = @(), [int]$Nulls = 3, [string]$Snapshot = 'rig-base', [switch]$NoRestore,
-          [string]$RunPrefix = '', [string]$Engine = '')
+          [string]$RunPrefix = '', [string]$Engine = '', [int]$NullWaitSec = 60,
+          [ValidateSet('first', 'spread')][string]$NullOrder = 'first', [switch]$ExtraChecks, [switch]$NoBaselines,
+          [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'))
     $useEngine = [bool]$Engine
-    $plan = @()
-    if ($Nulls -gt 0) { foreach ($n in 1..$Nulls) { $plan += @{ run = "null$n"; null = $n } } }
+    if ($ExtraChecks -and -not $useEngine) { throw '-ExtraChecks needs -Engine' }
+    if ($NoBaselines -and -not $useEngine) { throw '-NoBaselines needs -Engine' }
     # Names are checked before anything is moved or restored.
-    foreach ($id in $Ids) { if ($id) { $plan += @{ run = (Get-RunName -Id $id -RunPrefix $RunPrefix -Engine:$useEngine); id = $id } } }
+    $nullPlan = @()
+    if ($Nulls -gt 0) { foreach ($n in 1..$Nulls) { $nullPlan += @{ run = (Get-NullRunName -N $n -RunPrefix $RunPrefix); null = $n } } }
+    $appPlan = @()
+    foreach ($id in $Ids) { if ($id) { $appPlan += @{ run = (Get-RunName -Id $id -RunPrefix $RunPrefix -Engine:$useEngine); id = $id } } }
+    $plan = @(Get-CampaignOrder -Nulls $nullPlan -Apps $appPlan -NullOrder $NullOrder)
     if ($useEngine) { $null = Get-EnginePush -Engine $Engine }
     New-Item -ItemType Directory -Force $script:RunsDir | Out-Null
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $script:RigLogFile = Join-Path $script:RunsDir "campaign-$stamp.log"
     $summaryFile = Join-Path $script:RunsDir "campaign-$stamp.json"
     $results = New-Object System.Collections.ArrayList
-    Write-RigLog "campaign ${stamp}: $(($plan | ForEach-Object { $_.run }) -join ', ') from snapshot $Snapshot$(if ($useEngine) { "; engine $Engine" })"
+    Write-RigLog "campaign ${stamp}: $(($plan | ForEach-Object { $_.run }) -join ', ') from snapshot $Snapshot on $script:VmName$(if ($useEngine) { "; engine $Engine" })$(if ($ExtraChecks) { '; extra checks' })$(if ($NoBaselines) { '; NO baselines' })$(if ($ExecutionEngine) { "; execution engine $ExecutionEngine" })$(if ($No3D) { '; 3D off' })"
     try {
         $null = Get-PwFile
         foreach ($p in $plan) {
@@ -461,9 +605,11 @@ function Invoke-Campaign {
             try {
                 # Before anything else, so neither Invoke-Run nor the catch's Pull-Run sees an older run's files.
                 $null = Move-RunToOld -Run $p.run
-                if (-not $NoRestore) { Restore-Base -Snapshot $Snapshot } else { Wait-Agent -TimeoutSec 120 }
-                Push-Tools -Engine $Engine
-                if ($p.id) { $res = Invoke-Run -Id $p.id -RunPrefix $RunPrefix -Engine:$useEngine } else { $res = Invoke-Run -NullRun $p.null }
+                if (-not $NoRestore) { Restore-Base -Snapshot $Snapshot -ExecutionEngine $ExecutionEngine -No3D:$No3D } else { Wait-Agent -TimeoutSec 120 }
+                $inst = @(); if ($p.id) { $inst = @(Get-CachedRunFiles -Id $p.id) }
+                Push-Tools -Engine $Engine -NoBaselines:$NoBaselines -Installers $inst
+                if ($p.id) { $res = Invoke-Run -Id $p.id -RunPrefix $RunPrefix -Engine:$useEngine -ExtraChecks:$ExtraChecks }
+                else { $res = Invoke-Run -NullRun $p.null -RunPrefix $RunPrefix -NullWaitSec $NullWaitSec }
                 $rec.pulled = @($res.pulled).Count
                 $chk = Test-RunResult -Run $p.run -NotBefore $t
                 $rec.started = $chk.started; $rec.failed_phases = @($chk.failed_phases)
@@ -493,7 +639,7 @@ function Invoke-Campaign {
 # Runs guest\setup-base.ps1 elevated through the agent (after Push-Tools) and prints its log.
 function Invoke-SetupBase {
     param([int]$TimeoutSec = 3600)
-    $text = [IO.File]::ReadAllText((Join-Path $script:RigDir 'guest\setup-base.ps1'))
+    $text = [IO.File]::ReadAllText((Join-Path $script:RigDir (HostPath 'guest\setup-base.ps1')))
     $j = Invoke-GuestJob -Text $text -Name 'setup-base' -TimeoutSec $TimeoutSec
     $j.log
     if (-not $j.done) { throw 'setup-base did not finish' }
@@ -515,5 +661,6 @@ function Save-BaseSnapshot {
 }
 
 if ($MyInvocation.InvocationName -ne '.' -and ($Ids.Count -gt 0 -or $Nulls -gt 0)) {
-    Invoke-Campaign -Ids $Ids -Nulls $Nulls -Snapshot $Snapshot -RunPrefix $RunPrefix -Engine $Engine
+    Invoke-Campaign -Ids $Ids -Nulls $Nulls -Snapshot $Snapshot -RunPrefix $RunPrefix -Engine $Engine -NullWaitSec $NullWaitSec -NullOrder $NullOrder `
+                    -ExtraChecks:$ExtraChecks -NoBaselines:$NoBaselines -ExecutionEngine $ExecutionEngine -No3D:$No3D
 }

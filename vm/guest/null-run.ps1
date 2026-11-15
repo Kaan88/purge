@@ -1,12 +1,18 @@
-# Purge rig v2: null run (vm\RIG.md §4). Template: the host replaces __RUN__ with null1..null3.
-# Same captures and waits as an app run, with no install, launch or uninstall, so diff(snap-0, snap-2)
-# is pure Windows churn for the ambient set. Outputs in C:\cr\out\<run>\ as for run-app.ps1.
+# Purge rig v2: null run (vm\RIG.md §4, §6). Template: the host replaces the run placeholder with null1..null3
+# (or <prefix>null<n>, e.g. r0-null1 in an engine campaign) and the wait placeholder with the idle seconds.
+# Same captures as an app run, with no install, launch or uninstall, so diff(snap-0, snap-2) is pure Windows
+# churn for the ambient set. Outputs in C:\cr\out\<run>\ as for run-app.ps1.
 $Run = '__RUN__'
+$WaitArg = '__WAIT__'
 . C:\cr\guest\riglib.ps1
 
-$Waits = [ordered]@{ install = 60; launch = 0; uninstall = 60 }
+# Idle time standing in for the install and the uninstall. 60 s each (the M0 null runs) unless the host set it,
+# e.g. so the snap0 -> snap2 window is as long as an app run's (RIG.md §6).
+$w = 60
+if ($WaitArg -match '^\d{1,4}$') { $w = [int]$WaitArg }
+$Waits = [ordered]@{ install = $w; launch = 0; uninstall = $w }
 
-if ($Run -notmatch '^null\d+$') { Write-Host "null-run.ps1: __RUN__ was not replaced ('$Run')"; exit 2 }
+if ($Run -cnotmatch '^([a-z0-9][a-z0-9_.-]*-)?null\d+$') { Write-Host "null-run.ps1: the run placeholder was not replaced ('$Run')"; exit 2 }
 $Dir = New-RunDir $Run
 Set-RunLog (Join-Path $Dir 'run.log')
 Log "null-run $Run on $env:COMPUTERNAME as $env:USERDOMAIN\$env:USERNAME (sid $RigUserSid)"
@@ -22,6 +28,9 @@ $RunJson = Join-Path $Dir 'run.json'
 function Save-Run { $S.finished = NowIso; try { Write-JsonFile $S $RunJson } catch { Log "!! cannot write run.json: $($_.Exception.Message)" } }
 $e = @{ e0 = $null }
 
+# Edge/WebView2 updater pause, exactly as in run-app.ps1 (riglib Suspend-EdgeUpdate, RIG.md §4): before anything is
+# captured, so the null runs' ambient set and the app runs share the same paused state.
+Phase 'edge-pause' { $S.edge_pause = Suspend-EdgeUpdate } $S
 Phase 'arp0' { $e.e0 = @(UninstallEntries) } $S
 Phase 'lists0' { Lists $Run 0 } $S
 Phase 'snap0' { Snap $Run 0 } $S
@@ -34,6 +43,12 @@ Save-Run
 Phase 'wait-uninstall' { Log "idle $($Waits.uninstall) s"; Start-Sleep -Seconds $Waits.uninstall } $S
 Phase 'lists2' { Lists $Run 2 } $S
 Phase 'snap2' { Snap $Run 2 } $S
+Phase 'edge-check' {
+    if (-not $S.edge_pause) { throw 'no edge_pause record' }
+    $S.edge_pause.versions_end = Get-EdgeVersions
+    $S.edge_pause.held = ((ConvertTo-Json -InputObject $S.edge_pause.versions_after -Compress) -eq (ConvertTo-Json -InputObject $S.edge_pause.versions_end -Compress))
+    Log "edge versions at the end: $(@($S.edge_pause.versions_end.Values) -join '; '); pause held: $($S.edge_pause.held)"
+} $S
 Phase 'entries' {
     $old = @{}
     foreach ($x in @($e.e0)) { $old[$x.key] = $true }

@@ -1,0 +1,2491 @@
+{
+  "schema": "purge.rig.m2traps/0",
+  "generated_by": "vm/guest/m2-traps.ps1",
+  "dry_run": true,
+  "built_at": null,
+  "computer": null,
+  "user_sid": "{user-sid}",
+  "placeholders": {
+    "{user-sid}": "SID of the rig user: HKU\\<sid>",
+    "{localappdata}": "%LOCALAPPDATA% of the rig user"
+  },
+  "roots": {
+    "trap_root": "C:\\Program Files\\PurgeTrapApp",
+    "canary_root": "C:\\PurgeCanary",
+    "user_writable_root": "C:\\PurgeTrapUW",
+    "programdata": "C:\\ProgramData\\Purge",
+    "trap_keys": [
+      "HKLM\\SOFTWARE\\PurgeTrapApp",
+      "HKU\\{user-sid}\\Software\\PurgeTrapApp"
+    ],
+    "canary_keys": [
+      "HKLM\\SOFTWARE\\PurgeCanary",
+      "HKU\\{user-sid}\\Software\\PurgeCanary"
+    ]
+  },
+  "rules": {
+    "canaries": "every canary must keep its sha256 (file: content; regkey: values; regvalue: type+data) and must not become a reparse point; any change is a guard escape",
+    "expect": "items[].expect is the executor outcome the gate expects; items[].accept lists outcomes that are not failures as long as every canary stays intact",
+    "outcomes": "Done | Vanished | Skipped{reason: GateBlocked{blocker} | NoLongerEmpty | ChangedSinceScan} | HeldRetry | PendingReboot (purge-model ItemOutcome); trap-level expect: RenamedAside | Denied | NotPreselected",
+    "groups": "main: one exec; race-a / race-b: one exec each with helper.env and the swap helper; locked: m2-reboot"
+  },
+  "canaries": [
+    {
+      "id": "links-j.a",
+      "trap": "link-junction-item",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\links-j\\target\\a.txt",
+      "sha256": "665128a2a5ad867072e6c53088675722a48334b3da2a625d14682df664f06091"
+    },
+    {
+      "id": "links-j.b",
+      "trap": "link-junction-item",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\links-j\\target\\sub\\b.txt",
+      "sha256": "2947d9f5b0671835e91511d8c31f991a942634c14bae467b6fc2c8beabe24066"
+    },
+    {
+      "id": "links-ds.a",
+      "trap": "link-dirsym-item",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\links-ds\\target\\a.txt",
+      "sha256": "0755f3b65c4bebf89b8d9df6f9d8afdc9e5b16b37b6cf380dd7211308b8429a5"
+    },
+    {
+      "id": "links-fs.target",
+      "trap": "link-filesym-item",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\links-fs\\target.txt",
+      "sha256": "c2384e3e279a3027c3f2cc65e1b00c5863e0da0dc73484b5b2e3c6f5d5d36909"
+    },
+    {
+      "id": "links-in.j",
+      "trap": "links-inside-dir",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\links-in\\jtarget\\a.txt",
+      "sha256": "55ec1e0bbe084e0ff6d9f1919c445f0cd8781ae979e6d7499b9c13622dcb20af"
+    },
+    {
+      "id": "links-in.ds",
+      "trap": "links-inside-dir",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\links-in\\dstarget\\a.txt",
+      "sha256": "7c9d861005a6aa858dc77b7cb30065c0f90ae47c7ffcbb662c4d3195abfbd0ad"
+    },
+    {
+      "id": "links-in.fs",
+      "trap": "links-inside-dir",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\links-in\\fstarget.txt",
+      "sha256": "2076a44472108ddcdc6b4ad121956f6d4bb7164dbdcb9131076134116e2e6951"
+    },
+    {
+      "id": "jparent.victim",
+      "trap": "junction-parent",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\jparent\\target\\victim.txt",
+      "sha256": "fefc6ee97b3c5c7fe04b34f33cf77ae9c45cabc63872a20c99ca29420669829e"
+    },
+    {
+      "id": "hardlink.shared",
+      "trap": "hardlink-out-file",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\hardlink\\shared.dll",
+      "sha256": "3e0882533c67e4770f7b2e8678ce13d0e6f7eaacba1b199ad884fc84bc87bb14"
+    },
+    {
+      "id": "hardlink-dir.shared",
+      "trap": "hardlink-out-dir",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\hardlink-dir\\shared2.dll",
+      "sha256": "530a7b070a3c5b7ec9e19a1f37082f1678ebae94aaa7792cdd57e8938e7c3852"
+    },
+    {
+      "id": "odd.sibling-file",
+      "trap": "odd-names",
+      "kind": "file",
+      "path": "C:\\Program Files\\PurgeTrapApp\\odd\\name",
+      "sha256": "d0d18809cbc0570d73c3498697b016a05dca68956a81b5e4ab490951e7b12ffc"
+    },
+    {
+      "id": "odd.sibling-dir",
+      "trap": "odd-names",
+      "kind": "file",
+      "path": "C:\\Program Files\\PurgeTrapApp\\odd\\dir\\inner.txt",
+      "sha256": "0ab72d0c4797b6b2d0dd074c2b160ee671924c492bf65c2d247af8f1c48bd893"
+    },
+    {
+      "id": "reglink.leaf",
+      "trap": "reglink-leaf",
+      "kind": "regkey",
+      "path": "HKLM\\SOFTWARE\\PurgeCanary\\LeafTarget",
+      "sha256": "a8cc59fa8521affe2bb4f04c342832df39ba672cc511f3e219057d0b7e66ec14"
+    },
+    {
+      "id": "reglink.mid",
+      "trap": "reglink-mid",
+      "kind": "regkey",
+      "path": "HKLM\\SOFTWARE\\PurgeCanary\\MidTarget",
+      "sha256": "22b13d9f7cd1f8e4508e4fd05fd5532901c8f16b3acf06be63a2e08cb02de2f7"
+    },
+    {
+      "id": "reglink.mid-child",
+      "trap": "reglink-mid",
+      "kind": "regkey",
+      "path": "HKLM\\SOFTWARE\\PurgeCanary\\MidTarget\\Child",
+      "sha256": "5968e74ec379afb431325ea814d1307a41fbe76cd4471c7ead81a3f9dcb4b144"
+    },
+    {
+      "id": "reglink.inside",
+      "trap": "reglink-inside-tree",
+      "kind": "regkey",
+      "path": "HKLM\\SOFTWARE\\PurgeCanary\\InsideTarget",
+      "sha256": "fa5d9930aa559499876933ddc7a56769a905d2bf0f3d1b77023dac8260dd83c7"
+    },
+    {
+      "id": "reglink.user",
+      "trap": "reglink-user",
+      "kind": "regkey",
+      "path": "HKU\\{user-sid}\\Software\\PurgeCanary\\UserTarget",
+      "sha256": "6cd30907763b97ba2aa029fa4cb3d724c0f6157df13dd56a7dc63c6dd79d5858"
+    },
+    {
+      "id": "ti.dir-payload",
+      "trap": "ti-dir",
+      "kind": "file",
+      "path": "C:\\Program Files\\PurgeTrapApp\\ti-dir\\payload.dll",
+      "sha256": "b4139772bbee1948840c72eb956552ee21da35f91a6178c7b5823bdb79b6424a"
+    },
+    {
+      "id": "ti.file",
+      "trap": "ti-file",
+      "kind": "file",
+      "path": "C:\\Program Files\\PurgeTrapApp\\ti-file\\payload.dll",
+      "sha256": "f0e8537a088a239f7422ac3e4366c40c1572c02909adce3ebf18af73f8a68b38"
+    },
+    {
+      "id": "ti.key",
+      "trap": "ti-key",
+      "kind": "regkey",
+      "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\TiOwned",
+      "sha256": "cc363891e808f6ee3721b64c1d6242d53eb9f00e841c102e52b127c47336f48c"
+    },
+    {
+      "id": "ti.ace-key",
+      "trap": "ti-ace-key",
+      "kind": "regkey",
+      "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\TiAce",
+      "sha256": "ea8beeb8ea2f0a816731cbf7c2dc57bd01b4a50e8e54e552534990a450111c92"
+    },
+    {
+      "id": "ph.offline",
+      "trap": "placeholder-attrs",
+      "kind": "file",
+      "path": "C:\\Program Files\\PurgeTrapApp\\ph\\offline.txt",
+      "sha256": "7802a1996361c01bfbde7a52ac1435010904631d5d9fc44173c216448740b952"
+    },
+    {
+      "id": "ph.recall-open",
+      "trap": "placeholder-attrs",
+      "kind": "file",
+      "path": "C:\\Program Files\\PurgeTrapApp\\ph\\recall-open.txt",
+      "sha256": "4e46c78de6c5a40fdf2c28b6896c0adf06ab190892347b768f80536b4fb4a3c6"
+    },
+    {
+      "id": "ph.recall-data",
+      "trap": "placeholder-attrs",
+      "kind": "file",
+      "path": "C:\\Program Files\\PurgeTrapApp\\ph\\recall-data.txt",
+      "sha256": "5f3f99ab369e0e2c71600f3cb0ad77fc9ec758564f247e3056fc4330c61484e0"
+    },
+    {
+      "id": "ph-dir.offline",
+      "trap": "placeholder-dir",
+      "kind": "file",
+      "path": "C:\\Program Files\\PurgeTrapApp\\ph-dir\\offline.txt",
+      "sha256": "9f1ee1be35251054a693512d332b255195bb0757f1d7546b7c299b855af49c2e"
+    },
+    {
+      "id": "pd.quarantine-target",
+      "trap": "pd-precreated",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\pd\\quarantine-target\\keep.txt",
+      "sha256": "3db7b8dfaf4e432c605ae13294e2b8645b4eeb3b90fa12cf2c9bf5e1c68bdf14"
+    },
+    {
+      "id": "pd.sessions-target",
+      "trap": "pd-precreated",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\pd\\sessions-target\\keep.txt",
+      "sha256": "e81de0156ae2cecb7ce4f1d6320a03c7a3c0cd16946053c069a7a745e8a049a6"
+    },
+    {
+      "id": "pd-post.target",
+      "trap": "pd-plant-denied",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\pd-post\\target\\keep.txt",
+      "sha256": "caac1b7e038c071549b651e65bceccf143a93a4fce952cb4d7a806a6f05d7244"
+    },
+    {
+      "id": "boot.target",
+      "trap": "boot-uw-planted",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\boot\\target\\user-locked.dll",
+      "sha256": "184ee6640d6355133c8c8532e0f27abc85369df21176357fc4c280651a234c6c"
+    },
+    {
+      "id": "race-a.own1",
+      "trap": "race-validate-open",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\race-a\\target\\own1.txt",
+      "sha256": "4e0c7dcb2ab7e2f6796dfefa0d8780f24f328b53faddf21af9f63308adb74057"
+    },
+    {
+      "id": "race-b.own1",
+      "trap": "race-open-act",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\race-b\\target\\own1.txt",
+      "sha256": "d8b23112899fd1cdb8e6b386bf14e0e951cbf3587208b704cc1385087fe94733"
+    },
+    {
+      "id": "expiry.target",
+      "trap": "expiry-junction",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\expiry\\target\\keep.txt",
+      "sha256": "f2e32cc64495b777878fddb8a6f1edef98c3486c237e7d956409d4d077558990"
+    },
+    {
+      "id": "expiry.target-file",
+      "trap": "expiry-junction",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\expiry\\target-file.txt",
+      "sha256": "ad3f089e9c5433a31d89304ba7ce848b86a6f895d40f0141944939bcef53361d"
+    },
+    {
+      "id": "fp.victim",
+      "trap": "forged-user-fp",
+      "kind": "file",
+      "path": "C:\\PurgeCanary\\fp\\victim\\data.txt",
+      "sha256": "3920c9bf356f3a20090b20821a6302a7a3af7d151e3c74772743df026c350992"
+    },
+    {
+      "id": "fp.victim-key",
+      "trap": "forged-user-fp",
+      "kind": "regkey",
+      "path": "HKLM\\SOFTWARE\\PurgeCanary\\FpVictim",
+      "sha256": "d864c822e6510736e1d709fc2041c2083cecc1345e37f46c3ef25df636657922"
+    }
+  ],
+  "traps": [
+    {
+      "id": "link-junction-item",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "The plan item is a directory junction to a canary tree.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "links-j.a",
+          "path": "C:\\PurgeCanary\\links-j\\target\\a.txt"
+        },
+        {
+          "k": "canary-file",
+          "id": "links-j.b",
+          "path": "C:\\PurgeCanary\\links-j\\target\\sub\\b.txt"
+        },
+        {
+          "k": "dir",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-j"
+        },
+        {
+          "k": "junction",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-j\\j",
+          "target": "C:\\PurgeCanary\\links-j\\target"
+        }
+      ],
+      "items": [
+        {
+          "id": "link-junction-item.link",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\links-j\\j"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "ReparseMismatch",
+            "summary": "blocked: ReparseMismatch"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\links-j",
+        "C:\\PurgeCanary\\links-j"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "links-j.a",
+        "links-j.b"
+      ],
+      "build": null
+    },
+    {
+      "id": "link-dirsym-item",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "The plan item is a directory symbolic link to a canary tree.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "links-ds.a",
+          "path": "C:\\PurgeCanary\\links-ds\\target\\a.txt"
+        },
+        {
+          "k": "dir",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-ds"
+        },
+        {
+          "k": "dirsym",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-ds\\ds",
+          "target": "C:\\PurgeCanary\\links-ds\\target"
+        }
+      ],
+      "items": [
+        {
+          "id": "link-dirsym-item.link",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\links-ds\\ds"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "ReparseMismatch",
+            "summary": "blocked: ReparseMismatch"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\links-ds",
+        "C:\\PurgeCanary\\links-ds"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "links-ds.a"
+      ],
+      "build": null
+    },
+    {
+      "id": "link-filesym-item",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "The plan item is a file symbolic link to a canary file.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "links-fs.target",
+          "path": "C:\\PurgeCanary\\links-fs\\target.txt"
+        },
+        {
+          "k": "dir",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-fs"
+        },
+        {
+          "k": "filesym",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-fs\\fs.txt",
+          "target": "C:\\PurgeCanary\\links-fs\\target.txt"
+        }
+      ],
+      "items": [
+        {
+          "id": "link-filesym-item.link",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\links-fs\\fs.txt"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "ReparseMismatch",
+            "summary": "blocked: ReparseMismatch"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\links-fs",
+        "C:\\PurgeCanary\\links-fs"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "links-fs.target"
+      ],
+      "build": null
+    },
+    {
+      "id": "links-inside-dir",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "A directory moved whole holds a junction, a directory symlink and a file symlink to canaries.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "links-in.j",
+          "path": "C:\\PurgeCanary\\links-in\\jtarget\\a.txt"
+        },
+        {
+          "k": "canary-file",
+          "id": "links-in.ds",
+          "path": "C:\\PurgeCanary\\links-in\\dstarget\\a.txt"
+        },
+        {
+          "k": "canary-file",
+          "id": "links-in.fs",
+          "path": "C:\\PurgeCanary\\links-in\\fstarget.txt"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-in\\payload.txt",
+          "text": "payload\n"
+        },
+        {
+          "k": "junction",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-in\\j",
+          "target": "C:\\PurgeCanary\\links-in\\jtarget"
+        },
+        {
+          "k": "dirsym",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-in\\ds",
+          "target": "C:\\PurgeCanary\\links-in\\dstarget"
+        },
+        {
+          "k": "filesym",
+          "path": "C:\\Program Files\\PurgeTrapApp\\links-in\\fs.txt",
+          "target": "C:\\PurgeCanary\\links-in\\fstarget.txt"
+        }
+      ],
+      "items": [
+        {
+          "id": "links-inside-dir.dir",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\links-in"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "link removed, target intact: the links move with their directory as links; undo restores them as links"
+          },
+          "accept": [
+            {
+              "outcome": "Skipped",
+              "reason": "GateBlocked",
+              "blocker": "ReparseMismatch",
+              "summary": "blocked: ReparseMismatch"
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\links-in",
+        "C:\\PurgeCanary\\links-in"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "links-in.j",
+        "links-in.ds",
+        "links-in.fs"
+      ],
+      "build": null
+    },
+    {
+      "id": "junction-parent",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "A junction inside the install dir is the PARENT of the plan item: the item path traverses it into the canary tree.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "jparent.victim",
+          "path": "C:\\PurgeCanary\\jparent\\target\\victim.txt"
+        },
+        {
+          "k": "junction",
+          "path": "C:\\Program Files\\PurgeTrapApp\\jparent",
+          "target": "C:\\PurgeCanary\\jparent\\target"
+        }
+      ],
+      "items": [
+        {
+          "id": "junction-parent.file",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\jparent\\victim.txt"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "ReparseMismatch",
+            "summary": "blocked: ReparseMismatch"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\jparent",
+        "C:\\PurgeCanary\\jparent"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "jparent.victim"
+      ],
+      "build": null
+    },
+    {
+      "id": "hardlink-out-file",
+      "gate": "G6",
+      "stage": "post-install",
+      "summary": "The plan item is a file whose other hard link lies outside the plan.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "hardlink.shared",
+          "path": "C:\\PurgeCanary\\hardlink\\shared.dll"
+        },
+        {
+          "k": "dir",
+          "path": "C:\\Program Files\\PurgeTrapApp\\hl-file"
+        },
+        {
+          "k": "hardlink",
+          "path": "C:\\Program Files\\PurgeTrapApp\\hl-file\\h.dll",
+          "existing": "C:\\PurgeCanary\\hardlink\\shared.dll"
+        }
+      ],
+      "items": [
+        {
+          "id": "hardlink-out-file.file",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\hl-file\\h.dll"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "HardLinkOutsidePlan",
+            "summary": "blocked: HardLinkOutsidePlan"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\hl-file",
+        "C:\\PurgeCanary\\hardlink"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "hardlink.shared"
+      ],
+      "build": null
+    },
+    {
+      "id": "hardlink-out-dir",
+      "gate": "G6",
+      "stage": "post-install",
+      "summary": "A directory moved whole holds a file whose other hard link lies outside the plan.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "hardlink-dir.shared",
+          "path": "C:\\PurgeCanary\\hardlink-dir\\shared2.dll"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\hl-dir\\own.txt",
+          "text": "own\n"
+        },
+        {
+          "k": "hardlink",
+          "path": "C:\\Program Files\\PurgeTrapApp\\hl-dir\\h2.dll",
+          "existing": "C:\\PurgeCanary\\hardlink-dir\\shared2.dll"
+        }
+      ],
+      "items": [
+        {
+          "id": "hardlink-out-dir.dir",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\hl-dir"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "HardLinkOutsidePlan",
+            "summary": "blocked: HardLinkOutsidePlan"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\hl-dir",
+        "C:\\PurgeCanary\\hardlink-dir"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "hardlink-dir.shared"
+      ],
+      "build": null
+    },
+    {
+      "id": "long-path-file",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "A file whose full path is longer than 260 characters.",
+      "objects": [
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\long-file\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx1\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx2\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx3\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx4\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx5\\deep-file.txt",
+          "text": "deep\n"
+        }
+      ],
+      "items": [
+        {
+          "id": "long-path-file.file",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\long-file\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx1\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx2\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx3\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx4\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx5\\deep-file.txt"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "moved and restored at a path over 260 characters"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\long-file"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [],
+      "build": null
+    },
+    {
+      "id": "long-path-dir",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "A directory whose own path is longer than 260 characters.",
+      "objects": [
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\long-dir\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx1\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx2\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx3\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx4\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx5\\deep.txt",
+          "text": "deep\n"
+        }
+      ],
+      "items": [
+        {
+          "id": "long-path-dir.dir",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\long-dir\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx1\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx2\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx3\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx4\\segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx5"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "moved and restored at a path over 260 characters"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\long-dir"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [],
+      "build": null
+    },
+    {
+      "id": "odd-names",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "Trailing-dot and trailing-space names next to the siblings a Win32-normalised name would hit.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "odd.sibling-file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\odd\\name"
+        },
+        {
+          "k": "canary-file",
+          "id": "odd.sibling-dir",
+          "path": "C:\\Program Files\\PurgeTrapApp\\odd\\dir\\inner.txt"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\odd\\name.",
+          "text": "trailing dot\n"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\odd\\name ",
+          "text": "trailing space\n"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\odd\\dir.\\inner.txt",
+          "text": "inside a trailing-dot dir\n"
+        }
+      ],
+      "items": [
+        {
+          "id": "odd-names.dot",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\odd\\name."
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "moved and restored under its exact name; sibling 'name' intact"
+          },
+          "accept": [],
+          "condition": null
+        },
+        {
+          "id": "odd-names.space",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\odd\\name "
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "moved and restored under its exact name; sibling 'name' intact"
+          },
+          "accept": [],
+          "condition": null
+        },
+        {
+          "id": "odd-names.dotdir",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\odd\\dir."
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "moved and restored under its exact name; sibling 'dir' intact"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\odd"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "odd.sibling-file",
+        "odd.sibling-dir"
+      ],
+      "build": null
+    },
+    {
+      "id": "attributes",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "Read-only, hidden and system files and directories.",
+      "objects": [
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\ro.txt",
+          "text": "ro\n"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\hidden.txt",
+          "text": "hidden\n"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\system.txt",
+          "text": "system\n"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\rhs.txt",
+          "text": "rhs\n"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\rodir\\inner.txt",
+          "text": "inner\n"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\hsdir\\inner.txt",
+          "text": "inner\n"
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\ro.txt",
+          "attrs": [
+            "ReadOnly"
+          ]
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\hidden.txt",
+          "attrs": [
+            "Hidden"
+          ]
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\system.txt",
+          "attrs": [
+            "System"
+          ]
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\rhs.txt",
+          "attrs": [
+            "ReadOnly",
+            "Hidden",
+            "System"
+          ]
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\rodir",
+          "attrs": [
+            "ReadOnly"
+          ]
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs\\hsdir",
+          "attrs": [
+            "Hidden",
+            "System"
+          ]
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs-one\\rhs.txt",
+          "text": "rhs alone\n"
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\attrs-one\\rhs.txt",
+          "attrs": [
+            "ReadOnly",
+            "Hidden",
+            "System"
+          ]
+        }
+      ],
+      "items": [
+        {
+          "id": "attributes.dir",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\attrs"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "moved; undo restores every attribute exactly"
+          },
+          "accept": [],
+          "condition": null
+        },
+        {
+          "id": "attributes.file",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\attrs-one\\rhs.txt"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "moved; undo restores read-only + hidden + system"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\attrs",
+        "C:\\Program Files\\PurgeTrapApp\\attrs-one"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [],
+      "build": null
+    },
+    {
+      "id": "reglink-leaf",
+      "gate": "G11",
+      "stage": "post-install",
+      "summary": "The plan key is a REG_LINK to a canary key.",
+      "objects": [
+        {
+          "k": "canary-key",
+          "id": "reglink.leaf",
+          "path": "HKLM\\SOFTWARE\\PurgeCanary\\LeafTarget",
+          "values": [
+            {
+              "name": "CanaryValue",
+              "type": 1,
+              "data_b64": "UABVAFIARwBFAC0AQwBBAE4AQQBSAFkAIABsAGUAYQBmAAAA"
+            },
+            {
+              "name": "CanaryDword",
+              "type": 4,
+              "data_b64": "3sBeAA=="
+            },
+            {
+              "name": "CanaryBinary",
+              "type": 3,
+              "data_b64": "3q2+7wD/"
+            }
+          ]
+        },
+        {
+          "k": "key",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp"
+        },
+        {
+          "k": "reglink",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkLeaf",
+          "target": "HKLM\\SOFTWARE\\PurgeCanary\\LeafTarget"
+        }
+      ],
+      "items": [
+        {
+          "id": "reglink-leaf.key",
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkLeaf"
+          },
+          "action": "DeleteKey",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "RegLink",
+            "summary": "blocked: RegLink"
+          },
+          "accept": [],
+          "condition": null
+        },
+        {
+          "id": "reglink-leaf.value",
+          "target": {
+            "type": "RegValue",
+            "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkLeaf",
+            "name": "CanaryValue"
+          },
+          "action": "DeleteValue",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "RegLink",
+            "summary": "blocked: RegLink"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [],
+      "reg_roots": [
+        "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkLeaf",
+        "HKLM\\SOFTWARE\\PurgeCanary\\LeafTarget"
+      ],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "reglink.leaf"
+      ],
+      "build": null
+    },
+    {
+      "id": "reglink-mid",
+      "gate": "G11",
+      "stage": "post-install",
+      "summary": "A REG_LINK in the middle of the plan key path leads into a canary tree.",
+      "objects": [
+        {
+          "k": "canary-key",
+          "id": "reglink.mid",
+          "path": "HKLM\\SOFTWARE\\PurgeCanary\\MidTarget",
+          "values": [
+            {
+              "name": "CanaryValue",
+              "type": 1,
+              "data_b64": "UABVAFIARwBFAC0AQwBBAE4AQQBSAFkAIABtAGkAZAAAAA=="
+            },
+            {
+              "name": "CanaryDword",
+              "type": 4,
+              "data_b64": "3sBeAA=="
+            },
+            {
+              "name": "CanaryBinary",
+              "type": 3,
+              "data_b64": "3q2+7wD/"
+            }
+          ]
+        },
+        {
+          "k": "canary-key",
+          "id": "reglink.mid-child",
+          "path": "HKLM\\SOFTWARE\\PurgeCanary\\MidTarget\\Child",
+          "values": [
+            {
+              "name": "ChildValue",
+              "type": 1,
+              "data_b64": "UABVAFIARwBFAC0AQwBBAE4AQQBSAFkAIABtAGkAZAAtAGMAaABpAGwAZAAAAA=="
+            }
+          ]
+        },
+        {
+          "k": "key",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp"
+        },
+        {
+          "k": "reglink",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkMid",
+          "target": "HKLM\\SOFTWARE\\PurgeCanary\\MidTarget"
+        }
+      ],
+      "items": [
+        {
+          "id": "reglink-mid.key",
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkMid\\Child"
+          },
+          "action": "DeleteKey",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "RegLink",
+            "summary": "blocked: RegLink"
+          },
+          "accept": [],
+          "condition": null
+        },
+        {
+          "id": "reglink-mid.value",
+          "target": {
+            "type": "RegValue",
+            "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkMid\\Child",
+            "name": "ChildValue"
+          },
+          "action": "DeleteValue",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "RegLink",
+            "summary": "blocked: RegLink"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [],
+      "reg_roots": [
+        "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkMid",
+        "HKLM\\SOFTWARE\\PurgeCanary\\MidTarget"
+      ],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "reglink.mid",
+        "reglink.mid-child"
+      ],
+      "build": null
+    },
+    {
+      "id": "reglink-inside-tree",
+      "gate": "G11",
+      "stage": "post-install",
+      "summary": "A plain plan key holds a REG_LINK subkey to a canary key.",
+      "objects": [
+        {
+          "k": "canary-key",
+          "id": "reglink.inside",
+          "path": "HKLM\\SOFTWARE\\PurgeCanary\\InsideTarget",
+          "values": [
+            {
+              "name": "CanaryValue",
+              "type": 1,
+              "data_b64": "UABVAFIARwBFAC0AQwBBAE4AQQBSAFkAIABpAG4AcwBpAGQAZQAAAA=="
+            },
+            {
+              "name": "CanaryDword",
+              "type": 4,
+              "data_b64": "3sBeAA=="
+            },
+            {
+              "name": "CanaryBinary",
+              "type": 3,
+              "data_b64": "3q2+7wD/"
+            }
+          ]
+        },
+        {
+          "k": "key",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkHolder"
+        },
+        {
+          "k": "value",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkHolder",
+          "name": "own",
+          "type": 1,
+          "data_b64": "bwB3AG4AAAA="
+        },
+        {
+          "k": "reglink",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkHolder\\inner",
+          "target": "HKLM\\SOFTWARE\\PurgeCanary\\InsideTarget"
+        }
+      ],
+      "items": [
+        {
+          "id": "reglink-inside-tree.key",
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkHolder"
+          },
+          "action": "DeleteKey",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "RegLink",
+            "summary": "blocked: RegLink"
+          },
+          "accept": [
+            {
+              "outcome": "Done",
+              "reason": null,
+              "blocker": null,
+              "summary": "link removed, target intact: the link key is deleted as a link and undo recreates it"
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "fs_roots": [],
+      "reg_roots": [
+        "HKLM\\SOFTWARE\\PurgeTrapApp\\LinkHolder",
+        "HKLM\\SOFTWARE\\PurgeCanary\\InsideTarget"
+      ],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "reglink.inside"
+      ],
+      "build": null
+    },
+    {
+      "id": "reglink-user",
+      "gate": "G11",
+      "stage": "post-install",
+      "summary": "A REG_LINK in the user hive to a canary key of the same hive.",
+      "objects": [
+        {
+          "k": "canary-key",
+          "id": "reglink.user",
+          "path": "HKU\\{user-sid}\\Software\\PurgeCanary\\UserTarget",
+          "values": [
+            {
+              "name": "CanaryValue",
+              "type": 1,
+              "data_b64": "UABVAFIARwBFAC0AQwBBAE4AQQBSAFkAIAB1AHMAZQByAAAA"
+            },
+            {
+              "name": "CanaryDword",
+              "type": 4,
+              "data_b64": "3sBeAA=="
+            },
+            {
+              "name": "CanaryBinary",
+              "type": 3,
+              "data_b64": "3q2+7wD/"
+            }
+          ]
+        },
+        {
+          "k": "key",
+          "path": "HKU\\{user-sid}\\Software\\PurgeTrapApp"
+        },
+        {
+          "k": "reglink",
+          "path": "HKU\\{user-sid}\\Software\\PurgeTrapApp\\LinkUser",
+          "target": "HKU\\{user-sid}\\Software\\PurgeCanary\\UserTarget",
+          "optional": true
+        }
+      ],
+      "items": [
+        {
+          "id": "reglink-user.key",
+          "target": {
+            "type": "RegKey",
+            "path": "HKU\\{user-sid}\\Software\\PurgeTrapApp\\LinkUser"
+          },
+          "action": "DeleteKey",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "RegLink",
+            "summary": "blocked: RegLink"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [],
+      "reg_roots": [
+        "HKU\\{user-sid}\\Software\\PurgeTrapApp\\LinkUser",
+        "HKU\\{user-sid}\\Software\\PurgeCanary\\UserTarget"
+      ],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "reglink.user"
+      ],
+      "build": null
+    },
+    {
+      "id": "ti-dir",
+      "gate": "G3",
+      "stage": "post-install",
+      "summary": "A folder (and its file) owned by TrustedInstaller.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "ti.dir-payload",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ti-dir\\payload.dll"
+        },
+        {
+          "k": "file-sddl",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ti-dir\\payload.dll",
+          "sddl": "O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464G:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:PAI(A;;FA;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)(A;;0x1200a9;;;BA)(A;;0x1200a9;;;SY)(A;;0x1200a9;;;BU)"
+        },
+        {
+          "k": "file-sddl",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ti-dir",
+          "sddl": "O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464G:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:PAI(A;OICI;FA;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)(A;OICI;0x1200a9;;;BA)(A;OICI;0x1200a9;;;SY)(A;OICI;0x1200a9;;;BU)"
+        }
+      ],
+      "items": [
+        {
+          "id": "ti-dir.dir",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\ti-dir"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "TrustedInstallerOwned",
+            "summary": "blocked: TrustedInstallerOwned"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\ti-dir"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "ti.dir-payload"
+      ],
+      "build": null
+    },
+    {
+      "id": "ti-file",
+      "gate": "G3",
+      "stage": "post-install",
+      "summary": "A file owned by TrustedInstaller in an ordinary folder.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "ti.file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ti-file\\payload.dll"
+        },
+        {
+          "k": "file-sddl",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ti-file\\payload.dll",
+          "sddl": "O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464G:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:PAI(A;;FA;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)(A;;0x1200a9;;;BA)(A;;0x1200a9;;;SY)(A;;0x1200a9;;;BU)"
+        }
+      ],
+      "items": [
+        {
+          "id": "ti-file.file",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\ti-file\\payload.dll"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "TrustedInstallerOwned",
+            "summary": "blocked: TrustedInstallerOwned"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\ti-file"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "ti.file"
+      ],
+      "build": null
+    },
+    {
+      "id": "ti-key",
+      "gate": "G3",
+      "stage": "post-install",
+      "summary": "A key owned by TrustedInstaller (administrators: read only).",
+      "objects": [
+        {
+          "k": "canary-key",
+          "id": "ti.key",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\TiOwned",
+          "values": [
+            {
+              "name": "CanaryValue",
+              "type": 1,
+              "data_b64": "UABVAFIARwBFAC0AQwBBAE4AQQBSAFkAIAB0AGkALQBrAGUAeQAAAA=="
+            },
+            {
+              "name": "CanaryDword",
+              "type": 4,
+              "data_b64": "3sBeAA=="
+            },
+            {
+              "name": "CanaryBinary",
+              "type": 3,
+              "data_b64": "3q2+7wD/"
+            }
+          ]
+        },
+        {
+          "k": "key-sddl",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\TiOwned",
+          "sddl": "O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464G:SYD:PAI(A;CI;KA;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)(A;CI;KR;;;BA)(A;CI;KR;;;SY)(A;CI;KR;;;BU)"
+        }
+      ],
+      "items": [
+        {
+          "id": "ti-key.key",
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\TiOwned"
+          },
+          "action": "DeleteKey",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "TrustedInstallerOwned",
+            "summary": "blocked: TrustedInstallerOwned"
+          },
+          "accept": [],
+          "condition": null
+        },
+        {
+          "id": "ti-key.value",
+          "target": {
+            "type": "RegValue",
+            "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\TiOwned",
+            "name": "CanaryValue"
+          },
+          "action": "DeleteValue",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "TrustedInstallerOwned",
+            "summary": "blocked: TrustedInstallerOwned"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [],
+      "reg_roots": [
+        "HKLM\\SOFTWARE\\PurgeTrapApp\\TiOwned"
+      ],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "ti.key"
+      ],
+      "build": null
+    },
+    {
+      "id": "ti-ace-key",
+      "gate": "G3",
+      "stage": "post-install",
+      "summary": "A key owned by administrators that carries a TrustedInstaller ACE.",
+      "objects": [
+        {
+          "k": "canary-key",
+          "id": "ti.ace-key",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\TiAce",
+          "values": [
+            {
+              "name": "CanaryValue",
+              "type": 1,
+              "data_b64": "UABVAFIARwBFAC0AQwBBAE4AQQBSAFkAIAB0AGkALQBhAGMAZQAAAA=="
+            },
+            {
+              "name": "CanaryDword",
+              "type": 4,
+              "data_b64": "3sBeAA=="
+            },
+            {
+              "name": "CanaryBinary",
+              "type": 3,
+              "data_b64": "3q2+7wD/"
+            }
+          ]
+        },
+        {
+          "k": "key-sddl",
+          "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\TiAce",
+          "sddl": "O:BAG:SYD:PAI(A;CI;KA;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)(A;CI;KA;;;BA)(A;CI;KA;;;SY)(A;CI;KR;;;BU)"
+        }
+      ],
+      "items": [
+        {
+          "id": "ti-ace-key.key",
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\PurgeTrapApp\\TiAce"
+          },
+          "action": "DeleteKey",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "TrustedInstallerOwned",
+            "summary": "blocked: TrustedInstallerOwned"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [],
+      "reg_roots": [
+        "HKLM\\SOFTWARE\\PurgeTrapApp\\TiAce"
+      ],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "ti.ace-key"
+      ],
+      "build": null
+    },
+    {
+      "id": "placeholder-attrs",
+      "gate": "G7",
+      "stage": "post-install",
+      "summary": "Files carrying placeholder attributes (OFFLINE, RECALL_ON_OPEN, RECALL_ON_DATA_ACCESS) and a cloud reparse tag, where Windows lets them be set; an item whose bits did not stick is not scored (see build.objects).",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "ph.offline",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph\\offline.txt"
+        },
+        {
+          "k": "canary-file",
+          "id": "ph.recall-open",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph\\recall-open.txt"
+        },
+        {
+          "k": "canary-file",
+          "id": "ph.recall-data",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph\\recall-data.txt"
+        },
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph\\cloud-tag.txt",
+          "text": "cloud placeholder\n"
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph\\offline.txt",
+          "attrs": [
+            "Offline"
+          ],
+          "optional": true
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph\\recall-open.txt",
+          "attrs": [
+            "RecallOnOpen"
+          ],
+          "optional": true
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph\\recall-data.txt",
+          "attrs": [
+            "RecallOnDataAccess"
+          ],
+          "optional": true
+        },
+        {
+          "k": "cloud-tag",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph\\cloud-tag.txt",
+          "optional": true
+        }
+      ],
+      "items": [
+        {
+          "id": "placeholder-attrs.offline",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\ph\\offline.txt"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "SyncRoot",
+            "summary": "blocked: SyncRoot"
+          },
+          "accept": [],
+          "condition": "scored only when build.objects shows the attribute set"
+        },
+        {
+          "id": "placeholder-attrs.recall-open",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\ph\\recall-open.txt"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "SyncRoot",
+            "summary": "blocked: SyncRoot"
+          },
+          "accept": [],
+          "condition": "scored only when build.objects shows the attribute set"
+        },
+        {
+          "id": "placeholder-attrs.recall-data",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\ph\\recall-data.txt"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "SyncRoot",
+            "summary": "blocked: SyncRoot"
+          },
+          "accept": [],
+          "condition": "scored only when build.objects shows the attribute set"
+        },
+        {
+          "id": "placeholder-attrs.cloud-tag",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\ph\\cloud-tag.txt"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "SyncRoot",
+            "summary": "blocked: SyncRoot"
+          },
+          "accept": [],
+          "condition": "scored only when build.objects shows the reparse tag set"
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\ph"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [
+        {
+          "kind": "present",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph\\cloud-tag.txt"
+        }
+      ],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "ph.offline",
+        "ph.recall-open",
+        "ph.recall-data"
+      ],
+      "build": null
+    },
+    {
+      "id": "placeholder-dir",
+      "gate": "G7",
+      "stage": "post-install",
+      "summary": "A directory moved whole holds an OFFLINE placeholder.",
+      "objects": [
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph-dir\\own.txt",
+          "text": "own\n"
+        },
+        {
+          "k": "canary-file",
+          "id": "ph-dir.offline",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph-dir\\offline.txt"
+        },
+        {
+          "k": "attrs",
+          "path": "C:\\Program Files\\PurgeTrapApp\\ph-dir\\offline.txt",
+          "attrs": [
+            "Offline"
+          ],
+          "optional": true
+        }
+      ],
+      "items": [
+        {
+          "id": "placeholder-dir.dir",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\ph-dir"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "SyncRoot",
+            "summary": "blocked: SyncRoot"
+          },
+          "accept": [],
+          "condition": "scored only when build.objects shows the attribute set"
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\ph-dir"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [
+        "ph-dir.offline"
+      ],
+      "build": null
+    },
+    {
+      "id": "pd-precreated",
+      "gate": "storage",
+      "stage": "pre-install",
+      "summary": "Before install: a standard user (medium IL) creates C:\\ProgramData\\Purge with planted junctions in Quarantine and sessions.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "pd.quarantine-target",
+          "path": "C:\\PurgeCanary\\pd\\quarantine-target\\keep.txt"
+        },
+        {
+          "k": "canary-file",
+          "id": "pd.sessions-target",
+          "path": "C:\\PurgeCanary\\pd\\sessions-target\\keep.txt"
+        },
+        {
+          "k": "medium",
+          "step": "pd-precreate"
+        }
+      ],
+      "items": [],
+      "fs_roots": [
+        "C:\\PurgeCanary\\pd"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [
+        {
+          "parent": "C:\\ProgramData",
+          "like": "Purge.rejected-*",
+          "marker": "purge-trap-precreated.txt"
+        }
+      ],
+      "guarded_roots": [
+        {
+          "path": "C:\\ProgramData\\Purge",
+          "marker": "purge-trap-precreated.txt"
+        }
+      ],
+      "expect": {
+        "phase": "install",
+        "outcome": "RenamedAside",
+        "summary": "install.ps1 never adopts the user-created tree: it renames it to Purge.rejected-<utc> without following the planted junctions and creates a fresh protected tree; canaries intact"
+      },
+      "post_checks": [
+        {
+          "kind": "exists",
+          "path": "C:\\ProgramData\\Purge.rejected-*\\purge-trap-precreated.txt"
+        },
+        {
+          "kind": "not-reparse",
+          "path": "C:\\ProgramData\\Purge"
+        },
+        {
+          "kind": "absent",
+          "path": "C:\\ProgramData\\Purge\\purge-trap-precreated.txt"
+        },
+        {
+          "kind": "absent",
+          "path": "C:\\ProgramData\\Purge\\Quarantine\\planted"
+        },
+        {
+          "kind": "absent",
+          "path": "C:\\ProgramData\\Purge\\sessions\\planted"
+        }
+      ],
+      "helper": null,
+      "medium": {
+        "pd-precreate": {
+          "expect_ok": {
+            "mkdir Purge": true,
+            "mkdir sessions": true,
+            "mkdir Quarantine": true,
+            "marker": true,
+            "junction Quarantine\\planted": true,
+            "junction sessions\\planted": true
+          },
+          "body": "Op 'mkdir Purge' { New-Item -ItemType Directory -Path 'C:\\ProgramData\\Purge' -ErrorAction Stop }\r\nOp 'mkdir sessions' { New-Item -ItemType Directory -Path 'C:\\ProgramData\\Purge\\sessions' -ErrorAction Stop }\r\nOp 'mkdir Quarantine' { New-Item -ItemType Directory -Path 'C:\\ProgramData\\Purge\\Quarantine' -ErrorAction Stop }\r\nOp 'marker' { Set-Content -LiteralPath 'C:\\ProgramData\\Purge\\purge-trap-precreated.txt' -Value 'created by a standard user (m2-traps pd-precreated)' -ErrorAction Stop }\r\nOp 'junction Quarantine\\planted' { MkJunction 'C:\\ProgramData\\Purge\\Quarantine\\planted' 'C:\\PurgeCanary\\pd\\quarantine-target' }\r\nOp 'junction sessions\\planted' { MkJunction 'C:\\ProgramData\\Purge\\sessions\\planted' 'C:\\PurgeCanary\\pd\\sessions-target' }"
+        }
+      },
+      "canaries": [
+        "pd.quarantine-target",
+        "pd.sessions-target"
+      ],
+      "build": null
+    },
+    {
+      "id": "pd-plant-denied",
+      "gate": "storage",
+      "stage": "post-install",
+      "summary": "After install: a standard user (medium IL) tries to plant files and junctions in Quarantine and sessions; only sessions\\index.json is readable.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "pd-post.target",
+          "path": "C:\\PurgeCanary\\pd-post\\target\\keep.txt"
+        },
+        {
+          "k": "medium",
+          "step": "pd-plant"
+        }
+      ],
+      "items": [],
+      "fs_roots": [
+        "C:\\PurgeCanary\\pd-post"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": {
+        "phase": "build",
+        "outcome": "Denied",
+        "summary": "every create/plant/list attempt is denied by the installer-created DACL; reading sessions\\index.json is allowed (see build.medium)"
+      },
+      "post_checks": [
+        {
+          "kind": "absent",
+          "path": "C:\\ProgramData\\Purge\\Quarantine\\user-file.txt"
+        },
+        {
+          "kind": "absent",
+          "path": "C:\\ProgramData\\Purge\\Quarantine\\planted-post"
+        },
+        {
+          "kind": "absent",
+          "path": "C:\\ProgramData\\Purge\\sessions\\user-file.txt"
+        },
+        {
+          "kind": "absent",
+          "path": "C:\\ProgramData\\Purge\\sessions\\planted-post"
+        },
+        {
+          "kind": "absent",
+          "path": "C:\\ProgramData\\Purge\\user-file.txt"
+        }
+      ],
+      "helper": null,
+      "medium": {
+        "pd-plant": {
+          "expect_ok": {
+            "create Quarantine\\user-file.txt": false,
+            "junction Quarantine\\planted-post": false,
+            "create sessions\\user-file.txt": false,
+            "junction sessions\\planted-post": false,
+            "create Purge\\user-file.txt": false,
+            "list Quarantine": false,
+            "read sessions\\index.json": true
+          },
+          "body": "Op 'create Quarantine\\user-file.txt' { Set-Content -LiteralPath 'C:\\ProgramData\\Purge\\Quarantine\\user-file.txt' -Value x -ErrorAction Stop }\r\nOp 'junction Quarantine\\planted-post' { MkJunction 'C:\\ProgramData\\Purge\\Quarantine\\planted-post' 'C:\\PurgeCanary\\pd-post\\target' }\r\nOp 'create sessions\\user-file.txt' { Set-Content -LiteralPath 'C:\\ProgramData\\Purge\\sessions\\user-file.txt' -Value x -ErrorAction Stop }\r\nOp 'junction sessions\\planted-post' { MkJunction 'C:\\ProgramData\\Purge\\sessions\\planted-post' 'C:\\PurgeCanary\\pd-post\\target' }\r\nOp 'create Purge\\user-file.txt' { Set-Content -LiteralPath 'C:\\ProgramData\\Purge\\user-file.txt' -Value x -ErrorAction Stop }\r\nOp 'list Quarantine' { Get-ChildItem -LiteralPath 'C:\\ProgramData\\Purge\\Quarantine' -Force -ErrorAction Stop }\r\nOp 'read sessions\\index.json' { Get-Content -LiteralPath 'C:\\ProgramData\\Purge\\sessions\\index.json' -ErrorAction Stop }"
+        }
+      },
+      "canaries": [
+        "pd-post.target"
+      ],
+      "build": null
+    },
+    {
+      "id": "boot-admin-locked",
+      "gate": "boot-move",
+      "stage": "post-install",
+      "summary": "A file in an admin-only directory, locked by the m2-reboot locker.",
+      "objects": [
+        {
+          "k": "file",
+          "path": "C:\\Program Files\\PurgeTrapApp\\locked\\admin-locked.dll",
+          "text": "admin-only ancestors\n"
+        }
+      ],
+      "items": [
+        {
+          "id": "boot-admin-locked.file",
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\PurgeTrapApp\\locked\\admin-locked.dll"
+          },
+          "action": "Quarantine",
+          "group": "locked",
+          "expect": {
+            "outcome": "PendingReboot",
+            "reason": null,
+            "blocker": null,
+            "summary": "every ancestor is admin-only writable: a boot-time move into quarantine is registered (ENGINE_PLAN 7.6 step 4); reconcile after reboot finds the recorded FileId"
+          },
+          "accept": [
+            {
+              "outcome": "Done",
+              "reason": null,
+              "blocker": null,
+              "summary": "not locked"
+            }
+          ],
+          "condition": "held open without FILE_SHARE_DELETE by the m2-reboot locker"
+        }
+      ],
+      "fs_roots": [
+        "C:\\Program Files\\PurgeTrapApp\\locked"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": null,
+      "medium": null,
+      "canaries": [],
+      "build": null
+    },
+    {
+      "id": "boot-uw-planted",
+      "gate": "boot-move",
+      "stage": "post-install",
+      "summary": "A locked file under a user-writable ancestor; later a standard user replaces that ancestor with a junction to a canary holding a file of the same name.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "boot.target",
+          "path": "C:\\PurgeCanary\\boot\\target\\user-locked.dll"
+        },
+        {
+          "k": "dir",
+          "path": "C:\\PurgeTrapUW"
+        },
+        {
+          "k": "file-sddl",
+          "path": "C:\\PurgeTrapUW",
+          "sddl": "O:BAG:SYD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;0x1301bf;;;BU)"
+        },
+        {
+          "k": "file",
+          "path": "C:\\PurgeTrapUW\\boot\\user-locked.dll",
+          "text": "user-writable ancestor\n"
+        }
+      ],
+      "items": [
+        {
+          "id": "boot-uw-planted.file",
+          "target": {
+            "type": "Path",
+            "path": "C:\\PurgeTrapUW\\boot\\user-locked.dll"
+          },
+          "action": "Quarantine",
+          "group": "locked",
+          "expect": {
+            "outcome": "HeldRetry",
+            "reason": null,
+            "blocker": null,
+            "summary": "an ancestor is user-writable: no boot-time move; held as retry at the next run"
+          },
+          "accept": [
+            {
+              "outcome": "Done",
+              "reason": null,
+              "blocker": null,
+              "summary": "not locked"
+            }
+          ],
+          "condition": "held open without FILE_SHARE_DELETE by the m2-reboot locker"
+        }
+      ],
+      "fs_roots": [
+        "C:\\PurgeTrapUW\\boot",
+        "C:\\PurgeCanary\\boot"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [
+        {
+          "parent": "C:\\PurgeTrapUW",
+          "like": "boot.planted-orig-*",
+          "marker": null
+        }
+      ],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": {
+        "action": "plant-boot-junction",
+        "when": "after the locker released the file (after the reboot), before the retry run",
+        "expect_after": {
+          "outcome": "Skipped",
+          "reason": "GateBlocked",
+          "blocker": "ReparseMismatch",
+          "summary": "blocked: ReparseMismatch"
+        },
+        "summary": "the retry re-validates through the handle (G1) and refuses: the canary of the same name stays intact"
+      },
+      "medium": {
+        "boot-plant": {
+          "expect_ok": {
+            "rename boot aside": true,
+            "junction boot -> canary": true
+          },
+          "body": "Op 'rename boot aside' { Rename-Item -LiteralPath 'C:\\PurgeTrapUW\\boot' -NewName ('boot.planted-orig-' + (Get-Date -Format yyyyMMddHHmmss)) -ErrorAction Stop }\r\nOp 'junction boot -> canary' { MkJunction 'C:\\PurgeTrapUW\\boot' 'C:\\PurgeCanary\\boot\\target' }"
+        }
+      },
+      "canaries": [
+        "boot.target"
+      ],
+      "build": null
+    },
+    {
+      "id": "race-validate-open",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "A validated directory is replaced by a junction to a canary while the engine is paused at intent.flushed:8000 (PURGE_FAULT_PAUSE; separate exec, group race-a).",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "race-a.own1",
+          "path": "C:\\PurgeCanary\\race-a\\target\\own1.txt"
+        },
+        {
+          "k": "dir",
+          "path": "C:\\PurgeTrapUW"
+        },
+        {
+          "k": "file-sddl",
+          "path": "C:\\PurgeTrapUW",
+          "sddl": "O:BAG:SYD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;0x1301bf;;;BU)"
+        },
+        {
+          "k": "file",
+          "path": "C:\\PurgeTrapUW\\race-a\\payload\\own1.txt",
+          "text": "payload\n"
+        }
+      ],
+      "items": [
+        {
+          "id": "race-validate-open.dir",
+          "target": {
+            "type": "Path",
+            "path": "C:\\PurgeTrapUW\\race-a\\payload"
+          },
+          "action": "Quarantine",
+          "group": "race-a",
+          "expect": {
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "ReparseMismatch",
+            "summary": "blocked: ReparseMismatch"
+          },
+          "accept": [
+            {
+              "outcome": "Skipped",
+              "reason": "ChangedSinceScan",
+              "blocker": null,
+              "summary": "skipped: ChangedSinceScan"
+            },
+            {
+              "outcome": "Done",
+              "reason": null,
+              "blocker": null,
+              "summary": "the original directory object moved through the handle; the junction and its target untouched"
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\PurgeTrapUW\\race-a",
+        "C:\\PurgeCanary\\race-a"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": {
+        "action": "swap",
+        "fault_pause": "intent.flushed:8000",
+        "env": {
+          "PURGE_FAULT_PAUSE": "intent.flushed:8000"
+        },
+        "dir": "C:\\PurgeTrapUW\\race-a\\payload",
+        "link_to": "C:\\PurgeCanary\\race-a\\target",
+        "trigger": "a line of the newest sessions\\*\\journal.jsonl that names the item path and contains \"intent\"",
+        "when": "start before exec of this group"
+      },
+      "medium": null,
+      "canaries": [
+        "race-a.own1"
+      ],
+      "build": null
+    },
+    {
+      "id": "race-open-act",
+      "gate": "G1",
+      "stage": "post-install",
+      "summary": "A validated directory is replaced by a junction to a canary while the engine is paused at act.before:8000 (PURGE_FAULT_PAUSE; separate exec, group race-b).",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "race-b.own1",
+          "path": "C:\\PurgeCanary\\race-b\\target\\own1.txt"
+        },
+        {
+          "k": "dir",
+          "path": "C:\\PurgeTrapUW"
+        },
+        {
+          "k": "file-sddl",
+          "path": "C:\\PurgeTrapUW",
+          "sddl": "O:BAG:SYD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;0x1301bf;;;BU)"
+        },
+        {
+          "k": "file",
+          "path": "C:\\PurgeTrapUW\\race-b\\payload\\own1.txt",
+          "text": "payload\n"
+        }
+      ],
+      "items": [
+        {
+          "id": "race-open-act.dir",
+          "target": {
+            "type": "Path",
+            "path": "C:\\PurgeTrapUW\\race-b\\payload"
+          },
+          "action": "Quarantine",
+          "group": "race-b",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "the handle opened before the swap moves the original directory object; the planted junction and its target are untouched"
+          },
+          "accept": [
+            {
+              "outcome": "Skipped",
+              "reason": "GateBlocked",
+              "blocker": "ReparseMismatch",
+              "summary": "blocked: ReparseMismatch"
+            },
+            {
+              "outcome": "Skipped",
+              "reason": "ChangedSinceScan",
+              "blocker": null,
+              "summary": "skipped: ChangedSinceScan"
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "C:\\PurgeTrapUW\\race-b",
+        "C:\\PurgeCanary\\race-b"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": {
+        "action": "swap",
+        "fault_pause": "act.before:8000",
+        "env": {
+          "PURGE_FAULT_PAUSE": "act.before:8000"
+        },
+        "dir": "C:\\PurgeTrapUW\\race-b\\payload",
+        "link_to": "C:\\PurgeCanary\\race-b\\target",
+        "trigger": "a line of the newest sessions\\*\\journal.jsonl that names the item path and contains \"intent\"",
+        "when": "start before exec of this group"
+      },
+      "medium": null,
+      "canaries": [
+        "race-b.own1"
+      ],
+      "build": null
+    },
+    {
+      "id": "expiry-junction",
+      "gate": "expiry",
+      "stage": "post-install",
+      "summary": "After exec, a junction and a file symlink to canaries are planted inside the quarantined item; the expiry walk must delete the links and never descend.",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "expiry.target",
+          "path": "C:\\PurgeCanary\\expiry\\target\\keep.txt"
+        },
+        {
+          "k": "canary-file",
+          "id": "expiry.target-file",
+          "path": "C:\\PurgeCanary\\expiry\\target-file.txt"
+        },
+        {
+          "k": "file",
+          "path": "System.Collections.Hashtable\\expiry\\payload\\expiry-marker.txt",
+          "text": "PURGE-EXPIRY-MARKER m2-traps\n"
+        },
+        {
+          "k": "file",
+          "path": "System.Collections.Hashtable\\expiry\\payload\\own.txt",
+          "text": "own\n"
+        }
+      ],
+      "items": [
+        {
+          "id": "expiry-junction.dir",
+          "target": {
+            "type": "Path",
+            "path": "System.Collections.Hashtable\\expiry\\payload"
+          },
+          "action": "Quarantine",
+          "group": "main",
+          "expect": {
+            "outcome": "Done",
+            "reason": null,
+            "blocker": null,
+            "summary": "quarantined; later purged by the expiry walk"
+          },
+          "accept": [],
+          "condition": null
+        }
+      ],
+      "fs_roots": [
+        "System.Collections.Hashtable\\expiry",
+        "C:\\PurgeCanary\\expiry"
+      ],
+      "reg_roots": [],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": null,
+      "post_checks": [],
+      "helper": {
+        "action": "plant-expiry-junction",
+        "when": "after the main exec committed, before `purge-engine quarantine purge --ids <op> --yes-irreversible`",
+        "marker": "expiry-marker.txt",
+        "plants": [
+          {
+            "name": "escape-dir",
+            "kind": "junction",
+            "target": "C:\\PurgeCanary\\expiry\\target"
+          },
+          {
+            "name": "escape-file.txt",
+            "kind": "filesym",
+            "target": "C:\\PurgeCanary\\expiry\\target-file.txt"
+          }
+        ],
+        "expect_after": {
+          "outcome": "Done",
+          "reason": null,
+          "blocker": null,
+          "summary": "link removed, target intact: the walk deletes both links without descending"
+        }
+      },
+      "medium": null,
+      "canaries": [
+        "expiry.target",
+        "expiry.target-file"
+      ],
+      "build": null
+    },
+    {
+      "id": "forged-user-fp",
+      "gate": "RuleT",
+      "stage": "post-install",
+      "summary": "A standard user writes a user-store fingerprint claiming machine-scope paths and a canary (ENGINE_PLAN 6.2).",
+      "objects": [
+        {
+          "k": "canary-file",
+          "id": "fp.victim",
+          "path": "C:\\PurgeCanary\\fp\\victim\\data.txt"
+        },
+        {
+          "k": "canary-key",
+          "id": "fp.victim-key",
+          "path": "HKLM\\SOFTWARE\\PurgeCanary\\FpVictim",
+          "values": [
+            {
+              "name": "CanaryValue",
+              "type": 1,
+              "data_b64": "UABVAFIARwBFAC0AQwBBAE4AQQBSAFkAIABmAHAAAAA="
+            },
+            {
+              "name": "CanaryDword",
+              "type": 4,
+              "data_b64": "3sBeAA=="
+            },
+            {
+              "name": "CanaryBinary",
+              "type": 3,
+              "data_b64": "3q2+7wD/"
+            }
+          ]
+        },
+        {
+          "k": "medium",
+          "step": "fp-forge"
+        }
+      ],
+      "items": [],
+      "fs_roots": [
+        "C:\\PurgeCanary\\fp",
+        "{localappdata}\\Purge\\fp\\PurgeTrapApp.json"
+      ],
+      "reg_roots": [
+        "HKLM\\SOFTWARE\\PurgeCanary\\FpVictim"
+      ],
+      "fs_root_globs": [],
+      "guarded_roots": [],
+      "expect": {
+        "phase": "scan",
+        "outcome": "NotPreselected",
+        "paths": [
+          "C:\\PurgeCanary\\fp\\victim",
+          "HKLM\\SOFTWARE\\PurgeCanary\\FpVictim"
+        ],
+        "summary": "user-store evidence is Tier B for machine-scope targets (Rule T): the canary paths are never Safe or preselected; no plan item is emitted for them"
+      },
+      "post_checks": [],
+      "helper": null,
+      "medium": {
+        "fp-forge": {
+          "expect_ok": {
+            "mkdir fp": true,
+            "write forged fingerprint": true
+          },
+          "body": "Op 'mkdir fp' { New-Item -ItemType Directory -Force -Path '{localappdata}\\Purge\\fp' -ErrorAction Stop }\r\nOp 'write forged fingerprint' { [IO.File]::WriteAllText('{localappdata}\\Purge\\fp\\PurgeTrapApp.json', [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('ew0KICAgICJzY2hlbWEiOiAgInB1cmdlLmZwLzAiLA0KICAgICJub3RlIjogICJGT1JHRUQgYnkgdGhlIE0yIHJpZyAobTItdHJhcHMgZm9yZ2VkLXVzZXItZnApOyB0aGUgdXNlci1zdG9yZSBmb3JtYXQgaXMgcHJvdmlzaW9uYWwgKEVOR0lORV9QTEFOIDYuMikiLA0KICAgICJhcHAiOiAgIlB1cmdlVHJhcEFwcCIsDQogICAgInNjb3BlIjogICJtYWNoaW5lIiwNCiAgICAicm9vdHMiOiAgWw0KICAgICAgICAgICAgICAgICAgIkM6XFxQcm9ncmFtIEZpbGVzXFxQdXJnZVRyYXBBcHAiLA0KICAgICAgICAgICAgICAgICAgIkM6XFxQdXJnZUNhbmFyeVxcZnBcXHZpY3RpbSINCiAgICAgICAgICAgICAgXSwNCiAgICAia2V5cyI6ICBbDQogICAgICAgICAgICAgICAgICJIS0xNXFxTT0ZUV0FSRVxcUHVyZ2VUcmFwQXBwIiwNCiAgICAgICAgICAgICAgICAgIkhLTE1cXFNPRlRXQVJFXFxQdXJnZUNhbmFyeVxcRnBWaWN0aW0iDQogICAgICAgICAgICAgXSwNCiAgICAiZXhlX25hbWVzIjogIFsNCiAgICAgICAgICAgICAgICAgICAgICAicHVyZ2V0cmFwYXBwLmV4ZSINCiAgICAgICAgICAgICAgICAgIF0NCn0='))) }"
+        }
+      },
+      "canaries": [
+        "fp.victim",
+        "fp.victim-key"
+      ],
+      "build": null
+    }
+  ]
+}

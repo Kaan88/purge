@@ -1,0 +1,16 @@
+{
+  "id": "winmerge",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\(WINMERGEU)\\.EXE-[0-9A-F]{8}\\.pf$",
+      "why": "Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash)."
+    }
+  ],
+  "note": "WinMerge 2.16.60 (x0-winmerge, out-of-sample Inno). Generic rules only: informational recall."
+}

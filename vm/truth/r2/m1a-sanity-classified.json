@@ -1,0 +1,93 @@
+{
+  "schema": "purge.rig.m1a-sanity-classified/1",
+  "prefix": "r2-",
+  "reviewed": "2026-11-15",
+  "source": "~/purge-target/gate/score-review-r2.md, section \"The 11 sanity differences\"",
+  "note": "11 residual differences: 6 random CLSID+AppID keys (OS noise), 1 hivelist COMPONENTS (OS noise), 4 UserAssist Count missing (environment); plus the Firefox CLSID {1814CEEB...} listed by the normalised comparison (artefact).",
+  "items": [
+    {
+      "app": "vscode",
+      "side": "frozen",
+      "key": "RegValue:hku\\s-1-5-21-1336749127-99101324-1432799918-1000\\software\\microsoft\\windows\\currentversion\\explorer\\userassist\\{cebff5cd-ace2-4f4f-9178-9926f41749ea}\\count|zvpebfbsg.ivfhnyfghqvbpbqr",
+      "class": "environment",
+      "evidence": "score-review-r2.md: Explorer wrote no UserAssist Count value in any r2 run (Linux host, 3D off); present in the frozen M0 truth. UserAssist traces are not exercised by this campaign"
+    },
+    {
+      "app": "vscode",
+      "side": "run",
+      "key": "RegKey:hklm\\software\\classes\\clsid\\{7aac202a-6c82-4aca-8ea6-d1a93a2b3f52}|",
+      "class": "os_noise",
+      "evidence": "score-review-r2.md: one value AppID={random}, no subkeys, written 2-7 s after snap0; the same pair appears in all three r2 null runs and in two of three r1 null runs with no app involved"
+    },
+    {
+      "app": "vscode",
+      "side": "run",
+      "key": "RegKey:hklm\\software\\classes\\clsid\\{e248f276-d0eb-4caa-aaca-61c6d55b1dd7}|",
+      "class": "os_noise",
+      "evidence": "score-review-r2.md: one value AppID={random}, no subkeys, written 2-7 s after snap0; the same pair appears in all three r2 null runs and in two of three r1 null runs with no app involved"
+    },
+    {
+      "app": "vscode",
+      "side": "run",
+      "key": "RegValue:hklm\\system\\currentcontrolset\\control\\hivelist|\\registry\\machine\\components",
+      "class": "os_noise",
+      "evidence": "score-review-r2.md: Windows servicing mounted the COMPONENTS hive during the run (same run has Component Based Servicing and 16 WOSC changes); null runs r0-null3 and f0-null3 show it too; now a servicing rule in truth/mk_labels.py"
+    },
+    {
+      "app": "git",
+      "side": "frozen",
+      "key": "RegValue:hku\\s-1-5-21-1336749127-99101324-1432799918-1000\\software\\microsoft\\windows\\currentversion\\explorer\\userassist\\{cebff5cd-ace2-4f4f-9178-9926f41749ea}\\count|tvgsbejvaqbjf.onfu",
+      "class": "environment",
+      "evidence": "score-review-r2.md: Explorer wrote no UserAssist Count value in any r2 run (Linux host, 3D off); present in the frozen M0 truth. UserAssist traces are not exercised by this campaign"
+    },
+    {
+      "app": "git",
+      "side": "run",
+      "key": "RegKey:hklm\\software\\classes\\clsid\\{96449681-04cb-455f-9053-c77f2310212d}|",
+      "class": "os_noise",
+      "evidence": "score-review-r2.md: one value AppID={random}, no subkeys, written 2-7 s after snap0; the same pair appears in all three r2 null runs and in two of three r1 null runs with no app involved"
+    },
+    {
+      "app": "git",
+      "side": "run",
+      "key": "RegKey:hklm\\software\\classes\\clsid\\{e31e7174-2886-421b-8ab9-b981f7f4bebd}|",
+      "class": "os_noise",
+      "evidence": "score-review-r2.md: one value AppID={random}, no subkeys, written 2-7 s after snap0; the same pair appears in all three r2 null runs and in two of three r1 null runs with no app involved"
+    },
+    {
+      "app": "firefox",
+      "side": "frozen",
+      "key": "RegValue:hku\\s-1-5-21-1336749127-99101324-1432799918-1000\\software\\microsoft\\windows\\currentversion\\explorer\\userassist\\{cebff5cd-ace2-4f4f-9178-9926f41749ea}\\count|308046o0ns4n39po",
+      "class": "environment",
+      "evidence": "score-review-r2.md: Explorer wrote no UserAssist Count value in any r2 run (Linux host, 3D off); present in the frozen M0 truth. UserAssist traces are not exercised by this campaign"
+    },
+    {
+      "app": "firefox",
+      "side": "run",
+      "key": "RegKey:hklm\\software\\classes\\clsid\\{1814ceeb-49e2-407f-af99-fa755a7d2607}|",
+      "class": "normalisation_artefact",
+      "evidence": "score-review-r2.md: Firefox's own CLSID, also in the frozen truth; listed only because GUID-normalised counts differ (the two random OS CLSIDs share its normalised form)"
+    },
+    {
+      "app": "firefox",
+      "side": "run",
+      "key": "RegKey:hklm\\software\\classes\\clsid\\{622506a1-3f33-4595-b851-49f627f6434e}|",
+      "class": "os_noise",
+      "evidence": "score-review-r2.md: one value AppID={random}, no subkeys, written 2-7 s after snap0; the same pair appears in all three r2 null runs and in two of three r1 null runs with no app involved"
+    },
+    {
+      "app": "firefox",
+      "side": "run",
+      "key": "RegKey:hklm\\software\\classes\\clsid\\{d6a6855a-429a-4928-8039-4da34c616c2a}|",
+      "class": "os_noise",
+      "evidence": "score-review-r2.md: one value AppID={random}, no subkeys, written 2-7 s after snap0; the same pair appears in all three r2 null runs and in two of three r1 null runs with no app involved"
+    },
+    {
+      "app": "npp",
+      "side": "frozen",
+      "key": "RegValue:hku\\s-1-5-21-1336749127-99101324-1432799918-1000\\software\\microsoft\\windows\\currentversion\\explorer\\userassist\\{cebff5cd-ace2-4f4f-9178-9926f41749ea}\\count|{6q809377-6ns0-444o-8957-n3773s02200r}\\abgrcnq++\\abgrcnq++.rkr",
+      "class": "environment",
+      "evidence": "score-review-r2.md: Explorer wrote no UserAssist Count value in any r2 run (Linux host, 3D off); present in the frozen M0 truth. UserAssist traces are not exercised by this campaign"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "schema": "purge.rig.m1a-status/1",
+  "time": "2026-11-13T17:36:32+03:00",
+  "prefix": "f0-",
+  "classes": true,
+  "bcu": false,
+  "exit": 0,
+  "stage": "done",
+  "ambient": "truth/f0/ambient-f0.json",
+  "servicing_rules": true,
+  "sanity_residual": 112,
+  "accept_sanity_diff": true,
+  "invdiff": [
+    {
+      "run": "f0-vscode",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f0-vscode",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "f0-vscode-user",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f0-vscode-user",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "f0-git",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f0-git",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "f0-firefox",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f0-firefox",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "f0-firefox-tb",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f0-firefox-tb",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "f0-npp",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f0-npp",
+      "phase": "2",
+      "exit": 0
+    }
+  ]
+}

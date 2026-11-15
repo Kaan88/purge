@@ -1,0 +1,990 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "purge",
+      "apps": 2,
+      "truth_n": 73,
+      "recall_listed": 0.2676332288401254,
+      "recall_visible": 0.1085423197492163,
+      "recall_safe": 0.09717868338557994,
+      "recall_listed_nd": 0.17672413793103448,
+      "recall_visible_nd": 0.1085423197492163,
+      "recall_safe_nd": 0.09717868338557994,
+      "precision_safe": 1.0,
+      "partial_n": 2,
+      "danger_listed": 7,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 2,
+      "noop_would_be_danger": 2,
+      "classes": {
+        "danger_blocking": 0,
+        "userdata_blocking": 0,
+        "danger_unticked": 7,
+        "userdata_unticked": 1,
+        "preexisting_value_ref": 0,
+        "old_empty_ext_key": 0,
+        "userdata_safe": 0
+      },
+      "per_kind_recall": {
+        "Path": 0.4076923076923077,
+        "RegKey": 0.0625,
+        "RegValue": 0.6166666666666667,
+        "RegValueChanged": 0.0
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 7,
+        "gone": 0,
+        "hit": 18,
+        "noop_if_nonempty": 2,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "ff-esr",
+      "dir": "runs/x0-ff-esr",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 86,
+        "kept_owner": 3,
+        "leftover": 38,
+        "rig": 1,
+        "user_data": 6
+      },
+      "ambient_by_run": {
+        "r0-null1": 59,
+        "r0-null2": 62,
+        "r0-null3": 60
+      },
+      "tools": [
+        {
+          "app": "ff-esr",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/x0-ff-esr\\plans\\purge.json",
+          "offered_n": 21,
+          "truth_n": 44,
+          "covered_listed": 19,
+          "covered_visible": 5,
+          "covered_safe": 4,
+          "recall_listed": 0.4318181818181818,
+          "recall_visible": 0.11363636363636363,
+          "recall_safe": 0.09090909090909091,
+          "covered_listed_nd": 11,
+          "covered_visible_nd": 5,
+          "covered_safe_nd": 4,
+          "recall_listed_nd": 0.25,
+          "recall_visible_nd": 0.11363636363636363,
+          "recall_safe_nd": 0.09090909090909091,
+          "partial_n": 0,
+          "safe_n": 5,
+          "safe_not_gone": 5,
+          "safe_hits": 5,
+          "precision_safe": 1.0,
+          "danger_listed": 7,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 2,
+          "noop_would_be_danger": 2,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 7,
+            "userdata_unticked": 1,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 7,
+            "gone": 0,
+            "hit": 12,
+            "noop_if_nonempty": 2,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 13,
+              "covered": 8,
+              "recall": 0.6153846153846154
+            },
+            "RegKey": {
+              "n": 8,
+              "covered": 1,
+              "recall": 0.125
+            },
+            "RegValue": {
+              "n": 12,
+              "covered": 10,
+              "recall": 0.8333333333333334
+            },
+            "RegValueChanged": {
+              "n": 11,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "FS-APPDATA": {
+              "danger": 2,
+              "hit": 1
+            },
+            "FS-VENDORPARENT": {
+              "noop_if_nonempty": 2
+            },
+            "REF-ANY": {
+              "danger": 1,
+              "hit": 4
+            },
+            "REG-APPPATHS": {
+              "danger": 1
+            },
+            "REG-SOFTWARE": {
+              "danger": 3,
+              "hit": 7
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\Firefox_S-1-5-21-1336749127-99101324-1432799918-1000_shortcuts.ini",
+              "label": "leftover",
+              "partial": false,
+              "size": 158
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\profile_count_308046B0AF4A39CB.json",
+              "label": "leftover",
+              "partial": false,
+              "size": 78
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsuA.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 779203
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CRASHHELPER.EXE-C6FC1224.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 4263
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\FIREFOX.EXE-25FC0A66.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 45192
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7600",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7700",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7724",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7784",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-19\\Software\\Microsoft\\Cryptography\\NGC",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.shtml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\InstallService",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|308046O0NS4N39PO",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RunNotification|StartupTNotiMozilla-Firefox-308046B0AF4A39CB",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\InProcServer32|",
+              "label": "leftover",
+              "partial": false,
+              "size": 110
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags|PatchDbUpdateTickCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|EndTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 48
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|RunCounter",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|StartTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 48
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|StartTimeBin",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\InstallService\\State|AutoUpdateLastSuccessTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 52
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OneSettings\\appcompat\\runtimesdbincloud|RefreshAfter",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\mozilla.org\\Mozilla|CurrentVersion",
+              "label": "leftover",
+              "partial": false,
+              "size": 12
+            },
+            {
+              "target": "C:HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage|SwarmCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\Shell\\Bags\\1\\Desktop|IconLayouts",
+              "label": "leftover",
+              "partial": false,
+              "size": 198
+            }
+          ],
+          "danger": [
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\firefox.exe|",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\firefox.exe|"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Applications\\firefox.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-APPPATHS",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKLM\\SOFTWARE\\Classes\\Applications\\firefox.exe"
+              ]
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 6,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Firefox",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKLM\\SOFTWARE\\Mozilla\\Firefox"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Mozilla Firefox",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKLM\\SOFTWARE\\Mozilla\\Mozilla Firefox"
+              ]
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox"
+              ]
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "danger",
+              "covers": 6,
+              "partial": 0,
+              "class": "unticked",
+              "userdata": "unticked",
+              "reasons": [
+                "existed in snap0: P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox"
+              ]
+            }
+          ],
+          "noop": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 223 entries left inside (102 existed in snap0), e.g. P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox, P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox\\Profiles, P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\3tc8oot3.default",
+                "as a plain delete: existed in snap0: P:C:\\Users\\tester\\AppData\\Local\\Mozilla"
+              ]
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 268 entries left inside (141 existed in snap0), e.g. P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox, P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox\\Background Tasks Profiles, P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox\\Background Tasks Profiles\\46d5xsmk.MozillaBackgroundTask-308046B0AF4A39CB-defaultagent",
+                "as a plain delete: existed in snap0: P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla"
+              ]
+            }
+          ],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{9899288F-3B0E-41E8-B93A-FACF4E1A321A}",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB;PrivateBrowsingAUMID",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\firefox.exe|",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\firefox.exe|"
+              ]
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\DllPrefetchExperiment|C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\Launcher|C:\\Program Files\\Mozilla Firefox\\firefox.exe|Blocklist",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings|C:\\Program Files\\Mozilla Firefox\\firefox.exe|Enabled",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings|C:\\Program Files\\Mozilla Firefox\\firefox.exe|Progress",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings|C:\\Program Files\\Mozilla Firefox\\firefox.exe|Theme",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Applications\\firefox.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-APPPATHS",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKLM\\SOFTWARE\\Classes\\Applications\\firefox.exe"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 6,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Firefox",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKLM\\SOFTWARE\\Mozilla\\Firefox"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Mozilla Firefox",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKLM\\SOFTWARE\\Mozilla\\Mozilla Firefox"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox"
+              ]
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "danger",
+              "covers": 6,
+              "partial": 0,
+              "class": "unticked",
+              "userdata": "unticked",
+              "reasons": [
+                "existed in snap0: P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox"
+              ]
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 223 entries left inside (102 existed in snap0), e.g. P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox, P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox\\Profiles, P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\3tc8oot3.default",
+                "as a plain delete: existed in snap0: P:C:\\Users\\tester\\AppData\\Local\\Mozilla"
+              ]
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 268 entries left inside (141 existed in snap0), e.g. P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox, P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox\\Background Tasks Profiles, P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox\\Background Tasks Profiles\\46d5xsmk.MozillaBackgroundTask-308046B0AF4A39CB-defaultagent",
+                "as a plain delete: existed in snap0: P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla"
+              ]
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates\\308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vlc",
+      "dir": "runs/x0-vlc",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 171,
+        "kept_owner": 0,
+        "leftover": 29,
+        "rig": 0,
+        "user_data": 0
+      },
+      "ambient_by_run": {
+        "r0-null1": 142,
+        "r0-null2": 146,
+        "r0-null3": 141
+      },
+      "tools": [
+        {
+          "app": "vlc",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/x0-vlc\\plans\\purge.json",
+          "offered_n": 6,
+          "truth_n": 29,
+          "covered_listed": 3,
+          "covered_visible": 3,
+          "covered_safe": 3,
+          "recall_listed": 0.10344827586206896,
+          "recall_visible": 0.10344827586206896,
+          "recall_safe": 0.10344827586206896,
+          "covered_listed_nd": 3,
+          "covered_visible_nd": 3,
+          "covered_safe_nd": 3,
+          "recall_listed_nd": 0.10344827586206896,
+          "recall_visible_nd": 0.10344827586206896,
+          "recall_safe_nd": 0.10344827586206896,
+          "partial_n": 2,
+          "safe_n": 4,
+          "safe_not_gone": 4,
+          "safe_hits": 4,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 6,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 5,
+              "covered": 1,
+              "recall": 0.2
+            },
+            "RegKey": {
+              "n": 13,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValue": {
+              "n": 5,
+              "covered": 2,
+              "recall": 0.4
+            },
+            "RegValueChanged": {
+              "n": 6,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "FS-VENDORPARENT": {
+              "hit": 1
+            },
+            "REF-ANY": {
+              "hit": 5
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Diagnosis\\DownloadedSettings\\telemetry.P-Eco3PTelDefault.json.bk",
+              "label": "leftover",
+              "partial": false,
+              "size": 57
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Diagnosis\\DownloadedSettings\\utc.cert.json.bk",
+              "label": "leftover",
+              "partial": false,
+              "size": 2723
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsu1.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 264549
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\VLC.EXE-46412408.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 14674
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\DVD\\shell",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\VideoLAN.VLCPlugin.2",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\AutoplayHandlers\\Handlers\\VLCPlayBlurayOnArrival",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\1192",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\1308",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\1560",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2248",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6536",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7116",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7304",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\MozillaPlugins",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Control Panel\\NotifyIconSettings\\482821502890861840",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Ext\\Stats",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\AutoplayHandlers\\EventHandlers\\PlayBluRayOnArrival|VLCPlayBlurayOnArrival",
+              "label": "leftover",
+              "partial": false,
+              "size": 2
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Program Files\\VideoLAN\\VLC\\vlc.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 24
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|{6Q809377-6NS0-444O-8957-N3773S02200R}\\IvqrbYNA\\IYP\\iyp.rkr",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|SequenceNumber",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Control Panel\\NotifyIconSettings|UIOrderList",
+              "label": "leftover",
+              "partial": false,
+              "size": 40
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\DesktopSpotlight|State",
+              "label": "leftover",
+              "partial": false,
+              "size": 696
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\DesktopSpotlight|UpdateTimer",
+              "label": "leftover",
+              "partial": false,
+              "size": 42
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.DesktopSpotlight\\V1\\LU|PCT",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.DesktopSpotlight\\V1\\LU|PTT",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\AutoplayHandlers\\Handlers\\VLCPlayBlurayOnArrival|DefaultIcon",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\AutoplayHandlers\\Handlers\\VLCPlayBlurayOnArrival|InvokeProgID",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|1",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|2",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\VideoLAN.VLCPlugin.2\\CLSID|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\Program Files\\VideoLAN",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

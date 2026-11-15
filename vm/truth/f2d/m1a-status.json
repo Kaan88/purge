@@ -1,0 +1,68 @@
+{
+  "schema": "purge.rig.m1a-status/1",
+  "time": "2026-11-15T06:27:21+03:00",
+  "prefix": "f2d-",
+  "classes": true,
+  "bcu": false,
+  "exit": 0,
+  "stage": "done",
+  "ambient": "truth/f2d/ambient-f2d.json",
+  "servicing_rules": true,
+  "sanity": "skipped",
+  "label_overrides": "firefox=firefox-dirty vscode-user=vscode-user-dirty",
+  "sanity_residual": null,
+  "accept_sanity_diff": false,
+  "sanity_classified": null,
+  "invdiff": [
+    {
+      "run": "f2d-firefox",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f2d-firefox",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "f2d-vscode-user",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f2d-vscode-user",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "f2d-git",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f2d-git",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "f2d-npp",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f2d-npp",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "f2d-vlc",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "f2d-vlc",
+      "phase": "2",
+      "exit": 0
+    }
+  ]
+}

@@ -29,11 +29,14 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
   rigtool snap [--root SPEC]... [--no-values] [--threads N] -o FILE.tsv.gz
   rigtool diff A.tsv.gz B.tsv.gz [--json]
   rigtool truth --s0 F --s1 F --s2 F --lists0 F --lists2 F --run run.json
-                [--ambient ambient.json] [--labels labels.json] [--deny deny.json] [--sid SID] -o truth.json
+                [--ambient ambient.json] [--labels labels.json...] [--deny deny.json] [--sid SID] -o truth.json
   rigtool ambient --null DIR... -o ambient.json
-  rigtool score --set APPDIR... [--deny deny.json] [--sid SID] --json out.json --md out.md
-  rigtool score --plan plan.json [--plan ...] --truth truth.json --s0 F --s2 F
-                [--deny deny.json] [--sid SID] --json out.json --md out.md
+  rigtool score --set APPDIR... [--deny deny.json] [--sid SID] [--classes] --json out.json --md out.md
+  rigtool score --plan plan.json [--plan ...] --truth truth.json --s0 F --s2 F [--lists0 F]
+                [--deny deny.json] [--sid SID] [--classes] --json out.json --md out.md
+                (--classes: reporting classes blocking / unticked / preexisting_value_ref / old_empty_ext_key;
+                 --lists0: lists whose packages, tasks, services and firewall rules count as pre-existing;
+                 --set reads <dir>/lists-*-0.json)
   rigtool convert (--clone FILE | --removed FILE --tool ut|bcu) --app ID -o plan.json
   rigtool baseline --snap snap-0.tsv.gz -o FILE.tsv.gz|DIR\\
   rigtool invdiff --inv inventory.json --lists lists-<run>-<phase>.json [--explain inventory-explain.json]
@@ -159,8 +162,8 @@ fn run(argv: Vec<String>) -> Result<()> {
             let a = Args::parse(
                 rest,
                 &[],
-                &[],
-                &["--s0", "--s1", "--s2", "--lists0", "--lists2", "--run", "--ambient", "--labels", "--deny", "--sid", "-o"],
+                &["--labels"],
+                &["--s0", "--s1", "--s2", "--lists0", "--lists2", "--run", "--ambient", "--deny", "--sid", "-o"],
             )?;
             truth::cmd_truth(&truth::TruthArgs {
                 s0: a.req("--s0")?,
@@ -171,7 +174,7 @@ fn run(argv: Vec<String>) -> Result<()> {
                 lists2: Some(a.req("--lists2")?),
                 run: Some(a.req("--run")?),
                 ambient: a.path("--ambient"),
-                labels: a.path("--labels"),
+                labels: a.all("--labels").into_iter().map(PathBuf::from).collect(),
                 deny: a.path("--deny"),
                 sid: a.get("--sid"),
                 out: a.req("-o")?,
@@ -188,9 +191,9 @@ fn run(argv: Vec<String>) -> Result<()> {
         "score" => {
             let a = Args::parse(
                 rest,
-                &[],
+                &["--classes"],
                 &["--set"],
-                &["--plan", "--truth", "--s0", "--s2", "--deny", "--sid", "--json", "--md"],
+                &["--plan", "--truth", "--s0", "--s2", "--deny", "--sid", "--json", "--md", "--lists0"],
             )?;
             score::cmd_score(&score::ScoreArgs {
                 set: a.all("--set").into_iter().map(PathBuf::from).collect(),
@@ -202,6 +205,8 @@ fn run(argv: Vec<String>) -> Result<()> {
                 sid: a.get("--sid"),
                 json: a.path("--json"),
                 md: a.path("--md"),
+                lists0: a.path("--lists0"),
+                classes: a.has("--classes"),
             })
         }
         "convert" => {

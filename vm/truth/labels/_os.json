@@ -199,6 +199,11 @@
     },
     {
       "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\bam\\\\State\\\\UserSettings\\\\S-1-5-21-[0-9-]+\\|",
+      "why": "Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target."
+    },
+    {
+      "label": "ambient",
       "match": "^K:(HKLM\\\\SOFTWARE\\\\Classes|HKU\\\\(?:S-1-5-21-[0-9-]+_Classes|\\.DEFAULT\\\\Software\\\\Classes))\\\\PackagedCom(\\\\(Package|ClassIndex))?$",
       "why": "PackagedCom catalog containers created by the AppX COM catalog on first packaged-COM registration. The package and CLSID entries inside are the package's own (split).",
       "split": true

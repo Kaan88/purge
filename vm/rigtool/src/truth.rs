@@ -11,7 +11,7 @@ use crate::target::Target;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub const LABELS: [&str; 5] = ["rig", "ambient", "kept_owner", "user_data", "leftover"];
@@ -242,6 +242,60 @@ pub fn kept_entries(run: &Value, lists0: &Value, lists2: &Value, sid: Option<&st
     out
 }
 
+/// Microsoft Store self-updates between lists-0 and lists-2: non-sparse packages installed under
+/// `C:\Program Files\WindowsApps`, published by Microsoft (publisher id `8wekyb3d8bbwe`), whose full name is in
+/// exactly one of the two lists (an inbox app replaced by a newer version, or a framework it pulled in). No
+/// desktop installer of the corpus deploys such a package (the apps' own packages are sparse), so what names
+/// them is OS-owned by construction (2026-11-15, x2 review: Photos, VCLibs and OneDrive.Photos updated
+/// themselves inside 9 of 16 runs). Returns (folded needle, family) pairs: each full name and its family.
+pub fn store_updates(lists0: &Value, lists2: &Value) -> Vec<(String, String)> {
+    let appx = |v: &Value| -> Vec<Value> { v.get("appx").and_then(|x| x.as_array()).cloned().unwrap_or_default() };
+    let (a0, a2) = (appx(lists0), appx(lists2));
+    if lists0.is_null() || lists2.is_null() {
+        return Vec::new();
+    }
+    let names = |a: &[Value]| -> HashSet<String> { a.iter().filter_map(|e| s(e, "full_name")).map(|n| canon::fold(&n)).collect() };
+    let (n0, n2) = (names(&a0), names(&a2));
+    let mut out: Vec<(String, String)> = Vec::new();
+    for e in a0.iter().chain(a2.iter()) {
+        let Some(full) = s(e, "full_name") else { continue };
+        let f = canon::fold(&full);
+        if n0.contains(&f) == n2.contains(&f) {
+            continue;
+        }
+        let sparse = e.get("sparse").and_then(|x| x.as_bool()).unwrap_or(true);
+        let loc = s(e, "install_location").map(|l| canon::fold(&l)).unwrap_or_default();
+        let Some(family) = crate::score::package_family(&full) else { continue };
+        if sparse || !loc.starts_with(&canon::fold("C:\\Program Files\\WindowsApps\\")) || !canon::fold(&family).ends_with("_8wekyb3d8bbwe") {
+            continue;
+        }
+        for n in [f, canon::fold(&family)] {
+            if !out.iter().any(|(x, _)| *x == n) {
+                out.push((n, family.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// Relabel the `leftover` / `user_data` items that name a Store self-updated package (see [`store_updates`]) as
+/// `ambient`. Returns how many were relabelled.
+pub fn relabel_store_updates(items: &mut [TruthItem], upd: &[(String, String)]) -> usize {
+    if upd.is_empty() {
+        return 0;
+    }
+    let mut n = 0;
+    for i in items.iter_mut().filter(|i| i.label == "leftover" || i.label == "user_data") {
+        let cs = canon::fold(&i.target.canon_string());
+        if let Some((_, fam)) = upd.iter().find(|(x, _)| cs.contains(x.as_str())) {
+            i.label = "ambient".into();
+            i.rule = format!("built-in: Microsoft Store self-update of {fam} (full name differs between lists-0 and lists-2)");
+            n += 1;
+        }
+    }
+    n
+}
+
 impl KeptAnchors {
     pub fn from_entries(entries: &[Value], sid: Option<&str>) -> KeptAnchors {
         let mut p: Vec<(String, String)> = Vec::new();
@@ -467,10 +521,17 @@ pub fn split_containers(items: Vec<Item>, s2: &Snap, lab: &Labeler) -> (Vec<Item
 /// own item, and the values of the container keys on the path; the container itself is not an item (an
 /// offer of it covers a kept_owner item, so it scores as danger). Returns the new items and how many
 /// collapsed items were split.
+///
+/// The same split happens at `user_data` boundaries below a top labelled `leftover` (x0 runs, RIG.md §5): a
+/// user file planted inside a new install root (`plant_post`) is matched by a `user_data` rule of the variant's
+/// label file, so it becomes its own `user_data` item instead of disappearing into the root's single
+/// `leftover` item; an offer of the root then covers it (`userdata_preselected`). A top that is itself
+/// `user_data` is never split this way.
 pub fn split_kept(items: Vec<Item>, s0: &Snap, s2: &Snap, lab: &Labeler) -> (Vec<Item>, usize) {
     // Candidates: collapsed dirs and keys that would be labelled leftover or user_data.
     let mut ptop: HashMap<CiString, usize> = HashMap::new();
     let mut ktop: HashMap<CiString, usize> = HashMap::new();
+    let mut top_leftover: HashSet<usize> = HashSet::new();
     for (i, it) in items.iter().enumerate() {
         let is_dir = it.dir == Some(true);
         let is_key = matches!(it.target, Target::RegKey { .. });
@@ -480,6 +541,9 @@ pub fn split_kept(items: Vec<Item>, s0: &Snap, s2: &Snap, lab: &Labeler) -> (Vec
         let (l, _) = lab.label(&it.target);
         if l != "leftover" && l != "user_data" {
             continue;
+        }
+        if l == "leftover" {
+            top_leftover.insert(i);
         }
         let m = if is_key { &mut ktop } else { &mut ptop };
         m.insert(CiString(it.target.path().to_string()), i);
@@ -528,9 +592,19 @@ pub fn split_kept(items: Vec<Item>, s0: &Snap, s2: &Snap, lab: &Labeler) -> (Vec
         let top = items[i].target.path().to_string();
         let is_key = matches!(items[i].target, Target::RegKey { .. });
         let mk = |p: &str| if is_key { Target::RegKey { path: p.to_string() } } else { Target::Path { path: p.to_string() } };
-        // Kept entries below the top, reduced to the top-most ones.
-        let marked: HashSet<String> =
-            d.iter().filter(|p| lab.kept_reason(&mk(p)).is_some()).map(|p| canon::fold(p)).collect();
+        // Kept entries (and, below a leftover top, user_data entries) below the top, reduced to the top-most ones.
+        let user_split = top_leftover.contains(&i);
+        let marked: HashSet<String> = d
+            .iter()
+            .filter(|p| {
+                let t = mk(p);
+                lab.kept_reason(&t).is_some()
+                    || (user_split
+                        && lab.rule_for("user_data", &t.canon_string()).is_some()
+                        && lab.label(&t).0 == "user_data")
+            })
+            .map(|p| canon::fold(p))
+            .collect();
         if marked.is_empty() {
             continue;
         }
@@ -661,7 +735,9 @@ pub struct TruthArgs {
     pub lists2: Option<PathBuf>,
     pub run: Option<PathBuf>,
     pub ambient: Option<PathBuf>,
-    pub labels: Option<PathBuf>,
+    /// Label files, in order (repeatable `--labels`): their rules are concatenated. A label's precedence
+    /// comes from the label order (RIG.md section 5), not from the file order.
+    pub labels: Vec<PathBuf>,
     pub deny: Option<PathBuf>,
     pub sid: Option<String>,
     pub out: PathBuf,
@@ -702,10 +778,10 @@ pub fn cmd_truth(a: &TruthArgs) -> Result<()> {
         Some(p) => Some(AmbientSet::load(p)?),
         None => None,
     };
-    let rules = match &a.labels {
-        Some(p) => load_label_rules(p)?,
-        None => Vec::new(),
-    };
+    let mut rules = Vec::new();
+    for p in &a.labels {
+        rules.extend(load_label_rules(p)?);
+    }
     let entries = kept_entries(&run, &lists0, &lists2, sid.as_deref());
     let kept = KeptAnchors::from_entries(&entries, sid.as_deref());
     let lab = Labeler { rig: RigRules::new(&[&s0, &s2]), ambient, rules, kept };
@@ -717,7 +793,7 @@ pub fn cmd_truth(a: &TruthArgs) -> Result<()> {
     let (derived, n_split) = split_kept(opened, &s0, &s2, &lab);
     let n_derived = derived.len();
     if n_split > 0 {
-        eprintln!("truth: split {n_split} collapsed item(s) at kept_owner boundaries");
+        eprintln!("truth: split {n_split} collapsed item(s) at kept_owner / user_data boundaries");
     }
     if s0.alias_dropped + s2.alias_dropped > 0 {
         eprintln!(
@@ -725,7 +801,16 @@ pub fn cmd_truth(a: &TruthArgs) -> Result<()> {
             s0.alias_dropped + s2.alias_dropped
         );
     }
-    let items = label_items(derived, &lab, s1.as_ref());
+    let mut items = label_items(derived, &lab, s1.as_ref());
+    let upd = store_updates(&lists0, &lists2);
+    let n_store = relabel_store_updates(&mut items, &upd);
+    if n_store > 0 {
+        let fams: BTreeSet<&str> = upd.iter().map(|(_, f)| f.as_str()).collect();
+        eprintln!(
+            "truth: {n_store} item(s) of Store self-updated packages labelled ambient ({})",
+            fams.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
 
     let mut tf = summarize(&id, items);
     tf.run = run;
@@ -762,8 +847,12 @@ pub fn cmd_truth(a: &TruthArgs) -> Result<()> {
             tf.ambient_by_run.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ")
         );
     }
-    for h in &tf.deny_hits {
+    // One line per hit up to 10, then a count (the full list is in the truth file's `deny_hits`).
+    for h in tf.deny_hits.iter().take(10) {
         eprintln!("truth: warning: leftover matches deny: {h}");
+    }
+    if tf.deny_hits.len() > 10 {
+        eprintln!("truth: warning: {} more leftover item(s) match the deny list (deny_hits in {})", tf.deny_hits.len() - 10, a.out.display());
     }
     Ok(())
 }
@@ -916,6 +1005,60 @@ mod tests {
     }
 
     #[test]
+    fn split_new_root_at_planted_user_data() {
+        // x0-npp-userfiles: user files planted inside the new install root while the app was installed.
+        let s0 = snap_text(|t| write_d(t, "C:\\Program Files", 0x10, 1, 0));
+        let s2 = snap_text(|t| {
+            write_d(t, "C:\\Program Files", 0x10, 1, 0);
+            write_d(t, "C:\\Program Files\\Notepad++", 0x10, 2, 0);
+            write_f(t, "C:\\Program Files\\Notepad++\\notepad++.exe", 10, 0x20, 2, 0);
+            write_f(t, "C:\\Program Files\\Notepad++\\session-backup.txt", 4, 0x20, 2, 0);
+            write_d(t, "C:\\Program Files\\Notepad++\\my-notes", 0x10, 2, 0);
+            write_f(t, "C:\\Program Files\\Notepad++\\my-notes\\todo.txt", 3, 0x20, 2, 0);
+            write_d(t, "C:\\Program Files\\Notepad++\\plugins", 0x10, 2, 0);
+            write_f(t, "C:\\Program Files\\Notepad++\\plugins\\p.dll", 5, 0x20, 2, 0);
+        });
+        let rules = vec![
+            rule("user_data", r"^P:C:\\Program Files\\Notepad\+\+\\(my-notes|session-backup\.txt)(\\.*)?$"),
+            // A user_data top is never split (the whole folder is user data already).
+            rule("user_data", r"^P:C:\\Users\\"),
+        ];
+        let lab = Labeler { rig: RigRules::new(&[]), ambient: None, rules, kept: KeptAnchors::default() };
+        let (items, n) = split_kept(items::derive(&s0, &s2), &s0, &s2, &lab);
+        assert_eq!(n, 1);
+        let got: Vec<(String, Option<u64>, String)> =
+            label_items(items, &lab, None).into_iter().map(|i| (i.target.canon_string(), i.size, i.label)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("P:C:\\Program Files\\Notepad++\\my-notes".to_string(), Some(3), "user_data".to_string()),
+                ("P:C:\\Program Files\\Notepad++\\notepad++.exe".to_string(), Some(10), "leftover".to_string()),
+                ("P:C:\\Program Files\\Notepad++\\plugins".to_string(), Some(5), "leftover".to_string()),
+                ("P:C:\\Program Files\\Notepad++\\session-backup.txt".to_string(), Some(4), "user_data".to_string()),
+            ]
+        );
+        // Without a user_data rule below it the root stays one leftover item.
+        let lab = Labeler { rig: RigRules::new(&[]), ambient: None, rules: vec![], kept: KeptAnchors::default() };
+        let (items, n) = split_kept(items::derive(&s0, &s2), &s0, &s2, &lab);
+        assert_eq!((n, items.len()), (0, 1));
+        // A collapsed user_data top is not split at user_data matches inside it.
+        let s0 = snap_text(|t| write_d(t, "C:\\Users", 0x10, 1, 0));
+        let s2 = snap_text(|t| {
+            write_d(t, "C:\\Users", 0x10, 1, 0);
+            write_d(t, "C:\\Users\\t", 0x10, 2, 0);
+            write_f(t, "C:\\Users\\t\\a.txt", 1, 0x20, 2, 0);
+        });
+        let lab = Labeler {
+            rig: RigRules::new(&[]),
+            ambient: None,
+            rules: vec![rule("user_data", r"^P:C:\\Users\\")],
+            kept: KeptAnchors::default(),
+        };
+        let (items, n) = split_kept(items::derive(&s0, &s2), &s0, &s2, &lab);
+        assert_eq!((n, items.len()), (0, 1));
+    }
+
+    #[test]
     fn split_rule_opens_container_and_first_rule_wins() {
         // A new Windows container (PackagedCom) holding an app's package registration.
         let s0 = snap_text(|t| write_k(t, "HKLM\\SOFTWARE\\Classes", 1, Some(0), Some(0)));
@@ -1015,5 +1158,33 @@ mod tests {
         let tf = summarize("x", items);
         assert_eq!(tf.counts["leftover"], 3);
         assert_eq!(tf.counts["rig"], 1);
+    }
+
+    #[test]
+    fn store_self_updates_are_ambient() {
+        let l0 = json!({"appx": [
+            {"full_name": "Microsoft.Windows.Photos_26.1.0.0_x64__8wekyb3d8bbwe", "install_location": "C:\\Program Files\\WindowsApps\\Microsoft.Windows.Photos_26.1.0.0_x64__8wekyb3d8bbwe", "sparse": false},
+            {"full_name": "Microsoft.VisualStudioCode_1.0.0.0_neutral__8wekyb3d8bbwe", "install_location": "C:\\Program Files\\Microsoft VS Code", "sparse": true}
+        ]});
+        let l2 = json!({"appx": [
+            {"full_name": "Microsoft.Windows.Photos_2026.1.0.0_x64__8wekyb3d8bbwe", "install_location": "C:\\Program Files\\WindowsApps\\Microsoft.Windows.Photos_2026.1.0.0_x64__8wekyb3d8bbwe", "sparse": false},
+            {"full_name": "Microsoft.VCLibs.140.00_14.0.1.0_x86__8wekyb3d8bbwe", "install_location": "C:\\Program Files\\WindowsApps\\Microsoft.VCLibs.140.00_14.0.1.0_x86__8wekyb3d8bbwe", "sparse": false},
+            {"full_name": "Vendor.App_1.0.0.0_x64__abcdefghijklm", "install_location": "C:\\Program Files\\WindowsApps\\Vendor.App_1.0.0.0_x64__abcdefghijklm", "sparse": false},
+            {"full_name": "NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww", "install_location": "C:\\Program Files\\Notepad++", "sparse": true}
+        ]});
+        let upd = store_updates(&l0, &l2);
+        let fams: BTreeSet<&str> = upd.iter().map(|(_, f)| f.as_str()).collect();
+        assert_eq!(fams.into_iter().collect::<Vec<_>>(), vec!["Microsoft.VCLibs.140.00_8wekyb3d8bbwe", "Microsoft.Windows.Photos_8wekyb3d8bbwe"]);
+        let it = |t: Target, l: &str| TruthItem { target: t, label: l.into(), rule: String::new(), size: None, lwt: None, dir: None, in_s1: None };
+        let mut items = vec![
+            it(Target::Path { path: "C:\\Program Files\\WindowsApps\\Microsoft.Windows.Photos_2026.1.0.0_x64__8wekyb3d8bbwe\\a.dll".into() }, "leftover"),
+            it(Target::RegKey { path: "HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\Microsoft.Windows.Photos_8wekyb3d8bbwe".into() }, "leftover"),
+            it(Target::Path { path: "C:\\Program Files\\Notepad++\\x".into() }, "leftover"),
+            it(Target::RegKey { path: "HKLM\\SOFTWARE\\Microsoft.Windows.Photos_8wekyb3d8bbwe".into() }, "kept_owner"),
+        ];
+        assert_eq!(relabel_store_updates(&mut items, &upd), 2);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["ambient", "ambient", "leftover", "kept_owner"]);
+        assert!(store_updates(&Value::Null, &l2).is_empty());
     }
 }

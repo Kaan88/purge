@@ -1,0 +1,16 @@
+{
+  "id": "vscode-user-dirty",
+  "include": [
+    "_os.json",
+    "vscode-user.json"
+  ],
+  "note": "vscode-user on dirty-base: the system VS Code (C:\\Program Files\\Microsoft VS Code) stays installed and uses the same per-user data (%APPDATA%\\Code, %USERPROFILE%\\.vscode); what the user build created there is the still-installed product's too. 2026-11-15 dirty review (f2d).",
+  "rules": [
+    {
+      "label": "kept_owner",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\(AppData\\\\Roaming\\\\Code|\\.vscode)(\\\\.*)?$",
+      "why": "VS Code user data shared with the system VS Code, still installed on dirty-base.",
+      "gen": true
+    }
+  ]
+}

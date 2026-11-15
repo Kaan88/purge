@@ -1,0 +1,567 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "bcu",
+      "apps": 1,
+      "truth_n": 16,
+      "recall_listed": 0.0,
+      "recall_visible": 0.0,
+      "recall_safe": 0.0,
+      "recall_listed_nd": 0.0,
+      "recall_visible_nd": 0.0,
+      "recall_safe_nd": 0.0,
+      "precision_safe": null,
+      "partial_n": 0,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.0,
+        "RegKey": 0.0,
+        "RegValue": 0.0,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 14,
+        "hit": 0,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    },
+    {
+      "tool": "purge",
+      "apps": 1,
+      "truth_n": 16,
+      "recall_listed": 0.25,
+      "recall_visible": 0.25,
+      "recall_safe": 0.125,
+      "recall_listed_nd": 0.25,
+      "recall_visible_nd": 0.25,
+      "recall_safe_nd": 0.125,
+      "precision_safe": 1.0,
+      "partial_n": 0,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.0,
+        "RegKey": 1.0,
+        "RegValue": 0.3333333333333333,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 0,
+        "hit": 4,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "git",
+      "dir": "truth/frozen/git",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 123,
+        "kept_owner": 0,
+        "leftover": 16,
+        "rig": 0,
+        "user_data": 0
+      },
+      "ambient_by_run": {
+        "null1": 96,
+        "null2": 79,
+        "null3": 75
+      },
+      "tools": [
+        {
+          "app": "git",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/r1-git/plans/purge.json",
+          "offered_n": 4,
+          "truth_n": 16,
+          "covered_listed": 4,
+          "covered_visible": 4,
+          "covered_safe": 2,
+          "recall_listed": 0.25,
+          "recall_visible": 0.25,
+          "recall_safe": 0.125,
+          "covered_listed_nd": 4,
+          "covered_visible_nd": 4,
+          "covered_safe_nd": 2,
+          "recall_listed_nd": 0.25,
+          "recall_visible_nd": 0.25,
+          "recall_safe_nd": 0.125,
+          "partial_n": 0,
+          "safe_n": 2,
+          "safe_not_gone": 2,
+          "safe_hits": 2,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 4,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 8,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 2,
+              "covered": 2,
+              "recall": 1.0
+            },
+            "RegValue": {
+              "n": 6,
+              "covered": 2,
+              "recall": 0.3333333333333333
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "CLS-VERBS": {
+              "hit": 1
+            },
+            "REF-ANY": {
+              "hit": 3
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\is-TU8SYANY8F-uninstall.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 6933192
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\600c39005ac9a5cc.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\b9413fda1ddca9c1.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\bbab4f0ce657b5d0.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\BASH.EXE-E0DADEC9.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 6338
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CYGWIN-CONSOLE-HELPER.EXE-D6E999A9.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 1432
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\GIT.EXE-65A5E465.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 3531
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\MINTTY.EXE-3A9BD6BC.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 10520
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|TvgSbeJvaqbjf.Onfu",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.AutoGenerated.{0FDD9C6B-656B-0F1F-AB08-B1CDBB7067B3}",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.AutoGenerated.{29591C0F-7C09-B655-C0EB-8544FCA7D1DE}",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|{6D809377-6AF0-444B-8957-A3773F02200E}\\Git\\cmd\\git-gui.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|1",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|2",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "CLS-VERBS",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\sh_auto_file",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ]
+        },
+        {
+          "app": "git",
+          "tool": "bcu",
+          "mode": "post",
+          "plan_file": "truth/frozen/git/plans/bcu.json",
+          "offered_n": 14,
+          "truth_n": 16,
+          "covered_listed": 0,
+          "covered_visible": 0,
+          "covered_safe": 0,
+          "recall_listed": 0.0,
+          "recall_visible": 0.0,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 0,
+          "covered_visible_nd": 0,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.0,
+          "recall_visible_nd": 0.0,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 14,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 14,
+            "hit": 0,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 8,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 2,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValue": {
+              "n": 6,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "bcu": {
+              "gone": 14
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\is-TU8SYANY8F-uninstall.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 6933192
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\600c39005ac9a5cc.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\b9413fda1ddca9c1.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\bbab4f0ce657b5d0.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\BASH.EXE-E0DADEC9.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 6338
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CYGWIN-CONSOLE-HELPER.EXE-D6E999A9.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 1432
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\GIT.EXE-65A5E465.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 3531
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\MINTTY.EXE-3A9BD6BC.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 10520
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\sh_auto_file",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|TvgSbeJvaqbjf.Onfu",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.AutoGenerated.{0FDD9C6B-656B-0F1F-AB08-B1CDBB7067B3}",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.AutoGenerated.{29591C0F-7C09-B655-C0EB-8544FCA7D1DE}",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|{6D809377-6AF0-444B-8957-A3773F02200E}\\Git\\cmd\\git-gui.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|1",
+              "label": "leftover",
+              "partial": false,
+              "size": 232
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|2",
+              "label": "leftover",
+              "partial": false,
+              "size": 216
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "P:C:\\Program Files\\Git",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Git",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitmodules",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Directory\\background\\shell\\git_gui",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Directory\\background\\shell\\git_shell",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Directory\\shell\\git_gui",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Directory\\shell\\git_shell",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell\\git_gui",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell\\git_shell",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\sh_auto_file\\DefaultIcon",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\sh_auto_file\\shell\\open\\command",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\sh_auto_file\\ShellEx\\DropHandler",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\GitForWindows",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Git_is1",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

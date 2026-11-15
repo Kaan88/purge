@@ -1,0 +1,178 @@
+{
+  "schema": "purge.rig.m1a-status/1",
+  "time": "2026-11-15T06:28:15+03:00",
+  "prefix": "x2-",
+  "classes": true,
+  "bcu": false,
+  "exit": 0,
+  "stage": "done",
+  "ambient": "truth/f0/ambient-f0.json",
+  "servicing_rules": true,
+  "sanity": "skipped",
+  "label_overrides": null,
+  "sanity_residual": null,
+  "accept_sanity_diff": false,
+  "sanity_classified": null,
+  "invdiff": [
+    {
+      "run": "x2-git-toolsdir",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-git-toolsdir",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-git-userstate",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-git-userstate",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-userstate",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-userstate",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-zipcopy",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-zipcopy",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-git-upgrade",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-git-upgrade",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-npp-userfiles",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-npp-userfiles",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-ff-esr",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-ff-esr",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-ff-devedition",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-ff-devedition",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-with-user",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-with-user",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-thunderbird",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-thunderbird",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-ff-tbafter",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-ff-tbafter",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-insiders-pair",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-insiders-pair",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-upgrade",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-vscode-upgrade",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-ff-reinstall",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-ff-reinstall",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-vlc",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-vlc",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-winmerge",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-winmerge",
+      "phase": "2",
+      "exit": 0
+    }
+  ]
+}

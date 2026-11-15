@@ -1,0 +1,40 @@
+{
+  "id": "ff-tbafter",
+  "include": [
+    "_os.json",
+    "firefox.json"
+  ],
+  "note": "x0 rank 10: Thunderbird installed and launched AFTER Firefox's launch (post-app). Its ARP entry and folder are kept_owner by the lists-2 anchors; the rules below add the Maintenance Service and everything named Thunderbird. Score the footprint too: truth/footprint.sh x0-ff-tbafter x0-thunderbird.",
+  "rules": [
+    {
+      "label": "kept_owner",
+      "match": "^P:C:\\\\Program Files \\(x86\\)\\\\Mozilla Maintenance Service(\\\\.*)?$",
+      "why": "Mozilla Maintenance Service folder: the service stays installed for Thunderbird (post-app).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\MozillaMaintenanceService(\\\\[^|]*)?(\\|.*)?$",
+      "why": "ARP entry of the Mozilla Maintenance Service, still installed for Thunderbird (post-app).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Mozilla\\\\MaintenanceService(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Mozilla Maintenance Service settings key, still installed for Thunderbird (post-app).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\MozillaMaintenance(\\\\[^|]*)?(\\|.*)?$",
+      "why": "MozillaMaintenance service registration, still installed for Thunderbird (post-app).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "(?i)^[PKVC]:.*thunderbird",
+      "why": "Thunderbird (post-app, still installed): its keys, folders, ProgIDs, Clients\\Mail and RegisteredApplications entries.",
+      "gen": true
+    }
+  ]
+}

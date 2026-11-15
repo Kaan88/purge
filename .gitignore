@@ -20,3 +20,6 @@ vm/results/
 ui/**/bin/
 ui/**/obj/
 .vs/
+
+# Secrets: the VM password file never belongs in the repo
+vmpw*.txt

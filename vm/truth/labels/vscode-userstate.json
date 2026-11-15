@@ -1,0 +1,16 @@
+{
+  "id": "vscode-userstate",
+  "include": [
+    "_os.json",
+    "vscode.json"
+  ],
+  "note": "x0 rank 11: pre-existing .ext keys, prior VS Code user data and an Open-with registration of a zip copy (planted before snap 0), and a user file in the install folder after the launch.",
+  "rules": [
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Program Files\\\\Microsoft VS Code\\\\my-workspace(\\\\.*)?$",
+      "why": "User workspace planted in the install folder after the launch (plant_post): never the app's.",
+      "gen": true
+    }
+  ]
+}

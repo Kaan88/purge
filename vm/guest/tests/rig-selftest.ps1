@@ -279,6 +279,7 @@ if "%VERB%"=="uninstall" (
 )
 if "%VERB%"=="scan" (
   copy /y "%STUB_DIR%\plan.json" "%OUT%" >nul
+  copy /y "%STUB_DIR%\plan.scan.json" "%OUT:.json=.scan.json%" >nul
   echo scan: 3 candidates 1>&2
   exit /b 0
 )
@@ -301,7 +302,8 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
         '],"msi_only":[]}'
     [IO.File]::WriteAllText((Join-Path $stub 'inv.json'), $inv)
     [IO.File]::WriteAllText((Join-Path $stub 'fp.json'), '{"schema":"purge.fp/0"}')
-    [IO.File]::WriteAllText((Join-Path $stub 'plan.json'), '{"schema":"purge.plan/0","app":"x","tool":"purge","mode":"post","items":[]}')
+    [IO.File]::WriteAllText((Join-Path $stub 'plan.json'), '{"schema":"purge.plan/0","app":"x","tool":"purge","mode":"post","items":[{"target":{"type":"Path","path":"C:\\fake"},"band":"Likely","preselected":false,"scanner":"FS-INSTALLDIR"}]}')
+    [IO.File]::WriteAllText((Join-Path $stub 'plan.scan.json'), '{"schema":"purge.scan/0","plan_hash":"abc123","items":[]}')
     $t0 = (Get-Date).AddSeconds(-50).ToFileTime()
     $run = '{"schema":"purge.run/0","program_id":"HKLM|64|' + $MainKey + '","cmd":"\"C:\\fake\\unins000.exe\" /S","signer":null,' +
         '"t_start":' + $t0 + ',"t_end":' + ($t0 + 450000000) + ',"exit_code":0,"outcome":"Success",' +
@@ -325,7 +327,25 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
         Check "New-RunJobText rejects the run name '$bad'" ($msg -match 'bad run name') "got '$msg'"
     }
     Check 'New-RunJobText -Null 2 still fills null-run.ps1' ((New-RunJobText -NullRun 2).Contains("`$Run = 'null2'"))
+    $t = New-RunJobText -NullRun 2
+    Check 'New-RunJobText -Null 2: wait defaults to 60, nothing left unreplaced' ($t.Contains("`$WaitArg = '60'") -and -not ($t -match '__(RUN|WAIT)__'))
+    $t = New-RunJobText -NullRun 3 -Run (Get-NullRunName -N 3 -RunPrefix 'r0-') -NullWaitSec 120
+    Check 'New-RunJobText null with prefix and wait: r0-null3, 120 s' ($t.Contains("`$Run = 'r0-null3'") -and $t.Contains("`$WaitArg = '120'"))
+    Check 'Get-NullRunName: no prefix keeps null<n> (M0)' ((Get-NullRunName -N 1) -eq 'null1')
+    $msg = $null; try { $null = Get-NullRunName -N 1 -RunPrefix 'r0' } catch { $msg = $_.Exception.Message }
+    Check 'Get-NullRunName: a prefix without a trailing dash is rejected' ($msg -match 'bad null run name') "got '$msg'"
+    $o = @(Get-CampaignOrder -Nulls @('n1', 'n2', 'n3') -Apps @('a', 'b', 'c', 'd', 'e', 'f') -NullOrder spread) -join ','
+    Check 'Get-CampaignOrder spread: nulls first, middle and last' ($o -eq 'n1,a,b,c,n2,d,e,f,n3') $o
+    $o = @(Get-CampaignOrder -Nulls @('n1', 'n2', 'n3') -Apps @('a', 'b') -NullOrder first) -join ','
+    Check 'Get-CampaignOrder first: nulls, then apps (M0 order)' ($o -eq 'n1,n2,n3,a,b') $o
+    $tpl0 = [IO.File]::ReadAllText((Join-Path $Guest 'null-run.ps1'))
+    Check 'null-run template has the __RUN__ and __WAIT__ placeholders' ($tpl0.Contains("`$Run = '__RUN__'") -and $tpl0.Contains("`$WaitArg = '__WAIT__'"))
 
+    $t = New-RunJobText -Id 'npp-userfiles' -Run 'x0-npp-userfiles' -Engine -Extra
+    Check 'New-RunJobText -Engine -Extra: __EXTRA__ = 1, nothing left unreplaced' ($t.Contains("`$ExtraFlag = '1'") -and -not ($t -match '__(ID|RUN|ENGINE|EXTRA)__'))
+    Check 'New-RunJobText without -Extra: __EXTRA__ = 0' ((New-RunJobText -Id 'npp' -Run 'r0-npp' -Engine).Contains("`$ExtraFlag = '0'"))
+    $msg = $null; try { $null = New-RunJobText -Id 'npp' -Extra } catch { $msg = $_.Exception.Message }
+    Check 'New-RunJobText -Extra without -Engine throws' ($msg -match 'needs -Engine') "got '$msg'"
     $r = Test-HeadCheck (New-RunJobText -Id 'npp' -Run 'r0-npp' -Engine)
     Check 'run-app head: r0-npp in engine mode passes' ($r.code -eq 7 -and $r.out -match 'RUN=r0-npp ENGINE=True') "exit $($r.code): $($r.out)"
     $r = Test-HeadCheck (New-RunJobText -Id 'firefox-tb')
@@ -350,6 +370,53 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
     Check 'thunderbird: official Mozilla URL, /S' ((& $tb.url) -eq 'https://download.mozilla.org/?product=thunderbird-latest-ssl&os=win64&lang=en-US' -and $tb.install -eq '/S' -and 'Mozilla Thunderbird (x64 en-US)' -match $tb.match)
     $ids = @($Apps | ForEach-Object { $_.id })
     Check 'app ids are unique' (@($ids | Select-Object -Unique).Count -eq $ids.Count) ($ids -join ',')
+
+    # x0 variants (RIG.md §4b)
+    $x0 = 'npp-userfiles', 'git-toolsdir', 'ff-devedition', 'vscode-with-user', 'git-userstate', 'ff-tbafter', 'vscode-userstate',
+          'vscode-insiders-pair', 'vscode-upgrade', 'ff-esr', 'vscode-zipcopy', 'ff-reinstall', 'git-upgrade'
+    $miss = @($x0 + 'thunderbird', 'vlc', 'winmerge' | Where-Object { $ids -notcontains $_ })
+    Check 'x0: every variant and new base record exists' ($miss.Count -eq 0) ($miss -join ',')
+    $bad = @()
+    foreach ($a in $Apps) {
+        foreach ($ref in @(@($a.pre) + @($a.post) + @($a.upgrade_from) | Where-Object { $_ })) { if ($ids -notcontains $ref) { $bad += "$($a.id)->$ref" } }
+    }
+    Check 'x0: pre / post / upgrade_from name known apps' ($bad.Count -eq 0) ($bad -join ',')
+    $np = Get-App 'npp-userfiles'; $n0 = Get-App 'npp'
+    Check 'x0: npp-userfiles = npp + plants (install, match, un, launch unchanged)' ($np.install -eq $n0.install -and $np.match -eq $n0.match -and $np.un -eq $n0.un -and $np.file -eq 'npp.exe' -and $np.plant_pre -eq 'Plant-NppPortable' -and $np.plant_post -eq 'Plant-NppUserFiles' -and -not $n0.plant_pre)
+    Check 'x0: Get-AppFiles ff-tbafter = firefox + thunderbird' ((Get-AppFiles 'ff-tbafter') -join ',' -eq 'firefox.exe,thunderbird.exe') ((Get-AppFiles 'ff-tbafter') -join ',')
+    Check 'x0: Get-AppFiles npp-userfiles includes the portable zip' ((Get-AppFiles 'npp-userfiles') -join ',' -eq 'npp.exe,npp-portable.zip') ((Get-AppFiles 'npp-userfiles') -join ',')
+    Check 'x0: Get-AppFiles vscode-upgrade = vscode + vscode-1145' ((Get-AppFiles 'vscode-upgrade') -join ',' -eq 'vscode.exe,vscode-1145.exe') ((Get-AppFiles 'vscode-upgrade') -join ',')
+    $tg = Get-App 'tortoisegit'
+    Check 'x0: tortoisegit is the signed MSI from download.tortoisegit.org' ($tg.install -eq 'msi' -and $tg.un -eq 'msi' -and "$(& $tg.url)" -like 'https://download.tortoisegit.org/*.msi')
+    # Every plant function named in apps.ps1 is defined in x0-plants.ps1 (parsed, not run: it writes the user hive).
+    $tok = $null; $err = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $Guest 'x0-plants.ps1'), [ref]$tok, [ref]$err)
+    $defs = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+    $names = @($Apps | ForEach-Object { $_.plant_pre; $_.plant_post } | Where-Object { $_ } | Select-Object -Unique)
+    $undef = @($names | Where-Object { $defs -notcontains $_ })
+    Check 'x0: every plant_pre / plant_post function exists in x0-plants.ps1' ($names.Count -ge 7 -and $undef.Count -eq 0) "undefined: $($undef -join ',')"
+    # Every installer of a new record and every plant file is in the host cache manifest (official URL + SHA-256).
+    $manF = Join-Path $Vm 'cache\inst\cache-sources.json'
+    if (Test-Path $manF) {
+        $man = [IO.File]::ReadAllText($manF) | ConvertFrom-Json
+        $keys = @($man.PSObject.Properties | ForEach-Object { $_.Name })
+        $need = @('firefox-dev', 'firefox-esr', 'vscode-insiders', 'vscode-1145', 'tortoisegit', 'winmerge', 'git-2560' | ForEach-Object { (Get-App $_).file }) +
+                @($Apps | ForEach-Object { $_.plant_files } | Where-Object { $_ })
+        $absent = @($need | Select-Object -Unique | Where-Object { $keys -notcontains $_ })
+        $noHash = @($keys | Where-Object { "$($man.$_.sha256)" -notmatch '^[0-9A-Fa-f]{64}$' -or "$($man.$_.url)" -notmatch '^https://' })
+        Check 'x0: host cache manifest lists every new installer and plant file with an https URL and a SHA-256' ($absent.Count -eq 0 -and $noHash.Count -eq 0) "absent: $($absent -join ','); bad: $($noHash -join ',')"
+    } else { Write-Host "skip x0 cache manifest check (no $manF)" }
+}
+
+# --------------------------------------------------------------- Edge pause: before any capture, in both jobs
+& {
+    foreach ($f in 'run-app.ps1', 'null-run.ps1') {
+        $t = [IO.File]::ReadAllText((Join-Path $Guest $f))
+        $p = $t.IndexOf("Phase 'edge-pause'"); $a = $t.IndexOf("Phase 'arp0'"); $l = $t.IndexOf("Phase 'lists0'"); $c = $t.IndexOf("Phase 'edge-check'"); $s2 = $t.IndexOf("Phase 'snap2'")
+        Check "${f}: edge-pause before arp0 / lists0, edge-check after snap2" ($p -gt 0 -and $p -lt $a -and $p -lt $l -and $c -gt $s2) "pause=$p arp0=$a lists0=$l check=$c snap2=$s2"
+    }
+    $rl = [IO.File]::ReadAllText((Join-Path $Guest 'riglib.ps1'))
+    Check 'riglib: Suspend-EdgeUpdate disables both services and the MicrosoftEdgeUpdate* tasks' ($rl -match "RigEdgeServices = @\('edgeupdate', 'edgeupdatem'\)" -and $rl -match 'Set-Service -Name \$n -StartupType Disabled' -and $rl -match 'Disable-ScheduledTask')
 }
 
 # ------------------------------------------------------------------------- riglib: engine helpers
@@ -401,6 +468,36 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
     Remove-Item Env:STUB_DIR, Env:STUB_EV, Env:STUB_FAIL -ErrorAction SilentlyContinue
 }
 
+# -------------------------------------------- riglib: process tree PID-reuse guard (no clock ordering)
+& {
+    . (Join-Path $Guest 'riglib.ps1')
+    $ErrorActionPreference = 'Stop'
+    $boot = [datetime]'2026-11-11T07:00:00'
+    $now = [datetime]'2026-11-12T13:30:00'
+    function P($id, $pp, $n, $st) { [pscustomobject]@{ pid = $id; ppid = $pp; name = $n; path = $null; cmd = $n; session = 0; start = $st } }
+    # Before the root starts: csrss/wininit whose ppid is the PID of an smss.exe instance that has exited.
+    $before = @((P 600 500 'csrss.exe' $boot), (P 700 500 'wininit.exe' $boot), (P 900 1 'explorer.exe' $boot))
+    $pre = New-ProcKeySet $before
+    # The root (installer) reuses PID 500; its child was created after a BACKWARD clock step, so its start
+    # time is earlier than everything else's. It must still be part of the tree.
+    $after = $before + @((P 500 900 'setup.exe' $now), (P 510 500 'setup.tmp' $boot.AddDays(-3)), (P 520 510 'helper.exe' $now.AddMinutes(1)))
+    $known = New-PidSet @(500)
+    $tree = @(Get-TreeProcs -Procs $after -Known $known -Preexisting $pre | ForEach-Object { $_.name } | Sort-Object)
+    Check 'Get-TreeProcs: pre-existing processes with the reused ppid are not adopted' (-not ($tree -contains 'csrss.exe') -and -not ($tree -contains 'wininit.exe')) ($tree -join ',')
+    Check 'Get-TreeProcs: a child with a back-stepped start time stays in the tree' (($tree -join ',') -eq 'helper.exe,setup.exe,setup.tmp') ($tree -join ',')
+    $tree0 = @(Get-TreeProcs -Procs $after -Known (New-PidSet @(500)) | ForEach-Object { $_.name })
+    Check 'Get-TreeProcs: without the guard the reuse case adopts csrss (documents the hazard)' ($tree0 -contains 'csrss.exe') ($tree0 -join ',')
+    # A pre-existing process that exits and whose PID a new child reuses: different creation time, so it is new.
+    $after2 = @((P 500 900 'setup.exe' $now), (P 900 500 'child.exe' $now.AddMinutes(2)))
+    $tree2 = @(Get-TreeProcs -Procs $after2 -Known (New-PidSet @(500)) -Preexisting $pre | ForEach-Object { $_.name } | Sort-Object)
+    Check 'Get-TreeProcs: a reused PID with a new creation time is a real child' (($tree2 -join ',') -eq 'child.exe,setup.exe') ($tree2 -join ',')
+    # WaitTree end to end with fake polls: the adopted-system case would never go idle; with the guard it does.
+    $script:polls = 0
+    $gp ={ $script:polls++; if ($script:polls -le 2) { $after } else { $before } }
+    $w = WaitTree -RootPid @(500) -Preexisting $pre -GetProcs $gp -MsiBusy { $false } -PollSec 0 -TimeoutSec 20 -QuietPolls 2
+    Check 'WaitTree -Preexisting: ends once the real tree exits (csrss/wininit never block)' (-not $w.timed_out -and $w.cond_met) "timed_out=$($w.timed_out)"
+}
+
 # --------------------------------------------------- run-app.ps1 end to end with fakes and the stub
 # The job text is generated by New-RunJobText as on the host; the guest paths point at vm\guest and a fakes
 # file is dot-sourced right after apps.ps1. Every capture, install, launch and wait is a fake that appends to
@@ -410,7 +507,14 @@ $RigOut = '@W@\out'; $RigInst = '@W@\inst'; $RigTool = '@W@\rigtool.exe'; $RigEn
 $script:FakeEv = '@W@\events.txt'
 $script:FakeStub = '@W@\stub'
 $script:FakeInstalled = New-Object System.Collections.ArrayList
-$script:FakeNames = @{ npp = 'Notepad++ (64-bit x64)'; firefox = 'Mozilla Firefox (x64 en-US)'; thunderbird = 'Mozilla Thunderbird (x64 en-US)'; 'vscode-user' = 'Microsoft Visual Studio Code (User)' }
+$script:FakeNames = @{ npp = 'Notepad++ (64-bit x64)'; firefox = 'Mozilla Firefox (x64 en-US)'; thunderbird = 'Mozilla Thunderbird (x64 en-US)'; 'vscode-user' = 'Microsoft Visual Studio Code (User)'; git = 'Git' }
+# Never touch the host's Edge updater or plant anything on the host: the Edge pause and every plant function
+# (apps.ps1 plant_pre / plant_post) are fakes that only record an event (and one planted item each).
+function Get-EdgeVersions { [ordered]@{ 'fake-edge' = 'Microsoft Edge 1.0' } }
+function Suspend-EdgeUpdate { Ev 'edge-pause'; [ordered]@{ method = 'fake'; versions_before = (Get-EdgeVersions); versions_after = (Get-EdgeVersions) } }
+foreach ($pn in @($Apps | ForEach-Object { $_.plant_pre; $_.plant_post } | Where-Object { $_ } | Select-Object -Unique)) {
+    Set-Item -Path "function:script:$pn" -Value ([scriptblock]::Create("param(`$Ctx) Ev ('plant:' + `$Ctx.Phase + ':$pn'); Add-Planted `$Ctx 'file' 'P:C:\fake\$pn.txt' 'fake'"))
+}
 $script:FakeMainKey = [IO.Path]::GetFileNameWithoutExtension((Get-App $Id).file)
 function Ev([string]$s) { [IO.File]::AppendAllText($script:FakeEv, $s + "`r`n") }
 function FakeKey([string]$b) { "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Fake-$b" }
@@ -441,9 +545,11 @@ function LaunchMedium([string]$Exe, [string]$Arguments = '', [string]$WorkDir = 
 }
 function Stop-Launch($Launch, [int]$GraceSec = 5) { [pscustomobject]@{ closed = @(); killed = @() } }
 function Unregister-ScheduledTask { [CmdletBinding(SupportsShouldProcess)] param([string]$TaskName) Ev "unregister:$TaskName" }
+function Get-ProcList { @() }
 function WaitTree {
     param([datetime]$Since, [int]$TimeoutSec = 900, [int]$PollSec = 2, [scriptblock]$Until = $null, [int]$QuietPolls = 2,
-          [int]$IdleGiveUpSec = 0, $GetProcs = $null, $MsiBusy = $null, [int[]]$RootPid = @())
+          [int]$IdleGiveUpSec = 0, $GetProcs = $null, $MsiBusy = $null, [int[]]$RootPid = @(), $Preexisting = $null)
+    if ($RootPid.Count -and $null -eq $Preexisting) { Ev 'waittree:no-preexisting' }
     [pscustomobject]@{ timed_out = $false; cond_met = $true; end = (Get-Date); still = @(); known = (New-PidSet @()) }
 }
 function Resolve-LaunchExe($App, $Main) { 'C:\fake\app.exe' }
@@ -461,7 +567,7 @@ function Snap([string]$Run, [string]$Phase) { Ev "snap:$Phase"; [IO.File]::Write
 
 # Runs one generated job in a child powershell.exe. Returns {code, out, dir (C:\cr\out\<run> stand-in), run
 # (run.json), phases (names), failed (names), events, engine (engine command lines), stub}.
-function Invoke-FakeRunApp([string]$Scenario, [string]$Id, [string]$Run = '', [switch]$EngineMode, [string]$Fail = '') {
+function Invoke-FakeRunApp([string]$Scenario, [string]$Id, [string]$Run = '', [switch]$EngineMode, [string]$Fail = '', [switch]$Extra) {
     $W = Join-Path $Work "ra-$Scenario"
     foreach ($d in 'out', 'inst') { New-Item -ItemType Directory -Force (Join-Path $W $d) | Out-Null }
     . (Join-Path $Vm 'rig.ps1')
@@ -470,9 +576,13 @@ function Invoke-FakeRunApp([string]$Scenario, [string]$Id, [string]$Run = '', [s
     $sd = New-StubEngine $W $mainKey
     [IO.File]::WriteAllText((Join-Path $W 'fakes.ps1'), $Fakes.Replace('@W@', $W), (New-Object System.Text.UTF8Encoding($true)))
     if (-not $Run) { $Run = $Id }
-    $text = New-RunJobText -Id $Id -Run $Run -Engine:$EngineMode
+    $text = New-RunJobText -Id $Id -Run $Run -Engine:$EngineMode -Extra:$Extra
     $text = $text.Replace('. C:\cr\guest\riglib.ps1', ". '$Guest\riglib.ps1'")
-    $text = $text.Replace('. C:\cr\guest\apps.ps1', ". '$Guest\apps.ps1'`r`n. '$W\fakes.ps1'")
+    $text = $text.Replace('. C:\cr\guest\apps.ps1', ". '$Guest\apps.ps1'")
+    # The fakes come after x0-plants.ps1, so they replace its plant functions too.
+    $x0 = "if (Test-Path -LiteralPath 'C:\cr\guest\x0-plants.ps1') { . C:\cr\guest\x0-plants.ps1 }"
+    if (-not $text.Contains($x0)) { throw 'run-app.ps1 no longer dot-sources x0-plants.ps1 the expected way' }
+    $text = $text.Replace($x0, ". '$Guest\x0-plants.ps1'`r`n. '$W\fakes.ps1'")
     $job = Join-Path $W 'job.ps1'
     [IO.File]::WriteAllText($job, $text, (New-Object System.Text.UTF8Encoding($true)))
     $env:STUB_DIR = $sd.stub; $env:STUB_EV = Join-Path $W 'events.txt'; $env:STUB_FAIL = $Fail
@@ -494,8 +604,9 @@ function Files($Dir) { @(Get-ChildItem -LiteralPath $Dir -File | ForEach-Object 
 # The capture / install / engine events only, in order.
 function Steps($R) { @($R.events | Where-Object { $_ -match '^(lists|snap|start|medium|engine):' } | ForEach-Object { ($_ -split ' ')[0] }) -join ' ' }
 
-$M0Phases = 'setup arp0 lists0 snap0 install detect launch lists1 snap1 uninstall lists2 snap2 entries'
-$EnginePhases = 'setup arp0 lists0 snap0 install detect launch lists1 snap1 engine-inventory-1 engine-harvest uninstall lists2 snap2 entries engine-scan engine-inventory-2'
+$M0Phases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1 snap1 uninstall lists2 snap2 edge-check entries'
+# Engine inventory right after the lists of the same point (RIG.md §4a capture order).
+$EnginePhases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1 engine-inventory-1 snap1 engine-harvest uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan'
 
 & {
     $ErrorActionPreference = 'Stop'
@@ -503,13 +614,16 @@ $EnginePhases = 'setup arp0 lists0 snap0 install detect launch lists1 snap1 engi
     $r = Invoke-FakeRunApp 'm0' 'npp'
     Check 'run-app M0: exit 0, M0 phase order' ($r.code -eq 0 -and ($r.phases -join ' ') -eq $M0Phases) "exit $($r.code); phases: $($r.phases -join ' ')`n$($r.out)"
     Check 'run-app M0: vendor uninstall, no engine call, no engine record' ($r.engine.Count -eq 0 -and ($r.events -contains 'start:uninst-npp.exe /S') -and -not ($r.run.PSObject.Properties.Name -contains 'engine') -and $r.run.uninstall.entry_gone -eq $true) (Steps $r)
+    Check 'run-app M0: every tree wait has the PID-reuse guard (-Preexisting)' (-not ($r.events -contains 'waittree:no-preexisting')) ($r.events -join ' | ')
     Check 'run-app M0: outputs under the app id, installer ran elevated' ((Files $r.dir) -eq 'lists-npp-0.json,lists-npp-1.json,lists-npp-2.json,run.json,run.log,snap-npp-0.tsv.gz,snap-npp-1.tsv.gz,snap-npp-2.tsv.gz' -and $r.run.install.ran_as -eq 'elevated') (Files $r.dir)
 
     # Engine mode, every call ok.
     $r = Invoke-FakeRunApp 'engine' 'npp' 'r0-npp' -EngineMode
     Check 'run-app engine: exit 0, documented phase order' ($r.code -eq 0 -and ($r.phases -join ' ') -eq $EnginePhases) "exit $($r.code); phases: $($r.phases -join ' ')`n$($r.out)"
-    Check 'run-app engine: captures and engine calls in order' ((Steps $r) -eq 'lists:0 snap:0 start:npp.exe medium:PurgeRigLaunch:app.exe lists:1 snap:1 engine:inventory engine:harvest engine:uninstall lists:2 snap:2 engine:scan engine:inventory') (Steps $r)
-    Check 'run-app engine: outputs under the prefixed run name only' ((Files $r.dir) -eq 'engine-run.json,fp.json,inv-1.json,inv-2.json,lists-r0-npp-0.json,lists-r0-npp-1.json,lists-r0-npp-2.json,plan-purge.json,run.json,run.log,snap-r0-npp-0.tsv.gz,snap-r0-npp-1.tsv.gz,snap-r0-npp-2.tsv.gz' -and -not (Test-Path (Join-Path $r.outRoot 'npp'))) (Files $r.dir)
+    Check 'run-app engine: captures and engine calls in order' ((Steps $r) -eq 'lists:0 snap:0 start:npp.exe medium:PurgeRigLaunch:app.exe lists:1 engine:inventory snap:1 engine:harvest engine:uninstall lists:2 engine:inventory snap:2 engine:scan') (Steps $r)
+    Check 'run-app engine: Edge pause is the first event, before any capture' ($r.events[0] -eq 'edge-pause' -and $r.run.edge_pause.held -eq $true -and $r.run.edge_pause.versions_end) ($r.events -join ' | ')
+    Check 'run-app engine: outputs under the prefixed run name only' ((Files $r.dir) -eq 'engine-run.json,fp.json,inv-1.json,inv-2.json,lists-r0-npp-0.json,lists-r0-npp-1.json,lists-r0-npp-2.json,plan-purge.json,plan-purge.scan.json,run.json,run.log,snap-r0-npp-0.tsv.gz,snap-r0-npp-1.tsv.gz,snap-r0-npp-2.tsv.gz' -and -not (Test-Path (Join-Path $r.outRoot 'npp'))) (Files $r.dir)
+    Check 'run-app engine: no extra checks without -Extra' (-not ($r.run.PSObject.Properties.Name -contains 'extra') -and -not ($r.engine -match '--mode external')) ($r.engine -join ' | ')
     Check 'run-app engine: run.json names run r0-npp of app npp' ($r.run.run -eq 'r0-npp' -and $r.run.id -eq 'npp')
     Check 'run-app engine: program_id resolved from inv-1.json by key path' ($r.run.engine.program_id -eq 'HKLM|64|Fake-npp') "$($r.run.engine.program_id)"
     Check 'run-app engine: harvest/uninstall/scan command lines' (
@@ -520,28 +634,60 @@ $EnginePhases = 'setup arp0 lists0 snap0 install detect launch lists1 snap1 engi
     $t0 = $null; if ($u.t0) { $t0 = [DateTimeOffset]::Parse("$($u.t0)", [Globalization.CultureInfo]::InvariantCulture).ToFileTime() }
     Check 'run-app engine: t0/t1/exit copied from engine-run.json' ($u.via -eq 'purge-engine' -and $u.times -eq 'engine' -and $t0 -eq $r.stub.t_start -and $u.exit -eq 0 -and $u.outcome -eq 'Success' -and $u.verify_gone.passed -eq $true -and $u.t1 -and $u.rig_t0 -and $u.rig_t1) "t0=$($u.t0) ($t0 vs $($r.stub.t_start)) times=$($u.times) exit=$($u.exit)"
     Check 'run-app engine: no vendor uninstall, entry gone' (-not ($r.events -match '^start:uninst-') -and $u.entry_gone -eq $true)
-    Check 'run-app engine: five engine calls recorded' ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',' -eq 'inventory-1,harvest,uninstall,scan,inventory-2') ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',')
+    Check 'run-app engine: every tree wait has the PID-reuse guard (-Preexisting)' (-not ($r.events -contains 'waittree:no-preexisting')) ($r.events -join ' | ')
+    Check 'run-app engine: five engine calls recorded' ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',' -eq 'inventory-1,harvest,uninstall,inventory-2,scan') ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',')
 
     # Engine mode, harvest fails: recorded, the captures still run, uninstall runs without --fp.
     $r = Invoke-FakeRunApp 'harvest-fails' 'npp' 'r0-npp' -EngineMode -Fail 'harvest'
     Check 'run-app engine, harvest fails: exit 1, harvest and scan failed, every phase ran' ($r.code -eq 1 -and ($r.failed -join ',') -eq 'engine-harvest,engine-scan' -and ($r.phases -join ' ') -eq $EnginePhases) "exit $($r.code); failed: $($r.failed -join ',')"
-    Check 'run-app engine, harvest fails: captures after it still ran' ((Steps $r) -match 'engine:harvest engine:uninstall lists:2 snap:2 engine:inventory$' -and (Test-Path (Join-Path $r.dir 'snap-r0-npp-2.tsv.gz')) -and (Test-Path (Join-Path $r.dir 'inv-2.json'))) (Steps $r)
+    Check 'run-app engine, harvest fails: captures after it still ran' ((Steps $r) -match 'engine:harvest engine:uninstall lists:2 engine:inventory snap:2$' -and (Test-Path (Join-Path $r.dir 'snap-r0-npp-2.tsv.gz')) -and (Test-Path (Join-Path $r.dir 'inv-2.json'))) (Steps $r)
     Check 'run-app engine, harvest fails: exit code recorded, uninstall without --fp' ((@($r.run.engine.calls) | Where-Object { $_.step -eq 'harvest' }).exit -eq 3 -and ($r.engine -match '^engine:uninstall ') -notmatch '--fp') ($r.engine -join ' | ')
 
     # Engine mode, uninstall fails: the phase fails, rig times are used, captures and the scan still run.
     $r = Invoke-FakeRunApp 'uninstall-fails' 'npp' 'r0-npp' -EngineMode -Fail 'uninstall'
-    Check 'run-app engine, uninstall fails: only uninstall failed, scan still ran' ($r.code -eq 1 -and ($r.failed -join ',') -eq 'uninstall' -and (Steps $r) -match 'lists:2 snap:2 engine:scan engine:inventory$') "failed: $($r.failed -join ','); $(Steps $r)"
+    Check 'run-app engine, uninstall fails: only uninstall failed, scan still ran' ($r.code -eq 1 -and ($r.failed -join ',') -eq 'uninstall' -and (Steps $r) -match 'lists:2 engine:inventory snap:2 engine:scan$') "failed: $($r.failed -join ','); $(Steps $r)"
     Check 'run-app engine, uninstall fails: rig times, engine exit 3, entry not gone' ($r.run.uninstall.times -eq 'rig' -and $r.run.uninstall.engine_exit -eq 3 -and $r.run.uninstall.entry_gone -eq $false -and $r.run.uninstall.t0)
 
     # Pre-apps: Thunderbird installed and settled before lists 0 / snap 0, and kept.
     $r = Invoke-FakeRunApp 'firefox-tb' 'firefox-tb' 'r0-firefox-tb' -EngineMode
-    Check 'run-app firefox-tb: pre-thunderbird phase before arp0' ($r.code -eq 0 -and ($r.phases -join ' ') -eq ('setup pre-thunderbird ' + $EnginePhases.Substring('setup '.Length))) "exit $($r.code); $($r.phases -join ' ')`n$($r.out)"
+    Check 'run-app firefox-tb: pre-thunderbird phase before arp0' ($r.code -eq 0 -and ($r.phases -join ' ') -eq $EnginePhases.Replace('setup ', 'setup pre-thunderbird ')) "exit $($r.code); $($r.phases -join ' ')`n$($r.out)"
     Check 'run-app firefox-tb: thunderbird installer before snap 0, firefox after' ((Steps $r) -match '^start:thunderbird\.exe lists:0 snap:0 start:firefox\.exe ') (Steps $r)
     Check 'run-app firefox-tb: pre entry recorded, not counted as created, main is firefox' (@($r.run.pre)[0].id -eq 'thunderbird' -and @($r.run.pre)[0].entry.key -match 'Fake-thunderbird$' -and @($r.run.entries_created).Count -eq 1 -and $r.run.main.key -match 'Fake-firefox$' -and $r.run.engine.program_id -eq 'HKLM|64|Fake-firefox') "created: $(@($r.run.entries_created | ForEach-Object { $_.key }) -join ',')"
 
     # vscode-user: the installer goes through the medium-integrity task, which is deleted again.
     $r = Invoke-FakeRunApp 'vscode-user' 'vscode-user'
-    Check 'run-app vscode-user: installer through PurgeRigInstall, task deleted, ran_as medium' ($r.code -eq 0 -and ($r.events -contains 'medium:PurgeRigInstall:vscode-user.exe') -and ($r.events -contains 'unregister:PurgeRigInstall') -and -not ($r.events -match '^start:vscode-user\.exe') -and $r.run.install.ran_as -eq 'medium' -and $r.run.install.task -eq 'PurgeRigInstall') "exit $($r.code); $($r.events -join ' | ')"
+    Check 'run-app vscode-user: installer through PurgeRigInstall, task deleted, ran_as medium' ($r.code -eq 0 -and ($r.events -contains 'medium:PurgeRigInstall:vscode-user.exe') -and ($r.events -contains 'unregister:PurgeRigInstall') -and -not ($r.events -match '^start:vscode-user\.exe') -and $r.run.install.ran_as -eq 'medium' -and $r.run.install.task -eq 'PurgeRigInstall' -and -not ($r.events -contains 'waittree:no-preexisting')) "exit $($r.code); $($r.events -join ' | ')"
+
+    # x0 (RIG.md §4b): plants before snap 0 and after the launch, live scan and repeat scan.
+    $r = Invoke-FakeRunApp 'x0-npp-userfiles' 'npp-userfiles' 'x0t-npp-userfiles' -EngineMode -Extra
+    $x0Phases = 'edge-pause setup plant-pre arp0 lists0 snap0 install detect launch plant-post lists1 engine-inventory-1 snap1 engine-harvest engine-scan-live uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan engine-scan-repeat'
+    Check 'run-app x0 npp-userfiles: exit 0, plant and extra-check phases in order' ($r.code -eq 0 -and ($r.phases -join ' ') -eq $x0Phases) "exit $($r.code); $($r.phases -join ' ')`n$($r.out)"
+    $ev = @($r.events | Where-Object { $_ -match '^(lists:|snap:|plant:|medium:)' }) -join ' '
+    Check 'run-app x0 npp-userfiles: plant-pre before lists 0, plant-post after the launch and before lists 1' ($ev -eq 'plant:plant-pre:Plant-NppPortable lists:0 snap:0 medium:PurgeRigLaunch:app.exe plant:plant-post:Plant-NppUserFiles lists:1 snap:1 lists:2 snap:2') $ev
+    Check 'run-app x0 npp-userfiles: planted[] in run.json with the phase of each item' ((@($r.run.planted) | ForEach-Object { "$($_.phase)=$($_.target)" }) -join ',' -eq 'plant-pre=P:C:\fake\Plant-NppPortable.txt,plant-post=P:C:\fake\Plant-NppUserFiles.txt') ((@($r.run.planted) | ForEach-Object { "$($_.phase)=$($_.target)" }) -join ',')
+    Check 'run-app x0 npp-userfiles: live scan (--mode external, plan-live.json) after the harvest, before the uninstall' (
+        ($r.engine -contains ('engine:scan --fp ' + (Join-Path $r.dir 'fp.json') + ' --mode external --app npp-userfiles -o ' + (Join-Path $r.dir 'plan-live.json'))) -and
+        ((Steps $r) -match 'engine:harvest engine:scan engine:uninstall')) ($r.engine -join ' | ')
+    $x = $r.run.extra
+    Check 'run-app x0 npp-userfiles: extra record (live counts, root band, det_equal by plan hash)' ($x.live_items -eq 1 -and $x.live_safe -eq 0 -and $x.live_preselected -eq 0 -and (@($x.live_root_band) -join ',') -eq 'Likely' -and $x.det_equal -eq $true -and $x.det_how -eq 'plan_hash' -and $x.plan_a -eq 'abc123') ($x | ConvertTo-Json -Compress)
+    Check 'run-app x0 npp-userfiles: repeat scan writes plan-purge-b.json' ((Test-Path (Join-Path $r.dir 'plan-purge-b.json')) -and ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',') -eq 'inventory-1,harvest,scan-live,uninstall,inventory-2,scan,scan-repeat') ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',')
+
+    # pre_launch + pre_uninstall: Firefox installed, launched and removed before snap 0, then installed again.
+    $r = Invoke-FakeRunApp 'x0-ff-reinstall' 'ff-reinstall' 'x0t-ff-reinstall' -EngineMode
+    Check 'run-app x0 ff-reinstall: pre-app installed, launched, vendor-removed before arp0' ($r.code -eq 0 -and ($r.phases -join ' ') -eq $EnginePhases.Replace('setup ', 'setup pre-firefox pre-launch-firefox pre-uninstall-firefox ')) "exit $($r.code); $($r.phases -join ' ')`n$($r.out)"
+    Check 'run-app x0 ff-reinstall: install, launch, uninst-firefox, then lists 0, then the second install' ((Steps $r) -match '^start:firefox\.exe medium:PurgeRigLaunch:app\.exe start:uninst-firefox\.exe lists:0 snap:0 start:firefox\.exe ') (Steps $r)
+    Check 'run-app x0 ff-reinstall: pre record has launch and uninstall, main is the new firefox entry' (@($r.run.pre)[0].launch.done -eq $true -and @($r.run.pre)[0].uninstall.entry_gone -eq $true -and $r.run.main.key -match 'Fake-firefox$' -and @($r.run.entries_created).Count -eq 1) ($r.run.pre | ConvertTo-Json -Depth 4 -Compress)
+
+    # post: Thunderbird installed and launched after Firefox's launch, before lists 1.
+    $r = Invoke-FakeRunApp 'x0-ff-tbafter' 'ff-tbafter' 'x0t-ff-tbafter' -EngineMode
+    Check 'run-app x0 ff-tbafter: post-thunderbird after the launch, before lists1' ($r.code -eq 0 -and ($r.phases -join ' ') -eq $EnginePhases.Replace('launch lists1', 'launch post-thunderbird lists1')) "exit $($r.code); $($r.phases -join ' ')`n$($r.out)"
+    Check 'run-app x0 ff-tbafter: firefox launch, thunderbird install + launch, then lists 1' ((Steps $r) -match 'start:firefox\.exe medium:PurgeRigLaunch:app\.exe start:thunderbird\.exe medium:PurgeRigLaunch:app\.exe lists:1 ') (Steps $r)
+    Check 'run-app x0 ff-tbafter: post entry recorded, not in entries_created, main is firefox' (@($r.run.post)[0].entry.key -match 'Fake-thunderbird$' -and @($r.run.post)[0].launch.done -eq $true -and @($r.run.entries_created).Count -eq 1 -and $r.run.main.key -match 'Fake-firefox$') "created: $(@($r.run.entries_created | ForEach-Object { $_.key }) -join ',')"
+
+    # Install arguments: environment variables expanded (git-toolsdir installs into %USERPROFILE%\Tools).
+    $r = Invoke-FakeRunApp 'x0-git-toolsdir' 'git-toolsdir'
+    $want = 'start:git.exe /VERYSILENT /NORESTART /SUPPRESSMSGBOXES /DIR="' + [Environment]::ExpandEnvironmentVariables('%USERPROFILE%') + '\Tools"'
+    Check 'run-app x0 git-toolsdir: %USERPROFILE% expanded in the install arguments, plant-pre before lists 0' ($r.code -eq 0 -and ($r.events -contains $want) -and (@($r.events | Where-Object { $_ -match '^(plant:|lists:0)' }) -join ' ') -eq 'plant:plant-pre:Plant-GitToolsDir lists:0') "exit $($r.code); $($r.events -join ' | ')"
 }
 
 # ---------------------------------------- rig.ps1: run names, engine push, plans, frozen dirs kept
@@ -593,6 +739,24 @@ $EnginePhases = 'setup arp0 lists0 snap0 install detect launch lists1 snap1 engi
     Check 'Push-Tools without a built engine: no engine copy (M0)' (-not ($gc -match 'copyto[^\n]*purge-engine') -and -not ($gc -match 'copyto[^\n]*baselines') -and -not $gc.Contains('stat C:\cr\bin\purge-engine.exe') -and $gc.Contains('copyto --target-directory C:\cr\bin\ ' + $rt)) $gc
     $msg = $null; try { Push-Tools -RigTool $rt -Engine (Join-Path $H 'missing.exe') } catch { $msg = $_.Exception.Message }
     Check 'Push-Tools -Engine <missing> throws' ($msg -match 'purge-engine not found') "got '$msg'"
+    [IO.File]::WriteAllText($eng, 'MZ fake')
+    $script:GuestCalls.Clear()
+    Push-Tools -RigTool $rt -NoBaselines
+    $gc = $script:GuestCalls -join "`n"
+    Check 'Push-Tools -NoBaselines: engine pushed, old baselines deleted, none copied' ($gc.Contains("copyto --target-directory C:\cr\bin\ $eng") -and $gc.Contains('C:\cr\bin\kb\baselines\*.tsv.gz') -and -not ($gc -match 'copyto[^\n]*baselines')) $gc
+    # Host installer cache: Get-CachedRunFiles picks the run's files the cache holds; Push-Tools sends them + manifest.
+    $cache = Join-Path $H 'cache'; New-Item -ItemType Directory -Force $cache | Out-Null
+    foreach ($n in 'cache-sources.json', 'npp-portable.zip', 'thunderbird.exe') { [IO.File]::WriteAllText((Join-Path $cache $n), 'x') }
+    $cf = @(Get-CachedRunFiles -Id 'npp-userfiles' -CacheDir $cache | ForEach-Object { Split-Path -Leaf $_ })
+    Check 'Get-CachedRunFiles npp-userfiles: the portable zip (npp.exe is not cached)' (($cf -join ',') -eq 'npp-portable.zip') ($cf -join ',')
+    $cf = @(Get-CachedRunFiles -Id 'ff-tbafter' -CacheDir $cache | ForEach-Object { Split-Path -Leaf $_ })
+    Check 'Get-CachedRunFiles ff-tbafter: thunderbird.exe' (($cf -join ',') -eq 'thunderbird.exe') ($cf -join ',')
+    Check 'Get-CachedRunFiles: no manifest -> nothing' (@(Get-CachedRunFiles -Id 'ff-tbafter' -CacheDir (Join-Path $H 'nocache')).Count -eq 0)
+    $script:GuestCalls.Clear()
+    Push-Tools -RigTool $rt -Installers @((Join-Path $cache 'thunderbird.exe'))
+    $gc = $script:GuestCalls -join "`n"
+    Check 'Push-Tools -Installers: manifest and file to C:\cr\inst, both verified' ($gc -match 'copyto --target-directory C:\\cr\\inst\\ [^\n]*cache-sources\.json [^\n]*thunderbird\.exe' -and $gc.Contains('stat C:\cr\inst\thunderbird.exe') -and $gc.Contains('stat C:\cr\inst\cache-sources.json')) $gc
+    Remove-Item -LiteralPath $eng
 
     # Invoke-Run / Invoke-Campaign in engine mode with the guest faked
     $script:GuestFiles = [ordered]@{}
@@ -605,7 +769,7 @@ $EnginePhases = 'setup arp0 lists0 snap0 install detect launch lists1 snap1 engi
     function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy) $script:LastJob = @{ text = $Text; name = $Name }; [IO.File]::WriteAllText($LogCopy, 'job log'); [pscustomobject]@{ name = $Name; done = $true; seconds = 1; log = ''; log_file = $LogCopy } }
     function Restore-Base { param($Snapshot, $AgentTimeoutSec) }
     $script:PushArgs = $null
-    function Push-Tools { param([string]$RigTool = '', [string]$Engine = '') $script:PushArgs = $Engine }
+    function Push-Tools { param([string]$RigTool = '', [string]$Engine = '', [switch]$NoBaselines, [string[]]$Installers = @()) $script:PushArgs = $Engine; $script:PushNoBl = [bool]$NoBaselines }
     function Get-PwFile { 'C:\nonexistent\pw.txt' }
 
     $frozenRun = Join-Path $script:RunsDir 'npp'
@@ -633,6 +797,14 @@ $EnginePhases = 'setup arp0 lists0 snap0 install detect launch lists1 snap1 engi
     $script:GuestFiles = [ordered]@{ 'run.log' = 'NEW'; 'run.json' = (New-RunJson 'r0-npp' (Get-Date)); 'plan-purge.json' = '{}' }
     $rec = @(Invoke-Campaign -Ids npp -Nulls 0 -RunPrefix 'r0-' -Engine $fakeEngine)[0]
     Check 'Invoke-Campaign -RunPrefix r0- -Engine: run r0-npp ok, engine pushed, frozen dir untouched' ($rec.ok -and $rec.run -eq 'r0-npp' -and $rec.id -eq 'npp' -and $rec.engine -and $script:PushArgs -eq $fakeEngine -and (FrozenIntact)) "ok=$($rec.ok) run=$($rec.run) error=$($rec.error) push=$($script:PushArgs)"
+    $script:GuestFiles = [ordered]@{ 'run.log' = 'NEW'; 'run.json' = (New-RunJson 'x0-npp' (Get-Date)); 'plan-purge.json' = '{}'; 'plan-live.json' = '{}'; 'plan-purge-b.json' = '{}' }
+    $rec = @(Invoke-Campaign -Ids npp -Nulls 0 -RunPrefix 'x0-' -Engine $fakeEngine -ExtraChecks -NoBaselines)[0]
+    $xd = Join-Path $script:RunsDir 'x0-npp'
+    Check 'Invoke-Campaign -ExtraChecks -NoBaselines: __EXTRA__ = 1, no baselines pushed, extra plans stay out of plans\' (
+        $rec.ok -and $script:LastJob.text.Contains("`$ExtraFlag = '1'") -and $script:PushNoBl -and (Test-Path (Join-Path $xd 'plan-live.json')) -and
+        ((@(Get-ChildItem (Join-Path $xd 'plans') | ForEach-Object { $_.Name }) -join ',') -eq 'bcu.json,purge.json')) "ok=$($rec.ok) error=$($rec.error) nobl=$($script:PushNoBl)"
+    $msg = $null; try { $null = Invoke-Campaign -Ids npp -Nulls 0 -RunPrefix 'x0-' -ExtraChecks } catch { $msg = $_.Exception.Message }
+    Check 'Invoke-Campaign -ExtraChecks without -Engine refuses' ($msg -match 'needs -Engine') "got '$msg'"
     $msg = $null; try { $null = Invoke-Campaign -Ids npp -Nulls 0 -Engine $fakeEngine } catch { $msg = $_.Exception.Message }
     Check 'Invoke-Campaign -Engine without -RunPrefix refuses before touching anything' ($msg -match 'need -RunPrefix' -and (FrozenIntact)) "got '$msg'"
     $msg = $null; try { $null = Invoke-Campaign -Ids npp -Nulls 0 -RunPrefix 'r0-' -Engine (Join-Path $H 'missing.exe') } catch { $msg = $_.Exception.Message }

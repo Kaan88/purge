@@ -2,7 +2,9 @@
 
     python -I vm/truth/mk_labels.py vm/truth/labels
 
-_os.json holds the shared OS side effects (label `ambient`). Each app file keeps its hand-written rules;
+_os.json holds the shared OS side effects (label `ambient`). _os-servicing.json holds the Windows servicing
+families used by the M1a gate only (SERVICING below; m1a.sh passes it as a second --labels). Each app file keeps
+its hand-written rules;
 rules this script adds carry `"gen": true` and are replaced on every run. Patterns are written with `/` for
 a path separator and turned into an escaped backslash. Rule fields (vm/RIG.md §5): `split` = the rule
 labels a container only, its new children become items of their own; `first` = checked before the ambient
@@ -87,6 +89,10 @@ OS = [
     ('^[VC]:' + UC + r'/Local Settings/Software/Microsoft/Windows/CurrentVersion/AppModel/SystemAppData/Microsoft\.[^/]+_cw5n1h2txyewy/HAM' + TAIL,
      'Host Activity Manager timestamps for inbox system packages.'),
     ('^K:' + UC + '/Local Settings/Software/Microsoft/Windows/CurrentVersion/AppModel/ShellRefresh$', 'AppX shell refresh marker.'),
+    # Moved here from the per-app hand rules (2026-11-15, dirty review): the out-of-sample bases (vlc, thunderbird,
+    # winmerge) lacked it, so their bam value counted as a leftover no cleaner may reach (deny list).
+    ('^[VC]:HKLM/SYSTEM/CurrentControlSet/Services/bam/State/UserSettings/S-1-5-21-[0-9-]+\\|',
+     'Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.'),
 ]
 # Containers: the rule labels the container only; what an app put inside is judged item by item.
 SPLIT = [
@@ -127,7 +133,45 @@ PREFETCH = {
     'git': ['BASH', 'CYGWIN-CONSOLE-HELPER', 'GIT', 'MINTTY'],
     'python': ['PYTHON', 'PYTHONW'],
     'firefox': ['FIREFOX', 'CRASHHELPER'],
+    'thunderbird': ['THUNDERBIRD'],
+    'vlc': ['VLC'],
+    'winmerge': ['WINMERGEU'],
 }
+
+# Base label files of the x0 out-of-sample apps (vm/RIG.md section 4b), created with these hand rules when missing
+# (informational recall only; review and extend after the first run). Their generated rules come from PREFETCH.
+NEW_BASES = {
+    'thunderbird': {
+        'note': 'Mozilla Thunderbird (x0-thunderbird, also the footprint reference of x0-ff-tbafter). Generic rules only: '
+                'informational recall, review after the first run.',
+        'rules': [dict(label='user_data', match=rx('^P:' + P + r'/AppData/Roaming/Thunderbird(/.*)?$'),
+                       why='Thunderbird profiles (mail, address books): user data.')],
+    },
+    'vlc': {
+        'note': 'VLC media player 3.0.21 (x0-vlc, out-of-sample NSIS). Generic rules only: informational recall.',
+        'rules': [dict(label='user_data', match=rx('^P:' + P + r'/AppData/Roaming/vlc(/.*)?$'),
+                       why='VLC preferences, playlists and media library: user data.')],
+    },
+    'winmerge': {
+        'note': 'WinMerge 2.16.60 (x0-winmerge, out-of-sample Inno). Generic rules only: informational recall.',
+        'rules': [],
+    },
+}
+
+
+def mms(who):
+    """kept_owner rules for the shared Mozilla Maintenance Service, which stays installed for `who`."""
+    return [
+        dict(label='kept_owner', match=rx(r'^P:C:/Program Files \(x86\)/Mozilla Maintenance Service(/.*)?$'),
+             why=f'Mozilla Maintenance Service folder: the service stays installed for {who}.'),
+        dict(label='kept_owner',
+             match=rx('^[KVC]:HKLM/SOFTWARE/(WOW6432Node/)?Microsoft/Windows/CurrentVersion/Uninstall/MozillaMaintenanceService' + TAIL),
+             why=f'ARP entry of the Mozilla Maintenance Service, still installed for {who}.'),
+        dict(label='kept_owner', match=rx('^[KVC]:HKLM/SOFTWARE/(WOW6432Node/)?Mozilla/MaintenanceService' + TAIL),
+             why=f'Mozilla Maintenance Service settings key, still installed for {who}.'),
+        dict(label='kept_owner', match=rx('^[KVC]:HKLM/SYSTEM/CurrentControlSet/Services/MozillaMaintenance' + TAIL),
+             why=f'MozillaMaintenance service registration, still installed for {who}.'),
+    ]
 
 # M1a corpus variants (vm/RIG.md section 4a): label files that reuse a base app's rules through `include`.
 # The base file's hand-written and generated rules (jump lists, Prefetch, user data) apply unchanged; rules of
@@ -143,10 +187,201 @@ VARIANTS = {
         'base': 'firefox',
         'note': 'The firefox run with Thunderbird installed before snap 0. Everything of Thunderbird\'s (and the shared '
                 'Mozilla Maintenance Service, vendor keys and dirs it created) existed in snap 0, so offering it scores '
-                'danger by the scorer\'s own rule; no kept_owner rule is needed for it. Freeze after review of the first '
-                'r0-firefox-tb run.',
+                'danger by the scorer\'s own rule. What Firefox\'s install added to the Maintenance Service, which stays '
+                'installed for Thunderbird (its ARP entry and service are in lists-0 and lists-2), is kept_owner '
+                '(generated rules below). Freeze after review of the first r0-firefox-tb run.',
+        # The Mozilla Maintenance Service is shared: Thunderbird installed it before snap 0 and still uses it after
+        # Firefox is gone (ARP entry MozillaMaintenanceService and service MozillaMaintenance in lists-2). Firefox's
+        # installer refreshed it (maintenanceservice_tmp.exe in its folder, a new EstimatedSize on its ARP entry);
+        # those changes belong to the still-installed product, not to Firefox. The run's entries_left cannot anchor
+        # them because the entry existed before the install.
+        'rules': mms('Thunderbird (pre-app)'),
+    },
+    # ------------------------------------------------------------------ x0 variants (vm/RIG.md section 4b)
+    # Planted user files (apps.ps1 plant_post) are user_data: rigtool truth splits a collapsed new install root at
+    # them (truth.rs split_kept), so an offer that covers them counts in userdata_preselected / the reporting classes.
+    # Everything planted before snap 0 needs no label: it existed in snap 0, so any offer of it scores danger.
+    'npp-userfiles': {
+        'base': 'npp',
+        'note': 'x0 rank 1: npp with a portable copy registered before snap 0 and user files written into the install '
+                'folder after the launch (apps.ps1 Plant-NppPortable, Plant-NppUserFiles).',
+        'rules': [dict(label='user_data', match=rx(r'^P:C:/Program Files/Notepad\+\+/(my-notes(/.*)?|session-backup\.txt)$'),
+                       why='User files planted in the install folder after the launch (plant_post): never the app\'s.')],
+    },
+    'git-toolsdir': {
+        'base': 'git',
+        'note': 'x0 rank 2: Git installed into the user\'s existing tools folder %USERPROFILE%\\Tools (planted before snap 0, '
+                'so its content scores danger by snap 0). Git\'s own files there are leftover by default; the git rules assume '
+                'Program Files\\Git, so recall is partial.',
+    },
+    'ff-devedition': {
+        'base': 'firefox',
+        'note': 'x0 rank 3: Firefox Developer Edition installed and launched before snap 0. Its keys, folders and profile '
+                'existed in snap 0 (danger when offered); the Maintenance Service it shares is kept_owner.',
+        'rules': mms('Firefox Developer Edition (pre-app)'),
+    },
+    'vscode-with-user': {
+        'base': 'vscode',
+        'note': 'x0 rank 4: the per-user VS Code installed and launched before snap 0, then the system build removed.',
+    },
+    'git-userstate': {
+        'base': 'git',
+        'note': 'x0 rank 5: TortoiseGit and the user\'s own references to Git (config values, PATH, Run values, a Start menu '
+                'shortcut, an empty .sh key), all planted before snap 0.',
+    },
+    'ff-tbafter': {
+        'base': 'firefox',
+        'note': 'x0 rank 10: Thunderbird installed and launched AFTER Firefox\'s launch (post-app). Its ARP entry and folder '
+                'are kept_owner by the lists-2 anchors; the rules below add the Maintenance Service and everything named '
+                'Thunderbird. Score the footprint too: truth/footprint.sh x0-ff-tbafter x0-thunderbird.',
+        'rules': mms('Thunderbird (post-app)') + [
+            dict(label='kept_owner', match=rx(r'(?i)^[PKVC]:.*thunderbird'),
+                 why='Thunderbird (post-app, still installed): its keys, folders, ProgIDs, Clients\\Mail and RegisteredApplications entries.'),
+        ],
+    },
+    'vscode-userstate': {
+        'base': 'vscode',
+        'note': 'x0 rank 11: pre-existing .ext keys, prior VS Code user data and an Open-with registration of a zip copy '
+                '(planted before snap 0), and a user file in the install folder after the launch.',
+        'rules': [dict(label='user_data', match=rx(r'^P:C:/Program Files/Microsoft VS Code/my-workspace(/.*)?$'),
+                       why='User workspace planted in the install folder after the launch (plant_post): never the app\'s.')],
+    },
+    'vscode-insiders-pair': {
+        'base': 'vscode',
+        'note': 'x0 rank 13: VS Code Insiders installed and launched before snap 0 (prefix collisions).',
+    },
+    'vscode-upgrade': {
+        'base': 'vscode',
+        'note': 'x0 rank 15: VS Code 1.145.0 installed first, the current build over it (both after snap 0).',
+    },
+    'ff-esr': {
+        'base': 'firefox',
+        'note': 'x0 rank 16: Firefox ESR in its own folder, installed and launched before snap 0.',
+        'rules': mms('Firefox ESR (pre-app)'),
+    },
+    'vscode-zipcopy': {
+        'base': 'vscode-user',
+        'note': 'x0 rank 17: an unregistered zip copy of VS Code in %USERPROFILE%\\Tools\\VSCode, started once before snap 0, '
+                'then the per-user build installed and removed.',
+    },
+    'ff-reinstall': {
+        'base': 'firefox',
+        'note': 'x0 rank 18: Firefox installed, launched and removed with its own uninstaller before snap 0, then installed '
+                'again. The first install\'s leftovers existed in snap 0 (danger by the scorer\'s rule; spec Q1).',
+    },
+    'git-upgrade': {
+        'base': 'git',
+        'note': 'x0 rank 20: Git 2.56.0 installed first, 2.56.1 over it (both after snap 0).',
+    },
+    # ------------------------------------------------------------------ dirty-base labels (vm/RIG.md section 4b)
+    # dirty-base has Thunderbird and the system VS Code installed (vm/guest/setup-dirty.ps1); m1a.sh maps the f*d
+    # runs' firefox and vscode-user to these files (M1A_LABELS in ~/purge-target/campaigns/inbound-dirty-score.sh).
+    'firefox-dirty': {
+        'base': 'firefox',
+        'note': 'firefox on dirty-base: Thunderbird is installed before snap 0 and stays, so the shared Mozilla Maintenance '
+                'Service is kept_owner (as firefox-tb). 2026-11-15 dirty review (f2d).',
+        'rules': mms('Thunderbird (dirty-base)'),
+    },
+    'vscode-user-dirty': {
+        'base': 'vscode-user',
+        'note': 'vscode-user on dirty-base: the system VS Code (C:\\Program Files\\Microsoft VS Code) stays installed and '
+                'uses the same per-user data (%APPDATA%\\Code, %USERPROFILE%\\.vscode); what the user build created there '
+                'is the still-installed product\'s too. 2026-11-15 dirty review (f2d).',
+        'rules': [
+            dict(label='kept_owner', match=rx('^P:' + P + r'/(AppData/Roaming/Code|\.vscode)(/.*)?$'),
+                 why='VS Code user data shared with the system VS Code, still installed on dirty-base.'),
+        ],
     },
 }
+
+# M1a gate only (vm/truth/m1a.sh passes this file as a second --labels; the M0 recompute does not, so the frozen
+# M0 truth is unchanged). Windows servicing and telemetry families that run on their own schedule, by nature OS
+# background activity no uninstaller writes and no cleaner may touch. The primary ambient mechanism is the null
+# runs of the same campaign (RIG.md section 6); these rules cover the daily tasks that fire when a restored
+# snapshot finds itself a day or more later (stale ambient.json, 2026-11-13 review) but may miss a given null
+# run's window. Each rule is anchored under the family's own Windows-owned root; nothing app-named matches.
+SERVICING = [
+    # Connected User Experiences and Telemetry (DiagTrack): settings downloads (SettingsRequests ETag,
+    # LastDownloadTime, RefreshInterval), DiagTrackStatus and upload timestamps, refreshed by the service.
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/Diagnostics/DiagTrack' + TAIL,
+     'DiagTrack (telemetry service) settings refresh and upload bookkeeping; written on the service\'s own schedule.'),
+    # Windows Update Medic / settings client (WaaSMedic, WOSC) refresh timestamps.
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/Wosc' + TAIL,
+     'Windows Update settings client (WaaSMedic/WOSC) refresh state.'),
+    # Update Session Orchestrator: scheduler state and the UX smart-scheduler predictions.
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/WindowsUpdate/Orchestrator' + TAIL,
+     'Update Session Orchestrator scheduler state (RebootDowntimeEvaluation...).'),
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/WindowsUpdate/UX/StateVariables' + TAIL,
+     'Windows Update UX smart-scheduler predictions.'),
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/WaaSAssessment' + TAIL,
+     'Windows-as-a-Service quality assessment cache.'),
+    ('^P:C:/ProgramData/USOShared/Logs(/.*)?$', 'Update Session Orchestrator ETL logs (MoNotificationUx...).'),
+    # Component Based Servicing: servicing sessions (e.g. the Defender default-definitions package refresh),
+    # session ids, pending sessions, notification stamps, catalogs to uninstall.
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/Component Based Servicing' + TAIL,
+     'Component Based Servicing (TrustedInstaller) session state; the component store is never a cleaner target.'),
+    ('^[VC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/SideBySide\\|PublisherPolicyChangeTime$',
+     'WinSxS publisher-policy change stamp, set by servicing.'),
+    ('^[VC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/Fcon\\|',
+     'Feature configuration (Fcon) update stamps (PUU, DU, PDU).'),
+    # WMI: provider tracing registrations and the ADAP performance-library refresh (WmiApSrv).
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Wbem/(Tracing|PROVIDERS/Performance)' + TAIL,
+     'WMI provider tracing registration and ADAP performance data refresh; WMI\'s own state.'),
+    ('^[VC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/Appx/PackageRepair\\|',
+     'AppX package-repair bookkeeping per user (deployment service maintenance task).'),
+    ('^P:C:/ProgramData/Microsoft/Windows Defender/Scans/History(/.*)?$',
+     'Microsoft Defender scan history store (results of its own scheduled and real-time scans).'),
+    # The next three were approved by the user on 2026-11-14 (blocked pending approval on 2026-11-13). Each is
+    # limited to the exact Windows-internal locations seen in the r0/r1/f1d/x1 sanity residuals and truths.
+    # TrustedInstaller session state: the Windows Modules Installer service's start type and its Winlogon
+    # notification flags, flipped by servicing sessions. Changed values only, these two names only.
+    ('^C:HKLM/SYSTEM/CurrentControlSet/(Services/TrustedInstaller\\|Start|Control/Winlogon/Notifications/Components/TrustedInstaller\\|Events)$',
+     'TrustedInstaller (Windows Modules Installer) session state: service start type and Winlogon notification events '
+     'toggled by servicing (approved 2026-11-14).'),
+    # SIH (Service Initiated Healing, sihclient.exe): the Windows Update self-healing client's cached service-locator
+    # responses, one key per service GUID with the request URL as subkey (Data, ETag, Expires...).
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/SIH/SLS/\\{[0-9A-Fa-f-]{36}\\}(/[^|]*)?(\\|.*)?$',
+     'SIH (Windows Update self-healing client) service-locator cache (approved 2026-11-14).'),
+    # WER termination records: TermReason\<pid> keys (CreationTime, Reason, Terminator) written when a process is
+    # terminated, plus their container key. Numeric PID names only.
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Windows/Windows Error Reporting/TermReason(/[0-9]+)?(\\|.*)?$',
+     'Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).'),
+    # 2026-11-15 (gate reviews of r2, f2d, x2). Each family below was seen in null runs (no app involved) on both
+    # images, listed with the null runs in the comment; all are under Windows-owned roots and name no app.
+    # Census (device inventory task): Census|StartTime/EndTime/RunCounter/ReturnCode. Null runs r0-null3,
+    # r2-null2 (Inbound), f0-null3 (Clean-Pro), f1d-null1 (dirty-base).
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/Census' + TAIL,
+     'Census (device inventory scheduled task) run bookkeeping (null runs, 2026-11-15).'),
+    # Appraiser/compat database refresh tick. Null runs r0-null3, r2-null2, f0-null3, f1d-null1.
+    ('^[VC]:HKLM/SOFTWARE/Microsoft/Windows NT/CurrentVersion/AppCompatFlags\\|PatchDbUpdateTickCount$',
+     'Application-compatibility patch database refresh tick (null runs, 2026-11-15).'),
+    # Store install service: AutoUpdateLastSuccessTime. Null runs r0-null3, r2-null2, f1d-null1.
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/InstallService/State' + TAIL,
+     'Microsoft Store install service state (auto-update timestamps) (null runs, 2026-11-15).'),
+    # OneSettings cloud configuration cache: ...\appcompat\runtimesdbincloud|RefreshAfter. Null runs r0-null3,
+    # r2-null2, f1d-null1.
+    ('^[KVC]:HKLM/SOFTWARE/Microsoft/Windows/CurrentVersion/OneSettings' + TAIL,
+     'OneSettings cloud-configuration cache refresh state (null runs, 2026-11-15).'),
+    # The kernel's list of loaded hives: the COMPONENTS hive is mounted by servicing (CBS). Null runs r0-null3,
+    # f0-null3; one of the 11 r2 sanity differences.
+    ('^[VC]:HKLM/SYSTEM/CurrentControlSet/Control/hivelist\\|\\\\REGISTRY\\\\MACHINE\\\\COMPONENTS$',
+     'hivelist entry of the COMPONENTS hive, loaded by Windows servicing (null runs, 2026-11-15).'),
+    # Windows backup of the Start app list (AppListBackup|LastRun, IsBackupEnabledAndMSAAttached). Null run r2-null2.
+    ('^[KVC]:' + U + '/Software/Microsoft/Windows/CurrentVersion/AppListBackup' + TAIL,
+     'Windows Backup app-list backup bookkeeping (null run, 2026-11-15).'),
+    # Delivery Optimization usage counters in the NETWORK SERVICE profile. Every null run of every campaign
+    # (21 runs) has some of them; the ambient sets keep exact names only, so a new counter name escaped them.
+    ('^[KVC]:HKU/S-1-5-20/Software/Microsoft/Windows/CurrentVersion/DeliveryOptimization' + TAIL,
+     'Delivery Optimization (NETWORK SERVICE) usage counters and config (all null runs, 2026-11-15).'),
+    # Windows Hello / NGC key-attestation state (LOCAL SERVICE profile and the machine Ngc key). Null runs r0-null3,
+    # r2-null2, f0-null3, f0d-null1/2, f1d-null1/2, f2d-null1/2.
+    ('^[KVC]:(HKU/S-1-5-19/Software/Microsoft/Cryptography/NGC|HKLM/SYSTEM/CurrentControlSet/Control/Cryptography/Ngc)' + TAIL,
+     'Windows Hello (NGC) key attestation state (null runs, 2026-11-15).'),
+    # Microsoft-account device-ID cookie (AuthCookies\Live\Default\DIDC|Data), refreshed by the wlidsvc service in
+    # every profile. Null runs f0-null1..3, f0d-null2, f2d-null1, r1-null2, r2-null1, r2-null2.
+    ('^[KVC]:HKU/S-1-5-[0-9-]+/Software/Microsoft/AuthCookies/Live/Default/DIDC' + TAIL,
+     'Microsoft-account device-ID cookie refreshed by wlidsvc (null runs, 2026-11-15).'),
+]
 
 
 def main(d):
@@ -162,10 +397,24 @@ def main(d):
     with open(d + '/_os.json', 'w', encoding='utf-8') as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
 
-    for id in ['npp', '7zip', 'vscode', 'git', 'python', 'node', 'vcredist', 'firefox']:
+    srv = dict(id='_os-servicing',
+               note='Generated by vm/truth/mk_labels.py (SERVICING). M1a gate only: vm/truth/m1a.sh passes it as a second '
+                    '--labels file; the M0 recompute (truth/recompute.sh) does not, so the frozen M0 truth is unchanged. '
+                    'Windows servicing and telemetry families that run on their own schedule (OS background activity by '
+                    'nature). The primary ambient source is the null runs of the same campaign (vm/RIG.md section 6).',
+               rules=[dict(label='ambient', match=rx(m), why=w) for m, w in SERVICING])
+    with open(d + '/_os-servicing.json', 'w', encoding='utf-8') as f:
+        json.dump(srv, f, indent=2, ensure_ascii=False)
+
+    for id in ['npp', '7zip', 'vscode', 'git', 'python', 'node', 'vcredist', 'firefox'] + list(NEW_BASES):
         fn = f'{d}/{id}.json'
-        with open(fn, encoding='utf-8') as f:
-            j = json.load(f)
+        try:
+            with open(fn, encoding='utf-8') as f:
+                j = json.load(f)
+        except FileNotFoundError:
+            if id not in NEW_BASES:
+                raise
+            j = {'id': id, 'rules': NEW_BASES[id]['rules'], 'note': NEW_BASES[id]['note']}
         keep = [r for r in j.get('rules', []) if not r.get('gen')
                 and not r.get('why', '').startswith(('Python Launcher (still installed, product', 'The uninstaller removed the'))]
         gen = []
@@ -196,15 +445,17 @@ def main(d):
         except FileNotFoundError:
             j = {'id': id, 'rules': []}
         keep = [r for r in j.get('rules', []) if not r.get('gen')]
+        gen = [dict(r, gen=True) for r in v.get('rules', [])]
         # `_os.json` first (as in every app file), then the base app's file, which includes `_os.json` again:
         # the duplicate rules are harmless, a rule's label decides its precedence, not its position.
-        j2 = {'id': id, 'include': ['_os.json', v['base'] + '.json'], 'note': v['note'], 'rules': keep}
+        j2 = {'id': id, 'include': ['_os.json', v['base'] + '.json'], 'note': v['note'], 'rules': gen + keep}
         for k, val in j.items():
             if k not in ('id', 'include', 'note', 'rules'):
                 j2[k] = val
         with open(fn, 'w', encoding='utf-8') as f:
             json.dump(j2, f, indent=2, ensure_ascii=False)
-    print(f'_os.json: {len(rules)} rules ({len(SPLIT)} split); variants: {", ".join(VARIANTS)}')
+    print(f'_os.json: {len(rules)} rules ({len(SPLIT)} split); _os-servicing.json: {len(SERVICING)} rules; '
+          f'variants: {", ".join(VARIANTS)}')
 
 
 if __name__ == '__main__':

@@ -1,0 +1,9 @@
+{
+  "id": "vscode-with-user",
+  "include": [
+    "_os.json",
+    "vscode.json"
+  ],
+  "note": "x0 rank 4: the per-user VS Code installed and launched before snap 0, then the system build removed.",
+  "rules": []
+}

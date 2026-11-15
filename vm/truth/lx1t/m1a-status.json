@@ -1,0 +1,25 @@
+{
+  "schema": "purge.rig.m1a-status/1",
+  "time": "2026-11-14T02:57:30+03:00",
+  "prefix": "lx1t-",
+  "classes": true,
+  "bcu": false,
+  "exit": 0,
+  "stage": "done",
+  "ambient": "truth/ambient-r0.json",
+  "servicing_rules": true,
+  "sanity_residual": 0,
+  "accept_sanity_diff": true,
+  "invdiff": [
+    {
+      "run": "lx1t-npp-userfiles",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "lx1t-npp-userfiles",
+      "phase": "2",
+      "exit": 0
+    }
+  ]
+}

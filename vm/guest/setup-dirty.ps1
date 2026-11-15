@@ -27,15 +27,16 @@ function Install-One([string]$Name, $Url, [string]$File, [string]$Arguments, [in
         else { $exe = $path; $a = $Arguments }
         $r.cmd = "`"$exe`" $a"
         Log "install $Name : $($r.cmd)"
+        $pre = New-ProcKeySet    # PID-reuse guard for the installer's process tree (Get-TreeProcs)
         $t = Get-Date
         $p = Start-Native $exe $a
         $exited = $p.WaitForExit($TimeoutSec * 1000)
         if ($exited) { $r.exit = $p.ExitCode } else { $r.timed_out = $true }
-        $w = WaitTree -Since $t -TimeoutSec ([Math]::Max(60, $TimeoutSec - [int]((Get-Date) - $t).TotalSeconds)) -RootPid @($p.Id)
+        $w = WaitTree -Since $t -TimeoutSec ([Math]::Max(60, $TimeoutSec - [int]((Get-Date) - $t).TotalSeconds)) -RootPid @($p.Id) -Preexisting $pre
         if ($w.timed_out) {
             # An installer that starts its app (NVDA, Steam) leaves a long-lived child: stop the tree.
             $r.timed_out = $true
-            $still = @(Get-TreeProcs -Procs (Get-ProcList) -Known $w.known)
+            $still = @(Get-TreeProcs -Procs (Get-ProcList) -Known $w.known -Preexisting $pre)
             if ($still.Count) { Log "  stopping: $(($still | ForEach-Object { "$($_.name)[$($_.pid)]" }) -join ', ')"; Stop-Procs $still "$Name tree" }
         }
         Log "  $Name exit=$($r.exit) timed_out=$($r.timed_out) in $([int]((Get-Date) - $t).TotalSeconds) s"

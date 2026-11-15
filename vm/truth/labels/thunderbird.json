@@ -1,0 +1,21 @@
+{
+  "id": "thunderbird",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\(THUNDERBIRD)\\.EXE-[0-9A-F]{8}\\.pf$",
+      "why": "Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash)."
+    },
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Roaming\\\\Thunderbird(\\\\.*)?$",
+      "why": "Thunderbird profiles (mail, address books): user data."
+    }
+  ],
+  "note": "Mozilla Thunderbird (x0-thunderbird, also the footprint reference of x0-ff-tbafter). Generic rules only: informational recall, review after the first run."
+}

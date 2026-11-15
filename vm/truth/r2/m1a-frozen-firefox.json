@@ -1,0 +1,801 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "bcu",
+      "apps": 1,
+      "truth_n": 24,
+      "recall_listed": 0.20833333333333334,
+      "recall_visible": 0.20833333333333334,
+      "recall_safe": 0.20833333333333334,
+      "recall_listed_nd": 0.20833333333333334,
+      "recall_visible_nd": 0.20833333333333334,
+      "recall_safe_nd": 0.20833333333333334,
+      "precision_safe": 1.0,
+      "partial_n": 4,
+      "danger_listed": 0,
+      "danger_offered": 0,
+      "danger_kept": 0,
+      "danger_blocking": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 1,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.0,
+        "RegKey": 0.5,
+        "RegValue": 0.0,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 8,
+        "hit": 9,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    },
+    {
+      "tool": "purge",
+      "apps": 1,
+      "truth_n": 24,
+      "recall_listed": 0.375,
+      "recall_visible": 0.2916666666666667,
+      "recall_safe": 0.20833333333333334,
+      "recall_listed_nd": 0.375,
+      "recall_visible_nd": 0.2916666666666667,
+      "recall_safe_nd": 0.20833333333333334,
+      "precision_safe": 1.0,
+      "partial_n": 5,
+      "danger_listed": 0,
+      "danger_offered": 0,
+      "danger_kept": 0,
+      "danger_blocking": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.2857142857142857,
+        "RegKey": 0.4,
+        "RegValue": 0.42857142857142855,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 1,
+        "hit": 19,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "firefox",
+      "dir": "truth/frozen/firefox",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 103,
+        "kept_owner": 0,
+        "leftover": 23,
+        "rig": 0,
+        "user_data": 1
+      },
+      "ambient_by_run": {
+        "null1": 72,
+        "null2": 73,
+        "null3": 71
+      },
+      "tools": [
+        {
+          "app": "firefox",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/r2-firefox/plans/purge.json",
+          "offered_n": 20,
+          "truth_n": 24,
+          "covered_listed": 9,
+          "covered_visible": 7,
+          "covered_safe": 5,
+          "recall_listed": 0.375,
+          "recall_visible": 0.2916666666666667,
+          "recall_safe": 0.20833333333333334,
+          "covered_listed_nd": 9,
+          "covered_visible_nd": 7,
+          "covered_safe_nd": 5,
+          "recall_listed_nd": 0.375,
+          "recall_visible_nd": 0.2916666666666667,
+          "recall_safe_nd": 0.20833333333333334,
+          "partial_n": 5,
+          "safe_n": 10,
+          "safe_not_gone": 10,
+          "safe_hits": 10,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_offered": 0,
+          "danger_kept": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 1,
+            "hit": 19,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 7,
+              "covered": 2,
+              "recall": 0.2857142857142857
+            },
+            "RegKey": {
+              "n": 10,
+              "covered": 4,
+              "recall": 0.4
+            },
+            "RegValue": {
+              "n": 7,
+              "covered": 3,
+              "recall": 0.42857142857142855
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "FS-APPDATA": {
+              "hit": 3
+            },
+            "FS-VENDORPARENT": {
+              "hit": 3
+            },
+            "REF-ANY": {
+              "gone": 1,
+              "hit": 7
+            },
+            "REG-SOFTWARE": {
+              "hit": 6
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38",
+              "label": "leftover",
+              "partial": true,
+              "size": 156
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\2b3e1db9-43ea-48fa-ac1f-48512895ea3c.zip",
+              "label": "leftover",
+              "partial": false,
+              "size": 3869401
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsuA.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 882597
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CRASHHELPER.EXE-C6FC1224.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 4226
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\FIREFOX.EXE-25FC0A66.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 49713
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\MediaPlayer\\ShimInclusionList\\false",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\mozilla.org",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|Content Type",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{AC21D679-A9C1-47A0-B96F-A0625A9EE822}",
+              "label": "leftover",
+              "partial": false,
+              "size": 326
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|308046O0NS4N39PO",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 2
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{6459BB81-8108-4536-81B4-59D35544E623}",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB;PrivateBrowsingAUMID",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\InProcServer32|",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}\\ProxyStubClsid32|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\ProxyStubClsid32|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}\\ProxyStubClsid32|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\MaintenanceService",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates\\308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            }
+          ]
+        },
+        {
+          "app": "firefox",
+          "tool": "bcu",
+          "mode": "post",
+          "plan_file": "truth/frozen/firefox/plans/bcu.json",
+          "offered_n": 17,
+          "truth_n": 24,
+          "covered_listed": 5,
+          "covered_visible": 5,
+          "covered_safe": 5,
+          "recall_listed": 0.20833333333333334,
+          "recall_visible": 0.20833333333333334,
+          "recall_safe": 0.20833333333333334,
+          "covered_listed_nd": 5,
+          "covered_visible_nd": 5,
+          "covered_safe_nd": 5,
+          "recall_listed_nd": 0.20833333333333334,
+          "recall_visible_nd": 0.20833333333333334,
+          "recall_safe_nd": 0.20833333333333334,
+          "partial_n": 4,
+          "safe_n": 17,
+          "safe_not_gone": 9,
+          "safe_hits": 9,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_offered": 0,
+          "danger_kept": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 1,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 8,
+            "hit": 9,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 7,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 10,
+              "covered": 5,
+              "recall": 0.5
+            },
+            "RegValue": {
+              "n": 7,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "bcu": {
+              "gone": 8,
+              "hit": 9
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38",
+              "label": "leftover",
+              "partial": false,
+              "size": 156
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla",
+              "label": "leftover",
+              "partial": true,
+              "size": 61830356
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\2b3e1db9-43ea-48fa-ac1f-48512895ea3c.zip",
+              "label": "leftover",
+              "partial": false,
+              "size": 3869401
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsuA.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 882597
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla",
+              "label": "user_data",
+              "partial": true,
+              "size": 71038723
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CRASHHELPER.EXE-C6FC1224.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 4226
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\FIREFOX.EXE-25FC0A66.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 49713
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\MediaPlayer\\ShimInclusionList\\false",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\mozilla.org",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\MaintenanceService",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|Content Type",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{AC21D679-A9C1-47A0-B96F-A0625A9EE822}",
+              "label": "leftover",
+              "partial": false,
+              "size": 326
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated|308046B0AF4A39CB",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|308046O0NS4N39PO",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB;PrivateBrowsingAUMID",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "P:C:\\Program Files\\Mozilla Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Firefox Private Browsing.lnk",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Firefox.lnk",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\Public\\Desktop\\Firefox.lnk",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{56932DBC-A2C3-452E-B42D-7FD6CCAC6FCE}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mozilla Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Mozilla Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Mozilla Firefox 160.0",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "ff-reinstall",
+  "include": [
+    "_os.json",
+    "firefox.json"
+  ],
+  "note": "x0 rank 18: Firefox installed, launched and removed with its own uninstaller before snap 0, then installed again. The first install's leftovers existed in snap 0 (danger by the scorer's rule; spec Q1).",
+  "rules": []
+}

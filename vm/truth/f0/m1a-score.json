@@ -1,0 +1,5230 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "purge",
+      "apps": 6,
+      "truth_n": 564,
+      "recall_listed": 0.40810771062413864,
+      "recall_visible": 0.385498220197484,
+      "recall_safe": 0.2896850410915907,
+      "recall_listed_nd": 0.40810771062413864,
+      "recall_visible_nd": 0.385498220197484,
+      "recall_safe_nd": 0.2896850410915907,
+      "precision_safe": 1.0,
+      "partial_n": 6,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "classes": {
+        "danger_blocking": 0,
+        "userdata_blocking": 0,
+        "danger_unticked": 0,
+        "userdata_unticked": 6,
+        "preexisting_value_ref": 0,
+        "old_empty_ext_key": 0,
+        "userdata_safe": 0
+      },
+      "per_kind_recall": {
+        "Path": 0.14562289562289563,
+        "RegKey": 0.45495406093304974,
+        "RegValue": 0.255050505050505,
+        "RegValueChanged": 0.0
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 0,
+        "hit": 320,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "vscode",
+      "dir": "runs/f0-vscode",
+      "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+      "truth_counts": {
+        "ambient": 484,
+        "kept_owner": 0,
+        "leftover": 177,
+        "rig": 1,
+        "user_data": 2
+      },
+      "ambient_by_run": {
+        "f0-null1": 332,
+        "f0-null2": 259,
+        "f0-null3": 318
+      },
+      "tools": [
+        {
+          "app": "vscode",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/f0-vscode\\plans\\purge.json",
+          "offered_n": 140,
+          "truth_n": 179,
+          "covered_listed": 138,
+          "covered_visible": 138,
+          "covered_safe": 136,
+          "recall_listed": 0.770949720670391,
+          "recall_visible": 0.770949720670391,
+          "recall_safe": 0.7597765363128491,
+          "covered_listed_nd": 138,
+          "covered_visible_nd": 138,
+          "covered_safe_nd": 136,
+          "recall_listed_nd": 0.770949720670391,
+          "recall_visible_nd": 0.770949720670391,
+          "recall_safe_nd": 0.7597765363128491,
+          "partial_n": 0,
+          "safe_n": 137,
+          "safe_not_gone": 137,
+          "safe_hits": 137,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 1,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 140,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 18,
+              "covered": 1,
+              "recall": 0.05555555555555555
+            },
+            "RegKey": {
+              "n": 156,
+              "covered": 137,
+              "recall": 0.8782051282051282
+            },
+            "RegValue": {
+              "n": 3,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValueChanged": {
+              "n": 2,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "CLS-PROGID": {
+              "hit": 1
+            },
+            "FS-APPDATA": {
+              "hit": 1
+            },
+            "REF-ANY": {
+              "hit": 138
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs",
+              "label": "leftover",
+              "partial": false,
+              "size": 912
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.copilot",
+              "label": "leftover",
+              "partial": false,
+              "size": 14076
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.vscode",
+              "label": "user_data",
+              "partial": false,
+              "size": 800
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.vscode-shared",
+              "label": "leftover",
+              "partial": false,
+              "size": 12288
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\ActionCenterCache\\microsoft-skydrive-desktop_8_0.png",
+              "label": "leftover",
+              "partial": false,
+              "size": 39033
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Cache\\Cache_Data\\f_00001b",
+              "label": "leftover",
+              "partial": false,
+              "size": 34690
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Local Storage\\leveldb\\000010.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Local Storage\\leveldb\\000011.ldb",
+              "label": "leftover",
+              "partial": false,
+              "size": 20233
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\iu-14D2N.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 3494712
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\vscode-inno-updater-1794577708.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1816
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\vscode-stable-system-x64",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\1ced32d74a95c7bc.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA71.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 49789
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA72.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 26133
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA73.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 38625
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA7C.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 12120
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-A5B0DA7F.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 96850
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\10232",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\1848",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\1980",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2016",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3056",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3452",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\5252",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\5968",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6352",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6660",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6692",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\9008",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\DeveloperTools",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\HostActivityManager\\CommitHistory\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy!WMSS",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~Microsoft.VisualStudioCode",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Tuning",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PolicyCache\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WMSS",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|Zvpebfbsg.IvfhnyFghqvbPbqr",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Microsoft.SkyDrive.Desktop|PeriodicNotificationCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.VisualStudioCode",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\OneDrive\\Accounts|LastUpdate",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Microsoft.SkyDrive.Desktop|LastNotificationAddedTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\vscode\\shell\\open\\command|",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\vscode|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ascx\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.asp\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.aspx\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.c\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cc\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cls\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cpp\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cs\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.csproj\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.css\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.csv\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cxx\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dot\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.h\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hpp\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hxx\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ini\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jav\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.java\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.js\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.json\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mk\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pl\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.sql\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.txt\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.xaml\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.xml\\OpenWithProgids",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash_login",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash_logout",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bash_profile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bashrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bib",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.bowerrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.c++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cfg",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cjs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.clj",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cljs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cljx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.clojure",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cmake",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.code-workspace",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.coffee",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.config",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.containerfile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.cshtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.csx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ctp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dart",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.diff",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dockerfile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.dtd",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.editorconfig",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.edn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.erb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.eyaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.eyml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fsi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fsscript",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.fsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gemspec",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitattributes",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitconfig",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gitignore",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.go",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.gradle",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.groovy",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.h++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.handlebars",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hbs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.hh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ipynb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jade",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jscsrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jshintrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jshtm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jsp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.jsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.less",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.log",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.lua",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.m",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.makefile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.markdown",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.md",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdoc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdown",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdtext",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdtxt",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mdwn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mjs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mkd",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mkdn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.mli",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.npmignore",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.php",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.phtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pl6",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.plist",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pm6",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pod",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.profile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.properties",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.ps1",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.psd1",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.psgi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.psm1",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.py",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.pyi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.r",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rhistory",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rprofile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rst",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.rt",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.sass",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.scss",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.sh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.t",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.tex",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.toml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.tsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.vb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.vue",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.wxi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.wxl",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.wxs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.yaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.yml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\.zsh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\vscode",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "CLS-PROGID",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Code",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0,
+              "userdata": "unticked"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vscode-user",
+      "dir": "runs/f0-vscode-user",
+      "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+      "truth_counts": {
+        "ambient": 687,
+        "kept_owner": 0,
+        "leftover": 199,
+        "rig": 1,
+        "user_data": 2
+      },
+      "ambient_by_run": {
+        "f0-null1": 354,
+        "f0-null2": 280,
+        "f0-null3": 535
+      },
+      "tools": [
+        {
+          "app": "vscode-user",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/f0-vscode-user\\plans\\purge.json",
+          "offered_n": 140,
+          "truth_n": 201,
+          "covered_listed": 138,
+          "covered_visible": 137,
+          "covered_safe": 135,
+          "recall_listed": 0.6865671641791045,
+          "recall_visible": 0.681592039800995,
+          "recall_safe": 0.6716417910447762,
+          "covered_listed_nd": 138,
+          "covered_visible_nd": 137,
+          "covered_safe_nd": 135,
+          "recall_listed_nd": 0.6865671641791045,
+          "recall_visible_nd": 0.681592039800995,
+          "recall_safe_nd": 0.6716417910447762,
+          "partial_n": 0,
+          "safe_n": 136,
+          "safe_not_gone": 136,
+          "safe_hits": 136,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 1,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 140,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 33,
+              "covered": 1,
+              "recall": 0.030303030303030304
+            },
+            "RegKey": {
+              "n": 159,
+              "covered": 137,
+              "recall": 0.8616352201257862
+            },
+            "RegValue": {
+              "n": 6,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValueChanged": {
+              "n": 3,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "CLS-PROGID": {
+              "hit": 1
+            },
+            "FS-APPDATA": {
+              "hit": 1
+            },
+            "REF-ANY": {
+              "hit": 138
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs",
+              "label": "leftover",
+              "partial": false,
+              "size": 1475
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.copilot",
+              "label": "leftover",
+              "partial": false,
+              "size": 14887
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.vscode",
+              "label": "user_data",
+              "partial": false,
+              "size": 800
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.vscode-shared",
+              "label": "leftover",
+              "partial": false,
+              "size": 12288
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\Common\\StandaloneUpdater-2026-11-13.1358.2112.1.odl",
+              "label": "leftover",
+              "partial": false,
+              "size": 44934
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\Common\\StandaloneUpdater-2026-11-13.1358.7736.1.aodl",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\ListSync\\Common\\Nucleus-2026-11-13.1358.3300.1.odl",
+              "label": "leftover",
+              "partial": false,
+              "size": 1007
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\ListSync\\Common\\Nucleus-2026-11-13.1358.3300.2.aodl",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\ListSync\\Local\\NucleusLocal-2026-11-13.1358.3300.1.aodl",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\ListSync\\UnAuthenticated\\NucleusUnAuthenticated-2026-11-13.1358.3300.1.aodl",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\setup\\logs\\Install_2026-11-13_135847_3300-8328.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\setup\\logs\\StandaloneUpdate_2026-11-13_135838_2112-7516.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 14132
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\setup\\logs\\StandaloneUpdate_2026-11-13_135838_7736-1136.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\ActionCenterCache\\microsoft-skydrive-desktop_8_0.png",
+              "label": "leftover",
+              "partial": false,
+              "size": 39033
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Cache\\Cache_Data\\f_00001b",
+              "label": "leftover",
+              "partial": false,
+              "size": 34690
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Local Storage\\leveldb\\000010.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Local Storage\\leveldb\\000011.ldb",
+              "label": "leftover",
+              "partial": false,
+              "size": 21253
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Programs",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\iu-14D2N.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 3494720
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\vscode-inno-updater-1794578106.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 2154
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\vscode-inno-updater-1794578134.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 2154
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\vscode-stable-user-x64",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wctC4D3.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 105942
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wctC4D4.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 105942
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wctCCA5.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 1467
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wctE8F5.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 105942
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\1ced32d74a95c7bc.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-08846014.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 49826
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-08846015.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 26410
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-08846016.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 38790
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-0884601F.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 12233
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CODE.EXE-08846022.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 98129
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3980",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4448",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4872",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4964",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6284",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6424",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6608",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6636",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6660",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7588",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\8252",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\8296",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\8636",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\9080",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\9784",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\DeveloperTools",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\HostActivityManager\\CommitHistory\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy!WMSS",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~Microsoft.VisualStudioCode",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Tuning",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PolicyCache\\Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WMSS",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\WC\\Silo305e7596-668f-44c2-c3e1-dec89b4db13ccom",
+              "label": "leftover",
+              "partial": false,
+              "size": 382
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\WC\\Silo5ff2464b-3c2d-3a40-87f0-134a6c3947dbcom",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\WC\\Silo5ff2464b-3c2d-3a40-87f0-134a6c3947dbsoftware",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|Zvpebfbsg.IvfhnyFghqvbPbqr",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Microsoft.SkyDrive.Desktop|PeriodicNotificationCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.VisualStudioCode",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage|LANConnectionCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\OneDrive\\Accounts|LastUpdate",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Microsoft.SkyDrive.Desktop|LastNotificationAddedTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\vscode\\shell\\open\\command|",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\vscode|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.ascx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.asp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.aspx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.bash",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.bash_login",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.bash_logout",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.bash_profile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.bashrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.bib",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.bowerrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.c",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.c++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cfg",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cjs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.clj",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cljs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cljx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.clojure",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cls",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cmake",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.code-workspace",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.coffee",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.config",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.containerfile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cpp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cshtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.csproj",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.css",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.csv",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.csx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.ctp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.cxx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.dart",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.diff",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.dockerfile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.dot",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.dtd",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.editorconfig",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.edn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.erb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.eyaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.eyml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.fs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.fsi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.fsscript",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.fsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.gemspec",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.gitattributes",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.gitconfig",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.gitignore",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.go",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.gradle",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.groovy",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.h",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.h++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.handlebars",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.hbs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.hh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.hpp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.htm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.html",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.hxx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.ipynb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.jade",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.jav",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.java",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.js",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.jscsrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.jshintrc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.jshtm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.json",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.jsp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.jsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.less",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.lua",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.m",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.makefile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.markdown",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.md",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mdoc",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mdown",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mdtext",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mdtxt",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mdwn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mjs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mk",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mkd",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mkdn",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.ml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.mli",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.npmignore",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.php",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.phtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.pl",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.pl6",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.plist",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.pm",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.pm6",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.pod",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.pp",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.profile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.properties",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.psgi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.py",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.pyi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.r",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.rb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.rhistory",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.rprofile",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.rs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.rst",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.rt",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.sass",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.scss",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.sh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.shtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.sql",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.svg",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.t",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.tex",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.toml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.tsx",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.vb",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.vue",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.wxi",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.wxl",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.wxs",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.xaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.xhtml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.xml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.yaml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.yml",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\.zsh",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\Applications",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\vscode",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "CLS-PROGID",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Code",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0,
+              "userdata": "unticked"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "git",
+      "dir": "runs/f0-git",
+      "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+      "truth_counts": {
+        "ambient": 444,
+        "kept_owner": 0,
+        "leftover": 45,
+        "rig": 1,
+        "user_data": 0
+      },
+      "ambient_by_run": {
+        "f0-null1": 342,
+        "f0-null2": 273,
+        "f0-null3": 393
+      },
+      "tools": [
+        {
+          "app": "git",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/f0-git\\plans\\purge.json",
+          "offered_n": 4,
+          "truth_n": 45,
+          "covered_listed": 4,
+          "covered_visible": 4,
+          "covered_safe": 4,
+          "recall_listed": 0.08888888888888889,
+          "recall_visible": 0.08888888888888889,
+          "recall_safe": 0.08888888888888889,
+          "covered_listed_nd": 4,
+          "covered_visible_nd": 4,
+          "covered_safe_nd": 4,
+          "recall_listed_nd": 0.08888888888888889,
+          "recall_visible_nd": 0.08888888888888889,
+          "recall_safe_nd": 0.08888888888888889,
+          "partial_n": 0,
+          "safe_n": 4,
+          "safe_not_gone": 4,
+          "safe_hits": 4,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 4,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 21,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 17,
+              "covered": 2,
+              "recall": 0.11764705882352941
+            },
+            "RegValue": {
+              "n": 6,
+              "covered": 2,
+              "recall": 0.3333333333333333
+            },
+            "RegValueChanged": {
+              "n": 1,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "CLS-VERBS": {
+              "hit": 1
+            },
+            "REF-ANY": {
+              "hit": 3
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\Common\\StandaloneUpdater-2026-11-13.1403.9360.1.aodl",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\Common\\StandaloneUpdater-2026-11-13.1403.9516.1.odl",
+              "label": "leftover",
+              "partial": false,
+              "size": 44934
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\ListSync\\Common\\Nucleus-2026-11-13.1403.3504.1.odl",
+              "label": "leftover",
+              "partial": false,
+              "size": 1007
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\ListSync\\Common\\Nucleus-2026-11-13.1403.3504.2.aodl",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\ListSync\\Local\\NucleusLocal-2026-11-13.1403.3504.1.aodl",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\ListSync\\UnAuthenticated\\NucleusUnAuthenticated-2026-11-13.1403.3504.1.aodl",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\setup\\logs\\Install_2026-11-13_140335_3504-3496.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\setup\\logs\\StandaloneUpdate_2026-11-13_140327_9360-3400.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\setup\\logs\\StandaloneUpdate_2026-11-13_140327_9516-9568.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 14132
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\is-5ILHPYAONK-uninstall.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 6933192
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wct18B9.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 105942
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wctF727.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 105942
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wctF728.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 105942
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wctFF76.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 1467
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\600c39005ac9a5cc.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\b9413fda1ddca9c1.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\bbab4f0ce657b5d0.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\BASH.EXE-E0DADEC9.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 3465
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CYGWIN-CONSOLE-HELPER.EXE-D6E999A9.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 1529
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\GIT.EXE-65A5E465.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 3712
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\MINTTY.EXE-3A9BD6BC.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 12272
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\228",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3200",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3488",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6568",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6684",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6824",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6860",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7800",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\8612",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\8828",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\9088",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~https://gitforwindows.org/faq",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~Microsoft.AutoGenerated.{0FDD9C6B-656B-0F1F-AB08-B1CDBB7067B3}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~Microsoft.AutoGenerated.{29591C0F-7C09-B655-C0EB-8544FCA7D1DE}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~{6D809377-6AF0-444B-8957-A3773F02200E}\\Git",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|TvgSbeJvaqbjf.Onfu",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.AutoGenerated.{0FDD9C6B-656B-0F1F-AB08-B1CDBB7067B3}",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|Microsoft.AutoGenerated.{29591C0F-7C09-B655-C0EB-8544FCA7D1DE}",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|{6D809377-6AF0-444B-8957-A3773F02200E}\\Git\\cmd\\git-gui.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\OneDrive\\Accounts|LastUpdate",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|3",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|4",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "CLS-VERBS",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\sh_auto_file",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "firefox",
+      "dir": "runs/f0-firefox",
+      "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+      "truth_counts": {
+        "ambient": 384,
+        "kept_owner": 0,
+        "leftover": 47,
+        "rig": 1,
+        "user_data": 1
+      },
+      "ambient_by_run": {
+        "f0-null1": 318,
+        "f0-null2": 249,
+        "f0-null3": 307
+      },
+      "tools": [
+        {
+          "app": "firefox",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/f0-firefox\\plans\\purge.json",
+          "offered_n": 20,
+          "truth_n": 48,
+          "covered_listed": 10,
+          "covered_visible": 7,
+          "covered_safe": 5,
+          "recall_listed": 0.20833333333333334,
+          "recall_visible": 0.14583333333333334,
+          "recall_safe": 0.10416666666666667,
+          "covered_listed_nd": 10,
+          "covered_visible_nd": 7,
+          "covered_safe_nd": 5,
+          "recall_listed_nd": 0.20833333333333334,
+          "recall_visible_nd": 0.14583333333333334,
+          "recall_safe_nd": 0.10416666666666667,
+          "partial_n": 5,
+          "safe_n": 10,
+          "safe_not_gone": 10,
+          "safe_hits": 10,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 2,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 20,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 12,
+              "covered": 2,
+              "recall": 0.16666666666666666
+            },
+            "RegKey": {
+              "n": 26,
+              "covered": 4,
+              "recall": 0.15384615384615385
+            },
+            "RegValue": {
+              "n": 8,
+              "covered": 4,
+              "recall": 0.5
+            },
+            "RegValueChanged": {
+              "n": 2,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "FS-APPDATA": {
+              "hit": 3
+            },
+            "FS-VENDORPARENT": {
+              "hit": 3
+            },
+            "REF-ANY": {
+              "hit": 8
+            },
+            "REG-SOFTWARE": {
+              "hit": 6
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs",
+              "label": "leftover",
+              "partial": false,
+              "size": 1821
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38",
+              "label": "leftover",
+              "partial": true,
+              "size": 156
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\ActionCenterCache\\microsoft-skydrive-desktop_8_0.png",
+              "label": "leftover",
+              "partial": false,
+              "size": 39033
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Cache\\Cache_Data\\f_00001b",
+              "label": "leftover",
+              "partial": false,
+              "size": 34690
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Local Storage\\leveldb\\000010.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Local Storage\\leveldb\\000011.ldb",
+              "label": "leftover",
+              "partial": false,
+              "size": 21366
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\2d39444c-9a6a-4c9b-a8d5-c97a59746f7b.zip",
+              "label": "leftover",
+              "partial": false,
+              "size": 3869401
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsuA.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 882597
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CRASHHELPER.EXE-C6FC1224.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 6399
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\FIREFOX.EXE-25FC0A66.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 55436
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\MediaPlayer\\ShimInclusionList\\false",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\1660",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2236",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2676",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4520",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\5348",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\5356",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6288",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6464",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6748",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6756",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6772",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7392",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\8344",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\mozilla.org",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.shtml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~308046B0AF4A39CB",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~308046B0AF4A39CB;PrivateBrowsingAUMID",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|Content Type",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|308046O0NS4N39PO",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Microsoft.SkyDrive.Desktop|PeriodicNotificationCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\OneDrive\\Accounts|LastUpdate",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Microsoft.SkyDrive.Desktop|LastNotificationAddedTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{2C7AB489-908F-406A-A62F-32391B7A597D}",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB;PrivateBrowsingAUMID",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\InProcServer32|",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}\\ProxyStubClsid32|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\ProxyStubClsid32|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}\\ProxyStubClsid32|",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\MaintenanceService",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1,
+              "userdata": "unticked"
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0,
+              "userdata": "unticked"
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates\\308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "firefox-tb",
+      "dir": "runs/f0-firefox-tb",
+      "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+      "truth_counts": {
+        "ambient": 374,
+        "kept_owner": 2,
+        "leftover": 43,
+        "rig": 2,
+        "user_data": 1
+      },
+      "ambient_by_run": {
+        "f0-null1": 317,
+        "f0-null2": 244,
+        "f0-null3": 307
+      },
+      "tools": [
+        {
+          "app": "firefox-tb",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/f0-firefox-tb\\plans\\purge.json",
+          "offered_n": 14,
+          "truth_n": 44,
+          "covered_listed": 9,
+          "covered_visible": 6,
+          "covered_safe": 5,
+          "recall_listed": 0.20454545454545456,
+          "recall_visible": 0.13636363636363635,
+          "recall_safe": 0.11363636363636363,
+          "covered_listed_nd": 9,
+          "covered_visible_nd": 6,
+          "covered_safe_nd": 5,
+          "recall_listed_nd": 0.20454545454545456,
+          "recall_visible_nd": 0.13636363636363635,
+          "recall_safe_nd": 0.11363636363636363,
+          "partial_n": 1,
+          "safe_n": 8,
+          "safe_not_gone": 8,
+          "safe_hits": 8,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 2,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 14,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 12,
+              "covered": 2,
+              "recall": 0.16666666666666666
+            },
+            "RegKey": {
+              "n": 18,
+              "covered": 3,
+              "recall": 0.16666666666666666
+            },
+            "RegValue": {
+              "n": 11,
+              "covered": 4,
+              "recall": 0.36363636363636365
+            },
+            "RegValueChanged": {
+              "n": 3,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "FS-APPDATA": {
+              "hit": 3
+            },
+            "FS-VENDORPARENT": {
+              "hit": 3
+            },
+            "REF-ANY": {
+              "hit": 4
+            },
+            "REG-SOFTWARE": {
+              "hit": 4
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs",
+              "label": "leftover",
+              "partial": false,
+              "size": 912
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38",
+              "label": "leftover",
+              "partial": true,
+              "size": 156
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\ActionCenterCache\\microsoft-skydrive-desktop_8_0.png",
+              "label": "leftover",
+              "partial": false,
+              "size": 39033
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Cache\\Cache_Data\\f_00001b",
+              "label": "leftover",
+              "partial": false,
+              "size": 34690
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Local Storage\\leveldb\\000010.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\LocalState\\EBWebView\\Default\\Local Storage\\leveldb\\000011.ldb",
+              "label": "leftover",
+              "partial": false,
+              "size": 21322
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsuA.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 779203
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\CRASHHELPER.EXE-C6FC1224.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 6392
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\FIREFOX.EXE-1C60E72F.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 44305
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\FIREFOX.EXE-25FC0A66.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 67031
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\MediaPlayer\\ShimInclusionList\\false",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\10016",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2948",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4104",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4536",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\5280",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\5868",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6552",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7472",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\9288",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\9608",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\mozilla.org",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.shtml",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~308046B0AF4A39CB",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~308046B0AF4A39CB;PrivateBrowsingAUMID",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\.shtml|Content Type",
+              "label": "leftover",
+              "partial": false,
+              "size": 20
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\WC\\Silo305e7596-668f-44c2-c3e1-dec89b4db13ccom",
+              "label": "leftover",
+              "partial": false,
+              "size": 382
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\WC\\Silo5ff2464b-3c2d-3a40-87f0-134a6c3947dbcom",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\WC\\Silo5ff2464b-3c2d-3a40-87f0-134a6c3947dbsoftware",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|308046O0NS4N39PO",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Microsoft.SkyDrive.Desktop|PeriodicNotificationCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\InProcServer32|",
+              "label": "leftover",
+              "partial": false,
+              "size": 110
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\OneDrive\\Accounts|LastUpdate",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Microsoft.SkyDrive.Desktop|LastNotificationAddedTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{882D354D-4027-457C-B839-AC4642AAE301}",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB;PrivateBrowsingAUMID",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Mozilla\\Firefox",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1,
+              "userdata": "unticked"
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Mozilla",
+              "band": "Weak",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0,
+              "userdata": "unticked"
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates\\308046B0AF4A39CB",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "P:C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "npp",
+      "dir": "runs/f0-npp",
+      "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+      "truth_counts": {
+        "ambient": 386,
+        "kept_owner": 0,
+        "leftover": 47,
+        "rig": 1,
+        "user_data": 0
+      },
+      "ambient_by_run": {
+        "f0-null1": 295,
+        "f0-null2": 242,
+        "f0-null3": 296
+      },
+      "tools": [
+        {
+          "app": "npp",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/f0-npp\\plans\\purge.json",
+          "offered_n": 2,
+          "truth_n": 47,
+          "covered_listed": 23,
+          "covered_visible": 23,
+          "covered_safe": 0,
+          "recall_listed": 0.48936170212765956,
+          "recall_visible": 0.48936170212765956,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 23,
+          "covered_visible_nd": 23,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.48936170212765956,
+          "recall_visible_nd": 0.48936170212765956,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 2,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 11,
+              "covered": 5,
+              "recall": 0.45454545454545453
+            },
+            "RegKey": {
+              "n": 29,
+              "covered": 16,
+              "recall": 0.5517241379310345
+            },
+            "RegValue": {
+              "n": 6,
+              "covered": 2,
+              "recall": 0.3333333333333333
+            },
+            "RegValueChanged": {
+              "n": 1,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "REG-SOFTWARE": {
+              "hit": 1
+            },
+            "SYS-APPX": {
+              "hit": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs",
+              "label": "leftover",
+              "partial": false,
+              "size": 1605
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\7990b3ce-74d3-47f8-baf4-14e8919d8f6f_S-1-5-21-1871224937-2691627691-3762806239-1000_1.rslc",
+              "label": "leftover",
+              "partial": false,
+              "size": 388
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\tem1E08.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 389104
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsu1.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 280232
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\GUP.EXE-7F7956CE.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 5068
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\NOTEPAD++.EXE-0C41AC7A.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 23216
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\10188",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2156",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2356",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3472",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3660",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3700",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6524",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6676",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6716",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7068",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7372",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7556",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~{6D809377-6AF0-444B-8957-A3773F02200E}\\Notepad++",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\WC\\Silo305e7596-668f-44c2-c3e1-dec89b4db13ccom",
+              "label": "leftover",
+              "partial": false,
+              "size": 382
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\WC\\Silo5ff2464b-3c2d-3a40-87f0-134a6c3947dbcom",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\WC\\Silo5ff2464b-3c2d-3a40-87f0-134a6c3947dbsoftware",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|{6Q809377-6NS0-444O-8957-N3773S02200R}\\Abgrcnq++\\abgrcnq++.rkr",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\Shell\\Bags\\1\\Desktop|IconLayouts",
+              "label": "leftover",
+              "partial": false,
+              "size": 366
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Notepad++",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "A:NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "SYS-APPX",
+              "action": "RemovePackage",
+              "outcome": "hit",
+              "covers": 25,
+              "partial": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

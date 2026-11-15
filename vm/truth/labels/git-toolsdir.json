@@ -1,0 +1,9 @@
+{
+  "id": "git-toolsdir",
+  "include": [
+    "_os.json",
+    "git.json"
+  ],
+  "note": "x0 rank 2: Git installed into the user's existing tools folder %USERPROFILE%\\Tools (planted before snap 0, so its content scores danger by snap 0). Git's own files there are leftover by default; the git rules assume Program Files\\Git, so recall is partial.",
+  "rules": []
+}

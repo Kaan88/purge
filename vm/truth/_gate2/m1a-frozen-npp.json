@@ -1,0 +1,527 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "bcu",
+      "apps": 1,
+      "truth_n": 29,
+      "recall_listed": 0.034482758620689655,
+      "recall_visible": 0.034482758620689655,
+      "recall_safe": 0.034482758620689655,
+      "recall_listed_nd": 0.034482758620689655,
+      "recall_visible_nd": 0.034482758620689655,
+      "recall_safe_nd": 0.034482758620689655,
+      "precision_safe": 1.0,
+      "partial_n": 0,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.0,
+        "RegKey": 0.0625,
+        "RegValue": 0.0,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 9,
+        "hit": 1,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    },
+    {
+      "tool": "purge",
+      "apps": 1,
+      "truth_n": 29,
+      "recall_listed": 0.7586206896551724,
+      "recall_visible": 0.7586206896551724,
+      "recall_safe": 0.0,
+      "recall_listed_nd": 0.7586206896551724,
+      "recall_visible_nd": 0.7586206896551724,
+      "recall_safe_nd": 0.0,
+      "precision_safe": null,
+      "partial_n": 0,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.5,
+        "RegKey": 0.9375,
+        "RegValue": 0.6666666666666666,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 0,
+        "hit": 1,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "npp",
+      "dir": "truth/frozen/npp",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 167,
+        "kept_owner": 0,
+        "leftover": 29,
+        "rig": 0,
+        "user_data": 0
+      },
+      "ambient_by_run": {
+        "null1": 78,
+        "null2": 72,
+        "null3": 70
+      },
+      "tools": [
+        {
+          "app": "npp",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/r0-npp/plans/purge.json",
+          "offered_n": 1,
+          "truth_n": 29,
+          "covered_listed": 22,
+          "covered_visible": 22,
+          "covered_safe": 0,
+          "recall_listed": 0.7586206896551724,
+          "recall_visible": 0.7586206896551724,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 22,
+          "covered_visible_nd": 22,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.7586206896551724,
+          "recall_visible_nd": 0.7586206896551724,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 1,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 10,
+              "covered": 5,
+              "recall": 0.5
+            },
+            "RegKey": {
+              "n": 16,
+              "covered": 15,
+              "recall": 0.9375
+            },
+            "RegValue": {
+              "n": 3,
+              "covered": 2,
+              "recall": 0.6666666666666666
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "SYS-APPX": {
+              "hit": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\fb764295-5706-4eaf-8f28-603f30273874_S-1-5-21-1336749127-99101324-1432799918-1000_1.rslc",
+              "label": "leftover",
+              "partial": false,
+              "size": 388
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\tem5A6A.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 389104
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsu1.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 280232
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\GUP.EXE-7F7956CE.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 4696
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\NOTEPAD++.EXE-0C41AC7A.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 22123
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Notepad++",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|{6Q809377-6NS0-444O-8957-N3773S02200R}\\Abgrcnq++\\abgrcnq++.rkr",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "A:NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "SYS-APPX",
+              "action": "RemovePackage",
+              "outcome": "hit",
+              "covers": 25,
+              "partial": 0
+            }
+          ]
+        },
+        {
+          "app": "npp",
+          "tool": "bcu",
+          "mode": "post",
+          "plan_file": "truth/frozen/npp/plans/bcu.json",
+          "offered_n": 10,
+          "truth_n": 29,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 1,
+          "recall_listed": 0.034482758620689655,
+          "recall_visible": 0.034482758620689655,
+          "recall_safe": 0.034482758620689655,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 1,
+          "recall_listed_nd": 0.034482758620689655,
+          "recall_visible_nd": 0.034482758620689655,
+          "recall_safe_nd": 0.034482758620689655,
+          "partial_n": 0,
+          "safe_n": 10,
+          "safe_not_gone": 1,
+          "safe_hits": 1,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 9,
+            "hit": 1,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 10,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 16,
+              "covered": 1,
+              "recall": 0.0625
+            },
+            "RegValue": {
+              "n": 3,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "bcu": {
+              "gone": 9,
+              "hit": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Program Files\\WindowsApps\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "label": "leftover",
+              "partial": false,
+              "size": 64270
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\fb764295-5706-4eaf-8f28-603f30273874_S-1-5-21-1336749127-99101324-1432799918-1000_1.rslc",
+              "label": "leftover",
+              "partial": false,
+              "size": 388
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww.xml",
+              "label": "leftover",
+              "partial": false,
+              "size": 2862
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\Packages\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "label": "leftover",
+              "partial": false,
+              "size": 2156
+            },
+            {
+              "target": "P:C:\\ProgramData\\Packages\\NotepadPlusPlus_2247w0b46hfww",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\NotepadPlusPlus_2247w0b46hfww",
+              "label": "leftover",
+              "partial": false,
+              "size": 8192
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\tem5A6A.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 389104
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsu1.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 280232
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\GUP.EXE-7F7956CE.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 4696
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\NOTEPAD++.EXE-0C41AC7A.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 22123
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PackageRepository\\Packages\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{E6950302-61F0-4FEB-97DB-855E30D4A991}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\PackagedCom\\Package\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\SecurityManager\\CapAuthz\\ApplicationsEx\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StagingInfo\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageState\\S-1-5-21-1336749127-99101324-1432799918-1000\\NotepadPlusPlus_2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\AppHost\\IndexedDB\\NotepadPlusPlus_2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\NotepadPlusPlus_2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications\\Backup\\NotepadPlusPlus_2247w0b46hfww!NotepadPlusPlus",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Mappings\\S-1-15-2-2557016000-3416274266-3014759505-2624777461-3676268001-1533065058-806985695",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Storage\\notepadplusplus_2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PolicyCache\\NotepadPlusPlus_2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\NotepadPlusPlus_2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\PackagedCom\\Package\\NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\RestrictedServices\\AppIso\\FirewallRules|NotepadPlusPlus_2247w0b46hfww-In-Block",
+              "label": "leftover",
+              "partial": false,
+              "size": 348
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\RestrictedServices\\AppIso\\FirewallRules|NotepadPlusPlus_2247w0b46hfww-Out-Block",
+              "label": "leftover",
+              "partial": false,
+              "size": 350
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|{6Q809377-6NS0-444O-8957-N3773S02200R}\\Abgrcnq++\\abgrcnq++.rkr",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "P:C:\\Program Files\\Notepad++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Notepad++.lnk",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Notepad++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\*\\shell\\ANotepad++64",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{B298D29A-A6ED-11DE-BA8C-A68E55D89593}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\notepad++.exe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Notepad++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\notepad++.exe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Notepad++",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

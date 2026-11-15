@@ -36,6 +36,7 @@ pub fn from_clone(v: &Value, app: &str) -> Result<Plan> {
             preselected: checked,
             scanner: Some("clone".into()),
             category: l.get("kind").and_then(|x| x.as_str()).map(str::to_string),
+            action: None,
         });
     }
     Ok(Plan { schema: "purge.plan/0".into(), app: app.into(), tool: "clone".into(), mode: "post".into(), items })
@@ -56,6 +57,7 @@ pub fn from_removed(v: &Value, tool: &str, app: &str) -> Result<Plan> {
             preselected: true,
             scanner: Some(tool.to_string()),
             category: None,
+            action: None,
         })
         .collect();
     Ok(Plan { schema: "purge.plan/0".into(), app: app.into(), tool: tool.into(), mode: "post".into(), items })

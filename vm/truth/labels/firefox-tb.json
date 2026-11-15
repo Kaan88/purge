@@ -4,6 +4,31 @@
     "_os.json",
     "firefox.json"
   ],
-  "note": "The firefox run with Thunderbird installed before snap 0. Everything of Thunderbird's (and the shared Mozilla Maintenance Service, vendor keys and dirs it created) existed in snap 0, so offering it scores danger by the scorer's own rule; no kept_owner rule is needed for it. Freeze after review of the first r0-firefox-tb run.",
-  "rules": []
+  "note": "The firefox run with Thunderbird installed before snap 0. Everything of Thunderbird's (and the shared Mozilla Maintenance Service, vendor keys and dirs it created) existed in snap 0, so offering it scores danger by the scorer's own rule. What Firefox's install added to the Maintenance Service, which stays installed for Thunderbird (its ARP entry and service are in lists-0 and lists-2), is kept_owner (generated rules below). Freeze after review of the first r0-firefox-tb run.",
+  "rules": [
+    {
+      "label": "kept_owner",
+      "match": "^P:C:\\\\Program Files \\(x86\\)\\\\Mozilla Maintenance Service(\\\\.*)?$",
+      "why": "Mozilla Maintenance Service folder: the service stays installed for Thunderbird (pre-app).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\MozillaMaintenanceService(\\\\[^|]*)?(\\|.*)?$",
+      "why": "ARP entry of the Mozilla Maintenance Service, still installed for Thunderbird (pre-app).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Mozilla\\\\MaintenanceService(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Mozilla Maintenance Service settings key, still installed for Thunderbird (pre-app).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\MozillaMaintenance(\\\\[^|]*)?(\\|.*)?$",
+      "why": "MozillaMaintenance service registration, still installed for Thunderbird (pre-app).",
+      "gen": true
+    }
+  ]
 }

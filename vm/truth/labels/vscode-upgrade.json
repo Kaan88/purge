@@ -1,0 +1,9 @@
+{
+  "id": "vscode-upgrade",
+  "include": [
+    "_os.json",
+    "vscode.json"
+  ],
+  "note": "x0 rank 15: VS Code 1.145.0 installed first, the current build over it (both after snap 0).",
+  "rules": []
+}

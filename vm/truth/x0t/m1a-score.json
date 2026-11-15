@@ -1,0 +1,406 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "purge",
+      "apps": 1,
+      "truth_n": 47,
+      "recall_listed": 0.5106382978723404,
+      "recall_visible": 0.5106382978723404,
+      "recall_safe": 0.0,
+      "recall_listed_nd": 0.5106382978723404,
+      "recall_visible_nd": 0.5106382978723404,
+      "recall_safe_nd": 0.0,
+      "precision_safe": null,
+      "partial_n": 0,
+      "danger_listed": 3,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "classes": {
+        "danger_blocking": 0,
+        "userdata_blocking": 0,
+        "danger_unticked": 3,
+        "userdata_unticked": 1,
+        "preexisting_value_ref": 0,
+        "old_empty_ext_key": 0,
+        "userdata_safe": 0
+      },
+      "per_kind_recall": {
+        "Path": 0.46153846153846156,
+        "RegKey": 0.6956521739130435,
+        "RegValue": 0.6666666666666666,
+        "RegValueChanged": 0.0
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 3,
+        "gone": 0,
+        "hit": 3,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "npp-userfiles",
+      "dir": "runs/x0t-npp-userfiles",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 400,
+        "kept_owner": 0,
+        "leftover": 44,
+        "rig": 1,
+        "user_data": 3
+      },
+      "ambient_by_run": {
+        "r0-null1": 152,
+        "r0-null2": 159,
+        "r0-null3": 152
+      },
+      "tools": [
+        {
+          "app": "npp-userfiles",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/x0t-npp-userfiles\\plans\\purge.json",
+          "offered_n": 6,
+          "truth_n": 47,
+          "covered_listed": 24,
+          "covered_visible": 24,
+          "covered_safe": 0,
+          "recall_listed": 0.5106382978723404,
+          "recall_visible": 0.5106382978723404,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 24,
+          "covered_visible_nd": 24,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.5106382978723404,
+          "recall_visible_nd": 0.5106382978723404,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 3,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 3,
+            "userdata_unticked": 1,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 3,
+            "gone": 0,
+            "hit": 3,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 13,
+              "covered": 6,
+              "recall": 0.46153846153846156
+            },
+            "RegKey": {
+              "n": 23,
+              "covered": 16,
+              "recall": 0.6956521739130435
+            },
+            "RegValue": {
+              "n": 3,
+              "covered": 2,
+              "recall": 0.6666666666666666
+            },
+            "RegValueChanged": {
+              "n": 8,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "CLS-FILEEXTS": {
+              "danger": 2
+            },
+            "FS-APPDATA": {
+              "hit": 1
+            },
+            "REG-APPPATHS": {
+              "danger": 1
+            },
+            "REG-SOFTWARE": {
+              "hit": 1
+            },
+            "SYS-APPX": {
+              "hit": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Program Files\\Notepad++\\my-notes",
+              "label": "user_data",
+              "partial": false,
+              "size": 35
+            },
+            {
+              "target": "P:C:\\Program Files\\Notepad++\\session-backup.txt",
+              "label": "user_data",
+              "partial": false,
+              "size": 36
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\AppRepository\\1d875bbc-99d9-4f49-b465-a8a397512bf7_S-1-5-21-1336749127-99101324-1432799918-1000_1.rslc",
+              "label": "leftover",
+              "partial": false,
+              "size": 388
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\tem73BA.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 389104
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\~nsu1.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 280232
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\GUP.EXE-7F7956CE.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 4721
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\NOTEPAD++.EXE-0C41AC7A.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 22026
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\1436",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2928",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3456",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6376",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\6856",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7452",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-19\\Software\\Microsoft\\Cryptography\\NGC",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|{6Q809377-6NS0-444O-8957-N3773S02200R}\\Abgrcnq++\\abgrcnq++.rkr",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags|PatchDbUpdateTickCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|EndTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 48
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|RunCounter",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|StartTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 48
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Census|StartTimeBin",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\InstallService\\State|AutoUpdateLastSuccessTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 52
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OneSettings\\appcompat\\runtimesdbincloud|RefreshAfter",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\Shell\\Bags\\1\\Desktop|IconLayouts",
+              "label": "leftover",
+              "partial": false,
+              "size": 198
+            }
+          ],
+          "danger": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.log\\OpenWithList|a",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "CLS-FILEEXTS",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.log\\OpenWithList|a"
+              ]
+            },
+            {
+              "target": "S:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.log\\OpenWithList|MRUList|a",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "CLS-FILEEXTS",
+              "action": "EditSegment",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: S:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.log\\OpenWithList|MRUList|a"
+              ]
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Applications\\notepad++.exe",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REG-APPPATHS",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Applications\\notepad++.exe"
+              ]
+            }
+          ],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.log\\OpenWithList|a",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "CLS-FILEEXTS",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.log\\OpenWithList|a"
+              ]
+            },
+            {
+              "target": "S:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.log\\OpenWithList|MRUList|a",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "CLS-FILEEXTS",
+              "action": "EditSegment",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: S:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.log\\OpenWithList|MRUList|a"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Notepad++",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Applications\\notepad++.exe",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REG-APPPATHS",
+              "action": "DeleteKey",
+              "outcome": "danger",
+              "covers": 0,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "existed in snap0: K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Applications\\notepad++.exe"
+              ]
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Notepad++",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "FS-APPDATA",
+              "action": "Quarantine",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0,
+              "userdata": "unticked"
+            },
+            {
+              "target": "A:NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "SYS-APPX",
+              "action": "RemovePackage",
+              "outcome": "hit",
+              "covers": 25,
+              "partial": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

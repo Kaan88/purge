@@ -1,0 +1,9 @@
+{
+  "id": "vscode-zipcopy",
+  "include": [
+    "_os.json",
+    "vscode-user.json"
+  ],
+  "note": "x0 rank 17: an unregistered zip copy of VS Code in %USERPROFILE%\\Tools\\VSCode, started once before snap 0, then the per-user build installed and removed.",
+  "rules": []
+}

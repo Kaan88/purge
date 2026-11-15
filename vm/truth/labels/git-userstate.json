@@ -1,0 +1,9 @@
+{
+  "id": "git-userstate",
+  "include": [
+    "_os.json",
+    "git.json"
+  ],
+  "note": "x0 rank 5: TortoiseGit and the user's own references to Git (config values, PATH, Run values, a Start menu shortcut, an empty .sh key), all planted before snap 0.",
+  "rules": []
+}

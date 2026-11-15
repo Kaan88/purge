@@ -1,0 +1,21 @@
+{
+  "id": "vlc",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\(VLC)\\.EXE-[0-9A-F]{8}\\.pf$",
+      "why": "Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash)."
+    },
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Roaming\\\\vlc(\\\\.*)?$",
+      "why": "VLC preferences, playlists and media library: user data."
+    }
+  ],
+  "note": "VLC media player 3.0.21 (x0-vlc, out-of-sample NSIS). Generic rules only: informational recall."
+}

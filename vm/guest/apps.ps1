@@ -20,6 +20,20 @@
 #   install_il 'medium': the installer runs at medium integrity through the one-shot task PurgeRigInstall
 #              (LaunchMedium pattern), as a per-user install by a normal user would; default: the elevated
 #              agent token
+# Optional (x0 variants, vm\RIG.md §4b; environment variables in 'install' are expanded in the guest):
+#   pre_launch    $true: every pre-app is launched once (as the main app's launch) after its install, so its
+#                 profile and first-run registrations exist in snap 0
+#   pre_uninstall $true: every pre-app is then removed with its vendor uninstaller (reinstall-after-uninstall)
+#   plant_pre     name of a function in x0-plants.ps1 run after the pre-apps, before lists 0 / snap 0
+#   plant_post    name of a function in x0-plants.ps1 run after the launch (and the post-apps), before lists 1
+#   post          ids of apps installed and launched after the main app's launch, before lists 1 (a sibling
+#                 installed after the app)
+#   upgrade_from  id of an app installed first in the install phase (after snap 0), then the main installer runs
+#                 over it (an in-place upgrade)
+#   plant_files   files of the host installer cache (vm\cache\inst) a plant function needs, pushed with the run
+# Installer files: when vm\cache\inst holds the app's 'file' (listed in vm\cache\inst\cache-sources.json with its
+# URL and SHA-256), rig.ps1 pushes it to C:\cr\inst before the run and the guest uses it after checking the hash;
+# otherwise the guest downloads from 'url' (rig-base already holds the M0 installers).
 
 # Pure: a shallow copy of an app definition with some fields replaced (a corpus variant of another app).
 function Copy-AppDef($App, [hashtable]$Changes) {
@@ -53,7 +67,10 @@ $Apps = @(
      un = '{U} /VERYSILENT /NORESTART /SUPPRESSMSGBOXES'
      launch = @{ exe = 'git-bash.exe'; args = ''; dirs = @('%ProgramFiles%\Git') } }
 
-  @{ id = 'vlc'; tech = 'NSIS'; file = 'vlc.exe'
+  # The installer must not be named vlc.exe: VLC's installer ends running vlc.exe processes before it copies its
+  # files, so under that name it ends itself (exit 0 after a few seconds, empty VideoLAN\VLC, no ARP entry). The
+  # official file name is used; it is in the host cache (rig-base's C:\cr\inst\vlc.exe is the same file, unused).
+  @{ id = 'vlc'; tech = 'NSIS'; file = 'vlc-3.0.21-win64.exe'
      url = { 'https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.exe',
              'https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe' }
      install = '/S /L=1033'; match = '^VLC media player'; un = '{U} /S'
@@ -99,11 +116,111 @@ $Apps = @(
      url = { 'https://download.mozilla.org/?product=thunderbird-latest-ssl&os=win64&lang=en-US' }
      install = '/S'; match = '^Mozilla Thunderbird'; un = '{U} /S'
      launch = @{ exe = 'thunderbird.exe'; args = ''; dirs = @('%ProgramFiles%\Mozilla Thunderbird') } }
+
+  # ---- x0 records (vm\RIG.md §4b). Pinned official URLs; the files are in the host cache vm\cache\inst with
+  # their SHA-256 in cache-sources.json (downloaded 2026-11-13). Fallbacks are the vendors' own "latest" links.
+  @{ id = 'firefox-dev'; tech = 'NSIS (Mozilla)'; file = 'firefox-dev.exe'
+     url = { 'https://ftp.mozilla.org/pub/devedition/releases/161.0b2/win64/en-US/Firefox%20Setup%20161.0b2.exe',
+             'https://download.mozilla.org/?product=firefox-devedition-latest-ssl&os=win64&lang=en-US' }
+     install = '/S'; match = '^Firefox Developer Edition'; un = '{U} /S'
+     launch = @{ exe = 'firefox.exe'; args = ''; dirs = @('%ProgramFiles%\Firefox Developer Edition') } }
+
+  # ESR's default folder is the release's own 'Mozilla Firefox': /InstallDirectoryPath (Mozilla's documented full
+  # installer option) puts it next to it. Its ARP name 'Mozilla Firefox ESR ...' also matches firefox's '^Mozilla
+  # Firefox', which is harmless as a pre-app: Find-MainEntry prefers entries created by the main install.
+  @{ id = 'firefox-esr'; tech = 'NSIS (Mozilla)'; file = 'firefox-esr.exe'
+     url = { 'https://ftp.mozilla.org/pub/firefox/releases/153.7.0esr/win64/en-US/Firefox%20Setup%20153.7.0esr.exe',
+             'https://download.mozilla.org/?product=firefox-esr-latest-ssl&os=win64&lang=en-US' }
+     install = '/S /InstallDirectoryPath="C:\Program Files\Mozilla Firefox ESR"'; match = '^Mozilla Firefox ESR'; un = '{U} /S'
+     launch = @{ exe = 'firefox.exe'; args = ''; dirs = @('%ProgramFiles%\Mozilla Firefox ESR') } }
+
+  @{ id = 'vscode-insiders'; tech = 'Inno Setup'; file = 'vscode-insiders.exe'
+     url = { 'https://vscode.download.prss.microsoft.com/dbazure/download/insider/54ab79431a5858c9546c7161e5afe5fd9e8570d6/VSCodeSetup-x64-1.147.0-insider.exe',
+             'https://update.code.visualstudio.com/latest/win32-x64/insider' }
+     install = '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /MERGETASKS=!runcode'; match = '^Microsoft Visual Studio Code Insiders'
+     un = '{U} /VERYSILENT /NORESTART /SUPPRESSMSGBOXES'
+     launch = @{ exe = 'Code - Insiders.exe'; args = ''; dirs = @('%ProgramFiles%\Microsoft VS Code Insiders') } }
+
+  @{ id = 'vscode-1145'; tech = 'Inno Setup'; file = 'vscode-1145.exe'
+     url = { 'https://update.code.visualstudio.com/1.145.0/win32-x64/stable' }
+     install = '/VERYSILENT /NORESTART /MERGETASKS=!runcode'; match = '^Microsoft Visual Studio Code'
+     un = '{U} /VERYSILENT /NORESTART /SUPPRESSMSGBOXES'
+     launch = @{ exe = 'Code.exe'; args = ''; dirs = @('%ProgramFiles%\Microsoft VS Code') } }
+
+  # tortoisegit.org/download lists "stable 2.19.0" and links 2.19.1.0 under /tgit/2.19.0.0/ (re-checked 2026-11-13);
+  # the MSI is Authenticode-signed (Open Source Developer, Sven Strickroth).
+  @{ id = 'tortoisegit'; tech = 'MSI'; file = 'tortoisegit.msi'
+     url = { 'https://download.tortoisegit.org/tgit/2.19.0.0/TortoiseGit-2.19.1.0-64bit.msi' }
+     install = 'msi'; match = '^TortoiseGit'; un = 'msi'; launch = $null }
+
+  @{ id = 'winmerge'; tech = 'Inno Setup'; file = 'winmerge.exe'
+     url = { 'https://github.com/WinMerge/winmerge/releases/download/v2.16.60/WinMerge-2.16.60-x64-Setup.exe' }
+     install = '/VERYSILENT /NORESTART /SP- /SUPPRESSMSGBOXES'; match = '^WinMerge'
+     un = '{U} /VERYSILENT /NORESTART /SUPPRESSMSGBOXES'
+     launch = @{ exe = 'WinMergeU.exe'; args = ''; dirs = @('%ProgramFiles%\WinMerge') } }
+
+  @{ id = 'git-2560'; tech = 'Inno Setup'; file = 'git-2560.exe'
+     url = { 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.1/Git-2.56.0-64-bit.exe' }
+     install = '/VERYSILENT /NORESTART'; match = '^Git$|^Git version'
+     un = '{U} /VERYSILENT /NORESTART /SUPPRESSMSGBOXES'
+     launch = @{ exe = 'git-bash.exe'; args = ''; dirs = @('%ProgramFiles%\Git') } }
 )
+
+function Get-BaseApp([string]$Id) { $Apps | Where-Object { $_.id -eq $Id } | Select-Object -First 1 }
 
 # firefox-tb (ENGINE_PLAN §10.4 #2): the firefox run with Thunderbird installed before snap 0, so the shared
 # Mozilla parts (Maintenance Service, vendor keys and dirs) are pre-existing and offering them is danger.
-$Apps += (Copy-AppDef ($Apps | Where-Object { $_.id -eq 'firefox' } | Select-Object -First 1) @{ id = 'firefox-tb'; pre = @('thunderbird') })
+$Apps += (Copy-AppDef (Get-BaseApp 'firefox') @{ id = 'firefox-tb'; pre = @('thunderbird') })
+
+# x0 variants (vm\RIG.md §4b, design in the M1a x0 spec). The label file of each is vm\truth\labels\<id>.json.
+$Apps += @(
+    # 1: user files written into the install root while installed; a portable copy's Open-with registration,
+    #    OpenWithList entry, desktop shortcut and Run value (all before snap 0).
+    (Copy-AppDef (Get-BaseApp 'npp') @{ id = 'npp-userfiles'; plant_pre = 'Plant-NppPortable'; plant_post = 'Plant-NppUserFiles'
+                                        plant_files = @('npp-portable.zip') })
+    # 2: Git installed into the user's existing, non-empty tools folder.
+    (Copy-AppDef (Get-BaseApp 'git') @{ id = 'git-toolsdir'; plant_pre = 'Plant-GitToolsDir'; plant_files = @('ripgrep.zip')
+                                        install = '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /DIR="%USERPROFILE%\Tools"'
+                                        launch = @{ exe = 'git-bash.exe'; args = ''; dirs = @('%USERPROFILE%\Tools') } })
+    # 3: Firefox Developer Edition installed and launched before snap 0.
+    (Copy-AppDef (Get-BaseApp 'firefox') @{ id = 'ff-devedition'; pre = @('firefox-dev'); pre_launch = $true })
+    # 4: the per-user VS Code installed and launched before snap 0, then the system build.
+    (Copy-AppDef (Get-BaseApp 'vscode') @{ id = 'vscode-with-user'; pre = @('vscode-user'); pre_launch = $true
+                                           plant_pre = 'Plant-VscodeTxtOpenWith'
+                                           install = '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /MERGETASKS=!runcode' })
+    # 5: TortoiseGit and the user's own Git references (config values, PATH, Run, Start menu shortcut, .sh key).
+    (Copy-AppDef (Get-BaseApp 'git') @{ id = 'git-userstate'; pre = @('vcredist', 'tortoisegit'); plant_pre = 'Plant-GitUserState' })
+    # 10: Thunderbird installed and launched AFTER Firefox's launch (footprint reference: the solo 'thunderbird' run).
+    (Copy-AppDef (Get-BaseApp 'firefox') @{ id = 'ff-tbafter'; post = @('thunderbird') })
+    # 11: pre-existing .ext keys, prior VS Code user data, an Open-with registration of a zip copy; a user file in
+    #     the install root.
+    (Copy-AppDef (Get-BaseApp 'vscode') @{ id = 'vscode-userstate'; plant_pre = 'Plant-VscodeUserState'; plant_post = 'Plant-VscodeWorkspace' })
+    # 13: VS Code Insiders installed and launched before snap 0.
+    (Copy-AppDef (Get-BaseApp 'vscode') @{ id = 'vscode-insiders-pair'; pre = @('vscode-insiders'); pre_launch = $true })
+    # 15: 1.145.0 installed first, the current build over it (both after snap 0).
+    (Copy-AppDef (Get-BaseApp 'vscode') @{ id = 'vscode-upgrade'; upgrade_from = 'vscode-1145' })
+    # 16: Firefox ESR in its own folder, installed and launched before snap 0. The release build gets its own
+    #     explicit folder: a plain /S reuses the install directory Mozilla's installer finds in the registry (ESR's),
+    #     which replaced ESR's install and ARP entry in the first x0-ff-esr run.
+    (Copy-AppDef (Get-BaseApp 'firefox') @{ id = 'ff-esr'; pre = @('firefox-esr'); pre_launch = $true
+                                           install = '/S /InstallDirectoryPath="C:\Program Files\Mozilla Firefox"' })
+    # 17: an unregistered zip copy of VS Code launched before snap 0, then the per-user build.
+    (Copy-AppDef (Get-BaseApp 'vscode-user') @{ id = 'vscode-zipcopy'; plant_pre = 'Plant-VscodeZipCopy'; plant_files = @('vscode-archive.zip') })
+    # 18: Firefox installed, launched and removed with its own uninstaller before snap 0, then installed again.
+    (Copy-AppDef (Get-BaseApp 'firefox') @{ id = 'ff-reinstall'; pre = @('firefox'); pre_launch = $true; pre_uninstall = $true })
+    # 20: Git 2.56.0 first, then 2.56.1 over it.
+    (Copy-AppDef (Get-BaseApp 'git') @{ id = 'git-upgrade'; upgrade_from = 'git-2560' })
+)
+
+# Pure: every installer or plant file a run of $Id needs (the app, its pre/post apps, upgrade_from, plant_files).
+function Get-AppFiles([string]$Id) {
+    $a = Get-App $Id
+    $files = New-Object System.Collections.Generic.List[string]
+    $files.Add($a.file)
+    foreach ($x in @(@($a.pre) + @($a.post) + @($a.upgrade_from) | Where-Object { $_ })) { $files.Add((Get-App $x).file) }
+    foreach ($f in @($a.plant_files | Where-Object { $_ })) { $files.Add($f) }
+    @($files | Select-Object -Unique)
+}
 
 function Get-App([string]$Id) {
     $a = $Apps | Where-Object { $_.id -eq $Id } | Select-Object -First 1

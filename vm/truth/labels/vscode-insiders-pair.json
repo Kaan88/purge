@@ -1,0 +1,9 @@
+{
+  "id": "vscode-insiders-pair",
+  "include": [
+    "_os.json",
+    "vscode.json"
+  ],
+  "note": "x0 rank 13: VS Code Insiders installed and launched before snap 0 (prefix collisions).",
+  "rules": []
+}

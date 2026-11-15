@@ -1,0 +1,437 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "bcu",
+      "apps": 1,
+      "truth_n": 3,
+      "recall_listed": 0.3333333333333333,
+      "recall_visible": 0.3333333333333333,
+      "recall_safe": 0.3333333333333333,
+      "recall_listed_nd": 0.3333333333333333,
+      "recall_visible_nd": 0.3333333333333333,
+      "recall_safe_nd": 0.3333333333333333,
+      "precision_safe": 1.0,
+      "partial_n": 0,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.0,
+        "RegKey": 1.0,
+        "RegValue": null,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 19,
+        "hit": 1,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    },
+    {
+      "tool": "purge",
+      "apps": 1,
+      "truth_n": 3,
+      "recall_listed": 0.0,
+      "recall_visible": 0.0,
+      "recall_safe": 0.0,
+      "recall_listed_nd": 0.0,
+      "recall_visible_nd": 0.0,
+      "recall_safe_nd": 0.0,
+      "precision_safe": null,
+      "partial_n": 0,
+      "danger_listed": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 0,
+      "noop_would_be_danger": 0,
+      "per_kind_recall": {
+        "Path": 0.0,
+        "RegKey": 0.0,
+        "RegValue": null,
+        "RegValueChanged": null
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 0,
+        "hit": 0,
+        "noop_if_nonempty": 0,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "7zip",
+      "dir": "truth/frozen/7zip",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 89,
+        "kept_owner": 0,
+        "leftover": 3,
+        "rig": 0,
+        "user_data": 0
+      },
+      "ambient_by_run": {
+        "null1": 68,
+        "null2": 66,
+        "null3": 66
+      },
+      "tools": [
+        {
+          "app": "7zip",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/r1-7zip/plans/purge.json",
+          "offered_n": 0,
+          "truth_n": 3,
+          "covered_listed": 0,
+          "covered_visible": 0,
+          "covered_safe": 0,
+          "recall_listed": 0.0,
+          "recall_visible": 0.0,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 0,
+          "covered_visible_nd": 0,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.0,
+          "recall_visible_nd": 0.0,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 0,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 2,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 1,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValue": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {},
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\5bb830f67194431a.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\7ZFM.EXE-44040917.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 9623
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip",
+              "label": "leftover",
+              "partial": false
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": []
+        },
+        {
+          "app": "7zip",
+          "tool": "bcu",
+          "mode": "post",
+          "plan_file": "truth/frozen/7zip/plans/bcu.json",
+          "offered_n": 20,
+          "truth_n": 3,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 1,
+          "recall_listed": 0.3333333333333333,
+          "recall_visible": 0.3333333333333333,
+          "recall_safe": 0.3333333333333333,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 1,
+          "recall_listed_nd": 0.3333333333333333,
+          "recall_visible_nd": 0.3333333333333333,
+          "recall_safe_nd": 0.3333333333333333,
+          "partial_n": 0,
+          "safe_n": 20,
+          "safe_not_gone": 1,
+          "safe_hits": 1,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 19,
+            "hit": 1,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 2,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 1,
+              "covered": 1,
+              "recall": 1.0
+            },
+            "RegValue": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "bcu": {
+              "gone": 19,
+              "hit": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\5bb830f67194431a.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\7ZFM.EXE-44040917.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 9623
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "P:C:\\Program Files\\7-Zip",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\7-Zip",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\7-Zip",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\7-Zip",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers\\7-Zip",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\DragDropHandlers",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Drive\\shellex\\DragDropHandlers",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Folder\\ShellEx\\ContextMenuHandlers\\7-Zip",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Installer\\Features\\96F071321C0420724280000010000000",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Installer\\Products\\96F071321C0420724280000010000000",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\96F071321C0420720000000040000000",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\96F071321C0420720000000040000000",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\Wow6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "bcu",
+              "outcome": "gone",
+              "covers": 0,
+              "partial": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

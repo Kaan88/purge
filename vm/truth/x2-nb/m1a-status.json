@@ -1,0 +1,68 @@
+{
+  "schema": "purge.rig.m1a-status/1",
+  "time": "2026-11-15T06:28:34+03:00",
+  "prefix": "x2-nb-",
+  "classes": true,
+  "bcu": false,
+  "exit": 0,
+  "stage": "done",
+  "ambient": "truth/f0/ambient-f0.json",
+  "servicing_rules": true,
+  "sanity": "skipped",
+  "label_overrides": null,
+  "sanity_residual": null,
+  "accept_sanity_diff": false,
+  "sanity_classified": null,
+  "invdiff": [
+    {
+      "run": "x2-nb-firefox-tb",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-nb-firefox-tb",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-nb-vscode",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-nb-vscode",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-nb-vscode-user",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-nb-vscode-user",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-nb-git",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-nb-git",
+      "phase": "2",
+      "exit": 0
+    },
+    {
+      "run": "x2-nb-npp",
+      "phase": "1",
+      "exit": 0
+    },
+    {
+      "run": "x2-nb-npp",
+      "phase": "2",
+      "exit": 0
+    }
+  ]
+}

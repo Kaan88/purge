@@ -1,0 +1,9 @@
+{
+  "id": "git-upgrade",
+  "include": [
+    "_os.json",
+    "git.json"
+  ],
+  "note": "x0 rank 20: Git 2.56.0 installed first, 2.56.1 over it (both after snap 0).",
+  "rules": []
+}
