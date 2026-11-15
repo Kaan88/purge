@@ -4,11 +4,11 @@
 use std::collections::BTreeMap;
 
 use purge_model::exec::journal::{
-    Aborted, Commit, Header, Intent, ItemFacts, MAX_GROUP_INTENTS, Reconcile, ReconcileResult,
-    Record, UndoConflict, UndoOutcome,
+    Aborted, Commit, GateExemptions, Header, Intent, ItemFacts, MAX_GROUP_INTENTS, Reconcile,
+    ReconcileResult, Record, RetryIntent, RunSettings, UndoConflict, UndoOutcome, Validated,
 };
-use purge_model::exec::op::{ItemOutcome, OpId, OutcomeCounts};
-use purge_model::exec::session::{RetentionClass, SessionId};
+use purge_model::exec::op::{ItemOutcome, OpId, OutcomeCounts, Sha256Hex};
+use purge_model::exec::session::{JournalMark, RetentionClass, SessionId};
 use purge_model::{CandidateId, Target};
 
 /// A record that breaks the journal's rules. The reader refuses the journal; the writer refuses the record
@@ -130,6 +130,21 @@ pub enum Violation {
     /// A second `expire` of the same class for an op.
     #[error("op {0}: expired twice")]
     DuplicateExpire(OpId),
+    /// A `settings` record anywhere but right after the header, or a second one.
+    #[error("a settings record that does not follow the header directly")]
+    SettingsMisplaced,
+    /// A `retry_intent` for an op that is not held for a retry (its outcome, as changed by its
+    /// reconcile records, is not `HeldRetry`), or before the run ended.
+    #[error("op {0}: retry of an op that is not held")]
+    RetryNotHeld(OpId),
+    /// A `retry_intent`, undo or expire record while a retry of the op is in flight (a `retry_intent`
+    /// with no `reconcile` after it): the retry may have moved the item.
+    #[error("op {0}: a retry of the op is in flight")]
+    RetryInFlight(OpId),
+    /// The writer was given a retry token for an op whose retry is not in flight, or asked to write a
+    /// `Retried` result without a retry token.
+    #[error("op {0}: no retry in flight")]
+    RetryNotInFlight(OpId),
     /// An `undo_intent` for an op whose kept data expiry deleted (an `expire` record of any class):
     /// the inverse has nothing to restore from. An `undo_conflict` may still record that.
     #[error("op {0}: undo after its data expired")]
@@ -209,6 +224,9 @@ pub struct OpState {
     pub target: Target,
     /// What the item looked like when validated.
     pub facts: ItemFacts,
+    /// The exemptions the gate applied to the item when it was validated (the `validated` record's).
+    /// Undo and recovery pass exactly these to the gate; see [`OpState::validated`].
+    pub exemptions: GateExemptions,
     /// The intent, when one was written.
     pub intent: Option<Intent>,
     /// The outcome of the `done` record, when one was written.
@@ -221,9 +239,35 @@ pub struct OpState {
     pub undo_attempts: u32,
     /// The retention classes of its data that expiry deleted.
     pub expired: Vec<RetentionClass>,
+    /// Whether a retry of the held item is in flight: a `retry_intent` with no `reconcile` after it.
+    /// The retry may have moved the item; recovery probes it and ends it with the token of
+    /// `JournalWriter::resume_retry`.
+    pub retry_in_flight: bool,
 }
 
 impl OpState {
+    /// The op's journal `validated` record, as written: what undo and recovery hand to
+    /// `GateCtx::record` (and whose exemptions they pass to the undo gates) instead of reading the
+    /// records again.
+    pub fn validated(&self) -> Validated {
+        Validated {
+            op: self.op,
+            item: self.item.clone(),
+            target: self.target.clone(),
+            facts: self.facts.clone(),
+            exemptions: self.exemptions,
+        }
+    }
+
+    /// The reconcile result that left the op needing the user's attention
+    /// ([`ReconcileResult::needs_attention`]: an object kept in quarantine that is not the recorded
+    /// one, or an item lost), when the last of its reconcile records is one.
+    pub fn attention(&self) -> Option<&ReconcileResult> {
+        self.reconciles
+            .last()
+            .filter(|result| result.needs_attention())
+    }
+
     /// Validated, intent only, or done.
     pub fn status(&self) -> OpStatus<'_> {
         match (&self.intent, &self.outcome) {
@@ -245,7 +289,10 @@ impl OpState {
                 ReconcileResult::StillPending => pending,
                 ReconcileResult::Completed
                 | ReconcileResult::MismatchMovedBack
-                | ReconcileResult::Cancelled => None,
+                | ReconcileResult::Cancelled
+                | ReconcileResult::NotMoved { .. }
+                | ReconcileResult::MismatchKept { .. }
+                | ReconcileResult::Lost { .. } => None,
                 ReconcileResult::Retried { outcome } => pending_of(outcome),
             };
         }
@@ -276,7 +323,16 @@ fn pending_of(outcome: &ItemOutcome) -> Option<Pending> {
 /// - `undo_conflict`: ends the op's undo with or without an `undo_intent` before it, for an op with an
 ///   intent or a done; not after the undo settled. Failed and conflicting undos may be tried again.
 /// - `reconcile`: the op is pending ([`OpState::pending`]); `Retried` only for a held item, the other
-///   results only for a boot-time move.
+///   results only for a boot-time move. `NotMoved`, `MismatchKept` and `Lost` end the boot move's pending state like
+///   `Completed` does; the last two leave the op needing attention ([`OpState::attention`]).
+/// - `retry_intent`: after `commit` or `aborted`, for a held op ([`Pending::Held`]) with no retry in
+///   flight ([`Violation::RetryNotHeld`], [`Violation::RetryInFlight`]). The `reconcile` with
+///   `Retried` that follows ends the retry; its outcome replaces `HeldRetry`. A `Retried` without a
+///   `retry_intent` before it is still read (journals from before the record existed), but the
+///   writer no longer writes one.
+/// - While a retry is in flight, no undo record, no second `retry_intent` and no `expire` is accepted
+///   for the op.
+/// - `settings`: only right after the header, once ([`Violation::SettingsMisplaced`]).
 /// - `expire`: after `commit` or `aborted`, for an op with an intent, once per retention class, not
 ///   while the op's undo is in progress ([`Violation::ExpireDuringUndo`]).
 ///
@@ -285,6 +341,9 @@ fn pending_of(outcome: &ItemOutcome) -> Option<Pending> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalState {
     header: Header,
+    settings: Option<RunSettings>,
+    lines: u64,
+    head: [u8; 32],
     phase: Phase,
     commit: Option<Commit>,
     aborted: Option<Aborted>,
@@ -300,6 +359,9 @@ impl JournalState {
     pub(super) fn new(header: Header) -> Self {
         JournalState {
             header,
+            settings: None,
+            lines: 0,
+            head: [0; 32],
             phase: Phase::Validating,
             commit: None,
             aborted: None,
@@ -319,6 +381,27 @@ impl JournalState {
     /// The session id from the header.
     pub fn session(&self) -> &SessionId {
         &self.header.session
+    }
+
+    /// The run's settings from the `settings` record; `None` for a journal written before that record
+    /// existed (or cut right after its header).
+    pub fn settings(&self) -> Option<&RunSettings> {
+        self.settings.as_ref()
+    }
+
+    /// How far the journal reaches: its complete lines (header included) and the chain value of the
+    /// last one. The index entry records it (`SessionSummary::journal`, review M7).
+    pub fn mark(&self) -> JournalMark {
+        JournalMark {
+            records: self.lines,
+            head: Sha256Hex::from(self.head),
+        }
+    }
+
+    /// Counts one more line, written or read, whose chain value is `head`.
+    pub(super) fn advance(&mut self, head: [u8; 32]) {
+        self.lines += 1;
+        self.head = head;
     }
 
     /// Where the run stands.
@@ -370,11 +453,22 @@ impl JournalState {
             .filter(|s| s.pending() == Some(Pending::Reboot))
     }
 
-    /// The ops held for a retry at the next run, in op order.
+    /// The ops held for a retry at the next run with no retry in flight, in op order.
     pub fn held_retry(&self) -> impl Iterator<Item = &OpState> + '_ {
         self.ops
             .values()
-            .filter(|s| s.pending() == Some(Pending::Held))
+            .filter(|s| s.pending() == Some(Pending::Held) && !s.retry_in_flight)
+    }
+
+    /// The ops whose retry is in flight (a `retry_intent` with no `reconcile` after it), in op order:
+    /// what recovery must probe.
+    pub fn retries_in_flight(&self) -> impl Iterator<Item = &OpState> + '_ {
+        self.ops.values().filter(|s| s.retry_in_flight)
+    }
+
+    /// The ops that need the user's attention after reconcile ([`OpState::attention`]), in op order.
+    pub fn needs_attention(&self) -> impl Iterator<Item = &OpState> + '_ {
+        self.ops.values().filter(|s| s.attention().is_some())
     }
 
     /// The ops whose undo is in progress (an `undo_intent` with nothing after it), in op order: what
@@ -447,6 +541,18 @@ impl JournalState {
     pub fn check(&self, record: &Record) -> Result<(), Violation> {
         match record {
             Record::Header(_) => Err(Violation::DuplicateHeader),
+            Record::Settings(_) => {
+                self.run_open("settings")?;
+                if self.phase != Phase::Validating
+                    || !self.ops.is_empty()
+                    || self.settings.is_some()
+                    || self.lines != 1
+                {
+                    return Err(Violation::SettingsMisplaced);
+                }
+                Ok(())
+            }
+            Record::RetryIntent(r) => self.check_retry(r),
             Record::Validated(v) => {
                 self.run_open("validated")?;
                 if self.phase != Phase::Validating {
@@ -532,6 +638,9 @@ impl JournalState {
             Record::Aborted(_) => self.run_open("aborted"),
             Record::UndoIntent(u) => {
                 let s = self.known(u.op)?;
+                if s.retry_in_flight {
+                    return Err(Violation::RetryInFlight(u.op));
+                }
                 if s.intent.is_none() {
                     return Err(Violation::UndoNotApplicable(u.op));
                 }
@@ -546,6 +655,9 @@ impl JournalState {
             }
             Record::UndoDone(u) => {
                 let s = self.known(u.op)?;
+                if s.retry_in_flight {
+                    return Err(Violation::RetryInFlight(u.op));
+                }
                 if s.undo.is_settled() {
                     return Err(Violation::UndoSettled(u.op));
                 }
@@ -564,6 +676,9 @@ impl JournalState {
             }
             Record::UndoConflict(c) => {
                 let s = self.known(c.op)?;
+                if s.retry_in_flight {
+                    return Err(Violation::RetryInFlight(c.op));
+                }
                 if s.undo.is_settled() {
                     return Err(Violation::UndoSettled(c.op));
                 }
@@ -580,6 +695,9 @@ impl JournalState {
                 let s = self.known(e.op)?;
                 if s.intent.is_none() {
                     return Err(Violation::ExpireWithoutIntent(e.op));
+                }
+                if s.retry_in_flight {
+                    return Err(Violation::RetryInFlight(e.op));
                 }
                 if s.expired.contains(&e.class) {
                     return Err(Violation::DuplicateExpire(e.op));
@@ -598,6 +716,8 @@ impl JournalState {
     pub(super) fn record(&mut self, record: &Record) {
         match record {
             Record::Header(_) => {}
+            Record::Settings(settings) => self.settings = Some(settings.clone()),
+            Record::RetryIntent(r) => self.known_mut(r.op).retry_in_flight = true,
             Record::Validated(v) => {
                 self.ops.insert(
                     v.op,
@@ -606,12 +726,14 @@ impl JournalState {
                         item: v.item.clone(),
                         target: v.target.clone(),
                         facts: v.facts.clone(),
+                        exemptions: v.exemptions,
                         intent: None,
                         outcome: None,
                         reconciles: Vec::new(),
                         undo: UndoState::NotStarted,
                         undo_attempts: 0,
                         expired: Vec::new(),
+                        retry_in_flight: false,
                     },
                 );
             }
@@ -654,9 +776,26 @@ impl JournalState {
             Record::UndoConflict(c) => {
                 self.known_mut(c.op).undo = UndoState::Conflict(c.conflict.clone());
             }
-            Record::Reconcile(r) => self.known_mut(r.op).reconciles.push(r.result.clone()),
+            Record::Reconcile(r) => {
+                let s = self.known_mut(r.op);
+                if matches!(r.result, ReconcileResult::Retried { .. }) {
+                    s.retry_in_flight = false;
+                }
+                s.reconciles.push(r.result.clone());
+            }
             Record::Expire(e) => self.known_mut(e.op).expired.push(e.class),
         }
+    }
+
+    fn check_retry(&self, r: &RetryIntent) -> Result<(), Violation> {
+        let s = self.known(r.op)?;
+        if s.retry_in_flight {
+            return Err(Violation::RetryInFlight(r.op));
+        }
+        if !self.is_finished() || s.pending() != Some(Pending::Held) {
+            return Err(Violation::RetryNotHeld(r.op));
+        }
+        Ok(())
     }
 
     fn check_reconcile(&self, r: &Reconcile) -> Result<(), Violation> {

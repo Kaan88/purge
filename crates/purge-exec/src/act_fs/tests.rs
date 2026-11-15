@@ -694,13 +694,17 @@ fn nested_delete_child_then_empty_parent_and_undo_parent_first() {
         (parent_before.attributes, parent_before.sddl.as_str())
     );
 
-    // The child cannot go back while its parent is missing; nothing is created for it.
+    // The child cannot go back while its parent is missing; nothing is created for it. (Changed: the
+    // conflict was `GateBlocked{DenyListed{act_fs.undo-parent-missing}}` until the model had
+    // `UndoConflict::ParentMissing`.)
     let early = env.undo(1);
     assert!(
         matches!(
             &early,
-            FsUndo::Conflict { conflict: UndoConflict::GateBlocked { blocker: Blocker::DenyListed { rule } }, .. }
-                if rule.as_str() == reason::UNDO_PARENT_MISSING
+            FsUndo::Conflict {
+                conflict: UndoConflict::ParentMissing,
+                ..
+            }
         ),
         "{early:?}"
     );

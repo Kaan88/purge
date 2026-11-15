@@ -329,6 +329,21 @@ pub struct SessionSummary {
     /// Whether a boot-time move of this session still waits for a restart.
     #[serde(default)]
     pub pending_reboot: bool,
+    /// Where the session's journal stood when this entry was written: a reader of the journal checks
+    /// that it still holds that many lines with that chain value at the last of them, so a journal cut
+    /// at a line boundary is detected (review M7). `None` in entries written before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal: Option<JournalMark>,
+}
+
+/// How far a session's journal reached when the index entry was written: its number of lines (the header
+/// included) and the hash-chain value of the last of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct JournalMark {
+    /// Complete lines in the journal, the header included.
+    pub records: u64,
+    /// The `chain` value of the last of them.
+    pub head: Sha256Hex,
 }
 
 /// The session index, `sessions\index.json`.
@@ -417,8 +432,10 @@ pub struct ItemReport {
     pub op: OpId,
     /// What the item acts on, as the plan spells it.
     pub target: Target,
-    /// The op the item resolved to.
-    pub exec_op: ExecOp,
+    /// The op the item resolved to. `None` for an item whose target has no executor in this version (a
+    /// service, scheduled task or firewall rule), which is listed with its skipped outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_op: Option<ExecOp>,
     /// How it ended.
     pub outcome: ItemOutcome,
     /// Bytes of quarantine and backup data kept for the item.
@@ -882,7 +899,7 @@ mod tests {
             Some("VendorSvc")
         );
         for item in &report.items {
-            assert_eq!(item.exec_op.target(), item.target);
+            assert_eq!(item.exec_op.as_ref().unwrap().target(), item.target);
         }
         for bad in [
             "purge.exec/0",
@@ -904,6 +921,39 @@ mod tests {
         ] {
             round_trip::<RestorePointOutcome>(text);
         }
+    }
+
+    /// An item without an executor op (a service skipped as unsupported) is listed without the field;
+    /// reports written before the field became optional read as before.
+    #[test]
+    fn report_item_without_an_exec_op_round_trips() {
+        let text = r#"{"item":"c-09","op":9,"target":{"type":"Service","name":"VendorSvc"},"outcome":{"kind":"Skipped","reason":{"kind":"GateBlocked","blocker":{"kind":"CannotBackUp"}}},"backup_bytes":0}"#;
+        let item: ItemReport = round_trip(text);
+        assert_eq!(item.exec_op, None);
+        let old: ExecReport = round_trip(&exec_report_json("purge.exec/1"));
+        assert!(old.items.iter().all(|item| item.exec_op.is_some()));
+    }
+
+    /// The journal mark of an index entry (review M7): absent in entries written before it existed,
+    /// round-trips when present, and needs both of its fields.
+    #[test]
+    fn summary_journal_mark_is_optional_and_round_trips() {
+        let old: SessionSummary = round_trip(&summary_json(ID, "Committed", 1, 2));
+        assert_eq!(old.journal, None);
+        let with = summary_json(ID, "Committed", 1, 2).replace(
+            r#""pending_reboot":true}"#,
+            &format!(r#""pending_reboot":true,"journal":{{"records":17,"head":"{HASH_B}"}}}}"#),
+        );
+        let summary: SessionSummary = round_trip(&with);
+        assert_eq!(
+            summary.journal,
+            Some(JournalMark {
+                records: 17,
+                head: HASH_B.parse().unwrap()
+            })
+        );
+        let partial = with.replace(r#""records":17,"#, "");
+        assert!(serde_json::from_str::<SessionSummary>(&partial).is_err());
     }
 
     fn undo_report_json(schema: &str) -> String {
@@ -978,6 +1028,7 @@ mod tests {
             "lockers",
             "BackupTampered",
             "already_restored",
+            "JournalMark",
         ] {
             assert!(text.contains(name), "schema lacks {name}");
         }

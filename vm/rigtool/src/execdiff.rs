@@ -106,7 +106,9 @@ pub struct ReportItem {
     pub item: String,
     pub op: u32,
     pub target: Target,
-    pub exec_op: ExecOp,
+    /// `None` for an item with no executor op in the engine version (it is listed, skipped).
+    #[serde(default)]
+    pub exec_op: Option<ExecOp>,
     pub outcome: Outcome,
     #[serde(default)]
     pub backup_bytes: u64,
@@ -867,10 +869,14 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
                         i.outcome.summary()
                     ));
                 }
-                if let Some(e) = &o.exec_op
-                    && e != &i.exec_op
-                {
-                    incons.push(format!("op {}: journal exec_op {}, report {}", i.op, e.name(), i.exec_op.name()));
+                match (&o.exec_op, &i.exec_op) {
+                    (Some(e), Some(r)) if e != r => {
+                        incons.push(format!("op {}: journal exec_op {}, report {}", i.op, e.name(), r.name()));
+                    }
+                    (Some(e), None) => {
+                        incons.push(format!("op {}: journal exec_op {}, report none", i.op, e.name()));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -902,12 +908,13 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
         .iter()
         .map(|o| {
             let ri = by_op.get(&o.op);
-            let kind = o.kind.clone().or_else(|| ri.map(|i| i.exec_op.name().to_string()));
+            let report_op = ri.and_then(|i| i.exec_op.as_ref());
+            let kind = o.kind.clone().or_else(|| report_op.map(|e| e.name().to_string()));
             let target = o
                 .exec_op
                 .as_ref()
                 .map(ExecOp::target)
-                .or_else(|| ri.map(|i| i.exec_op.target()))
+                .or_else(|| report_op.map(ExecOp::target))
                 .or_else(|| o.target.clone())
                 .map(|t| t.canonical(cx.sid));
             OpT { j: o, kind, target }
@@ -1699,6 +1706,13 @@ mod tests {
         let r = run(Case { report_override: Some(v.to_string()), ..Default::default() });
         assert_eq!(r.counts.inconsistencies, 1, "{:?}", r.inconsistencies);
         assert!(!r.ok);
+        // A report item may have no exec_op (an item with no executor op), but not one the journal acted on.
+        let mut v: Value = serde_json::from_str(&good).unwrap();
+        v["items"][0].as_object_mut().unwrap().remove("exec_op");
+        assert!(parse_report(&v.to_string()).unwrap().items[0].exec_op.is_none());
+        let r = run(Case { report_override: Some(v.to_string()), ..Default::default() });
+        assert_eq!(r.counts.inconsistencies, 1, "{:?}", r.inconsistencies);
+        assert!(r.inconsistencies.iter().any(|i| i.contains("report none")), "{:?}", r.inconsistencies);
         // Wrong schema, other session: refused.
         assert!(parse_report(&good.replace("purge.exec/1", "purge.exec/2")).is_err());
         let mut v: Value = serde_json::from_str(&good).unwrap();

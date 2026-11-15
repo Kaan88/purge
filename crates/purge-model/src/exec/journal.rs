@@ -3,11 +3,17 @@
 //! A session's `journal.jsonl` holds one [`Record`] per line, each a JSON object tagged by `"rec"`. The
 //! first line is the [`Header`], which carries the schema id; a journal of another version does not parse.
 //!
-//! The order of a run is: `header`, one `validated` per selected item, then per item `intent` (flushed
-//! before the action) and `done`, with a `group_end` after at most 64 intents, and at the end `commit` or
-//! `aborted`. An item that is decided before any backup is taken (already gone, refused by a gate) gets a
-//! `done` with no `intent`; see [`ItemOutcome::allowed_without_intent`]. Later runs append `undo_intent`,
-//! `undo_done`, `undo_conflict`, `reconcile` and `expire` records.
+//! The order of a run is: `header`, `settings` (journals written before that record existed have none),
+//! one `validated` per selected item, then per item `intent` (flushed before the action) and `done`, with
+//! a `group_end` after at most 64 intents, and at the end `commit` or `aborted`. An item that is decided
+//! before any backup is taken (already gone, refused by a gate) gets a `done` with no `intent`; see
+//! [`ItemOutcome::allowed_without_intent`]. Later runs append `undo_intent`, `undo_done`,
+//! `undo_conflict`, `reconcile`, `retry_intent` and `expire` records.
+//!
+//! Compatibility: additions keep every older document readable. New fields have defaults, and new
+//! variants and record kinds leave the encoding of the old ones as it was. An older reader refuses a
+//! journal holding a record kind or variant it does not know (it never skips one), so no addition of
+//! that kind is silently ignored.
 //!
 //! This module only defines the records. Writing, flushing and reading them back, with the rule for a
 //! torn last line, is `purge-exec`'s job.
@@ -106,6 +112,27 @@ pub enum ItemFacts {
     Package,
     /// The item does not exist.
     Absent,
+    /// The item did not pass validation: a gate refused it, or it could not be opened or read. Nothing
+    /// acts on it in the run (the act-time gate keeps no record of it), exactly as for
+    /// [`ItemFacts::Absent`], but the journal says why.
+    Refused {
+        /// The blocker the gate raised; `None` when the item could not be opened or read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blocker: Option<Blocker>,
+        /// The code of the rule that refused (`gate.*`, `live.*`, `exec.*`), or of what failed.
+        reason: String,
+        /// The Win32 error code, when the item could not be opened or read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        os_error: Option<u32>,
+    },
+}
+
+impl ItemFacts {
+    /// Whether the facts describe an item the run may act on: not [`ItemFacts::Absent`] and not
+    /// [`ItemFacts::Refused`].
+    pub fn is_actionable(&self) -> bool {
+        !matches!(self, ItemFacts::Absent | ItemFacts::Refused { .. })
+    }
 }
 
 /// One volume a session touches.
@@ -148,6 +175,36 @@ pub struct Header {
     pub allow_irreversible: bool,
     /// The volumes the session keeps quarantine data on.
     pub volumes: Vec<VolumeRecord>,
+}
+
+/// When a run asks for a restore point (Settings S5, "Restore point"), as the journal records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum RestorePointPolicy {
+    /// Never.
+    Off,
+    /// Only for a high-risk run.
+    HighRiskOnly,
+    /// For every run.
+    Always,
+}
+
+/// The settings a run was started with: the `settings` record, written right after the [`Header`] and
+/// before the first `validated` record. A resumed run reads them from here, never from its caller. The
+/// acknowledgement of irreversible removals is the header's [`Header::allow_irreversible`].
+///
+/// Journals written before this record existed have none; they still read, and a reader treats the
+/// settings as unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct RunSettings {
+    /// The SID of the user the scan ran for, as the scan gave it to the plan's decisions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_sid: Option<String>,
+    /// Whether the scan resolved 8.3 names, as the scan gave it to the plan's decisions.
+    pub long_names_resolved: bool,
+    /// The most keys a registry tree may hold to be deleted.
+    pub key_limit: u64,
+    /// When the run asks for a restore point.
+    pub restore_point: RestorePointPolicy,
 }
 
 /// The deny-list exemptions an item was judged with (ENGINE_PLAN.md §5.10). The same four inputs as the
@@ -393,6 +450,10 @@ pub enum UndoConflict {
     },
     /// The op has no inverse.
     Irreversible,
+    /// The parent directory or key the item goes back into is gone. It is recreated only by an inverse
+    /// of the same session (a `RecreateDir` or `RestoreKeyTree` that must run first); nothing was created
+    /// for this op.
+    ParentMissing,
 }
 
 /// An inverse ran to an end.
@@ -430,11 +491,68 @@ pub enum ReconcileResult {
     StillPending,
     /// Purge removed its own pending pair; the item stays where it was.
     Cancelled,
-    /// A held item was tried again, with this outcome.
+    /// A held item was tried again, with this outcome. Written after the op's [`RetryIntent`]; the
+    /// outcome takes the place of `HeldRetry`.
     Retried {
         /// The outcome of the new attempt.
         outcome: ItemOutcome,
     },
+    /// The boot-time move did not happen: the pair is gone from the list, nothing reached quarantine and
+    /// the item is still at its source path. Nothing changed, so there is nothing to undo; the op is no
+    /// longer pending.
+    NotMoved {
+        /// The kind of failure (`VerifyFailed`: the registration was confirmed, the item stayed).
+        code: FailCode,
+        /// The Win32 error code, when there is one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        os_error: Option<u32>,
+        /// Free text for the report; may be empty.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        detail: String,
+    },
+    /// Another object than the recorded one is in quarantine and could not be moved back; it stays in
+    /// the admin-only quarantine. The op is no longer pending; it needs attention and its undo reports a
+    /// conflict.
+    MismatchKept {
+        /// Why the object could not be moved back.
+        code: FailCode,
+        /// The Win32 error code, when there is one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        os_error: Option<u32>,
+        /// Free text for the report; may be empty.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        detail: String,
+    },
+    /// The item is neither at its source path nor in quarantine. The op is no longer pending; it needs
+    /// attention and its undo reports a conflict.
+    Lost {
+        /// Free text for the report; may be empty.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        detail: String,
+    },
+}
+
+impl ReconcileResult {
+    /// Whether the result leaves the op in a state that needs the user's attention (an object kept in
+    /// quarantine that is not the recorded one, or an item lost): [`ReconcileResult::MismatchKept`] and
+    /// [`ReconcileResult::Lost`]. Undo answers such an op with a conflict.
+    pub fn needs_attention(&self) -> bool {
+        matches!(
+            self,
+            ReconcileResult::MismatchKept { .. } | ReconcileResult::Lost { .. }
+        )
+    }
+}
+
+/// The write-ahead record of a retry of a held item (an op whose outcome is `HeldRetry`). It is flushed
+/// before the retry acts; the retry ends with a `reconcile` record whose result is
+/// [`ReconcileResult::Retried`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct RetryIntent {
+    /// When the retry started.
+    pub at: FileTime,
+    /// The held op.
+    pub op: OpId,
 }
 
 /// What a later start found for a pending op.
@@ -462,8 +580,11 @@ pub struct Expire {
 }
 
 /// One line of `journal.jsonl`. Serialised as an object tagged by `"rec"`, in snake case: `header`,
-/// `validated`, `intent`, `done`, `group_end`, `commit`, `aborted`, `undo_intent`, `undo_done`,
-/// `undo_conflict`, `reconcile`, `expire`.
+/// `settings`, `validated`, `intent`, `done`, `group_end`, `commit`, `aborted`, `undo_intent`,
+/// `undo_done`, `undo_conflict`, `reconcile`, `retry_intent`, `expire`.
+///
+/// Only the three write-ahead records (`intent`, `undo_intent`, `retry_intent`) spell the word "intent"
+/// in their line; of those only `intent` holds an item path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "rec", rename_all = "snake_case")]
 // Records are built, written and dropped one at a time, so the size of the largest variant costs nothing
@@ -494,6 +615,10 @@ pub enum Record {
     Reconcile(Reconcile),
     /// An op's kept data was deleted by expiry.
     Expire(Expire),
+    /// The settings of the run; only right after the header.
+    Settings(RunSettings),
+    /// A held op is about to be tried again.
+    RetryIntent(RetryIntent),
 }
 
 impl Record {
@@ -501,6 +626,8 @@ impl Record {
     pub fn name(&self) -> &'static str {
         match self {
             Record::Header(_) => "header",
+            Record::Settings(_) => "settings",
+            Record::RetryIntent(_) => "retry_intent",
             Record::Validated(_) => "validated",
             Record::Intent(_) => "intent",
             Record::Done(_) => "done",
@@ -526,9 +653,12 @@ impl Record {
             Record::UndoConflict(r) => Some(r.op),
             Record::Reconcile(r) => Some(r.op),
             Record::Expire(r) => Some(r.op),
-            Record::Header(_) | Record::GroupEnd(_) | Record::Commit(_) | Record::Aborted(_) => {
-                None
-            }
+            Record::RetryIntent(r) => Some(r.op),
+            Record::Header(_)
+            | Record::Settings(_)
+            | Record::GroupEnd(_)
+            | Record::Commit(_)
+            | Record::Aborted(_) => None,
         }
     }
 }
@@ -592,6 +722,80 @@ mod tests {
             r#"{"rec":"reconcile","at":2,"op":5,"result":{"kind":"Retried","outcome":{"kind":"Vanished"}}}"#.to_owned(),
             r#"{"rec":"expire","at":134104041020000000,"op":1,"class":"Quarantine","bytes":1048576}"#.to_owned(),
         ]
+    }
+
+    /// Lines of the record kinds and variants added after the first journals were written: the
+    /// `settings` and `retry_intent` records, `Refused` facts, and the reconcile results that end a
+    /// pending boot move.
+    fn added_lines() -> Vec<String> {
+        vec![
+            r#"{"rec":"settings","user_sid":"S-1-5-21-1-2-3-1001","long_names_resolved":true,"key_limit":10000,"restore_point":"HighRiskOnly"}"#.to_owned(),
+            r#"{"rec":"settings","long_names_resolved":false,"key_limit":1,"restore_point":"Off"}"#.to_owned(),
+            r#"{"rec":"validated","op":7,"item":"c-07","target":{"type":"Path","path":"C:\\Windows\\x"},"facts":{"kind":"Refused","blocker":{"kind":"DenyListed","rule":"fs.windows"},"reason":"live.deny-listed"},"exemptions":{"proven_owned_skeleton":false,"environment_segment_edit":false,"tier_a_start_menu_entry":false,"long_names_resolved":false}}"#.to_owned(),
+            r#"{"rec":"validated","op":8,"item":"c-08","target":{"type":"Path","path":"C:\\x"},"facts":{"kind":"Refused","reason":"gate.open-failed","os_error":5},"exemptions":{"proven_owned_skeleton":false,"environment_segment_edit":false,"tier_a_start_menu_entry":false,"long_names_resolved":false}}"#.to_owned(),
+            r#"{"rec":"retry_intent","at":3,"op":2}"#.to_owned(),
+            r#"{"rec":"reconcile","at":4,"op":3,"result":{"kind":"NotMoved","code":"VerifyFailed","detail":"still in place"}}"#.to_owned(),
+            r#"{"rec":"reconcile","at":4,"op":3,"result":{"kind":"MismatchKept","code":"InUse","os_error":32}}"#.to_owned(),
+            r#"{"rec":"reconcile","at":4,"op":3,"result":{"kind":"Lost"}}"#.to_owned(),
+            r#"{"rec":"undo_conflict","op":2,"conflict":{"kind":"ParentMissing"},"detail":"C:\\A is gone"}"#.to_owned(),
+        ]
+    }
+
+    /// Documents written before the additions read unchanged, and the additions round-trip without
+    /// changing the encoding of anything older.
+    #[test]
+    fn added_records_round_trip_and_old_lines_are_unchanged() {
+        for line in added_lines() {
+            let record: Record =
+                serde_json::from_str(&line).unwrap_or_else(|e| panic!("{line}: {e}"));
+            assert_eq!(serde_json::to_string(&record).unwrap(), line);
+            assert_eq!(record.op().is_some(), line.contains(r#","op":"#), "{line}");
+        }
+        // A header of the first version has no settings field and reads exactly as before.
+        let header = sample_journal().remove(0);
+        assert!(!header.contains("settings"));
+        let record: Record = serde_json::from_str(&header).unwrap();
+        assert_eq!(serde_json::to_string(&record).unwrap(), header);
+
+        let facts = |line: &str| match serde_json::from_str::<Record>(line).unwrap() {
+            Record::Validated(v) => v.facts,
+            other => panic!("{other:?}"),
+        };
+        let lines = added_lines();
+        assert!(!facts(&lines[2]).is_actionable());
+        assert!(!ItemFacts::Absent.is_actionable());
+        assert!(ItemFacts::Package.is_actionable());
+        let results: Vec<ReconcileResult> = lines[5..8]
+            .iter()
+            .map(|line| match serde_json::from_str::<Record>(line).unwrap() {
+                Record::Reconcile(r) => r.result,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            results
+                .iter()
+                .map(ReconcileResult::needs_attention)
+                .collect::<Vec<_>>(),
+            [false, true, true]
+        );
+        assert!(!ReconcileResult::Completed.needs_attention());
+
+        // Fields the additions require are required.
+        for bad in [
+            r#"{"rec":"settings","key_limit":1,"restore_point":"Off"}"#,
+            r#"{"rec":"settings","long_names_resolved":true,"key_limit":1,"restore_point":"Sometimes"}"#,
+            r#"{"rec":"retry_intent","op":2}"#,
+            r#"{"rec":"retry_intent","at":3,"op":0}"#,
+            r#"{"rec":"reconcile","at":4,"op":3,"result":{"kind":"NotMoved"}}"#,
+            r#"{"kind":"Refused"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Record>(bad).is_err()
+                    && serde_json::from_str::<ItemFacts>(bad).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]
@@ -663,6 +867,7 @@ mod tests {
             r#"{"kind":"ValueChanged"}"#,
             r#"{"kind":"GateBlocked","blocker":{"kind":"ReparseMismatch"}}"#,
             r#"{"kind":"Irreversible"}"#,
+            r#"{"kind":"ParentMissing"}"#,
         ]);
         all::<ReconcileResult>(&[
             r#"{"kind":"Completed"}"#,
@@ -670,6 +875,15 @@ mod tests {
             r#"{"kind":"StillPending"}"#,
             r#"{"kind":"Cancelled"}"#,
             r#"{"kind":"Retried","outcome":{"kind":"HeldRetry"}}"#,
+            r#"{"kind":"NotMoved","code":"VerifyFailed"}"#,
+            r#"{"kind":"MismatchKept","code":"Internal","detail":"x"}"#,
+            r#"{"kind":"Lost"}"#,
+        ]);
+        all::<RestorePointPolicy>(&[r#""Off""#, r#""HighRiskOnly""#, r#""Always""#]);
+        all::<ItemFacts>(&[
+            r#"{"kind":"Absent"}"#,
+            r#"{"kind":"Refused","reason":"exec.unsupported"}"#,
+            r#"{"kind":"Refused","blocker":{"kind":"CannotBackUp"},"reason":"exec.unsupported"}"#,
         ]);
     }
 
@@ -729,11 +943,14 @@ mod tests {
         assert!(first >= 2);
         assert!(lines[..first].iter().any(|line| line.contains(escaped)));
 
-        // No record other than the two intent kinds spells the word through its own field names or
-        // values.
-        for line in &lines {
+        // No record other than the three write-ahead kinds spells the word through its own field names
+        // or values, and of those only `intent` names a path.
+        for line in lines.iter().chain(&added_lines()) {
             let record: Record = serde_json::from_str(line).unwrap();
-            let is_intent_kind = matches!(record, Record::Intent(_) | Record::UndoIntent(_));
+            let is_intent_kind = matches!(
+                record,
+                Record::Intent(_) | Record::UndoIntent(_) | Record::RetryIntent(_)
+            );
             assert_eq!(
                 line.to_lowercase().contains("intent"),
                 is_intent_kind,
@@ -1041,6 +1258,11 @@ mod tests {
             "RestoreKeyTree",
             "BackupTampered",
             "RolledBack",
+            "retry_intent",
+            "key_limit",
+            "ParentMissing",
+            "MismatchKept",
+            "Refused",
         ] {
             assert!(text.contains(name), "schema lacks {name}");
         }

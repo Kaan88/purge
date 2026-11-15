@@ -339,6 +339,14 @@ pub mod journal {
         },
         Package,
         Absent,
+        /// The validate pass refused the item (or could not open it); nothing was bound.
+        Refused {
+            #[serde(default)]
+            blocker: Option<Blocker>,
+            reason: String,
+            #[serde(default)]
+            os_error: Option<u32>,
+        },
     }
 
     impl Facts {
@@ -475,17 +483,42 @@ pub mod journal {
         ValueChanged,
         GateBlocked { blocker: Blocker },
         Irreversible,
+        ParentMissing,
     }
 
     /// purge-model `ReconcileResult`.
     #[derive(Deserialize, Clone, Debug, PartialEq)]
     #[serde(tag = "kind")]
+    #[allow(dead_code)] // fields are read to check the record's shape
     pub enum ReconcileResult {
         Completed,
         MismatchMovedBack,
         StillPending,
         Cancelled,
-        Retried { outcome: Outcome },
+        Retried {
+            outcome: Outcome,
+        },
+        /// The boot-time move did not happen: the item stayed where it was.
+        NotMoved {
+            code: String,
+            #[serde(default)]
+            os_error: Option<u32>,
+            #[serde(default)]
+            detail: String,
+        },
+        /// Something else was in quarantine and could not be moved back.
+        MismatchKept {
+            code: String,
+            #[serde(default)]
+            os_error: Option<u32>,
+            #[serde(default)]
+            detail: String,
+        },
+        /// Neither at its source nor in quarantine.
+        Lost {
+            #[serde(default)]
+            detail: String,
+        },
     }
 
     /// purge-model `exec::journal::Record`.
@@ -495,6 +528,14 @@ pub mod journal {
     #[allow(clippy::large_enum_variant)] // read and dropped one line at a time
     pub enum Record {
         Header(Header),
+        /// The run's settings, right after the header (absent in older journals).
+        Settings {
+            #[serde(default)]
+            user_sid: Option<String>,
+            long_names_resolved: bool,
+            key_limit: u64,
+            restore_point: String,
+        },
         Validated(Validated),
         Intent(Intent),
         Done(DoneRec),
@@ -514,6 +555,11 @@ pub mod journal {
             detail: String,
         },
         UndoIntent {
+            op: u32,
+        },
+        /// A held op is about to be tried again; its `reconcile` `Retried` follows.
+        RetryIntent {
+            at: u64,
             op: u32,
         },
         UndoDone {
@@ -561,7 +607,7 @@ pub mod journal {
         pub done: Option<Outcome>,
         /// Effective outcome name: the done outcome, changed by later reconcile records (Completed -> Done,
         /// StillPending -> PendingReboot, Retried -> its outcome, MismatchMovedBack -> MovedBack, Cancelled ->
-        /// Cancelled). `None` = no done record yet.
+        /// Cancelled, NotMoved / MismatchKept / Lost -> that name). `None` = no done record yet.
         pub outcome: Option<String>,
         /// Effective outcome as a purge-model ItemOutcome, when it is one.
         pub effective: Option<Outcome>,
@@ -751,12 +797,16 @@ pub mod journal {
                         ReconcileResult::Retried { outcome } => ("Retried", Some(outcome.clone())),
                         ReconcileResult::MismatchMovedBack => ("MismatchMovedBack", None),
                         ReconcileResult::Cancelled => ("Cancelled", None),
+                        ReconcileResult::NotMoved { .. } => ("NotMoved", None),
+                        ReconcileResult::MismatchKept { .. } => ("MismatchKept", None),
+                        ReconcileResult::Lost { .. } => ("Lost", None),
                     };
                     o.reconciled.push(name.to_string());
                     o.outcome = Some(match (&eff, &result) {
                         (Some(e), _) => e.name().to_string(),
                         (None, ReconcileResult::MismatchMovedBack) => "MovedBack".to_string(),
-                        _ => "Cancelled".to_string(),
+                        (None, ReconcileResult::Cancelled) => "Cancelled".to_string(),
+                        _ => name.to_string(),
                     });
                     o.effective = eff;
                 }
@@ -774,6 +824,10 @@ pub mod journal {
                     j.undo_records += 1;
                     get(&idx, op, "undo_intent")?;
                 }
+                Record::RetryIntent { op, .. } => {
+                    get(&idx, op, "retry_intent")?;
+                }
+                Record::Settings { .. } => {}
                 Record::Expire { op, .. } => {
                     get(&idx, op, "expire")?;
                 }
@@ -1011,6 +1065,46 @@ pub mod journal {
             assert_eq!(j.undo_records, 6);
             assert_eq!(j.reconcile_records, 2);
             assert!(j.warnings.iter().any(|w| w.contains("announces 3 items")), "{:?}", j.warnings);
+        }
+
+        /// The record kinds and variants purge-model added in the M2 gap pass (its `added_lines`), in a
+        /// journal of their own: the settings record, refused facts, a retry under its own intent, the
+        /// reconcile results that end a boot move, and the ParentMissing undo conflict.
+        #[test]
+        fn reads_the_records_added_later() {
+            let lines = [
+                MODEL_SAMPLE[0],
+                r#"{"rec":"settings","user_sid":"S-1-5-21-1-2-3-1001","long_names_resolved":true,"key_limit":10000,"restore_point":"HighRiskOnly"}"#,
+                MODEL_SAMPLE[1],
+                r#"{"rec":"validated","op":2,"item":"c-02","target":{"type":"Path","path":"C:\\Windows\\x"},"facts":{"kind":"Refused","blocker":{"kind":"DenyListed","rule":"fs.windows"},"reason":"live.deny-listed"},"exemptions":{"proven_owned_skeleton":false,"environment_segment_edit":false,"tier_a_start_menu_entry":false,"long_names_resolved":false}}"#,
+                r#"{"rec":"validated","op":3,"item":"c-03","target":{"type":"Path","path":"C:\\x"},"facts":{"kind":"Refused","reason":"gate.open-failed","os_error":5}}"#,
+                MODEL_SAMPLE[7],
+                r#"{"rec":"done","op":1,"item":"c-01","outcome":{"kind":"HeldRetry"}}"#,
+                r#"{"rec":"done","op":2,"item":"c-02","outcome":{"kind":"Skipped","reason":{"kind":"GateBlocked","blocker":{"kind":"DenyListed","rule":"fs.windows"}}}}"#,
+                r#"{"rec":"commit","at":2,"counts":{"skipped":1,"held_retry":1},"backup_bytes":0}"#,
+                r#"{"rec":"retry_intent","at":3,"op":1}"#,
+                r#"{"rec":"reconcile","at":3,"op":1,"result":{"kind":"Retried","outcome":{"kind":"Done"}}}"#,
+                r#"{"rec":"reconcile","at":4,"op":1,"result":{"kind":"NotMoved","code":"VerifyFailed","detail":"still in place"}}"#,
+                r#"{"rec":"reconcile","at":4,"op":1,"result":{"kind":"MismatchKept","code":"InUse","os_error":32}}"#,
+                r#"{"rec":"reconcile","at":4,"op":1,"result":{"kind":"Lost"}}"#,
+                r#"{"rec":"undo_conflict","op":1,"conflict":{"kind":"ParentMissing"},"detail":"C:\\A is gone"}"#,
+            ];
+            let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+            let j = parse_journal(&text).unwrap();
+            assert_eq!(j.ops.len(), 3);
+            assert!(j.warnings.is_empty(), "{:?}", j.warnings);
+            let o1 = j.op(1).unwrap();
+            assert_eq!(o1.reconciled, ["Retried", "NotMoved", "MismatchKept", "Lost"]);
+            assert_eq!((o1.outcome.as_deref(), o1.effective.as_ref()), (Some("Lost"), None));
+            assert!(!o1.removed());
+            assert_eq!(o1.undo, ["undo_conflict:ParentMissing"]);
+            let o2 = j.op(2).unwrap();
+            assert_eq!((o2.kind.as_deref(), o2.is_dir), (None, None));
+            assert_eq!(j.op(3).unwrap().outcome, None);
+            assert_eq!(j.reconcile_records, 4);
+            // A retry intent names an op that has a validated record.
+            let stray = text.replace(r#""retry_intent","at":3,"op":1"#, r#""retry_intent","at":3,"op":9"#);
+            assert!(parse_journal(&stray).is_err());
         }
 
         #[test]

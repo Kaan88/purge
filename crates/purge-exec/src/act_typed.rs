@@ -730,9 +730,9 @@ impl PackageRemoval {
 /// they cannot differ from what the journal holds. This is the form the executor uses.
 ///
 /// An op with no such record (never validated, refused at validation, or a package recorded as
-/// [`ItemFacts::Absent`], which `GateCtx::record` keeps no record of) and a record of another kind (not
-/// an [`ExecOp::RemovePackage`] with [`ItemFacts::Package`]) are [`Prepared::Decided`]
-/// `Failed{Internal}`, before any system call.
+/// [`ItemFacts::Absent`] or [`ItemFacts::Refused`], which `GateCtx::record` keeps no record of) and a
+/// record of another kind (not an [`ExecOp::RemovePackage`] with [`ItemFacts::Package`]) are
+/// [`Prepared::Decided`] `Failed{Internal}`, before any system call.
 // The error type of `prepare_remove_package`, unchanged.
 #[allow(clippy::result_large_err)]
 pub fn prepare_remove_package_recorded(

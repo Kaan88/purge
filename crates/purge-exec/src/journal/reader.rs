@@ -21,6 +21,20 @@ pub struct JournalRead {
     pub torn_tail: u64,
     /// The chain value of the last complete line.
     pub head: Sha256Hex,
+    /// The chain value of every complete line, in order (`line_heads[0]` is the header's): what
+    /// [`check_mark`](super::check_mark) compares an index entry's [`JournalMark`] with.
+    ///
+    /// [`JournalMark`]: purge_model::exec::session::JournalMark
+    pub line_heads: Vec<Sha256Hex>,
+}
+
+impl JournalRead {
+    /// The chain value of the journal's first `lines` lines (of line `lines`, counted from 1), or `None`
+    /// when it has fewer lines or `lines` is 0.
+    pub fn head_at(&self, lines: u64) -> Option<Sha256Hex> {
+        let index = usize::try_from(lines).ok()?.checked_sub(1)?;
+        self.line_heads.get(index).copied()
+    }
 }
 
 /// Reads the journal of `session` (see [`parse`]) through the store: the file is opened relative to
@@ -63,6 +77,7 @@ pub(super) fn read_checked(
 pub fn parse(bytes: &[u8]) -> Result<JournalRead, JournalError> {
     let mut chain = CHAIN_SEED;
     let mut records = Vec::new();
+    let mut line_heads = Vec::new();
     let mut state: Option<JournalState> = None;
     let mut start = 0usize;
     let mut line_no = 0u64;
@@ -79,14 +94,22 @@ pub fn parse(bytes: &[u8]) -> Result<JournalRead, JournalError> {
             serde_json::from_slice(&body).map_err(|e| corrupt(Corruption::Json(e.to_string())))?;
         match state.as_mut() {
             None => match &record {
-                Record::Header(header) => state = Some(JournalState::new(header.clone())),
+                Record::Header(header) => {
+                    let mut first = JournalState::new(header.clone());
+                    first.advance(next);
+                    state = Some(first);
+                }
                 _ => return Err(corrupt(Corruption::Rule(Violation::HeaderNotFirst))),
             },
-            Some(state) => state
-                .apply(&record)
-                .map_err(|v| corrupt(Corruption::Rule(v)))?,
+            Some(state) => {
+                state
+                    .apply(&record)
+                    .map_err(|v| corrupt(Corruption::Rule(v)))?;
+                state.advance(next);
+            }
         }
         records.push(record);
+        line_heads.push(Sha256Hex::from(next));
         chain = next;
         start += len + 1;
     }
@@ -102,5 +125,6 @@ pub fn parse(bytes: &[u8]) -> Result<JournalRead, JournalError> {
         valid_len: start as u64,
         torn_tail,
         head: Sha256Hex::from(chain),
+        line_heads,
     })
 }

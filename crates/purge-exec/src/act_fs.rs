@@ -74,7 +74,8 @@
 //!   with its file id and volume serial compared with the journal, the original path's parent checked
 //!   by the gate ([`gate::check_undo_path`]), and the item renamed by handle into that checked directory
 //!   under its original leaf. Nothing is overwritten: an occupied original path is
-//!   `UndoConflict::DestinationExists`. No directory is created here; a missing parent is a conflict.
+//!   `UndoConflict::DestinationExists`. No directory is created here; a missing parent is
+//!   `UndoConflict::ParentMissing`.
 //! - **Recreate dir**: the original path's parent is checked by the gate ([`gate::check_undo_path`]) and
 //!   the directory is created **relative to that checked parent handle** (`DestDir::create_dir`; nothing
 //!   existing is adopted). Through the new directory's own handle the recorded security descriptor is
@@ -127,8 +128,6 @@ mod tests;
 pub mod reason {
     /// The volume serial of the item's handle is 0, which means unknown: same volume cannot be proven.
     pub const SERIAL_UNKNOWN: &str = "act_fs.volume-serial-unknown";
-    /// The original path's parent directory does not exist; `move_back` creates no directory.
-    pub const UNDO_PARENT_MISSING: &str = "act_fs.undo-parent-missing";
     /// The journal's intent does not hang together (`Intent::is_consistent`).
     pub const INTENT_INCONSISTENT: &str = "act_fs.intent-inconsistent";
 }
@@ -1264,12 +1263,13 @@ fn look_at(path: &str) -> PathNow {
     }
 }
 
-/// The conflict for a missing parent of `path`, if it is missing.
+/// The conflict for a missing parent of `path`, if it is missing: [`UndoConflict::ParentMissing`]
+/// (`move_back` and `RecreateDir` create no directory but their own).
 fn parent_missing(path: &str) -> Option<FsUndo> {
     let parent = prefix::parent(path)?;
     matches!(look_at(parent), PathNow::Missing).then(|| {
-        FsUndo::blocked(
-            rule(reason::UNDO_PARENT_MISSING),
+        FsUndo::conflict(
+            UndoConflict::ParentMissing,
             format!(
                 "the parent directory {parent} of {path} does not exist; it is recreated only by a \
                  RecreateDir inverse of this session, which must run first"

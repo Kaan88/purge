@@ -387,8 +387,9 @@ impl GateCtx {
     ///
     /// Refused, recording nothing: `op` acts on another target than the record
     /// ([`reason::VALIDATION_MISMATCH`]), the op id already has a record (the same), or the facts do not
-    /// fit the op ([`reason::STAMP_KIND`]). A record of an absent item ([`ItemFacts::Absent`]) is accepted
-    /// and records nothing: there is nothing to act on, and the act-time gate refuses the id.
+    /// fit the op ([`reason::STAMP_KIND`]). A record of an absent item ([`ItemFacts::Absent`]) or of an
+    /// item the validate pass refused ([`ItemFacts::Refused`]) is accepted and records nothing: there is
+    /// nothing to act on, and the act-time gate refuses the id.
     pub fn record(
         &mut self,
         op: &ExecOp,
@@ -546,7 +547,8 @@ pub enum Stamp {
 }
 
 impl Stamp {
-    /// The stamp a journal `validated` record stands for. `None` for [`ItemFacts::Absent`].
+    /// The stamp a journal `validated` record stands for. `None` for [`ItemFacts::Absent`] and
+    /// [`ItemFacts::Refused`], which bind nothing.
     pub fn from_item_facts(facts: &ItemFacts) -> Option<Stamp> {
         Some(match facts {
             ItemFacts::File(file) => Stamp::Path(PathStamp {
@@ -563,7 +565,7 @@ impl Stamp {
                 sha256: value.data_sha256.0,
             }),
             ItemFacts::Package => Stamp::Package,
-            ItemFacts::Absent => return None,
+            ItemFacts::Absent | ItemFacts::Refused { .. } => return None,
         })
     }
 

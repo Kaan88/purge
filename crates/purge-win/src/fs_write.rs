@@ -366,6 +366,19 @@ impl MoveHandle {
         }
     }
 
+    /// Wraps a handle the caller opened itself, without a path: relative to a checked directory
+    /// handle (`NtCreateFile` with a root directory), for a store that must act on the object it
+    /// checked. The handle must be on the object itself (opened without following a reparse point)
+    /// with at least `DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES`; `read_control` says whether it
+    /// also carries `READ_CONTROL` ([`MoveHandle::has_read_control`]). A handle without `DELETE`
+    /// makes every rename and delete fail with [`FsError::AccessDenied`]; nothing else is assumed.
+    pub fn from_owned_handle(handle: OwnedHandle, read_control: bool) -> MoveHandle {
+        MoveHandle {
+            file: FileHandle(handle),
+            read_control,
+        }
+    }
+
     /// Whether the handle carries `READ_CONTROL`, which [`MoveHandle::security`] needs.
     pub fn has_read_control(&self) -> bool {
         self.read_control

@@ -22,9 +22,9 @@
 //! | 2 | expose cloud placeholders to the process | | | [`ExecError::Gate`] |
 //! | 3 | check the store; read the index; size cap over the plan's sizes | | | [`ExecError::Store`]; an unavailable index is a warning and the cap is then not checked |
 //! | 4 | create the session directory | | | [`ExecError::Store`] |
-//! | 5 | write the scan copy `plan.scan.json`, flushed with its directory | | | [`ExecError::ScanCopy`]; no journal exists |
-//! | 6 | journal header | `header` | `journal.header` | [`ExecError::Journal`]; no item was looked at |
-//! | 7 | validate every selected item, read-only | one `validated` per item, flushed after the last | | abort `JournalWriteFailed` |
+//! | 5 | write the scan copy `plan.scan.json`, flushed with its directory | | | [`ExecError::ScanCopy`]; no journal exists, the session directory is removed |
+//! | 6 | journal header, then the run's settings | `header`, `settings` (flushed) | `journal.header` | [`ExecError::Journal`]; no item was looked at. Before the header the session directory is removed ([`SessionDir::remove_unstarted`]) |
+//! | 7 | validate every selected item, read-only | one `validated` per item (an item that did not pass: `Refused` or `Absent` facts), flushed after the last | | abort `JournalWriteFailed` |
 //! | 8 | prepare: restore point (per setting), Restart Manager query | | | never: warnings |
 //! | 9 | every item in plan order ([`Run::run_item`]) | see below | see below | see "Aborts" |
 //! | 10 | commit | `group_end` (`group.end`), `commit` | `commit.before` | abort `JournalWriteFailed` |
@@ -68,7 +68,8 @@
 //!
 //! No implicit pruning: only the `RemoveDirIfEmpty` items the plan carries are run. No shell change
 //! notification is sent: `purge-win` offers none. Undo and crash recovery are the next package; it
-//! resumes a run through [`Run::resume`] and [`Run::run_item`].
+//! resumes a run through [`Run::resume`] (which reads the run's settings from the journal and enforces
+//! the size cap again) and [`Run::run_item`].
 
 // The store's and the journal's errors carry paths and are over clippy's size threshold wherever
 // they are returned in this crate; the run's own errors wrap them unboxed like every other module.
@@ -80,8 +81,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use purge_guard::deny::{DenyList, Exemptions};
+use purge_model::Blocker;
 use purge_model::exec::journal::{
-    AbortReason, Header, Intent, ItemFacts, JournalSchema, Record, Validated, VolumeRecord,
+    AbortReason, Header, Intent, ItemFacts, JournalSchema, Validated, VolumeRecord,
 };
 use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::session::{ExecReport, SessionId, SessionIndex, SessionState, VolumeUsage};
@@ -91,14 +93,15 @@ use purge_plan::emit::ScanDoc;
 use crate::act_fs::{self, FsActed, FsPrepared, Retry, act_fs, prepare_fs};
 use crate::act_reg::{BackupWriteError, RegPrepared, act_reg, prepare_reg};
 use crate::act_typed::{
-    self, DefinitionError, IrreversibleAck, PackageBackend, prepare_remove_package, remove_package,
+    self, DefinitionError, IrreversibleAck, PackageBackend, prepare_remove_package_recorded,
+    remove_package,
 };
 use crate::fault;
 use crate::gate::{self, GateCtx, GateItem, GateOutcome, GateSetupError};
-use crate::journal::{self, IntentToken, JournalError, JournalState, JournalWriter, OpStatus};
+use crate::journal::{IntentToken, JournalError, JournalState, JournalWriter, OpState, OpStatus};
 use crate::locked::{
-    self, ConsentAnswer, ConsentCallback, DenyAll, Ladder, LadderEnv, LiveLadder, LockPrepared,
-    LockResult, PendingRenames,
+    self, ConsentAnswer, ConsentCallback, DenyAll, Ladder, LockPrepared, LockResult,
+    PendingRenames, StoreLadder,
 };
 use crate::plan_in::{self, BoundPlan, ExecRequest, ExecSettings, PlanRefusal};
 use crate::prepare::{
@@ -165,8 +168,6 @@ pub struct ExecEnv<'a> {
     pub packages: &'a dyn PackageBackend,
     /// Restart Manager, query only.
     pub lockers: &'a dyn LockerQuery,
-    /// Live facts for the locked-file ladder.
-    pub ladder: &'a dyn LadderEnv,
     /// Who answers the "close these programs?" question. Nothing is closed whatever the answer.
     pub consent: &'a dyn ConsentCallback,
     /// The boot-time move list.
@@ -184,8 +185,9 @@ pub struct ExecEnv<'a> {
 }
 
 impl<'a> ExecEnv<'a> {
-    /// An environment with the live ladder facts, the standard retries, the default consent answer
-    /// (deny) and no progress callback.
+    /// An environment with the standard retries, the default consent answer (deny) and no progress
+    /// callback. The locked-file ladder always reads live facts and checks a boot move's destination
+    /// against this session's store ([`StoreLadder`]).
     pub fn new(
         roots: &'a StorageRoots,
         deny: &'a DenyList,
@@ -198,7 +200,6 @@ impl<'a> ExecEnv<'a> {
             deny,
             packages,
             lockers,
-            ladder: &LiveLadder,
             consent: &DenyAll,
             pending_renames,
             retry: Retry::standard(),
@@ -470,6 +471,54 @@ impl Budget {
     }
 }
 
+/// The index, or `None` (with a warning) when it is unavailable; any other failure is the store's.
+fn read_index_for_cap(
+    roots: &StorageRoots,
+    warnings: &mut Vec<String>,
+) -> Result<Option<SessionIndex>, StorageError> {
+    match roots.read_index() {
+        Ok(index) => Ok(Some(index)),
+        Err(e) if e.is_index_unavailable() => {
+            warnings.push(format!(
+                "the session index is unavailable ({e}); the quarantine size cap was not checked"
+            ));
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The budget of a resumed run: what each volume of the journal header may still take, counting what
+/// the other sessions of the index hold there (this session's own entry, if a former close wrote one,
+/// is left out) and what this session's journal says it already holds there (`spent`). A volume that
+/// cannot be found now is not limited (nothing can be quarantined on it). `None` index: no cap.
+fn resume_budget(
+    roots: &StorageRoots,
+    state: &JournalState,
+    index: Option<SessionIndex>,
+    spent: &[VolumeUsage],
+) -> Budget {
+    let Some(mut index) = index else {
+        return Budget(None);
+    };
+    index.remove(&state.header().session);
+    let volumes: Vec<(Volume, u64)> = state
+        .header()
+        .volumes
+        .iter()
+        .filter_map(|record| {
+            volume_of(roots, &record.root)
+                .filter(|volume| volume.serial == record.serial)
+                .map(|volume| (volume, 0))
+        })
+        .collect();
+    let mut budget = Budget::new(Some(&index), &volumes);
+    for usage in spent {
+        budget.spend(usage.serial, usage.bytes);
+    }
+    budget
+}
+
 /// Reads the index and checks the plan's sizes against the cap of each volume. An unavailable index is
 /// not an error: the run goes on without the cap, and `warnings` says so.
 fn preflight_cap(
@@ -477,15 +526,8 @@ fn preflight_cap(
     volumes: &[(Volume, u64)],
     warnings: &mut Vec<String>,
 ) -> Result<Budget, StorageError> {
-    let index = match roots.read_index() {
-        Ok(index) => index,
-        Err(e) if e.is_index_unavailable() => {
-            warnings.push(format!(
-                "the session index is unavailable ({e}); the quarantine size cap was not checked"
-            ));
-            return Ok(Budget(None));
-        }
-        Err(e) => return Err(e),
+    let Some(index) = read_index_for_cap(roots, warnings)? else {
+        return Ok(Budget(None));
     };
     let planned: Vec<VolumeUsage> = volumes
         .iter()
@@ -606,6 +648,38 @@ impl Ledger {
     }
 }
 
+/// The rule of a `Refused` validated record for an item whose open failed at validation.
+const OPEN_FAILED: &str = "gate.open-failed";
+/// The rule of a `Refused` validated record for an item the validate pass found in use.
+const LOCKED_AT_VALIDATION: &str = "gate.locked";
+/// The rule of a `Refused` validated record for an item with no executor in this version.
+const UNSUPPORTED: &str = "exec.unsupported";
+
+/// The facts of the `validated` record of an item that did not pass the validate pass: `Absent` when it
+/// is gone, else [`ItemFacts::Refused`] with the blocker and rule of a refusal, the Win32 error of a
+/// failed or locked open, or (`None`: an item with no executor op, which is not looked at) the blocker
+/// its skip reports.
+fn refused_facts(outcome: Option<&GateOutcome<gate::Validation>>) -> ItemFacts {
+    let refused = |blocker, reason: &str, os_error| ItemFacts::Refused {
+        blocker,
+        reason: reason.to_owned(),
+        os_error,
+    };
+    match outcome {
+        Some(GateOutcome::Vanished) => ItemFacts::Absent,
+        Some(GateOutcome::Refused(refusal)) => {
+            refused(Some(refusal.blocker.clone()), refusal.reason, None)
+        }
+        Some(GateOutcome::Failed(error)) => refused(None, OPEN_FAILED, Some(error.0)),
+        Some(GateOutcome::Locked(locked)) => {
+            refused(None, LOCKED_AT_VALIDATION, Some(locked.error.0))
+        }
+        // A pass is journalled with its own facts; one arriving here binds nothing.
+        Some(GateOutcome::Pass(_)) => refused(None, "exec.internal", None),
+        None => refused(Some(Blocker::CannotBackUp), UNSUPPORTED, None),
+    }
+}
+
 fn internal(detail: impl Into<String>) -> (ItemOutcome, String) {
     let detail = detail.into();
     (
@@ -655,7 +729,10 @@ pub struct Run<'a> {
 }
 
 impl<'a> Run<'a> {
-    /// Steps 2 to 6 of the run: the store, the session, the scan copy and the journal header.
+    /// Steps 2 to 6 of the run: the store, the session, the scan copy, the journal header and the
+    /// run's settings. A failure before the header removes the session directory again
+    /// ([`SessionDir::remove_unstarted`]: by handle, only when it holds nothing or only the scan copy);
+    /// a failure of that cleanup leaves the directory, which holds no journal and so describes no run.
     fn start(request: ExecRequest, env: ExecEnv<'a>) -> Result<Run<'a>, ExecError> {
         let plan = plan_in::bind(&request)?;
         gate::expose_placeholders()?;
@@ -673,26 +750,38 @@ impl<'a> Run<'a> {
                 items,
             });
         }
-        write_scan_copy(&session, plan.scan())?;
-
-        let volume_roots: Vec<&Path> = volumes.iter().map(|(v, _)| v.root.as_path()).collect();
-        let scope = env.roots.store_scope(session.id(), &volume_roots)?;
-        let ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
-        let header = Header {
-            schema: JournalSchema,
-            session: session.id().clone(),
-            created: now(),
-            engine_version: env.engine_version.clone(),
-            app: plan.scan().app.clone(),
-            plan_hash: plan.plan_hash(),
-            selection_hash: plan.selection_hash(),
-            policy_version: plan.scan().policy_version.clone(),
-            mode: plan.scan().mode,
-            items,
-            allow_irreversible: plan.allow_irreversible(),
-            volumes: volume_records(env.roots, session.id(), &volumes),
+        let opened = (|| -> Result<(GateCtx, JournalWriter), ExecError> {
+            write_scan_copy(&session, plan.scan())?;
+            let volume_roots: Vec<&Path> = volumes.iter().map(|(v, _)| v.root.as_path()).collect();
+            let scope = env.roots.store_scope(session.id(), &volume_roots)?;
+            let ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
+            let header = Header {
+                schema: JournalSchema,
+                session: session.id().clone(),
+                created: now(),
+                engine_version: env.engine_version.clone(),
+                app: plan.scan().app.clone(),
+                plan_hash: plan.plan_hash(),
+                selection_hash: plan.selection_hash(),
+                policy_version: plan.scan().policy_version.clone(),
+                mode: plan.scan().mode,
+                items,
+                allow_irreversible: plan.allow_irreversible(),
+                volumes: volume_records(env.roots, session.id(), &volumes),
+            };
+            let journal = JournalWriter::create(&session, header)?;
+            Ok((ctx, journal))
+        })();
+        let (ctx, mut journal) = match opened {
+            Ok(opened) => opened,
+            Err(e) => {
+                // A journal created before the failure (an unfinished header) makes this refuse, and
+                // the directory then stays as it is.
+                let _ = session.remove_unstarted();
+                return Err(e);
+            }
         };
-        let journal = JournalWriter::create(&session, header)?;
+        journal.settings(request.settings.to_journal())?;
         Ok(Run {
             data_volume: data_volume(env.roots),
             env,
@@ -708,29 +797,24 @@ impl<'a> Run<'a> {
 
     /// Takes up the unfinished run of `session`, whose copy of the scan document is `scan`
     /// ([`read_scan_copy`]): the journal is opened to append, the plan is bound to it again
-    /// ([`plan_in::rebind`]), and every `validated` record read back is handed to the gate context,
-    /// exactly as a fresh run hands over the ones it wrote. Nothing is acted on here.
+    /// ([`plan_in::rebind`]), and every `validated` record of the journal ([`OpState::validated`]) is
+    /// handed to the gate context, exactly as a fresh run hands over the ones it wrote. Nothing is
+    /// acted on here.
     ///
-    /// Refused when the journal already ended, or when the run stopped before every item was
-    /// validated (nothing was acted on then; such a session is aborted, not resumed).
+    /// Refused when the journal already ended, when the run stopped before every item was validated
+    /// (nothing was acted on then; such a session is aborted, not resumed), and when the journal holds
+    /// no `settings` record (written before the record existed): the run's settings are read from the
+    /// journal ([`ExecSettings::from_journal`]), never taken from the caller.
     ///
-    /// `settings` supplies the registry key limit; the exemptions of each item are the journalled ones.
-    /// The size cap is not enforced for the remaining items of a resumed run.
+    /// The size cap is enforced for the remaining items as for a fresh run: each volume of the header
+    /// may take what its cap leaves after the other sessions of the index and what this session's
+    /// journal already holds there. An unavailable index lifts the cap, with a warning.
     pub fn resume(
         env: ExecEnv<'a>,
         session: SessionDir,
         scan: &ScanDoc,
-        settings: ExecSettings,
     ) -> Result<Run<'a>, ExecError> {
         gate::expose_placeholders()?;
-        let validated: Vec<Validated> = journal::read(&session)?
-            .records
-            .into_iter()
-            .filter_map(|record| match record {
-                Record::Validated(validated) => Some(validated),
-                _ => None,
-            })
-            .collect();
         let journal = JournalWriter::open_append(&session)?;
         let state = journal.state();
         if state.is_finished() {
@@ -741,6 +825,14 @@ impl<'a> Run<'a> {
                 "the run stopped before every item was validated".into(),
             ));
         }
+        let Some(journalled) = state.settings() else {
+            return Err(ExecError::NotResumable(
+                "its journal records no run settings (it was written before they were journalled)"
+                    .into(),
+            ));
+        };
+        let settings = ExecSettings::from_journal(journalled);
+        let validated: Vec<Validated> = state.ops().map(OpState::validated).collect();
         let plan = plan_in::rebind(scan, state)?;
         let volume_roots: Vec<&str> = state
             .header()
@@ -751,6 +843,10 @@ impl<'a> Run<'a> {
         let scope = env.roots.store_scope(session.id(), &volume_roots)?;
         let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
         let mut notes = RunNotes::default();
+        let data_volume = data_volume(env.roots);
+        let index = read_index_for_cap(env.roots, &mut notes.warnings)?;
+        let spent = report::usage(state, data_volume.as_ref());
+        let budget = resume_budget(env.roots, state, index, &spent);
         for record in &validated {
             let exec_op = plan.item(record.op).and_then(|item| item.exec_op.as_ref());
             if let Some(exec_op) = exec_op {
@@ -764,16 +860,21 @@ impl<'a> Run<'a> {
             }
         }
         Ok(Run {
-            data_volume: data_volume(env.roots),
+            data_volume,
             env,
             plan,
             settings,
             session,
             ctx,
             ledger: Ledger { journal, notes },
-            budget: Budget(None),
+            budget,
             prepared: None,
         })
+    }
+
+    /// The settings the run works with: the request's for a fresh run, the journal's for a resumed one.
+    pub fn settings(&self) -> &ExecSettings {
+        &self.settings
     }
 
     /// The session directory.
@@ -827,8 +928,9 @@ impl<'a> Run<'a> {
     }
 
     /// Step 7: validates every selected item read-only, writes one `validated` record per item and
-    /// hands each written record to the gate context. An item that did not pass is recorded with
-    /// [`ItemFacts::Absent`] and nothing is recorded for it in the gate, so nothing can act on it.
+    /// hands each written record to the gate context. An item that is gone is recorded with
+    /// [`ItemFacts::Absent`]; one that did not pass otherwise with [`ItemFacts::Refused`] and why
+    /// ([`refused_facts`]). Neither binds anything in the gate, so nothing can act on such an item.
     fn validate(&mut self) -> Result<Vec<Validated>, Abort> {
         let exemptions: BTreeMap<OpId, Exemptions> = self
             .plan
@@ -863,11 +965,11 @@ impl<'a> Run<'a> {
                 Some(GateOutcome::Pass(validation)) => {
                     validation.to_journal(item.op, candidate.id.clone(), target)
                 }
-                _ => Validated {
+                outcome => Validated {
                     op: item.op,
                     item: candidate.id.clone(),
                     target,
-                    facts: ItemFacts::Absent,
+                    facts: refused_facts(outcome),
                     exemptions: gate::exemptions_to_journal(
                         &exemptions.get(&item.op).copied().unwrap_or_default(),
                     ),
@@ -965,12 +1067,14 @@ impl<'a> Run<'a> {
 
     /// An op the gate holds no `validated` record for. Nothing may act on it; a fresh read-only look
     /// only says how to report it: gone (`Vanished`), refused or unreadable. An item that passes now
-    /// did not when the run started, so it is skipped as changed; the next scan takes it up.
+    /// did not when the run started, so it is skipped as changed; the next scan takes it up. The look
+    /// is taken for an item journalled as gone or refused ([`ItemFacts::is_actionable`] false); an item
+    /// with actionable facts that the gate did not accept is an internal failure.
     fn unvalidated_item(&mut self, op: OpId) -> Result<ItemOutcome, Abort> {
         let journalled_absent = self
             .state()
             .op(op)
-            .is_some_and(|state| state.facts == ItemFacts::Absent);
+            .is_some_and(|state| !state.facts.is_actionable());
         let exec_op = self.plan.item(op).and_then(|item| item.exec_op.clone());
         let (outcome, detail) = match exec_op {
             Some(_) if !journalled_absent => internal(
@@ -1099,11 +1203,10 @@ impl<'a> Run<'a> {
             let (outcome, detail) = internal("a locked item without journalled file facts");
             return self.ledger.end(op, token, outcome, detail);
         };
+        let store_ladder = StoreLadder::new(&self.ctx, &self.session);
         let ladder = Ladder {
-            env: self.env.ladder,
-            scope: self.ctx.scope(),
-            lockers: self.env.lockers,
             consent: self.env.consent,
+            ..Ladder::in_store(&store_ladder, self.env.lockers)
         };
         let result = match ladder.prepare(&item, journalled.as_ref()) {
             LockPrepared::Decided(result) => {
@@ -1170,16 +1273,9 @@ impl<'a> Run<'a> {
     }
 
     /// A package removal, which has no undo: acknowledgement, checks and definition file, intent,
-    /// remove, done.
+    /// remove, done. Op and plan item are those of the op's journalled `validated` record
+    /// ([`prepare_remove_package_recorded`]).
     fn package_item(&mut self, op: OpId) -> Result<ItemOutcome, Abort> {
-        let Some((exec_op, item)) = self
-            .ctx
-            .journalled(op)
-            .map(|(exec_op, record)| (exec_op.clone(), record.item.clone()))
-        else {
-            let (outcome, detail) = internal("the gate holds no record of its validation");
-            return self.ledger.decided(op, outcome, detail);
-        };
         let ack = if self.plan.allow_irreversible() {
             IrreversibleAck::Acknowledged
         } else {
@@ -1187,7 +1283,7 @@ impl<'a> Run<'a> {
         };
         let backend = self.env.packages;
         let prepared =
-            match prepare_remove_package(backend, &self.session, op, &item, &exec_op, ack) {
+            match prepare_remove_package_recorded(backend, &self.ctx, &self.session, op, ack) {
                 Ok(prepared) => prepared,
                 Err(e @ DefinitionError::Encode(_)) => {
                     return self.ledger.decided(op, e.outcome(), e.to_string());
@@ -1232,6 +1328,7 @@ impl<'a> Run<'a> {
             &plan,
             &session,
             &state,
+            true,
             ledger.notes,
             data_volume.as_ref(),
             prepared,
@@ -1261,11 +1358,14 @@ impl<'a> Run<'a> {
                 abort.reason, abort.detail
             ));
         }
+        // Without the `aborted` record the state may hold lines that were written and never flushed,
+        // so the index entry does not record how far the journal reaches.
         let mut output = close(
             &env,
             &plan,
             &session,
             &state,
+            recorded,
             notes,
             data_volume.as_ref(),
             prepared,
@@ -1321,11 +1421,16 @@ fn write_report(session: &SessionDir, report: &ExecReport) -> Result<(), String>
 }
 
 /// Step 11: the restore point's outcome, the index entry and the report, all read from `state`.
+/// `durable` says that every line of `state` is flushed (the run ended with a written `commit` or
+/// `aborted`); only then does the index entry record the journal's mark (review M7), which a later
+/// read checks.
+#[allow(clippy::too_many_arguments)]
 fn close(
     env: &ExecEnv<'_>,
     plan: &BoundPlan,
     session: &SessionDir,
     state: &JournalState,
+    durable: bool,
     mut notes: RunNotes,
     data_volume: Option<&DataVolume>,
     prepared: Option<Prepared>,
@@ -1341,7 +1446,10 @@ fn close(
         }
         notes.warnings.extend(record.warnings);
     }
-    let summary = report::summary(state, plan.scan(), data_volume);
+    let mut summary = report::summary(state, plan.scan(), data_volume);
+    if !durable {
+        summary.journal = None;
+    }
     let index_updated = match env.roots.update_index(|index| index.upsert(summary)) {
         Ok(_) => true,
         Err(e) => {

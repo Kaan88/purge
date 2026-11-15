@@ -46,6 +46,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purge_guard::live;
+use purge_model::exec::journal::{RestorePointPolicy, RunSettings};
 use purge_model::exec::op::{ExecOp, Mismatch, OpId, Sha256Hex, resolve};
 use purge_model::{Action, Band, Blocker, Candidate, CandidateId};
 use purge_plan::collapse::nests_in;
@@ -87,6 +88,38 @@ impl Default for ExecSettings {
             user_sid: None,
             long_names_resolved: true,
             key_limit: regbackup::DEFAULT_KEY_LIMIT,
+        }
+    }
+}
+
+impl ExecSettings {
+    /// The journal form of the settings, for the run's `settings` record (written right after the
+    /// header). [`ExecSettings::from_journal`] is the exact inverse.
+    pub fn to_journal(&self) -> RunSettings {
+        RunSettings {
+            user_sid: self.user_sid.clone(),
+            long_names_resolved: self.long_names_resolved,
+            key_limit: u64::try_from(self.key_limit).unwrap_or(u64::MAX),
+            restore_point: match self.restore_point {
+                RestorePointSetting::Off => RestorePointPolicy::Off,
+                RestorePointSetting::HighRiskOnly => RestorePointPolicy::HighRiskOnly,
+                RestorePointSetting::Always => RestorePointPolicy::Always,
+            },
+        }
+    }
+
+    /// The settings a journal's `settings` record holds: what a resumed run works with, instead of
+    /// settings its caller supplies.
+    pub fn from_journal(settings: &RunSettings) -> ExecSettings {
+        ExecSettings {
+            restore_point: match settings.restore_point {
+                RestorePointPolicy::Off => RestorePointSetting::Off,
+                RestorePointPolicy::HighRiskOnly => RestorePointSetting::HighRiskOnly,
+                RestorePointPolicy::Always => RestorePointSetting::Always,
+            },
+            user_sid: settings.user_sid.clone(),
+            long_names_resolved: settings.long_names_resolved,
+            key_limit: usize::try_from(settings.key_limit).unwrap_or(usize::MAX),
         }
     }
 }

@@ -1150,6 +1150,7 @@ fn summary(built: &Built, bytes: u64) -> SessionSummary {
         expires: Expiry::from_start(at_day(0)),
         purged: Vec::new(),
         pending_reboot: false,
+        journal: None,
     }
 }
 

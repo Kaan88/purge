@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use purge_model::exec::journal::{
     AbortReason, Aborted, Commit, Done, Expire, GroupEnd, Header, Intent, MAX_GROUP_INTENTS,
-    Reconcile, Record, UndoConflict, UndoConflictEntry, UndoDone, UndoIntent, UndoOutcome,
+    Reconcile, ReconcileResult, Record, RetryIntent, RunSettings, UndoConflict, UndoConflictEntry,
+    UndoDone, UndoIntent, UndoOutcome,
 };
 use purge_model::exec::op::{ItemOutcome, OpId, Sha256Hex};
 use purge_model::{CandidateId, FileTime};
@@ -75,6 +76,34 @@ impl UndoToken {
     }
 }
 
+/// Proof that a held op's `retry_intent` record is durable: handed out by
+/// [`JournalWriter::retry_intent`] after the flush and consumed by [`JournalWriter::retried`]. The
+/// retry's move takes `&RetryToken`, so it cannot run before its write-ahead record is on disk.
+///
+/// ```compile_fail
+/// use purge_exec::journal::RetryToken;
+/// use purge_model::exec::op::OpId;
+/// // Fields are private: a token cannot be made up.
+/// let token = RetryToken { writer: 1, op: OpId(1) };
+/// ```
+///
+/// Dropping a token without [`JournalWriter::retried`] leaves the retry in flight
+/// ([`OpState::retry_in_flight`](super::OpState::retry_in_flight)), which recovery probes; the op
+/// takes no undo, expire or second retry meanwhile.
+#[derive(Debug)]
+#[must_use = "a retry token must end in JournalWriter::retried"]
+pub struct RetryToken {
+    writer: u64,
+    op: OpId,
+}
+
+impl RetryToken {
+    /// The held op whose retry intent is durable.
+    pub fn op(&self) -> OpId {
+        self.op
+    }
+}
+
 /// The only writer of a session's journal. It checks every record against a [`JournalState`] first, so
 /// it never writes what the reader would refuse, and applies it to that state only once it is written,
 /// so the state never runs ahead of the file.
@@ -98,6 +127,9 @@ pub struct JournalWriter {
     /// Ops whose undo was in progress when the journal was opened, for
     /// [`JournalWriter::resume_undo`].
     resumable_undo: BTreeSet<OpId>,
+    /// Ops whose retry was in flight when the journal was opened, for
+    /// [`JournalWriter::resume_retry`].
+    resumable_retry: BTreeSet<OpId>,
     /// Test hook: the next line write fails as a disk error would.
     #[cfg(test)]
     fail_next_write: bool,
@@ -159,9 +191,11 @@ impl JournalWriter {
                 state.undo_in_progress().map(|s| s.op).collect(),
             )
         };
+        let resumable_retry = state.retries_in_flight().map(|s| s.op).collect();
         let mut writer = JournalWriter::with(file, state, head.0, valid_len);
         writer.resumable = resumable;
         writer.resumable_undo = resumable_undo;
+        writer.resumable_retry = resumable_retry;
         writer.discarded_tail = torn_tail;
         if torn_tail != 0 {
             writer.file.file().set_len(valid_len).map_err(|source| {
@@ -198,6 +232,7 @@ impl JournalWriter {
             syncs: 0,
             resumable: BTreeSet::new(),
             resumable_undo: BTreeSet::new(),
+            resumable_retry: BTreeSet::new(),
             #[cfg(test)]
             fail_next_write: false,
         }
@@ -241,6 +276,13 @@ impl JournalWriter {
     /// Flushes the journal to disk (`FlushFileBuffers`).
     pub fn sync(&mut self) -> Result<(), JournalError> {
         self.flush()
+    }
+
+    /// Writes and flushes the run's `settings` record. Only right after the header
+    /// ([`Violation::SettingsMisplaced`]): `Run::start` writes it before anything else, and
+    /// `Run::resume` reads the settings back from it instead of taking them from its caller.
+    pub fn settings(&mut self, settings: RunSettings) -> Result<(), JournalError> {
+        self.append(&Record::Settings(settings), true)
     }
 
     /// Writes the `validated` record of one selected item. Flushed with the next intent; call
@@ -488,9 +530,69 @@ impl JournalWriter {
         })
     }
 
-    /// Writes and flushes a `reconcile` record for a pending op.
+    /// Writes and flushes a `reconcile` record for a pending op. A
+    /// [`ReconcileResult::Retried`] ends a retry and needs its token: use [`JournalWriter::retried`]
+    /// (refused here with [`Violation::RetryNotInFlight`]).
     pub fn reconcile(&mut self, reconcile: Reconcile) -> Result<(), JournalError> {
+        if matches!(reconcile.result, ReconcileResult::Retried { .. }) {
+            return Err(JournalError::Refused(Violation::RetryNotInFlight(
+                reconcile.op,
+            )));
+        }
         self.append(&Record::Reconcile(reconcile), true)
+    }
+
+    /// Writes and flushes the `retry_intent` of a held op (one whose outcome, as changed by its
+    /// reconcile records, is `HeldRetry`, after the run ended, with no retry in flight) and returns the
+    /// token the retry's move and [`JournalWriter::retried`] need.
+    pub fn retry_intent(&mut self, op: OpId, at: FileTime) -> Result<RetryToken, JournalError> {
+        self.append(&Record::RetryIntent(RetryIntent { at, op }), true)?;
+        Ok(RetryToken {
+            writer: self.id,
+            op,
+        })
+    }
+
+    /// Writes and flushes the `reconcile` record that ends a retry, consuming its token: its
+    /// [`ReconcileResult::Retried`] outcome replaces the op's `HeldRetry` (`HeldRetry` again when the
+    /// item is still in use; never `PendingReboot`, which a retry does not register).
+    pub fn retried(
+        &mut self,
+        token: RetryToken,
+        at: FileTime,
+        outcome: ItemOutcome,
+    ) -> Result<(), JournalError> {
+        self.check_poison()?;
+        self.own(token.writer, token.op)?;
+        match self.state.op(token.op) {
+            Some(state) if state.retry_in_flight => {}
+            _ => {
+                return Err(JournalError::Refused(Violation::RetryNotInFlight(token.op)));
+            }
+        }
+        self.append(
+            &Record::Reconcile(Reconcile {
+                at,
+                op: token.op,
+                result: ReconcileResult::Retried { outcome },
+            }),
+            true,
+        )
+    }
+
+    /// The token of an op whose retry was in flight (a `retry_intent` with no `reconcile` after it)
+    /// when [`JournalWriter::open_append`] read the journal, for recovery to probe the item and end the
+    /// retry with [`JournalWriter::retried`]. Handed out once per op, like
+    /// [`JournalWriter::resume_intent`]: `None` on a second call, for any other op, and on a writer made
+    /// by [`JournalWriter::create`].
+    pub fn resume_retry(&mut self, op: OpId) -> Option<RetryToken> {
+        if !self.resumable_retry.remove(&op) {
+            return None;
+        }
+        self.state.op(op)?.retry_in_flight.then_some(RetryToken {
+            writer: self.id,
+            op,
+        })
     }
 
     /// Writes and flushes an `expire` record (after the run ended).
@@ -579,6 +681,7 @@ impl JournalWriter {
         }
         self.chain = next;
         self.len = grown;
+        self.state.advance(next);
         Ok(())
     }
 

@@ -651,6 +651,148 @@ impl QuarantineDir {
     pub fn volume_serial(&self) -> u64 {
         self.dir.volume_serial()
     }
+
+    /// Opens what sits at `leaf` in the op directory, relative to the directory's checked handle (one
+    /// name component, a reparse point at the name opened itself, never followed), for reconcile, undo
+    /// and expiry to read its identity and, when it could be opened for it, rename it by that very
+    /// handle ([`QuarantinedItem::mover`]). `Ok(None)` when nothing has the name.
+    ///
+    /// The handle asks for `DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL`, then without
+    /// `READ_CONTROL` when that is denied; when the object cannot be opened with `DELETE` (in use
+    /// without delete sharing, or denied) a read-only handle (`FILE_READ_ATTRIBUTES`) is used for the
+    /// facts and there is no mover. The handle's final path must be the op directory's plus `leaf`
+    /// ([`IntegrityFailure::FinalPathMismatch`], nothing renamed). The object is not checked as a
+    /// store object: it is the user's item (or whatever else is there), not Purge's file.
+    pub fn open_item(&self, leaf: &str) -> Result<Option<QuarantinedItem>, StorageError> {
+        let path = self.item_path(leaf);
+        // An empty name would reopen the op directory itself.
+        if !at::plain_leaf(leaf) {
+            return Err(StorageError::InvalidPath(path.display().to_string()));
+        }
+        let open = |access: u32| {
+            at::open_at(
+                &self.dir.handle,
+                leaf,
+                at::Open {
+                    access,
+                    share: at::SHARE_ALL,
+                    create: None,
+                    kind: at::Kind::File,
+                },
+            )
+        };
+        let mover_access = at::DELETE | at::FILE_READ_ATTRIBUTES;
+        let opened = match open(mover_access | at::READ_CONTROL) {
+            Ok(handle) => Ok((handle, Some(true))),
+            Err(FsError::AccessDenied) => match open(mover_access) {
+                Ok(handle) => Ok((handle, Some(false))),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
+        let (handle, read_control) = match opened {
+            Ok(found) => found,
+            Err(FsError::NotFound) => return Ok(None),
+            Err(FsError::AccessDenied | FsError::SharingViolation) => {
+                match open(at::FILE_READ_ATTRIBUTES) {
+                    Ok(handle) => (handle, None),
+                    Err(FsError::NotFound) => return Ok(None),
+                    Err(e) => return Err(io("open", &path, e)),
+                }
+            }
+            Err(e) => return Err(io("open", &path, e)),
+        };
+        let facts = at::facts(&handle).map_err(|e| io("read the attributes of", &path, e))?;
+        let final_path =
+            at::final_path(&handle).map_err(|e| io("read the final path of", &path, e))?;
+        let expected = format!(r"{}\{leaf}", self.dir.final_path.trim_end_matches('\\'));
+        if !same_path(Path::new(&expected), Path::new(&final_path)) {
+            return Err(StorageError::Integrity {
+                path,
+                failure: IntegrityFailure::FinalPathMismatch {
+                    expected,
+                    actual: final_path,
+                },
+                renamed_to: None,
+                rename_error: None,
+            });
+        }
+        let mover =
+            read_control.map(|read_control| MoveHandle::from_owned_handle(handle, read_control));
+        Ok(Some(QuarantinedItem {
+            leaf: leaf.to_owned(),
+            file_id: facts.file_id,
+            is_dir: facts.is_dir,
+            reparse_tag: facts.reparse_tag,
+            n_links: facts.n_links,
+            size: facts.size,
+            final_path,
+            mover,
+        }))
+    }
+}
+
+/// What [`QuarantineDir::open_item`] found at a name inside a quarantine op directory: the facts read
+/// from the handle it was opened with, and that handle when it can rename.
+#[derive(Debug)]
+pub struct QuarantinedItem {
+    leaf: String,
+    file_id: FileId,
+    is_dir: bool,
+    reparse_tag: u32,
+    n_links: u32,
+    size: u64,
+    final_path: String,
+    mover: Option<MoveHandle>,
+}
+
+impl QuarantinedItem {
+    /// The name inside the op directory.
+    pub fn leaf(&self) -> &str {
+        &self.leaf
+    }
+
+    /// Volume serial and file id, read from the handle.
+    pub fn file_id(&self) -> FileId {
+        self.file_id
+    }
+
+    /// Whether it is a directory.
+    pub fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+
+    /// Its reparse tag; 0 unless it is a reparse point (which was opened itself).
+    pub fn reparse_tag(&self) -> u32 {
+        self.reparse_tag
+    }
+
+    /// Its hard link count.
+    pub fn n_links(&self) -> u32 {
+        self.n_links
+    }
+
+    /// Its size in bytes (end of file; 0 for a directory).
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// The handle's final path, in `\\?\C:\...` form: the op directory's plus [`QuarantinedItem::leaf`].
+    pub fn final_path(&self) -> &str {
+        &self.final_path
+    }
+
+    /// The handle the facts were read from, when it could be opened with `DELETE`: renaming it
+    /// ([`MoveHandle::rename_into`]) moves this very object. `None` when only a read-only handle could
+    /// be had (in use, or denied).
+    pub fn mover(&self) -> Option<&MoveHandle> {
+        self.mover.as_ref()
+    }
+
+    /// [`QuarantinedItem::mover`], by value.
+    pub fn into_mover(self) -> Option<MoveHandle> {
+        self.mover
+    }
 }
 
 impl AsHandle for QuarantineDir {
@@ -1837,6 +1979,141 @@ impl SessionDir {
             });
         }
         Ok((QuarantineDir { dir, root }, leaf))
+    }
+
+    /// Removes the directory of a session that never got a journal (the run failed after
+    /// [`StorageRoots::create_session`] and before the journal's header was durable), by handle: the
+    /// chain is re-checked, the directory is opened again relative to the checked `sessions` handle
+    /// with `DELETE | FILE_LIST_DIRECTORY` and must be the directory this value checked (same file
+    /// id), and it is listed through that handle. It may hold nothing, or only the scan copy
+    /// ([`SCAN_FILE`], which must pass the store file check and is deleted through the handle it
+    /// was checked on). Anything else is refused with [`FsError::DirNotEmpty`] and nothing is
+    /// deleted; so is a directory that gains an entry before it goes. The `sessions` directory is
+    /// flushed afterwards. The session never had an index entry, so none is touched.
+    pub fn remove_unstarted(self) -> Result<(), StorageError> {
+        let layout = self.roots.layout()?;
+        let checked = self.recheck()?;
+        let path = checked.path.clone();
+        let handle = at::open_at(
+            &layout.sessions.handle,
+            self.id.as_str(),
+            at::Open {
+                access: at::DELETE | at::FILE_LIST_DIRECTORY | at::FILE_READ_ATTRIBUTES,
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::Dir,
+            },
+        )
+        .map_err(|e| io("open", &path, e))?;
+        let facts = at::facts(&handle).map_err(|e| io("read the attributes of", &path, e))?;
+        if facts.file_id != self.dir.id || !facts.is_dir || facts.reparse_tag != 0 {
+            return Err(StorageError::Integrity {
+                path,
+                failure: IntegrityFailure::IdentityChanged,
+                renamed_to: None,
+                rename_error: None,
+            });
+        }
+        let names = at::list_names(&handle).map_err(|e| io("list", &path, e))?;
+        match names.as_slice() {
+            [] => {}
+            [only] if only.eq_ignore_ascii_case(SCAN_FILE) => {
+                let scan = self.roots.open_file_at(
+                    &checked,
+                    SCAN_FILE,
+                    ObjectKind::StoreFile,
+                    at::Open {
+                        access: at::DELETE | at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
+                        share: at::SHARE_READ,
+                        create: None,
+                        kind: at::Kind::File,
+                    },
+                )?;
+                if let Some((scan, _)) = scan {
+                    at::dispose(&scan).map_err(|e| io("delete", &path.join(SCAN_FILE), e))?;
+                }
+            }
+            _ => return Err(io("remove", &path, FsError::DirNotEmpty)),
+        }
+        // The scan copy's handle is closed: its name is gone, so the directory can be marked.
+        at::dispose(&handle).map_err(|e| io("remove", &path, e))?;
+        drop(handle);
+        drop(checked);
+        let name = self.id.as_str().to_owned();
+        // Every handle on the directory is closed now; the last close removes it.
+        drop(self);
+        match at::open_at(
+            &layout.sessions.handle,
+            &name,
+            at::Open {
+                access: at::FILE_READ_ATTRIBUTES,
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::Dir,
+            },
+        ) {
+            Err(FsError::NotFound) => {}
+            Ok(_) => return Err(io("remove", &path, FsError::DirNotEmpty)),
+            Err(e) => return Err(io("remove", &path, e)),
+        }
+        at::flush_dir_at(&layout.sessions.handle).map_err(|e| io("flush", &layout.sessions.path, e))
+    }
+
+    /// Deletes the session file `rel`, which must be in `reg` or `def` ([`backup_rel`]: a registry
+    /// backup or a typed definition), by handle: its directory is re-checked through the chain, the
+    /// file is opened relative to that directory's checked handle with `DELETE` (others may only read
+    /// it meanwhile, so a reader that does not share delete makes this fail) and must pass the store
+    /// file check on that handle (a plain file, one link, admin-only; a failing object is renamed
+    /// aside and nothing is deleted), and it is deleted through that handle. Returns its size, or
+    /// `None` when it, or its directory, does not exist. Any other name (the journal, the scan copy,
+    /// the report, a directory) is refused with [`StorageError::InvalidPath`]. Expiry's deletion of a
+    /// session's backups; it writes no journal record (the caller does).
+    pub fn delete_backup_file(&self, rel: &str) -> Result<Option<u64>, StorageError> {
+        let (sub, leaf) = split_rel(rel)?;
+        if sub.is_none() {
+            return Err(StorageError::InvalidPath(rel.to_owned()));
+        }
+        let dir = match self.parent_of(sub, false) {
+            Ok(dir) => dir,
+            Err(StorageError::Io {
+                source: FsError::NotFound,
+                ..
+            }) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let path = dir.path.join(leaf);
+        let Some((file, facts)) = self.roots.open_file_at(
+            &dir,
+            leaf,
+            ObjectKind::StoreFile,
+            at::Open {
+                access: at::DELETE | at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
+                share: at::SHARE_READ,
+                create: None,
+                kind: at::Kind::File,
+            },
+        )?
+        else {
+            return Ok(None);
+        };
+        at::dispose(&file).map_err(|e| io("delete", &path, e))?;
+        drop(file);
+        match at::open_at(
+            &dir.handle,
+            leaf,
+            at::Open {
+                access: at::FILE_READ_ATTRIBUTES,
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::File,
+            },
+        ) {
+            Err(FsError::NotFound) => {}
+            Ok(_) => return Err(io("delete", &path, FsError::Other(ERROR_FILE_INVALID))),
+            Err(e) => return Err(io("delete", &path, e)),
+        }
+        at::flush_dir_at(&dir.handle).map_err(|e| io("flush", &dir.path, e))?;
+        Ok(Some(facts.size))
     }
 }
 

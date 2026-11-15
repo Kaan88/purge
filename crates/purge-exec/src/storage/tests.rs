@@ -728,6 +728,7 @@ fn summary(id: SessionId, serial: u64, bytes: u64) -> purge_model::exec::session
         }],
         purged: Vec::new(),
         pending_reboot: false,
+        journal: None,
     }
 }
 
@@ -1279,4 +1280,233 @@ fn a_volume_root_others_could_rearrange_gets_no_quarantine() {
         }
     );
     assert_eq!(names(&s.path("volb")), Vec::<String>::new());
+}
+
+#[test]
+fn a_quarantined_item_is_opened_through_the_op_dir_handle() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let (s, roots) = fixture("openitem");
+    let session = roots.create_session().unwrap();
+    let serial = real_serial(&s.0);
+    std::fs::create_dir(s.path("app")).unwrap();
+    let source = s.path(r"app\held. ");
+    std::fs::write(secure::extended_path(&source).unwrap(), b"payload").unwrap();
+    let op = session.create_op_dir(&source, serial, OpId(7)).unwrap();
+    MoveHandle::open(&source)
+        .unwrap()
+        .rename_into(&op, "held. ")
+        .unwrap();
+    let moved = op.item_path("held. ");
+    let id = purge_win::fs::file_id(&secure::extended_path(&moved).unwrap()).unwrap();
+
+    // Present: the facts come from the handle, which can rename.
+    let item = op.open_item("held. ").unwrap().expect("present");
+    assert_eq!(item.leaf(), "held. ");
+    assert_eq!(item.file_id(), id);
+    assert!(!item.is_dir());
+    assert_eq!(item.reparse_tag(), 0);
+    assert_eq!(item.n_links(), 1);
+    assert_eq!(item.size(), 7);
+    assert!(same_path(Path::new(item.final_path()), &moved));
+    assert!(item.mover().is_some());
+    drop(item);
+
+    // Missing, and names that are not one plain component.
+    assert!(op.open_item("gone.txt").unwrap().is_none());
+    for bad in ["", "..", r"a\b", "a/b", "x:stream"] {
+        assert!(
+            matches!(op.open_item(bad), Err(StorageError::InvalidPath(_))),
+            "{bad:?}"
+        );
+    }
+
+    // In use without delete sharing: the facts, but no mover.
+    let user = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1) // FILE_SHARE_READ
+        .open(secure::extended_path(&moved).unwrap())
+        .unwrap();
+    let item = op.open_item("held. ").unwrap().expect("present");
+    assert_eq!(item.file_id(), id);
+    assert!(item.mover().is_none());
+    assert!(item.into_mover().is_none());
+    drop(user);
+
+    // The mover renames the very object it was opened on.
+    let mover = op
+        .open_item("held. ")
+        .unwrap()
+        .unwrap()
+        .into_mover()
+        .unwrap();
+    let back = session.create_op_dir(&source, serial, OpId(8)).unwrap();
+    mover.rename_into(&back, "held. ").unwrap();
+    drop(mover);
+    assert!(op.open_item("held. ").unwrap().is_none());
+    let renamed = back.open_item("held. ").unwrap().unwrap();
+    assert_eq!(renamed.file_id(), id);
+
+    // A directory and a junction are opened themselves, never followed.
+    std::fs::create_dir(op.item_path("sub")).unwrap();
+    let dir = op.open_item("sub").unwrap().unwrap();
+    assert!(dir.is_dir());
+    let canary = Canary::new(s.path("elsewhere"));
+    junction(&op.item_path("link"), &canary.0);
+    let link = op.open_item("link").unwrap().unwrap();
+    assert_ne!(link.reparse_tag(), 0);
+    assert!(same_path(
+        Path::new(link.final_path()),
+        &op.item_path("link")
+    ));
+    drop(link);
+    canary.intact();
+}
+
+#[test]
+fn an_unstarted_session_dir_is_removed_by_handle() {
+    let (_s, roots) = fixture("unstarted");
+    // Empty.
+    let session = roots.create_session().unwrap();
+    let path = session.path().to_path_buf();
+    let id = session.id().clone();
+    session.remove_unstarted().unwrap();
+    assert!(!path.exists());
+    assert!(roots.list_sessions().unwrap().sessions.is_empty());
+    assert!(roots.open_session(&id).is_err());
+
+    // Only the scan copy.
+    let session = roots.create_session().unwrap();
+    let path = session.path().to_path_buf();
+    let mut scan = session.create_file(SCAN_FILE).unwrap();
+    scan.write_all(b"{}").unwrap();
+    drop(scan);
+    session.remove_unstarted().unwrap();
+    assert!(!path.exists());
+
+    // A journal (the run started): refused, nothing deleted.
+    let session = roots.create_session().unwrap();
+    let path = session.path().to_path_buf();
+    session.create_file(SCAN_FILE).unwrap();
+    session.create_file(JOURNAL_FILE).unwrap();
+    let err = session.remove_unstarted().unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StorageError::Io {
+                source: FsError::DirNotEmpty,
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(names(&path), [JOURNAL_FILE, SCAN_FILE]);
+
+    // Any other entry, even without a journal: refused.
+    let session = roots.create_session().unwrap();
+    let path = session.path().to_path_buf();
+    std::fs::write(path.join("stray.txt"), b"x").unwrap();
+    assert!(matches!(
+        session.remove_unstarted(),
+        Err(StorageError::Io {
+            source: FsError::DirNotEmpty,
+            ..
+        })
+    ));
+    assert_eq!(names(&path), ["stray.txt"]);
+
+    // A scan copy that fails the store file check is renamed aside, not deleted, and the directory
+    // stays.
+    let session = roots.create_session().unwrap();
+    let path = session.path().to_path_buf();
+    session.create_file(SCAN_FILE).unwrap();
+    std::fs::hard_link(path.join(SCAN_FILE), _s.path("outside.json")).unwrap();
+    assert!(matches!(
+        session.remove_unstarted(),
+        Err(StorageError::Integrity {
+            failure: IntegrityFailure::HardLinked { .. },
+            ..
+        })
+    ));
+    assert!(path.exists());
+    assert!(_s.path("outside.json").exists());
+}
+
+#[test]
+fn a_backup_file_is_deleted_by_handle() {
+    let (s, roots) = fixture("delbackup");
+    let session = roots.create_session().unwrap();
+    // The `def` directory does not exist yet.
+    let def = backup_rel(BackupKind::Definition, OpId(2));
+    assert_eq!(session.delete_backup_file(&def).unwrap(), None);
+
+    let rel = backup_rel(BackupKind::Registry, OpId(1));
+    let mut file = session.create_file(&rel).unwrap();
+    file.write_all(b"0123456789").unwrap();
+    drop(file);
+    let path = session.path().join(&rel);
+    assert_eq!(session.delete_backup_file(&rel).unwrap(), Some(10));
+    assert!(!path.exists());
+    assert_eq!(session.delete_backup_file(&rel).unwrap(), None);
+
+    let mut file = session.create_file(&def).unwrap();
+    file.write_all(b"{}").unwrap();
+    drop(file);
+    assert_eq!(session.delete_backup_file(&def).unwrap(), Some(2));
+
+    // Only files in `reg` and `def`.
+    session.create_file(JOURNAL_FILE).unwrap();
+    for bad in [
+        JOURNAL_FILE,
+        SCAN_FILE,
+        REPORT_FILE,
+        "",
+        "reg",
+        r"reg\..\journal.jsonl",
+        r"other\x",
+        r"reg\sub\x",
+    ] {
+        assert!(
+            matches!(
+                session.delete_backup_file(bad),
+                Err(StorageError::InvalidPath(_))
+            ),
+            "{bad:?}"
+        );
+    }
+    assert!(session.path().join(JOURNAL_FILE).exists());
+
+    // A directory at the name fails the store file check: renamed aside, not deleted.
+    let dir_rel = backup_rel(BackupKind::Registry, OpId(3));
+    std::fs::create_dir(session.path().join(&dir_rel)).unwrap();
+    let err = session.delete_backup_file(&dir_rel).unwrap_err();
+    let StorageError::Integrity {
+        failure: IntegrityFailure::WrongKind {
+            expected_dir: false,
+        },
+        renamed_to: Some(aside),
+        ..
+    } = &err
+    else {
+        panic!("{err}");
+    };
+    assert!(aside.is_dir());
+
+    // A file with a second name elsewhere fails the store file check: renamed aside, not deleted.
+    let linked = backup_rel(BackupKind::Registry, OpId(4));
+    session.create_file(&linked).unwrap();
+    std::fs::hard_link(session.path().join(&linked), s.path("outside.json")).unwrap();
+    let err = session.delete_backup_file(&linked).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StorageError::Integrity {
+                failure: IntegrityFailure::HardLinked { n_links: 2 },
+                renamed_to: Some(_),
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert!(s.path("outside.json").exists());
+    assert_eq!(std::fs::metadata(s.path("outside.json")).unwrap().len(), 0);
 }

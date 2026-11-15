@@ -111,6 +111,7 @@ mod tests {
                 expires: Expiry::from_start(started),
                 purged: Vec::new(),
                 pending_reboot: false,
+                journal: None,
             };
             index.upsert(summary);
         }

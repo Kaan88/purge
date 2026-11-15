@@ -51,6 +51,17 @@
 //! once: its boot-move pair is the only record of the registration. Undo, reconcile and expire records
 //! are flushed one by one.
 //!
+//! **Index mark (review M7).** The chain cannot tell a journal cut at a line boundary from a shorter
+//! one, so the session's index entry records how far the journal reached when the entry was written:
+//! [`SessionSummary::journal`](purge_model::exec::session::SessionSummary::journal), a
+//! [`JournalMark`] of the line count and the chain value of the last line ([`JournalState::mark`]).
+//! [`check_mark`] (and [`read_indexed`], which reads and checks) compares it with the journal read
+//! back: the journal must hold at least that many lines and line *n* must carry that chain value. More
+//! lines are fine (records appended after the entry was written, before the index caught up); fewer
+//! lines, or another chain value, mean the journal was cut or replaced, and the session is damaged
+//! ([`JournalError::IndexMismatch`]). An entry without a mark (written before the mark existed) is
+//! not checked.
+//!
 //! **Through the store only.** The journal is created, opened and read only through a
 //! [`SessionDir`](crate::storage::SessionDir): relative to the session directory's checked handle,
 //! checked on the handle it is then read or written through. Its header must name that session
@@ -61,7 +72,7 @@
 //! [`JournalWriter::intent`] returns an [`IntentToken`] only after the intent is flushed, and
 //! [`JournalWriter::done`] consumes it. Nothing outside this module can make a token, so code that acts
 //! takes `&IntentToken` as its proof that the write-ahead record is durable; the same holds for undo with
-//! [`UndoToken`].
+//! [`UndoToken`] and for the retry of a held item with [`RetryToken`].
 //!
 //! # Hashing
 //!
@@ -81,9 +92,41 @@ mod tests;
 pub use hash::{BackupCheckError, sha256_bytes, sha256_reader, verify_backup};
 pub use reader::{JournalRead, parse, read};
 pub use state::{JournalState, OpState, OpStatus, Pending, Phase, UndoState, Violation};
-pub use writer::{IntentToken, JournalWriter, UndoToken};
+pub use writer::{IntentToken, JournalWriter, RetryToken, UndoToken};
 
 pub use purge_model::exec::journal::MAX_GROUP_INTENTS;
+
+use purge_model::exec::session::JournalMark;
+
+/// Checks a journal read back against the [`JournalMark`] its session's index entry recorded (review
+/// M7): the journal must hold at least `mark.records` complete lines, and line `mark.records` must carry
+/// the chain value `mark.head`. Later lines are allowed. Anything else is
+/// [`JournalError::IndexMismatch`]: the journal was cut at a line boundary or replaced, and the session
+/// is damaged.
+pub fn check_mark(read: &JournalRead, mark: &JournalMark) -> Result<(), JournalError> {
+    if read.head_at(mark.records) == Some(mark.head) {
+        Ok(())
+    } else {
+        Err(JournalError::IndexMismatch {
+            index_records: mark.records,
+            journal_records: read.line_heads.len() as u64,
+        })
+    }
+}
+
+/// Reads the journal of `session` ([`read`]) and checks it against the mark of its index entry
+/// ([`check_mark`]) when there is one; `None` (an entry written before the mark existed, or no entry)
+/// checks nothing. Undo, recovery and expiry read a session this way.
+pub fn read_indexed(
+    session: &crate::storage::SessionDir,
+    mark: Option<&JournalMark>,
+) -> Result<JournalRead, JournalError> {
+    let read = read(session)?;
+    if let Some(mark) = mark {
+        check_mark(&read, mark)?;
+    }
+    Ok(read)
+}
 
 /// The file name of a session's journal inside its session directory.
 pub const JOURNAL_FILE_NAME: &str = crate::storage::JOURNAL_FILE;
@@ -151,6 +194,18 @@ pub enum JournalError {
     /// A record did not serialise to one line that reads back equal; nothing was written.
     #[error("journal record does not round-trip: {0}")]
     Encoding(String),
+    /// The journal does not reach as far as its session's index entry recorded ([`check_mark`]): fewer
+    /// lines than the entry's mark, or another chain value at its last line. The journal was cut at a
+    /// line boundary or replaced; the session is damaged and nothing is acted on.
+    #[error(
+        "the journal holds {journal_records} lines and does not match the index, which recorded {index_records}"
+    )]
+    IndexMismatch {
+        /// The line count the index entry recorded.
+        index_records: u64,
+        /// The complete lines the journal holds.
+        journal_records: u64,
+    },
     /// An earlier write or flush failed, so the file may end in a partial line; the writer takes no more
     /// records. Reopen with [`JournalWriter::open_append`], which cuts off a torn tail.
     #[error("an earlier journal write or flush failed; the writer takes no more records")]

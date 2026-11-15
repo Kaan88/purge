@@ -73,9 +73,12 @@
 //! # After the restart
 //!
 //! - [`reconcile`] (at the next start, per op still pending a reboot) returns a [`Reconciled`] per op; see
-//!   [`ReconcileVerdict`] for the table. Journal [`Reconciled::record`] when it is `Some`.
+//!   [`ReconcileVerdict`] for the table. Journal [`Reconciled::record`] when it is `Some` (every verdict
+//!   but `Indeterminate`).
 //! - [`retry_held`] tries the held items again through a [`RetryMove`] the executor supplies (the move
-//!   belongs to the file action) and returns `Retried{outcome}` results to journal.
+//!   belongs to the file action). It journals each retry itself, write-ahead: `retry_intent` (flushed)
+//!   before the move, which takes the [`RetryToken`] as proof, and the `reconcile` `Retried{outcome}`
+//!   that ends it after.
 //! - [`undo_locked`] says how to undo a lock op; a pending boot move is undone by removing **our exact
 //!   pair only** ([`remove_boot_move`], under an undo token).
 //! - [`pending_after_crash`] tells recovery whether an intent-only op left a registered pair.
@@ -102,7 +105,7 @@ use purge_guard::live::{
     self, BootMove, DestinationFacts, FileIdentity, PathStamp, QuarantineCheck, Refusal, StoreScope,
 };
 use purge_model::exec::journal::{
-    FileFacts, Intent, ItemFacts, Reconcile, ReconcileResult, UndoOutcome,
+    FileFacts, Intent, ItemFacts, Reconcile, ReconcileResult, UndoConflict, UndoOutcome,
 };
 use purge_model::exec::op::{
     BootMovePair, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason,
@@ -116,7 +119,9 @@ use purge_win::rm::RebootReasons;
 
 use crate::fault;
 use crate::gate::{self, GateCtx, LockedPath};
-use crate::journal::{IntentToken, JournalState, OpState, UndoToken};
+use crate::journal::{
+    IntentToken, JournalError, JournalState, JournalWriter, OpState, RetryToken, UndoToken,
+};
 use crate::prepare::LockerQuery;
 use crate::storage::SessionDir;
 
@@ -1299,8 +1304,10 @@ enum LockState {
     Pending(BootMovePair),
     /// The item went into quarantine (reconcile `Completed`, or a retry ended `Done`).
     Moved,
-    /// The system is as before (mismatch moved back, cancelled, retried without change).
+    /// The system is as before (mismatch moved back, not moved, cancelled, retried without change).
     Unchanged,
+    /// Reconcile found the op needing attention (`MismatchKept`, `Lost`): its undo is this conflict.
+    Attention(UndoConflict),
     /// Not a lock op.
     Other,
 }
@@ -1320,7 +1327,13 @@ fn lock_state(op: &OpState) -> LockState {
         state = match result {
             ReconcileResult::StillPending => state,
             ReconcileResult::Completed => LockState::Moved,
-            ReconcileResult::MismatchMovedBack | ReconcileResult::Cancelled => LockState::Unchanged,
+            ReconcileResult::MismatchMovedBack
+            | ReconcileResult::Cancelled
+            | ReconcileResult::NotMoved { .. } => LockState::Unchanged,
+            ReconcileResult::MismatchKept { .. } => {
+                LockState::Attention(UndoConflict::FileIdMismatch)
+            }
+            ReconcileResult::Lost { .. } => LockState::Attention(UndoConflict::QuarantineMissing),
             ReconcileResult::Retried { outcome } => of(outcome),
         };
     }
@@ -1360,6 +1373,16 @@ pub enum LockUndo {
         /// Why.
         detail: String,
     },
+    /// Reconcile left the op needing attention: another object than the recorded one is kept in
+    /// quarantine ([`UndoConflict::FileIdMismatch`]), or the item is neither in place nor in quarantine
+    /// ([`UndoConflict::QuarantineMissing`]). Nothing can be undone:
+    /// `undo_conflict_without_intent(op, conflict, detail)`.
+    Conflict {
+        /// The conflict to journal.
+        conflict: UndoConflict,
+        /// Why, for the report.
+        detail: String,
+    },
 }
 
 /// The undo of a lock op, in the style of `act_typed::undo_typed`: `None` when the op is not a lock op
@@ -1369,6 +1392,17 @@ pub fn undo_locked(op: &OpState, store: &dyn PendingRenames) -> Option<LockUndo>
     match lock_state(op) {
         LockState::Other | LockState::Moved => None,
         LockState::Held | LockState::Unchanged => Some(LockUndo::Done(UndoOutcome::NothingToUndo)),
+        LockState::Attention(conflict) => Some(LockUndo::Conflict {
+            detail: match conflict {
+                UndoConflict::FileIdMismatch => {
+                    "reconcile found another object than the recorded one in quarantine; it was kept \
+                     there"
+                }
+                _ => "reconcile found the item neither in place nor in quarantine",
+            }
+            .to_owned(),
+            conflict,
+        }),
         LockState::Pending(pair) => Some(match store.list() {
             Err(e) => LockUndo::ReconcileFirst {
                 detail: format!("the boot-time move list cannot be read ({e})"),
@@ -1483,15 +1517,16 @@ pub fn remove_boot_move(
 /// | yes | - | - | `StillPending` | `StillPending` |
 /// | no | the recorded item (file id and serial equal) | - | `Completed` | `Completed` |
 /// | no | something else, moved back | - | `MismatchMovedBack`, alert | `MismatchMovedBack` |
-/// | no | something else, cannot be moved back | - | `MismatchKept`, alert | nothing |
+/// | no | something else, cannot be moved back | - | `MismatchKept`, alert | `MismatchKept{code}` |
 /// | no | cannot be checked | - | `Indeterminate` | nothing |
-/// | no | empty | present | `NotMoved` (failed) | nothing |
-/// | no | empty | absent | `Lost` | nothing |
+/// | no | empty | present | `NotMoved` (failed) | `NotMoved{VerifyFailed}` |
+/// | no | empty | absent | `Lost` | `Lost` |
 /// | no | empty | cannot be looked at | `Indeterminate` | nothing |
 ///
-/// "Nothing": the journal model has no reconcile result for these (no failed and no kept variant), so
-/// the op stays pending a reboot in the journal and is reported again at each start, and its undo answers
-/// [`LockUndo::ReconcileFirst`]. Settling such an op needs a model result for it.
+/// Every journalled result but `StillPending` ends the op's pending state. After `NotMoved` the op's
+/// undo is "nothing to undo"; after `MismatchKept` and `Lost` it needs attention
+/// (`OpState::attention`) and its undo is a conflict ([`LockUndo::Conflict`]). "Nothing": the state
+/// could not be told; the op stays pending a reboot and is reconciled again at the next start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconcileVerdict {
     /// The move has not happened yet.
@@ -1539,19 +1574,33 @@ pub struct Reconciled {
     pub detail: String,
     /// An object in quarantine that was not ours.
     pub alert: Option<ReconcileAlert>,
+    /// For `MismatchKept`, why the object could not be moved back (the failure kind and the Win32
+    /// error, when there is one); for `NotMoved`, `VerifyFailed`. `None` otherwise.
+    pub failure: Option<(FailCode, Option<u32>)>,
 }
 
 impl Reconciled {
-    /// The result to journal, when the model has one for the verdict.
+    /// The result to journal; `None` only for `Indeterminate`, which decides nothing.
     pub fn result(&self) -> Option<ReconcileResult> {
+        let (code, os_error) = self.failure.unwrap_or((FailCode::Internal, None));
         match self.verdict {
             ReconcileVerdict::StillPending => Some(ReconcileResult::StillPending),
             ReconcileVerdict::Completed => Some(ReconcileResult::Completed),
             ReconcileVerdict::MismatchMovedBack => Some(ReconcileResult::MismatchMovedBack),
-            ReconcileVerdict::MismatchKept
-            | ReconcileVerdict::NotMoved
-            | ReconcileVerdict::Lost
-            | ReconcileVerdict::Indeterminate => None,
+            ReconcileVerdict::MismatchKept => Some(ReconcileResult::MismatchKept {
+                code,
+                os_error,
+                detail: self.detail.clone(),
+            }),
+            ReconcileVerdict::NotMoved => Some(ReconcileResult::NotMoved {
+                code,
+                os_error,
+                detail: self.detail.clone(),
+            }),
+            ReconcileVerdict::Lost => Some(ReconcileResult::Lost {
+                detail: self.detail.clone(),
+            }),
+            ReconcileVerdict::Indeterminate => None,
         }
     }
 
@@ -1601,6 +1650,7 @@ pub fn reconcile(
                 verdict,
                 detail,
                 alert: None,
+                failure: None,
             };
             let (LockState::Pending(pair), Some(intent)) = (lock_state(op), &op.intent) else {
                 return found(
@@ -1659,20 +1709,22 @@ pub fn reconcile(
                         found: identity,
                         moved_back: moved.is_ok(),
                     };
-                    let (verdict, detail) = match moved {
+                    let (verdict, detail, failure) = match moved {
                         Ok(()) => (
                             ReconcileVerdict::MismatchMovedBack,
                             format!(
                                 "{quarantine_path} held another object than the one recorded; it was \
                                  moved back to {original_path}"
                             ),
+                            None,
                         ),
-                        Err(why) => (
+                        Err((code, os_error, why)) => (
                             ReconcileVerdict::MismatchKept,
                             format!(
                                 "{quarantine_path} holds another object than the one recorded; it could \
                                  not be moved back to {original_path} ({why}) and stays in quarantine"
                             ),
+                            Some((code, os_error)),
                         ),
                     };
                     Reconciled {
@@ -1680,16 +1732,20 @@ pub fn reconcile(
                         verdict,
                         detail,
                         alert: Some(alert),
+                        failure,
                     }
                 }
                 Destination::Empty => match env.look(original_path) {
-                    SourceState::Present { .. } => found(
-                        ReconcileVerdict::NotMoved,
-                        format!(
-                            "{original_path}: the boot-time move did not happen; the item is still in \
-                             place"
-                        ),
-                    ),
+                    SourceState::Present { .. } => Reconciled {
+                        failure: Some((FailCode::VerifyFailed, None)),
+                        ..found(
+                            ReconcileVerdict::NotMoved,
+                            format!(
+                                "{original_path}: the boot-time move did not happen; the item is still \
+                                 in place"
+                            ),
+                        )
+                    },
                     SourceState::Absent => found(
                         ReconcileVerdict::Lost,
                         format!(
@@ -1706,23 +1762,12 @@ pub fn reconcile(
         .collect()
 }
 
-/// `path` without a `\\?\` prefix in front of a drive path.
-fn strip_verbatim(path: &str) -> &str {
-    match path.strip_prefix(r"\\?\") {
-        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest,
-        _ => path,
-    }
-}
-
-/// Looks at the op's quarantine destination through the store-checked op directory.
-///
-/// The item is reached through that directory's handle: its name is joined to the final path the store's
-/// handle reports now (not to the journal's spelling), it is opened without following a reparse point,
-/// and it counts only while its own final path is that directory's (read from the store's handle again
-/// after the open) plus the leaf. `purge-win` has no open relative to a directory handle, so this is a
-/// path open checked on both handles. The identity is read from the handle a mismatch is then moved back
-/// with ([`Destination::Other`]); only when that handle cannot be had (in use) is a read-only handle used
-/// for the identity, and nothing is moved.
+/// Looks at the op's quarantine destination through the store-checked op directory: the item is
+/// opened relative to that directory's handle (`QuarantineDir::open_item`: one name component, a
+/// reparse point opened itself, its final path the directory's plus the leaf), so no path is resolved
+/// again. The identity is read from the handle a mismatch is then moved back with
+/// ([`Destination::Other`]); only when that handle cannot be had (in use, denied) is a read-only
+/// handle used for the identity, and nothing is moved.
 fn destination_state(
     session: &SessionDir,
     op: OpId,
@@ -1734,54 +1779,26 @@ fn destination_state(
             Ok(opened) => opened,
             Err(e) => return Destination::Unknown(e.to_string()),
         };
-    let dir_now = || dir.dir().handle().final_path().ok();
-    let Some(before) = dir_now() else {
-        return Destination::Unknown("the op directory's path cannot be read".to_owned());
+    let item = match dir.open_item(&leaf) {
+        Ok(Some(item)) => item,
+        Ok(None) => return Destination::Empty,
+        Err(e) => return Destination::Unknown(e.to_string()),
     };
-    let inside = format!(r"{}\{leaf}", before.trim_end_matches('\\'));
-    let Some(p) = ext(strip_verbatim(&inside)) else {
-        return Destination::Unknown("the path has no extended form".to_owned());
-    };
-    let mover = match MoveHandle::open(&p) {
-        Ok(mover) => Some(mover),
-        Err(FsError::NotFound) => return Destination::Empty,
-        Err(_) => None,
-    };
-    let read_only;
-    let handle: &FileHandle = match &mover {
-        Some(mover) => mover.as_file(),
-        None => match FileHandle::open(&p) {
-            Ok(opened) => {
-                read_only = opened;
-                &read_only
-            }
-            Err(e) if e.is_not_found() => return Destination::Empty,
-            Err(e) => return Destination::Unknown(format!("Win32 error {}", e.0)),
-        },
-    };
-    let (Ok(meta), Ok(final_path)) = (handle.metadata(), handle.final_path()) else {
-        return Destination::Unknown("its facts cannot be read".to_owned());
-    };
-    if !final_path.eq_ignore_ascii_case(&inside) {
-        return Destination::Unknown(format!("its final path is {final_path}"));
-    }
-    if dir_now().as_deref() != Some(before.as_str()) {
-        return Destination::Unknown("the op directory moved while it was looked at".to_owned());
-    }
     let identity = FileIdentity {
-        volume_serial: meta.file_id.volume_serial,
-        file_id: meta.file_id.id,
+        volume_serial: item.file_id().volume_serial,
+        file_id: item.file_id().id,
     };
-    if identity == expected && meta.reparse_tag == 0 && !meta.is_dir {
+    if identity == expected && item.reparse_tag() == 0 && !item.is_dir() {
         Destination::Ours
     } else {
-        Destination::Other(identity, mover)
+        Destination::Other(identity, item.into_mover())
     }
 }
 
 /// Moves the object in quarantine whose identity `found` was read from `handle` back to `original`,
 /// renaming that very handle into the parent [`gate::check_undo_path`] checked. A rename never replaces
-/// anything. Without a handle (the object could not be opened for a rename) nothing is moved.
+/// anything. Without a handle (the object could not be opened for a rename) nothing is moved. A failure
+/// carries the failure kind and Win32 error the journal's `MismatchKept` records, and the reason.
 fn move_back(
     ctx: &GateCtx,
     handle: Option<MoveHandle>,
@@ -1789,18 +1806,31 @@ fn move_back(
     original: &str,
     volume_serial: u64,
     exemptions: Exemptions,
-) -> Result<(), String> {
-    let handle =
-        handle.ok_or_else(|| "it cannot be opened for a rename (in use or denied)".to_owned())?;
-    let now = handle.file_id().map_err(|e| e.to_string())?;
+) -> Result<(), (FailCode, Option<u32>, String)> {
+    let handle = handle.ok_or_else(|| {
+        (
+            FailCode::InUse,
+            None,
+            "it cannot be opened for a rename (in use or denied)".to_owned(),
+        )
+    })?;
+    let now = handle.file_id().map_err(|e| {
+        let (code, os_error) = fail_of(e);
+        (code, os_error, e.to_string())
+    })?;
     if now.volume_serial != found.volume_serial || now.id != found.file_id {
-        return Err("the object changed while it was looked at".to_owned());
+        return Err((
+            FailCode::VerifyFailed,
+            None,
+            "the object changed while it was looked at".to_owned(),
+        ));
     }
     let dest = gate::check_undo_path(ctx, original, volume_serial, exemptions)
-        .map_err(|refusal| refusal.to_string())?;
-    handle
-        .rename_into(dest.dir(), dest.leaf())
-        .map_err(|e| e.to_string())
+        .map_err(|refusal| (FailCode::Internal, None, refusal.to_string()))?;
+    handle.rename_into(dest.dir(), dest.leaf()).map_err(|e| {
+        let (code, os_error) = fail_of(e);
+        (code, os_error, e.to_string())
+    })
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1834,11 +1864,12 @@ pub enum RetryAttempt {
 /// act removed its empty op directory again, and the retry makes it anew with
 /// [`crate::act_fs::create_op_dir_for`]. A retry never registers a boot-time move.
 pub trait RetryMove {
-    /// Tries op `op` once more; `intent` is its journalled intent.
-    fn retry(&mut self, op: &OpState, intent: &Intent) -> RetryAttempt;
+    /// Tries op `op` once more; `intent` is its journalled intent, and `token` proves its
+    /// `retry_intent` is durable (the move must not run without it).
+    fn retry(&mut self, op: &OpState, intent: &Intent, token: &RetryToken) -> RetryAttempt;
 }
 
-/// The result of one retry, to journal as `reconcile` `Retried{outcome}`.
+/// The result of one retry, journalled by [`retry_held`] as `reconcile` `Retried{outcome}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Retried {
     /// The op.
@@ -1847,51 +1878,50 @@ pub struct Retried {
     pub outcome: ItemOutcome,
 }
 
-impl Retried {
-    /// The `reconcile` record to journal, stamped `at`.
-    pub fn record(&self, at: FileTime) -> Reconcile {
-        Reconcile {
-            at,
-            op: self.op,
-            result: ReconcileResult::Retried {
-                outcome: self.outcome.clone(),
-            },
-        }
-    }
-}
-
-/// Tries every held op of `state` ([`JournalState::held_retry`]) again through `mover`. An op whose
-/// intent is not a quarantine move with a `MoveBack` is not passed to the mover and ends
-/// `Failed{Internal}`. Still locked stays `HeldRetry`.
-pub fn retry_held(state: &JournalState, mover: &mut dyn RetryMove) -> Vec<Retried> {
-    state
-        .held_retry()
-        .map(|op| {
-            let outcome = match &op.intent {
-                Some(
-                    intent @ Intent {
-                        exec_op: ExecOp::QuarantineMove { .. },
-                        inverse: Inverse::MoveBack { .. },
-                        ..
-                    },
-                ) => match mover.retry(op, intent) {
-                    RetryAttempt::Moved => ItemOutcome::Done,
-                    RetryAttempt::Vanished => ItemOutcome::Vanished,
-                    RetryAttempt::StillLocked => ItemOutcome::HeldRetry,
-                    RetryAttempt::Skipped(reason) => ItemOutcome::Skipped { reason },
-                    RetryAttempt::Failed { code, os_error } => ItemOutcome::Failed {
-                        code,
-                        os_error,
-                        detail: String::new(),
-                    },
+/// Tries every held op of the journal ([`JournalState::held_retry`]) again through `mover`, journalling
+/// each retry write-ahead: `retry_intent` (flushed, [`JournalWriter::retry_intent`]) first, then the
+/// move with the token, then `reconcile` `Retried{outcome}` ([`JournalWriter::retried`], flushed), whose
+/// outcome replaces `HeldRetry`. An op whose intent is not a quarantine move with a `MoveBack` is not
+/// passed to the mover and ends `Failed{Internal}`. Still locked stays `HeldRetry`.
+///
+/// Stops at the first journal error and returns it: the retries before it are journalled, and one whose
+/// `retried` could not be written stays in flight (`OpState::retry_in_flight`), for recovery to probe
+/// with the token of `JournalWriter::resume_retry`.
+pub fn retry_held(
+    journal: &mut JournalWriter,
+    mover: &mut dyn RetryMove,
+    at: FileTime,
+) -> Result<Vec<Retried>, JournalError> {
+    let held: Vec<OpState> = journal.state().held_retry().cloned().collect();
+    let mut retried = Vec::with_capacity(held.len());
+    for op in held {
+        let token = journal.retry_intent(op.op, at)?;
+        let outcome = match &op.intent {
+            Some(
+                intent @ Intent {
+                    exec_op: ExecOp::QuarantineMove { .. },
+                    inverse: Inverse::MoveBack { .. },
+                    ..
                 },
-                _ => failed_outcome(
-                    FailCode::Internal,
-                    None,
-                    "the held op has no quarantine-move intent",
-                ),
-            };
-            Retried { op: op.op, outcome }
-        })
-        .collect()
+            ) => match mover.retry(&op, intent, &token) {
+                RetryAttempt::Moved => ItemOutcome::Done,
+                RetryAttempt::Vanished => ItemOutcome::Vanished,
+                RetryAttempt::StillLocked => ItemOutcome::HeldRetry,
+                RetryAttempt::Skipped(reason) => ItemOutcome::Skipped { reason },
+                RetryAttempt::Failed { code, os_error } => ItemOutcome::Failed {
+                    code,
+                    os_error,
+                    detail: String::new(),
+                },
+            },
+            _ => failed_outcome(
+                FailCode::Internal,
+                None,
+                "the held op has no quarantine-move intent",
+            ),
+        };
+        journal.retried(token, at, outcome.clone())?;
+        retried.push(Retried { op: op.op, outcome });
+    }
+    Ok(retried)
 }

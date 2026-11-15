@@ -1575,14 +1575,35 @@ fn reconcile_state_table() {
         assert!(r.alert.is_none() || r.verdict == ReconcileVerdict::MismatchMovedBack);
     }
 
-    // Journal what the model can hold; the rest stays pending.
-    for r in &results {
-        if let Some(record) = r.record(FileTime(134_078_200_000_000_000)) {
-            fx.journal.borrow_mut().reconcile(record).unwrap();
+    // Every verdict has a journal result now; only the op still waiting for the restart stays
+    // pending. (Changed: kept, not-moved and lost had no model result and stayed pending.)
+    let results_journalled: Vec<ReconcileResult> =
+        results.iter().map(|r| r.result().unwrap()).collect();
+    assert!(matches!(
+        &results_journalled[3],
+        ReconcileResult::MismatchKept { detail, .. } if detail.contains("stays in quarantine")
+    ));
+    assert!(results[3].failure.is_some());
+    assert!(matches!(
+        &results_journalled[4],
+        ReconcileResult::NotMoved {
+            code: FailCode::VerifyFailed,
+            os_error: None,
+            ..
         }
+    ));
+    assert!(matches!(
+        &results_journalled[5],
+        ReconcileResult::Lost { .. }
+    ));
+    for r in &results {
+        let record = r.record(FileTime(134_078_200_000_000_000)).unwrap();
+        fx.journal.borrow_mut().reconcile(record).unwrap();
     }
     let still: Vec<u32> = fx.state().pending_reboot().map(|s| s.op.0).collect();
-    assert_eq!(still, vec![1, 4, 5, 6]);
+    assert_eq!(still, vec![1]);
+    let attention: Vec<u32> = fx.state().needs_attention().map(|s| s.op.0).collect();
+    assert_eq!(attention, vec![4, 6]);
     assert_eq!(
         undo_locked(&fx.op(2), &store),
         None,
@@ -1592,6 +1613,33 @@ fn reconcile_state_table() {
         undo_locked(&fx.op(3), &store),
         Some(LockUndo::Done(UndoOutcome::NothingToUndo))
     );
+    assert!(matches!(
+        undo_locked(&fx.op(4), &store),
+        Some(LockUndo::Conflict {
+            conflict: UndoConflict::FileIdMismatch,
+            ..
+        })
+    ));
+    assert_eq!(
+        undo_locked(&fx.op(5), &store),
+        Some(LockUndo::Done(UndoOutcome::NothingToUndo)),
+        "not moved: nothing changed"
+    );
+    assert!(matches!(
+        undo_locked(&fx.op(6), &store),
+        Some(LockUndo::Conflict {
+            conflict: UndoConflict::QuarantineMissing,
+            ..
+        })
+    ));
+    // The conflict is what the journal takes for such an op.
+    let lost = undo_locked(&fx.op(6), &store);
+    if let Some(LockUndo::Conflict { conflict, detail }) = lost {
+        fx.journal
+            .borrow_mut()
+            .undo_conflict_without_intent(OpId(6), conflict, detail)
+            .unwrap();
+    }
 
     // An unreadable list decides nothing.
     let broken = MemoryPendingRenames {
@@ -1599,6 +1647,7 @@ fn reconcile_state_table() {
         ..MemoryPendingRenames::default()
     };
     let results = reconcile(&fx.state(), &fx.session, &ctx, &LiveLadder, &broken);
+    assert_eq!(results.len(), 1);
     assert!(
         results.iter().all(
             |r| r.verdict == ReconcileVerdict::Indeterminate && r.record(FileTime(1)).is_none()
@@ -1646,20 +1695,27 @@ fn exemptions_and_facts_come_from_the_journalled_records() {
     );
 }
 
-/// Records what it was given and answers from a script.
-struct Mover {
+/// Records what it was given and answers from a script. Before each move it reads the journal back
+/// from disk: the op's retry must be in flight there (its `retry_intent` durable).
+struct Mover<'a> {
+    session: &'a SessionDir,
     seen: Vec<(OpId, String)>,
+    durable: Vec<bool>,
     answers: Vec<RetryAttempt>,
 }
 
-impl RetryMove for Mover {
-    fn retry(&mut self, op: &OpState, intent: &Intent) -> RetryAttempt {
+impl RetryMove for Mover<'_> {
+    fn retry(&mut self, op: &OpState, intent: &Intent, token: &RetryToken) -> RetryAttempt {
         let Inverse::MoveBack {
             quarantine_path, ..
         } = &intent.inverse
         else {
             panic!("not a move");
         };
+        assert_eq!(token.op(), op.op);
+        let on_disk = crate::journal::read(self.session).unwrap();
+        self.durable
+            .push(on_disk.state.op(op.op).unwrap().retry_in_flight);
         self.seen.push((op.op, quarantine_path.clone()));
         self.answers.remove(0)
     }
@@ -1674,8 +1730,15 @@ fn retry_held_passes_the_journalled_destination_and_maps_outcomes() {
     for n in 1..=3 {
         fx.run(&ladder(&fx, &held, &rm, &DenyAll), n, &mut store);
     }
+    // A retry belongs to a later start: the run has ended.
+    fx.journal
+        .borrow_mut()
+        .commit(FileTime(134_078_121_030_000_000), 0)
+        .unwrap();
     let mut mover = Mover {
+        session: &fx.session,
         seen: Vec::new(),
+        durable: Vec::new(),
         answers: vec![
             RetryAttempt::Moved,
             RetryAttempt::StillLocked,
@@ -1685,12 +1748,17 @@ fn retry_held_passes_the_journalled_destination_and_maps_outcomes() {
             },
         ],
     };
-    let retried = retry_held(&fx.state(), &mut mover);
+    let retried = retry_held(&mut fx.journal.borrow_mut(), &mut mover, FileTime(2)).unwrap();
     assert_eq!(
         mover.seen,
         (1..=3)
             .map(|n| (OpId(n), fx.it(n).quarantine.clone()))
             .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        mover.durable,
+        vec![true; 3],
+        "each move ran after its flushed retry_intent"
     );
     assert_eq!(retried[0].outcome, ItemOutcome::Done);
     assert_eq!(retried[1].outcome, ItemOutcome::HeldRetry);
@@ -1701,12 +1769,27 @@ fn retry_held_passes_the_journalled_destination_and_maps_outcomes() {
             ..
         }
     ));
-    for r in &retried {
-        fx.journal
-            .borrow_mut()
-            .reconcile(r.record(FileTime(2)))
-            .unwrap();
-    }
+    // retry_held journalled each retry: its retry_intent, then the `Retried` that ends it.
+    assert_eq!(fx.state().retries_in_flight().count(), 0);
+    let read = crate::journal::read(&fx.session).unwrap();
+    let tail: Vec<&str> = read
+        .records
+        .iter()
+        .rev()
+        .take(6)
+        .map(Record::name)
+        .collect();
+    assert_eq!(
+        tail,
+        [
+            "reconcile",
+            "retry_intent",
+            "reconcile",
+            "retry_intent",
+            "reconcile",
+            "retry_intent"
+        ]
+    );
     let held_now: Vec<u32> = fx.state().held_retry().map(|s| s.op.0).collect();
     assert_eq!(held_now, vec![2]);
     assert_eq!(undo_locked(&fx.op(1), &store), None, "moved: ordinary undo");

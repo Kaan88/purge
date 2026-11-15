@@ -11,10 +11,10 @@
 //! | an `intent` without a `done` (the run stopped in the middle of the action) | `Failed{Internal}`, with a warning: recovery decides what happened |
 //! | neither (the run was aborted before the item) | `Skipped{NotAttempted}` |
 //!
-//! `ItemReport.exec_op` is not optional in the model, so an item whose target has no executor in this
-//! version (a service, scheduled task or firewall rule) cannot be listed as an item. It is journalled as
-//! skipped, named in `warnings`, and left out of `items` and `counts`, which therefore still equal each
-//! other ([`ExecReport::tally`]).
+//! Every journalled op is an item of the report. One whose target has no executor in this version (a
+//! service, scheduled task or firewall rule) is listed with no `exec_op` and its journalled outcome
+//! (skipped), so the report's `counts` equal both its items ([`ExecReport::tally`]) and, for a run
+//! that ended, the journal's `done` records (the index entry's counts).
 //!
 //! # Bytes
 //!
@@ -205,15 +205,13 @@ pub fn build(state: &JournalState, scan: &ScanDoc, notes: &RunNotes, at: FileTim
         let candidate = scan.items.iter().find(|c| c.id == op.item);
         let outcome = reported_outcome(op);
         let detail = notes.details.get(&op.op);
-        let Some(exec_op) = exec_op_of(op, candidate) else {
+        let exec_op = exec_op_of(op, candidate);
+        if exec_op.is_none() && detail.is_none() {
             warnings.push(format!(
-                "item {} (op {}) was not acted on: {}",
-                op.item.0,
-                op.op,
-                detail.map_or("it has no executor in this version", String::as_str)
+                "item {} (op {}) was not acted on: it has no executor in this version",
+                op.item.0, op.op
             ));
-            continue;
-        };
+        }
         if let Some(detail) = detail.filter(|_| !outcome.is_success()) {
             warnings.push(format!("item {} (op {}): {detail}", op.item.0, op.op));
         }
@@ -276,7 +274,8 @@ fn common_owner(state: &JournalState, scan: &ScanDoc) -> Option<AppRef> {
 }
 
 /// The index entry of the session `state` describes: every figure is the journal's (the counts of its
-/// `done` records, so items without an executor are counted here, unlike in the report).
+/// `done` records), and `journal` records how far the journal reaches ([`JournalState::mark`], review
+/// M7), which a later read checks ([`crate::journal::check_mark`]).
 pub fn summary(state: &JournalState, scan: &ScanDoc, data: Option<&DataVolume>) -> SessionSummary {
     let header = state.header();
     SessionSummary {
@@ -294,5 +293,6 @@ pub fn summary(state: &JournalState, scan: &ScanDoc, data: Option<&DataVolume>) 
         expires: Expiry::from_start(header.created),
         purged: Vec::new(),
         pending_reboot: state.pending_reboot().next().is_some(),
+        journal: Some(state.mark()),
     }
 }

@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 
 use purge_model::exec::journal::{
     AbortReason, Expire, FileFacts, GateExemptions, Header, Intent, ItemFacts, JournalSchema,
-    Reconcile, ReconcileResult, Record, UndoConflict, UndoOutcome, Validated,
+    Reconcile, ReconcileResult, Record, RestorePointPolicy, RetryIntent, RunSettings, UndoConflict,
+    UndoOutcome, Validated,
 };
 use purge_model::exec::op::{
     BackupRef, BootMovePair, ExecOp, FailCode, FileIdHex, Inverse, ItemOutcome, OpId,
-    OutcomeCounts, SkipReason,
+    OutcomeCounts, Sha256Hex, SkipReason,
 };
-use purge_model::exec::session::{RetentionClass, SessionId};
+use purge_model::exec::session::{JournalMark, RetentionClass, SessionId};
 use purge_model::{CandidateId, FileTime, ScanMode, Target};
 use purge_win::fs_write::FsError;
 
@@ -812,14 +813,25 @@ fn undo_and_reconcile_rules() {
         op: OpId(op),
         result,
     };
+    let retried_done = rec(
+        2,
+        ReconcileResult::Retried {
+            outcome: ItemOutcome::Done,
+        },
+    );
     assert_eq!(
-        refused(w.reconcile(rec(
-            2,
-            ReconcileResult::Retried {
-                outcome: ItemOutcome::Done
-            }
-        ))),
-        Violation::ReconcileMismatch(OpId(2))
+        w.state().check(&Record::Reconcile(retried_done.clone())),
+        Err(Violation::ReconcileMismatch(OpId(2)))
+    );
+    // (Changed: the writer refused this with ReconcileMismatch. A `Retried` now ends a retry and needs
+    // its token, so the writer refuses it first; the rule above still holds for the reader.)
+    assert_eq!(
+        refused(w.reconcile(retried_done)),
+        Violation::RetryNotInFlight(OpId(2))
+    );
+    assert_eq!(
+        refused(w.retry_intent(OpId(2), FileTime(2)).map(|_| ())),
+        Violation::RetryNotHeld(OpId(2))
     );
     assert_eq!(
         refused(w.reconcile(rec(3, ReconcileResult::Completed))),
@@ -831,13 +843,9 @@ fn undo_and_reconcile_rules() {
         refused(w.reconcile(rec(2, ReconcileResult::StillPending))),
         Violation::NotPending(OpId(2))
     );
-    w.reconcile(rec(
-        3,
-        ReconcileResult::Retried {
-            outcome: pending_reboot(3),
-        },
-    ))
-    .unwrap();
+    // (Changed: written with `reconcile` before the retry had its own write-ahead record.)
+    let retry = w.retry_intent(OpId(3), FileTime(2)).unwrap();
+    w.retried(retry, FileTime(2), pending_reboot(3)).unwrap();
     assert_eq!(
         w.state().pending_reboot().map(|s| s.op).collect::<Vec<_>>(),
         [OpId(3)]
@@ -1624,4 +1632,475 @@ mod crash {
             .unwrap();
         assert!(elapsed >= 450, "{elapsed} ms");
     }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Run settings, retries of held items, the journalled validation, the index mark
+// ---------------------------------------------------------------------------------------------------
+
+fn run_settings() -> RunSettings {
+    RunSettings {
+        user_sid: Some("S-1-5-21-1-2-3-1001".into()),
+        long_names_resolved: true,
+        key_limit: 10_000,
+        restore_point: RestorePointPolicy::HighRiskOnly,
+    }
+}
+
+/// Appends one record, chained to `head`, to the journal bytes `bytes`.
+fn appended(bytes: &[u8], head: &Sha256Hex, record: Record) -> Vec<u8> {
+    let (line, _) = frame(head.as_bytes(), &body(record));
+    [bytes, &line].concat()
+}
+
+#[test]
+fn the_run_settings_follow_the_header_once() {
+    let dir = TempDir::new("settings");
+    let mut w = JournalWriter::create(&dir.session, dir.header(2)).unwrap();
+    let syncs = w.syncs();
+    w.settings(run_settings()).unwrap();
+    assert_eq!(w.syncs(), syncs + 1, "flushed");
+    assert_eq!(w.state().settings(), Some(&run_settings()));
+    assert_eq!(
+        refused(w.settings(run_settings())),
+        Violation::SettingsMisplaced
+    );
+    w.validated(validated(1)).unwrap();
+    assert_eq!(
+        refused(w.settings(run_settings())),
+        Violation::SettingsMisplaced
+    );
+    drop(w);
+    let back = read(&dir.session).unwrap();
+    assert_eq!(back.records[1].name(), "settings");
+    assert_eq!(back.state.settings(), Some(&run_settings()));
+
+    // The reader holds the same rule: settings after a validated record, or twice, are refused.
+    let late = [
+        body(Record::Header(header(1))),
+        body(Record::Validated(validated(1))),
+        body(Record::Settings(run_settings())),
+    ];
+    assert_eq!(
+        corrupt(parse(&chained(&late))),
+        (3, Corruption::Rule(Violation::SettingsMisplaced))
+    );
+    let twice = [
+        body(Record::Header(header(1))),
+        body(Record::Settings(run_settings())),
+        body(Record::Settings(run_settings())),
+    ];
+    assert_eq!(
+        corrupt(parse(&chained(&twice))),
+        (3, Corruption::Rule(Violation::SettingsMisplaced))
+    );
+}
+
+#[test]
+fn a_journal_from_before_the_settings_record_still_reads() {
+    // Old document: header, validated, intent, done, commit, undo, reconcile, expire, written without
+    // a settings record.
+    let dir = TempDir::new("old-doc");
+    let bytes = sample_journal(&dir);
+    assert!(!String::from_utf8_lossy(&bytes).contains(r#""rec":"settings""#));
+    let back = parse(&bytes).unwrap();
+    assert_eq!(back.state.settings(), None);
+    assert_eq!(back.state.ops().count(), 4);
+    assert_eq!(back.state.retries_in_flight().count(), 0);
+}
+
+/// A journal whose ops 1 and 2 were held and op 3 done, not yet committed.
+fn with_held(dir: &TempDir) -> JournalWriter {
+    let mut w = started(dir, 3);
+    for n in 1..=2 {
+        let t = w.intent(intent(n)).unwrap();
+        w.done(t, ItemOutcome::HeldRetry).unwrap();
+    }
+    let t = w.intent(intent(3)).unwrap();
+    w.done(t, ItemOutcome::Done).unwrap();
+    w
+}
+
+#[test]
+fn a_held_item_is_retried_under_a_durable_retry_intent() {
+    let dir = TempDir::new("retry");
+    let mut w = with_held(&dir);
+    let at = FileTime(134_078_200_000_000_000);
+    // Only after the run ended, and only for a held op.
+    assert_eq!(
+        refused(w.retry_intent(OpId(1), at).map(|_| ())),
+        Violation::RetryNotHeld(OpId(1))
+    );
+    w.commit(FileTime(134_078_121_950_000_000), 0).unwrap();
+    assert_eq!(
+        refused(w.retry_intent(OpId(3), at).map(|_| ())),
+        Violation::RetryNotHeld(OpId(3))
+    );
+    assert_eq!(
+        refused(w.retry_intent(OpId(9), at).map(|_| ())),
+        Violation::UnknownOp(OpId(9))
+    );
+
+    let syncs = w.syncs();
+    let first = w.retry_intent(OpId(1), at).unwrap();
+    assert_eq!(first.op(), OpId(1));
+    assert_eq!(
+        w.syncs(),
+        syncs + 1,
+        "the retry intent is flushed before the token"
+    );
+    let on_disk = read(&dir.session).unwrap();
+    assert!(on_disk.state.op(OpId(1)).unwrap().retry_in_flight);
+
+    // One retry in flight per op, and no undo, expire or token-less `Retried` meanwhile.
+    assert_eq!(
+        refused(w.retry_intent(OpId(1), at).map(|_| ())),
+        Violation::RetryInFlight(OpId(1))
+    );
+    assert_eq!(
+        refused(w.undo_intent(OpId(1)).map(|_| ())),
+        Violation::RetryInFlight(OpId(1))
+    );
+    assert_eq!(
+        refused(w.undo_done_without_intent(OpId(1), UndoOutcome::NothingToUndo)),
+        Violation::RetryInFlight(OpId(1))
+    );
+    assert_eq!(
+        refused(w.undo_conflict_without_intent(
+            OpId(1),
+            UndoConflict::FileIdMismatch,
+            String::new()
+        )),
+        Violation::RetryInFlight(OpId(1))
+    );
+    let expire = Expire {
+        at,
+        op: OpId(1),
+        class: RetentionClass::Quarantine,
+        bytes: 0,
+    };
+    assert_eq!(refused(w.expire(expire)), Violation::RetryInFlight(OpId(1)));
+    let tokenless = Reconcile {
+        at,
+        op: OpId(1),
+        result: ReconcileResult::Retried {
+            outcome: ItemOutcome::Done,
+        },
+    };
+    assert_eq!(
+        refused(w.reconcile(tokenless)),
+        Violation::RetryNotInFlight(OpId(1))
+    );
+    assert_eq!(
+        w.state().held_retry().map(|s| s.op).collect::<Vec<_>>(),
+        [OpId(2)]
+    );
+    assert_eq!(
+        w.state()
+            .retries_in_flight()
+            .map(|s| s.op)
+            .collect::<Vec<_>>(),
+        [OpId(1)]
+    );
+
+    // Another op may be retried meanwhile. The outcome replaces HeldRetry.
+    let second = w.retry_intent(OpId(2), at).unwrap();
+    w.retried(first, at, ItemOutcome::Done).unwrap();
+    w.retried(second, at, ItemOutcome::HeldRetry).unwrap();
+    assert_eq!(w.state().op(OpId(1)).unwrap().pending(), None);
+    assert_eq!(
+        w.state().held_retry().map(|s| s.op).collect::<Vec<_>>(),
+        [OpId(2)]
+    );
+    // Still held: it may be retried again.
+    let again = w.retry_intent(OpId(2), at).unwrap();
+    w.retried(again, at, ItemOutcome::Vanished).unwrap();
+    assert_eq!(w.state().held_retry().count(), 0);
+    assert_eq!(
+        refused(w.retry_intent(OpId(2), at).map(|_| ())),
+        Violation::RetryNotHeld(OpId(2))
+    );
+    // Undo and expiry take the op again once its retry ended.
+    w.undo_done_without_intent(OpId(2), UndoOutcome::NothingToUndo)
+        .unwrap();
+    w.expire(expire).unwrap();
+    drop(w);
+
+    let back = read(&dir.session).unwrap();
+    let names: Vec<&str> = back.records.iter().map(Record::name).collect();
+    assert_eq!(
+        names[names.len() - 8..],
+        [
+            "retry_intent",
+            "retry_intent",
+            "reconcile",
+            "reconcile",
+            "retry_intent",
+            "reconcile",
+            "undo_done",
+            "expire"
+        ]
+    );
+    assert_eq!(
+        back.state.op(OpId(1)).unwrap().reconciles,
+        [ReconcileResult::Retried {
+            outcome: ItemOutcome::Done
+        }]
+    );
+    assert_eq!(back.state.retries_in_flight().count(), 0);
+}
+
+#[test]
+fn an_interrupted_retry_is_resumed_once_with_a_token_of_the_new_writer() {
+    let dir = TempDir::new("retry-resume");
+    let mut w = with_held(&dir);
+    w.commit(FileTime(134_078_121_950_000_000), 0).unwrap();
+    let stale = w.retry_intent(OpId(1), FileTime(2)).unwrap();
+    // The process stops here: the retry is in flight on disk.
+    drop(w);
+
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    assert!(w.state().op(OpId(1)).unwrap().retry_in_flight);
+    assert_eq!(
+        w.state().held_retry().map(|s| s.op).collect::<Vec<_>>(),
+        [OpId(2)]
+    );
+    assert!(
+        w.resume_retry(OpId(2)).is_none(),
+        "op 2 has no retry in flight"
+    );
+    assert_eq!(
+        refused(w.retried(stale, FileTime(3), ItemOutcome::Done)),
+        Violation::ForeignToken(OpId(1))
+    );
+    let token = w.resume_retry(OpId(1)).unwrap();
+    assert!(w.resume_retry(OpId(1)).is_none(), "handed out once");
+    w.retried(token, FileTime(3), ItemOutcome::Done).unwrap();
+    assert_eq!(w.state().retries_in_flight().count(), 0);
+
+    // A created writer has nothing to resume.
+    let other = TempDir::new("retry-resume-new");
+    let mut created = started(&other, 1);
+    assert!(created.resume_retry(OpId(1)).is_none());
+}
+
+#[test]
+fn a_retried_record_without_a_retry_intent_from_an_older_journal_still_reads() {
+    // Old document: a held op ended by a bare `reconcile` `Retried`, as journals were written before
+    // the retry had its own write-ahead record.
+    let dir = TempDir::new("retry-old");
+    let mut w = with_held(&dir);
+    w.commit(FileTime(134_078_121_950_000_000), 0).unwrap();
+    let head = w.head();
+    drop(w);
+    let bytes = std::fs::read(dir.journal()).unwrap();
+    let legacy = Record::Reconcile(Reconcile {
+        at: FileTime(2),
+        op: OpId(1),
+        result: ReconcileResult::Retried {
+            outcome: ItemOutcome::Done,
+        },
+    });
+    let old = appended(&bytes, &head, legacy);
+    let back = parse(&old).unwrap();
+    let op = back.state.op(OpId(1)).unwrap();
+    assert_eq!(op.pending(), None);
+    assert!(!op.retry_in_flight);
+
+    // The reader refuses a retry intent for an op that is not held, and a second one in flight.
+    let not_held = appended(
+        &bytes,
+        &head,
+        Record::RetryIntent(RetryIntent {
+            at: FileTime(2),
+            op: OpId(3),
+        }),
+    );
+    let lines_before = lines(&bytes).len() as u64;
+    assert_eq!(
+        corrupt(parse(&not_held)),
+        (
+            lines_before + 1,
+            Corruption::Rule(Violation::RetryNotHeld(OpId(3)))
+        )
+    );
+    let retry = Record::RetryIntent(RetryIntent {
+        at: FileTime(2),
+        op: OpId(1),
+    });
+    let once = appended(&bytes, &head, retry.clone());
+    let head_once = parse(&once).unwrap().head;
+    let twice = appended(&once, &head_once, retry);
+    assert_eq!(
+        corrupt(parse(&twice)),
+        (
+            lines_before + 2,
+            Corruption::Rule(Violation::RetryInFlight(OpId(1)))
+        )
+    );
+}
+
+#[test]
+fn reconcile_ends_a_boot_move_that_did_not_complete() {
+    let dir = TempDir::new("reconcile-end");
+    let mut w = started(&dir, 4);
+    for n in 1..=3 {
+        let t = w.intent(intent(n)).unwrap();
+        w.done(t, pending_reboot(n)).unwrap();
+    }
+    let t = w.intent(intent(4)).unwrap();
+    w.done(t, ItemOutcome::HeldRetry).unwrap();
+    w.commit(FileTime(134_078_121_950_000_000), 0).unwrap();
+    let rec = |op, result| Reconcile {
+        at: FileTime(2),
+        op: OpId(op),
+        result,
+    };
+    let not_moved = ReconcileResult::NotMoved {
+        code: FailCode::VerifyFailed,
+        os_error: None,
+        detail: String::new(),
+    };
+    // Only for a boot move, not for a held item.
+    assert_eq!(
+        refused(w.reconcile(rec(4, not_moved.clone()))),
+        Violation::ReconcileMismatch(OpId(4))
+    );
+    w.reconcile(rec(1, not_moved.clone())).unwrap();
+    w.reconcile(rec(
+        2,
+        ReconcileResult::MismatchKept {
+            code: FailCode::Os,
+            os_error: Some(183),
+            detail: "kept".into(),
+        },
+    ))
+    .unwrap();
+    w.reconcile(rec(
+        3,
+        ReconcileResult::Lost {
+            detail: String::new(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(w.state().pending_reboot().count(), 0);
+    assert_eq!(
+        refused(w.reconcile(rec(1, ReconcileResult::StillPending))),
+        Violation::NotPending(OpId(1))
+    );
+    let attention: Vec<OpId> = w.state().needs_attention().map(|s| s.op).collect();
+    assert_eq!(attention, [OpId(2), OpId(3)]);
+    assert_eq!(w.state().op(OpId(1)).unwrap().attention(), None);
+    assert!(matches!(
+        w.state().op(OpId(3)).unwrap().attention(),
+        Some(ReconcileResult::Lost { .. })
+    ));
+    w.undo_conflict_without_intent(OpId(3), UndoConflict::QuarantineMissing, String::new())
+        .unwrap();
+    drop(w);
+    let back = read(&dir.session).unwrap();
+    assert_eq!(back.state.op(OpId(1)).unwrap().reconciles, [not_moved]);
+    assert_eq!(
+        back.state
+            .needs_attention()
+            .map(|s| s.op)
+            .collect::<Vec<_>>(),
+        [OpId(2), OpId(3)]
+    );
+}
+
+#[test]
+fn op_state_hands_back_the_journalled_validation_with_its_exemptions() {
+    let dir = TempDir::new("validated");
+    let mut w = JournalWriter::create(&dir.session, dir.header(2)).unwrap();
+    let first = Validated {
+        exemptions: GateExemptions {
+            long_names_resolved: true,
+            environment_segment_edit: true,
+            ..GateExemptions::default()
+        },
+        ..validated(1)
+    };
+    let second = Validated {
+        facts: ItemFacts::Refused {
+            blocker: Some(purge_model::Blocker::ChangedSinceScan),
+            reason: "live.identity-changed".into(),
+            os_error: None,
+        },
+        ..validated(2)
+    };
+    w.validated(first.clone()).unwrap();
+    w.validated(second.clone()).unwrap();
+    assert_eq!(w.state().op(OpId(1)).unwrap().validated(), first);
+    drop(w);
+    let back = read(&dir.session).unwrap();
+    let from_records: Vec<Validated> = back
+        .records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Validated(v) => Some(v.clone()),
+            _ => None,
+        })
+        .collect();
+    let from_state: Vec<Validated> = back.state.ops().map(OpState::validated).collect();
+    assert_eq!(from_state, from_records);
+    assert_eq!(from_state, [first, second]);
+}
+
+#[test]
+fn the_index_mark_finds_a_journal_cut_at_a_line_boundary() {
+    let dir = TempDir::new("mark");
+    let bytes = sample_journal(&dir);
+    let whole = read(&dir.session).unwrap();
+    let mark = whole.state.mark();
+    assert_eq!(mark.records, lines(&bytes).len() as u64);
+    assert_eq!(mark.head, whole.head);
+    assert_eq!(whole.head_at(mark.records), Some(whole.head));
+    assert_eq!(whole.head_at(0), None);
+    assert_eq!(whole.head_at(mark.records + 1), None);
+    check_mark(&whole, &mark).unwrap();
+    read_indexed(&dir.session, Some(&mark)).unwrap();
+    read_indexed(&dir.session, None).unwrap();
+
+    // The writer counts as the reader does.
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    assert_eq!(w.state().mark(), mark);
+    // Lines written after the index entry was are fine.
+    w.expire(Expire {
+        at: FileTime(134_104_041_030_000_000),
+        op: OpId(1),
+        class: RetentionClass::Quarantine,
+        bytes: 1,
+    })
+    .unwrap();
+    let later = w.state().mark();
+    assert_eq!(later.records, mark.records + 1);
+    assert_eq!(later.head, w.head());
+    drop(w);
+    read_indexed(&dir.session, Some(&mark)).unwrap();
+    read_indexed(&dir.session, Some(&later)).unwrap();
+
+    // Cut at a line boundary: the chain cannot tell, the mark can.
+    let all = lines(&bytes);
+    std::fs::write(dir.journal(), all[..all.len() - 1].concat()).unwrap();
+    let short = read(&dir.session).unwrap();
+    assert!(matches!(
+        check_mark(&short, &mark),
+        Err(JournalError::IndexMismatch {
+            index_records,
+            journal_records,
+        }) if index_records == mark.records && journal_records == mark.records - 1
+    ));
+    assert!(matches!(
+        read_indexed(&dir.session, Some(&mark)),
+        Err(JournalError::IndexMismatch { .. })
+    ));
+    // As many lines as the mark, but another chain value: the journal was replaced.
+    let replaced = JournalMark {
+        records: mark.records - 1,
+        head: mark.head,
+    };
+    assert!(check_mark(&short, &replaced).is_err());
+    // No mark (an entry written before it existed): nothing to check.
+    read_indexed(&dir.session, None).unwrap();
 }

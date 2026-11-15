@@ -30,6 +30,8 @@ pub(crate) const GENERIC_READ: u32 = 0x8000_0000;
 pub(crate) const GENERIC_WRITE: u32 = 0x4000_0000;
 /// `FILE_READ_ATTRIBUTES`.
 pub(crate) const FILE_READ_ATTRIBUTES: u32 = 0x80;
+/// `FILE_LIST_DIRECTORY`: what [`list_names`] needs on a directory handle.
+pub(crate) const FILE_LIST_DIRECTORY: u32 = 0x1;
 /// `FILE_ADD_FILE`: what `FlushFileBuffers` on a directory needs.
 const FILE_ADD_FILE: u32 = 0x2;
 
@@ -71,6 +73,16 @@ const FILE_DISPOSITION_INFO_CLASS: i32 = 4;
 const FILE_ATTRIBUTE_TAG_INFO_CLASS: i32 = 9;
 /// `FileIdInfo`.
 const FILE_ID_INFO_CLASS: i32 = 18;
+/// `FileFullDirectoryInfo`: the next entries of a directory listing.
+const FILE_FULL_DIRECTORY_INFO_CLASS: i32 = 14;
+/// `FileFullDirectoryRestartInfo`: the first entries of a directory listing.
+const FILE_FULL_DIRECTORY_RESTART_INFO_CLASS: i32 = 15;
+/// `ERROR_NO_MORE_FILES`: the end of a listing.
+const ERROR_NO_MORE_FILES: u32 = 18;
+/// Offset of `FileNameLength` in `FILE_FULL_DIR_INFO`.
+const DIR_INFO_NAME_LENGTH: usize = 60;
+/// Offset of `FileName` in `FILE_FULL_DIR_INFO`.
+const DIR_INFO_NAME: usize = 68;
 /// `FileRenameInformation` (`FILE_INFORMATION_CLASS`).
 const NT_FILE_RENAME_INFORMATION: i32 = 10;
 /// `FileRenameInformationEx`.
@@ -257,7 +269,7 @@ pub(crate) struct Open<'a> {
 }
 
 /// Whether `leaf` is one plain name component the store may open below a directory handle.
-fn plain_leaf(leaf: &str) -> bool {
+pub(crate) fn plain_leaf(leaf: &str) -> bool {
     !leaf.is_empty() && leaf != "." && leaf != ".." && !leaf.contains(['\\', '/', ':', '\0'])
 }
 
@@ -367,6 +379,72 @@ fn info<T: Default>(h: &impl AsHandle, class: i32) -> Result<T, FsError> {
     }
     Ok(out)
 }
+
+/// The names in the directory behind `dir` (opened with [`FILE_LIST_DIRECTORY`] and synchronous I/O,
+/// as [`open_at`] opens), `.` and `..` left out, read through that handle with
+/// `GetFileInformationByHandleEx(FileFullDirectoryRestartInfo, FileFullDirectoryInfo)`: no path is
+/// resolved, so the listing is of the very directory the handle is on.
+pub(crate) fn list_names(dir: &impl AsHandle) -> Result<Vec<String>, FsError> {
+    // u64 storage keeps the buffer aligned for the records the call writes.
+    let mut buf = vec![0u64; 8 * 1024];
+    let size = u32::try_from(buf.len() * 8).unwrap_or(u32::MAX);
+    let mut names = Vec::new();
+    let mut class = FILE_FULL_DIRECTORY_RESTART_INFO_CLASS;
+    loop {
+        // SAFETY: the handle is live for the call; `buf` is writable and holds `size` bytes.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                dir.as_handle().as_raw_handle(),
+                class,
+                buf.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if ok == 0 {
+            // SAFETY: reads the calling thread's last-error value; no preconditions.
+            let code = unsafe { GetLastError() };
+            if code == ERROR_NO_MORE_FILES {
+                return Ok(names);
+            }
+            return Err(FsError::from(Win32Error(code)));
+        }
+        class = FILE_FULL_DIRECTORY_INFO_CLASS;
+        // SAFETY: the bytes of `buf` are initialised (zeroed, then written by the call) and stay
+        // borrowed only while `buf` is not touched.
+        let bytes: &[u8] =
+            unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len() * 8) };
+        let mut at = 0usize;
+        loop {
+            let field = |offset: usize| -> Option<u32> {
+                let start = at.checked_add(offset)?;
+                let raw = bytes.get(start..start.checked_add(4)?)?;
+                Some(u32::from_le_bytes(raw.try_into().ok()?))
+            };
+            let (Some(next), Some(name_len)) = (field(0), field(DIR_INFO_NAME_LENGTH)) else {
+                return Err(FsError::Other(ERROR_INVALID_DATA));
+            };
+            let start = at + DIR_INFO_NAME;
+            let Some(raw) = bytes.get(start..start + name_len as usize) else {
+                return Err(FsError::Other(ERROR_INVALID_DATA));
+            };
+            let units: Vec<u16> = raw
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
+            let name = String::from_utf16_lossy(&units);
+            if name != "." && name != ".." {
+                names.push(name);
+            }
+            if next == 0 {
+                break;
+            }
+            at += next as usize;
+        }
+    }
+}
+
+/// `ERROR_INVALID_DATA`: a listing record that does not fit its buffer.
+const ERROR_INVALID_DATA: u32 = 13;
 
 /// What the store reads from one handle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -622,6 +700,34 @@ mod tests {
         drop(mover);
         assert!(!root.join("c.txt").exists());
         drop((sub, dir));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn listing_through_a_directory_handle() {
+        let root = scratch("list");
+        let list = Open {
+            access: FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+            share: SHARE_ALL,
+            create: None,
+            kind: Kind::Dir,
+        };
+        let dir = dir_handle(&root);
+        let listing = open_at(&dir, "", list).unwrap();
+        assert_eq!(list_names(&listing).unwrap(), Vec::<String>::new());
+        let mut expected: Vec<String> = (0..300).map(|n| format!("entry-{n:03}-ü")).collect();
+        for name in &expected {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        std::fs::create_dir(root.join("sub")).unwrap();
+        expected.push("sub".to_owned());
+        let mut names = list_names(&listing).unwrap();
+        names.sort();
+        expected.sort();
+        assert_eq!(names, expected);
+        // A handle without FILE_LIST_DIRECTORY cannot list.
+        assert!(list_names(&dir).is_err());
+        drop((listing, dir));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

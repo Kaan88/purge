@@ -256,21 +256,34 @@ fn a_committed_run_is_read_out_item_by_item() {
     assert_eq!(report.restore_point, RestorePointOutcome::Throttled);
     assert!(report.pending_reboot);
 
-    // Four items: the task has no executor op and cannot be listed.
-    let listed: Vec<(&str, u32, &str, u64)> = report
+    // Five items: the task has no executor op and is listed without one. (Changed: it was left out of
+    // the items while `ItemReport.exec_op` was not optional.)
+    let listed: Vec<(&str, u32, Option<&str>, u64)> = report
         .items
         .iter()
-        .map(|i| (i.item.0.as_str(), i.op.0, i.exec_op.name(), i.backup_bytes))
+        .map(|i| {
+            let name = i.exec_op.as_ref().map(|op| op.name());
+            (i.item.0.as_str(), i.op.0, name, i.backup_bytes)
+        })
         .collect();
     assert_eq!(
         listed,
         [
-            ("c-a", 1, "QuarantineMove", 100),
-            ("c-b", 2, "QuarantineMove", 40),
+            ("c-a", 1, Some("QuarantineMove"), 100),
+            ("c-b", 2, Some("QuarantineMove"), 40),
             // Held: nothing was moved, so nothing is kept for it yet.
-            ("c-c", 3, "QuarantineMove", 0),
-            ("c-v", 4, "DeleteValue", 300),
+            ("c-c", 3, Some("QuarantineMove"), 0),
+            ("c-v", 4, Some("DeleteValue"), 300),
+            ("c-t", 5, None, 0),
         ]
+    );
+    assert_eq!(
+        report.items[4].outcome,
+        ItemOutcome::Skipped {
+            reason: SkipReason::GateBlocked {
+                blocker: purge_model::Blocker::CannotBackUp,
+            },
+        }
     );
     assert_eq!(report.items[1].outcome, pending());
     assert_eq!(report.items[2].lockers.len(), 1);
@@ -283,8 +296,10 @@ fn a_committed_run_is_read_out_item_by_item() {
             report.counts.held_retry,
             report.counts.skipped
         ),
-        (2, 1, 1, 0)
+        (2, 1, 1, 1)
     );
+    // The report counts every journalled op, as the index entry does.
+    assert_eq!(report.counts, state.counts());
     assert_eq!(report.backup_bytes, total);
 
     assert_eq!(report.warnings[0], "a note about the run");
@@ -293,7 +308,8 @@ fn a_committed_run_is_read_out_item_by_item() {
     assert!(warned("c-t") && warned("not supported in this version"));
     assert!(!warned("needs no explanation"));
 
-    // The index entry is the journal's own tally, the task included.
+    // The index entry is the journal's own tally, the task included, and records how far the journal
+    // reaches (review M7).
     let data = DataVolume {
         serial: 9,
         root: r"C:\".into(),
@@ -302,6 +318,8 @@ fn a_committed_run_is_read_out_item_by_item() {
     assert_eq!(entry.state, SessionState::Committed);
     assert_eq!(entry.counts, state.counts());
     assert_eq!(entry.counts.skipped, 1);
+    assert_eq!(entry.journal, Some(state.mark()));
+    assert_eq!(state.mark().records, 1 + 5 + 4 + 5 + 1 + 1);
     assert_eq!(entry.backup_bytes, total);
     assert!(entry.pending_reboot);
     assert_eq!(entry.finished, Some(FileTime(134_078_121_030_000_000)));
@@ -358,7 +376,8 @@ fn an_aborted_run_reports_what_was_not_attempted() {
     assert_eq!(report.state, SessionState::Aborted);
     assert_eq!(report.finished, FileTime(134_078_121_040_000_000));
     let outcomes: Vec<&ItemOutcome> = report.items.iter().map(|i| &i.outcome).collect();
-    assert_eq!(outcomes.len(), 4);
+    // (Changed: four items while the task, which has no executor op, could not be listed.)
+    assert_eq!(outcomes.len(), 5);
     assert_eq!(outcomes[0], &ItemOutcome::Done);
     assert!(matches!(
         outcomes[1],
@@ -369,8 +388,10 @@ fn an_aborted_run_reports_what_was_not_attempted() {
     ));
     assert_eq!(outcomes[2], &not_attempted());
     assert_eq!(outcomes[3], &not_attempted());
+    assert_eq!(outcomes[4], &not_attempted());
+    assert_eq!(report.items[4].exec_op, None);
     assert_eq!(report.counts, report.tally());
-    assert_eq!((report.counts.failed, report.counts.skipped), (1, 2));
+    assert_eq!((report.counts.failed, report.counts.skipped), (1, 3));
     // What moved is counted; what only has an intent is not.
     assert_eq!(report.backup_bytes, 100);
     assert!(!report.pending_reboot);

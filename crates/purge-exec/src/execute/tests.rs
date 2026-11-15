@@ -30,7 +30,7 @@ use purge_win::sr::SrOutcome;
 use super::*;
 use crate::act_fs::RETRY_DELAYS;
 use crate::act_typed::{ListError, PackageInfo};
-use crate::journal::{JournalRead, Phase};
+use crate::journal::{self, JournalRead, Phase};
 use crate::locked::MemoryPendingRenames;
 use crate::plan_in::tests::{candidate, cid, key, path, request, safe, scan_doc, value};
 use crate::plan_in::{NotSelectable, Selection};
@@ -679,9 +679,10 @@ fn a_mixed_run_ends_with_a_report_that_matches_the_journal() {
     assert!(!report.pending_reboot);
     assert_eq!(rig.restore_calls.load(Ordering::SeqCst), 0);
 
-    // The record order: header, eight validated, then intent/done pairs, one group, commit.
+    // The record order: header, the run's settings, eight validated, then intent/done pairs, one
+    // group, commit.
     let names: Vec<&str> = read.records.iter().map(Record::name).collect();
-    let mut expected = vec!["header"];
+    let mut expected = vec!["header", "settings"];
     expected.extend(["validated"; 8]);
     for _ in 0..8 {
         expected.extend(["intent", "done"]);
@@ -750,6 +751,12 @@ fn a_mixed_run_ends_with_a_report_that_matches_the_journal() {
     assert_eq!(entry.plan_hash.to_string(), scan.plan_hash);
     assert_eq!(entry.usage.iter().map(|u| u.bytes).sum::<u64>(), total);
     assert_eq!(entry.owner.as_ref().unwrap().display_name, "Vendor App");
+    // M7: the entry marks the journal it summarises, and the journal is read against that mark.
+    let mark = entry.journal.as_ref().expect("a durable journal is marked");
+    assert_eq!(*mark, read.state.mark());
+    assert_eq!(mark.records, read.line_heads.len() as u64);
+    journal::check_mark(&read, mark).unwrap();
+    journal::read_indexed(&session, Some(mark)).unwrap();
 }
 
 #[test]
@@ -857,6 +864,32 @@ fn per_item_failures_do_not_stop_the_run() {
     assert!(!exists(&first) && !exists(&last));
     assert!(report.warnings.iter().any(|w| w.contains("c-4")));
     assert_eq!(read.state.held_retry().count(), 1);
+    // The validated records: the gone item is absent, the junction was refused at validation and says
+    // by what; neither binds anything.
+    assert_eq!(
+        read.state.op(OpId(3)).unwrap().validated().facts,
+        ItemFacts::Absent
+    );
+    let refused = read.state.op(OpId(4)).unwrap().validated().facts;
+    assert!(
+        matches!(
+            refused,
+            ItemFacts::Refused {
+                blocker: Some(_),
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert!(!refused.is_actionable());
+    assert!(
+        read.state
+            .op(OpId(1))
+            .unwrap()
+            .validated()
+            .facts
+            .is_actionable()
+    );
 }
 
 #[test]
@@ -1020,11 +1053,36 @@ fn targets_without_an_executor_are_journalled_as_skipped() {
     assert_eq!(read.state.counts().skipped, 3);
     assert!(read.records.iter().filter(|r| r.name() == "intent").count() == 1);
 
-    // The model's item report needs an executor op, which these have none of: they are named in the
-    // warnings, and the items and counts of the report still agree with each other.
-    assert_eq!(report.items.len(), 1);
-    assert_eq!(report.items[0].item, cid("c-file"));
+    // Every op is an item of the report; these are listed without an executor op. (Changed: the
+    // model's item report needed an executor op, so they were left out of the items.) The items, the
+    // report's counts and the journal's `done` records agree.
+    let listed: Vec<(&str, bool)> = report
+        .items
+        .iter()
+        .map(|i| (i.item.0.as_str(), i.exec_op.is_some()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("c-task", false),
+            ("c-svc", false),
+            ("c-fw", false),
+            ("c-file", true)
+        ]
+    );
     assert_eq!(report.counts, report.tally());
+    assert_eq!(report.counts, read.state.counts());
+    // Their validated records say why nothing binds them.
+    for op in 1..=3 {
+        assert!(matches!(
+            &read.state.op(OpId(op)).unwrap().facts,
+            ItemFacts::Refused {
+                blocker: Some(Blocker::CannotBackUp),
+                reason,
+                os_error: None,
+            } if reason == "exec.unsupported"
+        ));
+    }
     for id in ["c-task", "c-svc", "c-fw"] {
         assert!(
             report
@@ -1216,6 +1274,10 @@ fn a_journal_that_cannot_be_written_aborts_the_run_and_records_it_when_it_can() 
     assert!(k.exists(r"Tree\Sub"));
     assert_eq!(std::fs::read(ext(&file)).unwrap(), b"u");
     assert_eq!(output.report.items.len(), 3);
+    // The abort was recorded, so the index entry marks the journal.
+    let index = rig.roots.read_index().unwrap();
+    let mark = index.get(&output.session).unwrap().journal.unwrap();
+    assert_eq!(mark, read.state.mark());
 }
 
 #[test]
@@ -1256,6 +1318,9 @@ fn a_journal_that_stays_unwritable_still_stops_the_run() {
     assert!(!read.state.is_finished());
     assert_eq!(outcomes(&read), [Some(ItemOutcome::Done), None, None]);
     assert!(read.state.op(OpId(2)).unwrap().intent.is_none());
+    // The summary does not describe what the journal holds, so its entry carries no mark.
+    let index = rig.roots.read_index().unwrap();
+    assert_eq!(index.get(&output.session).unwrap().journal, None);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1399,8 +1464,10 @@ fn a_stopped_run_is_resumed_through_the_per_item_function() {
     let session = rig.session(&id);
     let copy = read_scan_copy(&session).unwrap();
     assert_eq!(copy, scan);
-    let mut run = Run::resume(rig.env(None), session, &copy, settings.clone()).unwrap();
+    let mut run = Run::resume(rig.env(None), session, &copy).unwrap();
     assert_eq!(run.plan().items().len(), 3);
+    // The settings are the journal's, as the first run wrote them.
+    assert_eq!(run.settings(), &settings);
     assert_eq!(run.run_item(OpId(1)).unwrap(), ItemStep::AlreadyDone);
     assert_eq!(
         run.run_item(OpId(2)).unwrap(),
@@ -1421,7 +1488,7 @@ fn a_stopped_run_is_resumed_through_the_per_item_function() {
     // A finished session is not resumed, and a journal is not resumed with another plan.
     let session = rig.session(&id);
     assert!(matches!(
-        Run::resume(rig.env(None), session, &copy, settings.clone()),
+        Run::resume(rig.env(None), session, &copy),
         Err(ExecError::NotResumable(_))
     ));
 }
@@ -1435,7 +1502,6 @@ fn a_journal_is_not_resumed_with_another_document() {
         vec![quarantine("c-a", &a), quarantine("c-b", &b)],
         Vec::new(),
     );
-    let settings = request.settings.clone();
     let mut run = Run::start(request.clone(), rig.env(None)).unwrap();
     run.validate().unwrap();
     let id = run.session().id().clone();
@@ -1446,14 +1512,14 @@ fn a_journal_is_not_resumed_with_another_document() {
     crate::plan_in::tests::rehash(&mut other);
     let session = rig.session(&id);
     assert!(matches!(
-        Run::resume(rig.env(None), session, &other, settings.clone()),
+        Run::resume(rig.env(None), session, &other),
         Err(ExecError::Plan(PlanRefusal::JournalMismatch(_)))
     ));
     let mut tampered = request.scan.clone();
     tampered.items[1].target = path(&a);
     let session = rig.session(&id);
     assert!(matches!(
-        Run::resume(rig.env(None), session, &tampered, settings),
+        Run::resume(rig.env(None), session, &tampered),
         Err(ExecError::Plan(PlanRefusal::PlanHashMismatch { .. }))
     ));
     assert!(exists(&a) && exists(&b));
@@ -1548,7 +1614,7 @@ mod crash {
         // Nothing was validated, so there is nothing to resume.
         let session = rig.session(&id);
         assert!(matches!(
-            Run::resume(rig.env(None), session, &request.scan, request.settings),
+            Run::resume(rig.env(None), session, &request.scan),
             Err(ExecError::NotResumable(_))
         ));
     }
@@ -1571,7 +1637,7 @@ mod crash {
         // The next package takes it from here: the open intent is recovery's, the rest runs through
         // the per-item function.
         let session = rig.session(&id);
-        let mut run = Run::resume(rig.env(None), session, &request.scan, request.settings).unwrap();
+        let mut run = Run::resume(rig.env(None), session, &request.scan).unwrap();
         assert_eq!(run.run_item(OpId(1)).unwrap(), ItemStep::AlreadyDone);
         assert_eq!(run.run_item(OpId(2)).unwrap(), ItemStep::OpenIntent);
         assert_eq!(
@@ -1597,10 +1663,261 @@ mod crash {
         // No report and no index entry were written; resuming only has the commit left to do.
         assert!(rig.session(&id).open_file(REPORT_FILE).is_err());
         let session = rig.session(&id);
-        let run = Run::resume(rig.env(None), session, &request.scan, request.settings).unwrap();
+        let run = Run::resume(rig.env(None), session, &request.scan).unwrap();
         let output = run.finish();
         assert_eq!(output.report.state, SessionState::Committed);
         assert_eq!(output.report.counts.done, 3);
         assert_eq!(rig.journal(&id).state.phase(), Phase::Committed);
     }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Gap pass: refused facts, the unstarted session, resume settings and cap
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn an_item_that_did_not_pass_validation_is_journalled_with_refused_facts() {
+    use purge_guard::live::Refusal;
+    assert_eq!(
+        refused_facts(Some(&GateOutcome::Vanished)),
+        ItemFacts::Absent
+    );
+    assert_eq!(
+        refused_facts(Some(&GateOutcome::Refused(Refusal {
+            blocker: Blocker::ChangedSinceScan,
+            reason: "live.identity-changed",
+        }))),
+        ItemFacts::Refused {
+            blocker: Some(Blocker::ChangedSinceScan),
+            reason: "live.identity-changed".into(),
+            os_error: None,
+        }
+    );
+    assert_eq!(
+        refused_facts(Some(&GateOutcome::Failed(Win32Error(5)))),
+        ItemFacts::Refused {
+            blocker: None,
+            reason: OPEN_FAILED.into(),
+            os_error: Some(5),
+        }
+    );
+    // No executor op: not looked at; the blocker its skip reports.
+    assert_eq!(
+        refused_facts(None),
+        ItemFacts::Refused {
+            blocker: Some(Blocker::CannotBackUp),
+            reason: UNSUPPORTED.into(),
+            os_error: None,
+        }
+    );
+    // A record of such an item binds nothing, as one of an absent item.
+    for facts in [refused_facts(None), ItemFacts::Absent] {
+        assert_eq!(gate::Stamp::from_item_facts(&facts), None);
+    }
+}
+
+#[test]
+fn a_refused_validated_record_is_accepted_on_resume_and_binds_nothing() {
+    let mut rig = Rig::new("resume-refused");
+    let a = rig.s.file(r"app\a.txt", b"a");
+    let target = rig.s.dir("elsewhere");
+    let link = rig.s.path(r"app\link");
+    junction(&link, &target);
+    let request = preselected(
+        vec![quarantine("c-a", &a), quarantine("c-link", &link)],
+        Vec::new(),
+    );
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    run.validate().unwrap();
+    let id = run.session().id().clone();
+    drop(run);
+    let read = rig.journal(&id);
+    assert!(matches!(
+        read.state.op(OpId(2)).unwrap().validated().facts,
+        ItemFacts::Refused { .. }
+    ));
+
+    let session = rig.session(&id);
+    let copy = read_scan_copy(&session).unwrap();
+    let mut run = Run::resume(rig.env(None), session, &copy).unwrap();
+    // GateCtx::record took the refused record without a complaint.
+    assert!(
+        run.ledger.notes.details.is_empty(),
+        "{:?}",
+        run.ledger.notes.details
+    );
+    // Nothing is bound to op 2, so it is never acted on.
+    let step = run.run_item(OpId(2)).unwrap();
+    assert!(
+        matches!(
+            step,
+            ItemStep::Finished(ItemOutcome::Skipped { .. } | ItemOutcome::Failed { .. })
+        ),
+        "{step:?}"
+    );
+    assert_eq!(
+        run.run_item(OpId(1)).unwrap(),
+        ItemStep::Finished(ItemOutcome::Done)
+    );
+    let output = run.finish();
+    assert_eq!(output.report.state, SessionState::Committed);
+    assert!(exists(&link) && !exists(&a));
+}
+
+#[test]
+fn a_run_that_fails_before_its_journal_removes_its_session_dir() {
+    // The scan copy's name is taken: the run fails before the header, and the directory, which holds
+    // only that name, is removed by handle.
+    let mut rig = Rig::new("unstarted-gone");
+    let a = rig.s.file(r"app\a.txt", b"a");
+    let request = preselected(vec![quarantine("c-a", &a)], Vec::new());
+    let session_path = RefCell::new(PathBuf::new());
+    let progress = |event: &Progress<'_>| {
+        if let Progress::SessionCreated { path, .. } = event {
+            *session_path.borrow_mut() = path.to_path_buf();
+            std::fs::write(path.join(crate::storage::SCAN_FILE), b"taken").unwrap();
+        }
+    };
+    assert!(rig.try_run(request, Some(&progress)).is_err());
+    assert!(!session_path.borrow().as_os_str().is_empty());
+    assert!(!session_path.borrow().exists());
+    assert!(rig.sessions().is_empty());
+    assert!(exists(&a));
+
+    // The journal's name is taken: the run fails at the header, and the directory, which now holds a
+    // journal, stays as it is.
+    let mut rig = Rig::new("unstarted-kept");
+    let a = rig.s.file(r"app\a.txt", b"a");
+    let request = preselected(vec![quarantine("c-a", &a)], Vec::new());
+    let session_path = RefCell::new(PathBuf::new());
+    let progress = |event: &Progress<'_>| {
+        if let Progress::SessionCreated { path, .. } = event {
+            *session_path.borrow_mut() = path.to_path_buf();
+            std::fs::write(path.join(JOURNAL_FILE), b"").unwrap();
+        }
+    };
+    assert!(matches!(
+        rig.try_run(request, Some(&progress)),
+        Err(ExecError::Journal(_))
+    ));
+    let mut left: Vec<String> = std::fs::read_dir(&*session_path.borrow())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, [JOURNAL_FILE, crate::storage::SCAN_FILE]);
+    assert_eq!(rig.sessions().len(), 1);
+    assert!(exists(&a));
+}
+
+#[test]
+fn a_journal_without_run_settings_is_not_resumed() {
+    // A journal as written before the settings record existed: the same header and validated records.
+    let mut rig = Rig::new("resume-old");
+    let a = rig.s.file(r"app\a.txt", b"a");
+    let request = preselected(vec![quarantine("c-a", &a)], Vec::new());
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    run.validate().unwrap();
+    let id = run.session().id().clone();
+    drop(run);
+    let read = rig.journal(&id);
+    let copy = read_scan_copy(&rig.session(&id)).unwrap();
+
+    let old = rig.roots.create_session().unwrap();
+    write_scan_copy(&old, &copy).unwrap();
+    let header = Header {
+        session: old.id().clone(),
+        ..read.state.header().clone()
+    };
+    let mut writer = JournalWriter::create(&old, header).unwrap();
+    for op in read.state.ops() {
+        writer.validated(op.validated()).unwrap();
+    }
+    drop(writer);
+    let err = Run::resume(rig.env(None), old, &copy).unwrap_err();
+    assert!(
+        matches!(&err, ExecError::NotResumable(why) if why.contains("settings")),
+        "{err}"
+    );
+    assert!(exists(&a));
+}
+
+#[test]
+fn a_resumed_run_keeps_to_the_size_cap() {
+    let mut rig = Rig::new("resume-cap");
+    let a = rig.s.file(r"app\a.bin", &[1u8; 4096]);
+    let b = rig.s.file(r"app\b.bin", &[2u8; 4096]);
+    let request = preselected(
+        vec![quarantine("c-a", &a), quarantine("c-b", &b)],
+        Vec::new(),
+    );
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    run.validate().unwrap();
+    let (serial, bytes) = run.move_size(OpId(1)).unwrap();
+    assert_eq!(bytes, 4096);
+    // Nothing else is in the index: what the budget holds is the volume's cap.
+    let cap = run.budget.0.as_ref().unwrap()[&serial];
+    assert!(cap > 2 * 4096);
+    assert_eq!(
+        run.run_item(OpId(1)).unwrap(),
+        ItemStep::Finished(ItemOutcome::Done)
+    );
+    let id = run.session().id().clone();
+    drop(run);
+
+    // Another session holds all but 8191 bytes of the cap: op 2 fits next to it, but not next to it
+    // and what op 1 already moved. A stale entry of this session itself is not counted twice.
+    let summary = |id: SessionId, bytes: u64| purge_model::exec::session::SessionSummary {
+        started: id.started(),
+        expires: purge_model::exec::session::Expiry::from_start(id.started()),
+        id,
+        app: "app".into(),
+        owner: None,
+        plan_hash: purge_model::exec::op::Sha256Hex([7; 32]),
+        state: SessionState::Committed,
+        finished: None,
+        counts: Default::default(),
+        undone: 0,
+        backup_bytes: bytes,
+        usage: vec![purge_model::exec::session::VolumeUsage {
+            serial,
+            root: String::new(),
+            bytes,
+        }],
+        purged: Vec::new(),
+        pending_reboot: false,
+        journal: None,
+    };
+    let other = rig.roots.create_session().unwrap();
+    rig.roots
+        .update_index(|index| {
+            index.upsert(summary(other.id().clone(), cap - 2 * 4096 + 1));
+            index.upsert(summary(id.clone(), cap));
+        })
+        .unwrap();
+
+    let session = rig.session(&id);
+    let copy = read_scan_copy(&session).unwrap();
+    let mut run = Run::resume(rig.env(None), session, &copy).unwrap();
+    assert!(!run.budget.allows(serial, 4096) && run.budget.allows(serial, 4095));
+    assert_eq!(
+        run.run_item(OpId(2)).unwrap(),
+        ItemStep::Finished(ItemOutcome::Skipped {
+            reason: SkipReason::CapExceeded
+        })
+    );
+    let output = run.finish();
+    assert_eq!(output.report.state, SessionState::Committed);
+    assert!(exists(&b) && !exists(&a));
+
+    // Without the other session the same resume would have let op 2 through.
+    let mut index = rig.roots.read_index().unwrap();
+    index.remove(&id);
+    let state = rig.journal(&id).state;
+    let spent = report::usage(&state, data_volume(&rig.roots).as_ref());
+    let without_other = {
+        index.remove(other.id());
+        resume_budget(&rig.roots, &state, Some(index), &spent)
+    };
+    assert!(without_other.allows(serial, 4096));
 }
