@@ -16,7 +16,7 @@ test-support = []
 
 [dependencies]
 purge-model.workspace = true
-purge-win = { workspace = true, features = ["write"] }
+purge-win = { workspace = true, features = ["write", "appx"] }
 purge-guard.workspace = true
 purge-plan.workspace = true
 serde.workspace = true
