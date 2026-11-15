@@ -399,6 +399,75 @@ fn a_partial_undo_pulls_in_what_its_restores_depend_on() {
     assert_eq!(k.snap(), keys_before);
 }
 
+/// Item 3 of the M2 recovery fix pass: the index entry follows the undo. After the run it holds the
+/// commit's figures; after a partial undo it is `PartiallyUndone` with the undone count and only the
+/// bytes still kept (an item moved back no longer counts); after the full undo it is `Undone`, with
+/// nothing left in quarantine (the registry backup file stays until expiry and still counts). Before
+/// the pass the entry kept the commit's bytes.
+#[test]
+fn the_index_entry_follows_a_partial_and_a_full_undo() {
+    let mut rig = Rig::new("entry-undo");
+    let k = TestKey::new();
+    let a = rig.s.file(r"app\a.bin", &[1u8; 1000]);
+    let b = rig.s.file(r"app\b.bin", &[2u8; 3000]);
+    k.create("Vals");
+    k.set("Vals", "Gone", REG_SZ, &utf16z("bye"));
+    let items = vec![
+        quarantine("c-a", &a),
+        quarantine("c-b", &b),
+        safe("c-val", value(&k.wire("Vals"), "Gone"), Action::DeleteValue),
+    ];
+    let done = rig.run(request(items, Vec::new()));
+    let id = done.session.clone();
+    let read = rig.journal(&id);
+    assert_eq!(outcomes(&read), vec![Some(ItemOutcome::Done); 3]);
+    let committed = read.state.commit().unwrap().backup_bytes;
+    let backup_file = read
+        .state
+        .op(op_of(&read, "c-val"))
+        .unwrap()
+        .intent
+        .as_ref()
+        .unwrap()
+        .inverse
+        .backup()
+        .unwrap()
+        .bytes;
+    assert_eq!(committed, 1000 + 3000 + backup_file);
+    let total = |entry: &purge_model::exec::session::SessionSummary| {
+        entry.usage.iter().map(|u| u.bytes).sum::<u64>()
+    };
+    let entry = rig.entry(&id).unwrap();
+    assert_eq!(
+        (entry.state, entry.undone, entry.backup_bytes),
+        (SessionState::Committed, 0, committed)
+    );
+    assert_eq!(total(&entry), committed);
+
+    // Partial: the 1000-byte file.
+    let partial = rig.undo(&id, UndoSelection::Items(vec![cid("c-a")]));
+    assert_eq!(partial.report.state, SessionState::PartiallyUndone);
+    let entry = rig.entry(&id).unwrap();
+    assert_eq!(
+        (entry.state, entry.undone, entry.backup_bytes),
+        (SessionState::PartiallyUndone, 1, 3000 + backup_file)
+    );
+    assert_eq!(total(&entry), 3000 + backup_file);
+    assert!(exists(&a) && !exists(&b));
+
+    // Full: the rest.
+    let rest = rig.undo_all(&id);
+    assert_eq!(rest.report.state, SessionState::Undone);
+    let entry = rig.entry(&id).unwrap();
+    assert_eq!(
+        (entry.state, entry.undone, entry.backup_bytes),
+        (SessionState::Undone, 3, backup_file)
+    );
+    assert_eq!(total(&entry), backup_file);
+    assert!(exists(&a) && exists(&b));
+    assert_eq!(k.get("Vals", "Gone").unwrap().1, utf16z("bye"));
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Conflicts
 // ---------------------------------------------------------------------------------------------------
@@ -646,4 +715,33 @@ fn a_journal_cut_behind_its_index_mark_is_refused_as_damaged() {
     assert_eq!(pending.sessions.len(), 1);
     assert_eq!(pending.sessions[0].kind, recover::PendingKind::Damaged);
     assert!(!exists(&a) && !exists(&b));
+}
+
+/// Item 2 of the M2 recovery fix pass: a finished session whose report was never written (a crash
+/// after the end of the run) is listed for recovery, and recovery writes the report from the journal
+/// and the scan copy, once. Before the pass such a session was not listed and never got a report.
+#[test]
+fn a_finished_session_without_its_report_gets_one_from_recovery() {
+    let mut rig = Rig::new("no-report");
+    let a = rig.s.file(r"app\a.txt", b"a");
+    let done = rig.run(request(vec![quarantine("c-a", &a)], Vec::new()));
+    let report = rig.session(&done.session).path().join("report.json");
+    std::fs::remove_file(&report).unwrap();
+    let listed = recover::pending(&rig.roots).unwrap();
+    assert_eq!(listed.sessions.len(), 1, "{listed:#?}");
+    assert_eq!(listed.sessions[0].kind, recover::PendingKind::Unindexed);
+    assert!(listed.sessions[0].detail.contains("report"));
+
+    let out = rig.resume(&done.session);
+    assert!(out.report_written, "{out:#?}");
+    let written = out.report.unwrap();
+    assert_eq!(written.state, SessionState::Committed);
+    assert_eq!(written.counts.done, 1);
+    let on_disk: purge_model::exec::session::ExecReport =
+        serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+    assert_eq!(on_disk, written);
+    assert!(recover::pending(&rig.roots).unwrap().sessions.is_empty());
+    let again = rig.resume(&done.session);
+    assert!(again.report.is_none() && !again.report_written);
+    assert!(!exists(&a));
 }

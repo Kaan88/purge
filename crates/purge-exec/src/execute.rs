@@ -85,7 +85,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use purge_guard::deny::{DenyList, Exemptions};
 use purge_model::Blocker;
@@ -94,11 +94,11 @@ use purge_model::exec::journal::{
 };
 use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::session::{ExecReport, SessionId, SessionIndex, SessionState, VolumeUsage};
-use purge_model::{Candidate, CandidateId, FileTime};
+use purge_model::{Candidate, CandidateId};
 use purge_plan::emit::ScanDoc;
 
-use crate::act_fs::{self, FsActed, FsPrepared, Retry, act_fs, prepare_fs};
-use crate::act_reg::{BackupWriteError, RegPrepared, act_reg, prepare_reg};
+use crate::act_fs::{self, FsActed, FsCompletion, FsPrepared, Retry, act_fs, prepare_fs};
+use crate::act_reg::{self, BackupWriteError, RegPrepared, act_reg, prepare_reg};
 use crate::act_typed::{
     self, DefinitionError, IrreversibleAck, PackageBackend, prepare_remove_package_recorded,
     remove_package,
@@ -110,15 +110,15 @@ use crate::locked::{
     self, ConsentAnswer, ConsentCallback, DenyAll, Ladder, LockPrepared, LockResult,
     PendingRenames, StoreLadder,
 };
-use crate::plan_in::{self, BoundPlan, ExecRequest, ExecSettings, PlanRefusal};
+use crate::plan_in::{self, BoundItem, BoundPlan, ExecRequest, ExecSettings, PlanRefusal};
 use crate::prepare::{
     self, LockerQuery, PrepareRequest, Prepared, RESTORE_POINT_FINISH_WAIT, RESTORE_POINT_WAIT,
     RestorePointBackend, RiskItem,
 };
+use crate::recover::{Probe, SettledOp};
 use crate::report::{self, DataVolume, RunNotes};
 use crate::storage::{
-    REPORT_FILE, SCAN_FILE, SessionDir, StorageError, StorageRoots, VOLUME_QUARANTINE_DIR,
-    cap_bytes,
+    SCAN_FILE, SessionDir, StorageError, StorageRoots, VOLUME_QUARANTINE_DIR, cap_bytes, now,
 };
 
 #[cfg(test)]
@@ -317,16 +317,6 @@ pub struct ExecOutput {
     pub index_updated: bool,
 }
 
-/// The current time as a FILETIME.
-fn now() -> FileTime {
-    const UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
-    let since = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let ticks = u64::try_from(since.as_nanos() / 100).unwrap_or(u64::MAX);
-    FileTime(UNIX_EPOCH_TICKS.saturating_add(ticks))
-}
-
 // ---------------------------------------------------------------------------------------------------
 // Volumes and the size cap
 // ---------------------------------------------------------------------------------------------------
@@ -347,14 +337,6 @@ fn is_drive_root(root: &Path) -> bool {
     bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && &bytes[1..] == br":\"
 }
 
-/// The 64-bit serial of the volume holding `path`, read from a handle on it.
-fn serial_of(path: &Path) -> Option<u64> {
-    let extended = purge_win::secure::extended_path(path).ok()?;
-    purge_win::fs::metadata(&extended)
-        .ok()
-        .map(|meta| meta.file_id.volume_serial)
-}
-
 fn same_root(a: &Path, b: &Path) -> bool {
     a.to_string_lossy()
         .eq_ignore_ascii_case(&b.to_string_lossy())
@@ -366,7 +348,7 @@ fn volume_of(roots: &StorageRoots, path: &str) -> Option<Volume> {
     if facts.quarantine_capable().is_err() || !is_drive_root(&facts.root) {
         return None;
     }
-    let serial = serial_of(&facts.root).filter(|serial| *serial != 0)?;
+    let serial = report::volume_serial(&facts.root).filter(|serial| *serial != 0)?;
     Some(Volume {
         root: facts.root,
         serial,
@@ -430,15 +412,6 @@ fn volume_records(
             }
         })
         .collect()
-}
-
-/// The volume of the data root, for the index entry's per-volume bytes.
-fn data_volume(roots: &StorageRoots) -> Option<DataVolume> {
-    let root = roots.volume(roots.data_root()).ok()?.root;
-    Some(DataVolume {
-        serial: serial_of(roots.data_root())?,
-        root: root.to_string_lossy().into_owned(),
-    })
 }
 
 /// What each volume may still take before its size cap; `None` when the index could not be read, in
@@ -736,6 +709,9 @@ pub struct Run<'a> {
     /// The journal was handed out ([`Run::journal_mut`]) and may hold `done` records the gate context
     /// has not noted: [`Run::run_item`] notes the journal's completed ops again before the next item.
     journal_lent: bool,
+    /// Why the run must stop before any item runs (a resumed validation that could not be journalled);
+    /// the next [`Run::run_item`] returns it.
+    stopped: Option<Abort>,
 }
 
 /// The run's ops with their op ids, for [`GateCtx::set_run_ops`].
@@ -788,10 +764,14 @@ impl<'a> Run<'a> {
                 allow_irreversible: plan.allow_irreversible(),
                 volumes: volume_records(env.roots, session.id(), &volumes),
             };
-            let journal = JournalWriter::create(&session, header)?;
+            let journal = JournalWriter::create_with_settings(
+                &session,
+                header,
+                request.settings.to_journal(),
+            )?;
             Ok((ctx, journal))
         })();
-        let (ctx, mut journal) = match opened {
+        let (ctx, journal) = match opened {
             Ok(opened) => opened,
             Err(e) => {
                 // A journal created before the failure (an unfinished header) makes this refuse, and
@@ -800,9 +780,8 @@ impl<'a> Run<'a> {
                 return Err(e);
             }
         };
-        journal.settings(request.settings.to_journal())?;
         Ok(Run {
-            data_volume: data_volume(env.roots),
+            data_volume: report::data_volume(env.roots),
             env,
             plan,
             settings: request.settings,
@@ -812,6 +791,7 @@ impl<'a> Run<'a> {
             budget,
             prepared: None,
             journal_lent: false,
+            stopped: None,
         })
     }
 
@@ -821,10 +801,19 @@ impl<'a> Run<'a> {
     /// handed to the gate context, exactly as a fresh run hands over the ones it wrote. Nothing is
     /// acted on here.
     ///
-    /// Refused when the journal already ended, when the run stopped before every item was validated
-    /// (nothing was acted on then; such a session is aborted, not resumed), and when the journal holds
-    /// no `settings` record (written before the record existed): the run's settings are read from the
-    /// journal ([`ExecSettings::from_journal`]), never taken from the caller.
+    /// Refused when the journal already ended and when the journal holds no `settings` record (written
+    /// before the record existed): the run's settings are read from the journal
+    /// ([`ExecSettings::from_journal`]), never taken from the caller.
+    ///
+    /// A run that stopped before every item was validated (a crash at the header or in the validate
+    /// pass) acted on nothing; it is continued as if it had not stopped. The plan is bound again with
+    /// the rest of its selection found from the header ([`plan_in::rebind_interrupted`]), the items
+    /// without a `validated` record are validated now (step 7, for those items only: a journalled
+    /// record is never written or validated again) and their records journalled and handed to the gate
+    /// context. Step 8 is not repeated: no restore point is asked for (the report says so when the
+    /// run's setting would have asked), and the Restart Manager is asked by the locked-file ladder per
+    /// item. A journal write that fails in that validation stops the run: the next
+    /// [`Run::run_item`] returns the [`Abort`].
     ///
     /// The size cap is enforced for the remaining items as for a fresh run: each volume of the header
     /// may take what its cap leaves after the other sessions of the index and what this session's
@@ -840,11 +829,6 @@ impl<'a> Run<'a> {
         if state.is_finished() {
             return Err(ExecError::NotResumable("its journal already ended".into()));
         }
-        if state.validated_count() != state.header().items {
-            return Err(ExecError::NotResumable(
-                "the run stopped before every item was validated".into(),
-            ));
-        }
         let Some(journalled) = state.settings() else {
             return Err(ExecError::NotResumable(
                 "its journal records no run settings (it was written before they were journalled)"
@@ -853,7 +837,7 @@ impl<'a> Run<'a> {
         };
         let settings = ExecSettings::from_journal(journalled);
         let validated: Vec<Validated> = state.ops().map(OpState::validated).collect();
-        let plan = plan_in::rebind(scan, state)?;
+        let plan = plan_in::rebind_interrupted(scan, state)?;
         let volume_roots: Vec<&str> = state
             .header()
             .volumes
@@ -864,7 +848,7 @@ impl<'a> Run<'a> {
         let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
         ctx.set_run_ops(run_ops(&plan));
         let mut notes = RunNotes::default();
-        let data_volume = data_volume(env.roots);
+        let data_volume = report::data_volume(env.roots);
         let index = read_index_for_cap(env.roots, &mut notes.warnings)?;
         let spent = report::usage(state, data_volume.as_ref());
         let budget = resume_budget(env.roots, state, index, &spent);
@@ -883,7 +867,8 @@ impl<'a> Run<'a> {
         // What the run's completed registry ops did to the keys later ops are bound to, from their
         // journalled intent and done records (`GateCtx::note_done`).
         ctx.note_journal(state);
-        Ok(Run {
+        let unvalidated = state.validated_count() < state.header().items;
+        let mut run = Run {
             data_volume,
             env,
             plan,
@@ -894,7 +879,20 @@ impl<'a> Run<'a> {
             budget,
             prepared: None,
             journal_lent: false,
-        })
+            stopped: None,
+        };
+        if unvalidated {
+            if let Err(abort) = run.validate() {
+                run.stopped = Some(abort);
+            } else if run.settings.restore_point.requests(&run.risk_reasons()) {
+                run.ledger.notes.warnings.push(
+                    "no restore point was asked for: the run stopped before its items were \
+                     validated and was resumed"
+                        .to_owned(),
+                );
+            }
+        }
+        Ok(run)
     }
 
     /// The settings the run works with: the request's for a fresh run, the journal's for a resumed one.
@@ -976,16 +974,25 @@ impl<'a> Run<'a> {
     /// ([`refused_facts`]). Neither binds anything in the gate, so nothing can act on such an item.
     /// A path item that is not the object its candidate's scan-time identity names is refused
     /// (`gate.scan-identity`, changed since the scan) and so later skipped as `ChangedSinceScan`.
+    ///
+    /// Only items without a `validated` record in the journal are looked at (all of them in a fresh
+    /// run; in a resumed one those the interrupted pass had not reached). Returns every item's record,
+    /// the journalled ones included, in plan order.
     fn validate(&mut self) -> Result<Vec<Validated>, Abort> {
-        let exemptions: BTreeMap<OpId, Exemptions> = self
+        let state = self.ledger.journal.state();
+        let todo: Vec<&BoundItem> = self
             .plan
             .items()
+            .iter()
+            .filter(|item| state.op(item.op).is_none())
+            .collect();
+        let exemptions: BTreeMap<OpId, Exemptions> = todo
             .iter()
             .map(|item| (item.op, self.exemptions(item.op)))
             .collect();
         let outcomes: BTreeMap<OpId, GateOutcome<gate::Validation>> = gate::validate_all(
             &self.ctx,
-            self.plan.items().iter().filter_map(|item| {
+            todo.iter().filter_map(|item| {
                 let exec_op = item.exec_op.as_ref()?;
                 Some((item.op, self.gate_item(item.op, exec_op)))
             }),
@@ -995,6 +1002,10 @@ impl<'a> Run<'a> {
 
         let mut records = Vec::with_capacity(self.plan.items().len());
         for item in self.plan.items() {
+            if let Some(journalled) = self.ledger.journal.state().op(item.op) {
+                records.push(journalled.validated());
+                continue;
+            }
             let Some(candidate) = self.plan.candidate(item) else {
                 continue;
             };
@@ -1038,6 +1049,18 @@ impl<'a> Run<'a> {
     /// Step 8: the restore point (per setting) and the Restart Manager query. Never fails.
     fn prepare<R: RestorePointBackend>(&mut self, validated: &[Validated], restore_points: R) {
         let scan = self.plan.scan();
+        let request = PrepareRequest {
+            setting: self.settings.restore_point,
+            risk: self.risk_reasons(),
+            description: prepare::restore_point_description(&scan.app),
+            validated,
+            wait: self.env.restore_point_wait,
+        };
+        self.prepared = Some(prepare::prepare(request, restore_points, self.env.lockers));
+    }
+
+    /// Why the plan is high-risk, from its selected items and their absorbed children.
+    fn risk_reasons(&self) -> Vec<prepare::RiskReason> {
         let mut risk_items = Vec::new();
         for item in self.plan.items() {
             if let Some(candidate) = self.plan.candidate(item) {
@@ -1045,14 +1068,7 @@ impl<'a> Run<'a> {
                 risk_items.extend(self.plan.children(candidate).map(RiskItem::from_candidate));
             }
         }
-        let request = PrepareRequest {
-            setting: self.settings.restore_point,
-            risk: prepare::risk_reasons(&risk_items, scan.mode),
-            description: prepare::restore_point_description(&scan.app),
-            validated,
-            wait: self.env.restore_point_wait,
-        };
-        self.prepared = Some(prepare::prepare(request, restore_points, self.env.lockers));
+        prepare::risk_reasons(&risk_items, self.plan.scan().mode)
     }
 
     // ---- One item ---------------------------------------------------------------------------------
@@ -1061,6 +1077,9 @@ impl<'a> Run<'a> {
     /// module docs). Returns `Err` only when the run must stop: the caller then calls [`Run::abort`]
     /// and runs no further item.
     pub fn run_item(&mut self, op: OpId) -> Result<ItemStep, Abort> {
+        if let Some(abort) = self.stopped.take() {
+            return Err(abort);
+        }
         if std::mem::take(&mut self.journal_lent) {
             self.ctx.note_journal(self.ledger.journal.state());
         }
@@ -1086,6 +1105,103 @@ impl<'a> Run<'a> {
             outcome: &outcome,
         });
         Ok(ItemStep::Finished(outcome))
+    }
+
+    /// Crash recovery: settles op `op`, whose intent the journal holds without a `done`, under that
+    /// intent's own token (`JournalWriter::resume_intent`). Its action module probes what really
+    /// happened ([`crate::recover::probe_intent`]): `Done` gets the missing `done`, `Attention` a `done`
+    /// `Failed{VerifyFailed}` (the item is left as it is), and `NotDone` or `Partial` is completed
+    /// forward, bound to the journalled intent ([`act_fs::complete_fs`], [`act_reg::complete_reg`],
+    /// [`act_typed::complete_package`]). A file found in use goes to the locked-file ladder
+    /// ([`Ladder::in_store`]) with the journalled intent, exactly as a run hands one over after its
+    /// intent. What the op changed counts toward the size cap and, for a registry op, as this run's own
+    /// change for the items after it.
+    ///
+    /// `Ok(None)` when the op has no open intent. `Err` only when the run must stop (a journal write
+    /// failed): the caller then calls [`Run::abort`].
+    pub fn settle_open(&mut self, op: OpId) -> Result<Option<SettledOp>, Abort> {
+        if let Some(abort) = self.stopped.take() {
+            return Err(abort);
+        }
+        if std::mem::take(&mut self.journal_lent) {
+            self.ctx.note_journal(self.ledger.journal.state());
+        }
+        let Some(intent) = self
+            .state()
+            .op(op)
+            .filter(|state| state.status() == OpStatus::IntentOnly)
+            .and_then(|state| state.intent.clone())
+        else {
+            return Ok(None);
+        };
+        let Some(token) = self.ledger.journal.resume_intent(op) else {
+            return Ok(None);
+        };
+        let probe = crate::recover::probe_intent(
+            &self.ctx,
+            &self.session,
+            &intent,
+            &*self.env.pending_renames,
+            self.env.packages,
+        );
+        let size = self.move_size(op);
+        let outcome = match &probe {
+            Probe::Done(outcome) => self.ledger.done(
+                token,
+                outcome.clone(),
+                "found done after the interruption".to_owned(),
+            )?,
+            Probe::Attention { detail } => self.ledger.done(
+                token,
+                ItemOutcome::Failed {
+                    code: FailCode::VerifyFailed,
+                    os_error: None,
+                    detail: detail.clone(),
+                },
+                format!("after the interruption: {detail}"),
+            )?,
+            Probe::NotDone | Probe::Partial { .. } => self.complete_open(&intent, token)?,
+        };
+        if let Some((serial, bytes)) = size.filter(|_| outcome.changed_system()) {
+            self.budget.spend(serial, bytes);
+        }
+        if let Some(state) = self.ledger.journal.state().op(op) {
+            self.ctx.note_done(state);
+        }
+        Ok(Some(SettledOp { op, probe, outcome }))
+    }
+
+    /// The forward completion of [`Run::settle_open`] for an intent the probe found not done or half
+    /// done.
+    fn complete_open(&mut self, intent: &Intent, token: IntentToken) -> Result<ItemOutcome, Abort> {
+        match &intent.exec_op {
+            ExecOp::QuarantineMove { .. } | ExecOp::RemoveDirIfEmpty { .. } => {
+                let completion =
+                    act_fs::complete_fs(&self.ctx, &self.session, intent, &token, &self.env.retry);
+                match completion {
+                    FsCompletion::Finished(result) => {
+                        self.ledger.done(token, result.outcome, result.detail)
+                    }
+                    FsCompletion::Locked(locked) => {
+                        self.locked_item(*locked, Some((intent.clone(), token)))
+                    }
+                }
+            }
+            ExecOp::RemovePackage { .. } => {
+                let result = act_typed::complete_package(
+                    self.env.packages,
+                    &self.session,
+                    intent,
+                    self.ledger.journal.state().header().allow_irreversible,
+                    &token,
+                );
+                self.ledger.done(token, result.outcome, result.detail)
+            }
+            _ => {
+                let result = act_reg::complete_reg(&self.ctx, &self.session, intent, &token);
+                self.ledger.done(token, result.outcome, result.detail)
+            }
+        }
     }
 
     fn route(&self, op: OpId) -> Route {
@@ -1359,6 +1475,9 @@ impl<'a> Run<'a> {
     /// Step 10 and 11: closes the last group, writes `commit`, then the index entry and the report. A
     /// commit that cannot be written is an abort.
     pub fn finish(mut self) -> ExecOutput {
+        if let Some(abort) = self.stopped.take() {
+            return self.abort(abort);
+        }
         let bytes = report::backup_bytes(self.state());
         if let Err(e) = self.ledger.journal.commit(now(), bytes) {
             return self.abort(Abort::journal(e));
@@ -1454,23 +1573,6 @@ fn record_abort(
     }
 }
 
-/// Writes `report` as the session's `report.json`, flushed.
-fn write_report(session: &SessionDir, report: &ExecReport) -> Result<(), String> {
-    let text = serde_json::to_vec_pretty(report).map_err(|e| e.to_string())?;
-    let mut file = session
-        .create_file(REPORT_FILE)
-        .map_err(|e| e.to_string())?;
-    let written = file
-        .write_all(&text)
-        .map_err(|e| e.to_string())
-        .and_then(|()| file.sync().map_err(|e| e.to_string()))
-        .and_then(|()| file.sync_dir().map_err(|e| e.to_string()));
-    if written.is_err() {
-        let _ = file.discard();
-    }
-    written
-}
-
 /// Step 11: the restore point's outcome, the index entry and the report, all read from `state`.
 /// `durable` says that every line of `state` is flushed (the run ended with a written `commit` or
 /// `aborted`); only then does the index entry record the journal's mark (review M7), which a later
@@ -1511,7 +1613,7 @@ fn close(
         }
     };
     let mut report = report::build(state, plan.scan(), &notes, now());
-    let report_written = match write_report(session, &report) {
+    let report_written = match report::write_report(session, &report) {
         Ok(()) => true,
         Err(e) => {
             report

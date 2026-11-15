@@ -555,6 +555,18 @@ pub struct RetryIntent {
     pub op: OpId,
 }
 
+/// The ops one undo run is about to undo, written before its first `undo_intent`: the selected ops and
+/// those pulled in because a selected restore depends on them, in the order the run undoes them. A run
+/// that is interrupted is finished from this list by recovery. Journals written before the record
+/// existed have none; their recovery finishes only the op whose undo was in progress.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct UndoPlan {
+    /// When the undo run started.
+    pub at: FileTime,
+    /// The ops, in undo order.
+    pub ops: Vec<OpId>,
+}
+
 /// What a later start found for a pending op.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Reconcile {
@@ -581,7 +593,7 @@ pub struct Expire {
 
 /// One line of `journal.jsonl`. Serialised as an object tagged by `"rec"`, in snake case: `header`,
 /// `settings`, `validated`, `intent`, `done`, `group_end`, `commit`, `aborted`, `undo_intent`,
-/// `undo_done`, `undo_conflict`, `reconcile`, `retry_intent`, `expire`.
+/// `undo_done`, `undo_conflict`, `undo_plan`, `reconcile`, `retry_intent`, `expire`.
 ///
 /// Only the three write-ahead records (`intent`, `undo_intent`, `retry_intent`) spell the word "intent"
 /// in their line; of those only `intent` holds an item path.
@@ -619,6 +631,8 @@ pub enum Record {
     Settings(RunSettings),
     /// A held op is about to be tried again.
     RetryIntent(RetryIntent),
+    /// An undo run is about to undo these ops.
+    UndoPlan(UndoPlan),
 }
 
 impl Record {
@@ -639,6 +653,7 @@ impl Record {
             Record::UndoConflict(_) => "undo_conflict",
             Record::Reconcile(_) => "reconcile",
             Record::Expire(_) => "expire",
+            Record::UndoPlan(_) => "undo_plan",
         }
     }
 
@@ -658,7 +673,8 @@ impl Record {
             | Record::Settings(_)
             | Record::GroupEnd(_)
             | Record::Commit(_)
-            | Record::Aborted(_) => None,
+            | Record::Aborted(_)
+            | Record::UndoPlan(_) => None,
         }
     }
 }
@@ -738,6 +754,8 @@ mod tests {
             r#"{"rec":"reconcile","at":4,"op":3,"result":{"kind":"MismatchKept","code":"InUse","os_error":32}}"#.to_owned(),
             r#"{"rec":"reconcile","at":4,"op":3,"result":{"kind":"Lost"}}"#.to_owned(),
             r#"{"rec":"undo_conflict","op":2,"conflict":{"kind":"ParentMissing"},"detail":"C:\\A is gone"}"#.to_owned(),
+            r#"{"rec":"undo_plan","at":5,"ops":[6,2,1]}"#.to_owned(),
+            r#"{"rec":"undo_plan","at":6,"ops":[]}"#.to_owned(),
         ]
     }
 
@@ -789,6 +807,9 @@ mod tests {
             r#"{"rec":"retry_intent","at":3,"op":0}"#,
             r#"{"rec":"reconcile","at":4,"op":3,"result":{"kind":"NotMoved"}}"#,
             r#"{"kind":"Refused"}"#,
+            r#"{"rec":"undo_plan","ops":[1]}"#,
+            r#"{"rec":"undo_plan","at":5}"#,
+            r#"{"rec":"undo_plan","at":5,"ops":[0]}"#,
         ] {
             assert!(
                 serde_json::from_str::<Record>(bad).is_err()

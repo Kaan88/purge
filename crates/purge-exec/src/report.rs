@@ -24,19 +24,24 @@
 //! of the tree below it).
 
 use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::Path;
 
-use purge_model::exec::journal::ItemFacts;
+use purge_model::exec::journal::{ItemFacts, UndoOutcome};
 use purge_model::exec::op::{
     ExecOp, FailCode, Inverse, ItemOutcome, OpId, OutcomeCounts, SkipReason, resolve,
 };
 use purge_model::exec::session::{
-    ExecReport, ExecReportSchema, Expiry, ItemReport, Locker, RestorePointOutcome, SessionState,
-    SessionSummary, VolumeUsage,
+    ExecReport, ExecReportSchema, Expiry, ItemReport, Locker, RestorePointOutcome, RetentionClass,
+    SessionState, SessionSummary, VolumeUsage,
 };
 use purge_model::{AppRef, Candidate, FileTime};
 use purge_plan::emit::ScanDoc;
+use purge_win::fs_write::FsError;
 
-use crate::journal::{JournalState, OpState, OpStatus};
+use crate::journal::{JournalState, OpState, OpStatus, UndoState};
+use crate::storage::{REPORT_FILE, SessionDir, StorageError, StorageRoots};
+use crate::undo::{effective_outcome, standing, stands_changed};
 
 #[cfg(test)]
 mod tests;
@@ -74,6 +79,56 @@ pub struct DataVolume {
     pub root: String,
 }
 
+/// The 64-bit serial of the volume holding `path`, read from a handle on it.
+pub(crate) fn volume_serial(path: &Path) -> Option<u64> {
+    let extended = purge_win::secure::extended_path(path).ok()?;
+    purge_win::fs::metadata(&extended)
+        .ok()
+        .map(|meta| meta.file_id.volume_serial)
+}
+
+/// The volume holding the store's data root, where backup and definition files are kept: the one
+/// [`summary`] and [`usage`] count them on. `None` when it cannot be read.
+pub fn data_volume(roots: &StorageRoots) -> Option<DataVolume> {
+    let root = roots.volume(roots.data_root()).ok()?.root;
+    Some(DataVolume {
+        serial: volume_serial(roots.data_root())?,
+        root: root.to_string_lossy().into_owned(),
+    })
+}
+
+/// Writes `report` as the session's `report.json` through the store: create-new (an existing report
+/// is never overwritten), flushed with its directory. A failed write discards the file through its own
+/// handle.
+pub fn write_report(session: &SessionDir, report: &ExecReport) -> Result<(), String> {
+    let text = serde_json::to_vec_pretty(report).map_err(|e| e.to_string())?;
+    let mut file = session
+        .create_file(REPORT_FILE)
+        .map_err(|e| e.to_string())?;
+    let written = file
+        .write_all(&text)
+        .map_err(|e| e.to_string())
+        .and_then(|()| file.sync().map_err(|e| e.to_string()))
+        .and_then(|()| file.sync_dir().map_err(|e| e.to_string()));
+    if written.is_err() {
+        // The file is Purge's own, created a moment ago.
+        let _ = file.discard();
+    }
+    written
+}
+
+/// Whether the session holds its `report.json`; `Err` when the store cannot tell.
+pub fn has_report(session: &SessionDir) -> Result<bool, StorageError> {
+    match session.open_file(REPORT_FILE) {
+        Ok(_) => Ok(true),
+        Err(StorageError::Io {
+            source: FsError::NotFound,
+            ..
+        }) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// Where the session stands according to its journal.
 pub fn session_state(state: &JournalState) -> SessionState {
     if state.commit().is_some() {
@@ -95,9 +150,13 @@ fn finished(state: &JournalState) -> Option<FileTime> {
 
 /// The bytes of what an op moved into quarantine: for a move that happened or is registered for the next
 /// restart, the size the acting handle reported, with the volume it is on.
+///
+/// The outcome is the one the op stands at after its `reconcile` records (a retried move that
+/// succeeded counts, a boot-time move that was cancelled does not); for a run that has not been
+/// reconciled that is its `done` outcome.
 fn quarantined(op: &OpState) -> Option<(u64, u64)> {
     let intent = op.intent.as_ref()?;
-    let moved = op.outcome.as_ref().is_some_and(ItemOutcome::changed_system);
+    let moved = stands_changed(op) && effective_outcome(op).is_some_and(|o| o.changed_system());
     match (&intent.inverse, &intent.pre) {
         (Inverse::MoveBack { volume_serial, .. }, ItemFacts::File(facts)) if moved => {
             Some((*volume_serial, facts.tree_bytes.unwrap_or(facts.size)))
@@ -128,8 +187,48 @@ pub fn backup_bytes(state: &JournalState) -> u64 {
         .fold(0u64, |sum, op| sum.saturating_add(op_backup_bytes(op)))
 }
 
-/// The same bytes per volume: quarantined items on the volume they were moved on, backup and definition
-/// files on the data root's volume (when it is known).
+/// What an op moved into quarantine and that is still there: [`quarantined`], unless its undo put
+/// it back (or found nothing to put back) or expiry deleted it.
+fn held_quarantine(op: &OpState) -> Option<(u64, u64)> {
+    let restored = matches!(
+        op.undo,
+        UndoState::Finished(
+            UndoOutcome::Restored | UndoOutcome::AlreadyRestored | UndoOutcome::NothingToUndo
+        )
+    );
+    if restored || op.expired.contains(&RetentionClass::Quarantine) {
+        return None;
+    }
+    quarantined(op)
+}
+
+/// The bytes of an op's backup and definition files that are still kept: all of them until expiry
+/// deleted them. An undo leaves them where they are.
+fn held_backup_file_bytes(op: &OpState) -> u64 {
+    if op.expired.contains(&RetentionClass::Backup) {
+        0
+    } else {
+        backup_file_bytes(op)
+    }
+}
+
+/// The bytes of quarantine and backup data still kept for one op: what [`op_backup_bytes`] counts,
+/// less what its undo moved back out of quarantine and what expiry deleted.
+pub fn op_held_bytes(op: &OpState) -> u64 {
+    held_backup_file_bytes(op).saturating_add(held_quarantine(op).map_or(0, |(_, bytes)| bytes))
+}
+
+/// The bytes of quarantine and backup data the session still keeps: the sum of [`op_held_bytes`]
+/// over its ops. Equal to [`backup_bytes`] until an undo or expiry ran; the index entry's figure.
+pub fn held_bytes(state: &JournalState) -> u64 {
+    state
+        .ops()
+        .fold(0u64, |sum, op| sum.saturating_add(op_held_bytes(op)))
+}
+
+/// The bytes the session still keeps ([`held_bytes`]) per volume: quarantined items on the volume
+/// they were moved on, backup and definition files on the data root's volume (when it is known). A
+/// volume left with nothing is not listed.
 pub fn usage(state: &JournalState, data: Option<&DataVolume>) -> Vec<VolumeUsage> {
     let mut by_serial: BTreeMap<u64, u64> = BTreeMap::new();
     let mut add = |serial: u64, bytes: u64| {
@@ -139,11 +238,11 @@ pub fn usage(state: &JournalState, data: Option<&DataVolume>) -> Vec<VolumeUsage
         }
     };
     for op in state.ops() {
-        if let Some((serial, bytes)) = quarantined(op) {
+        if let Some((serial, bytes)) = held_quarantine(op) {
             add(serial, bytes);
         }
         if let Some(data) = data {
-            add(data.serial, backup_file_bytes(op));
+            add(data.serial, held_backup_file_bytes(op));
         }
     }
     let root_of = |serial: u64| {
@@ -276,19 +375,35 @@ fn common_owner(state: &JournalState, scan: &ScanDoc) -> Option<AppRef> {
 /// The index entry of the session `state` describes: every figure is the journal's (the counts of its
 /// `done` records), and `journal` records how far the journal reaches ([`JournalState::mark`], review
 /// M7), which a later read checks ([`crate::journal::check_mark`]).
+///
+/// The undo records count too: `state` is `Undone` or `PartiallyUndone` once any op has one
+/// ([`crate::undo`]'s standing), `undone` is the number of ops put back (`Restored` or
+/// `AlreadyRestored`), and `backup_bytes` and `usage` are what the session still keeps
+/// ([`held_bytes`], [`usage`]): what an undo moved back out of quarantine, or expiry deleted, is no
+/// longer counted. `purged` is left empty: expiry marks the classes it purged in the entry itself.
 pub fn summary(state: &JournalState, scan: &ScanDoc, data: Option<&DataVolume>) -> SessionSummary {
+    summary_with_owner(state, common_owner(state, scan), data)
+}
+
+/// [`summary`] with the owner given (an existing entry's) instead of read from the scan document.
+pub(crate) fn summary_with_owner(
+    state: &JournalState,
+    owner: Option<AppRef>,
+    data: Option<&DataVolume>,
+) -> SessionSummary {
     let header = state.header();
+    let standing = standing(state.ops());
     SessionSummary {
         id: header.session.clone(),
         app: header.app.clone(),
-        owner: common_owner(state, scan),
+        owner,
         plan_hash: header.plan_hash,
-        state: session_state(state),
+        state: standing.state.unwrap_or_else(|| session_state(state)),
         started: header.created,
         finished: finished(state),
         counts: state.counts(),
-        undone: 0,
-        backup_bytes: backup_bytes(state),
+        undone: standing.undone,
+        backup_bytes: held_bytes(state),
         usage: usage(state, data),
         expires: Expiry::from_start(header.created),
         purged: Vec::new(),

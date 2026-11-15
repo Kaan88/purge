@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use purge_model::exec::journal::{
     AbortReason, Aborted, Commit, Done, Expire, GroupEnd, Header, Intent, MAX_GROUP_INTENTS,
     Reconcile, ReconcileResult, Record, RetryIntent, RunSettings, UndoConflict, UndoConflictEntry,
-    UndoDone, UndoIntent, UndoOutcome,
+    UndoDone, UndoIntent, UndoOutcome, UndoPlan,
 };
 use purge_model::exec::op::{ItemOutcome, OpId, Sha256Hex};
 use purge_model::{CandidateId, FileTime};
@@ -142,6 +142,26 @@ impl JournalWriter {
     /// if anything already has the name (nothing existing is opened) and if `header` names another
     /// session ([`JournalError::WrongSession`]). Hits [`fault::JOURNAL_HEADER`] at the end.
     pub fn create(session: &SessionDir, header: Header) -> Result<JournalWriter, JournalError> {
+        JournalWriter::create_inner(session, header, None)
+    }
+
+    /// As [`JournalWriter::create`], with the run's `settings` record written right after the header
+    /// and flushed together with it, so that a journal that has a header has its settings too (a crash
+    /// at [`fault::JOURNAL_HEADER`] leaves a run that can be resumed from its first item). Hits
+    /// [`fault::JOURNAL_HEADER`] after that flush.
+    pub fn create_with_settings(
+        session: &SessionDir,
+        header: Header,
+        settings: RunSettings,
+    ) -> Result<JournalWriter, JournalError> {
+        JournalWriter::create_inner(session, header, Some(settings))
+    }
+
+    fn create_inner(
+        session: &SessionDir,
+        header: Header,
+        settings: Option<RunSettings>,
+    ) -> Result<JournalWriter, JournalError> {
         if &header.session != session.id() {
             return Err(JournalError::WrongSession {
                 header: header.session.clone(),
@@ -158,6 +178,9 @@ impl JournalWriter {
         file.sync_dir().map_err(JournalError::Store)?;
         let mut writer = JournalWriter::with(file, JournalState::new(header), CHAIN_SEED, 0);
         writer.write_body(&body)?;
+        if let Some(settings) = settings {
+            writer.append(&Record::Settings(settings), false)?;
+        }
         writer.flush()?;
         fault::point(fault::JOURNAL_HEADER);
         Ok(writer)
@@ -437,6 +460,13 @@ impl JournalWriter {
         self.check_poison()?;
         self.end_group()?;
         self.append(&Record::Aborted(Aborted { at, reason, detail }), true)
+    }
+
+    /// Writes and flushes the `undo_plan` of an undo run: the ops it is about to undo (selected and
+    /// pulled in), in order, before its first undo record. Recovery finishes an interrupted run from
+    /// it ([`JournalState::undo_unfinished`]).
+    pub fn undo_plan(&mut self, at: FileTime, ops: Vec<OpId>) -> Result<(), JournalError> {
+        self.append(&Record::UndoPlan(UndoPlan { at, ops }), true)
     }
 
     /// Writes and flushes the op's `undo_intent` and returns the token the inverse and

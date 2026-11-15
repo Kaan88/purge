@@ -916,32 +916,45 @@ fn the_token_of_another_op_removes_nothing() {
     s.journal.done(token2, r.outcome).unwrap();
 }
 
+/// Changed in meaning (M2 recovery fix pass): a definition file of an op that has no intent can only be
+/// one a crash left between the file and the intent. One that is not this package's definition is
+/// deleted through the store and written anew; one that is is adopted (the same store file). Before the
+/// pass the op was skipped (`NoVerifiedBackup`) for good.
 #[test]
-fn an_existing_definition_file_is_never_replaced() {
+fn a_definition_file_a_crash_left_is_adopted_or_written_anew() {
     let s = Session::new("defexists", &[NAME]);
     let fake = Fake::new(vec![info(NAME)]);
     let mut file = s.session.create_file(r"def\000001.json").unwrap();
     let path = file.report_path();
-    file.write_all(b"not ours").unwrap();
+    file.write_all(b"left by a crash").unwrap();
     drop(file);
-    let err = prepare_remove_package(
-        &fake,
-        &s.session,
-        OpId(1),
-        &item(1),
-        &remove_op(NAME),
-        IrreversibleAck::Acknowledged,
-    )
-    .unwrap_err();
-    assert!(matches!(err, DefinitionError::Storage(_)), "{err}");
-    assert!(!err.is_storage_integrity());
-    assert_eq!(
-        err.outcome(),
-        ItemOutcome::Skipped {
-            reason: SkipReason::NoVerifiedBackup
-        }
-    );
-    assert_eq!(std::fs::read(path).unwrap(), b"not ours");
+    let prepare = || {
+        prepare_remove_package(
+            &fake,
+            &s.session,
+            OpId(1),
+            &item(1),
+            &remove_op(NAME),
+            IrreversibleAck::Acknowledged,
+        )
+        .unwrap()
+    };
+    let Prepared::Ready(first) = prepare() else {
+        panic!("decided");
+    };
+    assert_ne!(std::fs::read(&path).unwrap(), b"left by a crash");
+    let reference = first.intent().definition.clone().unwrap();
+    let parsed = read_definition(&s.session, &reference).unwrap();
+    assert_eq!(parsed.full_name, NAME);
+    let id = s.session.open_file(r"def\000001.json").unwrap().file_id();
+    drop(first);
+
+    let Prepared::Ready(second) = prepare() else {
+        panic!("decided");
+    };
+    assert_eq!(second.intent().definition.as_ref(), Some(&reference));
+    let again = s.session.open_file(r"def\000001.json").unwrap().file_id();
+    assert_eq!((again.volume_serial, again.id), (id.volume_serial, id.id));
     assert_eq!(fake.removes(), 0);
 }
 

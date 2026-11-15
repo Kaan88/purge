@@ -162,6 +162,10 @@ pub mod reason {
     /// The op directory of the boot move's destination did not pass the store's checks (missing,
     /// another op, session or volume, or a failed integrity check).
     pub const QUARANTINE_DIR: &str = "lock.quarantine-dir-unchecked";
+    /// At undo, the state of a registered boot-time move cannot be told (the pair is no longer listed,
+    /// or the list cannot be read): reported as the conflict `GateBlocked{DenyListed{rule: <this>}}`
+    /// until reconcile has decided it.
+    pub const BOOT_MOVE_INDETERMINATE: &str = "lock.boot-move-indeterminate";
 }
 
 // ---------------------------------------------------------------------------------------------------

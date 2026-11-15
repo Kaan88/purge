@@ -1,7 +1,7 @@
 //! The journal's rules as a state machine: what a session looks like after each record, and which record
 //! may come next.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use purge_model::exec::journal::{
     Aborted, Commit, GateExemptions, Header, Intent, ItemFacts, MAX_GROUP_INTENTS, Reconcile,
@@ -333,6 +333,10 @@ fn pending_of(outcome: &ItemOutcome) -> Option<Pending> {
 /// - While a retry is in flight, no undo record, no second `retry_intent` and no `expire` is accepted
 ///   for the op.
 /// - `settings`: only right after the header, once ([`Violation::SettingsMisplaced`]).
+/// - `undo_plan`: anywhere after the header; every op it names must be known. It replaces the plan
+///   before it; the ops it names that get no undo record afterwards are
+///   [`JournalState::undo_unfinished`]. Journals written before the record existed hold none, and
+///   recovery then finishes only the undos in progress.
 /// - `expire`: after `commit` or `aborted`, for an op with an intent, once per retention class, not
 ///   while the op's undo is in progress ([`Violation::ExpireDuringUndo`]).
 ///
@@ -352,6 +356,11 @@ pub struct JournalState {
     open_group_intents: u32,
     open_intents: u32,
     counts: OutcomeCounts,
+    /// The free text of each op's last `undo_conflict`, while that conflict is where its undo stands.
+    conflict_details: BTreeMap<OpId, String>,
+    /// The ops of the last `undo_plan`, in order, and those of them an undo record was written for
+    /// since.
+    undo_plan: Option<(Vec<OpId>, BTreeSet<OpId>)>,
 }
 
 impl JournalState {
@@ -370,6 +379,52 @@ impl JournalState {
             open_group_intents: 0,
             open_intents: 0,
             counts: OutcomeCounts::default(),
+            conflict_details: BTreeMap::new(),
+            undo_plan: None,
+        }
+    }
+
+    /// The free text of the `undo_conflict` record that op `op`'s undo stands at
+    /// ([`UndoState::Conflict`]); `None` when its undo is not in conflict. Empty when the record held
+    /// none.
+    pub fn undo_conflict_detail(&self, op: OpId) -> Option<&str> {
+        match self.ops.get(&op).map(|s| &s.undo) {
+            Some(UndoState::Conflict(_)) => {
+                Some(self.conflict_details.get(&op).map_or("", String::as_str))
+            }
+            _ => None,
+        }
+    }
+
+    /// The ops of the last `undo_plan` record, in undo order; `None` when the journal holds none
+    /// (no undo ran, or every undo was written before the record existed).
+    pub fn undo_plan(&self) -> Option<&[OpId]> {
+        self.undo_plan.as_ref().map(|(ops, _)| ops.as_slice())
+    }
+
+    /// The ops of the last `undo_plan` that its undo run did not reach: no undo record was written
+    /// for them after the plan, their undo has not settled, and they have an intent or a `done` (the
+    /// undo driver acts on them). In plan order. An undo run that ended leaves none; one that was
+    /// interrupted leaves the ops recovery still has to undo. Empty without a plan.
+    pub fn undo_unfinished(&self) -> Vec<OpId> {
+        let Some((ops, reached)) = &self.undo_plan else {
+            return Vec::new();
+        };
+        ops.iter()
+            .filter(|op| !reached.contains(op))
+            .filter(|op| {
+                self.ops.get(op).is_some_and(|s| {
+                    !s.undo.is_settled() && !matches!(s.status(), OpStatus::Validated)
+                })
+            })
+            .copied()
+            .collect()
+    }
+
+    /// Notes that an undo record was written for `op` after the last plan.
+    fn reach(&mut self, op: OpId) {
+        if let Some((_, reached)) = &mut self.undo_plan {
+            reached.insert(op);
         }
     }
 
@@ -688,6 +743,12 @@ impl JournalState {
                 Ok(())
             }
             Record::Reconcile(r) => self.check_reconcile(r),
+            Record::UndoPlan(plan) => {
+                for op in &plan.ops {
+                    self.known(*op)?;
+                }
+                Ok(())
+            }
             Record::Expire(e) => {
                 if !self.is_finished() {
                     return Err(Violation::ExpireBeforeFinish(e.op));
@@ -769,12 +830,21 @@ impl JournalState {
                 let s = self.known_mut(u.op);
                 s.undo = UndoState::InProgress;
                 s.undo_attempts = s.undo_attempts.saturating_add(1);
+                self.conflict_details.remove(&u.op);
+                self.reach(u.op);
             }
             Record::UndoDone(u) => {
                 self.known_mut(u.op).undo = UndoState::Finished(u.outcome.clone());
+                self.conflict_details.remove(&u.op);
+                self.reach(u.op);
             }
             Record::UndoConflict(c) => {
                 self.known_mut(c.op).undo = UndoState::Conflict(c.conflict.clone());
+                self.conflict_details.insert(c.op, c.detail.clone());
+                self.reach(c.op);
+            }
+            Record::UndoPlan(plan) => {
+                self.undo_plan = Some((plan.ops.clone(), BTreeSet::new()));
             }
             Record::Reconcile(r) => {
                 let s = self.known_mut(r.op);

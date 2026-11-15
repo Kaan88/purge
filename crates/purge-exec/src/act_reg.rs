@@ -130,7 +130,6 @@
 //! package needs no other knowledge of the dependency.
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use purge_guard::containers;
 use purge_guard::deny::Exemptions;
@@ -138,28 +137,27 @@ use purge_guard::live::{self, Refusal};
 use purge_model::exec::journal::{Intent, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{BackupRef, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::regbackup::{RegBackup, RegBackupBody, RegBackupSchema};
-use purge_model::{Blocker, FileTime, Target};
+use purge_model::{Blocker, Target};
+use purge_win::fs_write::FsError;
 use purge_win::os::Win32Error;
 use purge_win::reg_write::WKey;
 
 use crate::fault;
 use crate::gate::{self, CheckedKey, CheckedUndoKey, GateCtx, GateOutcome};
-use crate::journal::{IntentToken, UndoToken};
+use crate::journal::{IntentToken, UndoToken, sha256_bytes};
+use crate::recover::{self, Probe};
 use crate::regbackup::{
     self, BackupFileError, CaptureError, Change, DeleteError, DeleteFailure, Difference,
     DifferenceKind, ReinsertOutcome, RestoreError, RestoreOutcome, RestoreReport, Rollback,
-    SegmentError, SegmentRemoval, SegmentUndo, ValueDelete, VerifiedBackup,
+    SegmentError, SegmentRemoval, SegmentUndo, TreeState, ValueDelete, VerifiedBackup,
 };
-use crate::storage::{BackupKind, SessionDir, StorageError, backup_rel};
+use crate::storage::{BackupKind, SessionDir, StorageError, backup_rel, now};
 
 #[cfg(test)]
 mod tests;
 
 /// `ERROR_KEY_DELETED`: the key behind a handle was deleted.
 const KEY_DELETED: Win32Error = Win32Error(1018);
-
-/// FILETIME of 1970-01-01 (100 ns ticks since 1601-01-01).
-const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 
 // ---------------------------------------------------------------------------------------------------
 // Results
@@ -270,30 +268,72 @@ impl BackupWriteError {
     }
 }
 
-/// The current time as a FILETIME.
-fn now() -> FileTime {
-    let since = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let ticks = u64::try_from(since.as_nanos() / 100).unwrap_or(u64::MAX);
-    FileTime(FILETIME_UNIX_EPOCH.saturating_add(ticks))
-}
-
 /// Writes `doc` to op `op`'s backup file `reg\<op>.regbackup.json` with [`regbackup::write_verified`],
 /// the one writer of registry backups: through the store's handles only, create-new, flushed with its
 /// directory, closed (`backup.written`), re-opened through the store's checks as the same file, read
 /// and verified against the hash of the bytes meant to be written, and compared (`backup.verified`).
+///
+/// A file of that name that a crash left before the op's intent (written, and named by no journal
+/// record) is adopted when it verifies and holds what `doc`, the fresh capture, holds (the capture
+/// time aside): it is then the op's backup, with a reference computed from its bytes. Otherwise it is
+/// deleted through the store ([`SessionDir::delete_backup_file`]) and the backup written anew.
 fn write_backup(
     session: &SessionDir,
     op: OpId,
     doc: &RegBackup,
 ) -> Result<VerifiedBackup, BackupWriteError> {
     let rel = backup_rel(BackupKind::Registry, op);
-    regbackup::write_verified(session, &rel, doc).map_err(|e| match e {
+    match regbackup::write_verified(session, &rel, doc) {
+        Err(BackupFileError::Store(e)) if already_exists(&e) => {
+            if let Some(adopted) = adopt_backup(session, &rel, doc) {
+                return Ok(adopted);
+            }
+            session.delete_backup_file(&rel)?;
+            regbackup::write_verified(session, &rel, doc)
+                .map_err(|e| backup_write_error(session, &rel, e))
+        }
+        written => written.map_err(|e| backup_write_error(session, &rel, e)),
+    }
+}
+
+/// Whether the store refused to create a file because the name is taken.
+pub(crate) fn already_exists(error: &StorageError) -> bool {
+    matches!(
+        error,
+        StorageError::Io {
+            source: FsError::AlreadyExists,
+            ..
+        }
+    )
+}
+
+/// The backup file `rel` as it is, when it verifies (parsed and checked, with a reference computed
+/// from the bytes read through the store's checked handle) and holds what `doc` holds apart from the
+/// capture time; `None` otherwise.
+fn adopt_backup(session: &SessionDir, rel: &str, doc: &RegBackup) -> Option<VerifiedBackup> {
+    let mut file = session.open_file(rel).ok()?;
+    let bytes = file.read_all(regbackup::MAX_BACKUP_FILE_BYTES).ok()?;
+    drop(file);
+    let reference = BackupRef {
+        path: rel.to_owned(),
+        sha256: sha256_bytes(&bytes),
+        bytes: u64::try_from(bytes.len()).ok()?,
+    };
+    let found = regbackup::verify_bytes(&reference, &bytes).ok()?;
+    let fresh = RegBackup {
+        captured: found.doc().captured,
+        ..doc.clone()
+    };
+    (found.doc() == &fresh).then_some(found)
+}
+
+/// The run's view of a failed [`regbackup::write_verified`] of `rel`.
+fn backup_write_error(session: &SessionDir, rel: &str, e: BackupFileError) -> BackupWriteError {
+    match e {
         BackupFileError::Store(e) => BackupWriteError::Storage(*e),
         BackupFileError::Fs { op, error } => BackupWriteError::File {
             op,
-            path: session.path().join(&rel),
+            path: session.path().join(rel),
             detail: error.to_string(),
         },
         BackupFileError::NotSessionRelative(_)
@@ -302,10 +342,10 @@ fn write_backup(
         BackupFileError::Missing
         | BackupFileError::Tampered
         | BackupFileError::ReadBackMismatch => BackupWriteError::ReadBack {
-            path: session.path().join(&rel),
+            path: session.path().join(rel),
             detail: e.to_string(),
         },
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1418,5 +1458,287 @@ fn reinsert_result(
                 (None, _) => RegUndoResult::failed(FailCode::Internal, None, detail),
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Recovery: an intent without its `done`
+// ---------------------------------------------------------------------------------------------------
+
+/// The verified backup an intent names (its `inverse`'s backup reference), checked as the backup of
+/// the intent's op.
+fn intent_backup(session: &SessionDir, intent: &Intent) -> Result<VerifiedBackup, String> {
+    let reference = intent
+        .inverse
+        .backup()
+        .ok_or_else(|| "the intent names no backup".to_owned())?;
+    let backup = regbackup::read_verified(session, reference)
+        .map_err(|e| format!("the backup {} cannot be used: {e}", reference.path))?;
+    backup.doc().validate_for(&intent.exec_op).map_err(|e| {
+        format!(
+            "the backup {} is not the backup of this op: {e}",
+            reference.path
+        )
+    })?;
+    Ok(backup)
+}
+
+/// The key an intent acts on, opened and checked by the undo gate ([`gate::check_undo_key`]) with the
+/// exemptions of the op's journalled `validated` record. The undo gate is used because the key may be
+/// half deleted, which the act-time gate would refuse as changed.
+fn checked_key(ctx: &GateCtx, intent: &Intent) -> Result<CheckedUndoKey, String> {
+    let exemptions = ctx
+        .exemptions(intent.op)
+        .ok_or_else(|| format!("op {} has no journalled validated record", intent.op))?;
+    gate::check_undo_key(ctx, &intent.exec_op.target(), &exemptions)
+        .map_err(|refusal| format!("the gate refuses the key: {refusal}"))
+}
+
+/// What became of the registry action of `intent`, an intent with no `done` (recovery's probe; see the
+/// table in [`crate::recover`]). Reads the key through the undo gate and the backup the intent names
+/// (its backup reference, hash-checked); changes nothing.
+///
+/// | Op | Found | Probe |
+/// |---|---|---|
+/// | key tree, empty key | no key | `Done(Done)` |
+/// | key tree, empty key | the tree as backed up | `NotDone` |
+/// | key tree, empty key | whole subtrees missing, the rest as backed up | `Partial` |
+/// | key tree, empty key | anything else, a gate refusal, an unusable backup | `Attention` |
+/// | value | absent / as backed up / anything else | `Done(Done)` / `NotDone` / `Attention` |
+/// | segment edit | as written / as before / anything else | `Done(Done)` / `NotDone` / `Attention` |
+pub fn probe_reg(ctx: &GateCtx, session: &SessionDir, intent: &Intent) -> Probe {
+    let inconsistent = || Probe::Attention {
+        detail: "the intent does not hang together".to_owned(),
+    };
+    let attention = |detail: String| Probe::Attention { detail };
+    match (&intent.exec_op, &intent.inverse) {
+        (ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. }, _) => {
+            let parent = match checked_key(ctx, intent).map(CheckedUndoKey::into_parent) {
+                Ok(Some(parent)) => parent,
+                Ok(None) => return inconsistent(),
+                Err(e) => return attention(e),
+            };
+            let backup = match intent_backup(session, intent) {
+                Ok(backup) => backup,
+                Err(e) => return attention(e),
+            };
+            match regbackup::probe_tree(&parent, &backup) {
+                Ok(tree) => recover::probe_key(&tree),
+                Err(e) => attention(format!("the key cannot be compared with its backup: {e}")),
+            }
+        }
+        (ExecOp::DeleteValue { name, .. }, _) => {
+            let key = match checked_key(ctx, intent).map(CheckedUndoKey::into_value_key) {
+                Ok(Some(key)) => key,
+                Ok(None) => return inconsistent(),
+                Err(e) => return attention(e),
+            };
+            let backup = match intent_backup(session, intent) {
+                Ok(backup) => backup,
+                Err(e) => return attention(e),
+            };
+            let Some(backed_up) = backup.value() else {
+                return attention("the backup holds no value".to_owned());
+            };
+            match key.key().value(name) {
+                Ok(live) => recover::probe_value(
+                    live.as_ref().map(|value| (value.ty, value.data.as_slice())),
+                    (backed_up.value_type, backed_up.data_b64.0.as_slice()),
+                ),
+                Err(e) => attention(format!("the value cannot be read: {e}")),
+            }
+        }
+        (
+            ExecOp::EditSegment { name, .. },
+            Inverse::ReinsertSegment {
+                original_value_hash,
+                written_value_hash,
+                ..
+            },
+        ) => {
+            let key = match checked_key(ctx, intent).map(CheckedUndoKey::into_value_key) {
+                Ok(Some(key)) => key,
+                Ok(None) => return inconsistent(),
+                Err(e) => return attention(e),
+            };
+            match key.key().value(name) {
+                Ok(live) => recover::probe_segment(
+                    live.as_ref().map(|value| value.data.as_slice()),
+                    *original_value_hash,
+                    *written_value_hash,
+                ),
+                Err(e) => attention(format!("the value cannot be read: {e}")),
+            }
+        }
+        _ => inconsistent(),
+    }
+}
+
+/// Finishes the registry action of `intent` forward, under the token `JournalWriter::resume_intent`
+/// handed out for it (recovery's resume of an op its probe found `NotDone` or `Partial`).
+///
+/// - A key delete is finished from the backup the intent names, below the parent the undo gate
+///   checked ([`regbackup::finish_delete_tree`]); a delete that stops puts back what it deleted, and
+///   keys an interrupted run had deleted before are then put back too ([`regbackup::restore_missing`]),
+///   so the key ends either gone or whole.
+/// - A value delete or segment edit runs in the key the undo gate checked, only while the value is
+///   exactly what the intent recorded.
+///
+/// A token of another op is `Failed{Internal}` and nothing is done.
+pub fn complete_reg(
+    ctx: &GateCtx,
+    session: &SessionDir,
+    intent: &Intent,
+    token: &IntentToken,
+) -> RegResult {
+    if token.op() != intent.op || token.item() != &intent.item {
+        return RegResult::failed(
+            FailCode::Internal,
+            None,
+            format!(
+                "the intent token is for op {}, not op {}; nothing done",
+                token.op(),
+                intent.op
+            ),
+        );
+    }
+    match &intent.exec_op {
+        ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. } => {
+            complete_key(ctx, session, intent)
+        }
+        ExecOp::DeleteValue { .. } | ExecOp::EditSegment { .. } => {
+            complete_value(ctx, session, intent)
+        }
+        other => RegResult::failed(
+            FailCode::Internal,
+            None,
+            format!("{} is not a registry action", other.name()),
+        ),
+    }
+}
+
+fn changed_since_scan(detail: impl Into<String>) -> RegResult {
+    RegResult::skipped(SkipReason::ChangedSinceScan, detail)
+}
+
+/// The key half of [`complete_reg`].
+fn complete_key(ctx: &GateCtx, session: &SessionDir, intent: &Intent) -> RegResult {
+    let parent = match checked_key(ctx, intent).map(CheckedUndoKey::into_parent) {
+        Ok(Some(parent)) => parent,
+        Ok(None) => {
+            return RegResult::failed(FailCode::Internal, None, "the intent is not a key delete");
+        }
+        Err(e) => return RegResult::failed(FailCode::VerifyFailed, None, e),
+    };
+    let backup = match intent_backup(session, intent) {
+        Ok(backup) => backup,
+        Err(e) => return RegResult::failed(FailCode::VerifyFailed, None, e),
+    };
+    let stopped = match regbackup::finish_delete_tree(&parent, &backup) {
+        Ok(_) => {
+            return match regbackup::probe_tree(&parent, &backup) {
+                Ok(TreeState::Absent) => RegResult::new(ItemOutcome::Done, ""),
+                _ => RegResult::failed(
+                    FailCode::VerifyFailed,
+                    None,
+                    "the key was deleted, but whether it is gone cannot be checked",
+                ),
+            };
+        }
+        Err(stopped) => stopped,
+    };
+    let whole =
+        stopped.rollback.is_complete() || regbackup::restore_missing(&parent, &backup).is_ok();
+    if !whole {
+        return RegResult::failed(
+            FailCode::VerifyFailed,
+            None,
+            format!("the key delete stopped ({stopped}) and the key could not be put back whole"),
+        );
+    }
+    match stopped.failure {
+        DeleteFailure::Changed(_) => changed_since_scan(format!(
+            "the key delete stopped: {stopped}; the key is whole"
+        )),
+        DeleteFailure::Os { error, .. } => {
+            RegResult::os(error, format!("the key delete stopped: {stopped}"))
+        }
+        DeleteFailure::WrongBackupKind | DeleteFailure::NotThisKey => RegResult::failed(
+            FailCode::Internal,
+            None,
+            format!("the key delete stopped: {stopped}"),
+        ),
+    }
+}
+
+/// The value half of [`complete_reg`].
+fn complete_value(ctx: &GateCtx, session: &SessionDir, intent: &Intent) -> RegResult {
+    let key = match checked_key(ctx, intent).map(CheckedUndoKey::into_value_key) {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            return RegResult::failed(FailCode::Internal, None, "the intent is not a value op");
+        }
+        Err(e) => return RegResult::failed(FailCode::VerifyFailed, None, e),
+    };
+    match (&intent.exec_op, &intent.inverse) {
+        (ExecOp::DeleteValue { .. }, _) => {
+            let backup = match intent_backup(session, intent) {
+                Ok(backup) => backup,
+                Err(e) => return RegResult::failed(FailCode::VerifyFailed, None, e),
+            };
+            match regbackup::delete_value(key.key(), &backup) {
+                Ok(ValueDelete::Deleted) => RegResult::new(ItemOutcome::Done, ""),
+                Ok(ValueDelete::Vanished) => {
+                    RegResult::new(ItemOutcome::Vanished, "the value is gone")
+                }
+                Err(DeleteFailure::Changed(_)) => {
+                    changed_since_scan("the value changed since its backup")
+                }
+                Err(DeleteFailure::Os { op, error }) => {
+                    RegResult::os(error, format!("{op} failed: {error}"))
+                }
+                Err(e) => RegResult::failed(FailCode::Internal, None, e.to_string()),
+            }
+        }
+        (
+            ExecOp::EditSegment {
+                name,
+                segment,
+                index,
+                ..
+            },
+            Inverse::ReinsertSegment {
+                index: recorded_index,
+                original_value_hash,
+                written_value_hash,
+                ..
+            },
+        ) => {
+            let plan = match regbackup::plan_segment_removal(key.key(), name, segment, *index) {
+                Ok(plan) => plan,
+                Err(SegmentError::ValueAbsent | SegmentError::SegmentAbsent) => {
+                    return RegResult::new(ItemOutcome::Vanished, "the segment is gone");
+                }
+                Err(SegmentError::Os(e)) => return RegResult::os(e.error, e.to_string()),
+                Err(e) => return changed_since_scan(e.to_string()),
+            };
+            let as_recorded = plan.index == *recorded_index
+                && plan.original_value_hash == *original_value_hash
+                && plan.written_value_hash == *written_value_hash;
+            if !as_recorded {
+                return changed_since_scan("the value is no longer what the intent recorded");
+            }
+            match regbackup::apply_segment_removal(key.key(), &plan) {
+                Ok(()) => RegResult::new(ItemOutcome::Done, ""),
+                Err(SegmentError::VerifyFailed) => RegResult::failed(
+                    FailCode::VerifyFailed,
+                    None,
+                    "the value did not read back as written",
+                ),
+                Err(SegmentError::Os(e)) => RegResult::os(e.error, e.to_string()),
+                Err(e) => changed_since_scan(e.to_string()),
+            }
+        }
+        _ => RegResult::failed(FailCode::Internal, None, "the intent is not a value op"),
     }
 }

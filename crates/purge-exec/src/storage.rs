@@ -53,6 +53,9 @@ mod cap;
 mod integrity;
 mod sys;
 
+/// The current UTC time as a FILETIME: the one clock of this crate's journal records and reports.
+pub(crate) use sys::now;
+
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -1985,11 +1988,15 @@ impl SessionDir {
     /// [`StorageRoots::create_session`] and before the journal's header was durable), by handle: the
     /// chain is re-checked, the directory is opened again relative to the checked `sessions` handle
     /// with `DELETE | FILE_LIST_DIRECTORY` and must be the directory this value checked (same file
-    /// id), and it is listed through that handle. It may hold nothing, or only the scan copy
-    /// ([`SCAN_FILE`], which must pass the store file check and is deleted through the handle it
-    /// was checked on). Anything else is refused with [`FsError::DirNotEmpty`] and nothing is
-    /// deleted; so is a directory that gains an entry before it goes. The `sessions` directory is
-    /// flushed afterwards. The session never had an index entry, so none is touched.
+    /// id), and it is listed through that handle. It may hold nothing but the scan copy
+    /// ([`SCAN_FILE`]) and an empty journal ([`JOURNAL_FILE`] of zero bytes: a crash between creating
+    /// the journal and writing its header), each optional; each must pass the store file check, the
+    /// journal's size is read on the handle that deletes it (which lets others only read, so no writer
+    /// can be holding it), and both are opened and checked before either is deleted through its
+    /// handle. Anything else (another name, a journal that holds a byte) is refused with
+    /// [`FsError::DirNotEmpty`] and nothing is deleted; so is a directory that gains an entry before
+    /// it goes. The `sessions` directory is flushed afterwards. The session never had an index entry,
+    /// so none is touched.
     pub fn remove_unstarted(self) -> Result<(), StorageError> {
         let layout = self.roots.layout()?;
         let checked = self.recheck()?;
@@ -2015,27 +2022,50 @@ impl SessionDir {
             });
         }
         let names = at::list_names(&handle).map_err(|e| io("list", &path, e))?;
-        match names.as_slice() {
-            [] => {}
-            [only] if only.eq_ignore_ascii_case(SCAN_FILE) => {
-                let scan = self.roots.open_file_at(
-                    &checked,
-                    SCAN_FILE,
-                    ObjectKind::StoreFile,
-                    at::Open {
-                        access: at::DELETE | at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
-                        share: at::SHARE_READ,
-                        create: None,
-                        kind: at::Kind::File,
-                    },
-                )?;
-                if let Some((scan, _)) = scan {
-                    at::dispose(&scan).map_err(|e| io("delete", &path.join(SCAN_FILE), e))?;
-                }
-            }
-            _ => return Err(io("remove", &path, FsError::DirNotEmpty)),
+        let named = |name: &str| names.iter().any(|n| n.eq_ignore_ascii_case(name));
+        let allowed = names
+            .iter()
+            .all(|n| n.eq_ignore_ascii_case(SCAN_FILE) || n.eq_ignore_ascii_case(JOURNAL_FILE));
+        if !allowed {
+            return Err(io("remove", &path, FsError::DirNotEmpty));
         }
-        // The scan copy's handle is closed: its name is gone, so the directory can be marked.
+        let open_for_delete = |leaf: &str| {
+            self.roots.open_file_at(
+                &checked,
+                leaf,
+                ObjectKind::StoreFile,
+                at::Open {
+                    access: at::DELETE | at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
+                    share: at::SHARE_READ,
+                    create: None,
+                    kind: at::Kind::File,
+                },
+            )
+        };
+        // Every file is opened and checked before anything is deleted: a journal that holds a byte
+        // describes a run, and then nothing goes.
+        let journal = if named(JOURNAL_FILE) {
+            open_for_delete(JOURNAL_FILE)?
+        } else {
+            None
+        };
+        if journal.as_ref().is_some_and(|(_, facts)| facts.size != 0) {
+            return Err(io("remove", &path, FsError::DirNotEmpty));
+        }
+        let scan = if named(SCAN_FILE) {
+            open_for_delete(SCAN_FILE)?
+        } else {
+            None
+        };
+        if let Some((journal, _)) = &journal {
+            at::dispose(journal).map_err(|e| io("delete", &path.join(JOURNAL_FILE), e))?;
+        }
+        if let Some((scan, _)) = &scan {
+            at::dispose(scan).map_err(|e| io("delete", &path.join(SCAN_FILE), e))?;
+        }
+        drop(journal);
+        drop(scan);
+        // The files' handles are closed: their names are gone, so the directory can be marked.
         at::dispose(&handle).map_err(|e| io("remove", &path, e))?;
         drop(handle);
         drop(checked);

@@ -557,6 +557,12 @@ pub mod journal {
         UndoIntent {
             op: u32,
         },
+        /// The ops an undo run is about to undo, in order, before its first undo record (absent in
+        /// older journals).
+        UndoPlan {
+            at: u64,
+            ops: Vec<u32>,
+        },
         /// A held op is about to be tried again; its `reconcile` `Retried` follows.
         RetryIntent {
             at: u64,
@@ -827,6 +833,11 @@ pub mod journal {
                 Record::RetryIntent { op, .. } => {
                     get(&idx, op, "retry_intent")?;
                 }
+                Record::UndoPlan { ops, .. } => {
+                    for op in ops {
+                        get(&idx, op, "undo_plan")?;
+                    }
+                }
                 Record::Settings { .. } => {}
                 Record::Expire { op, .. } => {
                     get(&idx, op, "expire")?;
@@ -1087,6 +1098,7 @@ pub mod journal {
                 r#"{"rec":"reconcile","at":4,"op":1,"result":{"kind":"NotMoved","code":"VerifyFailed","detail":"still in place"}}"#,
                 r#"{"rec":"reconcile","at":4,"op":1,"result":{"kind":"MismatchKept","code":"InUse","os_error":32}}"#,
                 r#"{"rec":"reconcile","at":4,"op":1,"result":{"kind":"Lost"}}"#,
+                r#"{"rec":"undo_plan","at":5,"ops":[1]}"#,
                 r#"{"rec":"undo_conflict","op":1,"conflict":{"kind":"ParentMissing"},"detail":"C:\\A is gone"}"#,
             ];
             let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
@@ -1104,6 +1116,9 @@ pub mod journal {
             assert_eq!(j.reconcile_records, 4);
             // A retry intent names an op that has a validated record.
             let stray = text.replace(r#""retry_intent","at":3,"op":1"#, r#""retry_intent","at":3,"op":9"#);
+            assert!(parse_journal(&stray).is_err());
+            // So does every op of an undo plan.
+            let stray = text.replace(r#""undo_plan","at":5,"ops":[1]"#, r#""undo_plan","at":5,"ops":[1,9]"#);
             assert!(parse_journal(&stray).is_err());
         }
 

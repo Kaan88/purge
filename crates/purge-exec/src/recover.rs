@@ -2,15 +2,19 @@
 //!
 //! A run that died leaves a journal with neither `commit` nor `aborted`. [`pending`] lists such
 //! sessions (and those a crash left with an interrupted undo, an interrupted retry of a held item, or
-//! without their index entry). [`probe`] says what really happened to an op whose intent has no
-//! `done`. [`resume`] carries the session to the end the run would have reached; [`rollback`] brings
+//! without their index entry or report). [`probe`] says what really happened to an op whose intent has
+//! no `done`. [`resume`] carries the session to the end the run would have reached; [`rollback`] brings
 //! it back to where the run started. Both are idempotent: a second call finds nothing to do and
-//! writes nothing.
+//! writes nothing. [`retry_held`] tries the held items of a finished session again; recovery never
+//! does.
 //!
 //! # The probe
 //!
 //! An op with an intent and no `done` may have run in full, in part or not at all. The probe reads
-//! the system and changes nothing.
+//! the system and changes nothing. Each action module probes its own ops ([`act_fs::probe_fs`],
+//! [`act_reg::probe_reg`], [`act_typed::probe_package`]) and completes them forward
+//! ([`act_fs::complete_fs`], [`act_reg::complete_reg`], [`act_typed::complete_package`]); the verdicts
+//! are this module's table.
 //!
 //! | Op | Found | Probe |
 //! |---|---|---|
@@ -39,29 +43,32 @@
 //!
 //! | The session | What resume does |
 //! |---|---|
-//! | no journal, or one without a complete header | removes the directory when it holds nothing but the scan copy ([`RecoverError::Unstarted`] otherwise) |
-//! | the run stopped before every item was validated | nothing was acted on: writes `aborted` (`Cancelled`) |
+//! | no journal, one without a complete header, or an empty one | removes the directory by handle when it holds nothing but the scan copy and that journal ([`SessionDir::remove_unstarted`]; [`RecoverError::Unstarted`] otherwise) |
+//! | a journal without a `settings` record (written before the record existed) and validation incomplete | nothing was acted on: writes `aborted` (`Cancelled`) |
+//! | the run stopped before every item was validated | continued as if never interrupted ([`Run::resume`]): the items without a `validated` record are validated now, a journalled record is never validated again |
 //! | an open intent, probe `Done` | writes the missing `done` |
-//! | an open intent, probe `NotDone` | runs the action now, bound to the journalled intent, and writes its `done` |
-//! | an open intent, probe `Partial` | finishes the key delete from the backup ([`regbackup::finish_delete_tree`]) |
+//! | an open intent, probe `NotDone` | runs the action now, bound to the journalled intent, and writes its `done`; a file in use goes to the locked-file ladder ([`Run::settle_open`]) |
+//! | an open intent, probe `Partial` | finishes the key delete from the backup ([`act_reg::complete_reg`]) |
 //! | an open intent, probe `Attention` | writes `done` `Failed{VerifyFailed}`; the item is left as it is |
-//! | items with no intent yet | run through [`Run::run_item`], after backups left by the crash were deleted |
+//! | items with no intent yet | run through [`Run::run_item`]; a backup file a crash left is adopted when it verifies and equals a fresh capture, else deleted and written anew |
+//! | held items | stay held: only [`retry_held`] tries them again |
 //! | the end | `commit`, index entry and report through [`Run::finish`] |
-//! | finished session, undo interrupted | finishes the undo of the ops in progress |
+//! | finished session, undo interrupted | finishes the undo: the ops in progress, and the ops the undo's `undo_plan` names that it had not reached |
 //! | finished session, retry of a held item interrupted | probes the move and ends the retry (`Done`, `HeldRetry` or `Failed{VerifyFailed}`) |
+//! | finished session without its report | writes `report.json` from the journal and the scan copy |
 //! | finished session without a current index entry | writes the entry |
 //!
 //! # Rollback
 //!
 //! | The session | What rollback does |
 //! |---|---|
-//! | no journal; validation incomplete | as resume (`aborted` with `RolledBack`) |
+//! | no journal; validation incomplete | nothing was acted on: removes the directory, or writes `aborted` (`RolledBack`); nothing to undo |
 //! | an open intent, probe `Done` | writes the missing `done` |
 //! | an open intent, probe `NotDone` | writes `done` `Skipped{NotAttempted}`: the action did not run and will not |
 //! | an open intent, probe `Partial` or `Attention` | writes `done` `Failed{VerifyFailed}`; its undo then runs in the completing form (a key tree is completed from its backup, a move back looks where the item is) |
 //! | every op with an intent | undone in reverse order by the undo driver ([`crate::undo`]) |
 //! | the end | `aborted` (`RolledBack`), index entry and report through [`Run::abort`] |
-//! | finished session | as resume: an interrupted undo or retry is finished, the index entry brought up to date |
+//! | finished session | as resume: an interrupted undo or retry is finished, a missing report written, the index entry brought up to date |
 //!
 //! A journal record that cannot be written stops recovery at once with [`RecoverError::Journal`];
 //! everything else is the result of its op.
@@ -71,33 +78,28 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use purge_guard::deny::DenyList;
-use purge_guard::live::FileIdentity;
 use purge_model::FileTime;
-use purge_model::exec::journal::{AbortReason, Intent, ItemFacts};
-use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
+use purge_model::exec::journal::{AbortReason, Intent};
+use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::session::{ExecReport, SessionId, SessionState, UndoItemReport};
-use purge_win::appx_write::RemovalScope;
-use purge_win::fs::FileHandle;
 use purge_win::fs_write::FsError;
-use purge_win::secure::extended_path;
 
-use crate::act_fs::{self, FsActed, FsPrepared, Retry};
+use crate::act_fs::{self, Retry};
+use crate::act_reg;
 use crate::act_typed::{self, PackageBackend};
 use crate::execute::{self, Abort, ExecEnv, ExecError, ItemStep, Run};
-use crate::gate::{self, GateCtx, GateSetupError};
+use crate::gate::{GateCtx, GateSetupError};
 use crate::journal::{
-    self, IntentToken, JournalError, JournalRead, JournalState, JournalWriter, OpState, OpStatus,
-    sha256_bytes,
+    self, JournalError, JournalRead, JournalState, JournalWriter, OpState, OpStatus, sha256_bytes,
 };
 use crate::locked::{self, PendingRenames};
 use crate::prepare::LockerQuery;
-use crate::regbackup::{self, DeleteFailure, SegmentError, TreeState, ValueDelete, VerifiedBackup};
-use crate::report;
-use crate::storage::{BackupKind, SessionDir, StorageError, StorageRoots, backup_rel};
-use crate::undo::{self, CtxError, Driver, now, standing, undo_order};
+use crate::regbackup::TreeState;
+use crate::report::{self, RunNotes};
+use crate::storage::{SessionDir, StorageError, StorageRoots, now};
+use crate::undo::{self, CtxError, Driver, standing, undo_order};
 
 #[cfg(test)]
 mod tests;
@@ -190,14 +192,15 @@ impl From<CtxError> for RecoverError {
 pub enum PendingKind {
     /// Its journal ends with neither `commit` nor `aborted`: the run was interrupted.
     Run,
-    /// Its run ended, and an undo was interrupted.
+    /// Its run ended, and an undo was interrupted: an op's undo is in progress, or the undo's
+    /// `undo_plan` names ops it had not reached.
     Undo,
     /// Its run ended, and a retry of a held item was interrupted.
     Retry,
-    /// Its run ended, and the index has no entry for it (the crash came before the index was
-    /// written).
+    /// Its run ended, and the index has no entry for it or its `report.json` was never written (the
+    /// crash came before the index or the report was written).
     Unindexed,
-    /// It has no journal, or one without a complete header: no run started.
+    /// It has no journal, or one without a complete header, or an empty one: no run started.
     Unstarted,
     /// Its journal cannot be read, or does not fit the mark of its index entry.
     Damaged,
@@ -216,7 +219,8 @@ pub struct PendingSession {
     pub started: Option<FileTime>,
     /// Ops with an intent and no `done`.
     pub open_intents: Vec<OpId>,
-    /// Ops whose undo was interrupted.
+    /// Ops whose undo was interrupted: those in progress, then those the interrupted undo's
+    /// `undo_plan` names and had not reached.
     pub undo_in_progress: Vec<OpId>,
     /// Ops whose retry was interrupted.
     pub retries_in_flight: Vec<OpId>,
@@ -292,31 +296,64 @@ pub fn pending(roots: &StorageRoots) -> Result<PendingList, StorageError> {
         let state = &read.state;
         let ids = |ops: &mut dyn Iterator<Item = &OpState>| ops.map(|op| op.op).collect::<Vec<_>>();
         let undo_in_progress = ids(&mut state.undo_in_progress());
+        let undo_unreached = state.undo_unfinished();
         let retries_in_flight = ids(&mut state.retries_in_flight());
+        let mut report_missing = || {
+            report::has_report(&session).map_or_else(
+                |e| {
+                    list.warnings.push(format!(
+                        "session {id}: whether its report exists cannot be told: {e}"
+                    ));
+                    false
+                },
+                |found| !found,
+            )
+        };
         let (kind, detail) = if !state.is_finished() {
             (
                 PendingKind::Run,
-                "the run ended with neither commit nor aborted",
+                "the run ended with neither commit nor aborted".to_owned(),
             )
-        } else if !undo_in_progress.is_empty() {
-            (PendingKind::Undo, "an undo was interrupted")
+        } else if !undo_in_progress.is_empty() || !undo_unreached.is_empty() {
+            (
+                PendingKind::Undo,
+                format!(
+                    "an undo was interrupted; {} op(s) in progress, {} op(s) not reached",
+                    undo_in_progress.len(),
+                    undo_unreached.len()
+                ),
+            )
         } else if !retries_in_flight.is_empty() {
-            (PendingKind::Retry, "a retry of a held item was interrupted")
+            (
+                PendingKind::Retry,
+                "a retry of a held item was interrupted".to_owned(),
+            )
         } else if index.is_some() && entry.is_none() {
             (
                 PendingKind::Unindexed,
-                "the run ended and the session index has no entry for it",
+                "the run ended and the session index has no entry for it".to_owned(),
+            )
+        } else if report_missing() {
+            (
+                PendingKind::Unindexed,
+                "the run ended and its report was never written".to_owned(),
             )
         } else {
             continue;
         };
+        let unreached: Vec<OpId> = undo_unreached
+            .into_iter()
+            .filter(|op| !undo_in_progress.contains(op))
+            .collect();
+        let mut undoing = undo_in_progress;
+        undoing.extend(unreached);
         list.sessions.push(PendingSession {
             app: Some(state.header().app.clone()),
             started: Some(state.header().created),
             open_intents: ids(&mut state.open_intents()),
-            undo_in_progress,
+            undo_in_progress: undoing,
             retries_in_flight,
-            ..found(kind, detail.to_owned())
+            ..found(kind, detail)
         });
     }
     Ok(list)
@@ -443,215 +480,21 @@ pub(crate) fn probe_package(listed: Option<bool>) -> Probe {
     }
 }
 
-/// What `path` holds, opened without following a final reparse point.
-fn see_path(path: &str, recorded: FileIdentity) -> Seen {
-    let Ok(extended) = extended_path(Path::new(path)) else {
-        return Seen::Unknown;
-    };
-    match FileHandle::open(&extended) {
-        Err(e) if e.is_not_found() => Seen::Missing,
-        Err(_) => Seen::Unknown,
-        Ok(handle) => match handle.metadata() {
-            Ok(meta) => {
-                let found = FileIdentity {
-                    volume_serial: meta.file_id.volume_serial,
-                    file_id: meta.file_id.id,
-                };
-                if found == recorded {
-                    Seen::Recorded
-                } else {
-                    Seen::Other
-                }
-            }
-            Err(_) => Seen::Unknown,
-        },
-    }
-}
-
-/// What the op's quarantine path holds, reached through the store-checked op directory.
-fn see_quarantine(
-    session: &SessionDir,
-    quarantine_path: &str,
-    op: OpId,
-    recorded: FileIdentity,
-) -> Seen {
-    let not_found = |e: &StorageError| {
-        matches!(
-            e,
-            StorageError::Io {
-                source: FsError::NotFound,
-                ..
-            }
-        )
-    };
-    let (dir, leaf) =
-        match session.open_op_dir(Path::new(quarantine_path), op, recorded.volume_serial) {
-            Ok(found) => found,
-            Err(e) if not_found(&e) => return Seen::Missing,
-            Err(_) => return Seen::Unknown,
-        };
-    match dir.open_item(&leaf) {
-        Ok(None) => Seen::Missing,
-        Ok(Some(item)) => {
-            let id = item.file_id();
-            let found = FileIdentity {
-                volume_serial: id.volume_serial,
-                file_id: id.id,
-            };
-            if found == recorded {
-                Seen::Recorded
-            } else {
-                Seen::Other
-            }
-        }
-        Err(_) => Seen::Unknown,
-    }
-}
-
-/// The verified backup of a registry intent, checked as the backup of its op.
-fn intent_backup(session: &SessionDir, intent: &Intent) -> Result<VerifiedBackup, String> {
-    let reference = intent
-        .inverse
-        .backup()
-        .ok_or_else(|| "the intent names no backup".to_owned())?;
-    let backup = regbackup::read_verified(session, reference)
-        .map_err(|e| format!("the backup {} cannot be used: {e}", reference.path))?;
-    backup.doc().validate_for(&intent.exec_op).map_err(|e| {
-        format!(
-            "the backup {} is not the backup of this op: {e}",
-            reference.path
-        )
-    })?;
-    Ok(backup)
-}
-
-/// The key a registry intent acts on, opened and checked by the undo gate with the exemptions of the
-/// op's journalled `validated` record.
-fn checked_key(ctx: &GateCtx, intent: &Intent) -> Result<gate::CheckedUndoKey, String> {
-    let exemptions = ctx
-        .exemptions(intent.op)
-        .ok_or_else(|| format!("op {} has no journalled validated record", intent.op))?;
-    gate::check_undo_key(ctx, &intent.exec_op.target(), &exemptions)
-        .map_err(|refusal| format!("the gate refuses the key: {refusal}"))
-}
-
-/// Whether the package is listed for the calling user; `None` when the listing failed.
-fn package_listed(packages: &dyn PackageBackend, full_name: &str) -> Option<bool> {
-    let listing = packages.list(RemovalScope::CurrentUser).ok()?;
-    Some(
-        listing
-            .iter()
-            .any(|info| info.package.full_name.eq_ignore_ascii_case(full_name)),
-    )
-}
-
-/// Probes the op of `intent`, which has no `done`.
-fn probe_intent(
+/// Probes the op of `intent`, which has no `done`, through its action module: [`act_fs::probe_fs`],
+/// [`act_reg::probe_reg`] (the key checked by the undo gate in `ctx`) or [`act_typed::probe_package`].
+pub(crate) fn probe_intent(
     ctx: &GateCtx,
     session: &SessionDir,
     intent: &Intent,
     pending: &dyn PendingRenames,
     packages: &dyn PackageBackend,
 ) -> Probe {
-    let inconsistent = || Probe::attention("the intent does not hang together");
-    match (&intent.exec_op, &intent.inverse) {
-        (
-            ExecOp::QuarantineMove { .. },
-            Inverse::MoveBack {
-                quarantine_path,
-                original_path,
-                file_id,
-                volume_serial,
-            },
-        ) => {
-            if let Some(outcome) = locked::pending_after_crash(intent, pending) {
-                return Probe::Done(outcome);
-            }
-            let recorded = FileIdentity {
-                volume_serial: *volume_serial,
-                file_id: file_id.0,
-            };
-            probe_move(
-                see_path(original_path, recorded),
-                see_quarantine(session, quarantine_path, intent.op, recorded),
-            )
+    match &intent.exec_op {
+        ExecOp::QuarantineMove { .. } | ExecOp::RemoveDirIfEmpty { .. } => {
+            act_fs::probe_fs(session, intent, pending)
         }
-        (ExecOp::RemoveDirIfEmpty { path }, Inverse::RecreateDir { .. }) => {
-            let ItemFacts::File(pre) = &intent.pre else {
-                return inconsistent();
-            };
-            probe_remove_dir(see_path(
-                path,
-                FileIdentity {
-                    volume_serial: pre.volume_serial,
-                    file_id: pre.file_id.0,
-                },
-            ))
-        }
-        (ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. }, _) => {
-            let parent = match checked_key(ctx, intent).map(gate::CheckedUndoKey::into_parent) {
-                Ok(Some(parent)) => parent,
-                Ok(None) => return inconsistent(),
-                Err(e) => return Probe::attention(e),
-            };
-            let backup = match intent_backup(session, intent) {
-                Ok(backup) => backup,
-                Err(e) => return Probe::attention(e),
-            };
-            match regbackup::probe_tree(&parent, &backup) {
-                Ok(tree) => probe_key(&tree),
-                Err(e) => {
-                    Probe::attention(format!("the key cannot be compared with its backup: {e}"))
-                }
-            }
-        }
-        (ExecOp::DeleteValue { name, .. }, _) => {
-            let key = match checked_key(ctx, intent).map(gate::CheckedUndoKey::into_value_key) {
-                Ok(Some(key)) => key,
-                Ok(None) => return inconsistent(),
-                Err(e) => return Probe::attention(e),
-            };
-            let backup = match intent_backup(session, intent) {
-                Ok(backup) => backup,
-                Err(e) => return Probe::attention(e),
-            };
-            let Some(backed_up) = backup.value() else {
-                return Probe::attention("the backup holds no value");
-            };
-            match key.key().value(name) {
-                Ok(live) => probe_value(
-                    live.as_ref().map(|value| (value.ty, value.data.as_slice())),
-                    (backed_up.value_type, backed_up.data_b64.0.as_slice()),
-                ),
-                Err(e) => Probe::attention(format!("the value cannot be read: {e}")),
-            }
-        }
-        (
-            ExecOp::EditSegment { name, .. },
-            Inverse::ReinsertSegment {
-                original_value_hash,
-                written_value_hash,
-                ..
-            },
-        ) => {
-            let key = match checked_key(ctx, intent).map(gate::CheckedUndoKey::into_value_key) {
-                Ok(Some(key)) => key,
-                Ok(None) => return inconsistent(),
-                Err(e) => return Probe::attention(e),
-            };
-            match key.key().value(name) {
-                Ok(live) => probe_segment(
-                    live.as_ref().map(|value| value.data.as_slice()),
-                    *original_value_hash,
-                    *written_value_hash,
-                ),
-                Err(e) => Probe::attention(format!("the value cannot be read: {e}")),
-            }
-        }
-        (ExecOp::RemovePackage { full_name }, _) => {
-            probe_package(package_listed(packages, full_name))
-        }
-        _ => inconsistent(),
+        ExecOp::RemovePackage { .. } => act_typed::probe_package(packages, intent),
+        _ => act_reg::probe_reg(ctx, session, intent),
     }
 }
 
@@ -676,227 +519,6 @@ pub fn probe(session: &SessionId, op: OpId, env: &RecoverEnv<'_>) -> Result<Prob
             ))
         }
         _ => Ok(Probe::NotDone),
-    }
-}
-
-// ---------------------------------------------------------------------------------------------------
-// Running an action whose intent is already journalled
-// ---------------------------------------------------------------------------------------------------
-
-fn failed(code: FailCode, os_error: Option<u32>, detail: impl Into<String>) -> ItemOutcome {
-    ItemOutcome::Failed {
-        code,
-        os_error,
-        detail: detail.into(),
-    }
-}
-
-fn changed() -> ItemOutcome {
-    ItemOutcome::Skipped {
-        reason: SkipReason::ChangedSinceScan,
-    }
-}
-
-/// Runs the file action of an intent the probe found not done, under the intent's own token. The
-/// action is prepared again through the act-time gate and runs only when what it would journal is
-/// exactly the journalled intent (undo relies on that record); the locked-file ladder is not run, an
-/// item in use is held for a retry.
-fn forward_fs(
-    ctx: &GateCtx,
-    session: &SessionDir,
-    intent: &Intent,
-    token: &IntentToken,
-    retry: &Retry,
-) -> ItemOutcome {
-    match act_fs::prepare_fs(ctx, session, intent.op, retry) {
-        Err(e) => failed(
-            FailCode::Internal,
-            None,
-            format!("the store refused the item's quarantine: {e}"),
-        ),
-        Ok(FsPrepared::Decided(result)) => result.outcome,
-        Ok(FsPrepared::Locked(_)) => ItemOutcome::HeldRetry,
-        Ok(FsPrepared::Ready(action)) => {
-            if action.intent() != intent {
-                return failed(
-                    FailCode::VerifyFailed,
-                    None,
-                    "the item is no longer what the journalled intent recorded; left as it is",
-                );
-            }
-            match act_fs::act_fs(action, token, retry) {
-                FsActed::Finished(result) => result.outcome,
-                FsActed::Locked(_) => ItemOutcome::HeldRetry,
-            }
-        }
-    }
-}
-
-/// Finishes (or runs) the key delete of an intent from its backup, below the parent the undo gate
-/// checked. A delete that stops puts back what it deleted; keys an interrupted run had deleted before
-/// are then put back too ([`regbackup::restore_missing`]), so the key ends either gone or whole.
-fn forward_key(ctx: &GateCtx, session: &SessionDir, intent: &Intent) -> ItemOutcome {
-    let parent = match checked_key(ctx, intent).map(gate::CheckedUndoKey::into_parent) {
-        Ok(Some(parent)) => parent,
-        Ok(None) => return failed(FailCode::Internal, None, "the intent is not a key delete"),
-        Err(e) => return failed(FailCode::VerifyFailed, None, e),
-    };
-    let backup = match intent_backup(session, intent) {
-        Ok(backup) => backup,
-        Err(e) => return failed(FailCode::VerifyFailed, None, e),
-    };
-    let stopped = match regbackup::finish_delete_tree(&parent, &backup) {
-        Ok(_) => {
-            return match regbackup::probe_tree(&parent, &backup) {
-                Ok(TreeState::Absent) => ItemOutcome::Done,
-                _ => failed(
-                    FailCode::VerifyFailed,
-                    None,
-                    "the key was deleted, but whether it is gone cannot be checked",
-                ),
-            };
-        }
-        Err(stopped) => stopped,
-    };
-    let whole =
-        stopped.rollback.is_complete() || regbackup::restore_missing(&parent, &backup).is_ok();
-    if !whole {
-        return failed(
-            FailCode::VerifyFailed,
-            None,
-            format!("the key delete stopped ({stopped}) and the key could not be put back whole"),
-        );
-    }
-    match stopped.failure {
-        DeleteFailure::Changed(_) => changed(),
-        DeleteFailure::Os { error, .. } => failed(
-            FailCode::Os,
-            Some(error.code()),
-            format!("the key delete stopped: {stopped}"),
-        ),
-        DeleteFailure::WrongBackupKind | DeleteFailure::NotThisKey => failed(
-            FailCode::Internal,
-            None,
-            format!("the key delete stopped: {stopped}"),
-        ),
-    }
-}
-
-/// Runs the value delete or segment edit of an intent the probe found not done, in the key the undo
-/// gate checked, only while the value is exactly what the intent recorded.
-fn forward_value(ctx: &GateCtx, session: &SessionDir, intent: &Intent) -> ItemOutcome {
-    let key = match checked_key(ctx, intent).map(gate::CheckedUndoKey::into_value_key) {
-        Ok(Some(key)) => key,
-        Ok(None) => return failed(FailCode::Internal, None, "the intent is not a value op"),
-        Err(e) => return failed(FailCode::VerifyFailed, None, e),
-    };
-    match (&intent.exec_op, &intent.inverse) {
-        (ExecOp::DeleteValue { .. }, _) => {
-            let backup = match intent_backup(session, intent) {
-                Ok(backup) => backup,
-                Err(e) => return failed(FailCode::VerifyFailed, None, e),
-            };
-            match regbackup::delete_value(key.key(), &backup) {
-                Ok(ValueDelete::Deleted) => ItemOutcome::Done,
-                Ok(ValueDelete::Vanished) => ItemOutcome::Vanished,
-                Err(DeleteFailure::Changed(_)) => changed(),
-                Err(DeleteFailure::Os { op, error }) => failed(
-                    FailCode::Os,
-                    Some(error.code()),
-                    format!("{op} failed: {error}"),
-                ),
-                Err(e) => failed(FailCode::Internal, None, e.to_string()),
-            }
-        }
-        (
-            ExecOp::EditSegment {
-                name,
-                segment,
-                index,
-                ..
-            },
-            Inverse::ReinsertSegment {
-                index: recorded_index,
-                original_value_hash,
-                written_value_hash,
-                ..
-            },
-        ) => {
-            let plan = match regbackup::plan_segment_removal(key.key(), name, segment, *index) {
-                Ok(plan) => plan,
-                Err(SegmentError::ValueAbsent | SegmentError::SegmentAbsent) => {
-                    return ItemOutcome::Vanished;
-                }
-                Err(SegmentError::Os(e)) => {
-                    return failed(FailCode::Os, Some(e.error.code()), e.to_string());
-                }
-                Err(_) => return changed(),
-            };
-            let as_recorded = plan.index == *recorded_index
-                && plan.original_value_hash == *original_value_hash
-                && plan.written_value_hash == *written_value_hash;
-            if !as_recorded {
-                return changed();
-            }
-            match regbackup::apply_segment_removal(key.key(), &plan) {
-                Ok(()) => ItemOutcome::Done,
-                Err(SegmentError::VerifyFailed) => failed(
-                    FailCode::VerifyFailed,
-                    None,
-                    "the value did not read back as written",
-                ),
-                Err(SegmentError::Os(e)) => {
-                    failed(FailCode::Os, Some(e.error.code()), e.to_string())
-                }
-                Err(_) => changed(),
-            }
-        }
-        _ => failed(FailCode::Internal, None, "the intent is not a value op"),
-    }
-}
-
-/// Removes the package of an intent the probe found still listed, after the checks of the run: the
-/// header's acknowledgement, and no refusal for the package as it is listed now.
-fn forward_package(
-    state: &JournalState,
-    packages: &dyn PackageBackend,
-    full_name: &str,
-) -> ItemOutcome {
-    if !state.header().allow_irreversible {
-        return ItemOutcome::Skipped {
-            reason: SkipReason::GateBlocked {
-                blocker: purge_model::Blocker::ReversibilityNone,
-            },
-        };
-    }
-    let listing = match packages.list(RemovalScope::CurrentUser) {
-        Ok(listing) => listing,
-        Err(e) => return failed(FailCode::PackageApi, e.code.map(|c| c as u32), e.detail),
-    };
-    let Some(info) = listing
-        .iter()
-        .find(|info| info.package.full_name.eq_ignore_ascii_case(full_name))
-    else {
-        return ItemOutcome::Vanished;
-    };
-    if let Some((blocker, _)) = act_typed::refusal(info, &listing) {
-        return ItemOutcome::Skipped {
-            reason: SkipReason::GateBlocked { blocker },
-        };
-    }
-    let removed = packages.remove(full_name, RemovalScope::CurrentUser);
-    match package_listed(packages, full_name) {
-        Some(false) => ItemOutcome::Done,
-        Some(true) => failed(
-            FailCode::PackageApi,
-            None,
-            format!("the removal of package {full_name} ended {removed:?} and it is still listed"),
-        ),
-        None => failed(
-            FailCode::VerifyFailed,
-            None,
-            format!("package {full_name} was removed, but whether it is gone cannot be checked"),
-        ),
     }
 }
 
@@ -1015,23 +637,24 @@ fn recover(
     };
     if !read.state.is_finished() {
         let state = &read.state;
-        let validated =
-            state.validated_count() == state.header().items && state.settings().is_some();
-        if !validated {
-            end_unvalidated(&session, mode)?;
-        } else {
-            match mode {
-                RecoverMode::Resume => resume_run(&mut env, session, &read, &mut out)?,
-                RecoverMode::Rollback => rollback_run(&mut env, session, &read, &mut out)?,
+        let validated = state.validated_count() == state.header().items;
+        match mode {
+            // A journal from before the `settings` record cannot be resumed; one that stopped in its
+            // validation acted on nothing and ends here.
+            RecoverMode::Resume if state.settings().is_none() && !validated => {
+                end_unvalidated(&session, mode)?;
             }
+            RecoverMode::Resume => resume_run(&mut env, session, &mut out)?,
+            RecoverMode::Rollback if !validated => end_unvalidated(&session, mode)?,
+            RecoverMode::Rollback => rollback_run(&mut env, session, &read, &mut out)?,
         }
     }
     finish_tail(&mut env, id, index.is_some(), &mut out)?;
     Ok(out)
 }
 
-/// Ends a run that stopped before every item was validated: nothing was acted on, so the journal
-/// only gets its `aborted`.
+/// Ends a run that stopped before every item was validated and is not continued: nothing was acted
+/// on, so the journal only gets its `aborted` and there is nothing to undo.
 fn end_unvalidated(session: &SessionDir, mode: RecoverMode) -> Result<(), RecoverError> {
     let reason = match mode {
         RecoverMode::Resume => AbortReason::Cancelled,
@@ -1046,99 +669,40 @@ fn end_unvalidated(session: &SessionDir, mode: RecoverMode) -> Result<(), Recove
     Ok(())
 }
 
-/// Deletes the backup and definition files a crash left for ops that have no intent: written, and
-/// never named by the journal. A resumed run writes them anew (create-new).
-fn delete_unjournalled_backups(
-    session: &SessionDir,
-    state: &JournalState,
-    warnings: &mut Vec<String>,
-) {
-    for op in state.ops().filter(|op| op.status() == OpStatus::Validated) {
-        for kind in [BackupKind::Registry, BackupKind::Definition] {
-            let rel = backup_rel(kind, op.op);
-            if let Err(e) = session.delete_backup_file(&rel) {
-                warnings.push(format!(
-                    "the unjournalled backup {rel} of op {} could not be deleted: {e}",
-                    op.op
-                ));
-            }
-        }
-    }
-}
-
+/// Resume: the run is taken up again ([`Run::resume`], which validates what the interrupted pass had
+/// not reached), every open intent is settled by its probe and forward completion
+/// ([`Run::settle_open`]), the items without an intent run, and the run ends.
 fn resume_run(
     env: &mut RecoverEnv<'_>,
     session: SessionDir,
-    read: &JournalRead,
     out: &mut RecoverOutput,
 ) -> Result<(), RecoverError> {
-    let open: Vec<OpState> = read.state.open_intents().cloned().collect();
-    if !open.is_empty() {
-        let mut journal = JournalWriter::open_append(&session)?;
-        let ctx = undo::gate_ctx(
-            env.roots,
-            env.deny,
-            &session,
-            &read.state,
-            &mut out.warnings,
-        )?;
-        for op in &open {
-            let Some(intent) = &op.intent else {
-                continue;
-            };
-            let probe = probe_intent(&ctx, &session, intent, &*env.pending_renames, env.packages);
-            let Some(token) = journal.resume_intent(op.op) else {
-                continue;
-            };
-            let outcome = match (&probe, &intent.exec_op) {
-                (Probe::Done(outcome), _) => outcome.clone(),
-                (Probe::Attention { detail }, _) => {
-                    failed(FailCode::VerifyFailed, None, detail.clone())
-                }
-                (
-                    Probe::NotDone,
-                    ExecOp::QuarantineMove { .. } | ExecOp::RemoveDirIfEmpty { .. },
-                ) => forward_fs(&ctx, &session, intent, &token, &env.retry),
-                (
-                    Probe::NotDone | Probe::Partial { .. },
-                    ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. },
-                ) => forward_key(&ctx, &session, intent),
-                (Probe::NotDone, ExecOp::DeleteValue { .. } | ExecOp::EditSegment { .. }) => {
-                    forward_value(&ctx, &session, intent)
-                }
-                (Probe::NotDone, ExecOp::RemovePackage { full_name }) => {
-                    forward_package(&read.state, env.packages, full_name)
-                }
-                (Probe::Partial { .. }, _) => failed(
-                    FailCode::Internal,
-                    None,
-                    "only a key delete can be half done",
-                ),
-            };
-            journal.done(token, outcome.clone())?;
-            out.settled.push(SettledOp {
-                op: op.op,
-                probe,
-                outcome,
-            });
-        }
-        journal.sync()?;
-    }
-    delete_unjournalled_backups(&session, &read.state, &mut out.warnings);
-
     let scan = execute::read_scan_copy(&session)?;
     let mut run = Run::resume(exec_env(env), session, &scan)?;
-    let ops: Vec<OpId> = run.plan().items().iter().map(|item| item.op).collect();
+    let open: Vec<OpId> = run.state().open_intents().map(|op| op.op).collect();
     let mut aborted = None;
-    for op in ops {
-        match run.run_item(op) {
-            Ok(ItemStep::OpenIntent) => out.warnings.push(format!(
-                "op {op} still has an intent without a done; the run cannot be committed"
-            )),
-            Ok(_) => {}
+    for op in open {
+        match run.settle_open(op) {
+            Ok(Some(settled)) => out.settled.push(settled),
+            Ok(None) => {}
             Err(abort) => {
                 aborted = Some(abort);
                 break;
+            }
+        }
+    }
+    if aborted.is_none() {
+        let ops: Vec<OpId> = run.plan().items().iter().map(|item| item.op).collect();
+        for op in ops {
+            match run.run_item(op) {
+                Ok(ItemStep::OpenIntent) => out.warnings.push(format!(
+                    "op {op} still has an intent without a done; the run cannot be committed"
+                )),
+                Ok(_) => {}
+                Err(abort) => {
+                    aborted = Some(abort);
+                    break;
+                }
             }
         }
     }
@@ -1149,6 +713,14 @@ fn resume_run(
     out.report_written = output.report_written;
     out.report = Some(output.report);
     Ok(())
+}
+
+fn failed(code: FailCode, os_error: Option<u32>, detail: impl Into<String>) -> ItemOutcome {
+    ItemOutcome::Failed {
+        code,
+        os_error,
+        detail: detail.into(),
+    }
 }
 
 fn rollback_run(
@@ -1217,10 +789,10 @@ fn rollback_run(
         return Err(e.into());
     }
     drop(journal);
-    delete_unjournalled_backups(&session, &read.state, &mut out.warnings);
 
     // The run's end: `aborted`, the index entry and the report, through the executor's own close when
-    // the run can be bound again, else the `aborted` record alone (the index entry follows below).
+    // the run can be bound again, else the `aborted` record alone (the index entry and the report
+    // follow in the tail).
     let abort = Abort {
         reason: AbortReason::RolledBack,
         detail: "rolled back after an interrupted run".to_owned(),
@@ -1236,7 +808,8 @@ fn rollback_run(
         }
         Err(e) => {
             out.warnings.push(format!(
-                "the run could not be bound to its plan again ({e}); no report was written"
+                "the run could not be bound to its plan again ({e}); its report is written from the \
+                 journal"
             ));
             let session = env.roots.open_session(&id)?;
             let mut journal = JournalWriter::open_append(&session)?;
@@ -1256,9 +829,58 @@ pub(crate) fn retry_outcome(probe: &Probe) -> ItemOutcome {
     }
 }
 
-/// The part of recovery every finished session gets: interrupted retries are ended, an interrupted
-/// undo is finished, and the index entry is brought up to the journal. Writes nothing when there is
-/// nothing to do.
+/// Writes `report.json` for a finished session that has none (a crash after `commit` or `aborted` and
+/// before the report): built from the journal and the scan copy ([`report::build`]). The run's
+/// per-item notes were not journalled and are not in it. Whether it was written.
+fn write_missing_report(
+    session: &SessionDir,
+    state: &JournalState,
+    out: &mut RecoverOutput,
+) -> bool {
+    match report::has_report(session) {
+        Ok(true) => return false,
+        Ok(false) => {}
+        Err(e) => {
+            out.warnings
+                .push(format!("whether the report exists cannot be told: {e}"));
+            return false;
+        }
+    }
+    let scan = match execute::read_scan_copy(session) {
+        Ok(scan) => scan,
+        Err(e) => {
+            out.warnings.push(format!(
+                "the report is missing and cannot be built: the scan copy cannot be read ({e})"
+            ));
+            return false;
+        }
+    };
+    let notes = RunNotes {
+        warnings: vec![
+            "written by recovery after the run ended: the run's notes on single items were not kept"
+                .to_owned(),
+        ],
+        ..RunNotes::default()
+    };
+    let mut built = report::build(state, &scan, &notes, now());
+    built.state = report::session_state(state);
+    match report::write_report(session, &built) {
+        Ok(()) => {
+            out.report = Some(built);
+            true
+        }
+        Err(e) => {
+            out.warnings
+                .push(format!("the missing report could not be written: {e}"));
+            false
+        }
+    }
+}
+
+/// The part of recovery every finished session gets: a missing report is written, interrupted retries
+/// are ended (never retried), an interrupted undo is finished (the ops in progress and those its
+/// `undo_plan` names and had not reached), and the index entry is brought up to the journal. Writes
+/// nothing when there is nothing to do.
 fn finish_tail(
     env: &mut RecoverEnv<'_>,
     id: &SessionId,
@@ -1274,8 +896,12 @@ fn finish_tail(
             .push("the session's run could not be ended; it still needs recovery".to_owned());
         return Ok(());
     }
+    if write_missing_report(&session, &state, out) {
+        out.report_written = true;
+    }
     let retries: Vec<OpState> = state.retries_in_flight().cloned().collect();
-    let undoing: BTreeSet<OpId> = state.undo_in_progress().map(|op| op.op).collect();
+    let mut undoing: BTreeSet<OpId> = state.undo_in_progress().map(|op| op.op).collect();
+    undoing.extend(state.undo_unfinished());
     if !retries.is_empty() || !undoing.is_empty() {
         let mut journal = JournalWriter::open_append(&session)?;
         let ctx = undo::gate_ctx(env.roots, env.deny, &session, &state, &mut out.warnings)?;
@@ -1284,25 +910,7 @@ fn finish_tail(
                 continue;
             };
             // A retry never registers a boot-time move, so the list is not asked.
-            let probe = match &intent.inverse {
-                Inverse::MoveBack {
-                    quarantine_path,
-                    original_path,
-                    file_id,
-                    volume_serial,
-                } => {
-                    let recorded = FileIdentity {
-                        volume_serial: *volume_serial,
-                        file_id: file_id.0,
-                    };
-                    probe_move(
-                        see_path(original_path, recorded),
-                        see_quarantine(&session, quarantine_path, op.op, recorded),
-                    )
-                }
-                _ => Probe::attention("the held op has no quarantine-move intent"),
-            };
-            let outcome = retry_outcome(&probe);
+            let outcome = retry_outcome(&act_fs::probe_move_back(&session, intent));
             journal.retried(token, now(), outcome.clone())?;
             out.retries.push((op.op, outcome));
         }
@@ -1334,4 +942,72 @@ fn finish_tail(
             .unwrap_or_else(|| report::session_state(&state)),
     );
     Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Held items
+// ---------------------------------------------------------------------------------------------------
+
+/// What [`retry_held`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetryOutput {
+    /// The session.
+    pub session: SessionId,
+    /// Each held op tried again, with the outcome its `reconcile` `Retried` record carries.
+    pub retried: Vec<locked::Retried>,
+    /// Whether the session's index entry is current.
+    pub index_updated: bool,
+    /// Anything else the user should know (why nothing was tried, for one).
+    pub warnings: Vec<String>,
+}
+
+/// Tries the held items of a finished session again (`HeldRetry`; [`locked::retry_held`] with the file
+/// action's mover, [`act_fs::StoreRetryMove`]): each is validated again through the handle-based gate
+/// with its journalled `validated` record and moved by handle to the quarantine path its intent
+/// records, write-ahead (`retry_intent`, the move, `reconcile` `Retried`). An item still in use stays
+/// held; a retry never registers a boot-time move. The index entry is brought up to the journal.
+///
+/// Recovery never retries: a session whose run is unfinished, or that holds an interrupted retry, is
+/// left as it is (with a warning) until [`resume`] or [`rollback`] has run.
+pub fn retry_held(session: &SessionId, env: RecoverEnv<'_>) -> Result<RetryOutput, RecoverError> {
+    let mut out = RetryOutput {
+        session: session.clone(),
+        retried: Vec::new(),
+        index_updated: false,
+        warnings: Vec::new(),
+    };
+    env.roots.check()?;
+    let dir = env.roots.open_session(session)?;
+    let index = undo::read_index(env.roots, &mut out.warnings)?;
+    let mark = index
+        .as_ref()
+        .and_then(|index| index.get(session))
+        .and_then(|entry| entry.journal.as_ref());
+    let read = journal::read_indexed(&dir, mark)?;
+    if !read.state.is_finished() {
+        out.warnings
+            .push("the session's run is unfinished; recover it first (journal resume)".to_owned());
+        return Ok(out);
+    }
+    if read.state.retries_in_flight().next().is_some() {
+        out.warnings.push(
+            "a retry of a held item was interrupted; recover it first (journal resume)".to_owned(),
+        );
+        return Ok(out);
+    }
+    if read.state.held_retry().next().is_none() {
+        return Ok(out);
+    }
+    let ctx = undo::gate_ctx(env.roots, env.deny, &dir, &read.state, &mut out.warnings)?;
+    let mut journal = JournalWriter::open_append(&dir)?;
+    let state = {
+        let mut mover = act_fs::StoreRetryMove::new(&ctx, &dir, &env.retry);
+        out.retried = locked::retry_held(&mut journal, &mut mover, now())?;
+        journal.state().clone()
+    };
+    drop(journal);
+    if index.is_some() {
+        out.index_updated = undo::update_index(&dir, &state, &mut out.warnings);
+    }
+    Ok(out)
 }

@@ -1,6 +1,9 @@
 //! Unit tests of the probe tables: what recovery concludes from what it found. Pure: nothing here
 //! touches the system. The crash matrix on real objects is in `tests/crash.rs`.
 
+use std::path::Path;
+
+use purge_model::exec::journal::ItemFacts;
 use purge_model::exec::op::{BootMovePair, Inverse};
 
 use super::*;

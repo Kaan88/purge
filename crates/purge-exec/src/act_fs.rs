@@ -117,7 +117,9 @@ use purge_win::os::Win32Error;
 
 use crate::fault;
 use crate::gate::{self, CheckedDest, CheckedPath, GateCtx, GateOutcome, LockedPath, Stamp};
-use crate::journal::{IntentToken, UndoToken};
+use crate::journal::{IntentToken, OpState, RetryToken, UndoToken};
+use crate::locked::{self, PendingRenames, RetryAttempt, RetryMove};
+use crate::recover::{self, Probe, Seen};
 use crate::storage::{QuarantineDir, SessionDir, StorageError};
 
 #[cfg(test)]
@@ -777,19 +779,40 @@ fn rename_failure(error: FsError, path: &str) -> FsResult {
 /// recorded file id, and the original path must not hold the item; after a remove the handle is closed
 /// first and the path must not hold the directory. Otherwise `Failed{VerifyFailed}`.
 pub fn act_fs(action: Box<FsAction>, token: &IntentToken, retry: &Retry) -> FsActed {
+    if token.op() != action.intent.op || token.item() != &action.intent.item {
+        return FsActed::Finished(FsResult::internal(format!(
+            "the intent token is for op {}, not op {}; {} left untouched",
+            token.op(),
+            action.intent.op,
+            action.checked.path()
+        )));
+    }
+    act_checked(action, retry)
+}
+
+/// [`act_fs`] for the retry of a held item: the same move, under the token of the op's `retry_intent`
+/// (`JournalWriter::retry_intent`), which proves that retry durable. A token of another op is
+/// `Failed{Internal}` and nothing is done.
+pub fn retry_fs(action: Box<FsAction>, token: &RetryToken, retry: &Retry) -> FsActed {
+    if token.op() != action.intent.op {
+        return FsActed::Finished(FsResult::internal(format!(
+            "the retry token is for op {}, not op {}; {} left untouched",
+            token.op(),
+            action.intent.op,
+            action.checked.path()
+        )));
+    }
+    act_checked(action, retry)
+}
+
+/// The act of [`act_fs`] and [`retry_fs`], once the caller checked the token.
+fn act_checked(action: Box<FsAction>, retry: &Retry) -> FsActed {
     let FsAction {
         intent,
         checked,
         kind,
     } = *action;
     let path = checked.path().to_owned();
-    if token.op() != intent.op || token.item() != &intent.item {
-        return FsActed::Finished(FsResult::internal(format!(
-            "the intent token is for op {}, not op {}; {path} left untouched",
-            token.op(),
-            intent.op
-        )));
-    }
     let stamp = checked.stamp();
     let is_dir = stamp.is_dir;
     match kind {
@@ -1657,4 +1680,314 @@ fn recreate_dir(
     }
     fault::point(fault::UNDO_ACT_AFTER);
     FsUndo::done(UndoOutcome::Restored, notes.join("; "))
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Recovery: probe and forward completion of an op whose intent has no `done`
+// ---------------------------------------------------------------------------------------------------
+
+/// What `path` holds next to the recorded identity, opened without following a final reparse point.
+fn see_path(path: &str, recorded: FileIdentity) -> Seen {
+    let Ok(extended) = extended_path(Path::new(path)) else {
+        return Seen::Unknown;
+    };
+    match FileHandle::open(&extended) {
+        Err(e) if e.is_not_found() => Seen::Missing,
+        Err(_) => Seen::Unknown,
+        Ok(handle) => match handle.metadata() {
+            Ok(meta) => {
+                let found = FileIdentity {
+                    volume_serial: meta.file_id.volume_serial,
+                    file_id: meta.file_id.id,
+                };
+                if found == recorded {
+                    Seen::Recorded
+                } else {
+                    Seen::Other
+                }
+            }
+            Err(_) => Seen::Unknown,
+        },
+    }
+}
+
+/// What the op's quarantine path holds, reached through the store-checked op directory.
+fn see_quarantine(
+    session: &SessionDir,
+    quarantine_path: &str,
+    op: OpId,
+    recorded: FileIdentity,
+) -> Seen {
+    let not_found = |e: &StorageError| {
+        matches!(
+            e,
+            StorageError::Io {
+                source: FsError::NotFound,
+                ..
+            }
+        )
+    };
+    let (dir, leaf) =
+        match session.open_op_dir(Path::new(quarantine_path), op, recorded.volume_serial) {
+            Ok(found) => found,
+            Err(e) if not_found(&e) => return Seen::Missing,
+            Err(_) => return Seen::Unknown,
+        };
+    match dir.open_item(&leaf) {
+        Ok(None) => Seen::Missing,
+        Ok(Some(item)) => {
+            let id = item.file_id();
+            let found = FileIdentity {
+                volume_serial: id.volume_serial,
+                file_id: id.id,
+            };
+            if found == recorded {
+                Seen::Recorded
+            } else {
+                Seen::Other
+            }
+        }
+        Err(_) => Seen::Unknown,
+    }
+}
+
+/// The probe of a quarantine move from where the recorded item is: at its original path, in its
+/// quarantine, both or neither (`recover`'s table). The boot-time move list is not asked: a retry of a
+/// held item never registers a boot-time move. Read-only.
+pub(crate) fn probe_move_back(session: &SessionDir, intent: &Intent) -> Probe {
+    match (&intent.exec_op, &intent.inverse) {
+        (
+            ExecOp::QuarantineMove { .. },
+            Inverse::MoveBack {
+                quarantine_path,
+                original_path,
+                file_id,
+                volume_serial,
+            },
+        ) => {
+            let recorded = FileIdentity {
+                volume_serial: *volume_serial,
+                file_id: file_id.0,
+            };
+            recover::probe_move(
+                see_path(original_path, recorded),
+                see_quarantine(session, quarantine_path, intent.op, recorded),
+            )
+        }
+        _ => Probe::Attention {
+            detail: "the op has no quarantine-move intent".to_owned(),
+        },
+    }
+}
+
+/// Crash recovery: what really happened to the file op of `intent`, which the journal shows with no
+/// `done` (the module table of [`crate::recover`]). A quarantine move whose boot-time move pair stands
+/// in `pending` exactly once is `Done(PendingReboot)` ([`locked::pending_after_crash`]); otherwise the
+/// recorded item is looked for at its path and in its quarantine. A remove-directory looks at the path
+/// for the directory the intent's `pre` records. Read-only.
+pub fn probe_fs(session: &SessionDir, intent: &Intent, pending: &dyn PendingRenames) -> Probe {
+    match (&intent.exec_op, &intent.inverse, &intent.pre) {
+        (ExecOp::QuarantineMove { .. }, Inverse::MoveBack { .. }, _) => {
+            if let Some(outcome) = locked::pending_after_crash(intent, pending) {
+                return Probe::Done(outcome);
+            }
+            probe_move_back(session, intent)
+        }
+        (ExecOp::RemoveDirIfEmpty { path }, Inverse::RecreateDir { .. }, ItemFacts::File(pre)) => {
+            recover::probe_remove_dir(see_path(
+                path,
+                FileIdentity {
+                    volume_serial: pre.volume_serial,
+                    file_id: pre.file_id.0,
+                },
+            ))
+        }
+        _ => Probe::Attention {
+            detail: "the intent does not hang together".to_owned(),
+        },
+    }
+}
+
+/// Whether `prepared`, the intent [`prepare_fs`] builds now, is the action `journalled` records: the
+/// same op, plan item, executor op and inverse (for a move: quarantine path, original path, file id and
+/// volume serial), and the same identity and kind in `pre`. Sizes and times in `pre` may differ (a held
+/// item's intent records its validated facts, a fresh handle reads them now); undo uses only the
+/// inverse and the kind.
+fn same_action(prepared: &Intent, journalled: &Intent) -> bool {
+    let identity = |pre: &ItemFacts| match pre {
+        ItemFacts::File(facts) => Some((facts.volume_serial, facts.file_id, facts.is_dir)),
+        _ => None,
+    };
+    prepared.op == journalled.op
+        && prepared.item == journalled.item
+        && prepared.exec_op == journalled.exec_op
+        && prepared.inverse == journalled.inverse
+        && identity(&prepared.pre).is_some()
+        && identity(&prepared.pre) == identity(&journalled.pre)
+}
+
+/// Drops a prepared action that will not run, and the op directory its prepare created or adopted
+/// (only while empty).
+fn discard(action: Box<FsAction>) {
+    let FsAction { checked, kind, .. } = *action;
+    drop(checked);
+    if let ActKind::Move { dest, op_dir } = kind {
+        drop(dest);
+        remove_empty_op_dir(*op_dir);
+    }
+}
+
+/// How [`complete_fs`] ended.
+#[derive(Debug)]
+pub enum FsCompletion {
+    /// Journal the result with `done` and the intent's token.
+    Finished(FsResult),
+    /// In use after the retries: hand it to the locked-file ladder with the journalled intent and its
+    /// token ([`LockedStage::Act`]; `quarantine_path` is the one the intent's `MoveBack` records).
+    Locked(Box<LockedItem>),
+}
+
+/// Crash recovery: runs the file action of `intent`, which the probe found not done, under the intent's
+/// own `token`. The action is prepared again through the act-time gate ([`prepare_fs`], with the
+/// retries) and runs only when what it would journal is the journalled action ([`same_action`]);
+/// otherwise nothing is done and the op is `Failed{VerifyFailed}`. An item in use is returned as
+/// [`FsCompletion::Locked`] for the locked-file ladder, exactly as a run hands one over after its
+/// intent. A token of another op is `Failed{Internal}` and nothing is opened.
+pub fn complete_fs(
+    ctx: &GateCtx,
+    session: &SessionDir,
+    intent: &Intent,
+    token: &IntentToken,
+    retry: &Retry,
+) -> FsCompletion {
+    if token.op() != intent.op || token.item() != &intent.item {
+        return FsCompletion::Finished(FsResult::internal(format!(
+            "the intent token is for op {}, not op {}; nothing done",
+            token.op(),
+            intent.op
+        )));
+    }
+    let journalled_quarantine = match &intent.inverse {
+        Inverse::MoveBack {
+            quarantine_path, ..
+        } => Some(quarantine_path.clone()),
+        _ => None,
+    };
+    let prepared = match prepare_fs(ctx, session, intent.op, retry) {
+        Ok(prepared) => prepared,
+        Err(e) => {
+            return FsCompletion::Finished(FsResult::internal(format!(
+                "the store refused the item's quarantine: {e}"
+            )));
+        }
+    };
+    match prepared {
+        FsPrepared::Decided(result) => FsCompletion::Finished(result),
+        FsPrepared::Locked(mut locked) => {
+            locked.stage = LockedStage::Act;
+            locked.quarantine_path = journalled_quarantine;
+            FsCompletion::Locked(locked)
+        }
+        FsPrepared::Ready(action) => {
+            if !same_action(action.intent(), intent) {
+                discard(action);
+                return FsCompletion::Finished(FsResult::failed(
+                    FailCode::VerifyFailed,
+                    None,
+                    "the item is no longer what the journalled intent recorded; left as it is",
+                ));
+            }
+            match act_checked(action, retry) {
+                FsActed::Finished(result) => FsCompletion::Finished(result),
+                FsActed::Locked(locked) => FsCompletion::Locked(locked),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Held items: the retry
+// ---------------------------------------------------------------------------------------------------
+
+/// The production [`RetryMove`]: the move of a held item, by the file action. The item is prepared again
+/// through the act-time gate with the op's journalled `validated` record ([`prepare_fs`], which makes the
+/// op directory anew or adopts the empty one the run left), the prepared action must be the journalled
+/// one ([`same_action`]), and it is moved by handle into the intent's `MoveBack::quarantine_path` under
+/// the retry token ([`retry_fs`]). A retry never registers a boot-time move: an item still in use stays
+/// held.
+pub struct StoreRetryMove<'a> {
+    ctx: &'a GateCtx,
+    session: &'a SessionDir,
+    retry: &'a Retry,
+}
+
+impl<'a> StoreRetryMove<'a> {
+    /// The mover for session `session`, whose journalled `validated` records `ctx` holds.
+    pub fn new(ctx: &'a GateCtx, session: &'a SessionDir, retry: &'a Retry) -> StoreRetryMove<'a> {
+        StoreRetryMove {
+            ctx,
+            session,
+            retry,
+        }
+    }
+}
+
+impl fmt::Debug for StoreRetryMove<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoreRetryMove")
+            .field("session", &self.session.id())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The retry attempt of a result the file action decided or verified.
+fn attempt_of(result: &FsResult) -> RetryAttempt {
+    match &result.outcome {
+        ItemOutcome::Done => RetryAttempt::Moved,
+        ItemOutcome::Vanished => RetryAttempt::Vanished,
+        ItemOutcome::HeldRetry => RetryAttempt::StillLocked,
+        ItemOutcome::Skipped { reason } => RetryAttempt::Skipped(reason.clone()),
+        ItemOutcome::Failed { code, os_error, .. } => RetryAttempt::Failed {
+            code: *code,
+            os_error: *os_error,
+        },
+        _ => RetryAttempt::Failed {
+            code: FailCode::Internal,
+            os_error: None,
+        },
+    }
+}
+
+impl RetryMove for StoreRetryMove<'_> {
+    fn retry(&mut self, op: &OpState, intent: &Intent, token: &RetryToken) -> RetryAttempt {
+        if token.op() != op.op || intent.op != op.op {
+            return RetryAttempt::Failed {
+                code: FailCode::Internal,
+                os_error: None,
+            };
+        }
+        let prepared = match prepare_fs(self.ctx, self.session, op.op, self.retry) {
+            Ok(prepared) => prepared,
+            Err(_) => {
+                return RetryAttempt::Failed {
+                    code: FailCode::Internal,
+                    os_error: None,
+                };
+            }
+        };
+        match prepared {
+            FsPrepared::Decided(result) => attempt_of(&result),
+            FsPrepared::Locked(_) => RetryAttempt::StillLocked,
+            FsPrepared::Ready(action) => {
+                if !same_action(action.intent(), intent) {
+                    discard(action);
+                    return RetryAttempt::Skipped(SkipReason::ChangedSinceScan);
+                }
+                match retry_fs(action, token, self.retry) {
+                    FsActed::Finished(result) => attempt_of(&result),
+                    FsActed::Locked(_) => RetryAttempt::StillLocked,
+                }
+            }
+        }
+    }
 }

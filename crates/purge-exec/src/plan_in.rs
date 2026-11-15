@@ -414,6 +414,115 @@ pub fn rebind(scan: &ScanDoc, state: &JournalState) -> Result<BoundPlan, PlanRef
     })
 }
 
+/// How many selections [`rebind_interrupted`] hashes at most before it gives up.
+pub const MAX_SELECTION_TRIES: u64 = 1 << 16;
+
+/// The bound plan of a session whose run stopped before every selected item was validated (a crash
+/// at the journal header or in the validate pass), for resuming it: as [`rebind`] when every item has
+/// its `validated` record.
+///
+/// The journal holds the header's item count and selection hash, and the `validated` records written
+/// so far, which are the first selected items in plan order. The rest of the selection is found
+/// again: the items that complete it are selectable top-level items after the last validated one,
+/// and the selection is the one, of that count, whose ids hash to the header's selection hash. At
+/// most [`MAX_SELECTION_TRIES`] selections are hashed, in plan order; a selection not found among
+/// them refuses the resume ([`PlanRefusal::JournalMismatch`]), and nothing is guessed.
+pub fn rebind_interrupted(scan: &ScanDoc, state: &JournalState) -> Result<BoundPlan, PlanRefusal> {
+    let header = state.header();
+    if state.validated_count() == header.items {
+        return rebind(scan, state);
+    }
+    let mismatch = |text: &str| PlanRefusal::JournalMismatch(text.to_owned());
+    let plan_hash = check_plan_hash(scan)?;
+    if plan_hash != header.plan_hash {
+        return Err(PlanRefusal::JournalMismatch(format!(
+            "the journal names plan {}, the document hashes to {plan_hash}",
+            header.plan_hash
+        )));
+    }
+    check_structure(scan)?;
+    let known: Vec<CandidateId> = state.ops().map(|op| op.item.clone()).collect();
+    let total = usize::try_from(header.items).map_err(|_| mismatch("too many items"))?;
+    let missing = total
+        .checked_sub(known.len())
+        .ok_or_else(|| mismatch("the journal holds more validated records than items"))?;
+    let top: BTreeMap<&CandidateId, usize> = scan
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, c)| (&c.id, index))
+        .collect();
+    let mut prefix = Vec::with_capacity(total);
+    for (op, id) in state.ops().zip(&known) {
+        let index = *top.get(id).filter(|_| !id.0.is_empty()).ok_or_else(|| {
+            PlanRefusal::JournalMismatch(format!("op {} names no top-level item", op.op))
+        })?;
+        if prefix.last().is_some_and(|last| *last >= index) || scan.items[index].target != op.target
+        {
+            return Err(PlanRefusal::JournalMismatch(format!(
+                "op {} is not item {} of the document",
+                op.op, op.item.0
+            )));
+        }
+        prefix.push(index);
+    }
+    let start = prefix.last().map_or(0, |last| last + 1);
+    let pool: Vec<usize> = (start..scan.items.len())
+        .filter(|&index| {
+            let candidate = &scan.items[index];
+            !candidate.id.0.is_empty() && selectable(scan, candidate).is_ok()
+        })
+        .collect();
+    let chosen = find_selection(&pool, missing, |rest| {
+        let ids = known
+            .iter()
+            .chain(rest.iter().map(|&index| &scan.items[index].id));
+        selection_hash(ids) == header.selection_hash
+    })
+    .ok_or_else(|| {
+        mismatch("the rest of the selection cannot be found from the header's selection hash")
+    })?;
+    prefix.extend(chosen);
+    let items = bind_items(scan, &prefix)?;
+    check_order(scan, &items)?;
+    Ok(BoundPlan {
+        scan: scan.clone(),
+        plan_hash,
+        selection_hash: header.selection_hash,
+        items,
+        allow_irreversible: header.allow_irreversible,
+    })
+}
+
+/// The first `count` elements of `pool` (as a combination, in order) that `fits`, trying at most
+/// [`MAX_SELECTION_TRIES`] combinations in lexicographic order.
+fn find_selection(
+    pool: &[usize],
+    count: usize,
+    mut fits: impl FnMut(&[usize]) -> bool,
+) -> Option<Vec<usize>> {
+    if count > pool.len() {
+        return None;
+    }
+    let mut at: Vec<usize> = (0..count).collect();
+    let mut chosen: Vec<usize> = Vec::with_capacity(count);
+    for _ in 0..MAX_SELECTION_TRIES {
+        chosen.clear();
+        chosen.extend(at.iter().map(|&i| pool[i]));
+        if fits(&chosen) {
+            return Some(chosen);
+        }
+        // The next combination: the rightmost position that can move one step right.
+        let n = pool.len();
+        let move_at = (0..count).rev().find(|&i| at[i] < n - count + i)?;
+        at[move_at] += 1;
+        for i in move_at + 1..count {
+            at[i] = at[i - 1] + 1;
+        }
+    }
+    None
+}
+
 /// Step 1: the stated plan hash is well formed and is the hash of the document's items.
 fn check_plan_hash(scan: &ScanDoc) -> Result<Sha256Hex, PlanRefusal> {
     let stated: Sha256Hex = scan

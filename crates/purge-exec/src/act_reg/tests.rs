@@ -1976,25 +1976,94 @@ fn a_token_of_another_op_acts_on_nothing() {
     assert!(!k.exists("One"));
 }
 
+/// The store file id of the op's registry backup.
+fn backup_file_id(session: &SessionDir, op: u32) -> purge_win::fs::FileId {
+    session
+        .open_file(&backup_rel(BackupKind::Registry, OpId(op)))
+        .unwrap()
+        .file_id()
+}
+
+/// Changed in meaning (M2 recovery fix pass): a backup file of an op that has no intent can only be
+/// one a crash left between the backup and the intent. One that does not verify is deleted through
+/// the store (`SessionDir::delete_backup_file`) and the backup written anew; the item is acted on only
+/// after its own verified backup. Before the pass the op was skipped (`NoVerifiedBackup`) for good.
 #[test]
-fn an_existing_backup_file_is_never_replaced() {
+fn a_backup_file_a_crash_left_that_does_not_verify_is_written_anew() {
     let k = TestKey::new();
     k.create("Item");
     let run = Run::new("existing", vec![tree_op(k.wire("Item"))]);
     let rel = backup_rel(BackupKind::Registry, OpId(1));
     let mut file = run.session.create_file(&rel).unwrap();
     let path = file.report_path();
-    std::io::Write::write_all(&mut file, b"someone else's").unwrap();
+    std::io::Write::write_all(&mut file, b"left by a crash").unwrap();
     drop(file);
 
-    let err = match run.prepare(1) {
-        Err(err) => err,
-        Ok(other) => panic!("{other:?}"),
+    let RegPrepared::Ready(action) = run.prepare(1).unwrap() else {
+        panic!("decided");
     };
-    assert_eq!(err.outcome(), skipped(SkipReason::NoVerifiedBackup));
-    assert!(!err.is_storage_integrity(), "{err}");
-    assert_eq!(std::fs::read(&path).unwrap(), b"someone else's");
+    assert_ne!(std::fs::read(&path).unwrap(), b"left by a crash");
+    let reference = action.intent().inverse.backup().unwrap().clone();
+    assert_eq!(reference.path, rel);
+    let backup = regbackup::read_verified(&run.session, &reference).unwrap();
+    backup.doc().validate_for(&tree_op(k.wire("Item"))).unwrap();
     assert!(k.exists("Item"));
+}
+
+/// A backup a crash left that verifies and equals a fresh capture of the key is adopted: the file is
+/// not written again (same store file id) and the intent names it.
+#[test]
+fn a_backup_file_a_crash_left_that_matches_is_adopted() {
+    let k = TestKey::new();
+    k.create("Item");
+    k.set("Item", "v", REG_DWORD, &1u32.to_le_bytes());
+    let run = Run::new("adopt", vec![tree_op(k.wire("Item"))]);
+    let RegPrepared::Ready(first) = run.prepare(1).unwrap() else {
+        panic!("decided");
+    };
+    let first_ref = first.intent().inverse.backup().unwrap().clone();
+    // The crash: the backup is written, the intent never was.
+    drop(first);
+    let id = backup_file_id(&run.session, 1);
+    // A later capture carries a later time; the adopted file keeps its own.
+    std::thread::sleep(std::time::Duration::from_millis(30));
+
+    let RegPrepared::Ready(second) = run.prepare(1).unwrap() else {
+        panic!("decided");
+    };
+    assert_eq!(second.intent().inverse.backup(), Some(&first_ref));
+    let again = backup_file_id(&run.session, 1);
+    assert_eq!((again.volume_serial, again.id), (id.volume_serial, id.id));
+
+    // A leftover that verifies but is not a capture of this key (here: another key's backup) is
+    // deleted through the store and written anew, never adopted.
+    drop(second);
+    k.create("Other");
+    k.set("Other", "w", REG_DWORD, &2u32.to_le_bytes());
+    let other = Run::new("adopt-other", vec![tree_op(k.wire("Other"))]);
+    let RegPrepared::Ready(foreign) = other.prepare(1).unwrap() else {
+        panic!("decided");
+    };
+    let foreign_ref = foreign.intent().inverse.backup().unwrap().clone();
+    let rel = backup_rel(BackupKind::Registry, OpId(1));
+    let mut file = other.session.open_file(&rel).unwrap();
+    let foreign_bytes = file.read_all(1 << 20).unwrap();
+    drop(file);
+    run.session.delete_backup_file(&rel).unwrap();
+    let mut file = run.session.create_file(&rel).unwrap();
+    std::io::Write::write_all(&mut file, &foreign_bytes).unwrap();
+    drop(file);
+    let leftover = backup_file_id(&run.session, 1);
+
+    let RegPrepared::Ready(third) = run.prepare(1).unwrap() else {
+        panic!("decided");
+    };
+    let third_ref = third.intent().inverse.backup().unwrap().clone();
+    assert_ne!(third_ref.sha256, foreign_ref.sha256);
+    let now = backup_file_id(&run.session, 1);
+    assert_ne!(now.id, leftover.id);
+    let backup = regbackup::read_verified(&run.session, &third_ref).unwrap();
+    backup.doc().validate_for(&tree_op(k.wire("Item"))).unwrap();
 }
 
 /// Changed in meaning: the op reaches `prepare_reg` only through its journalled record. Without one it

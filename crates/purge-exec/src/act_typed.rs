@@ -72,6 +72,7 @@ use serde::{Deserialize, Serialize};
 use crate::fault;
 use crate::gate::GateCtx;
 use crate::journal::{IntentToken, sha256_bytes};
+use crate::recover::{self, Probe};
 use crate::storage::{BackupKind, SessionDir, StorageError, StoreFile, backup_rel};
 
 #[cfg(test)]
@@ -419,6 +420,11 @@ impl DefinitionError {
 /// (`backup.verified`), and return its reference with the SHA-256 of the bytes read back. A failure while
 /// the created handle is open discards the file through that handle ([`StoreFile::discard`]); nothing is
 /// removed by name.
+///
+/// A definition file of that name that a crash left before the op's intent (named by no journal record)
+/// is adopted when it parses to exactly `def`, the definition built now from the fresh listing: its
+/// reference is then computed from the bytes read through the store's checked handle. Otherwise it is
+/// deleted through the store ([`SessionDir::delete_backup_file`]) and the file written anew.
 fn write_definition(
     session: &SessionDir,
     op: OpId,
@@ -432,7 +438,16 @@ fn write_definition(
             text.len()
         )));
     }
-    let mut created = session.create_file(&rel)?;
+    let mut created = match session.create_file(&rel) {
+        Err(e) if crate::act_reg::already_exists(&e) => {
+            if let Some(adopted) = adopt_definition(session, &rel, def) {
+                return Ok(adopted);
+            }
+            session.delete_backup_file(&rel)?;
+            session.create_file(&rel)?
+        }
+        created => created?,
+    };
     if let Err(e) = write_created(&mut created, &text) {
         // The file is Purge's own, created a moment ago, and holds no verified definition.
         let _ = created.discard();
@@ -464,6 +479,19 @@ fn write_definition(
     };
     fault::point(fault::BACKUP_VERIFIED);
     Ok(reference)
+}
+
+/// The definition file `rel` as it is, when it parses to exactly `def`; `None` otherwise.
+fn adopt_definition(session: &SessionDir, rel: &str, def: &PackageDefinition) -> Option<BackupRef> {
+    let mut file = session.open_file(rel).ok()?;
+    let bytes = file.read_all(MAX_DEFINITION_BYTES).ok()?;
+    drop(file);
+    let parsed: PackageDefinition = serde_json::from_slice(&bytes).ok()?;
+    (&parsed == def).then(|| BackupRef {
+        path: rel.to_owned(),
+        sha256: sha256_bytes(&bytes),
+        bytes: bytes.len() as u64,
+    })
 }
 
 /// Writes `text` through the created store file, flushes it and its directory (through the directory's
@@ -1092,4 +1120,132 @@ pub fn undo_typed(
              undone{note}"
         ),
     })
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Recovery: an intent without its `done`
+// ---------------------------------------------------------------------------------------------------
+
+/// What became of the package removal of `intent`, an intent with no `done` (recovery's probe; see the
+/// table in [`crate::recover`]): not listed is `Done(Done)`, listed is `NotDone`, a failed listing is
+/// `Attention`. Changes nothing.
+pub fn probe_package(backend: &dyn PackageBackend, intent: &Intent) -> Probe {
+    let ExecOp::RemovePackage { full_name } = &intent.exec_op else {
+        return Probe::Attention {
+            detail: "the intent is not a package removal".to_owned(),
+        };
+    };
+    let listed = backend
+        .list(removal_scope(full_name))
+        .ok()
+        .map(|listing| !matches!(lookup(full_name, &listing), Lookup::Absent));
+    recover::probe_package(listed)
+}
+
+/// Removes the package of `intent` forward, under the token `JournalWriter::resume_intent` handed out
+/// for it (recovery's resume of an op its probe found still listed), after the checks of the run: the
+/// header's acknowledgement of irreversible removals (`allow_irreversible`), the package as listed now
+/// being the one the intent's definition file (its backup reference) records, and no [`refusal`] against
+/// the fresh listing. Verified as [`remove_package`] verifies. A token of another op is
+/// `Failed{Internal}` and nothing is called.
+pub fn complete_package(
+    backend: &dyn PackageBackend,
+    session: &SessionDir,
+    intent: &Intent,
+    allow_irreversible: bool,
+    token: &IntentToken,
+) -> TypedResult {
+    let ExecOp::RemovePackage { full_name } = &intent.exec_op else {
+        return TypedResult::failed(
+            FailCode::Internal,
+            None,
+            "the intent is not a package removal",
+        );
+    };
+    if token.op() != intent.op || token.item() != &intent.item {
+        return TypedResult::failed(
+            FailCode::Internal,
+            None,
+            format!(
+                "the intent token is for op {}, not op {}; package {full_name} left untouched",
+                token.op(),
+                intent.op
+            ),
+        );
+    }
+    if !allow_irreversible {
+        return TypedResult::blocked(
+            Blocker::ReversibilityNone,
+            format!("package {full_name}: irreversible removals were not acknowledged"),
+        );
+    }
+    let scope = removal_scope(full_name);
+    let listing = match backend.list(scope) {
+        Ok(listing) => listing,
+        Err(e) => {
+            let (os_error, text) = list_failure(&e);
+            return TypedResult::failed(
+                FailCode::PackageApi,
+                os_error,
+                format!("{text}; package {full_name} left untouched"),
+            );
+        }
+    };
+    let now = match lookup(full_name, &listing) {
+        Lookup::Absent => {
+            return TypedResult::new(
+                ItemOutcome::Vanished,
+                format!("package {full_name} is no longer registered"),
+            );
+        }
+        Lookup::Mismatch(why) => return TypedResult::skipped(SkipReason::ChangedSinceScan, why),
+        Lookup::Found(now) => now,
+    };
+    let recorded = intent
+        .definition
+        .as_ref()
+        .and_then(|reference| read_definition(session, reference));
+    if recorded != Some(PackageDefinition::new(intent.op, &intent.item, scope, now)) {
+        return TypedResult::skipped(
+            SkipReason::ChangedSinceScan,
+            format!(
+                "package {full_name} is not the one its definition file records, or the file cannot \
+                 be read; left untouched"
+            ),
+        );
+    }
+    if let Some((blocker, why)) = refusal(now, &listing) {
+        return TypedResult::blocked(blocker, format!("{why}; left untouched"));
+    }
+    let outcome = backend.remove(full_name, scope);
+    let still_listed = match backend.list(scope) {
+        Ok(after) => !matches!(lookup(full_name, &after), Lookup::Absent),
+        Err(e) => {
+            return TypedResult::failed(
+                FailCode::VerifyFailed,
+                None,
+                format!(
+                    "the removal of {full_name} returned {}, but whether it is gone cannot be \
+                     verified: {e}",
+                    outcome_name(&outcome)
+                ),
+            );
+        }
+    };
+    verdict(full_name, scope, &outcome, still_listed)
+}
+
+/// The definition file `reference` names, read through the store's checks and checked against its
+/// size and SHA-256; `None` when it cannot be read, does not match or does not parse.
+fn read_definition(session: &SessionDir, reference: &BackupRef) -> Option<PackageDefinition> {
+    if !reference.is_session_relative() {
+        return None;
+    }
+    let mut file = session.open_file(&reference.path).ok()?;
+    let bytes = file.read_all(MAX_DEFINITION_BYTES).ok()?;
+    let matches = bytes.len() as u64 == reference.bytes && sha256_bytes(&bytes) == reference.sha256;
+    if !matches {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
 }

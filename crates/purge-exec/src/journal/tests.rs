@@ -2104,3 +2104,106 @@ fn the_index_mark_finds_a_journal_cut_at_a_line_boundary() {
     // No mark (an entry written before it existed): nothing to check.
     read_indexed(&dir.session, None).unwrap();
 }
+
+/// Item 8 of the M2 recovery fix pass: the state keeps the free text of the `undo_conflict` an op's
+/// undo stands at, in the writer and when read back, and drops it once the undo moves on.
+#[test]
+fn the_state_keeps_the_detail_of_an_undo_conflict() {
+    let dir = TempDir::new("conflict-detail");
+    let mut w = started(&dir, 2);
+    for n in 1..=2 {
+        let token = w.intent(intent(n)).unwrap();
+        w.done(token, ItemOutcome::Done).unwrap();
+    }
+    w.commit(FileTime(1), 0).unwrap();
+    w.undo_conflict_without_intent(
+        OpId(1),
+        UndoConflict::DestinationExists,
+        r"C:\x is taken".into(),
+    )
+    .unwrap();
+    w.undo_conflict_without_intent(OpId(2), UndoConflict::BackupMissing, String::new())
+        .unwrap();
+    assert_eq!(
+        w.state().undo_conflict_detail(OpId(1)),
+        Some(r"C:\x is taken")
+    );
+    assert_eq!(w.state().undo_conflict_detail(OpId(2)), Some(""));
+    drop(w);
+
+    let back = read(&dir.session).unwrap();
+    assert_eq!(
+        back.state.undo_conflict_detail(OpId(1)),
+        Some(r"C:\x is taken")
+    );
+    // A later attempt: in progress, then restored; the old text no longer describes the op.
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    let again = w.undo_intent(OpId(1)).unwrap();
+    assert_eq!(w.state().undo_conflict_detail(OpId(1)), None);
+    w.undo_done(again, UndoOutcome::Restored).unwrap();
+    assert_eq!(w.state().undo_conflict_detail(OpId(1)), None);
+}
+
+/// Item 7 of the M2 recovery fix pass: an `undo_plan` names the ops an undo run is about to undo; the
+/// ops it names that got no undo record afterwards are what an interrupted run left. A journal without
+/// the record (written before it existed) leaves only the undo in progress.
+#[test]
+fn an_undo_plan_names_what_an_interrupted_undo_had_not_reached() {
+    let dir = TempDir::new("undo-plan");
+    let mut w = started(&dir, 3);
+    for n in 1..=3 {
+        let token = w.intent(intent(n)).unwrap();
+        w.done(token, ItemOutcome::Done).unwrap();
+    }
+    w.commit(FileTime(1), 0).unwrap();
+
+    // As before the record existed: no plan.
+    let u3 = w.undo_intent(OpId(3)).unwrap();
+    assert_eq!(w.state().undo_plan(), None);
+    assert!(w.state().undo_unfinished().is_empty());
+    w.undo_done(u3, UndoOutcome::Restored).unwrap();
+
+    // A plan over a settled op and two others; the settled one is never unfinished.
+    w.undo_plan(FileTime(2), vec![OpId(3), OpId(2), OpId(1)])
+        .unwrap();
+    assert_eq!(
+        w.state().undo_plan(),
+        Some(&[OpId(3), OpId(2), OpId(1)][..])
+    );
+    assert_eq!(w.state().undo_unfinished(), [OpId(2), OpId(1)]);
+    let _interrupted = w.undo_intent(OpId(2)).unwrap();
+    assert_eq!(w.state().undo_unfinished(), [OpId(1)]);
+    // The crash.
+    drop(w);
+
+    let back = read(&dir.session).unwrap();
+    assert_eq!(back.state.undo_unfinished(), [OpId(1)]);
+    assert_eq!(
+        back.state
+            .undo_in_progress()
+            .map(|op| op.op)
+            .collect::<Vec<_>>(),
+        [OpId(2)]
+    );
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    let u2 = w.resume_undo(OpId(2)).unwrap();
+    w.undo_done(u2, UndoOutcome::Restored).unwrap();
+    // A conflict reaches the op too: it is the user's to retry, not recovery's to finish.
+    w.undo_conflict_without_intent(OpId(1), UndoConflict::BackupMissing, String::new())
+        .unwrap();
+    assert!(w.state().undo_unfinished().is_empty());
+
+    // Every op a plan names must be part of the session.
+    assert_eq!(
+        refused(w.undo_plan(FileTime(3), vec![OpId(1), OpId(9)])),
+        Violation::UnknownOp(OpId(9))
+    );
+    drop(w);
+    assert!(
+        read(&dir.session)
+            .unwrap()
+            .state
+            .undo_unfinished()
+            .is_empty()
+    );
+}

@@ -56,7 +56,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use purge_guard::deny::{DenyList, Exemptions};
 use purge_guard::prefix;
@@ -66,7 +65,7 @@ use purge_model::exec::session::{
     SessionId, SessionIndex, SessionState, SessionSummary, UndoCounts, UndoItemReport, UndoReport,
     UndoReportSchema, UndoResult,
 };
-use purge_model::{CandidateId, FileTime, Target};
+use purge_model::{Blocker, CandidateId, FileTime, Target};
 use serde::{Deserialize, Serialize};
 
 use crate::act_fs::{self, FsUndo, FsUndoPlan, Retry};
@@ -78,8 +77,8 @@ use crate::journal::{
     self, JournalError, JournalState, JournalWriter, OpState, OpStatus, UndoState, UndoToken,
 };
 use crate::locked::{self, LockUndo, PendingRenames, ReconcileVerdict, StoreLadder};
-use crate::report::{self, DataVolume};
-use crate::storage::{SessionDir, StorageError, StorageRoots};
+use crate::report;
+use crate::storage::{SessionDir, StorageError, StorageRoots, now};
 
 #[cfg(test)]
 mod tests;
@@ -230,16 +229,6 @@ pub struct UndoLabel {
     pub outcome: UndoOutcome,
 }
 
-/// The current time as FILETIME ticks.
-pub(crate) fn now() -> FileTime {
-    const UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
-    let since = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let ticks = u64::try_from(since.as_nanos() / 100).unwrap_or(u64::MAX);
-    FileTime(UNIX_EPOCH_TICKS.saturating_add(ticks))
-}
-
 // ---------------------------------------------------------------------------------------------------
 // What the journal says about an op
 // ---------------------------------------------------------------------------------------------------
@@ -366,6 +355,23 @@ pub(crate) fn undo_order(records: &[Record], ops: &BTreeSet<OpId>) -> Vec<OpId> 
     order.into_iter().map(|(op, _, _)| op).collect()
 }
 
+/// Journals the `undo_plan` of an undo run over `order` (the selected and pulled-in ops in undo order),
+/// flushed before the first undo record, so that recovery can finish an interrupted run
+/// ([`JournalState::undo_unfinished`]). Nothing is written when every op of `order` is already settled.
+/// Returns `order`.
+fn plan_undo(journal: &mut JournalWriter, order: &[OpId]) -> Result<Vec<OpId>, JournalError> {
+    let unsettled = order.iter().any(|op| {
+        journal
+            .state()
+            .op(*op)
+            .is_some_and(|state| !state.undo.is_settled())
+    });
+    if unsettled {
+        journal.undo_plan(now(), order.to_vec())?;
+    }
+    Ok(order.to_vec())
+}
+
 /// Where a session stands after undo records were written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Standing {
@@ -479,48 +485,29 @@ pub(crate) fn gate_ctx(
     Ok(ctx)
 }
 
-/// The volume holding the data root, for a new index entry.
-fn data_volume(roots: &StorageRoots) -> Option<DataVolume> {
-    let root = roots.volume(roots.data_root()).ok()?.root;
-    let extended = purge_win::secure::extended_path(roots.data_root()).ok()?;
-    let serial = purge_win::fs::metadata(&extended)
-        .ok()?
-        .file_id
-        .volume_serial;
-    Some(DataVolume {
-        serial,
-        root: root.to_string_lossy().into_owned(),
-    })
-}
-
-/// The index entry `state` calls for: the existing entry (or, without one, the summary built from
-/// the journal and the session's scan copy) with the session's standing, its counts, its end and the
-/// journal's mark. `None` when there is no entry and the scan copy cannot be read.
-fn index_entry(
+/// The index entry `state` calls for: the summary of the journal ([`report::summary`]: standing,
+/// undone count, the bytes still kept and their volumes, counts, end, the journal's mark). The owner
+/// and the classes expiry marked purged are kept from the existing entry; without one the owner is
+/// read from the session's scan copy. `Err` when there is no entry and the scan copy cannot be read.
+pub(crate) fn index_entry(
     session: &SessionDir,
     state: &JournalState,
     existing: Option<&SessionSummary>,
 ) -> Result<SessionSummary, String> {
-    let mut entry = match existing {
-        Some(entry) => entry.clone(),
+    let data = report::data_volume(session.roots());
+    let entry = match existing {
+        Some(existing) => {
+            let mut entry =
+                report::summary_with_owner(state, existing.owner.clone(), data.as_ref());
+            entry.purged = existing.purged.clone();
+            entry
+        }
         None => {
             let scan = execute::read_scan_copy(session)
                 .map_err(|e| format!("the session's scan copy cannot be read ({e})"))?;
-            report::summary(state, &scan, data_volume(session.roots()).as_ref())
+            report::summary(state, &scan, data.as_ref())
         }
     };
-    let standing = standing(state.ops());
-    entry.state = standing
-        .state
-        .unwrap_or_else(|| report::session_state(state));
-    entry.undone = standing.undone;
-    entry.counts = state.counts();
-    entry.finished = state
-        .commit()
-        .map(|commit| commit.at)
-        .or_else(|| state.aborted().map(|aborted| aborted.at));
-    entry.pending_reboot = state.pending_reboot().next().is_some();
-    entry.journal = Some(state.mark());
     Ok(entry)
 }
 
@@ -713,13 +700,14 @@ impl Driver<'_> {
                     };
                 }
             };
-            let result = match self.journal.state().op(id).map(|after| &after.undo) {
+            let state = self.journal.state();
+            let result = match state.op(id).map(|after| &after.undo) {
                 Some(UndoState::Finished(outcome)) => UndoResult::Finished {
                     outcome: outcome.clone(),
                 },
                 Some(UndoState::Conflict(conflict)) => UndoResult::Conflict {
                     conflict: conflict.clone(),
-                    detail,
+                    detail: state.undo_conflict_detail(id).map_or(detail, str::to_owned),
                 },
                 // `undo_op` returned without ending the op's undo; it never does.
                 _ => continue,
@@ -777,7 +765,16 @@ impl Driver<'_> {
                         return step.conflict(conflict, detail);
                     }
                     Some(LockUndo::ReconcileFirst { detail }) => {
-                        return step.failed(FailCode::VerifyFailed, detail);
+                        // Nothing can be undone before reconcile has decided where the item is; the
+                        // conflict is not settled, so a later undo tries again.
+                        return step.conflict(
+                            UndoConflict::GateBlocked {
+                                blocker: Blocker::DenyListed {
+                                    rule: locked::reason::BOOT_MOVE_INDETERMINATE.to_owned(),
+                                },
+                            },
+                            detail,
+                        );
                     }
                     Some(LockUndo::RemovePair(removal)) => {
                         let outcome =
@@ -969,8 +966,11 @@ pub fn undo(request: &UndoRequest, env: UndoEnv<'_>) -> Result<UndoOutput, UndoE
         retry: &retry,
     };
     let all: BTreeSet<OpId> = requested.union(&pulled_in).copied().collect();
-    let covered = match driver.reconcile(&mut warnings) {
-        Ok(()) => driver.run(&undo_order(&read.records, &all)),
+    let covered = match driver
+        .reconcile(&mut warnings)
+        .and_then(|()| plan_undo(driver.journal, &undo_order(&read.records, &all)))
+    {
+        Ok(order) => driver.run(&order),
         Err(e) => Covered {
             items: Vec::new(),
             stopped: Some(e),

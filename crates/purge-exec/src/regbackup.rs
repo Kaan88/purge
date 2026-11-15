@@ -43,7 +43,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use purge_guard::live::KeyAddress;
 use purge_model::Blocker;
@@ -63,7 +62,7 @@ use sha2::{Digest, Sha256};
 
 use crate::fault;
 use crate::gate::{CheckedKeyParent, CheckedValueKey};
-use crate::storage::{SessionDir, StorageError};
+use crate::storage::{SessionDir, StorageError, now};
 
 /// The blast-radius limit for one key tree (ENGINE_PLAN.md §5.10): a tree with more keys is refused
 /// ([`CaptureError::TooLarge`]) unless the plan item is an absorbing Safe parent whose children were
@@ -86,9 +85,6 @@ const KEY_DELETED: Win32Error = Win32Error(1018);
 const INVALID_OWNER: Win32Error = Win32Error(1307);
 /// `ERROR_REQUEST_ABORTED`: a walk was stopped from inside (test hook only).
 const REQUEST_ABORTED: Win32Error = Win32Error(1235);
-
-/// FILETIME of 1970-01-01 (100 ns ticks since 1601-01-01).
-const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 
 // ---------------------------------------------------------------------------------------------------
 // Errors and reports
@@ -519,15 +515,6 @@ pub enum TreeState {
 /// SHA-256 of `bytes`.
 fn sha256(bytes: &[u8]) -> Sha256Hex {
     Sha256Hex(Sha256::digest(bytes).into())
-}
-
-/// The current time as a FILETIME.
-fn now() -> FileTime {
-    let since = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let ticks = u64::try_from(since.as_nanos() / 100).unwrap_or(u64::MAX);
-    FileTime(FILETIME_UNIX_EPOCH.saturating_add(ticks))
 }
 
 /// A recorded name as the strict `&str` form [`WKey`] takes; `None` when it is not valid UTF-16 or holds
@@ -2847,6 +2834,7 @@ mod tests {
     use purge_win::sid::current_user_sid;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// A raw key handle, closed on drop.
     struct RawKey(Hkey);

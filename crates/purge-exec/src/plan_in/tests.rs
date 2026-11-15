@@ -593,3 +593,26 @@ fn the_inner_item_must_come_first() {
         })
     );
 }
+
+/// The selection search of a resumed run that stopped in its validation: combinations in
+/// lexicographic order, the first that fits, none when nothing fits or too many are asked for.
+#[test]
+fn the_rest_of_an_interrupted_selection_is_found_by_its_hash() {
+    let pool = [3, 5, 7, 9];
+    let mut tried = Vec::new();
+    let found = find_selection(&pool, 2, |chosen| {
+        tried.push(chosen.to_vec());
+        chosen == [5, 9]
+    });
+    assert_eq!(found, Some(vec![5, 9]));
+    assert_eq!(
+        tried,
+        [vec![3, 5], vec![3, 7], vec![3, 9], vec![5, 7], vec![5, 9]]
+    );
+    assert_eq!(find_selection(&pool, 2, |_| false), None);
+    assert_eq!(find_selection(&pool, 5, |_| true), None);
+    assert_eq!(
+        find_selection(&pool, 0, <[usize]>::is_empty),
+        Some(Vec::new())
+    );
+}

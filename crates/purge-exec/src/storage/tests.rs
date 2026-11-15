@@ -1383,11 +1383,29 @@ fn an_unstarted_session_dir_is_removed_by_handle() {
     session.remove_unstarted().unwrap();
     assert!(!path.exists());
 
-    // A journal (the run started): refused, nothing deleted.
+    // The scan copy and a zero-byte journal (a crash before the header's first byte): removed, both
+    // files by handle (M2 recovery fix pass; refused before).
     let session = roots.create_session().unwrap();
     let path = session.path().to_path_buf();
     session.create_file(SCAN_FILE).unwrap();
     session.create_file(JOURNAL_FILE).unwrap();
+    session.remove_unstarted().unwrap();
+    assert!(!path.exists());
+
+    // A zero-byte journal alone: removed too.
+    let session = roots.create_session().unwrap();
+    let path = session.path().to_path_buf();
+    session.create_file(JOURNAL_FILE).unwrap();
+    session.remove_unstarted().unwrap();
+    assert!(!path.exists());
+
+    // A journal with a byte in it (the run started): refused, nothing deleted.
+    let session = roots.create_session().unwrap();
+    let path = session.path().to_path_buf();
+    session.create_file(SCAN_FILE).unwrap();
+    let mut journal = session.create_file(JOURNAL_FILE).unwrap();
+    journal.write_all(b"{").unwrap();
+    drop(journal);
     let err = session.remove_unstarted().unwrap_err();
     assert!(
         matches!(

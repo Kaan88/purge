@@ -10,10 +10,10 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use purge_guard::canon::{GuardEnv, ProfileEnv};
-use purge_model::exec::journal::{AbortReason, Record};
+use purge_model::exec::journal::{AbortReason, Record, UndoConflict};
 use purge_model::exec::op::Inverse;
 use purge_model::exec::session::RestorePointOutcome;
 use purge_model::{Action, Band, Blocker, Candidate, Target};
@@ -35,7 +35,8 @@ use crate::locked::MemoryPendingRenames;
 use crate::plan_in::tests::{candidate, cid, key, path, request, safe, scan_doc, value};
 use crate::plan_in::{NotSelectable, Selection};
 use crate::prepare::RestorePointSetting;
-use crate::storage::{JOURNAL_FILE, REG_BACKUP_DIR};
+use crate::report::data_volume;
+use crate::storage::{JOURNAL_FILE, REG_BACKUP_DIR, REPORT_FILE};
 
 // ---------------------------------------------------------------------------------------------------
 // Fixtures
@@ -389,6 +390,20 @@ impl Rig {
             restore_point_wait: Duration::from_secs(5),
             restore_point_finish_wait: Duration::ZERO,
             ..ExecEnv::new(
+                &self.roots,
+                &self.deny,
+                &self.packages,
+                &self.rm,
+                &mut self.pending,
+            )
+        }
+    }
+
+    /// The environment of a recovery or a retry: no sleeping between retries.
+    fn recover_env(&mut self) -> crate::recover::RecoverEnv<'_> {
+        crate::recover::RecoverEnv {
+            retry: Retry::with(RETRY_DELAYS.to_vec(), |_| {}),
+            ..crate::recover::RecoverEnv::new(
                 &self.roots,
                 &self.deny,
                 &self.packages,
@@ -1167,8 +1182,11 @@ fn a_backup_that_cannot_be_written_aborts_the_run() {
     let k = TestKey::new();
     let (request, file) = abort_plan(&rig, &k);
 
-    // Op 2's backup file name is taken when its turn comes; the store never replaces a file.
+    // Op 2's backup file name is taken when its turn comes, by a file that is not a backup and that
+    // another handle holds without sharing delete: it can be neither adopted nor deleted and written
+    // anew, and the store never replaces a file in place.
     let session_path = RefCell::new(PathBuf::new());
+    let holder = RefCell::new(None);
     let aborting = Cell::new(None);
     let progress = |event: &Progress<'_>| match event {
         Progress::SessionCreated { path, .. } => *session_path.borrow_mut() = path.to_path_buf(),
@@ -1177,12 +1195,19 @@ fn a_backup_that_cannot_be_written_aborts_the_run() {
                 .borrow()
                 .join(REG_BACKUP_DIR)
                 .join("000002.regbackup.json");
-            std::fs::write(taken, b"not a backup").unwrap();
+            std::fs::write(&taken, b"not a backup").unwrap();
+            let held = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1)
+                .open(&taken)
+                .unwrap();
+            *holder.borrow_mut() = Some(held);
         }
         Progress::Aborting { reason } => aborting.set(Some(*reason)),
         _ => {}
     };
     let output = rig.try_run(request, Some(&progress)).unwrap();
+    drop(holder.borrow_mut().take());
 
     let report = &output.report;
     assert_eq!(report.state, SessionState::Aborted, "{report:#?}");
@@ -1600,23 +1625,44 @@ mod crash {
         [1, 2, 3].map(|n| exists(&rig.s.path(&format!(r"app\f{n}.txt"))))
     }
 
+    /// Changed (M2 recovery fix pass): the header and the run's settings are flushed together, and a
+    /// run that stopped there is resumed as if it had never been interrupted (before, it could not be
+    /// resumed at all).
     #[test]
-    fn a_crash_at_the_header_leaves_the_scan_copy_and_nothing_else() {
+    fn a_crash_at_the_header_resumes_as_an_uninterrupted_run() {
         let mut rig = crashed("crash-header", fault::JOURNAL_HEADER);
         let request = crash_request(&rig.s);
         let [id] = rig.sessions().try_into().unwrap();
         let read = rig.journal(&id);
-        assert_eq!(read.records.len(), 1);
+        assert_eq!(read.records.len(), 2);
+        assert!(read.state.settings().is_some());
         assert_eq!(read.state.phase(), Phase::Validating);
         // The scan copy is durable before the journal exists.
         assert_eq!(read_scan_copy(&rig.session(&id)).unwrap(), request.scan);
         assert_eq!(at_source(&rig), [true; 3]);
-        // Nothing was validated, so there is nothing to resume.
+
+        // Nothing was validated: resume validates every item now, then runs them.
         let session = rig.session(&id);
-        assert!(matches!(
-            Run::resume(rig.env(None), session, &request.scan),
-            Err(ExecError::NotResumable(_))
-        ));
+        let mut run = Run::resume(rig.env(None), session, &request.scan).unwrap();
+        assert_eq!(run.state().validated_count(), 3);
+        for n in 1..=3 {
+            assert_eq!(
+                run.run_item(OpId(n)).unwrap(),
+                ItemStep::Finished(ItemOutcome::Done)
+            );
+        }
+        let output = run.finish();
+        assert_eq!(output.report.state, SessionState::Committed);
+        assert_eq!(output.report.counts.done, 3);
+        assert_eq!(at_source(&rig), [false; 3]);
+        // One validated record per item: none was written twice.
+        let read = rig.journal(&id);
+        let validated = read
+            .records
+            .iter()
+            .filter(|r| matches!(r, Record::Validated(_)))
+            .count();
+        assert_eq!(validated, 3);
     }
 
     #[test]
@@ -1784,9 +1830,10 @@ fn a_run_that_fails_before_its_journal_removes_its_session_dir() {
     assert!(rig.sessions().is_empty());
     assert!(exists(&a));
 
-    // The journal's name is taken: the run fails at the header, and the directory, which now holds a
-    // journal, stays as it is.
-    let mut rig = Rig::new("unstarted-kept");
+    // The journal's name is taken by an empty file: the run fails at the header, and the directory,
+    // which holds the scan copy and a zero-byte journal (no run started), is removed by handle (M2
+    // recovery fix pass; it was kept before).
+    let mut rig = Rig::new("unstarted-empty");
     let a = rig.s.file(r"app\a.txt", b"a");
     let request = preselected(vec![quarantine("c-a", &a)], Vec::new());
     let session_path = RefCell::new(PathBuf::new());
@@ -1794,6 +1841,26 @@ fn a_run_that_fails_before_its_journal_removes_its_session_dir() {
         if let Progress::SessionCreated { path, .. } = event {
             *session_path.borrow_mut() = path.to_path_buf();
             std::fs::write(path.join(JOURNAL_FILE), b"").unwrap();
+        }
+    };
+    assert!(matches!(
+        rig.try_run(request, Some(&progress)),
+        Err(ExecError::Journal(_))
+    ));
+    assert!(!session_path.borrow().exists());
+    assert!(rig.sessions().is_empty());
+    assert!(exists(&a));
+
+    // The journal's name is taken by a file with bytes in it: the directory, which holds what may be a
+    // run's journal, stays as it is.
+    let mut rig = Rig::new("unstarted-kept");
+    let a = rig.s.file(r"app\a.txt", b"a");
+    let request = preselected(vec![quarantine("c-a", &a)], Vec::new());
+    let session_path = RefCell::new(PathBuf::new());
+    let progress = |event: &Progress<'_>| {
+        if let Progress::SessionCreated { path, .. } = event {
+            *session_path.borrow_mut() = path.to_path_buf();
+            std::fs::write(path.join(JOURNAL_FILE), b"{").unwrap();
         }
     };
     assert!(matches!(
@@ -1840,6 +1907,84 @@ fn a_journal_without_run_settings_is_not_resumed() {
         "{err}"
     );
     assert!(exists(&a));
+}
+
+/// Item 1 of the M2 recovery fix pass: a run that stopped in its validate pass is resumed as if never
+/// interrupted. The selection is found again from the header's selection hash (one candidate between
+/// the validated ones is not selected), the journalled `validated` record is kept as it is and never
+/// written again, and only the items without one are validated. Before the pass such a run could not
+/// be resumed (`NotResumable`).
+#[test]
+fn a_run_stopped_in_its_validation_resumes_with_its_journalled_records() {
+    let mut rig = Rig::new("resume-validating");
+    let files: Vec<String> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|n| rig.s.file(&format!(r"app\{n}.txt"), n.as_bytes()))
+        .collect();
+    let scan = scan_doc(
+        files
+            .iter()
+            .zip(["c-a", "c-b", "c-c", "c-d"])
+            .map(|(file, id)| quarantine(id, file))
+            .collect(),
+        Vec::new(),
+    );
+    let mut request = request(
+        &scan,
+        Selection::Ids(vec![cid("c-a"), cid("c-c"), cid("c-d")]),
+    );
+    request.settings.restore_point = RestorePointSetting::Off;
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    run.validate().unwrap();
+    let id = run.session().id().clone();
+    drop(run);
+    let full = rig.journal(&id);
+    let copy = read_scan_copy(&rig.session(&id)).unwrap();
+
+    // The same run, stopped after the first validated record.
+    let cut = rig.roots.create_session().unwrap();
+    write_scan_copy(&cut, &copy).unwrap();
+    let header = Header {
+        session: cut.id().clone(),
+        ..full.state.header().clone()
+    };
+    let settings = full.state.settings().unwrap().clone();
+    let mut writer = JournalWriter::create_with_settings(&cut, header, settings).unwrap();
+    let first = full.state.op(OpId(1)).unwrap().validated();
+    writer.validated(first.clone()).unwrap();
+    writer.sync().unwrap();
+    drop(writer);
+    let cut_id = cut.id().clone();
+
+    let mut run = Run::resume(rig.env(None), cut, &copy).unwrap();
+    assert_eq!(run.state().validated_count(), 3);
+    assert_eq!(run.state().op(OpId(1)).unwrap().validated(), first);
+    let ops: Vec<CandidateId> = run
+        .plan()
+        .items()
+        .iter()
+        .map(|item| run.plan().candidate(item).unwrap().id.clone())
+        .collect();
+    assert_eq!(ops, [cid("c-a"), cid("c-c"), cid("c-d")]);
+    for n in 1..=3 {
+        assert_eq!(
+            run.run_item(OpId(n)).unwrap(),
+            ItemStep::Finished(ItemOutcome::Done)
+        );
+    }
+    let output = run.finish();
+    assert_eq!(output.report.state, SessionState::Committed);
+    let read = rig.journal(&cut_id);
+    let validated = read
+        .records
+        .iter()
+        .filter(|r| matches!(r, Record::Validated(_)))
+        .count();
+    assert_eq!(validated, 3);
+    assert_eq!(
+        files.iter().map(|f| exists(f)).collect::<Vec<_>>(),
+        [false, true, false, false]
+    );
 }
 
 #[test]
@@ -2464,4 +2609,222 @@ fn the_journalled_exemptions_are_those_the_plan_derives() {
     );
     // Nothing was acted on.
     assert!(exists(&lnk) && exists(&user_lnk) && exists(&emptied) && exists(&plain));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// M2 recovery fix pass: forward completion, held items, an indeterminate boot move at undo
+// ---------------------------------------------------------------------------------------------------
+
+/// Starts a run of `request`, validates it and journals op 1's intent from its prepared file action,
+/// then stops: the crash between the intent and the act. Returns the session and the intent.
+fn crash_after_the_first_intent(rig: &mut Rig, request: ExecRequest) -> (SessionId, Intent) {
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    run.validate().unwrap();
+    let FsPrepared::Ready(action) =
+        prepare_fs(&run.ctx, &run.session, OpId(1), &run.env.retry).unwrap()
+    else {
+        panic!("op 1 was decided");
+    };
+    let intent = action.intent().clone();
+    let _open = run.ledger.intent(intent.clone()).unwrap();
+    drop(action);
+    let id = run.session().id().clone();
+    drop(run);
+    (id, intent)
+}
+
+/// Item 6: a move whose intent a crash left open, and whose file is in use when recovery completes it,
+/// goes to the locked-file ladder with the journalled intent (the holders are named, nothing is
+/// registered); recovery of the crashed run then never retries the held item, and
+/// `recover::retry_held` moves it once the lock is gone, to exactly the quarantine path its intent
+/// records.
+#[test]
+fn a_move_in_use_at_forward_completion_is_held_and_moved_by_the_retry() {
+    let mut rig = Rig::new("complete-held");
+    let busy = rig.s.file(r"app\busy.dll", b"in use");
+    let other = rig.s.file(r"app\other.txt", b"o");
+    rig.rm
+        .holders
+        .borrow_mut()
+        .push(holder(4242, "Vendor Tray"));
+    let request = preselected(
+        vec![quarantine("c-busy", &busy), quarantine("c-other", &other)],
+        Vec::new(),
+    );
+    let (id, intent) = crash_after_the_first_intent(&mut rig, request);
+    let copy = read_scan_copy(&rig.session(&id)).unwrap();
+
+    // The file is taken in use before recovery.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(ext(&busy))
+        .unwrap();
+    let session = rig.session(&id);
+    let mut run = Run::resume(rig.env(None), session, &copy).unwrap();
+    let settled = run.settle_open(OpId(1)).unwrap().unwrap();
+    assert_eq!(settled.probe, Probe::NotDone);
+    assert_eq!(settled.outcome, ItemOutcome::HeldRetry);
+    // The ladder ran: the holders were asked for and named.
+    let named = run.ledger.notes.lockers.get(&OpId(1)).cloned().unwrap();
+    assert_eq!(named[0].pid, 4242);
+    assert_eq!(
+        run.run_item(OpId(2)).unwrap(),
+        ItemStep::Finished(ItemOutcome::Done)
+    );
+    // The second crash, before the commit; the lock goes away.
+    drop(run);
+    drop(lock);
+    assert_eq!(rig.pending.registers, 0);
+
+    // Recovery ends the run and leaves the held item where it is.
+    let out = crate::recover::resume(&id, rig.recover_env()).unwrap();
+    assert!(out.settled.is_empty() && out.retries.is_empty(), "{out:#?}");
+    assert_eq!(out.state, Some(SessionState::Committed));
+    assert!(exists(&busy) && !exists(&other));
+    let read = rig.journal(&id);
+    assert_eq!(read.state.held_retry().count(), 1);
+    let intents = read
+        .records
+        .iter()
+        .filter(|r| matches!(r, Record::Intent(i) if i.op == OpId(1)))
+        .count();
+    assert_eq!(intents, 1);
+
+    // The retry moves it.
+    let retried = crate::recover::retry_held(&id, rig.recover_env()).unwrap();
+    assert_eq!(
+        retried.retried,
+        [locked::Retried {
+            op: OpId(1),
+            outcome: ItemOutcome::Done
+        }],
+        "{retried:#?}"
+    );
+    assert!(retried.index_updated);
+    assert!(!exists(&busy));
+    let Inverse::MoveBack {
+        quarantine_path, ..
+    } = &intent.inverse
+    else {
+        panic!("{intent:?}");
+    };
+    assert_eq!(std::fs::read(ext(quarantine_path)).unwrap(), b"in use");
+    let read = rig.journal(&id);
+    assert_eq!(read.state.held_retry().count(), 0);
+    assert_eq!(read.state.retries_in_flight().count(), 0);
+    // Nothing is left to try.
+    let again = crate::recover::retry_held(&id, rig.recover_env()).unwrap();
+    assert!(again.retried.is_empty());
+    assert_eq!(rig.pending.registers, 0);
+}
+
+/// Item 6: a held item still in use at the retry stays held; one that changed since is skipped and
+/// left as it is.
+#[test]
+fn a_retry_of_a_held_item_still_in_use_keeps_it_held() {
+    let mut rig = Rig::new("retry-held");
+    let busy = rig.s.file(r"app\busy.dll", b"in use");
+    let request = preselected(vec![quarantine("c-busy", &busy)], Vec::new());
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(ext(&busy))
+        .unwrap();
+    let output = rig.run(request);
+    let id = output.session.clone();
+    assert_eq!(output.report.items[0].outcome, ItemOutcome::HeldRetry);
+
+    let retried = crate::recover::retry_held(&id, rig.recover_env()).unwrap();
+    assert_eq!(retried.retried[0].outcome, ItemOutcome::HeldRetry);
+    assert!(exists(&busy));
+    drop(lock);
+
+    // Replaced by another file of the same name: not the validated object, so not moved.
+    std::fs::remove_file(ext(&busy)).unwrap();
+    std::fs::write(ext(&busy), b"new").unwrap();
+    let retried = crate::recover::retry_held(&id, rig.recover_env()).unwrap();
+    assert!(
+        matches!(retried.retried[0].outcome, ItemOutcome::Skipped { .. }),
+        "{retried:#?}"
+    );
+    assert_eq!(std::fs::read(ext(&busy)).unwrap(), b"new");
+}
+
+/// Item 8: a boot-time move whose state cannot be told at undo (the list cannot be read) is the
+/// conflict `GateBlocked{DenyListed{lock.boot-move-indeterminate}}` with its reason, which the journal
+/// keeps; it is not settled, so a later undo tries again. Before the pass the undo ended
+/// `Failed{VerifyFailed}`.
+#[test]
+fn an_indeterminate_boot_move_at_undo_is_a_conflict_of_its_own() {
+    let mut rig = Rig::new("undo-indeterminate");
+    let file = rig.s.file(r"app\boot.dll", b"b");
+    let request = preselected(vec![quarantine("c-boot", &file)], Vec::new());
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    run.validate().unwrap();
+    let FsPrepared::Ready(action) =
+        prepare_fs(&run.ctx, &run.session, OpId(1), &run.env.retry).unwrap()
+    else {
+        panic!("op 1 was decided");
+    };
+    let intent = action.intent().clone();
+    drop(action);
+    let token = run.ledger.intent(intent.clone()).unwrap();
+    let Inverse::MoveBack {
+        quarantine_path,
+        original_path,
+        ..
+    } = &intent.inverse
+    else {
+        panic!("{intent:?}");
+    };
+    let pair =
+        purge_win::fs_write::pending_pair(Path::new(original_path), Path::new(quarantine_path))
+            .unwrap();
+    let pending = ItemOutcome::PendingReboot {
+        pair: purge_model::exec::op::BootMovePair {
+            src: pair.src,
+            dst: pair.dst,
+        },
+        confirmed: true,
+    };
+    run.ledger.done(token, pending, String::new()).unwrap();
+    let output = run.finish();
+    assert_eq!(output.report.state, SessionState::Committed);
+    let id = output.session.clone();
+
+    rig.pending.fail = Some(purge_win::fs_write::FsError::AccessDenied);
+    let request = crate::undo::UndoRequest {
+        session: id.clone(),
+        selection: crate::undo::UndoSelection::All,
+        plan_hash: None,
+    };
+    let env = crate::undo::UndoEnv {
+        retry: Retry::with(RETRY_DELAYS.to_vec(), |_| {}),
+        ..crate::undo::UndoEnv::new(&rig.roots, &rig.deny, &mut rig.pending)
+    };
+    let undone = crate::undo::undo(&request, env).unwrap();
+    let [item] = undone.report.items.as_slice() else {
+        panic!("{undone:#?}");
+    };
+    let indeterminate = UndoConflict::GateBlocked {
+        blocker: Blocker::DenyListed {
+            rule: locked::reason::BOOT_MOVE_INDETERMINATE.to_owned(),
+        },
+    };
+    let purge_model::exec::session::UndoResult::Conflict { conflict, detail } = &item.result else {
+        panic!("{item:#?}");
+    };
+    assert_eq!(conflict, &indeterminate);
+    assert!(!detail.is_empty());
+    let read = rig.journal(&id);
+    let op = read.state.op(OpId(1)).unwrap();
+    assert_eq!(op.undo, crate::journal::UndoState::Conflict(indeterminate));
+    assert_eq!(
+        read.state.undo_conflict_detail(OpId(1)),
+        Some(detail.as_str())
+    );
+    assert!(!op.undo.is_settled());
+    assert_eq!(read.state.undo_plan(), Some(&[OpId(1)][..]));
+    assert!(read.state.undo_unfinished().is_empty());
 }

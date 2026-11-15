@@ -24,9 +24,9 @@ use purge_exec::journal::{JournalWriter, Phase, UndoState};
 use purge_exec::locked::MemoryPendingRenames;
 use purge_exec::plan_in::ExecRequest;
 use purge_exec::recover::{self, PendingKind, Probe, RecoverMode, RecoverOutput};
-use purge_exec::storage::StorageRoots;
+use purge_exec::storage::{REPORT_FILE, StorageRoots};
 use purge_exec::undo::{UndoError, UndoRequest, UndoSelection, undo};
-use purge_model::exec::journal::{AbortReason, ReconcileResult, UndoConflict, UndoOutcome};
+use purge_model::exec::journal::{AbortReason, ReconcileResult, Record, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{BootMovePair, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::session::{SessionId, SessionState, UndoResult};
 use purge_model::{Action, FileTime};
@@ -396,19 +396,24 @@ fn execute_scenario(point: &str, hit: u32, mode: RecoverMode) {
     assert_eq!(read.state.open_intents().count(), 0, "{what}");
     let removed =
         read.state.op(PACKAGE_OP).and_then(|op| op.outcome.clone()) == Some(ItemOutcome::Done);
+    // Every recovered session has its report (written by the run's end, or by recovery from the
+    // journal when the crash came after the end).
+    assert!(
+        rig.session(&id).open_file(REPORT_FILE).is_ok(),
+        "{what}: no report"
+    );
     match mode {
-        RecoverMode::Resume if !validated => {
-            // Nothing was acted on, so there is nothing to continue: the run is ended as cancelled.
-            assert_eq!(
-                read.state.aborted().unwrap().reason,
-                AbortReason::Cancelled,
-                "{what}"
-            );
-            assert_eq!(world(&rig, &k), before, "{what}");
-            assert_eq!(entry.state, SessionState::Aborted, "{what}");
-        }
         RecoverMode::Resume => {
-            // As if the run had never been interrupted.
+            // As if the run had never been interrupted, also when it stopped before every item was
+            // validated (changed in the M2 recovery fix pass: such a run was ended as cancelled).
+            if !validated {
+                let records = &read.records;
+                let validated_records = records
+                    .iter()
+                    .filter(|r| matches!(r, Record::Validated(_)))
+                    .count();
+                assert_eq!(validated_records, 7, "{what}: an item was validated twice");
+            }
             let (machine, outcomes_of_a_full_run) = reference();
             assert_eq!(outcomes(&read), *outcomes_of_a_full_run, "{what}: {out:#?}");
             assert_eq!(&world(&rig, &k), machine, "{what}");
@@ -419,9 +424,16 @@ fn execute_scenario(point: &str, hit: u32, mode: RecoverMode) {
             for op in [1, 2] {
                 assert!(exists(&quarantine_path(&read, op)), "{what}");
             }
-            // The run's report is there, except when the run itself had already ended.
-            assert_eq!(out.report.is_some(), !finished, "{what}");
-            assert_eq!(out.report_written, !finished, "{what}");
+            // The run's report: written by the resumed run's end, or, when the run itself had ended
+            // and the crash came before its report (index.write), by recovery (changed in the M2
+            // recovery fix pass: no report was written then).
+            assert!(out.report.is_some(), "{what}");
+            assert!(out.report_written, "{what}");
+            assert_eq!(
+                out.report.as_ref().map(|r| r.state),
+                Some(SessionState::Committed),
+                "{what}"
+            );
         }
         RecoverMode::Rollback if finished => {
             // The run had ended; only its index entry was missing. There is nothing to roll back
@@ -475,8 +487,10 @@ fn execute_scenario(point: &str, hit: u32, mode: RecoverMode) {
     );
 }
 
-/// A crash while undoing a committed session, then recovery in `mode` (both modes finish the
-/// interrupted undo; neither starts the undo of an op the interrupted run had not reached).
+/// A crash while undoing a committed session, then recovery in `mode`: both modes finish the
+/// interrupted undo, the op in progress and the ops its `undo_plan` names that it had not reached
+/// (changed in the M2 recovery fix pass: before, only the op in progress was finished and the rest was
+/// the user's to ask for again).
 fn undo_scenario(point: &str, hit: u32, mode: RecoverMode) {
     let what = format!("{point}:{hit} {mode:?}");
     let mut rig = Rig::new("crash-undo");
@@ -495,21 +509,26 @@ fn undo_scenario(point: &str, hit: u32, mode: RecoverMode) {
     let crashed = rig.journal(&id);
     let interrupted: Vec<OpId> = crashed.state.undo_in_progress().map(|op| op.op).collect();
     assert_eq!(interrupted.len(), 1, "{what}");
-    let untouched: Vec<OpId> = crashed
-        .state
-        .ops()
-        .filter(|op| op.undo == UndoState::NotStarted)
-        .map(|op| op.op)
-        .collect();
+    // The undo run journalled its plan first: every op of the session, in undo order (the directory
+    // first, then the reverse of the run).
+    let plan = crashed.state.undo_plan().unwrap_or_default().to_vec();
+    assert_eq!(plan, [6, 7, 5, 4, 3, 2, 1].map(OpId), "{what}: {plan:?}");
+    // Not reached: every op of the plan after the one in progress (none when that was the last).
+    let unreached = crashed.state.undo_unfinished();
+    let at = plan.iter().position(|op| *op == interrupted[0]).unwrap();
+    assert_eq!(unreached, plan[at + 1..], "{what}");
     let listed = recover::pending(&rig.roots).unwrap();
     assert_eq!(listed.sessions.len(), 1, "{what}");
     assert_eq!(listed.sessions[0].kind, PendingKind::Undo, "{what}");
-    assert_eq!(listed.sessions[0].undo_in_progress, interrupted, "{what}");
+    let mut remaining = interrupted.clone();
+    remaining.extend(&unreached);
+    assert_eq!(listed.sessions[0].undo_in_progress, remaining, "{what}");
 
     let out = recover_with(&mut rig, &id, mode);
     let read = rig.journal(&id);
-    assert_eq!(out.undone.len(), 1, "{what}: {out:#?}");
-    assert_eq!(out.undone[0].op, interrupted[0], "{what}");
+    // The op in progress first, then every op the interrupted run had not reached, in plan order.
+    let covered: Vec<OpId> = out.undone.iter().map(|item| item.op).collect();
+    assert_eq!(covered, remaining, "{what}: {out:#?}");
     assert!(
         matches!(
             out.undone[0].result,
@@ -520,22 +539,23 @@ fn undo_scenario(point: &str, hit: u32, mode: RecoverMode) {
         "{what}: {out:#?}"
     );
     assert_eq!(read.state.undo_in_progress().count(), 0, "{what}");
-    for op in &untouched {
-        assert_eq!(
-            read.state.op(*op).unwrap().undo,
-            UndoState::NotStarted,
-            "{what}"
-        );
-    }
+    assert!(read.state.undo_unfinished().is_empty(), "{what}");
+    // After recovery the undo is complete: everything but the package is back.
+    assert_eq!(
+        world(&rig, &k),
+        before_without_package(&before, true),
+        "{what}: {out:#?}"
+    );
     assert!(out.index_updated, "{what}");
     assert_eq!(
         rig.entry(&id).unwrap().journal,
         Some(read.state.mark()),
         "{what}"
     );
+    assert_eq!(out.state, Some(SessionState::PartiallyUndone), "{what}");
     assert_idempotent(&mut rig, &k, &id, mode, &what);
 
-    // The rest of the undo is the user's to ask for again; then everything but the package is back.
+    // A further undo finds only the package, which stays irreversible, and changes nothing.
     let rest = rig.undo_all(&id);
     assert_eq!(rest.stopped, None, "{what}");
     assert_eq!(
