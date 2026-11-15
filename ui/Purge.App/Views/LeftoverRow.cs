@@ -59,6 +59,8 @@ public sealed partial class LeftoverRow : INotifyPropertyChanged
     public string SizeText { get; } = "";
     public long SizeBytes { get; }
     public LeftoverKind Kind { get; }
+    /// <summary>The engine's candidate id (empty for sample rows).</summary>
+    public string Id { get; init; } = "";
     public bool IsUserData { get; init; }
     public string Contents { get; init; } = "";
     public string FoundBy { get; init; } = "";

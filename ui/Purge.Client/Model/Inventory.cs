@@ -103,7 +103,8 @@ public sealed record EngineHello(
     string Edition,
     string Build,
     bool BaselineAvailable,
-    string PolicyVersion);
+    string PolicyVersion,
+    string? BuildNote = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(InventoryDoc))]

@@ -60,6 +60,24 @@ public sealed class FakeEngineClient : IEngineClient
                                ?? throw new InvalidDataException("empty quarantine status"));
     }
 
+    public bool IsLive => false;
+
+    public Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind, IProgress<string>? progress = null,
+        CancellationToken ct = default) => NotLive<LeftoverPlan>();
+
+    public Task<ExecResult> ExecAsync(LeftoverPlan plan, IReadOnlyList<string> selectedIds, IProgress<string>? progress = null,
+        CancellationToken ct = default) => NotLive<ExecResult>();
+
+    public Task<UndoResult> UndoSessionAsync(string sessionId, CancellationToken ct = default) => NotLive<UndoResult>();
+
+    public Task<IReadOnlyList<PendingSession>> PendingRecoveryAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PendingSession>>([]);
+
+    public Task<RecoveryResult> RecoverAsync(bool rollback, CancellationToken ct = default) => NotLive<RecoveryResult>();
+
+    private static Task<T> NotLive<T>() =>
+        Task.FromException<T>(new InvalidOperationException("Sample data: no engine is connected, so nothing can be scanned, moved or put back."));
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     private static Stream Open(string name) =>

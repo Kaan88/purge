@@ -15,6 +15,9 @@
 //!   each finish it (two separate stores);
 //! - `quarantine expiring` / `purge` with the clock offset, user-data confirmation included.
 //!
+//! With `sandbox-dev` (module `rig::sandbox_dev`): the rig's tests run with the Sandboxie check answered
+//! "inside"; destructive verbs outside Sandboxie answer 12; a round trip on the sandbox store.
+//!
 //! The registry is touched only below a fresh `HKU\<SID>\Software\PurgeTest-<unique>` key, removed on
 //! drop; every file lives in a scratch directory below the temp directory, removed on drop.
 
@@ -442,6 +445,18 @@ mod rig {
     }
 
     fn cli_with(
+        roots: &StorageRoots,
+        args: &[String],
+        elevated: bool,
+        offset: Result<i64, String>,
+    ) -> Run {
+        // A sandbox-dev build runs the rig's tests as if inside Sandboxie; `sandbox_dev` tests the refusal.
+        #[cfg(feature = "sandbox-dev")]
+        purge_engine::cli::sandbox::set_inside_for_tests(Some(true));
+        cli_on(roots, args, elevated, offset)
+    }
+
+    fn cli_on(
         roots: &StorageRoots,
         args: &[String],
         elevated: bool,
@@ -1124,7 +1139,8 @@ mod rig {
             use purge_source::system::SystemSource;
             Live::new().system.elevated()
         };
-        if !elevated {
+        // A sandbox-dev binary refuses outside Sandboxie before it looks at elevation (`sandbox_dev`).
+        if !elevated && cfg!(not(feature = "sandbox-dev")) {
             let (code, _, err) = binary(
                 &s.root,
                 &[
@@ -1141,5 +1157,181 @@ mod rig {
             assert!(err.contains("elevated"), "{err}");
         }
         assert!(s.names().is_empty(), "{:?}", s.names());
+    }
+
+    // -----------------------------------------------------------------------------------------------
+    // With sandbox-dev
+    // -----------------------------------------------------------------------------------------------
+
+    /// The `sandbox-dev` build (docs/SANDBOX_TEST.md): destructive verbs refused outside Sandboxie with
+    /// 12 before anything is read or created; the relaxed store of `cli::sandbox`; and a full plan ->
+    /// exec -> undo on that store with the Sandboxie check answered "inside" by the test hook.
+    #[cfg(feature = "sandbox-dev")]
+    mod sandbox_dev {
+        use purge_engine::cli::sandbox::{self, BUILD_MARKER as SBX_MARKER, store_at};
+
+        use super::*;
+
+        /// Copies a document for the UI client's tests when `PURGE_SBX_DUMP_DIR` names a directory.
+        fn dump(name: &str, text: &str) {
+            if let Some(dir) = std::env::var_os("PURGE_SBX_DUMP_DIR") {
+                std::fs::write(Path::new(&dir).join(name), text).unwrap();
+            }
+        }
+
+        fn outside(roots: &StorageRoots, line: &[String]) -> Run {
+            sandbox::set_inside_for_tests(Some(false));
+            let run = cli_on(roots, line, true, Ok(400));
+            sandbox::set_inside_for_tests(None);
+            run
+        }
+
+        #[test]
+        fn destructive_verbs_are_refused_outside_sandboxie() {
+            let f = Fixture::new("sbx-refuse");
+            let one = f.s.file(r"work\one.txt", "one");
+            let (plan, hash) = f.plan("plan", json!([quarantine("one", &one)]));
+            let confirm = confirm(&hash, &["one"]);
+            let session = "20261115T101502Z-9f3a6c1d2b7e4a50";
+            for line in [
+                args(&[&"exec", &"--plan", &plan, &"--confirm", &confirm]),
+                args(&[&"undo", &"--session", &session]),
+                args(&[&"journal", &"resume"]),
+                args(&[&"journal", &"rollback", &"--session", &session]),
+                args(&[
+                    &"quarantine",
+                    &"purge",
+                    &"--ids",
+                    &format!("{session}/1"),
+                    &"--yes-irreversible",
+                ]),
+            ] {
+                let run = outside(&f.roots, &line);
+                assert_eq!(run.exit, Exit::NotInSandbox, "{line:?}: {}", run.err);
+                assert_eq!(run.exit.code(), 12);
+                assert!(run.out.is_empty(), "{line:?}");
+                assert!(
+                    run.err.contains("not running inside Sandboxie"),
+                    "{line:?}: {}",
+                    run.err
+                );
+            }
+            assert!(f.sessions().is_empty());
+            assert_eq!(std::fs::read_to_string(&one).unwrap(), "one");
+            // The vendor's uninstaller is refused the same way (before the program is even looked up);
+            // inside, an unknown program is the usual precondition error.
+            let line = args(&[&"uninstall", &"PurgeNoSuchProgram", &"--quiet"]);
+            let run = outside(&f.roots, &line);
+            assert_eq!(run.exit, Exit::NotInSandbox, "{}", run.err);
+            assert!(
+                run.err.contains("not running inside Sandboxie"),
+                "{}",
+                run.err
+            );
+            let run = cli(&f.roots, &line);
+            assert_eq!(run.exit, Exit::Usage, "{}", run.err);
+            // The read-only verbs work anywhere.
+            let run = outside(&f.roots, &args(&[&"journal", &"recover"]));
+            assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+            let run = outside(&f.roots, &args(&[&"quarantine", &"expiring"]));
+            assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+        }
+
+        /// The real binary: it names itself, and outside Sandboxie refuses `exec` with 12 before it reads
+        /// the plan or creates its store.
+        #[test]
+        fn the_sandbox_dev_binary_refuses_outside_sandboxie() {
+            if sandbox::inside_sandboxie() {
+                return;
+            }
+            let s = Scratch::new("sbx-binary");
+            let (code, out, _) = binary(&s.root, &["--version"]);
+            assert_eq!(code, Some(0));
+            assert!(
+                out.contains(SBX_MARKER) && out.contains("SANDBOX DEV BUILD"),
+                "{out}"
+            );
+            let store = s.path("store");
+            let out = Command::new(env!("CARGO_BIN_EXE_purge-engine"))
+                .args(["exec", "--plan", "missing.json", "--confirm", "x"])
+                .current_dir(&s.root)
+                .env(sandbox::ROOT_VAR, &store)
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(12), "{err}");
+            assert!(err.contains("not running inside Sandboxie"), "{err}");
+            assert!(!store.exists(), "the store was created");
+            assert!(s.names().is_empty(), "{:?}", s.names());
+        }
+
+        /// plan -> exec -> undo through `run_with_exec` on a store made by `cli::sandbox::store_at`, the
+        /// function the live build uses, with the Sandboxie check injected as "inside".
+        #[test]
+        fn plan_exec_undo_round_trip_on_the_sandbox_store() {
+            let s = Scratch::new("sbx-round");
+            let roots = store_at(&s.path(r"local\PurgeSandboxDev"), true).unwrap();
+            let f = Fixture { s, roots };
+            let dir = f.s.file(r"work\app\a.txt", "alpha");
+            let dir = dir.parent().unwrap().to_path_buf();
+            let single = f.s.file(r"work\single.txt", "single");
+            let ids = ["files.dir", "single"];
+            let (plan_path, hash) = f.plan(
+                "plan",
+                json!([quarantine("files.dir", &dir), quarantine("single", &single)]),
+            );
+            let select = f.ids("select.json", &ids);
+            sandbox::set_inside_for_tests(Some(true));
+            let run = cli_on(
+                &f.roots,
+                &args(&[
+                    &"exec",
+                    &"--plan",
+                    &plan_path,
+                    &"--confirm",
+                    &confirm(&hash, &ids),
+                    &"--select",
+                    &select,
+                    &"--restore-point",
+                    &"off",
+                ]),
+                true,
+                Ok(0),
+            );
+            assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+            dump("plan.json", &std::fs::read_to_string(&plan_path).unwrap());
+            dump(
+                "plan.scan.json",
+                &std::fs::read_to_string(f.s.path("plan.scan.json")).unwrap(),
+            );
+            dump("report.json", &run.out);
+            let report: ExecReport = serde_json::from_str(&run.out).unwrap();
+            assert_eq!(report.state, SessionState::Committed);
+            assert!(report.items.iter().all(|i| i.outcome.is_success()));
+            assert!(!dir.exists() && !single.exists());
+            let index = f.roots.read_index().unwrap();
+            dump("index.json", &serde_json::to_string_pretty(&index).unwrap());
+            assert_eq!(index.sessions.len(), 1);
+
+            let session = report.session.to_string();
+            let run = cli_on(
+                &f.roots,
+                &args(&[&"undo", &"--session", &session]),
+                true,
+                Ok(0),
+            );
+            assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+            dump("undo.json", &run.out);
+            let undone: UndoReport = serde_json::from_str(&run.out).unwrap();
+            assert_eq!(undone.state, SessionState::Undone);
+            assert_eq!(undone.counts.restored, 2, "{undone:?}");
+            assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "alpha");
+            assert_eq!(std::fs::read_to_string(&single).unwrap(), "single");
+            let run = cli_on(&f.roots, &args(&[&"journal", &"recover"]), true, Ok(0));
+            assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+            dump("recover.json", &run.out);
+            sandbox::set_inside_for_tests(None);
+        }
     }
 }

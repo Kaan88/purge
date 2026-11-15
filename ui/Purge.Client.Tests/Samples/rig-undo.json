@@ -1,0 +1,45 @@
+{
+  "schema": "purge.undo/1",
+  "session": "20261115T223530Z-cada70265f85311e",
+  "state": "Undone",
+  "started": 134392557317242346,
+  "finished": 134392557317645477,
+  "items": [
+    {
+      "op": 2,
+      "item": "single",
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\purge-sample\\work\\single.txt"
+      },
+      "result": {
+        "result": "Finished",
+        "outcome": {
+          "kind": "Restored"
+        }
+      }
+    },
+    {
+      "op": 1,
+      "item": "files.dir",
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\purge-sample\\work\\app"
+      },
+      "result": {
+        "result": "Finished",
+        "outcome": {
+          "kind": "Restored"
+        }
+      }
+    }
+  ],
+  "counts": {
+    "restored": 2,
+    "already_restored": 0,
+    "nothing_to_undo": 0,
+    "conflicts": 0,
+    "failed": 0
+  },
+  "warnings": []
+}

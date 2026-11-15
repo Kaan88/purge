@@ -331,6 +331,9 @@ pub fn cli_in(
 ) -> Ran {
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+    // The fake host runs no real uninstaller; a sandbox-dev build runs `uninstall` only "inside Sandboxie".
+    #[cfg(feature = "sandbox-dev")]
+    purge_engine::cli::sandbox::set_inside_for_tests(Some(true));
     let exit = cli::run(
         &args,
         &mut Env {

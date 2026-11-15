@@ -19,16 +19,40 @@ public sealed partial class VaultView : UserControl
         InitializeComponent();
         Loaded += async (_, _) =>
         {
-            if (_batches.Count > 0) return;
-            QuarantineStatus status;
-            try { status = await Program.Engine.GetQuarantineAsync(); }
-            catch (Exception e)
-            {
-                ShowInfo(InfoBarSeverity.Error, "Couldn't read the quarantine.", e.Message);
-                return;
-            }
-            Fill(status);
+            // The live store changes under the page (a cleanup, an undo): read it each time it is shown.
+            if (_batches.Count > 0 && !Program.Engine.IsLive) return;
+            await ReloadAsync();
         };
+    }
+
+    private async Task ReloadAsync()
+    {
+        QuarantineStatus status;
+        try { status = await Program.Engine.GetQuarantineAsync(); }
+        catch (Exception e)
+        {
+            ShowInfo(InfoBarSeverity.Error, "Couldn't read the quarantine.", e.Message);
+            return;
+        }
+        InfoBarHost.Children.Clear();
+        Fill(status);
+        if (!Program.Engine.IsLive) return;
+        EmptyButton.IsEnabled = false;
+        EmptyButton.Content = "Delete for good: not in this build";
+        if (_batches.Count == 0)
+            ShowInfo(InfoBarSeverity.Informational, "The quarantine is empty.", "Cleanups you run from Leftovers appear here, with Put back.");
+        try
+        {
+            var pending = await Program.Engine.PendingRecoveryAsync();
+            if (pending.Count > 0)
+                InfoBarHost.Children.Insert(0, RecoveryBar.Create(
+                    string.Join(" · ", pending.Select(p => $"{p.SessionId} ({p.Kind}{(p.App.Length > 0 ? ", " + p.App : "")})")),
+                    () => _ = ReloadAsync()));
+        }
+        catch (Exception e)
+        {
+            ShowInfo(InfoBarSeverity.Error, "Couldn't check for interrupted cleanups.", e.Message);
+        }
     }
 
     private void Fill(QuarantineStatus status)
@@ -46,7 +70,7 @@ public sealed partial class VaultView : UserControl
         Totals.Text = $"{held.Count} cleanups hold {ProgramRow.FormatSize(held.Sum(b => b.Source.Bytes))} · files 30 days, registry backups 180 days";
         EmptyButton.IsEnabled = held.Count > 0;
 
-        if (expiring.Count > 0)
+        if (expiring.Count > 0 && !Program.Engine.IsLive)
         {
             var items = expiring.Sum(b => b.Source.FileItems + b.Source.RegistryItems);
             var bytes = ProgramRow.FormatSize(expiring.Sum(b => b.Source.Bytes));
@@ -70,7 +94,46 @@ public sealed partial class VaultView : UserControl
     {
         if ((sender as FrameworkElement)?.DataContext is not VaultBatch b || _promptOpen) return;
         var items = Lines(b).ToList();
+        if (Program.Engine.IsLive)
+        {
+            await UndoLiveAsync(b, items);
+            return;
+        }
         await Confirm(new ConsentSummary(b.Name, items, DateTime.Today, ConsentAction.Restore), "put back");
+    }
+
+    /// <summary>Puts back a whole session (<c>purge-engine undo --session</c>) after the prompt.</summary>
+    private async Task UndoLiveAsync(VaultBatch b, List<ConsentItem> items)
+    {
+        _promptOpen = true;
+        bool ok;
+        try { ok = await ConsentPrompt.ShowAsync(MainWindow.Instance.Hwnd, new ConsentSummary(b.Name, items, DateTime.Today, ConsentAction.Restore)); }
+        finally { _promptOpen = false; }
+        if (!ok) return;
+        var bar = ShowInfo(InfoBarSeverity.Informational, $"Putting back {b.Name}…", $"Session {b.Source.SessionId}");
+        bar.IsClosable = false;
+        try
+        {
+            var r = await Program.Engine.UndoSessionAsync(b.Source.SessionId);
+            await ReloadAsync();
+            var parts = new List<string> { $"Session {r.SessionId}: {r.State}", $"{r.Restored} put back" };
+            if (r.AlreadyRestored > 0) parts.Add($"{r.AlreadyRestored} already back");
+            if (r.NothingToUndo > 0) parts.Add($"{r.NothingToUndo} had nothing to undo");
+            if (r.Conflicts > 0) parts.Add($"{r.Conflicts} skipped because their place is taken");
+            if (r.Failed > 0) parts.Add($"{r.Failed} failed");
+            ShowInfo(r.ExitCode == 0 ? InfoBarSeverity.Success : InfoBarSeverity.Warning,
+                r.ExitCode == 0 ? $"{b.Name} is back." : $"{b.Name} is only partly back.", string.Join(" · ", parts));
+        }
+        catch (Purge.Client.Cli.EngineException e) when (e.NeedsRecovery)
+        {
+            InfoBarHost.Children.Remove(bar);
+            InfoBarHost.Children.Insert(0, RecoveryBar.Create(e.Message, () => _ = ReloadAsync()));
+        }
+        catch (Exception e)
+        {
+            InfoBarHost.Children.Remove(bar);
+            ShowInfo(InfoBarSeverity.Error, "Couldn't put it back.", e.Message);
+        }
     }
 
     private void OnDetails(object sender, RoutedEventArgs e) => MainWindow.Instance.Navigate("history");

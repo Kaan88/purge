@@ -24,6 +24,7 @@
 //! | 9 | `StoreIntegrity` | the store or a journal failed its integrity check |
 //! | 10 | `Partial` | the run did not commit, or an item did not end done; a purge item was not deleted (the document is written) |
 //! | 11 | `UndoConflicts` | an undo (or a rollback) ended with conflicts or failures (the document is written) |
+//! | 12 | `NotInSandbox` | `sandbox-dev` builds only: a destructive verb outside Sandboxie ([`sandbox`]) |
 //!
 //! Being unelevated is never an error for the M1a verbs: `harvest` and `scan` warn and go on with what
 //! they can read.
@@ -37,6 +38,8 @@ pub mod args;
 #[cfg(feature = "rig-exec")]
 pub mod exec;
 pub mod output;
+#[cfg(feature = "sandbox-dev")]
+pub mod sandbox;
 pub mod show;
 
 use std::io::Write;
@@ -81,6 +84,9 @@ pub enum Exit {
     Partial,
     /// 11: the undo ended with conflicts or failures.
     UndoConflicts,
+    /// 12: a destructive verb of a `sandbox-dev` build outside Sandboxie (that build only).
+    #[cfg(feature = "sandbox-dev")]
+    NotInSandbox,
 }
 
 impl Exit {
@@ -115,6 +121,8 @@ impl Exit {
             Exit::StoreIntegrity => 9,
             Exit::Partial => 10,
             Exit::UndoConflicts => 11,
+            #[cfg(feature = "sandbox-dev")]
+            Exit::NotInSandbox => 12,
         }
     }
 
@@ -138,6 +146,10 @@ impl Exit {
             Exit::Partial => "partial: not every item ended done (the document is still written)",
             Exit::UndoConflicts => {
                 "undo ended with conflicts or failures (the document is still written)"
+            }
+            #[cfg(feature = "sandbox-dev")]
+            Exit::NotInSandbox => {
+                "sandbox dev build: destructive verb refused outside Sandboxie; nothing was done"
             }
         }
     }
@@ -287,6 +299,8 @@ fn run_inner(
             let _ = writeln!(env.stdout, "purge-engine {}", env!("CARGO_PKG_VERSION"));
             #[cfg(feature = "rig-exec")]
             let _ = writeln!(env.stdout, "{}", exec::BUILD_MARKER);
+            #[cfg(feature = "sandbox-dev")]
+            let _ = writeln!(env.stdout, "{}", sandbox::BUILD_MARKER);
             Exit::Ok
         }
         Invocation::Help => {
@@ -428,6 +442,12 @@ fn harvest(a: &HarvestArgs, env: &mut Env<'_>, started: Instant) -> Exit {
 }
 
 fn uninstall(a: &UninstallArgs, env: &mut Env<'_>, started: Instant) -> Exit {
+    // A sandbox-dev build runs a vendor's uninstaller only inside Sandboxie too: it removes things.
+    #[cfg(feature = "sandbox-dev")]
+    if !sandbox::inside_sandboxie() {
+        env.error(&format!("uninstall: {}", sandbox::REFUSAL));
+        return Exit::NotInSandbox;
+    }
     progress_line(
         env.stderr,
         started,
@@ -745,7 +765,12 @@ mod tests {
         let (exit, _, err) = run_line("harvest HKLM|64|Nothing");
         assert_eq!(exit, Exit::Usage);
         assert!(err.contains("no inventory entry"), "{err}");
+        // A sandbox-dev build refuses `uninstall` outside Sandboxie before looking the id up.
+        #[cfg(feature = "sandbox-dev")]
+        sandbox::set_inside_for_tests(Some(true));
         let (exit, _, err) = run_line("uninstall Nothing --quiet");
+        #[cfg(feature = "sandbox-dev")]
+        sandbox::set_inside_for_tests(None);
         assert_eq!(exit, Exit::Usage, "{err}");
         let missing = std::env::temp_dir().join("purge-engine-no-such-file.json");
         let (exit, _, err) = run_line(&format!("scan --fp {} -o x.json", missing.display()));

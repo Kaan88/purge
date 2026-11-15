@@ -48,7 +48,7 @@ public sealed partial class MainWindow : Window
         _views["programs"] = _programs;
         ContentCard.Child = _programs;
         if (Program.Startup.IsCompletedSuccessfully)
-            _programs.Load(Program.Startup.Result);
+            OnStartup(Program.Startup.Result);
         else
             _ = LoadWhenReadyAsync();
 
@@ -56,7 +56,26 @@ public sealed partial class MainWindow : Window
         CompositionTarget.Rendering += OnFirstRendering;
     }
 
-    private async Task LoadWhenReadyAsync() => _programs.Load(await Program.Startup);
+    private async Task LoadWhenReadyAsync() => OnStartup(await Program.Startup);
+
+    private void OnStartup(StartupData data)
+    {
+        _programs.Load(data);
+        // A sandbox dev engine says so in the title bar (and in Settings → About).
+        if (data.Hello.BuildNote is { } note)
+        {
+            Title = $"Purge · {note}";
+            AppTitleBar.Title = Title;
+        }
+        if (data.Error is { } error) _programs.ShowEngineNotice(error);
+    }
+
+    /// <summary>The S3 review page (built on first use), for the scan started from S1.</summary>
+    public ReviewView OpenReview()
+    {
+        Navigate("leftovers");
+        return (ReviewView)_views["leftovers"];
+    }
 
     private void OnFirstRendering(object? sender, object e)
     {
@@ -127,6 +146,9 @@ public sealed partial class MainWindow : Window
                 "settings" => new SettingsView(),
                 _ => _programs,
             };
+            // With the real engine, pages it does not feed yet say so above their sample content.
+            if (Program.Engine.IsLive && key is "home" or "queue" or "history" or "footprint" or "assistant" or "startup")
+                view = SampleBanner(view);
             _views[key] = view;
         }
         ContentCard.Child = view;
@@ -139,6 +161,23 @@ public sealed partial class MainWindow : Window
         CurrentPage = key;
         if (Root.RequestedTheme != ElementTheme.Default)
             DispatcherQueue.TryEnqueue(() => PinInfoBars(view));
+    }
+
+    private static Grid SampleBanner(UIElement view)
+    {
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition());
+        var banner = new TextBlock
+        {
+            Text = "Sample data: this page is not connected to the engine in this build.",
+            Margin = new Thickness(28, 12, 28, 0),
+            Opacity = 0.7,
+        };
+        grid.Children.Add(banner);
+        Grid.SetRow((FrameworkElement)view, 1);
+        grid.Children.Add(view);
+        return grid;
     }
 
     /// <summary>The theme the window shows (Settings → Appearance, else Windows).</summary>

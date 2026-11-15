@@ -56,7 +56,9 @@ public sealed partial class SettingsView : UserControl
         var engine = Program.Startup.IsCompletedSuccessfully ? Program.Startup.Result.Hello : null;
         AboutLine.Text = engine is null
             ? "Purge 0.1 (shell preview)"
-            : $"Purge 0.1 · engine {engine.Version} · policy {engine.PolicyVersion}";
+            : $"Purge 0.1 · engine {engine.Version}" + (engine.PolicyVersion.Length > 0 ? $" · policy {engine.PolicyVersion}" : "")
+              + (engine.BuildNote is { } note ? $" · {note}" : "")
+              + (Program.Engine is Purge.Client.Cli.CliEngineClient cli ? $" · {cli.EnginePath}" : " · sample data");
     }
 
     private int Selectable => _sample.Count(r => r.Selectable);

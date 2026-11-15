@@ -4,11 +4,14 @@ namespace Purge.Client;
 
 /// <summary>
 /// The UI's view of <c>purge-engine</c>. One method per JSON-RPC call the shell needs so far
-/// (ENGINE_PLAN.md §3.3). The real implementation speaks newline-delimited JSON-RPC 2.0 over the stdio pipes
-/// of <c>purge-engine --stdio</c> (and later the broker pipe); <see cref="FakeEngineClient"/> stands in until then.
+/// (ENGINE_PLAN.md §3.3). Today <see cref="Cli.CliEngineClient"/> runs the engine's CLI verbs as child processes
+/// (the stdio JSON-RPC transport of M3 replaces it), and <see cref="FakeEngineClient"/> answers from sample JSON.
 /// </summary>
 public interface IEngineClient : IAsyncDisposable
 {
+    /// <summary>True when the client talks to a real engine (scan, remove and undo work); false for sample data.</summary>
+    bool IsLive { get; }
+
     /// <summary><c>engine.hello</c>.</summary>
     Task<EngineHello> HelloAsync(CancellationToken ct = default);
 
@@ -26,4 +29,24 @@ public interface IEngineClient : IAsyncDisposable
 
     /// <summary><c>quarantine.status</c> (proposed): use per volume and one entry per cleanup.</summary>
     Task<QuarantineStatus> GetQuarantineAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Records a program, optionally runs its quiet uninstaller, and scans for its leftovers. Progress lines go to
+    /// <paramref name="progress"/>.
+    /// </summary>
+    Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind, IProgress<string>? progress = null,
+        CancellationToken ct = default);
+
+    /// <summary>Moves the selected items of a plan to quarantine (removes registry entries with a backup).</summary>
+    Task<ExecResult> ExecAsync(LeftoverPlan plan, IReadOnlyList<string> selectedIds, IProgress<string>? progress = null,
+        CancellationToken ct = default);
+
+    /// <summary>Puts back everything a session changed.</summary>
+    Task<UndoResult> UndoSessionAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>Sessions that were interrupted and wait for <see cref="RecoverAsync"/>.</summary>
+    Task<IReadOnlyList<PendingSession>> PendingRecoveryAsync(CancellationToken ct = default);
+
+    /// <summary>Finishes (<paramref name="rollback"/> false) or rolls back every interrupted session.</summary>
+    Task<RecoveryResult> RecoverAsync(bool rollback, CancellationToken ct = default);
 }

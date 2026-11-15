@@ -11,7 +11,7 @@ namespace Purge.App;
 /// </summary>
 public static class Program
 {
-    /// <summary>The engine connection. A stub until the stdio JSON-RPC transport lands.</summary>
+    /// <summary>The engine connection: the CLI client, or the sample-data stub.</summary>
     public static IEngineClient Engine { get; private set; } = null!;
 
     /// <summary><c>engine.hello</c> + <c>programs.list</c>, started before XAML init.</summary>
@@ -26,15 +26,30 @@ public static class Program
         Options = StartupOptions.Parse(args);
 
         // (a) "Always start elevated" re-exec goes here (setting not implemented yet).
-        // (b) Spawn `purge-engine --stdio` inside a KILL_ON_JOB_CLOSE job: stubbed.
-        Engine = new FakeEngineClient();
-        // (c) Send engine.hello + programs.list; read on a background thread.
+        // (b) The engine: purge-engine.exe next to the app (or PURGE_ENGINE_EXE), run per call through its CLI
+        //     until the stdio JSON-RPC transport lands. --sample, or no engine found, keeps the sample data.
+        var cli = new Purge.Client.Cli.CliEngineClient();
+        Engine = Options.Sample || !File.Exists(cli.EnginePath) ? new FakeEngineClient() : cli;
+        // (c) Send engine.hello + programs.list; read on a background thread. If the real engine fails here the
+        //     shell falls back to the sample data and says why.
         Startup = Task.Run(async () =>
         {
-            var hello = await Engine.HelloAsync().ConfigureAwait(false);
-            var doc = await Engine.ListProgramsAsync().ConfigureAwait(false);
-            LaunchMarkers.Mark("list_reply");
-            return new StartupData(hello, doc);
+            try
+            {
+                var hello = await Engine.HelloAsync().ConfigureAwait(false);
+                var doc = await Engine.ListProgramsAsync().ConfigureAwait(false);
+                LaunchMarkers.Mark("list_reply");
+                return new StartupData(hello, doc);
+            }
+            catch (Exception e) when (Engine is not FakeEngineClient)
+            {
+                var failed = Engine;
+                Engine = new FakeEngineClient();
+                var hello = await Engine.HelloAsync().ConfigureAwait(false);
+                var doc = await Engine.ListProgramsAsync().ConfigureAwait(false);
+                return new StartupData(hello, doc,
+                    $"The engine ({(failed as Purge.Client.Cli.CliEngineClient)?.EnginePath}) failed, so this shows sample data: {e.Message}");
+            }
         });
 
         // (e) Start XAML.
@@ -49,7 +64,7 @@ public static class Program
     }
 }
 
-public sealed record StartupData(EngineHello Hello, InventoryDoc Inventory);
+public sealed record StartupData(EngineHello Hello, InventoryDoc Inventory, string? Error = null);
 
 /// <summary>Command-line switches for development and the launch bench.</summary>
 public sealed class StartupOptions
@@ -66,10 +81,14 @@ public sealed class StartupOptions
     /// <summary><c>--bench-exit</c>: close the window after the first presented frame (launch bench).</summary>
     public bool BenchExit { get; private init; }
 
+    /// <summary><c>--sample</c>: use the sample data even when purge-engine.exe is next to the app.</summary>
+    public bool Sample { get; private init; }
+
     public static StartupOptions Parse(string[] args)
     {
         var theme = ElementTheme.Default;
         var benchExit = false;
+        var sample = false;
         string? page = null, query = null;
         for (var i = 0; i < args.Length; i++)
         {
@@ -95,8 +114,11 @@ public sealed class StartupOptions
                 case "--bench-exit":
                     benchExit = true;
                     break;
+                case "--sample":
+                    sample = true;
+                    break;
             }
         }
-        return new StartupOptions { Theme = theme, BenchExit = benchExit, Page = page, Query = query };
+        return new StartupOptions { Theme = theme, BenchExit = benchExit, Page = page, Query = query, Sample = sample };
     }
 }

@@ -3,6 +3,8 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Purge.App.Shell;
+using Purge.Client.Cli;
+using Purge.Client.Model;
 
 namespace Purge.App.Views;
 
@@ -14,7 +16,7 @@ public sealed partial class ReviewView : UserControl
     private static readonly Brush Note = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0x8A, 0x8A, 0x8A));
 
     private const string Weak = "Weak matches";
-    private readonly List<LeftoverRow> _all = Sample();
+    private List<LeftoverRow> _all = Program.Engine.IsLive ? [] : Sample();
     private bool _showWeak;
     private bool _promptOpen;
 
@@ -24,7 +26,16 @@ public sealed partial class ReviewView : UserControl
         AppTile.Background = ProgramRow.TileFor("Mozilla");
         ApplyPreset(Settings.Preset);
         Refresh();
-        Items.SelectedItem = _all.First(r => r.IsUserData);
+        if (Program.Engine.IsLive)
+        {
+            AppInitial.Text = "?";
+            TitleText.Text = "Leftovers";
+            SubtitleText.Text = "No scan yet";
+            ShowInfo(InfoBarSeverity.Informational, "Nothing scanned yet.",
+                "In Programs, pick a program and choose Uninstall (runs its uninstaller, then scans) or Force remove (scans only).");
+        }
+        else
+            Items.SelectedItem = _all.First(r => r.IsUserData);
         // The page is cached by the shell; pick up a preset changed in Settings since it was last shown.
         Loaded += (_, _) =>
         {
@@ -97,7 +108,7 @@ public sealed partial class ReviewView : UserControl
         AddPart(parts, chosen.Count(c => c.Kind == LeftoverKind.Task), "task or service", "tasks and services");
         FooterDetail.Text = " · " + string.Join(", ", parts);
         MoveText.Text = chosen.Count == 1 ? "Move 1 item to quarantine…" : $"Move {chosen.Count} items to quarantine…";
-        MoveButton.IsEnabled = chosen.Count > 0 && !_promptOpen;
+        MoveButton.IsEnabled = chosen.Count > 0 && !_promptOpen && !_busy;
     }
 
     private static void AddPart(List<string> parts, int n, string one, string many)
@@ -326,6 +337,11 @@ public sealed partial class ReviewView : UserControl
     {
         var chosen = Candidates.Where(c => c.Checked).ToList();
         if (chosen.Count == 0) return;
+        if (Program.Engine.IsLive)
+        {
+            await MoveLiveAsync(chosen);
+            return;
+        }
         _promptOpen = true;
         UpdateCounts();
         var waiting = ShowInfo(InfoBarSeverity.Informational, "Confirm in the Purge security prompt.", "Nothing has been moved yet.");
@@ -342,6 +358,200 @@ public sealed partial class ReviewView : UserControl
         if (result)
             ShowInfo(InfoBarSeverity.Success, "Confirmed in the security prompt.",
                 "This preview isn't connected to the engine, so nothing was moved.");
+    }
+
+    // ---- The engine (CliEngineClient) -------------------------------------------------------------------------
+
+    private LeftoverPlan? _plan;
+    private bool _busy;
+
+    /// <summary>
+    /// Scans a program (after running its uninstaller for <see cref="ScanKind.UninstallThenScan"/>) and shows the
+    /// engine's plan: its bands and the engine's own preselection.
+    /// </summary>
+    public async Task ScanAsync(string programId, string name, ScanKind kind)
+    {
+        if (_busy)
+        {
+            ShowInfo(InfoBarSeverity.Warning, "Purge is still busy.", "Wait for the running scan or removal to finish.");
+            return;
+        }
+        _busy = true;
+        _plan = null;
+        _all = [];
+        Refresh();
+        AppTile.Background = ProgramRow.TileFor(name);
+        AppInitial.Text = name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+        TitleText.Text = $"Leftovers of {name}";
+        SubtitleText.Text = kind == ScanKind.UninstallThenScan ? "Uninstalling, then scanning…" : "Scanning without an uninstaller…";
+        using var cts = new CancellationTokenSource();
+        var bar = ShowInfo(InfoBarSeverity.Informational,
+            kind == ScanKind.UninstallThenScan ? $"Uninstalling {name}, then scanning." : $"Scanning for what {name} left.",
+            "This can take a few minutes.");
+        bar.IsClosable = false;
+        var cancel = new Button { Content = "Cancel" };
+        cancel.Click += (_, _) => { cts.Cancel(); cancel.IsEnabled = false; };
+        bar.ActionButton = cancel;
+        var progress = new Progress<string>(line => bar.Message = Shorten(line));
+        var started = DateTime.Now;
+        try
+        {
+            var plan = await Program.Engine.ScanAsync(programId, name, kind, progress, cts.Token);
+            LoadPlan(plan);
+            var seconds = (DateTime.Now - started).TotalSeconds.ToString("F0", CultureInfo.CurrentCulture);
+            SubtitleText.Text = (kind == ScanKind.UninstallThenScan ? "Uninstalled and scanned" : "Scanned without an uninstaller")
+                                + $" in {seconds} s · restorable for 30 days once moved";
+            var ticked = _all.Count(r => r.Checked);
+            ShowInfo(plan.Warnings.Count > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Success,
+                $"Found {plan.Items.Count} {(plan.Items.Count == 1 ? "item" : "items")}; the engine ticked {ticked}.",
+                plan.Warnings.Count > 0 ? "Engine warnings: " + string.Join(" · ", plan.Warnings.Take(4)) : "Review the list, then move what you want to quarantine.");
+        }
+        catch (OperationCanceledException)
+        {
+            SubtitleText.Text = "Cancelled";
+            ShowInfo(InfoBarSeverity.Warning, "Cancelled.", "The engine was stopped. If the uninstaller had started, it may have finished part of its work.");
+        }
+        catch (Exception ex)
+        {
+            SubtitleText.Text = "The scan did not finish";
+            ShowError(ex);
+        }
+        finally
+        {
+            _busy = false;
+            UpdateCounts();
+        }
+        if (kind == ScanKind.UninstallThenScan) _ = MainWindow.Instance.Programs.ReloadAsync();
+    }
+
+    private static string Shorten(string line)
+    {
+        // Progress lines start with "[  1.234s] ".
+        var text = line.StartsWith('[') && line.IndexOf("] ", StringComparison.Ordinal) is var at and > 0 ? line[(at + 2)..] : line;
+        return text.Length > 160 ? text[..157] + "…" : text;
+    }
+
+    private static string GroupOf(LeftoverItem i) =>
+        i.Band == LeftoverBand.Weak ? Weak
+        : i.Category == "Association" ? "File associations & protocols"
+        : i.Category == "ShellCom" ? "Shell & COM"
+        : i.IsFile ? "Files & folders"
+        : i.IsRegistry ? "Registry"
+        : "Services, tasks & other";
+
+    private static readonly string[] GroupOrder =
+        ["Files & folders", "Registry", "File associations & protocols", "Shell & COM", "Services, tasks & other", Weak];
+
+    private void LoadPlan(LeftoverPlan plan)
+    {
+        _plan = plan;
+        var rows = new List<LeftoverRow>();
+        foreach (var group in GroupOrder)
+        {
+            var items = plan.Items.Where(i => GroupOf(i) == group).ToList();
+            if (items.Count == 0) continue;
+            rows.Add(LeftoverRow.Header(group));
+            foreach (var i in items)
+            {
+                var band = !i.Selectable ? Band.Protected : i.Band switch
+                {
+                    LeftoverBand.Safe => Band.Safe,
+                    LeftoverBand.Likely => Band.Likely,
+                    _ => Band.Weak,
+                };
+                var why = i.Explanation.Length > 0 ? i.Explanation : i.Category;
+                if (i.Action == "RemovePackage") why += " · package removal is not in this build";
+                var kind = i.IsFile ? LeftoverKind.File : i.IsRegistry ? LeftoverKind.Registry : LeftoverKind.Task;
+                rows.Add(new LeftoverRow(group, i.Display, why, band,
+                    i.SizeBytes is { } b ? ProgramRow.FormatSize(b) : "", i.SizeBytes ?? 0, kind)
+                {
+                    Id = i.Id,
+                    IsUserData = i.IsUserData,
+                    FoundBy = $"{i.Scanner} · {i.Category} · {i.Action} · {i.Evidence} evidence",
+                    Checked = i.Selectable && i.Preselected,
+                });
+            }
+        }
+        _all = rows;
+        // Weak matches are shown when the engine found any: a real plan is short enough to see them all.
+        _showWeak = rows.Any(r => r.GroupName == Weak);
+        _appliedPreset = Settings.Preset;
+        _appliedUserData = Settings.PreSelectUserData;
+        SelectButton.Content = "Select: as the engine ticked";
+        Refresh();
+        Items.SelectedItem = rows.FirstOrDefault(r => !r.IsGroup);
+    }
+
+    private async Task MoveLiveAsync(List<LeftoverRow> chosen)
+    {
+        if (_plan is not { } plan || _busy || _promptOpen) return;
+        _promptOpen = true;
+        UpdateCounts();
+        var summary = new ConsentSummary(
+            plan.ProgramName,
+            chosen.Select(c => new ConsentItem(c.Path, c.Kind, c.Band, c.SizeText, c.SizeBytes, c.IsUserData)).ToList(),
+            DateTime.Today.AddDays(30));
+        bool ok;
+        try { ok = await ConsentPrompt.ShowAsync(MainWindow.Instance.Hwnd, summary); }
+        finally { _promptOpen = false; }
+        if (!ok)
+        {
+            UpdateCounts();
+            return;
+        }
+        _busy = true;
+        MoveButton.IsEnabled = false;
+        var bar = ShowInfo(InfoBarSeverity.Informational, $"Moving {chosen.Count} {(chosen.Count == 1 ? "item" : "items")} to quarantine.", "");
+        bar.IsClosable = false;
+        var progress = new Progress<string>(line => bar.Message = Shorten(line));
+        try
+        {
+            var result = await Program.Engine.ExecAsync(plan, chosen.Select(c => c.Id).ToList(), progress);
+            ShowExecResult(result, chosen.Count);
+            var finished = result.Items.Where(i => i.Complete).Select(i => i.Id).ToHashSet(StringComparer.Ordinal);
+            _all = _all.Where(r => r.IsGroup || !finished.Contains(r.Id)).ToList();
+            _all = _all.Where(r => !r.IsGroup || _all.Any(i => !i.IsGroup && i.GroupName == r.GroupName)).ToList();
+            Refresh();
+        }
+        catch (EngineException ex) when (ex.NeedsRecovery)
+        {
+            InfoBarHost.Children.Clear();
+            InfoBarHost.Children.Add(RecoveryBar.Create(ex.Message, () => { }));
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+        finally
+        {
+            _busy = false;
+            UpdateCounts();
+        }
+    }
+
+    private void ShowExecResult(ExecResult r, int asked)
+    {
+        var moved = r.Done + r.Vanished;
+        var parts = new List<string> { $"Session {r.SessionId} ({r.State})" };
+        if (r.Skipped > 0) parts.Add($"{r.Skipped} skipped");
+        if (r.HeldRetry > 0) parts.Add($"{r.HeldRetry} in use, left for a later run");
+        if (r.PendingReboot > 0) parts.Add($"{r.PendingReboot} go at the next restart");
+        if (r.Failed > 0) parts.Add($"{r.Failed} failed");
+        var notDone = r.Items.Where(i => !i.Complete).Take(4)
+            .Select(i => $"{i.Display} ({i.Outcome}{(i.Detail.Length > 0 ? ": " + i.Detail : "")})").ToList();
+        if (notDone.Count > 0) parts.Add("Not done: " + string.Join("; ", notDone));
+        parts.Add("Everything moved can be put back from the Quarantine vault.");
+        var bar = ShowInfo(r.ExitCode == ExitCodes.Ok ? InfoBarSeverity.Success : InfoBarSeverity.Warning,
+            $"Moved {moved} of {asked} {(asked == 1 ? "item" : "items")} to quarantine.", string.Join(" · ", parts));
+        var open = new Button { Content = "Open the vault" };
+        open.Click += (_, _) => MainWindow.Instance.Navigate("vault");
+        bar.ActionButton = open;
+    }
+
+    private void ShowError(Exception ex)
+    {
+        var bar = ShowInfo(InfoBarSeverity.Error, ex is EngineException ? "The engine refused or failed." : "Something went wrong.", ex.Message);
+        if (ex is EngineException { Stderr.Length: > 0 } ee) ToolTipService.SetToolTip(bar, ee.Stderr);
     }
 
     private InfoBar ShowInfo(InfoBarSeverity severity, string title, string message)

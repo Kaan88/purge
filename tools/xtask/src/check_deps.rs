@@ -10,6 +10,8 @@
 //!    rule; check 1 already implies it).
 //! 4. **Executor.** Only purge-engine links purge-exec, only with its `rig-exec` feature, and `fault-inject`
 //!    comes on only through `rig-exec` (see `exec_violations`).
+//! 5. **Relaxed store.** purge-exec's `test-support` comes on only through purge-engine's `sandbox-dev`
+//!    (never a default, `rig-exec` or workspace build; see `test_support_violations`).
 //!
 //! `xtask ci` also builds purge-mcp on its own (`cargo clippy -p purge-mcp`), so code that only compiles
 //! with features another member turns on fails CI.
@@ -191,6 +193,74 @@ fn exec_violations(
     out
 }
 
+/// The feature of [`ENGINE`] that is the one way to purge-exec's `test-support` outside tests.
+const SANDBOX_DEV: &str = "sandbox-dev";
+
+/// The names of the features in the `[features]` table of a manifest whose list turns on purge-exec's
+/// `test-support` (`purge-exec/test-support` or `purge-exec?/test-support`), and whether a normal or build
+/// dependency on purge-exec names `test-support` itself. A line-based reader of the plain TOML layout the
+/// workspace uses (one feature per line, one dependency per line).
+fn test_support_paths(manifest: &str) -> (Vec<&str>, bool) {
+    let mut section = "";
+    let mut features = Vec::new();
+    let mut in_dependency = false;
+    for line in manifest.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.starts_with('[') {
+            section = line;
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        let names_it =
+            value.contains("purge-exec/test-support") || value.contains("purge-exec?/test-support");
+        match section {
+            "[features]" if names_it => features.push(key),
+            "[dependencies]" | "[build-dependencies]"
+                if key == EXEC && value.contains("test-support") =>
+            {
+                in_dependency = true;
+            }
+            _ => {}
+        }
+    }
+    (features, in_dependency)
+}
+
+/// Violations of the `test-support` rule: only [`SANDBOX_DEV`] turns it on (never a normal dependency,
+/// default or `rig-exec`), and `sandbox-dev` really builds purge-exec with it. The listings are
+/// `manifest`, the text of purge-engine's Cargo.toml, and `engine_sandbox`: `cargo tree -p purge-engine
+/// --features sandbox-dev -f "{p} {f}"`. The default and `rig-exec` builds are checked by
+/// [`exec_violations`].
+fn test_support_violations(manifest: &str, engine_sandbox: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let (features, in_dependency) = test_support_paths(manifest);
+    for feature in features.iter().filter(|f| **f != SANDBOX_DEV) {
+        out.push(format!(
+            "{ENGINE} feature {feature} turns on {EXEC} feature test-support; only {SANDBOX_DEV} may"
+        ));
+    }
+    if !features.contains(&SANDBOX_DEV) {
+        out.push(format!(
+            "{ENGINE} has no feature {SANDBOX_DEV} that turns on {EXEC} feature test-support"
+        ));
+    }
+    if in_dependency {
+        out.push(format!(
+            "{ENGINE} depends on {EXEC} with test-support outside a feature"
+        ));
+    }
+    match exec_features(engine_sandbox) {
+        Some(f) if f.contains("test-support") => {}
+        _ => out.push(format!(
+            "{ENGINE} with feature {SANDBOX_DEV} does not build {EXEC} with test-support"
+        )),
+    }
+    out
+}
+
 fn cargo_tree(root: &Path, args: &[&str]) -> Result<String> {
     let output = crate::cargo()
         .arg("tree")
@@ -255,6 +325,13 @@ pub fn run(root: &Path) -> Result<bool> {
         &engine_rig,
         &workspace_features,
     ));
+    let manifest = std::fs::read_to_string(root.join("bins/purge-engine/Cargo.toml"))
+        .context("reading bins/purge-engine/Cargo.toml")?;
+    let engine_sandbox = cargo_tree(
+        root,
+        &["-p", ENGINE, "--features", SANDBOX_DEV, "-f", "{p} {f}"],
+    )?;
+    found.extend(test_support_violations(&manifest, &engine_sandbox));
 
     for v in &found {
         eprintln!("check-deps: {v}");
@@ -269,6 +346,9 @@ pub fn run(root: &Path) -> Result<bool> {
         );
         println!(
             "check-deps: ok ({EXEC} is linked only by {ENGINE}, and with fault-inject only through rig-exec)"
+        );
+        println!(
+            "check-deps: ok ({EXEC} test-support only through {ENGINE} feature {SANDBOX_DEV})"
         );
     }
     Ok(found.is_empty())
@@ -392,6 +472,60 @@ mod tests {
             exec_violations(garbage, garbage, rig, ws).len(),
             2,
             "unrecognised roots are named"
+        );
+    }
+
+    #[test]
+    fn test_support_only_through_sandbox_dev() {
+        let sbx = "purge-engine v0.1.0 (C:\\e) sandbox-dev\npurge-exec v0.1.0 (C:\\x) fault-inject,test-support\n";
+        let good = "[features]\n\
+                    # test-support is mentioned in a comment: purge-exec/test-support\n\
+                    rig-exec = [\"dep:purge-exec\", \"purge-exec/fault-inject\"]\n\
+                    sandbox-dev = [\"rig-exec\", \"purge-exec/test-support\"]\n\
+                    \n[dependencies]\n\
+                    purge-exec = { workspace = true, optional = true }\n\
+                    \n[dev-dependencies]\n\
+                    purge-exec = { workspace = true, features = [\"test-support\"] }\n";
+        assert!(test_support_violations(good, sbx).is_empty());
+        assert_eq!(test_support_paths(good), (vec!["sandbox-dev"], false));
+
+        // rig-exec (or default) turning it on.
+        let rig = good.replace(
+            "\"purge-exec/fault-inject\"]",
+            "\"purge-exec/fault-inject\", \"purge-exec?/test-support\"]",
+        );
+        assert_eq!(
+            test_support_violations(&rig, sbx),
+            [
+                "purge-engine feature rig-exec turns on purge-exec feature test-support; only sandbox-dev may"
+            ]
+        );
+        let default = good.replace(
+            "[features]\n",
+            "[features]\ndefault = [\"purge-exec/test-support\"]\n",
+        );
+        assert_eq!(test_support_violations(&default, sbx).len(), 1);
+
+        // A normal dependency with the feature.
+        let dep = good.replace(
+            "purge-exec = { workspace = true, optional = true }",
+            "purge-exec = { workspace = true, optional = true, features = [\"test-support\"] }",
+        );
+        assert_eq!(
+            test_support_violations(&dep, sbx),
+            ["purge-engine depends on purge-exec with test-support outside a feature"]
+        );
+
+        // No sandbox-dev feature, or one that does not reach purge-exec.
+        let none = good.replace(
+            "sandbox-dev = [\"rig-exec\", \"purge-exec/test-support\"]\n",
+            "",
+        );
+        assert_eq!(test_support_violations(&none, sbx).len(), 1);
+        let rig_only = "purge-engine v0.1.0 (C:\\e)\npurge-exec v0.1.0 (C:\\x) fault-inject\n";
+        assert_eq!(
+            test_support_violations(good, rig_only),
+            ["purge-engine with feature sandbox-dev does not build purge-exec with test-support"]
         );
     }
 }

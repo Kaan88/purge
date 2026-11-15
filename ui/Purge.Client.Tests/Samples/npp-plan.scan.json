@@ -1,0 +1,278 @@
+{
+    "schema":  "purge.scan/0",
+    "app":  "notepad++",
+    "tool":  "purge",
+    "mode":  "external",
+    "policy_version":  "m1a.6",
+    "plan_hash":  "4b404809336b129a6c8625c6e27d60f3d8acc0d4999a319e0db65e2a501839b2",
+    "items":  [
+                  {
+                      "id":  "c-214f2c4121a1bc65",
+                      "target":  {
+                                     "type":  "Path",
+                                     "path":  "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Notepad++.lnk"
+                                 },
+                      "action":  "Quarantine",
+                      "owner":  {
+                                    "program_id":  "HKLM|64|Notepad++",
+                                    "display_name":  "Notepad++ (64-bit x64)"
+                                },
+                      "origin":  "Scanner",
+                      "scanner":  "FS-SHORTCUTS",
+                      "category":  "AppFiles",
+                      "evidence":  [
+                                       {
+                                           "kind":  "ExactFullName",
+                                           "tier":  "B",
+                                           "weight":  4,
+                                           "scope":  "Path",
+                                           "trust":  "AdminOnly",
+                                           "source":  "identity:Notepad++ (64-bit x64)",
+                                           "detail":  {
+                                                          "name":  "Notepad++ (64-bit x64)"
+                                                      }
+                                       }
+                                   ],
+                      "blockers":  [
+                                       {
+                                           "kind":  "DenyListed",
+                                           "rule":  "fs.programdata.microsoft"
+                                       }
+                                   ],
+                      "harm":  "Low",
+                      "reversibility":  "Full",
+                      "children":  [
+
+                                   ],
+                      "size_bytes":  877,
+                      "child_count":  1,
+                      "decision":  {
+                                       "band":  "Blocked",
+                                       "preselected":  false,
+                                       "score":  4,
+                                       "explanation":  "Kept: protected location (rule fs.programdata.microsoft)"
+                                   },
+                      "item_fp":  {
+                                      "file_id":  "633c0400000002000000000000000000",
+                                      "volume_serial":  1633208402887983107
+                                  }
+                  },
+                  {
+                      "id":  "c-5788caac5780cea9",
+                      "target":  {
+                                     "type":  "Path",
+                                     "path":  "C:\\Users\\tester\\AppData\\Roaming\\Notepad++"
+                                 },
+                      "action":  "Quarantine",
+                      "owner":  {
+                                    "program_id":  "HKLM|64|Notepad++",
+                                    "display_name":  "Notepad++ (64-bit x64)"
+                                },
+                      "origin":  "Scanner",
+                      "scanner":  "FS-APPDATA",
+                      "category":  "UserData",
+                      "evidence":  [
+                                       {
+                                           "kind":  "ExactFullName",
+                                           "tier":  "B",
+                                           "weight":  4,
+                                           "scope":  "Path",
+                                           "trust":  "AdminOnly",
+                                           "source":  "identity:Notepad++ (64-bit x64)",
+                                           "detail":  {
+                                                          "name":  "Notepad++ (64-bit x64)"
+                                                      }
+                                       }
+                                   ],
+                      "blockers":  [
+                                       {
+                                           "kind":  "UserData"
+                                       }
+                                   ],
+                      "harm":  "High",
+                      "reversibility":  "Full",
+                      "children":  [
+
+                                   ],
+                      "size_bytes":  919279,
+                      "child_count":  24,
+                      "decision":  {
+                                       "band":  "Likely",
+                                       "preselected":  false,
+                                       "score":  4,
+                                       "explanation":  "Named exactly like Notepad++ (64-bit x64) Â· May hold your own data"
+                                   },
+                      "item_fp":  {
+                                      "file_id":  "66b00400000001000000000000000000",
+                                      "volume_serial":  1633208402887983107
+                                  }
+                  },
+                  {
+                      "id":  "c-7d6dec0653eb48b5",
+                      "target":  {
+                                     "type":  "RegValue",
+                                     "path":  "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.2025-11-05\\OpenWithList",
+                                     "name":  "a"
+                                 },
+                      "action":  "DeleteValue",
+                      "owner":  {
+                                    "program_id":  "HKLM|64|Notepad++",
+                                    "display_name":  "Notepad++ (64-bit x64)"
+                                },
+                      "origin":  "Scanner",
+                      "scanner":  "CLS-FILEEXTS",
+                      "category":  "Association",
+                      "evidence":  [
+                                       {
+                                           "kind":  "ChainedRef",
+                                           "tier":  "B",
+                                           "weight":  5,
+                                           "scope":  "Value",
+                                           "trust":  "AdminOnly",
+                                           "source":  "chain:notepad++.exe",
+                                           "detail":  {
+                                                          "anchor":  "notepad++.exe",
+                                                          "exe":  "notepad++.exe",
+                                                          "ext":  ".2025-11-05",
+                                                          "group":  "File associations"
+                                                      }
+                                       }
+                                   ],
+                      "blockers":  [
+
+                                   ],
+                      "harm":  "Low",
+                      "reversibility":  "Full",
+                      "children":  [
+
+                                   ],
+                      "size_bytes":  null,
+                      "child_count":  null,
+                      "decision":  {
+                                       "band":  "Likely",
+                                       "preselected":  false,
+                                       "score":  5,
+                                       "explanation":  "Refers to notepad++.exe, which belongs to Notepad++ (64-bit x64)"
+                                   }
+                  },
+                  {
+                      "id":  "c-6cc20efb1db9552b",
+                      "target":  {
+                                     "type":  "RegMultiSzSegment",
+                                     "path":  "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.2025-11-05\\OpenWithList",
+                                     "name":  "MRUList",
+                                     "segment":  "a",
+                                     "index":  0
+                                 },
+                      "action":  "EditSegment",
+                      "owner":  {
+                                    "program_id":  "HKLM|64|Notepad++",
+                                    "display_name":  "Notepad++ (64-bit x64)"
+                                },
+                      "origin":  "Scanner",
+                      "scanner":  "CLS-FILEEXTS",
+                      "category":  "Association",
+                      "evidence":  [
+                                       {
+                                           "kind":  "ChainedRef",
+                                           "tier":  "B",
+                                           "weight":  5,
+                                           "scope":  "Value",
+                                           "trust":  "AdminOnly",
+                                           "source":  "chain:notepad++.exe",
+                                           "detail":  {
+                                                          "anchor":  "notepad++.exe",
+                                                          "exe":  "notepad++.exe",
+                                                          "ext":  ".2025-11-05",
+                                                          "group":  "File associations"
+                                                      }
+                                       }
+                                   ],
+                      "blockers":  [
+
+                                   ],
+                      "harm":  "Medium",
+                      "reversibility":  "Full",
+                      "children":  [
+
+                                   ],
+                      "size_bytes":  null,
+                      "child_count":  null,
+                      "decision":  {
+                                       "band":  "Likely",
+                                       "preselected":  false,
+                                       "score":  5,
+                                       "explanation":  "Refers to notepad++.exe, which belongs to Notepad++ (64-bit x64)"
+                                   }
+                  },
+                  {
+                      "id":  "c-aaa6e34d1b3a788e",
+                      "target":  {
+                                     "type":  "RegKey",
+                                     "path":  "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\notepad++.exe"
+                                 },
+                      "action":  "DeleteKey",
+                      "owner":  {
+                                    "program_id":  "HKLM|64|Notepad++",
+                                    "display_name":  "Notepad++ (64-bit x64)"
+                                },
+                      "origin":  "Scanner",
+                      "scanner":  "REG-APPPATHS",
+                      "category":  "Registration",
+                      "evidence":  [
+                                       {
+                                           "kind":  "ChainedRef",
+                                           "tier":  "B",
+                                           "weight":  5,
+                                           "scope":  "Key",
+                                           "trust":  "AdminOnly",
+                                           "source":  "chain:c:\\program files\\notepad++\\notepad++.exe",
+                                           "detail":  {
+                                                          "anchor":  "c:\\program files\\notepad++\\notepad++.exe"
+                                                      }
+                                       },
+                                       {
+                                           "kind":  "ExactFullName",
+                                           "tier":  "B",
+                                           "weight":  4,
+                                           "scope":  "Key",
+                                           "trust":  "AdminOnly",
+                                           "source":  "identity:Notepad++ (64-bit x64)",
+                                           "detail":  {
+                                                          "name":  "Notepad++ (64-bit x64)"
+                                                      }
+                                       },
+                                       {
+                                           "kind":  "NameTokenExact",
+                                           "tier":  "C",
+                                           "weight":  3,
+                                           "scope":  "Key",
+                                           "trust":  "AdminOnly",
+                                           "source":  "identity:Notepad++ (64-bit x64)",
+                                           "detail":  {
+                                                          "name":  "Notepad++ (64-bit x64)"
+                                                      }
+                                       }
+                                   ],
+                      "blockers":  [
+
+                                   ],
+                      "harm":  "Low",
+                      "reversibility":  "Full",
+                      "children":  [
+
+                                   ],
+                      "size_bytes":  null,
+                      "child_count":  1,
+                      "decision":  {
+                                       "band":  "Likely",
+                                       "preselected":  false,
+                                       "score":  12,
+                                       "explanation":  "Refers to c:\\program files\\notepad++\\notepad++.exe, which belongs to Notepad++ (64-bit x64) Â· Named exactly like Notepad++ (64-bit x64) Â· Name matches Notepad++ (64-bit x64)"
+                                   }
+                  }
+              ],
+    "absorbed":  [
+
+                 ]
+}

@@ -16,6 +16,11 @@ path = "src/lib.rs"
 # The executor is linked only with this feature: a normal build has no code path into purge-exec
 # (`cargo xtask check-deps` enforces it).
 rig-exec = ["dep:purge-exec", "purge-exec/fault-inject"]
+# A developer build for trying the executor inside Sandboxie (docs/SANDBOX_TEST.md). Never in releases.
+# On top of rig-exec: a relaxed store under %LOCALAPPDATA%\PurgeSandboxDev (or PURGE_SANDBOX_DEV_ROOT), no
+# elevation needed, and every destructive verb refused unless the process runs inside Sandboxie. It is the
+# only way to purge-exec's `test-support` outside tests (`cargo xtask check-deps` enforces it).
+sandbox-dev = ["rig-exec", "purge-exec/test-support"]
 
 [dependencies]
 purge-model.workspace = true

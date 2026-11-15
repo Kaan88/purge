@@ -13,6 +13,10 @@
 //! through [`run`] with an [`ExecHost`] of their own (a relaxed store in a temp directory, which only the
 //! `test-support` feature of `purge-exec` can create, and stand-in backends).
 //!
+//! A `sandbox-dev` build ([`super::sandbox`]) differs here only: [`run_live`] uses the relaxed store of
+//! that module and needs no elevation, and [`run`] refuses the destructive verbs outside Sandboxie before
+//! anything else.
+//!
 //! # Outputs
 //!
 //! Every document goes to stdout, and to the `-o` file when one is given, written with
@@ -143,9 +147,20 @@ pub fn run_live(verb: ExecVerb, env: &mut Env<'_>) -> Exit {
     let packages = WinPackages::new();
     let lockers = RestartManager;
     let mut pending_renames = SystemPendingRenames;
+    #[cfg(not(feature = "sandbox-dev"))]
+    let (roots, elevated) = (StorageRoots::installed(), env.sources.sys.elevated());
+    // A sandbox-dev build: the relaxed store, created only by an `exec` that will run (inside Sandboxie),
+    // and no elevation needed (`run` refuses the destructive verbs outside Sandboxie first).
+    #[cfg(feature = "sandbox-dev")]
+    let (roots, elevated) = (
+        super::sandbox::live_store(
+            matches!(verb, ExecVerb::Exec(_)) && super::sandbox::inside_sandboxie(),
+        ),
+        true,
+    );
     let mut host = ExecHost {
-        roots: StorageRoots::installed(),
-        elevated: env.sources.sys.elevated(),
+        roots,
+        elevated,
         packages: &packages,
         lockers: &lockers,
         pending_renames: &mut pending_renames,
@@ -202,6 +217,11 @@ pub fn run<R: RestorePointBackend + Clone>(
     host: &mut ExecHost<'_, R>,
 ) -> Exit {
     let name = verb.command().name();
+    #[cfg(feature = "sandbox-dev")]
+    if needs_elevation(&verb) && !super::sandbox::inside_sandboxie() {
+        env.error(&format!("{name}: {}", super::sandbox::REFUSAL));
+        return Exit::NotInSandbox;
+    }
     if verb != ExecVerb::JournalFaultPoints
         && let Err(e) = fault::check_env()
     {

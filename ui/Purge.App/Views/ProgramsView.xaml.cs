@@ -145,7 +145,7 @@ public sealed partial class ProgramsView : UserControl
         if (!_firstTickDone) return;
         var shown = ProgramList.ItemsSource as List<ProgramRow> ?? [];
         StatusLeft.Text = $"{shown.Count} {TabLabel(_tab).ToLower(CultureInfo.CurrentCulture)} · {ProgramRow.FormatSize(shown.Sum(r => r.SizeBytes ?? 0))}";
-        var right = "Sample data · engine not connected";
+        var right = Program.Engine.IsLive ? "Engine connected · sizes and expected leftovers not measured" : "Sample data · engine not connected";
         if (LaunchMarkers.Get("list_reply") is { } reply) right += $" · list in {reply.ToString("F0", CultureInfo.CurrentCulture)} ms";
         if (LaunchMarkers.Get("presented") is { } ms) right += $" · on screen in {ms.ToString("F0", CultureInfo.CurrentCulture)} ms";
         StatusRight.Text = right;
@@ -211,11 +211,12 @@ public sealed partial class ProgramsView : UserControl
     private IEnumerable<ProgramRow> Order<TKey>(IEnumerable<ProgramRow> rows, Func<ProgramRow, TKey> key)
     {
         // Child rows (updates, Burn children) stay directly under their parent.
-        var byKey = _all.ToDictionary(r => KeyName(r.Entry.KeyPath), r => r);
+        // A key name can repeat on a real machine (the same key under the 32- and the 64-bit view, or HKLM and HKCU).
+        var byKey = _all.Select(r => KeyName(r.Entry.KeyPath)).ToHashSet();
         var all = rows.ToList();
-        var parents = all.Where(r => !r.IsChild || !byKey.ContainsKey(r.Entry.Flags.ParentKey!));
+        var parents = all.Where(r => !r.IsChild || !byKey.Contains(r.Entry.Flags.ParentKey!));
         var ordered = _sortDescending ? parents.OrderByDescending(key) : parents.OrderBy(key);
-        var children = all.Where(r => r.IsChild && byKey.ContainsKey(r.Entry.Flags.ParentKey!)).ToList();
+        var children = all.Where(r => r.IsChild && byKey.Contains(r.Entry.Flags.ParentKey!)).ToList();
         foreach (var p in ordered)
         {
             yield return p;
@@ -414,10 +415,63 @@ public sealed partial class ProgramsView : UserControl
             Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = false });
             return;
         }
+        if (Program.Engine.IsLive)
+        {
+            switch (tag)
+            {
+                case "uninstall" when _current is { } row:
+                    _ = ConfirmUninstallAsync(row);
+                    return;
+                case "force" when _current is { } row:
+                    _ = MainWindow.Instance.OpenReview().ScanAsync(row.Entry.ProgramId, row.Name, ScanKind.ScanOnly);
+                    return;
+                case "refresh":
+                    _ = ReloadAsync();
+                    return;
+                default:
+                    ShowNotice("Not in this build: only Uninstall, Force remove (scan only) and Refresh list use the engine.");
+                    return;
+            }
+        }
         var n = ProgramList.SelectedItems.Count;
         var what = n > 1 ? $"{n} programs" : _current?.Name ?? "this program";
         ShowNotice($"Not connected yet: this preview runs on sample data, so nothing happens to {what}. The engine connection arrives in M3.");
     }
+
+    /// <summary>Asks before the vendor's uninstaller runs, then hands over to S3, which scans when it is done.</summary>
+    private async Task ConfirmUninstallAsync(ProgramRow row)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = $"Uninstall {row.Name}?",
+            Content = "Purge records the program, runs its own uninstaller in quiet mode, then scans for what it left " +
+                      "behind. Nothing is moved by Purge until you confirm the list on the next page.",
+            PrimaryButtonText = "Uninstall and scan",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            RequestedTheme = MainWindow.Instance.ActualTheme,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        await MainWindow.Instance.OpenReview().ScanAsync(row.Entry.ProgramId, row.Name, ScanKind.UninstallThenScan);
+    }
+
+    /// <summary>Reads the program list from the engine again (after an uninstall, or Refresh list).</summary>
+    public async Task ReloadAsync()
+    {
+        try
+        {
+            _doc = await Program.Engine.ListProgramsAsync();
+            Rebuild();
+        }
+        catch (Exception e)
+        {
+            ShowNotice("Couldn't read the program list: " + e.Message);
+        }
+    }
+
+    /// <summary>Shows why the engine could not be used (startup).</summary>
+    public void ShowEngineNotice(string message) => ShowNotice(message);
 
     private void OnReviewRemoved(object sender, RoutedEventArgs e) => MainWindow.Instance.Navigate("leftovers");
 
