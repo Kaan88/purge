@@ -1,3 +1,1045 @@
-//! Typed actions: AppX package removal (M2-X-TYPED).
+//! Typed actions: AppX/MSIX package removal (M2-X-TYPED; ENGINE_PLAN.md §5.6 SYS-APPX, §7.4, §7.5, §7.8).
 //!
-//! Stub from M2-S0; the owning package fills it.
+//! In M2 the only typed action is [`ExecOp::RemovePackage`]. Services, scheduled tasks and firewall rules
+//! have no executor yet (their delete and recreate are deferred): [`unsupported_target`] turns such an
+//! item into a skip with a "not supported in this version" text.
+//!
+//! # Removing a package
+//!
+//! The removal has no inverse ([`Inverse::None`]): the package and its application data are gone for
+//! good. So it fails closed at every step:
+//!
+//! 1. **Acknowledgement.** Without [`IrreversibleAck::Acknowledged`] for the item the result is
+//!    `Skipped{GateBlocked{ReversibilityNone}}` and nothing is looked at. The executor derives the
+//!    acknowledgement from the confirmed selection; this module does not decide it.
+//! 2. **Identity.** The plan's full name must be a valid full name (`appx_write::validate_full_name`). The
+//!    package is then looked up by enumeration in the removal scope and must match the full name exactly
+//!    (ASCII case-insensitive, as Windows compares them) with the family name the full name implies
+//!    (`Name_PublisherId`). A package with a similar name is never a match. No match is
+//!    [`ItemOutcome::Vanished`]; more than one, or a family that does not fit, is
+//!    [`SkipReason::ChangedSinceScan`].
+//! 3. **Refusals** (SYS-APPX: never framework, resource, Store-signed or System-signed packages, or
+//!    packages with dependents): see [`refusal`]. A package whose signature kind or whose dependents
+//!    cannot be determined is refused too.
+//! 4. **Definition.** The full package record ([`PackageDefinition`]) is written to the op's definition
+//!    file `def\<op>.json` in the session directory, flushed, read back through the store's checks,
+//!    compared and hashed. The [`BackupRef`] goes into the intent's `definition`; undo never reads it.
+//! 5. **Remove and verify.** After the intent is durable, [`remove_package`] enumerates again (the
+//!    package must still be exactly the one recorded and pass the refusals), removes it by full name and
+//!    enumerates once more. Only a package that enumeration no longer lists counts as removed: the
+//!    deployment service's own answer is never trusted alone (with `RemoveForAllUsers` it reports success
+//!    for a package that is not installed at all).
+//!
+//! **Scope.** [`Target::AppxPackage`] records only the full name, not whose registration to remove, so
+//! the removal is always for the current user ([`RemovalScope::CurrentUser`]), the narrowest scope.
+//! `RemoveForAllUsers` is never chosen here until the plan target can name it.
+//!
+//! # Journal contract
+//!
+//! This module never writes the journal; it returns values the executor journals, in the order the
+//! journal module fixes (write-ahead by construction, see [`crate::journal`]):
+//!
+//! 1. [`prepare_remove_package`] returns [`Prepared::Decided`] (journal it with
+//!    `JournalWriter::done_without_intent`; every decided outcome is one that
+//!    `ItemOutcome::allowed_without_intent` accepts), [`Prepared::Ready`] (the definition file is written
+//!    and verified), or a [`DefinitionError`] (no definition file, nothing removed: journal
+//!    [`DefinitionError::outcome`] without an intent, or abort the run when
+//!    [`DefinitionError::is_storage_integrity`]). It hits `backup.written` and `backup.verified`.
+//! 2. The executor writes [`PackageRemoval::intent`] with `JournalWriter::intent`, which returns the
+//!    token once the intent is flushed, then hits `act.before`.
+//! 3. [`remove_package`] takes the token as proof of the durable intent, re-checks, removes, hits
+//!    `act.after`, verifies, and returns the [`TypedResult`] the executor passes to
+//!    `JournalWriter::done` with that token.
+//!
+//! Undo: [`undo_typed`] says how the undo of a typed op is journalled; a removed package is always
+//! [`UndoConflict::Irreversible`], recorded with `undo_conflict_without_intent`, never an error.
+//!
+//! The Windows calls sit behind [`PackageBackend`]: [`WinPackages`] goes through `purge_win::appx` and
+//! `purge_win::appx_write`; unit tests use a fake.
+
+use std::fmt;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use purge_model::exec::journal::{Intent, ItemFacts, UndoConflict, UndoOutcome};
+use purge_model::exec::op::{BackupRef, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
+use purge_model::{Blocker, CandidateId, Target};
+use purge_win::appx::{self, AppxPackage, AppxScope, SignatureKind};
+use purge_win::appx_write::{self, DeploymentError, RemovalScope, RemoveOutcome};
+use purge_win::fs_write::{self, FsError};
+use serde::{Deserialize, Serialize};
+
+use crate::fault;
+use crate::journal::{IntentToken, sha256_bytes};
+use crate::storage::{BackupKind, SessionDir, StorageError, backup_rel};
+
+#[cfg(test)]
+mod tests;
+
+/// The `schema` of a package definition file.
+pub const DEFINITION_SCHEMA: &str = "purge.appxdef/1";
+
+/// The largest definition file read back. A package record is a few kilobytes.
+pub const MAX_DEFINITION_BYTES: u64 = 1 << 20;
+
+/// Deny rule id: a framework package (other packages run on it).
+pub const RULE_FRAMEWORK: &str = "appx.framework";
+/// Deny rule id: a resource package (part of another package).
+pub const RULE_RESOURCE: &str = "appx.resource";
+/// Deny rule id: a package signed by the Microsoft Store.
+pub const RULE_STORE_SIGNED: &str = "appx.store_signed";
+/// Deny rule id: a package that is part of Windows (System-signed).
+pub const RULE_SYSTEM_SIGNED: &str = "appx.system_signed";
+/// Deny rule id: the package's signature kind cannot be read or is one this build does not know.
+pub const RULE_SIGNATURE_UNKNOWN: &str = "appx.signature_unknown";
+/// Deny rule id: whether other packages depend on the package cannot be determined.
+pub const RULE_DEPENDENTS_UNKNOWN: &str = "appx.dependents_unknown";
+
+/// `E_INVALIDARG`, reported when the real backend is handed a name that is not a full name.
+const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
+
+// ---------------------------------------------------------------------------------------------------
+// Results
+// ---------------------------------------------------------------------------------------------------
+
+/// How a typed action ended for one item, with a line for the report. The executor journals `outcome`;
+/// `detail` says why (an [`ItemOutcome::Skipped`] has no text of its own).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedResult {
+    /// The outcome to journal.
+    pub outcome: ItemOutcome,
+    /// Why, for the report; may be empty for a plain success.
+    pub detail: String,
+}
+
+impl TypedResult {
+    fn new(outcome: ItemOutcome, detail: impl Into<String>) -> TypedResult {
+        TypedResult {
+            outcome,
+            detail: detail.into(),
+        }
+    }
+
+    fn skipped(reason: SkipReason, detail: impl Into<String>) -> TypedResult {
+        TypedResult::new(ItemOutcome::Skipped { reason }, detail)
+    }
+
+    fn blocked(blocker: Blocker, detail: impl Into<String>) -> TypedResult {
+        TypedResult::skipped(SkipReason::GateBlocked { blocker }, detail)
+    }
+
+    fn failed(code: FailCode, os_error: Option<u32>, detail: impl Into<String>) -> TypedResult {
+        let detail = detail.into();
+        TypedResult {
+            outcome: ItemOutcome::Failed {
+                code,
+                os_error,
+                detail: detail.clone(),
+            },
+            detail,
+        }
+    }
+}
+
+/// Whether the user acknowledged, for this item, that its removal cannot be undone. The executor fills it
+/// from the confirmed selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IrreversibleAck {
+    /// The item may be removed although it cannot be undone.
+    Acknowledged,
+    /// No acknowledgement: the item is skipped with the `ReversibilityNone` gate.
+    Missing,
+}
+
+/// The skip for an item whose target is a service, a scheduled task or a firewall rule: those have no
+/// executor in this version (their definition capture and recreate are deferred), so they are never acted
+/// on. `None` for every other target.
+///
+/// The outcome is `Skipped{GateBlocked{CannotBackUp}}`: without the definition capture there is no backup,
+/// and no verified backup means no delete (§7.4). The model has no dedicated "not supported" reason.
+pub fn unsupported_target(target: &Target) -> Option<TypedResult> {
+    let what = match target {
+        Target::Service { name } => format!("service {name}"),
+        Target::Task { path } => format!("scheduled task {path}"),
+        Target::FirewallRule { id } => format!("firewall rule {id}"),
+        _ => return None,
+    };
+    Some(TypedResult::blocked(
+        Blocker::CannotBackUp,
+        format!(
+            "{what}: removing services, scheduled tasks and firewall rules is not supported in this \
+             version; left untouched"
+        ),
+    ))
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Backend
+// ---------------------------------------------------------------------------------------------------
+
+/// One package as the backend lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageInfo {
+    /// What `purge_win::appx` reports.
+    pub package: AppxPackage,
+    /// Full names of the packages this package depends on (`Package.Dependencies`), or `None` when the
+    /// backend cannot tell. One unknown entry in a listing makes the dependents of every package in it
+    /// unknown, so nothing in that listing is removed.
+    pub dependencies: Option<Vec<String>>,
+}
+
+/// Enumerating packages failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("listing packages failed: {detail}")]
+pub struct ListError {
+    /// The HRESULT or OS error code, when there is one.
+    pub code: Option<i32>,
+    /// What went wrong.
+    pub detail: String,
+}
+
+/// The package calls a removal needs. [`WinPackages`] is the real one.
+pub trait PackageBackend {
+    /// Every package registered in `scope` ([`RemovalScope::CurrentUser`]: the calling user's).
+    fn list(&self, scope: RemovalScope) -> Result<Vec<PackageInfo>, ListError>;
+
+    /// Removes the package `full_name` for `scope`. Irreversible.
+    fn remove(&self, full_name: &str, scope: RemovalScope) -> RemoveOutcome;
+}
+
+/// The real backend over `purge_win::appx` (enumeration) and `purge_win::appx_write` (removal).
+///
+/// `purge_win::appx` does not report a package's dependencies yet, so [`PackageInfo::dependencies`] is
+/// always `None` and every removal through this backend is refused with [`RULE_DEPENDENTS_UNKNOWN`]
+/// until it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WinPackages {
+    timeout: Duration,
+}
+
+impl WinPackages {
+    /// The backend with `appx_write::DEFAULT_REMOVE_TIMEOUT`.
+    pub fn new() -> WinPackages {
+        WinPackages {
+            timeout: appx_write::DEFAULT_REMOVE_TIMEOUT,
+        }
+    }
+
+    /// The backend with another bound on one removal.
+    pub fn with_timeout(timeout: Duration) -> WinPackages {
+        WinPackages { timeout }
+    }
+}
+
+impl Default for WinPackages {
+    fn default() -> WinPackages {
+        WinPackages::new()
+    }
+}
+
+impl PackageBackend for WinPackages {
+    fn list(&self, scope: RemovalScope) -> Result<Vec<PackageInfo>, ListError> {
+        let scope = match scope {
+            RemovalScope::CurrentUser => AppxScope::CurrentUser,
+            RemovalScope::AllUsers => AppxScope::AllUsers,
+        };
+        let packages = appx::list_packages(scope).map_err(|e| ListError {
+            code: e.raw_os_error(),
+            detail: e.to_string(),
+        })?;
+        Ok(packages
+            .into_iter()
+            .map(|package| PackageInfo {
+                package,
+                dependencies: None,
+            })
+            .collect())
+    }
+
+    fn remove(&self, full_name: &str, scope: RemovalScope) -> RemoveOutcome {
+        match appx_write::remove_package(full_name, scope, self.timeout) {
+            Ok(outcome) => outcome,
+            Err(e) => RemoveOutcome::Failed(DeploymentError {
+                hresult: E_INVALIDARG,
+                extended_hresult: None,
+                error_text: Some(e.to_string()),
+                activity_id: None,
+            }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Definition file
+// ---------------------------------------------------------------------------------------------------
+
+/// One user a package is registered for, as recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefinitionUser {
+    /// User SID string.
+    pub sid: String,
+    /// The package's install state for that user (`Installed`, `Staged`, ...).
+    pub install_state: String,
+}
+
+/// The record of a package kept in `def\<op>.json` before it is removed (`purge.appxdef/1`). Undo does not
+/// read it: it documents what was removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageDefinition {
+    /// Always [`DEFINITION_SCHEMA`].
+    pub schema: String,
+    /// The op that removes the package.
+    pub op: OpId,
+    /// The plan item.
+    pub item: CandidateId,
+    /// Whose registration is removed: `CurrentUser` or `AllUsers`.
+    pub scope: String,
+    /// Package full name, as enumerated.
+    pub full_name: String,
+    /// Package family name, as enumerated.
+    pub family_name: String,
+    /// The name field of the full name.
+    pub name: String,
+    /// The version field of the full name.
+    pub version: String,
+    /// The architecture field of the full name.
+    pub architecture: String,
+    /// The resource id field of the full name; may be empty.
+    pub resource_id: String,
+    /// The publisher id field of the full name.
+    pub publisher_id: String,
+    /// `Package.InstalledPath`, when available.
+    pub installed_location: Option<String>,
+    /// `Package.EffectiveExternalPath` of a sparse package.
+    pub effective_external_path: Option<String>,
+    /// Signature kind (`Developer`, `Enterprise`, ...), when available.
+    pub signature_kind: Option<String>,
+    /// Framework package.
+    pub is_framework: bool,
+    /// Resource package.
+    pub is_resource_package: bool,
+    /// Users the package is registered for (only filled for an all-users listing).
+    pub users: Vec<DefinitionUser>,
+    /// Full names of the packages it depends on; `None` when the backend cannot tell.
+    pub dependencies: Option<Vec<String>>,
+}
+
+impl PackageDefinition {
+    fn new(op: OpId, item: &CandidateId, scope: RemovalScope, info: &PackageInfo) -> Self {
+        let p = &info.package;
+        let fields: Vec<&str> = p.full_name.split('_').collect();
+        let field = |i: usize| fields.get(i).copied().unwrap_or_default().to_owned();
+        PackageDefinition {
+            schema: DEFINITION_SCHEMA.to_owned(),
+            op,
+            item: item.clone(),
+            scope: scope_name(scope).to_owned(),
+            full_name: p.full_name.clone(),
+            family_name: p.family_name.clone(),
+            name: field(0),
+            version: field(1),
+            architecture: field(2),
+            resource_id: field(3),
+            publisher_id: field(4),
+            installed_location: p.installed_location.clone(),
+            effective_external_path: p.effective_external_path.clone(),
+            signature_kind: p.signature_kind.map(|k| format!("{k:?}")),
+            is_framework: p.is_framework,
+            is_resource_package: p.is_resource_package,
+            users: p
+                .users
+                .iter()
+                .map(|u| DefinitionUser {
+                    sid: u.sid.clone(),
+                    install_state: format!("{:?}", u.install_state),
+                })
+                .collect(),
+            dependencies: info.dependencies.clone(),
+        }
+    }
+}
+
+/// The definition file could not be written and verified. Nothing was removed and no intent is needed.
+#[derive(Debug, thiserror::Error)]
+pub enum DefinitionError {
+    /// The store refused (integrity check, existing file, I/O on the layout).
+    #[error("definition file: {0}")]
+    Storage(#[from] StorageError),
+    /// Writing, flushing or reading the file failed.
+    #[error("definition file {}: {op} failed: {detail}", .path.display())]
+    File {
+        /// What was being done.
+        op: &'static str,
+        /// The file.
+        path: PathBuf,
+        /// The error.
+        detail: String,
+    },
+    /// The file did not read back as written.
+    #[error("definition file {} did not read back as written", .0.display())]
+    ReadBackMismatch(PathBuf),
+    /// The definition could not be encoded.
+    #[error("the package definition could not be encoded: {0}")]
+    Encode(String),
+}
+
+impl DefinitionError {
+    /// The outcome to journal for the item (without an intent): `Skipped{NoVerifiedBackup}`.
+    pub fn outcome(&self) -> ItemOutcome {
+        ItemOutcome::Skipped {
+            reason: SkipReason::NoVerifiedBackup,
+        }
+    }
+
+    /// Whether a storage directory failed its integrity check, which concerns the whole run
+    /// (`AbortReason::StorageIntegrity`) rather than this item.
+    pub fn is_storage_integrity(&self) -> bool {
+        matches!(
+            self,
+            DefinitionError::Storage(StorageError::Integrity { .. })
+        )
+    }
+}
+
+/// Writes `def` to the op's definition file, create-new with the store's file descriptor, flushes the
+/// file and its directory, re-opens it through the store's checks, reads it back, compares bytes and
+/// document, and returns its reference with the SHA-256 of the bytes read back. A file this call created
+/// is removed again when anything after its creation fails.
+fn write_definition(
+    session: &SessionDir,
+    op: OpId,
+    def: &PackageDefinition,
+) -> Result<BackupRef, DefinitionError> {
+    let rel = backup_rel(BackupKind::Definition, op);
+    let text = serde_json::to_vec(def).map_err(|e| DefinitionError::Encode(e.to_string()))?;
+    if u64::try_from(text.len()).map_or(true, |n| n > MAX_DEFINITION_BYTES) {
+        return Err(DefinitionError::Encode(format!(
+            "the definition has {} bytes, more than {MAX_DEFINITION_BYTES}",
+            text.len()
+        )));
+    }
+    let (path, file) = session.create_file(&rel)?;
+    let result = finish_definition(session, &rel, &path, file, &text, def);
+    if result.is_err() {
+        // The file is Purge's own, created a moment ago, and holds no verified definition.
+        let _ = std::fs::remove_file(&path);
+    }
+    result
+}
+
+/// The part of [`write_definition`] after the file exists.
+fn finish_definition(
+    session: &SessionDir,
+    rel: &str,
+    path: &Path,
+    mut file: std::fs::File,
+    text: &[u8],
+    def: &PackageDefinition,
+) -> Result<BackupRef, DefinitionError> {
+    let file_err = |op: &'static str, detail: String| DefinitionError::File {
+        op,
+        path: path.to_path_buf(),
+        detail,
+    };
+    file.write_all(text)
+        .map_err(|e| file_err("write", e.to_string()))?;
+    fs_write::flush(&file).map_err(|e: FsError| file_err("flush", e.to_string()))?;
+    drop(file);
+    if let Some(dir) = path.parent() {
+        fs_write::flush_dir(dir).map_err(|e| file_err("flush the directory of", e.to_string()))?;
+    }
+    fault::point(fault::BACKUP_WRITTEN);
+    let checked = session.open_file(rel)?;
+    if checked != path {
+        return Err(DefinitionError::ReadBackMismatch(checked));
+    }
+    let mut back = Vec::new();
+    std::fs::File::open(&checked)
+        .and_then(|f| f.take(MAX_DEFINITION_BYTES + 1).read_to_end(&mut back))
+        .map_err(|e| file_err("read back", e.to_string()))?;
+    if back != text {
+        return Err(DefinitionError::ReadBackMismatch(checked));
+    }
+    let parsed: PackageDefinition = serde_json::from_slice(&back)
+        .map_err(|_| DefinitionError::ReadBackMismatch(checked.clone()))?;
+    if &parsed != def {
+        return Err(DefinitionError::ReadBackMismatch(checked));
+    }
+    let reference = BackupRef {
+        path: rel.to_owned(),
+        sha256: sha256_bytes(&back),
+        bytes: back.len() as u64,
+    };
+    fault::point(fault::BACKUP_VERIFIED);
+    Ok(reference)
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Identity and refusals
+// ---------------------------------------------------------------------------------------------------
+
+fn scope_name(scope: RemovalScope) -> &'static str {
+    match scope {
+        RemovalScope::CurrentUser => "CurrentUser",
+        RemovalScope::AllUsers => "AllUsers",
+    }
+}
+
+/// The scope a removal uses. The plan target records only the full name, so the narrowest scope.
+fn removal_scope(_full_name: &str) -> RemovalScope {
+    RemovalScope::CurrentUser
+}
+
+/// The family name a valid full name implies: `Name_PublisherId`.
+fn family_of(full_name: &str) -> Option<String> {
+    let fields: Vec<&str> = full_name.split('_').collect();
+    match fields[..] {
+        [name, _, _, _, publisher] => Some(format!("{name}_{publisher}")),
+        _ => None,
+    }
+}
+
+/// What enumeration says about the package the plan names.
+enum Lookup<'a> {
+    /// Not registered in the scope.
+    Absent,
+    /// Exactly one package matches the full name and its family.
+    Found(&'a PackageInfo),
+    /// The match is not what the plan names (two matches, or another family).
+    Mismatch(String),
+}
+
+/// Finds the plan's package in a listing: full name equal (ASCII case-insensitive) and the family the full
+/// name implies.
+fn lookup<'a>(full_name: &str, listing: &'a [PackageInfo]) -> Lookup<'a> {
+    let matches: Vec<&PackageInfo> = listing
+        .iter()
+        .filter(|p| p.package.full_name.eq_ignore_ascii_case(full_name))
+        .collect();
+    match matches[..] {
+        [] => Lookup::Absent,
+        [one] => {
+            let family_fits = family_of(full_name)
+                .is_some_and(|family| family.eq_ignore_ascii_case(&one.package.family_name));
+            if family_fits {
+                Lookup::Found(one)
+            } else {
+                Lookup::Mismatch(format!(
+                    "package {full_name} is registered with family {:?}, not the family its full name \
+                     implies",
+                    one.package.family_name
+                ))
+            }
+        }
+        _ => Lookup::Mismatch(format!(
+            "{} packages are registered under the full name {full_name}",
+            matches.len()
+        )),
+    }
+}
+
+/// Why `info` must not be removed, given the rest of the `listing` it came from (SYS-APPX). Checked in
+/// this order:
+///
+/// | Condition | Blocker |
+/// |---|---|
+/// | framework package | `DenyListed{appx.framework}` |
+/// | resource package | `DenyListed{appx.resource}` |
+/// | Store-signed | `DenyListed{appx.store_signed}` |
+/// | System-signed | `DenyListed{appx.system_signed}` |
+/// | signature kind unavailable or unknown | `DenyListed{appx.signature_unknown}` |
+/// | another listed package's dependencies are unknown | `DenyListed{appx.dependents_unknown}` |
+/// | another listed package depends on it | `ReferencedByOtherApp{<that full name>}` |
+///
+/// Unsigned, developer- and enterprise-signed packages pass the signature check.
+pub fn refusal(info: &PackageInfo, listing: &[PackageInfo]) -> Option<(Blocker, String)> {
+    let p = &info.package;
+    let deny = |rule: &str, why: String| {
+        Some((
+            Blocker::DenyListed {
+                rule: rule.to_owned(),
+            },
+            why,
+        ))
+    };
+    if p.is_framework {
+        return deny(
+            RULE_FRAMEWORK,
+            format!("{} is a framework package", p.full_name),
+        );
+    }
+    if p.is_resource_package {
+        return deny(
+            RULE_RESOURCE,
+            format!("{} is a resource package", p.full_name),
+        );
+    }
+    match p.signature_kind {
+        Some(SignatureKind::None | SignatureKind::Developer | SignatureKind::Enterprise) => {}
+        Some(SignatureKind::Store) => {
+            return deny(
+                RULE_STORE_SIGNED,
+                format!("{} is signed by the Microsoft Store", p.full_name),
+            );
+        }
+        Some(SignatureKind::System) => {
+            return deny(
+                RULE_SYSTEM_SIGNED,
+                format!("{} is part of Windows", p.full_name),
+            );
+        }
+        Some(SignatureKind::Other(kind)) => {
+            return deny(
+                RULE_SIGNATURE_UNKNOWN,
+                format!("{} has signature kind {kind}, unknown here", p.full_name),
+            );
+        }
+        None => {
+            return deny(
+                RULE_SIGNATURE_UNKNOWN,
+                format!("the signature kind of {} cannot be read", p.full_name),
+            );
+        }
+    }
+    let others = listing
+        .iter()
+        .filter(|o| !o.package.full_name.eq_ignore_ascii_case(&p.full_name));
+    let mut unknown = 0usize;
+    for other in others {
+        match &other.dependencies {
+            None => unknown += 1,
+            Some(deps) if deps.iter().any(|d| d.eq_ignore_ascii_case(&p.full_name)) => {
+                return Some((
+                    Blocker::ReferencedByOtherApp {
+                        app: other.package.full_name.clone(),
+                    },
+                    format!("{} depends on {}", other.package.full_name, p.full_name),
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    if unknown > 0 {
+        return deny(
+            RULE_DEPENDENTS_UNKNOWN,
+            format!(
+                "the dependencies of {unknown} other package(s) cannot be read, so whether anything \
+                 depends on {} is unknown",
+                p.full_name
+            ),
+        );
+    }
+    None
+}
+
+/// Text of a list failure for a result.
+fn list_failure(e: &ListError) -> (Option<u32>, String) {
+    (e.code.and_then(win32_code), e.to_string())
+}
+
+/// The Win32 code inside an `HRESULT_FROM_WIN32` value, or a plain non-negative code.
+fn win32_code(code: i32) -> Option<u32> {
+    let bits = code as u32;
+    if bits & 0xFFFF_0000 == 0x8007_0000 {
+        Some(bits & 0xFFFF)
+    } else if code > 0 {
+        Some(bits)
+    } else {
+        None
+    }
+}
+
+struct Hex(i32);
+
+impl fmt::Display for Hex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:#010x}", self.0 as u32)
+    }
+}
+
+/// One line on a deployment error.
+fn deployment_text(e: &DeploymentError) -> String {
+    let mut text = format!("HRESULT {}", Hex(e.hresult));
+    if let Some(ext) = e.extended_hresult {
+        text.push_str(&format!(", extended {}", Hex(ext)));
+    }
+    if let Some(msg) = &e.error_text {
+        text.push_str(&format!(": {}", msg.trim()));
+    }
+    if let Some(id) = &e.activity_id {
+        text.push_str(&format!(" (activity {id})"));
+    }
+    text
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Prepare and act
+// ---------------------------------------------------------------------------------------------------
+
+/// What [`prepare_remove_package`] decided.
+#[derive(Debug)]
+pub enum Prepared {
+    /// Decided without changing anything: journal the outcome with `done_without_intent`.
+    Decided(TypedResult),
+    /// The definition is written and verified: journal [`PackageRemoval::intent`], then call
+    /// [`remove_package`] with its token.
+    Ready(Box<PackageRemoval>),
+}
+
+/// A package removal that passed every check and whose definition is on disk. Only
+/// [`prepare_remove_package`] makes one, and [`remove_package`] consumes it.
+#[derive(Debug)]
+pub struct PackageRemoval {
+    intent: Intent,
+    full_name: String,
+    scope: RemovalScope,
+    recorded: PackageInfo,
+    definition: PackageDefinition,
+}
+
+impl PackageRemoval {
+    /// The intent to journal before the removal: the op, [`Inverse::None`], the definition file and
+    /// [`ItemFacts::Package`]. It passes `Intent::is_consistent`.
+    pub fn intent(&self) -> &Intent {
+        &self.intent
+    }
+
+    /// The definition written to the op's definition file.
+    pub fn definition(&self) -> &PackageDefinition {
+        &self.definition
+    }
+
+    /// Whose registration is removed.
+    pub fn scope(&self) -> RemovalScope {
+        self.scope
+    }
+}
+
+/// Decides whether op `op` (plan item `item`, `exec_op` an [`ExecOp::RemovePackage`]) may remove its
+/// package, and if so writes the package's definition file into `session`. Never removes anything.
+///
+/// Returns [`Prepared::Decided`] for: a missing acknowledgement (`Skipped{GateBlocked{ReversibilityNone}}`,
+/// before any system call), an op that is not a package removal or a full name that is not valid
+/// (`Failed{Internal}`), a failed enumeration (`Failed{PackageApi}`), an absent package (`Vanished`), a
+/// package that is not the one named (`Skipped{ChangedSinceScan}`), and the refusals of [`refusal`]
+/// (`Skipped{GateBlocked{..}}`).
+pub fn prepare_remove_package(
+    backend: &dyn PackageBackend,
+    session: &SessionDir,
+    op: OpId,
+    item: &CandidateId,
+    exec_op: &ExecOp,
+    ack: IrreversibleAck,
+) -> Result<Prepared, DefinitionError> {
+    let decided = |r: TypedResult| Ok(Prepared::Decided(r));
+    let ExecOp::RemovePackage { full_name } = exec_op else {
+        return decided(TypedResult::failed(
+            FailCode::Internal,
+            None,
+            format!("{} is not a typed op; nothing done", exec_op.name()),
+        ));
+    };
+    if ack != IrreversibleAck::Acknowledged {
+        return decided(TypedResult::blocked(
+            Blocker::ReversibilityNone,
+            format!(
+                "removing package {full_name} cannot be undone and was not acknowledged; left untouched"
+            ),
+        ));
+    }
+    if let Err(e) = appx_write::validate_full_name(full_name) {
+        return decided(TypedResult::failed(
+            FailCode::Internal,
+            None,
+            format!("the plan names {full_name:?}, which is not a package full name: {e}"),
+        ));
+    }
+    let scope = removal_scope(full_name);
+    let listing = match backend.list(scope) {
+        Ok(listing) => listing,
+        Err(e) => {
+            let (os_error, text) = list_failure(&e);
+            return decided(TypedResult::failed(
+                FailCode::PackageApi,
+                os_error,
+                format!("{text}; package {full_name} left untouched"),
+            ));
+        }
+    };
+    let info = match lookup(full_name, &listing) {
+        Lookup::Absent => {
+            return decided(TypedResult::new(
+                ItemOutcome::Vanished,
+                format!(
+                    "package {full_name} is not registered for the {} scope",
+                    scope_name(scope)
+                ),
+            ));
+        }
+        Lookup::Mismatch(why) => {
+            return decided(TypedResult::skipped(SkipReason::ChangedSinceScan, why));
+        }
+        Lookup::Found(info) => info.clone(),
+    };
+    if let Some((blocker, why)) = refusal(&info, &listing) {
+        return decided(TypedResult::blocked(
+            blocker,
+            format!("{why}; left untouched"),
+        ));
+    }
+    let definition = PackageDefinition::new(op, item, scope, &info);
+    let reference = write_definition(session, op, &definition)?;
+    let intent = Intent {
+        op,
+        item: item.clone(),
+        exec_op: exec_op.clone(),
+        inverse: Inverse::None,
+        definition: Some(reference),
+        pre: ItemFacts::Package,
+    };
+    Ok(Prepared::Ready(Box::new(PackageRemoval {
+        intent,
+        full_name: full_name.clone(),
+        scope,
+        recorded: info,
+        definition,
+    })))
+}
+
+/// Removes the package of `removal`, whose intent `token` proves durable, and verifies by enumeration that
+/// it is gone. The executor hits `act.before` before the call and passes the result to
+/// `JournalWriter::done` with the token.
+///
+/// Right before the removal the package is enumerated again: absent is `Vanished`; not exactly the
+/// recorded package (any field, its dependencies included) is `Skipped{ChangedSinceScan}`; a refusal of
+/// [`refusal`] against the fresh listing is `Skipped{GateBlocked{..}}`. After the removal (and the
+/// `act.after` fault point) the scope is enumerated once more:
+///
+/// | Deployment result | Still listed | Not listed |
+/// |---|---|---|
+/// | `Removed` | `Failed{VerifyFailed}` | `Done` |
+/// | `NotFound` | `Failed{PackageApi}` | `Vanished` |
+/// | `InUse` | `Failed{InUse}` | `Done` |
+/// | `Failed` (access denied) | `Failed{AccessDenied}` | `Done` |
+/// | `Failed` (other) | `Failed{PackageApi}` | `Done` |
+/// | `TimedOut` | `Failed{PackageApi}` | `Done` |
+///
+/// A failed enumeration after the removal is `Failed{VerifyFailed}` (state unknown). A token of another op
+/// is `Failed{Internal}` and nothing is called.
+pub fn remove_package(
+    backend: &dyn PackageBackend,
+    removal: Box<PackageRemoval>,
+    token: &IntentToken,
+) -> TypedResult {
+    let PackageRemoval {
+        intent,
+        full_name,
+        scope,
+        recorded,
+        ..
+    } = *removal;
+    if token.op() != intent.op || token.item() != &intent.item {
+        return TypedResult::failed(
+            FailCode::Internal,
+            None,
+            format!(
+                "the intent token is for op {}, not op {}; package {full_name} left untouched",
+                token.op(),
+                intent.op
+            ),
+        );
+    }
+    let listing = match backend.list(scope) {
+        Ok(listing) => listing,
+        Err(e) => {
+            let (os_error, text) = list_failure(&e);
+            return TypedResult::failed(
+                FailCode::PackageApi,
+                os_error,
+                format!("{text}; package {full_name} left untouched"),
+            );
+        }
+    };
+    match lookup(&full_name, &listing) {
+        Lookup::Absent => {
+            return TypedResult::new(
+                ItemOutcome::Vanished,
+                format!("package {full_name} was unregistered before Purge removed it"),
+            );
+        }
+        Lookup::Mismatch(why) => {
+            return TypedResult::skipped(SkipReason::ChangedSinceScan, why);
+        }
+        Lookup::Found(now) if *now != recorded => {
+            return TypedResult::skipped(
+                SkipReason::ChangedSinceScan,
+                format!("package {full_name} changed after its definition was recorded"),
+            );
+        }
+        Lookup::Found(now) => {
+            if let Some((blocker, why)) = refusal(now, &listing) {
+                return TypedResult::blocked(blocker, format!("{why}; left untouched"));
+            }
+        }
+    }
+
+    let outcome = backend.remove(&full_name, scope);
+    fault::point(fault::ACT_AFTER);
+
+    let still_listed = match backend.list(scope) {
+        Ok(after) => !matches!(lookup(&full_name, &after), Lookup::Absent),
+        Err(e) => {
+            return TypedResult::failed(
+                FailCode::VerifyFailed,
+                None,
+                format!(
+                    "the removal of {full_name} returned {}, but whether it is gone cannot be \
+                     verified: {e}",
+                    outcome_name(&outcome)
+                ),
+            );
+        }
+    };
+    verdict(&full_name, scope, &outcome, still_listed)
+}
+
+fn outcome_name(outcome: &RemoveOutcome) -> &'static str {
+    match outcome {
+        RemoveOutcome::Removed => "Removed",
+        RemoveOutcome::NotFound => "NotFound",
+        RemoveOutcome::InUse(_) => "InUse",
+        RemoveOutcome::Failed(_) => "Failed",
+        RemoveOutcome::TimedOut => "TimedOut",
+    }
+}
+
+/// The result of a removal from the deployment result and the enumeration after it.
+fn verdict(
+    full_name: &str,
+    scope: RemovalScope,
+    outcome: &RemoveOutcome,
+    still_listed: bool,
+) -> TypedResult {
+    let scope = scope_name(scope);
+    if !still_listed {
+        return match outcome {
+            RemoveOutcome::Removed => TypedResult::new(ItemOutcome::Done, ""),
+            RemoveOutcome::NotFound => TypedResult::new(
+                ItemOutcome::Vanished,
+                format!("package {full_name} was unregistered before Purge removed it"),
+            ),
+            RemoveOutcome::InUse(e) | RemoveOutcome::Failed(e) => TypedResult::new(
+                ItemOutcome::Done,
+                format!(
+                    "the package API reported a failure ({}), but {full_name} is no longer \
+                     registered for the {scope} scope",
+                    deployment_text(e)
+                ),
+            ),
+            RemoveOutcome::TimedOut => TypedResult::new(
+                ItemOutcome::Done,
+                format!(
+                    "the removal timed out, but {full_name} is no longer registered for the {scope} \
+                     scope"
+                ),
+            ),
+        };
+    }
+    match outcome {
+        RemoveOutcome::Removed => TypedResult::failed(
+            FailCode::VerifyFailed,
+            None,
+            format!(
+                "the package API reported {full_name} removed, but it is still registered for the \
+                 {scope} scope"
+            ),
+        ),
+        RemoveOutcome::NotFound => TypedResult::failed(
+            FailCode::PackageApi,
+            None,
+            format!(
+                "the package API did not find {full_name}, but it is registered for the {scope} scope"
+            ),
+        ),
+        RemoveOutcome::InUse(e) => TypedResult::failed(
+            FailCode::InUse,
+            win32_code(e.hresult),
+            format!("{full_name} is in use: {}", deployment_text(e)),
+        ),
+        RemoveOutcome::Failed(e) => {
+            let code = if e.is_access_denied() {
+                FailCode::AccessDenied
+            } else {
+                FailCode::PackageApi
+            };
+            TypedResult::failed(
+                code,
+                win32_code(e.hresult),
+                format!("removing {full_name} failed: {}", deployment_text(e)),
+            )
+        }
+        RemoveOutcome::TimedOut => TypedResult::failed(
+            FailCode::PackageApi,
+            None,
+            format!("removing {full_name} timed out and was cancelled; it is still registered"),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Undo
+// ---------------------------------------------------------------------------------------------------
+
+/// How the undo of a typed op is journalled. A typed op never runs an inverse, so neither variant needs
+/// an `undo_intent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypedUndo {
+    /// The op changed nothing: `undo_done_without_intent(op, outcome)`.
+    Done(UndoOutcome),
+    /// The op cannot be undone: `undo_conflict_without_intent(op, conflict, detail)`.
+    Conflict {
+        /// Always [`UndoConflict::Irreversible`] for a removed package.
+        conflict: UndoConflict,
+        /// Text for the report.
+        detail: String,
+    },
+}
+
+/// The undo of a typed op: what to journal, as a record, never an error. `done` is the op's `done`
+/// outcome, or `None` when the journal holds only its intent (the run stopped during the removal).
+///
+/// A package removal whose outcome left the system unchanged (`Vanished`, `Skipped`, or `Failed` with any
+/// code but `VerifyFailed`) is [`UndoOutcome::NothingToUndo`]; every other case (`Done`, `VerifyFailed`,
+/// intent only) is [`UndoConflict::Irreversible`]. `None` for an op that is not typed.
+pub fn undo_typed(
+    exec_op: &ExecOp,
+    inverse: &Inverse,
+    done: Option<&ItemOutcome>,
+) -> Option<TypedUndo> {
+    let ExecOp::RemovePackage { full_name } = exec_op else {
+        return None;
+    };
+    let unchanged = match done {
+        Some(ItemOutcome::Failed { code, .. }) => *code != FailCode::VerifyFailed,
+        Some(outcome) => !outcome.changed_system(),
+        None => false,
+    };
+    if unchanged {
+        return Some(TypedUndo::Done(UndoOutcome::NothingToUndo));
+    }
+    let note = if matches!(inverse, Inverse::None) {
+        ""
+    } else {
+        " (the journal names an inverse for it, which is ignored)"
+    };
+    Some(TypedUndo::Conflict {
+        conflict: UndoConflict::Irreversible,
+        detail: format!(
+            "package {full_name} was removed (or its removal may have run); removing a package cannot be \
+             undone{note}"
+        ),
+    })
+}
