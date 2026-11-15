@@ -121,6 +121,10 @@ impl AsHandle for FileHandle {
 /// - Relative paths, drive-relative paths (`C:x`), device paths (`\\.\`) and paths with a `.` or
 ///   `..` component are refused with `ERROR_INVALID_PARAMETER`, because the `\\?\` form would
 ///   take such a component as a literal name.
+/// - A `:` anywhere after the drive (`X:`) is refused with `ERROR_INVALID_PARAMETER`, in the
+///   `\\?\` form as well: it is stream syntax (`name::$DATA`, `name:stream`,
+///   `dir::$INDEX_ALLOCATION`), which names a stream of an object or the object itself under
+///   another spelling, never a plain file or directory.
 pub(crate) fn extended_units(path: &Path) -> Result<Vec<u16>, Win32Error> {
     const BS: u16 = b'\\' as u16;
     const DOT: u16 = b'.' as u16;
@@ -130,6 +134,9 @@ pub(crate) fn extended_units(path: &Path) -> Result<Vec<u16>, Win32Error> {
     }
     let verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();
     if raw.starts_with(&verbatim) {
+        if has_stream_colon(&raw[verbatim.len()..]) {
+            return Err(Win32Error::INVALID_PARAMETER);
+        }
         return Ok(raw);
     }
     let units: Vec<u16> = raw
@@ -153,6 +160,7 @@ pub(crate) fn extended_units(path: &Path) -> Result<Vec<u16>, Win32Error> {
     if rest
         .split(|&c| c == BS)
         .any(|part| part == [DOT] || part == [DOT, DOT])
+        || has_stream_colon(rest)
     {
         return Err(Win32Error::INVALID_PARAMETER);
     }
@@ -161,12 +169,26 @@ pub(crate) fn extended_units(path: &Path) -> Result<Vec<u16>, Win32Error> {
     Ok(out)
 }
 
+/// Whether `rest` (a path without its `\\?\` or `\\` prefix: `X:\...`, `UNC\server\...`,
+/// `server\share\...`, `Volume{...}\...`) holds a `:` other than the one of a leading drive
+/// letter.
+fn has_stream_colon(rest: &[u16]) -> bool {
+    const COLON: u16 = b':' as u16;
+    let after_drive = match rest {
+        [letter, COLON, ..] if u8::try_from(*letter).is_ok_and(|c| c.is_ascii_alphabetic()) => {
+            &rest[2..]
+        }
+        _ => rest,
+    };
+    after_drive.contains(&COLON)
+}
+
 /// The `\\?\` form of an absolute path: long paths work and a name ending in a dot or a space keeps
 /// its exact spelling, because Windows does not normalise this form.
 ///
 /// A path already in `\\?\` form is returned unchanged; `/` becomes `\`. Relative paths, device
-/// paths (`\\.\`) and paths with a `.` or `..` component are refused with
-/// `ERROR_INVALID_PARAMETER`. The path does not have to exist.
+/// paths (`\\.\`), paths with a `.` or `..` component and paths with stream syntax (a `:` after
+/// the drive) are refused with `ERROR_INVALID_PARAMETER`. The path does not have to exist.
 pub fn extended_path(path: &Path) -> Result<PathBuf, Win32Error> {
     Ok(PathBuf::from(OsString::from_wide(&extended_units(path)?)))
 }
@@ -345,6 +367,46 @@ mod tests {
             "",
         ] {
             assert_eq!(ext(bad), Err(Win32Error::INVALID_PARAMETER), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn stream_syntax_is_refused() {
+        for bad in [
+            r"C:\a\host.txt::$DATA",
+            r"C:\a\host.txt:second",
+            r"C:\a\host.txt:second:$DATA",
+            r"C:\a\dir::$INDEX_ALLOCATION",
+            r"C:\a\dir:$I30:$INDEX_ALLOCATION\b",
+            r"C:\a:b\c",
+            r"C:/a/host.txt::$DATA",
+            r"C::",
+            r"\\srv\share\x:y",
+            r"\\srv\share:x",
+            r"\\?\C:\a\host.txt::$DATA",
+            r"\\?\C:\a\host.txt:s",
+            r"\\?\UNC\srv\share\x:y",
+            r"\\?\Volume{0}\x::$DATA",
+        ] {
+            assert_eq!(ext(bad), Err(Win32Error::INVALID_PARAMETER), "{bad:?}");
+        }
+        // The drive colon is not stream syntax, in either form.
+        assert_eq!(ext(r"z:\a").unwrap(), r"\\?\z:\a");
+        assert_eq!(ext(r"\\?\C:\a\b").unwrap(), r"\\?\C:\a\b");
+        assert_eq!(ext(r"\\?\UNC\srv\share").unwrap(), r"\\?\UNC\srv\share");
+
+        // open_for_security cannot be pointed at a stream or a stream spelling of a directory.
+        let dir = std::env::temp_dir().join(format!("purge-win-ads-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("host.txt"), b"x").unwrap();
+        let spelled = |s: &str| PathBuf::from(format!("{}{s}", dir.display()));
+        let results = [
+            open_for_security(&spelled(r"\host.txt::$DATA")).map(|_| ()),
+            open_for_security(&spelled("::$INDEX_ALLOCATION")).map(|_| ()),
+        ];
+        std::fs::remove_dir_all(&dir).unwrap();
+        for r in results {
+            assert_eq!(r, Err(Win32Error::INVALID_PARAMETER));
         }
     }
 

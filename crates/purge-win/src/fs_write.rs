@@ -9,6 +9,10 @@
 //!   itself, never on what a junction or symbolic link points to. Facts (metadata, file id, final
 //!   path, reparse tag, streams, security) and the action (rename, delete) use that one handle, so
 //!   nothing can be swapped between the check and the act.
+//! - The destination of a rename is a directory handle too: [`DestDir`] opens it without following
+//!   a reparse point and reports the facts the gate judges; [`MoveHandle::rename_into`] renames into
+//!   that very directory under one leaf name. There is no rename to a path, because the kernel would
+//!   resolve the path again after the check and follow a junction planted in the meantime.
 //! - Renames never replace an existing destination. Deletes are non-recursive.
 //! - [`create_dir_secure`] and [`create_file_secure`] create a new object with a security
 //!   descriptor given at creation and fail if anything already has that name.
@@ -19,7 +23,8 @@
 //!
 //! Nothing here raises access: no ownership change, no ACL edit, no privilege is enabled. Paths are
 //! turned into their `\\?\` form by [`extended_path`] and are not normalised, so long paths work
-//! and names ending in a dot or a space keep their spelling.
+//! and names ending in a dot or a space keep their spelling. Stream syntax (a `:` after the drive,
+//! as in `name::$DATA` or `dir::$INDEX_ALLOCATION`) is refused by every function that takes a path.
 #![cfg(feature = "write")]
 
 use std::mem::{offset_of, size_of};
@@ -35,15 +40,16 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ADD_FILE, FILE_ATTRIBUTE_NORMAL,
-    FILE_BASIC_INFO, FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ADD_FILE, FILE_ATTRIBUTE_DIRECTORY,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_BASIC_INFO,
+    FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
     FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_INFO_BY_HANDLE_CLASS,
     FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    FILE_WRITE_ATTRIBUTES, FileBasicInfo, FileDispositionInfo, FileDispositionInfoEx,
-    FileRenameInfo, FileRenameInfoEx, FileStreamInfo, FlushFileBuffers,
-    GetFileInformationByHandleEx, MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW, OPEN_EXISTING,
-    READ_CONTROL, SYNCHRONIZE, SetFileInformationByHandle,
+    FILE_WRITE_ATTRIBUTES, FileAttributeTagInfo, FileBasicInfo, FileDispositionInfo,
+    FileDispositionInfoEx, FileStreamInfo, FlushFileBuffers, GetFileInformationByHandleEx,
+    MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE,
+    SetFileInformationByHandle,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::Registry::{
@@ -120,8 +126,20 @@ pub enum FsError {
     #[error("in use by another process")]
     SharingViolation,
     /// The caller's token is not allowed to do this. Purge reports it and never raises its access.
+    ///
+    /// Not returned by [`MoveHandle::rename_into`] for a directory: there the same Win32 error
+    /// also means "in use" and is reported as [`FsError::DirInUseOrDenied`].
     #[error("access denied")]
     AccessDenied,
+    /// Renaming a directory failed with `ERROR_ACCESS_DENIED`. NTFS refuses to rename a directory
+    /// while any handle is open on a file or directory below it, whatever that handle shares and
+    /// even if it only reads attributes, and reports exactly this error; a token without the right
+    /// to add a subdirectory to the destination, or a filter driver that vetoes the rename, gets
+    /// the same code. The cases cannot be told apart from the error, so the caller must treat it
+    /// as possibly locked (retry, ask Restart Manager about the files below) before it reports
+    /// access denied. [`FsError::code`] is `ERROR_ACCESS_DENIED`.
+    #[error("access denied renaming a directory: something below it may be in use")]
+    DirInUseOrDenied,
     /// The directory still has entries.
     #[error("directory not empty")]
     DirNotEmpty,
@@ -133,7 +151,8 @@ pub enum FsError {
     AlreadyExists,
     /// The object is not of the kind the operation is for (a plain directory given to
     /// [`MoveHandle::delete`], a file or a reparse point given to
-    /// [`MoveHandle::remove_dir_if_empty`]). Nothing was changed.
+    /// [`MoveHandle::remove_dir_if_empty`], a destination handle for
+    /// [`MoveHandle::rename_into`] that is not a plain directory). Nothing was changed.
     #[error("wrong kind of object for this operation")]
     WrongKind,
     /// Any other Win32 error code.
@@ -148,7 +167,7 @@ impl FsError {
         match self {
             FsError::NotFound => Win32Error::FILE_NOT_FOUND.0,
             FsError::SharingViolation => ERROR_SHARING_VIOLATION,
-            FsError::AccessDenied => Win32Error::ACCESS_DENIED.0,
+            FsError::AccessDenied | FsError::DirInUseOrDenied => Win32Error::ACCESS_DENIED.0,
             FsError::DirNotEmpty => ERROR_DIR_NOT_EMPTY,
             FsError::NotSameDevice => ERROR_NOT_SAME_DEVICE,
             FsError::AlreadyExists => ERROR_ALREADY_EXISTS,
@@ -235,6 +254,15 @@ impl StreamInfo {
 /// Opened with `FILE_FLAG_OPEN_REPARSE_POINT`: for a junction, a symbolic link or any other
 /// reparse point the handle is on the link itself, so a rename moves the link and a delete removes
 /// the link; the target is never touched. Sharing is read, write and delete.
+///
+/// The only rename is [`MoveHandle::rename_into`], into a directory handle. A rename to a path does
+/// not exist:
+///
+/// ```compile_fail
+/// # fn f(h: &purge_win::fs_write::MoveHandle) {
+/// h.rename_to(std::path::Path::new(r"C:\dir\name")).unwrap();
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct MoveHandle {
     file: FileHandle,
@@ -325,27 +353,49 @@ impl MoveHandle {
         Ok(streams_of(self.raw())?)
     }
 
-    /// Renames the object to the absolute path `dest`. Fails with [`FsError::AlreadyExists`] if
-    /// anything has that name (nothing is ever replaced) and with [`FsError::NotSameDevice`] if
-    /// `dest` is on another volume. The handle stays valid and follows the object.
-    ///
-    /// Uses `SetFileInformationByHandle(FileRenameInfoEx)` without any replace flag, falling back
-    /// to `FileRenameInfo` where the newer class is unknown.
-    pub fn rename_to(&self, dest: &Path) -> Result<(), FsError> {
-        let name = extended_units(dest)?;
-        self.rename_raw(ptr::null_mut(), &name)
-    }
-
     /// Renames the object into the directory behind `dest_dir`, under the single name `leaf`.
-    /// The destination directory is the one the handle is on, whatever happens to its path in
-    /// the meantime. Same refusals as [`MoveHandle::rename_to`]; `leaf` must be one plain path
-    /// component (no `\`, `/` or `:`, not `.` or `..`, not empty).
+    /// The destination is the directory the handle is on, whatever happens to its path in the
+    /// meantime: a junction planted at the old path later is not followed. Pass the handle whose
+    /// facts the gate checked, normally a [`DestDir`] (any handle opened with
+    /// `FILE_FLAG_OPEN_REPARSE_POINT` and `FILE_READ_ATTRIBUTES` works, for example one from
+    /// [`crate::secure::open_for_security`]). The kernel needs no particular access on it; whether
+    /// an entry may be added is checked against the directory's security descriptor at the time
+    /// of the rename. The handle stays valid and follows the object.
+    ///
+    /// - `leaf` must be one plain path component: not empty, not `.` or `..`, no `\`, `/`, `:` or
+    ///   NUL; otherwise `FsError::Other(ERROR_INVALID_PARAMETER)`. A trailing dot or space is
+    ///   kept exactly (a leftover with such a name must come back under the same name).
+    /// - A `dest_dir` handle that is not a directory, or is a reparse point (junction, symbolic
+    ///   link, mount point), is refused with [`FsError::WrongKind`].
+    /// - [`FsError::AlreadyExists`] if anything has that name; nothing is ever replaced.
+    /// - [`FsError::NotSameDevice`] if the destination is on another volume.
+    /// - [`FsError::DirInUseOrDenied`] when the object is a directory and the rename is refused
+    ///   with `ERROR_ACCESS_DENIED`, which is how NTFS reports an open handle anywhere below it.
+    ///
+    /// Uses `NtSetInformationFile(FileRenameInformationEx)` with the root directory set and no
+    /// replace flag, falling back to `FileRenameInformation` where the newer class is unknown.
     pub fn rename_into(&self, dest_dir: &impl AsHandle, leaf: &str) -> Result<(), FsError> {
         if leaf.is_empty() || leaf == "." || leaf == ".." || leaf.contains(['\\', '/', ':', '\0']) {
             return Err(Win32Error::INVALID_PARAMETER.into());
         }
+        let root = dest_dir.as_handle().as_raw_handle();
+        let tag = attribute_tag(root)?;
+        if tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+            || tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        {
+            return Err(FsError::WrongKind);
+        }
         let name: Vec<u16> = leaf.encode_utf16().collect();
-        self.rename_raw(dest_dir.as_handle().as_raw_handle(), &name)
+        match self.rename_raw(root, &name) {
+            Err(FsError::AccessDenied)
+                if self
+                    .metadata()
+                    .is_ok_and(|m| m.is_dir && m.reparse_tag == 0) =>
+            {
+                Err(FsError::DirInUseOrDenied)
+            }
+            other => other,
+        }
     }
 
     fn rename_raw(&self, root: HANDLE, name: &[u16]) -> Result<(), FsError> {
@@ -372,48 +422,26 @@ impl MoveHandle {
         }
         let mut last = Win32Error::INVALID_PARAMETER;
         // With no flag set, the newer and the older class mean the same: rename, never replacing.
-        for newer in [true, false] {
-            let result = if root.is_null() {
-                let class = if newer {
-                    FileRenameInfoEx
-                } else {
-                    FileRenameInfo
-                };
-                // SAFETY: live handle; `buf` holds a complete FILE_RENAME_INFO of `bytes` bytes.
-                let ok = unsafe {
-                    SetFileInformationByHandle(self.raw(), class, buf.as_ptr().cast(), bytes as u32)
-                };
-                if ok != 0 {
-                    Ok(())
-                } else {
-                    Err(Win32Error::last())
-                }
+        // SetFileInformationByHandle does not take a root directory, so the structure goes to the
+        // native call it wraps.
+        for class in [NT_FILE_RENAME_INFORMATION_EX, NT_FILE_RENAME_INFORMATION] {
+            let mut io = IO_STATUS_BLOCK::default();
+            // SAFETY: live handles; `io` is a writable status block; `buf` holds a complete
+            // FILE_RENAME_INFORMATION (same layout as FILE_RENAME_INFO) of `bytes` bytes.
+            let status = unsafe {
+                NtSetInformationFile(
+                    self.raw(),
+                    &mut io,
+                    buf.as_ptr().cast(),
+                    bytes as u32,
+                    class,
+                )
+            };
+            let result = if status >= 0 {
+                Ok(())
             } else {
-                // SetFileInformationByHandle does not take a root directory, so the same
-                // structure goes to the native call it wraps.
-                let class = if newer {
-                    NT_FILE_RENAME_INFORMATION_EX
-                } else {
-                    NT_FILE_RENAME_INFORMATION
-                };
-                let mut io = IO_STATUS_BLOCK::default();
-                // SAFETY: live handles; `io` is a writable status block; `buf` holds a complete
-                // FILE_RENAME_INFORMATION (same layout as FILE_RENAME_INFO) of `bytes` bytes.
-                let status = unsafe {
-                    NtSetInformationFile(
-                        self.raw(),
-                        &mut io,
-                        buf.as_ptr().cast(),
-                        bytes as u32,
-                        class,
-                    )
-                };
-                if status >= 0 {
-                    Ok(())
-                } else {
-                    // SAFETY: a pure status-to-code mapping.
-                    Err(Win32Error(unsafe { RtlNtStatusToDosError(status) }))
-                }
+                // SAFETY: a pure status-to-code mapping.
+                Err(Win32Error(unsafe { RtlNtStatusToDosError(status) }))
             };
             match result {
                 Ok(()) => return Ok(()),
@@ -514,6 +542,104 @@ fn set_info<T>(h: HANDLE, class: FILE_INFO_BY_HANDLE_CLASS, info: &T) -> Result<
         Err(Win32Error::last())
     } else {
         Ok(())
+    }
+}
+
+/// `GetFileInformationByHandleEx(FileAttributeTagInfo)`: attributes and reparse tag of the object
+/// behind any handle that carries `FILE_READ_ATTRIBUTES`.
+fn attribute_tag(h: HANDLE) -> Result<FILE_ATTRIBUTE_TAG_INFO, Win32Error> {
+    let mut info = FILE_ATTRIBUTE_TAG_INFO {
+        FileAttributes: 0,
+        ReparseTag: 0,
+    };
+    // SAFETY: `info` is a writable FILE_ATTRIBUTE_TAG_INFO of the size passed; the caller keeps
+    // the handle alive for the call.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            h,
+            FileAttributeTagInfo,
+            (&raw mut info).cast(),
+            size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(Win32Error::last());
+    }
+    Ok(info)
+}
+
+/// A directory opened as the destination of [`MoveHandle::rename_into`], together with the facts
+/// the gate judges it by, all read from this one handle.
+///
+/// Opened with `FILE_READ_ATTRIBUTES | SYNCHRONIZE`, read, write and delete sharing, and
+/// `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`: a junction, symbolic link or mount
+/// point at the path is opened as itself and shows in [`DestDir::facts`] with its reparse tag; it
+/// is never followed. Opening refuses nothing that exists (the facts are for the caller to judge);
+/// [`MoveHandle::rename_into`] refuses a handle that is not a plain directory.
+///
+/// Keep the value from the gate's check until the rename and pass it to `rename_into`: the rename
+/// then lands in the directory that was checked, even if its path is swapped for a junction in
+/// between.
+#[derive(Debug)]
+pub struct DestDir {
+    file: FileHandle,
+}
+
+/// What [`DestDir::facts`] reads from the destination directory's handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirFacts {
+    /// The path the handle really is on, in `\\?\C:\...` form (for a reparse point, its own path).
+    pub final_path: String,
+    /// The reparse tag; `0` when the object is not a reparse point.
+    pub reparse_tag: u32,
+    /// Whether the object is a directory (a junction is a directory with a reparse tag).
+    pub is_dir: bool,
+    /// Volume serial (64-bit, `FILE_ID_INFO`) and 128-bit file id.
+    pub file_id: FileId,
+}
+
+impl DirFacts {
+    /// The serial of the volume the directory is on, the value source handles are compared with.
+    pub fn volume_serial(&self) -> u64 {
+        self.file_id.volume_serial
+    }
+
+    /// A directory that is not a reparse point: the only kind [`MoveHandle::rename_into`] accepts.
+    pub fn is_plain_dir(&self) -> bool {
+        self.is_dir && self.reparse_tag == 0
+    }
+}
+
+impl AsHandle for DestDir {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        self.file.as_handle()
+    }
+}
+
+impl DestDir {
+    /// Opens `path` (absolute) without following a final reparse point. Fails with
+    /// [`FsError::NotFound`] when nothing is there and with `FsError::Other(87)` for a relative
+    /// path, a `.`/`..` component or stream syntax.
+    pub fn open(path: &Path) -> Result<DestDir, FsError> {
+        Ok(DestDir {
+            file: FileHandle(open_no_follow(path, FILE_READ_ATTRIBUTES | SYNCHRONIZE)?),
+        })
+    }
+
+    /// Final path, reparse tag, directory flag, volume serial and file id, read from the handle.
+    pub fn facts(&self) -> Result<DirFacts, FsError> {
+        let meta = self.file.metadata()?;
+        Ok(DirFacts {
+            final_path: self.file.final_path()?,
+            reparse_tag: meta.reparse_tag,
+            is_dir: meta.is_dir,
+            file_id: meta.file_id,
+        })
+    }
+
+    /// The read-side view of the same handle.
+    pub fn as_file(&self) -> &FileHandle {
+        &self.file
     }
 }
 
@@ -637,9 +763,13 @@ pub fn create_dir_secure(path: &Path, sddl: &str) -> Result<(), FsError> {
 
 /// Creates the file `path` (absolute) with the security descriptor `sddl`, applied at creation,
 /// and returns it open for reading and writing (other handles may read). Fails with
-/// [`FsError::AlreadyExists`] if a file or a file link has that name, and with
-/// [`FsError::AccessDenied`] if a directory or a junction has it; nothing existing is ever
-/// opened or truncated.
+/// [`FsError::AlreadyExists`] if a file or a file symbolic link has that name (a dangling link
+/// included), and with [`FsError::AccessDenied`] if a directory, a junction or a directory link
+/// has it (dangling or not); nothing existing is ever opened or truncated, and the target of a
+/// link is never created.
+///
+/// `CREATE_NEW` alone follows a symbolic link whose target does not exist and creates the target;
+/// `FILE_FLAG_OPEN_REPARSE_POINT` makes the existing link itself count as the name being taken.
 pub fn create_file_secure(path: &Path, sddl: &str) -> Result<std::fs::File, FsError> {
     let p = ext_wide(path)?;
     let sd = SddlDescriptor::parse(sddl)?;
@@ -653,7 +783,7 @@ pub fn create_file_secure(path: &Path, sddl: &str) -> Result<std::fs::File, FsEr
             FILE_SHARE_READ,
             &sa,
             CREATE_NEW,
-            FILE_ATTRIBUTE_NORMAL,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
             ptr::null_mut(),
         )
     };
@@ -1114,6 +1244,30 @@ mod tests {
         v
     }
 
+    /// Renames `h` to the absolute path `dest` through the one public route: a [`DestDir`] on the
+    /// parent and the leaf name.
+    fn move_to(h: &MoveHandle, dest: &Path) -> Result<(), FsError> {
+        let (Some(parent), Some(leaf)) = (dest.parent(), dest.file_name()) else {
+            return Err(FsError::Other(87));
+        };
+        h.rename_into(&DestDir::open(parent)?, leaf.to_str().unwrap())
+    }
+
+    /// Creates a file symbolic link, or says loudly why the caller has to skip: creating one
+    /// needs a privilege or developer mode.
+    fn try_symlink_file(target: &Path, link: &Path, test: &str) -> bool {
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!(
+                    "SKIPPED part of {test}: cannot create a file symbolic link without \
+                     elevation or developer mode ({e})"
+                );
+                false
+            }
+        }
+    }
+
     #[test]
     fn rename_file_keeps_identity_and_never_replaces() {
         let s = Scratch::new("file");
@@ -1127,12 +1281,12 @@ mod tests {
         let before = h.metadata().unwrap();
 
         // An existing destination is never replaced, whether file or directory.
-        assert_eq!(h.rename_to(&c), Err(FsError::AlreadyExists));
-        assert_eq!(h.rename_to(&s.0), Err(FsError::AlreadyExists));
+        assert_eq!(move_to(&h, &c), Err(FsError::AlreadyExists));
+        assert_eq!(move_to(&h, &s.0), Err(FsError::AlreadyExists));
         assert_eq!(std::fs::read(&c).unwrap(), b"gamma");
         assert_eq!(std::fs::read(&a).unwrap(), b"alpha");
 
-        h.rename_to(&b).unwrap();
+        move_to(&h, &b).unwrap();
         assert!(!a.exists());
         assert_eq!(std::fs::read(&b).unwrap(), b"alpha");
         // The handle follows the file.
@@ -1151,12 +1305,12 @@ mod tests {
         assert_eq!(crate::fs::file_id(&b).unwrap(), id);
 
         // And back again on the same handle (the undo direction).
-        h.rename_to(&a).unwrap();
+        move_to(&h, &a).unwrap();
         assert_eq!(names(&s.0), ["a.txt", "c.txt"]);
 
         // Missing parent, missing source, relative destination.
         assert_eq!(
-            h.rename_to(&s.path(r"no-such-dir\x.txt")),
+            move_to(&h, &s.path(r"no-such-dir\x.txt")),
             Err(FsError::NotFound)
         );
         assert_eq!(
@@ -1164,7 +1318,7 @@ mod tests {
             FsError::NotFound
         );
         assert_eq!(
-            h.rename_to(Path::new("relative.txt")),
+            move_to(&h, Path::new("relative.txt")),
             Err(FsError::Other(87))
         );
         assert_eq!(std::fs::read(&a).unwrap(), b"alpha");
@@ -1183,7 +1337,7 @@ mod tests {
         let id = h.file_id().unwrap();
         assert!(h.metadata().unwrap().is_dir);
         let child_id = crate::fs::file_id(&src.join(r"sub\f.bin")).unwrap();
-        h.rename_to(&q.join("app")).unwrap();
+        move_to(&h, &q.join("app")).unwrap();
         assert!(!src.exists());
         assert_eq!(crate::fs::file_id(&q.join("app")).unwrap(), id);
         assert_eq!(
@@ -1194,7 +1348,7 @@ mod tests {
 
         // A directory is not renamed onto an existing one.
         std::fs::create_dir(&src).unwrap();
-        assert_eq!(h.rename_to(&src), Err(FsError::AlreadyExists));
+        assert_eq!(move_to(&h, &src), Err(FsError::AlreadyExists));
     }
 
     #[test]
@@ -1213,14 +1367,31 @@ mod tests {
             h.rename_into(&q_handle, "taken"),
             Err(FsError::AlreadyExists)
         );
-        for bad in ["", ".", "..", r"a\b", "a/b", "a:b"] {
+        for bad in ["", ".", "..", r"a\b", "a/b", "a:b", "a::$DATA", "a\0b"] {
             assert_eq!(
                 h.rename_into(&q_handle, bad),
                 Err(FsError::Other(87)),
                 "{bad:?}"
             );
         }
+        // A destination handle that is not a plain directory is refused: a file, a junction.
+        let other = s.path("other.txt");
+        std::fs::write(&other, b"o").unwrap();
+        let file_handle = DestDir::open(&other).unwrap();
+        assert!(!file_handle.facts().unwrap().is_dir);
+        assert_eq!(h.rename_into(&file_handle, "x"), Err(FsError::WrongKind));
+        let link = s.path("link");
+        mklink_junction(&link, &q);
+        let link_handle = DestDir::open(&link).unwrap();
+        let link_facts = link_handle.facts().unwrap();
+        assert_eq!(link_facts.reparse_tag, IO_REPARSE_TAG_MOUNT_POINT);
+        assert!(link_facts.is_dir && !link_facts.is_plain_dir());
+        assert_eq!(h.rename_into(&link_handle, "x"), Err(FsError::WrongKind));
+        drop(link_handle);
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::remove_file(&other).unwrap();
         assert!(f.exists());
+        assert_eq!(names(&q), ["taken"]);
 
         // The directory handle, not its path, names the destination: rename the directory away
         // and the file still lands inside it.
@@ -1231,6 +1402,219 @@ mod tests {
         assert_eq!(names(&q2), ["moved. ", "taken"]);
         assert_eq!(crate::fs::file_id(&ext(&q2).join("moved. ")).unwrap(), id);
         assert_eq!(names(&s.0), ["q-renamed"]);
+    }
+
+    #[test]
+    fn a_destination_swapped_for_a_junction_after_the_check_does_not_receive_the_file() {
+        // Review finding B1: the gate checks the destination directory through a handle; the
+        // rename must land in that directory, not in whatever its path names by then.
+        let s = Scratch::new("swap");
+        let (userdir, protected, quarantine) =
+            (s.path("userdir"), s.path("protected"), s.path("quarantine"));
+        for d in [&userdir, &protected, &quarantine] {
+            std::fs::create_dir(d).unwrap();
+        }
+        let payload = quarantine.join("payload.dll");
+        std::fs::write(&payload, b"payload").unwrap();
+        let mover = MoveHandle::open(&payload).unwrap();
+
+        // The check: a plain directory on the item's volume, at the path it was asked about.
+        let checked = DestDir::open(&userdir).unwrap();
+        let facts = checked.facts().unwrap();
+        assert!(facts.is_plain_dir(), "{facts:?}");
+        assert_eq!(
+            facts.volume_serial(),
+            mover.file_id().unwrap().volume_serial
+        );
+        let canon = std::fs::canonicalize(&userdir).unwrap();
+        assert!(
+            facts
+                .final_path
+                .eq_ignore_ascii_case(&canon.to_string_lossy())
+        );
+
+        // Between check and act the directory is renamed away and a junction to a protected
+        // directory takes its name.
+        let old = s.path("userdir.old");
+        std::fs::rename(&userdir, &old).unwrap();
+        mklink_junction(&userdir, &protected);
+
+        mover.rename_into(&checked, "payload.dll").unwrap();
+        assert_eq!(names(&old), ["payload.dll"]);
+        assert_eq!(std::fs::read(old.join("payload.dll")).unwrap(), b"payload");
+        assert!(names(&protected).is_empty());
+        assert!(names(&quarantine).is_empty());
+
+        // A fresh look at the path sees the junction, and a rename into it is refused.
+        let fresh = DestDir::open(&userdir).unwrap();
+        assert_eq!(
+            fresh.facts().unwrap().reparse_tag,
+            IO_REPARSE_TAG_MOUNT_POINT
+        );
+        assert_eq!(
+            mover.rename_into(&fresh, "payload.dll"),
+            Err(FsError::WrongKind)
+        );
+        assert!(names(&protected).is_empty());
+        assert_eq!(names(&old), ["payload.dll"]);
+    }
+
+    #[test]
+    fn a_directory_with_an_open_handle_below_is_reported_as_possibly_in_use() {
+        // Review finding S8: NTFS refuses to rename a directory with ERROR_ACCESS_DENIED while a
+        // handle is open anywhere below it, whatever that handle shares.
+        let s = Scratch::new("inuse");
+        let app = s.path("app");
+        std::fs::create_dir_all(app.join("sub")).unwrap();
+        std::fs::write(app.join(r"sub\held.txt"), b"x").unwrap();
+        let q = DestDir::open(&s.0).unwrap();
+        let h = MoveHandle::open(&app).unwrap();
+
+        let read_only_sharing = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(app.join(r"sub\held.txt"))
+            .unwrap();
+        assert_eq!(
+            h.rename_into(&q, "app-moved"),
+            Err(FsError::DirInUseOrDenied)
+        );
+        drop(read_only_sharing);
+        let full_sharing = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(app.join(r"sub\held.txt"))
+            .unwrap();
+        assert_eq!(
+            h.rename_into(&q, "app-moved"),
+            Err(FsError::DirInUseOrDenied)
+        );
+        drop(full_sharing);
+        // An attribute-only handle on a subdirectory is enough.
+        let sub = crate::fs::FileHandle::open(&app.join("sub")).unwrap();
+        let err = h.rename_into(&q, "app-moved").unwrap_err();
+        assert_eq!(err, FsError::DirInUseOrDenied);
+        assert_eq!(err.code(), 5);
+        drop(sub);
+        assert!(app.exists());
+
+        // With every handle below closed, the same rename goes through.
+        h.rename_into(&q, "app-moved").unwrap();
+        assert_eq!(names(&s.0), ["app-moved"]);
+
+        // A file keeps the plain mapping: a holder without delete sharing stops the open.
+        let f = s.path(r"app-moved\sub\held.txt");
+        let holder = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&f)
+            .unwrap();
+        assert_eq!(MoveHandle::open(&f).unwrap_err(), FsError::SharingViolation);
+        drop(holder);
+    }
+
+    #[test]
+    fn creation_never_follows_a_dangling_link() {
+        // Review finding S7: CREATE_NEW alone follows a dangling file symbolic link and creates
+        // its target.
+        let s = Scratch::new("dangling");
+        let me = crate::sid::current_user_sid().unwrap();
+        let sddl = format!("D:P(A;OICI;FA;;;{me})");
+
+        // A junction to a missing directory needs no privilege.
+        let junction = s.path("journal-j");
+        mklink_junction(&junction, &s.path("victim-j"));
+        assert_eq!(
+            create_file_secure(&junction, &sddl).unwrap_err(),
+            FsError::AccessDenied
+        );
+        assert_eq!(
+            create_dir_secure(&junction, &sddl),
+            Err(FsError::AlreadyExists)
+        );
+        assert!(!s.path("victim-j").exists());
+        assert_ne!(crate::fs::metadata(&junction).unwrap().reparse_tag, 0);
+
+        if !try_symlink_file(
+            &s.path("victim.txt"),
+            &s.path("journal.jsonl"),
+            "creation_never_follows_a_dangling_link",
+        ) {
+            return;
+        }
+        let link = s.path("journal.jsonl");
+        assert_eq!(
+            create_file_secure(&link, &sddl).unwrap_err(),
+            FsError::AlreadyExists
+        );
+        assert_eq!(create_dir_secure(&link, &sddl), Err(FsError::AlreadyExists));
+        assert!(!s.path("victim.txt").exists());
+        assert_eq!(
+            crate::fs::metadata(&link).unwrap().reparse_tag,
+            crate::fs::IO_REPARSE_TAG_SYMLINK
+        );
+
+        // A directory symbolic link to a missing directory, likewise.
+        let dir_link = s.path("dir-link");
+        if std::os::windows::fs::symlink_dir(s.path("victim-d"), &dir_link).is_ok() {
+            assert_eq!(
+                create_file_secure(&dir_link, &sddl).unwrap_err(),
+                FsError::AccessDenied
+            );
+            assert_eq!(
+                create_dir_secure(&dir_link, &sddl),
+                Err(FsError::AlreadyExists)
+            );
+            assert!(!s.path("victim-d").exists());
+        }
+        for victim in ["victim-j", "victim.txt", "victim-d"] {
+            assert!(!names(&s.0).contains(&victim.to_string()), "{victim}");
+        }
+    }
+
+    #[test]
+    fn stream_syntax_is_refused_by_every_path_wrapper() {
+        // Review finding M3: `name::$DATA` reached the file itself, `dir::$INDEX_ALLOCATION` the
+        // directory, `name:stream` one stream.
+        let s = Scratch::new("streams");
+        let host = s.path("host.txt");
+        std::fs::write(&host, b"main").unwrap();
+        std::fs::write(s.path("host.txt:second"), b"2").unwrap();
+        let dir = s.path("dir");
+        std::fs::create_dir(&dir).unwrap();
+        let sddl = format!("D:P(A;;FA;;;{})", crate::sid::current_user_sid().unwrap());
+        let inv = FsError::Other(87);
+        let spell = |p: &Path, suffix: &str| PathBuf::from(format!("{}{suffix}", p.display()));
+
+        for p in [
+            spell(&host, "::$DATA"),
+            spell(&host, ":second"),
+            spell(&host, ":second:$DATA"),
+            spell(&dir, "::$INDEX_ALLOCATION"),
+            spell(&dir, ":$I30:$INDEX_ALLOCATION"),
+            ext(&host).join("::$DATA"),
+            PathBuf::from(format!("{}::$DATA", ext(&host).display())),
+        ] {
+            assert_eq!(MoveHandle::open(&p).unwrap_err(), inv, "{p:?}");
+            assert_eq!(
+                MoveHandle::open_with_attribute_write(&p).unwrap_err(),
+                inv,
+                "{p:?}"
+            );
+            assert_eq!(DestDir::open(&p).unwrap_err(), inv, "{p:?}");
+            assert_eq!(list_streams(&p).unwrap_err(), inv, "{p:?}");
+            assert_eq!(flush_dir(&p), Err(inv), "{p:?}");
+            assert_eq!(create_dir_secure(&p, &sddl), Err(inv), "{p:?}");
+            assert_eq!(create_file_secure(&p, &sddl).unwrap_err(), inv, "{p:?}");
+            assert_eq!(pending_pair(&p, &dir).unwrap_err(), inv, "{p:?}");
+            assert_eq!(pending_pair(&dir, &p).unwrap_err(), inv, "{p:?}");
+            assert_eq!(move_delay_until_reboot(&p, &dir).unwrap_err(), inv, "{p:?}");
+        }
+        let new_stream = spell(&host, ":new");
+        assert_eq!(create_file_secure(&new_stream, &sddl).unwrap_err(), inv);
+        assert_eq!(std::fs::read(&host).unwrap(), b"main");
+        assert_eq!(list_streams(&host).unwrap().len(), 2);
+        assert!(dir.is_dir());
     }
 
     #[test]
@@ -1251,7 +1635,7 @@ mod tests {
         assert_eq!(h.remove_dir_if_empty(), Err(FsError::WrongKind));
 
         let moved = s.path("moved-link");
-        h.rename_to(&moved).unwrap();
+        move_to(&h, &moved).unwrap();
         assert!(!link.exists());
         let m = crate::fs::metadata(&moved).unwrap();
         assert_eq!(m.reparse_tag, IO_REPARSE_TAG_MOUNT_POINT);
@@ -1277,14 +1661,12 @@ mod tests {
         let target = s.path("target.txt");
         std::fs::write(&target, b"keep me").unwrap();
         let link = s.path("link.txt");
-        // Creating a symbolic link needs a privilege or developer mode; without it there is
-        // nothing to test here.
-        if std::os::windows::fs::symlink_file(&target, &link).is_err() {
+        if !try_symlink_file(&target, &link, "file_symlink_is_deleted_as_a_link") {
             return;
         }
         let h = MoveHandle::open(&link).unwrap();
         assert_eq!(h.reparse_tag().unwrap(), crate::fs::IO_REPARSE_TAG_SYMLINK);
-        h.rename_to(&s.path("moved.txt")).unwrap();
+        move_to(&h, &s.path("moved.txt")).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"keep me");
         h.delete(false).unwrap();
         drop(h);
@@ -1313,17 +1695,17 @@ mod tests {
         assert_eq!(h.metadata().unwrap().size, 3);
         assert!(h.final_path().unwrap().ends_with(r"\name."));
         let dest = deep.join("moved..");
-        h.rename_to(&dest).unwrap();
+        move_to(&h, &dest).unwrap();
         assert_eq!(names(&ext(&deep)), ["moved..", "name "]);
         assert_eq!(std::fs::read(ext(&dest)).unwrap(), b"dot");
         assert_eq!(list_streams(&dest).unwrap().len(), 1);
 
         // Out of the deep directory into a short one and back, by absolute path.
         let short = s.path("short. ");
-        h.rename_to(&short).unwrap();
+        move_to(&h, &short).unwrap();
         assert_eq!(names(&s.0).len(), 2);
         assert!(names(&s.0).contains(&"short. ".to_string()));
-        h.rename_to(&dotted).unwrap();
+        move_to(&h, &dotted).unwrap();
         assert_eq!(names(&ext(&deep)), ["name ", "name."]);
 
         let sp = MoveHandle::open(&spaced).unwrap();
@@ -1362,7 +1744,7 @@ mod tests {
         let before = h.metadata().unwrap();
         assert_eq!(before.attributes, written);
         let dest = s.path("moved.dat");
-        h.rename_to(&dest).unwrap();
+        move_to(&h, &dest).unwrap();
         let after = crate::fs::metadata(&dest).unwrap();
         assert_eq!(after.attributes, written);
         assert_eq!(after.last_write_time, before.last_write_time);
@@ -1419,7 +1801,7 @@ mod tests {
         let h = MoveHandle::open(&a).unwrap();
         assert_eq!(h.metadata().unwrap().n_links, 2);
         let id = h.file_id().unwrap();
-        h.rename_to(&q.join("a.bin")).unwrap();
+        move_to(&h, &q.join("a.bin")).unwrap();
         // Only the one name moved; the other name and the link count are as before.
         assert_eq!(h.metadata().unwrap().n_links, 2);
         assert_eq!(crate::fs::file_id(&b).unwrap(), id);
@@ -1574,7 +1956,7 @@ mod tests {
 
         let h = MoveHandle::open(&f).unwrap();
         let dest = s.path("moved.txt");
-        h.rename_to(&dest).unwrap();
+        move_to(&h, &dest).unwrap();
         let mut after = h.streams().unwrap();
         after.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(after, streams);
@@ -1943,7 +2325,7 @@ mod tests {
             h.file_id().unwrap().volume_serial,
             crate::fs::file_id(&other).unwrap().volume_serial
         );
-        assert_eq!(h.rename_to(&dest), Err(FsError::NotSameDevice));
+        assert_eq!(move_to(&h, &dest), Err(FsError::NotSameDevice));
         let other_handle = crate::secure::open_for_security(&other).unwrap();
         assert_eq!(
             h.rename_into(&other_handle, "purge-fsw-xvol.txt"),

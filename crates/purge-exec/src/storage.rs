@@ -968,14 +968,15 @@ fn rename_aside(path: &Path, id: FileId) -> Result<PathBuf, FsError> {
     let stamp = SessionId::new(sys::now(), 0);
     let stamp = &stamp.as_str()[..16];
     let leaf = leaf.to_string_lossy();
+    let dir = fs_write::DestDir::open(&secure::extended_path(parent)?)?;
     for n in 1..=64 {
         let name = if n == 1 {
             format!("{leaf}.rejected-{stamp}")
         } else {
             format!("{leaf}.rejected-{stamp}-{n}")
         };
-        let dest = parent.join(name);
-        match mover.rename_to(&secure::extended_path(&dest)?) {
+        let dest = parent.join(&name);
+        match mover.rename_into(&dir, &name) {
             Ok(()) => return Ok(dest),
             Err(FsError::AlreadyExists) => continue,
             Err(e) => return Err(e),

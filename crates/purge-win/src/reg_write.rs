@@ -16,6 +16,7 @@
 //!   to `RegCreateKeyExW`, which otherwise creates the missing target of a dangling link.
 //! - **Single keys only.** There is no tree delete (`RegDeleteTree`), no `RegSaveKey`, no link
 //!   creation. A key with subkeys is not deleted ([`HAS_SUBKEYS`]); the caller walks deepest first.
+//!   [`WKey::delete_if_empty`] also refuses a key with values ([`HAS_VALUES`]).
 //! - **Purge never raises its own access.** No privilege is enabled, no ownership is taken, and
 //!   [`KeyAccess`] cannot request `WRITE_DAC` or `WRITE_OWNER`. The only security write is
 //!   [`CreatedKey::set_security`], reachable solely through the value returned by
@@ -61,6 +62,9 @@ use crate::sid::{TRUSTED_INSTALLER_SID, sd_facts};
 /// `ERROR_DIR_NOT_EMPTY`: [`WKey::delete`] and [`WKey::delete_subkey`] return it for a key that
 /// still has subkeys. Nothing is deleted.
 pub const HAS_SUBKEYS: Win32Error = Win32Error(145);
+/// `ERROR_KEY_HAS_CHILDREN`: [`WKey::delete_if_empty`] returns it for a key that holds values
+/// (the default value counts when it is set). Nothing is deleted.
+pub const HAS_VALUES: Win32Error = Win32Error(1020);
 /// `ERROR_ALREADY_EXISTS`: [`WKey::create_subkey`] returns it when the name is taken, whether by a
 /// key or by a link. Nothing is created or changed.
 pub const ALREADY_EXISTS: Win32Error = Win32Error(183);
@@ -744,6 +748,29 @@ impl WKey {
         nt(unsafe { NtDeleteKey(self.hkey) })
     }
 
+    /// Deletes the key this handle refers to only if it has neither subkeys nor values: the form
+    /// for a delete-if-empty operation, whose emptiness was judged from counts read earlier. Same
+    /// access and refusals as [`WKey::delete`], plus [`HAS_VALUES`] for a key with values.
+    ///
+    /// The counts are read again through this handle immediately before `NtDeleteKey`, so a value
+    /// or subkey written any time before that read is seen and the key is kept. Subkeys are also
+    /// refused by the kernel inside `NtDeleteKey` itself. For values the registry offers no
+    /// conditional delete: a value written by another process after the count query returns and
+    /// before `NtDeleteKey` runs (two system calls on one handle, no other work between them) is
+    /// deleted with the key and is in no backup. That window is not closed.
+    pub fn delete_if_empty(&self) -> Result<(), Win32Error> {
+        self.refuse_link()?;
+        let info = self.info()?;
+        if info.n_subkeys > 0 {
+            return Err(HAS_SUBKEYS);
+        }
+        if info.n_values > 0 {
+            return Err(HAS_VALUES);
+        }
+        // SAFETY: `hkey` is a live key handle; the call takes no pointers.
+        nt(unsafe { NtDeleteKey(self.hkey) })
+    }
+
     /// Deletes the direct subkey `name` (one component) in this key's view: opens it with
     /// `REG_OPTION_OPEN_LINK` and [`KeyAccess::DELETE`], then [`WKey::delete`] on that handle. Same
     /// refusals; a missing subkey is an error for which [`Win32Error::is_not_found`] holds.
@@ -1190,6 +1217,53 @@ mod tests {
     }
 
     #[test]
+    fn delete_if_empty_rechecks_values_on_the_handle() {
+        // Review finding M6: emptiness judged earlier must be judged again right before the
+        // delete, through the same handle; `delete` alone takes values with the key.
+        let root = TestRoot::new();
+        root.key.create_subkey("k", "", None, false).unwrap();
+        let k = root.open("k", RW).unwrap();
+        assert_eq!(k.info().unwrap().n_values, 0);
+        // A value arrives after the caller read the counts.
+        let writer = root.open("k", KeyAccess::SET_VALUE).unwrap();
+        writer.set_value_raw("late", REG_SZ, &utf16("x\0")).unwrap();
+        assert_eq!(k.delete_if_empty().unwrap_err(), HAS_VALUES);
+        assert_eq!(
+            root.open("k", KeyAccess::READ)
+                .unwrap()
+                .value("late")
+                .unwrap()
+                .unwrap()
+                .data,
+            utf16("x\0")
+        );
+        // The default value counts as a value.
+        writer.delete_value("late").unwrap();
+        writer.set_value_raw("", REG_SZ, &utf16("d\0")).unwrap();
+        assert_eq!(k.delete_if_empty().unwrap_err(), HAS_VALUES);
+        writer.delete_value("").unwrap();
+        // So does a subkey; a link key is refused before any count.
+        k.create_subkey("sub", "", None, false).unwrap();
+        assert_eq!(k.delete_if_empty().unwrap_err(), HAS_SUBKEYS);
+        k.delete_subkey("sub").unwrap();
+        make_link(&root.key, "link", &root.nt_path("k"));
+        assert_eq!(
+            root.open("link", RW)
+                .unwrap()
+                .delete_if_empty()
+                .unwrap_err(),
+            Win32Error::LINK_ON_PATH
+        );
+        // Empty now: it goes.
+        k.delete_if_empty().unwrap();
+        assert!(root.open("k", KeyAccess::READ).unwrap_err().is_not_found());
+        // Without DELETE on the handle there is no delete.
+        root.key.create_subkey("ro", "", None, false).unwrap();
+        let ro = root.open("ro", KeyAccess::READ).unwrap();
+        assert_eq!(ro.delete_if_empty().unwrap_err(), ACCESS_DENIED);
+    }
+
+    #[test]
     fn delete_acts_on_the_inspected_handle() {
         let root = TestRoot::new();
         root.key.create_subkey("k", "", None, false).unwrap();
@@ -1469,16 +1543,85 @@ mod tests {
         assert_eq!(k64.info().unwrap_err(), Win32Error(1018));
     }
 
+    /// The kernel's full name of the key behind `key` (`NtQueryKey`, `KeyNameInformation`), for
+    /// example `\REGISTRY\MACHINE\SOFTWARE\Classes\Wow6432Node\CLSID`.
+    fn nt_key_name(key: &WKey) -> String {
+        const KEY_NAME_INFORMATION_CLASS: i32 = 3;
+        let mut buf = vec![0u32; 2048];
+        let mut len = 0u32;
+        // SAFETY: `buf` is a writable, 4-byte aligned buffer of the byte length passed; `len` is
+        // a valid out-pointer; `hkey` is live for the borrow.
+        let status = unsafe {
+            NtQueryKey(
+                key.hkey,
+                KEY_NAME_INFORMATION_CLASS,
+                buf.as_mut_ptr().cast(),
+                (buf.len() * 4) as u32,
+                &mut len,
+            )
+        };
+        nt(status).expect("KeyNameInformation");
+        // KEY_NAME_INFORMATION: ULONG NameLength (bytes), then the name.
+        let units = buf[0] as usize / 2;
+        let words: Vec<u16> = buf[1..]
+            .iter()
+            .flat_map(|w| [*w as u16, (*w >> 16) as u16])
+            .take(units)
+            .collect();
+        String::from_utf16(&words).unwrap()
+    }
+
+    #[test]
+    fn hklm_32bit_classes_open_through_the_view_not_through_the_wow6432node_link() {
+        // Read only, runs unelevated. Review finding S1 (fixed in purge-guard): under HKLM the
+        // 32-bit classes are reached as (K32, SOFTWARE\Classes\...); the spelling
+        // SOFTWARE\WOW6432Node\Classes is a registry link, which this module never traverses.
+        let read = |path: &str, view| WKey::open(RegRoot::Hklm, path, view, KeyAccess::READ);
+        let link = read(r"SOFTWARE\WOW6432Node\Classes", RegView::K64).unwrap();
+        assert!(
+            link.is_link().unwrap(),
+            "HKLM\\SOFTWARE\\WOW6432Node\\Classes is not a link on this host"
+        );
+        let target = link.link_target().unwrap().unwrap();
+        assert!(
+            target.eq_ignore_ascii_case(r"\REGISTRY\MACHINE\SOFTWARE\Classes\Wow6432Node"),
+            "{target}"
+        );
+        assert_eq!(
+            read(r"SOFTWARE\WOW6432Node\Classes\CLSID", RegView::K64).unwrap_err(),
+            Win32Error::LINK_ON_PATH
+        );
+        assert!(read(r"SOFTWARE\WOW6432Node\Classes\CLSID", RegView::K32).is_err());
+
+        // The route that works: the canonical path in the 32-bit view, no link on it.
+        let k32 = read(r"SOFTWARE\Classes\CLSID", RegView::K32).unwrap();
+        assert!(!k32.is_link().unwrap());
+        let name32 = nt_key_name(&k32);
+        assert!(
+            name32.eq_ignore_ascii_case(r"\REGISTRY\MACHINE\SOFTWARE\Classes\Wow6432Node\CLSID"),
+            "{name32}"
+        );
+        let k64 = read(r"SOFTWARE\Classes\CLSID", RegView::K64).unwrap();
+        let name64 = nt_key_name(&k64);
+        assert!(
+            name64.eq_ignore_ascii_case(r"\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID"),
+            "{name64}"
+        );
+    }
+
     #[test]
     #[ignore = "needs admin rights: writes HKLM\\SOFTWARE\\PurgeTest-<random> (runs in the VM)"]
     fn views_are_separate_under_hklm_software() {
         let name = format!("PurgeTest-{:x}", std::process::id());
-        let open_sw = |view| WKey::open(RegRoot::Hklm, "SOFTWARE", view, KeyAccess::CREATE_SUB_KEY);
+        let open_at =
+            |path: &str, view| WKey::open(RegRoot::Hklm, path, view, KeyAccess::CREATE_SUB_KEY);
         let (sw32, sw64) = (
-            open_sw(RegView::K32).unwrap(),
-            open_sw(RegView::K64).unwrap(),
+            open_at("SOFTWARE", RegView::K32).unwrap(),
+            open_at("SOFTWARE", RegView::K64).unwrap(),
         );
+        let classes32 = open_at(r"SOFTWARE\Classes", RegView::K32).unwrap();
         let made = sw32.create_subkey(&name, "", None, false).unwrap();
+        let made_class = classes32.create_subkey(&name, "", None, false).unwrap();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             made.set_value_raw("v", 4, &[1, 0, 0, 0]).unwrap();
             // Present in the 32-bit view and below WOW6432Node, absent from the 64-bit view.
@@ -1493,10 +1636,45 @@ mod tests {
                     .is_not_found()
             );
             assert!(sw64.delete_subkey(&name).unwrap_err().is_not_found());
+
+            // A 32-bit class key: reachable as (K32, SOFTWARE\Classes\<name>), where it lives in
+            // Classes\Wow6432Node; the WOW6432Node\Classes spelling runs through a link.
+            made_class.set_value_raw("v", 4, &[2, 0, 0, 0]).unwrap();
+            let read = |path: &str, view| WKey::open(RegRoot::Hklm, path, view, KeyAccess::READ);
+            let k32 = read(&format!(r"SOFTWARE\Classes\{name}"), RegView::K32).unwrap();
+            assert_eq!(k32.value("v").unwrap().unwrap().data, [2, 0, 0, 0]);
+            let full = nt_key_name(&k32);
+            assert!(
+                full.eq_ignore_ascii_case(&format!(
+                    r"\REGISTRY\MACHINE\SOFTWARE\Classes\Wow6432Node\{name}"
+                )),
+                "{full}"
+            );
+            assert!(
+                read(r"SOFTWARE\WOW6432Node\Classes", RegView::K64)
+                    .unwrap()
+                    .is_link()
+                    .unwrap()
+            );
+            assert_eq!(
+                read(
+                    &format!(r"SOFTWARE\WOW6432Node\Classes\{name}"),
+                    RegView::K64
+                )
+                .unwrap_err(),
+                Win32Error::LINK_ON_PATH
+            );
+            assert!(
+                read(&format!(r"SOFTWARE\Classes\{name}"), RegView::K64)
+                    .unwrap_err()
+                    .is_not_found()
+            );
         }));
         let removed = sw32.delete_subkey(&name);
+        let removed_class = classes32.delete_subkey(&name);
         result.unwrap();
         removed.unwrap();
+        removed_class.unwrap();
         assert!(
             sw32.open_subkey(&name, KeyAccess::READ)
                 .unwrap_err()
