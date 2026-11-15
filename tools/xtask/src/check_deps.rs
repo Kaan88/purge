@@ -8,6 +8,8 @@
 //!    Purge crate in the workspace graph, `cargo tree --workspace -i <crate>` must not list purge-mcp.
 //! 3. `purge-win` must not have feature `write` in purge-mcp's own tree (kept as a direct statement of the
 //!    rule; check 1 already implies it).
+//! 4. **Executor.** Only purge-engine links purge-exec, only with its `rig-exec` feature, and `fault-inject`
+//!    comes on only through `rig-exec` (see `exec_violations`).
 //!
 //! `xtask ci` also builds purge-mcp on its own (`cargo clippy -p purge-mcp`), so code that only compiles
 //! with features another member turns on fails CI.
@@ -107,6 +109,88 @@ fn unified_violations(inverted: &str, forbidden: &BTreeSet<&str>) -> Vec<String>
     out
 }
 
+/// The executor crate: only [`ENGINE`] may link it, and with `fault-inject` only through `rig-exec`.
+const EXEC: &str = "purge-exec";
+/// The one crate that may depend on [`EXEC`].
+const ENGINE: &str = "purge-engine";
+
+/// The features purge-exec is built with in a `-f "{p} {f}"` listing, or `None` if it is absent.
+fn exec_features(tree: &str) -> Option<BTreeSet<&str>> {
+    let mut found: Option<BTreeSet<&str>> = None;
+    for line in tree
+        .lines()
+        .filter_map(parse_line)
+        .filter(|l| l.name == EXEC)
+    {
+        found
+            .get_or_insert_with(BTreeSet::new)
+            .extend(line.features);
+    }
+    found
+}
+
+/// Violations of the executor rules (M2-CLI). The listings are:
+/// - `dependents`: `cargo tree --workspace --all-features -i purge-exec --depth 1 -f "{p}"`; the direct
+///   dependents of purge-exec under every feature must be purge-engine alone;
+/// - `engine_default`: `cargo tree -p purge-engine -f "{p}"`; a normal build has no executor;
+/// - `engine_rig`: `cargo tree -p purge-engine --features rig-exec -f "{p} {f}"`; purge-exec with
+///   `fault-inject` and without `test-support`;
+/// - `workspace`: `cargo tree --workspace -f "{p} {f}"`; a default workspace build has neither feature.
+fn exec_violations(
+    dependents: &str,
+    engine_default: &str,
+    engine_rig: &str,
+    workspace: &str,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut deps = dependents.lines().filter_map(parse_line).map(|l| l.name);
+    if deps.next() != Some(EXEC) {
+        out.push(format!(
+            "unexpected cargo tree -i {EXEC} output (first package is not {EXEC})"
+        ));
+    }
+    for name in deps.filter(|n| *n != ENGINE).collect::<BTreeSet<_>>() {
+        out.push(format!("{name} depends on {EXEC}; only {ENGINE} may"));
+    }
+    let mut default = engine_default
+        .lines()
+        .filter_map(parse_line)
+        .map(|l| l.name);
+    if default.next() != Some(ENGINE) {
+        out.push(format!(
+            "unexpected cargo tree -p {ENGINE} output (first package is not {ENGINE})"
+        ));
+    }
+    if default.any(|n| n == EXEC) {
+        out.push(format!("{ENGINE} links {EXEC} without feature rig-exec"));
+    }
+    match exec_features(engine_rig) {
+        None => out.push(format!(
+            "{ENGINE} with feature rig-exec does not link {EXEC}"
+        )),
+        Some(f) => {
+            if !f.contains("fault-inject") {
+                out.push(format!(
+                    "{ENGINE} with feature rig-exec builds {EXEC} without fault-inject"
+                ));
+            }
+            if f.contains("test-support") {
+                out.push(format!(
+                    "{ENGINE} with feature rig-exec builds {EXEC} with test-support"
+                ));
+            }
+        }
+    }
+    for feature in ["fault-inject", "test-support"] {
+        if exec_features(workspace).is_some_and(|f| f.contains(feature)) {
+            out.push(format!(
+                "a default workspace build turns on {EXEC} feature {feature}"
+            ));
+        }
+    }
+    out
+}
+
 fn cargo_tree(root: &Path, args: &[&str]) -> Result<String> {
     let output = crate::cargo()
         .arg("tree")
@@ -146,6 +230,32 @@ pub fn run(root: &Path) -> Result<bool> {
     let inverted = cargo_tree(root, &args)?;
     found.extend(unified_violations(&inverted, &forbidden));
 
+    let dependents = cargo_tree(
+        root,
+        &[
+            "--workspace",
+            "--all-features",
+            "-i",
+            EXEC,
+            "--depth",
+            "1",
+            "-f",
+            "{p}",
+        ],
+    )?;
+    let engine_default = cargo_tree(root, &["-p", ENGINE, "-f", "{p}"])?;
+    let engine_rig = cargo_tree(
+        root,
+        &["-p", ENGINE, "--features", "rig-exec", "-f", "{p} {f}"],
+    )?;
+    let workspace_features = cargo_tree(root, &["--workspace", "-f", "{p} {f}"])?;
+    found.extend(exec_violations(
+        &dependents,
+        &engine_default,
+        &engine_rig,
+        &workspace_features,
+    ));
+
     for v in &found {
         eprintln!("check-deps: {v}");
     }
@@ -156,6 +266,9 @@ pub fn run(root: &Path) -> Result<bool> {
             names.len(),
             ALLOWED.join(", "),
             forbidden.len()
+        );
+        println!(
+            "check-deps: ok ({EXEC} is linked only by {ENGINE}, and with fault-inject only through rig-exec)"
         );
     }
     Ok(found.is_empty())
@@ -236,6 +349,49 @@ mod tests {
         assert!(
             v[0].contains("one of purge-engine, purge-exec, purge-win"),
             "{v:?}"
+        );
+    }
+
+    #[test]
+    fn executor_only_in_the_engine_and_fault_inject_only_through_rig_exec() {
+        let deps = "purge-exec v0.1.0 (C:\\x)\npurge-engine v0.1.0 (C:\\e)\n";
+        let default = "purge-engine v0.1.0 (C:\\e)\npurge-win v0.1.0 (C:\\w) read\n";
+        let rig = "purge-engine v0.1.0 (C:\\e)\npurge-exec v0.1.0 (C:\\x) fault-inject\n";
+        let ws = "purge-engine v0.1.0 (C:\\e)\npurge-exec v0.1.0 (C:\\x) \npurge-exec v0.1.0 (C:\\x) (*)\n";
+        assert!(exec_violations(deps, default, rig, ws).is_empty());
+
+        let other =
+            "purge-exec v0.1.0 (C:\\x)\npurge-engine v0.1.0 (C:\\e)\npurge-mcp v0.1.0 (C:\\p)\n";
+        let v = exec_violations(other, default, rig, ws);
+        assert_eq!(
+            v,
+            ["purge-mcp depends on purge-exec; only purge-engine may"]
+        );
+
+        let linked = "purge-engine v0.1.0 (C:\\e)\npurge-exec v0.1.0 (C:\\x)\n";
+        let v = exec_violations(deps, linked, rig, ws);
+        assert_eq!(
+            v,
+            ["purge-engine links purge-exec without feature rig-exec"]
+        );
+
+        let no_fault = "purge-engine v0.1.0 (C:\\e)\npurge-exec v0.1.0 (C:\\x) test-support\n";
+        assert_eq!(exec_violations(deps, default, no_fault, ws).len(), 2);
+        assert_eq!(
+            exec_violations(deps, default, default, ws).len(),
+            1,
+            "rig-exec without the executor"
+        );
+
+        let ws_bad = "purge-engine v0.1.0 (C:\\e)\npurge-exec v0.1.0 (C:\\x) fault-inject\n\
+                      purge-exec v0.1.0 (C:\\x) test-support (*)\n";
+        assert_eq!(exec_violations(deps, default, rig, ws_bad).len(), 2);
+
+        let garbage = "error: nothing\n";
+        assert_eq!(
+            exec_violations(garbage, garbage, rig, ws).len(),
+            2,
+            "unrecognised roots are named"
         );
     }
 }

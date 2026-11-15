@@ -13,14 +13,29 @@
 //! | Code | [`Exit`] | When |
 //! |---|---|---|
 //! | 0 | `Ok` | success |
-//! | 1 | `NotImplemented` | `exec`, `undo`, `journal`, `kb lint`, `--stdio`, `--broker` (later milestones) |
-//! | 2 | `Usage` | a usage error or a broken precondition (unknown program id, unreadable input file, `--mode post` without an uninstall window, no quiet uninstall command) |
+//! | 1 | `NotImplemented` | `kb lint`, `--stdio`, `--broker` (later milestones) |
+//! | 2 | `Usage` | a usage error or a broken precondition (unknown program id, unreadable input file, `--mode post` without an uninstall window, no quiet uninstall command; an unknown session, a store that is not installed, a malformed fault or clock variable) |
 //! | 3 | `Runtime` | a runtime error (an output file cannot be written) |
 //! | 4 | `UninstallFailed` | the uninstaller failed, was cancelled or timed out (`run.json` is still written) |
+//! | 5 | `NeedsConsent` | an executor verb (`exec`, `undo`, `journal`, `quarantine`, `plan from-targets`) in a build without `rig-exec`: it needs the consent dialog of a later version |
+//! | 6 | `PlanRefused` | the plan was refused before a session existed: plan hash, sidecar, selection, order or confirmation; an undo of items the session does not hold or under another plan hash |
+//! | 7 | `NeedsElevation` | `exec`, `undo`, `journal resume` / `rollback`, `quarantine purge` run unelevated |
+//! | 8 | `NeedsRecovery` | an interrupted session must be resumed or rolled back first |
+//! | 9 | `StoreIntegrity` | the store or a journal failed its integrity check |
+//! | 10 | `Partial` | the run did not commit, or an item did not end done; a purge item was not deleted (the document is written) |
+//! | 11 | `UndoConflicts` | an undo (or a rollback) ended with conflicts or failures (the document is written) |
 //!
-//! Being unelevated is never an error: `harvest` and `scan` warn and go on with what they can read.
+//! Being unelevated is never an error for the M1a verbs: `harvest` and `scan` warn and go on with what
+//! they can read.
+//!
+//! # Executor verbs
+//!
+//! They are parsed in every build ([`args::ExecVerb`]). Only a `rig-exec` build compiles `cli::exec`, the one
+//! module that links `purge-exec`; any other build answers [`Exit::NeedsConsent`] and touches nothing.
 
 pub mod args;
+#[cfg(feature = "rig-exec")]
+pub mod exec;
 pub mod output;
 pub mod show;
 
@@ -35,7 +50,8 @@ use purge_plan::emit::ScanDoc;
 
 use crate::pipeline::{self, PipelineError, Scanned, Settings, Sources};
 use args::{
-    HarvestArgs, InventoryArgs, Invocation, PlanShowArgs, ScanArgs, ScanFrom, USAGE, UninstallArgs,
+    ExecVerb, HarvestArgs, InventoryArgs, Invocation, PlanShowArgs, ScanArgs, ScanFrom, USAGE,
+    UninstallArgs,
 };
 
 /// The process exit code of a CLI run.
@@ -51,9 +67,39 @@ pub enum Exit {
     Runtime,
     /// 4: the uninstaller failed, was cancelled or timed out.
     UninstallFailed,
+    /// 5: an executor verb in a build without `rig-exec`; it needs the consent dialog.
+    NeedsConsent,
+    /// 6: the plan was refused before a session existed.
+    PlanRefused,
+    /// 7: the verb needs an elevated process.
+    NeedsElevation,
+    /// 8: an interrupted session must be recovered first.
+    NeedsRecovery,
+    /// 9: the store or a journal failed its integrity check.
+    StoreIntegrity,
+    /// 10: the run, recovery or purge did not end every item done.
+    Partial,
+    /// 11: the undo ended with conflicts or failures.
+    UndoConflicts,
 }
 
 impl Exit {
+    /// Every exit code, in numeric order.
+    pub const ALL: [Exit; 12] = [
+        Exit::Ok,
+        Exit::NotImplemented,
+        Exit::Usage,
+        Exit::Runtime,
+        Exit::UninstallFailed,
+        Exit::NeedsConsent,
+        Exit::PlanRefused,
+        Exit::NeedsElevation,
+        Exit::NeedsRecovery,
+        Exit::StoreIntegrity,
+        Exit::Partial,
+        Exit::UndoConflicts,
+    ];
+
     /// The numeric exit code.
     pub fn code(self) -> u8 {
         match self {
@@ -62,6 +108,37 @@ impl Exit {
             Exit::Usage => 2,
             Exit::Runtime => 3,
             Exit::UninstallFailed => 4,
+            Exit::NeedsConsent => 5,
+            Exit::PlanRefused => 6,
+            Exit::NeedsElevation => 7,
+            Exit::NeedsRecovery => 8,
+            Exit::StoreIntegrity => 9,
+            Exit::Partial => 10,
+            Exit::UndoConflicts => 11,
+        }
+    }
+
+    /// What the code means, as the exit-code table of `--help` words it.
+    pub fn meaning(self) -> &'static str {
+        match self {
+            Exit::Ok => "ok",
+            Exit::NotImplemented => "not implemented yet",
+            Exit::Usage => "usage error or broken precondition",
+            Exit::Runtime => "runtime error",
+            Exit::UninstallFailed => "uninstall failed, cancelled or timed out",
+            Exit::NeedsConsent => "needs the consent dialog (executor verbs of a normal build)",
+            Exit::PlanRefused => {
+                "plan refused: hash, selection, order or confirmation; nothing was done"
+            }
+            Exit::NeedsElevation => "needs elevation",
+            Exit::NeedsRecovery => {
+                "needs recovery first: an interrupted session is pending (journal recover)"
+            }
+            Exit::StoreIntegrity => "store or journal integrity failure",
+            Exit::Partial => "partial: not every item ended done (the document is still written)",
+            Exit::UndoConflicts => {
+                "undo ended with conflicts or failures (the document is still written)"
+            }
         }
     }
 }
@@ -148,8 +225,55 @@ fn progress_line(stderr: &mut dyn Write, started: Instant, line: &str) {
     let _ = writeln!(stderr, "[{:7.3}s] {line}", started.elapsed().as_secs_f64());
 }
 
-/// Runs one command line (without the program name) and returns its exit code.
+/// Runs one command line (without the program name) and returns its exit code. In a `rig-exec` build
+/// the executor verbs run against the installed store and the live machine (`exec::run_live`).
 pub fn run(args: &[String], env: &mut Env<'_>) -> Exit {
+    run_inner(args, env, &mut executor)
+}
+
+/// Runs one command line like [`run`], with the executor verbs working through `host` (the store, the
+/// elevation answer and the system backends), so tests can drive them with a relaxed store and fakes.
+#[cfg(feature = "rig-exec")]
+pub fn run_with_exec<R>(
+    args: &[String],
+    env: &mut Env<'_>,
+    host: &mut exec::ExecHost<'_, R>,
+) -> Exit
+where
+    R: purge_exec::prepare::RestorePointBackend + Clone,
+{
+    run_inner(args, env, &mut |verb, env| exec::run(verb, env, host))
+}
+
+/// An executor verb in a build without `rig-exec`: refused, nothing read or written.
+#[cfg(not(feature = "rig-exec"))]
+fn executor(verb: ExecVerb, env: &mut Env<'_>) -> Exit {
+    let cmd = verb.command();
+    let why = if cmd.is_rig_tool() {
+        "is a test tool of the VM rig and exists only in rig-exec builds"
+    } else {
+        "needs the consent dialog, which comes with a later version; only rig-exec builds of the VM rig \
+         run it headless"
+    };
+    let _ = writeln!(
+        env.stderr,
+        "purge-engine {}: {why}. Nothing was done.",
+        cmd.name()
+    );
+    Exit::NeedsConsent
+}
+
+/// An executor verb in a `rig-exec` build: run against the live machine.
+#[cfg(feature = "rig-exec")]
+fn executor(verb: ExecVerb, env: &mut Env<'_>) -> Exit {
+    exec::run_live(verb, env)
+}
+
+fn run_inner(
+    args: &[String],
+    env: &mut Env<'_>,
+    executor: &mut dyn FnMut(ExecVerb, &mut Env<'_>) -> Exit,
+) -> Exit {
     let invocation = match args::parse(args) {
         Ok(i) => i,
         Err(e) => {
@@ -161,6 +285,8 @@ pub fn run(args: &[String], env: &mut Env<'_>) -> Exit {
     match invocation {
         Invocation::Version => {
             let _ = writeln!(env.stdout, "purge-engine {}", env!("CARGO_PKG_VERSION"));
+            #[cfg(feature = "rig-exec")]
+            let _ = writeln!(env.stdout, "{}", exec::BUILD_MARKER);
             Exit::Ok
         }
         Invocation::Help => {
@@ -181,6 +307,7 @@ pub fn run(args: &[String], env: &mut Env<'_>) -> Exit {
         Invocation::Uninstall(a) => uninstall(&a, env, started),
         Invocation::Scan(a) => scan(&a, env, started),
         Invocation::PlanShow(a) => plan_show(&a, env),
+        Invocation::Executor(verb) => executor(verb, env),
     }
 }
 
@@ -521,17 +648,13 @@ mod tests {
 
     #[test]
     fn exit_codes_are_the_documented_numbers() {
-        let codes: Vec<u8> = [
-            Exit::Ok,
-            Exit::NotImplemented,
-            Exit::Usage,
-            Exit::Runtime,
-            Exit::UninstallFailed,
-        ]
-        .iter()
-        .map(|e| e.code())
-        .collect();
-        assert_eq!(codes, [0, 1, 2, 3, 4]);
+        let codes: Vec<u8> = Exit::ALL.iter().map(|e| e.code()).collect();
+        assert_eq!(codes, (0..=11).collect::<Vec<u8>>());
+        // The help prints the same table, one code per line.
+        for exit in Exit::ALL {
+            let line = format!("{:>4}  {}\n", exit.code(), exit.meaning());
+            assert!(USAGE.contains(&line), "{line:?} is not in the help");
+        }
         assert_eq!(
             Exit::from(&PipelineError::Precondition(String::new())),
             Exit::Usage
@@ -547,11 +670,6 @@ mod tests {
         for line in [
             "--stdio",
             "--broker --pipe p --parent 1 --parent-ctime 2",
-            "exec --plan p.json --confirm abc",
-            "undo --session s1",
-            "journal recover",
-            "journal resume",
-            "journal rollback",
             "kb lint a.json",
         ] {
             let (exit, out, err) = run_line(line);
@@ -559,6 +677,34 @@ mod tests {
             assert!(out.is_empty(), "{line}");
             assert!(err.contains("not implemented yet"), "{line}: {err}");
         }
+    }
+
+    /// Without `rig-exec`, every executor verb is refused with its own code before anything is read.
+    #[cfg(not(feature = "rig-exec"))]
+    #[test]
+    fn executor_verbs_need_the_consent_dialog() {
+        for line in [
+            "exec --plan p.json --confirm abc",
+            "undo --session s1",
+            "journal recover",
+            "journal resume",
+            "journal rollback --session s1",
+            "journal show --session s1",
+            "quarantine expiring",
+            "quarantine purge --ids s/1 --yes-irreversible",
+        ] {
+            let (exit, out, err) = run_line(line);
+            assert_eq!(exit, Exit::NeedsConsent, "{line}");
+            assert!(out.is_empty(), "{line}");
+            assert!(err.contains("needs the consent dialog"), "{line}: {err}");
+        }
+        for line in ["plan from-targets t.json -o p.json", "journal fault-points"] {
+            let (exit, _, err) = run_line(line);
+            assert_eq!(exit, Exit::NeedsConsent, "{line}");
+            assert!(err.contains("test tool of the VM rig"), "{line}: {err}");
+        }
+        // A usage error is still a usage error.
+        assert_eq!(run_line("exec --plan p.json").0, Exit::Usage);
     }
 
     #[test]

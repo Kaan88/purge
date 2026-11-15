@@ -761,11 +761,42 @@ journal, quarantine; `PURGE_FAULT_AT` -> exit 0xC0000409) and fakes for rigtool,
 every system change; the continuation loop (reboot, power-off, a marker not taken) included. With
 `RIG_SELFTEST_M2_OUT=<dir>` the stub runs are copied there for a dry run of `truth/m2.sh`.
 
-### 11.7 Not settled by the design (the rig's reading; check against M2-CLI)
+### 11.7 Not settled by the design (the rig's reading, as M2-CLI implements it)
 
 The confirm byte encoding above; `--select` as the full selection; `plan from-targets` keeping the rig's target
-ids as candidate ids; the session id and where report/journal live; the `journal fault-points` output (JSON or
-one point per line, both parsed); `quarantine purge --ids a b ...` and the ids coming from `quarantine expiring`
-(entries matched by the item path); the expiry clock override env (`PURGE_RIG_NOW_OFFSET_DAYS=400`, overridable
-with opts `expiry_env`); a held item retried by a new exec of that item (not a resume of the old session);
-`journal rollback` after a crash inside undo is not run (undo-phase crashes are resumed only).
+ids as candidate ids (in the document's order, origin ManualUser, band Safe, preselected; an optional `category`
+per target, e.g. `UserData`); the session id and where report/journal live; the `journal fault-points` output
+(one point per line, `<name>` TAB `<description>`); `quarantine purge --ids a b ...` and the ids (`<session>/<op>`)
+coming from `quarantine expiring` (entries matched by the item path, `original_path`); a user-data item is
+purged only when `--confirm-user-data <id>...` names it too; the expiry clock override env
+(`PURGE_RIG_NOW_OFFSET_DAYS=400`, overridable with opts `expiry_env`; read by rig-exec builds only); a held item
+retried by a new exec of that item (not a resume of the old session); `journal rollback` after a crash inside
+undo is not run (undo-phase crashes are resumed, which finishes only the undo ops in progress, and then the
+session is undone with `undo --session`).
+
+`exec` prints the `purge.exec/1` report on stdout (and writes it to `-o`), progress and `session <id> <dir>` on
+stderr; `undo` the `purge.undo/1` report. `journal recover` lists the sessions that need recovery
+(`purge.cli.recover/1`, a probe per open intent) and changes nothing; `journal resume` / `rollback` without
+`--session` recover every pending session. A new `exec` is refused while a session waits for recovery. Output
+files are never written through a link at the path. There is no `--data-root`: the engine always uses the
+installed store. A build without `rig-exec` refuses every one of these verbs with exit code 5 and touches
+nothing. Exit codes (also in `purge-engine --help`):
+
+| Code | Meaning |
+|---|---|
+| 0 | ok |
+| 1 | not implemented yet |
+| 2 | usage error or broken precondition |
+| 3 | runtime error |
+| 4 | uninstall failed, cancelled or timed out |
+| 5 | needs the consent dialog (executor verbs of a normal build) |
+| 6 | plan refused: hash, selection, order or confirmation; nothing was done |
+| 7 | needs elevation |
+| 8 | needs recovery first: an interrupted session is pending (journal recover) |
+| 9 | store or journal integrity failure |
+| 10 | partial: not every item ended done (the document is still written) |
+| 11 | undo ended with conflicts or failures (the document is still written) |
+
+An item "ended done" when it is `Done`, `Vanished` or `Skipped(NoLongerEmpty)` (a remove-if-empty whose object
+holds something). So the fixture runs exit 0 and the trap runs exit 10 (deferred and blocked items); the rig
+gates neither on 10. A refusal is any exit other than 0 with no report; the engine refuses with 6.

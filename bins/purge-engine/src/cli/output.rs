@@ -52,6 +52,68 @@ pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     result
 }
 
+/// `FILE_ATTRIBUTE_REPARSE_POINT`.
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+/// `FILE_FLAG_OPEN_REPARSE_POINT`: open a reparse point itself, never what it points to.
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+/// Writes `text` to `path` atomically without following a reparse point: an existing reparse point at
+/// `path` (a symbolic link, a junction) is refused and left alone; the temporary file is a new file
+/// (`CREATE_NEW`, opened with `FILE_FLAG_OPEN_REPARSE_POINT`, so nothing planted under its name is
+/// followed or reused); the rename then replaces the directory entry at `path`, never the object a link
+/// there would name. The executor verbs write their documents this way.
+///
+/// # Errors
+///
+/// A reparse point at `path`, or any I/O error; the temporary file is removed when anything fails.
+pub fn write_atomic_no_follow(path: &Path, text: &str) -> io::Result<()> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the path names no file"))?;
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a reparse point (link or junction) is at the output path; it is not followed or replaced",
+            ));
+        }
+        Ok(meta) if meta.is_dir() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a directory is at the output path",
+            ));
+        }
+        _ => {}
+    }
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let tmp = dir.join(format!(
+        ".{}.{}.{nanos:x}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    // Only a file this call created is ever removed again.
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(&tmp)?;
+    let written = f.write_all(text.as_bytes()).and_then(|()| f.sync_all());
+    drop(f);
+    let result = written.and_then(|()| fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// The sidecar of a plan file: `plan.json` -> `plan.scan.json`, `plan` -> `plan.scan.json`.
 pub fn sidecar_path(plan: &Path) -> PathBuf {
     let name = plan
@@ -120,6 +182,41 @@ mod tests {
         assert_eq!(names, ["doc.json"]);
         // A write into a missing directory fails and leaves nothing behind.
         assert!(write_atomic(&dir.join("missing").join("x.json"), "x").is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_follow_write_replaces_files_and_refuses_reparse_points() {
+        let dir = scratch("nofollow");
+        let path = dir.join("report.json");
+        write_atomic_no_follow(&path, "one\n").unwrap();
+        write_atomic_no_follow(&path, "two\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "two\n");
+        // A junction at the output path is neither followed nor replaced.
+        let target = dir.join("target");
+        fs::create_dir(&target).unwrap();
+        let link = dir.join("link.json");
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if made {
+            let e = write_atomic_no_follow(&link, "x").unwrap_err();
+            assert!(e.to_string().contains("reparse point"), "{e}");
+            assert!(fs::read_dir(&target).unwrap().next().is_none());
+            fs::remove_dir(&link).unwrap();
+        }
+        // A directory at the output path is refused too.
+        assert!(write_atomic_no_follow(&target, "x").is_err());
+        let mut names: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["report.json", "target"]);
         fs::remove_dir_all(&dir).unwrap();
     }
 

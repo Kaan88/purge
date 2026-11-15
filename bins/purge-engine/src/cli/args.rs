@@ -3,8 +3,13 @@
 //!
 //! Options are `--name value` or `--name=value`; `-o` is the short form of `--out`. An option given twice,
 //! an unknown option, a missing value and a missing or extra positional argument are usage errors (exit
-//! code 2). Verbs of later milestones are recognised, their arguments are not interpreted, and they report
-//! "not implemented" (exit code 1).
+//! code 2). `quarantine purge` takes lists: `--ids` and `--confirm-user-data` take every following
+//! argument up to the next option. Verbs of later milestones are recognised, their arguments are not
+//! interpreted, and they report "not implemented" (exit code 1).
+//!
+//! The executor verbs (`exec`, `undo`, `journal`, `quarantine`, `plan from-targets`) are parsed in every
+//! build, so a usage error is reported the same way everywhere; only a `rig-exec` build runs them
+//! ([`crate::cli`]).
 
 use std::path::PathBuf;
 
@@ -26,16 +31,43 @@ verbs:
   scan --fp <fp.json> [--mode post|external|forced] [--app <id>] -o <plan.json>
   scan --path <dir> [--app <id>] -o <plan.json>
   plan show <plan.json>
-  exec --plan <plan.json> --confirm <hash>
-  undo --session <id> [--confirm <hash>]
-  journal recover|resume|rollback
   kb lint <pack.json>... [--baselines <dir>]
 
   <program_id> is an inventory id (HKLM|64|Git_is1) or the Uninstall key name of exactly one entry.
   scan also writes the sidecar <plan>.scan.json next to the plan.
 
-exit codes: 0 ok, 1 not implemented, 2 usage or precondition, 3 runtime error,
-            4 uninstall failed, cancelled or timed out
+executor verbs (headless, without the consent dialog: only a rig-exec build of the VM rig runs them;
+a normal build refuses them with exit code 5):
+  exec --plan <plan.json> --confirm <hash> [--select <ids.json>] [--allow-irreversible]
+       [--restore-point off|high-risk|always] [-o <report.json>]
+  undo --session <id> [--items <ids.json>] [--confirm <plan_hash>] [-o <undo.json>]
+  journal recover
+  journal resume [--session <id>]
+  journal rollback [--session <id>]
+  journal show --session <id>
+  journal fault-points
+  quarantine expiring
+  quarantine purge --ids <session/op>... --yes-irreversible [--confirm-user-data <session/op>...]
+  plan from-targets <targets.json> -o <plan.json>      test tool of the VM rig
+
+  exec reads the sidecar <plan>.scan.json; <hash> is the confirm hash of the plan and the selection.
+  <ids.json> is a JSON array of candidate ids (or {\"ids\": [...]}); without --select the plan's
+  preselected items run. Elevation is needed by exec, undo, journal resume / rollback and
+  quarantine purge. A user-data item is purged only when --confirm-user-data names it too.
+
+exit codes:
+   0  ok
+   1  not implemented yet
+   2  usage error or broken precondition
+   3  runtime error
+   4  uninstall failed, cancelled or timed out
+   5  needs the consent dialog (executor verbs of a normal build)
+   6  plan refused: hash, selection, order or confirmation; nothing was done
+   7  needs elevation
+   8  needs recovery first: an interrupted session is pending (journal recover)
+   9  store or journal integrity failure
+  10  partial: not every item ended done (the document is still written)
+  11  undo ended with conflicts or failures (the document is still written)
 
   --version, -V                             print the version
   --help, -h                                print this help
@@ -68,6 +100,16 @@ pub enum Command {
     JournalResume,
     /// `journal rollback`.
     JournalRollback,
+    /// `journal show`.
+    JournalShow,
+    /// `journal fault-points`.
+    JournalFaultPoints,
+    /// `quarantine expiring`.
+    QuarantineExpiring,
+    /// `quarantine purge`.
+    QuarantinePurge,
+    /// `plan from-targets` (a test tool of the VM rig).
+    PlanFromTargets,
     /// `kb lint`.
     KbLint,
 }
@@ -88,6 +130,11 @@ impl Command {
             Command::JournalRecover => "journal recover",
             Command::JournalResume => "journal resume",
             Command::JournalRollback => "journal rollback",
+            Command::JournalShow => "journal show",
+            Command::JournalFaultPoints => "journal fault-points",
+            Command::QuarantineExpiring => "quarantine expiring",
+            Command::QuarantinePurge => "quarantine purge",
+            Command::PlanFromTargets => "plan from-targets",
             Command::KbLint => "kb lint",
         }
     }
@@ -104,9 +151,124 @@ impl Command {
             | Command::Undo
             | Command::JournalRecover
             | Command::JournalResume
-            | Command::JournalRollback => "M2",
+            | Command::JournalRollback
+            | Command::JournalShow
+            | Command::JournalFaultPoints
+            | Command::QuarantineExpiring
+            | Command::QuarantinePurge
+            | Command::PlanFromTargets => "M2",
             Command::KbLint => "M4",
             Command::Stdio | Command::Broker => "M3",
+        }
+    }
+
+    /// Whether the command is a test tool of the VM rig rather than a verb of the product
+    /// (`plan from-targets`, `journal fault-points`).
+    pub fn is_rig_tool(self) -> bool {
+        matches!(self, Command::PlanFromTargets | Command::JournalFaultPoints)
+    }
+}
+
+/// `--restore-point off|high-risk|always`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RestorePointArg {
+    /// `off`: never.
+    Off,
+    /// `high-risk`: only for a high-risk run (the default).
+    #[default]
+    HighRisk,
+    /// `always`: for every run.
+    Always,
+}
+
+/// `plan from-targets <targets.json> -o <plan.json>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FromTargetsArgs {
+    /// The `purge.rig.targets/0` document.
+    pub targets: PathBuf,
+    /// The plan file; the sidecar goes next to it.
+    pub out: PathBuf,
+}
+
+/// `exec --plan <plan.json> --confirm <hash> [--select <ids.json>] [--allow-irreversible]
+/// [--restore-point m] [-o <report.json>]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecArgs {
+    /// The plan file; its sidecar is read next to it.
+    pub plan: PathBuf,
+    /// The confirm hash of the plan and the selection.
+    pub confirm: String,
+    /// The selected candidate ids; the plan's preselected items when absent.
+    pub select: Option<PathBuf>,
+    /// The user acknowledged that removals without an undo are final.
+    pub allow_irreversible: bool,
+    /// When to ask for a restore point.
+    pub restore_point: RestorePointArg,
+    /// Where the `purge.exec/1` report goes besides stdout.
+    pub out: Option<PathBuf>,
+}
+
+/// `undo --session <id> [--items <ids.json>] [--confirm <plan_hash>] [-o <undo.json>]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoArgs {
+    /// The session id.
+    pub session: String,
+    /// The candidate ids to undo; every op of the session when absent.
+    pub items: Option<PathBuf>,
+    /// The plan hash the caller confirmed; it must be the session's.
+    pub confirm: Option<String>,
+    /// Where the `purge.undo/1` report goes besides stdout.
+    pub out: Option<PathBuf>,
+}
+
+/// `quarantine purge --ids <id>... --yes-irreversible [--confirm-user-data <id>...]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PurgeArgs {
+    /// The `session/op` ids to purge, as `quarantine expiring` lists them.
+    pub ids: Vec<String>,
+    /// The ids among `ids` that are user data, confirmed one by one.
+    pub confirm_user_data: Vec<String>,
+}
+
+/// An executor verb and its arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecVerb {
+    /// `plan from-targets`.
+    PlanFromTargets(FromTargetsArgs),
+    /// `exec`.
+    Exec(ExecArgs),
+    /// `undo`.
+    Undo(UndoArgs),
+    /// `journal recover`.
+    JournalRecover,
+    /// `journal resume [--session <id>]`; every pending session when absent.
+    JournalResume(Option<String>),
+    /// `journal rollback [--session <id>]`; every pending session when absent.
+    JournalRollback(Option<String>),
+    /// `journal show --session <id>`.
+    JournalShow(String),
+    /// `journal fault-points`.
+    JournalFaultPoints,
+    /// `quarantine expiring`.
+    QuarantineExpiring,
+    /// `quarantine purge`.
+    QuarantinePurge(PurgeArgs),
+}
+
+impl ExecVerb {
+    /// The command of the verb.
+    pub fn command(&self) -> Command {
+        match self {
+            ExecVerb::PlanFromTargets(_) => Command::PlanFromTargets,
+            ExecVerb::Exec(_) => Command::Exec,
+            ExecVerb::Undo(_) => Command::Undo,
+            ExecVerb::JournalRecover => Command::JournalRecover,
+            ExecVerb::JournalResume(_) => Command::JournalResume,
+            ExecVerb::JournalRollback(_) => Command::JournalRollback,
+            ExecVerb::JournalShow(_) => Command::JournalShow,
+            ExecVerb::JournalFaultPoints => Command::JournalFaultPoints,
+            ExecVerb::QuarantineExpiring => Command::QuarantineExpiring,
+            ExecVerb::QuarantinePurge(_) => Command::QuarantinePurge,
         }
     }
 }
@@ -191,6 +353,8 @@ pub enum Invocation {
     Scan(ScanArgs),
     /// `plan show`.
     PlanShow(PlanShowArgs),
+    /// An executor verb (run only by a `rig-exec` build).
+    Executor(ExecVerb),
 }
 
 /// Parses a command line (without the program name).
@@ -210,7 +374,33 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Command::Uninstall => uninstall(&rest).map(Invocation::Uninstall),
         Command::Scan => scan(&rest).map(Invocation::Scan),
         Command::PlanShow => plan_show(&rest).map(Invocation::PlanShow),
-        other => Ok(Invocation::NotImplemented(other, rest)),
+        Command::PlanFromTargets => from_targets(&rest)
+            .map(ExecVerb::PlanFromTargets)
+            .map(Invocation::Executor),
+        Command::Exec => exec(&rest).map(ExecVerb::Exec).map(Invocation::Executor),
+        Command::Undo => undo(&rest).map(ExecVerb::Undo).map(Invocation::Executor),
+        Command::JournalRecover => no_arguments("journal recover", &rest)
+            .map(|()| Invocation::Executor(ExecVerb::JournalRecover)),
+        Command::JournalResume => optional_session("journal resume", &rest)
+            .map(ExecVerb::JournalResume)
+            .map(Invocation::Executor),
+        Command::JournalRollback => optional_session("journal rollback", &rest)
+            .map(ExecVerb::JournalRollback)
+            .map(Invocation::Executor),
+        Command::JournalShow => optional_session("journal show", &rest)?
+            .ok_or_else(|| "journal show: needs --session <id>".to_owned())
+            .map(ExecVerb::JournalShow)
+            .map(Invocation::Executor),
+        Command::JournalFaultPoints => no_arguments("journal fault-points", &rest)
+            .map(|()| Invocation::Executor(ExecVerb::JournalFaultPoints)),
+        Command::QuarantineExpiring => no_arguments("quarantine expiring", &rest)
+            .map(|()| Invocation::Executor(ExecVerb::QuarantineExpiring)),
+        Command::QuarantinePurge => quarantine_purge(&rest)
+            .map(ExecVerb::QuarantinePurge)
+            .map(Invocation::Executor),
+        other @ (Command::Stdio | Command::Broker | Command::KbLint) => {
+            Ok(Invocation::NotImplemented(other, rest))
+        }
     }
 }
 
@@ -249,7 +439,15 @@ fn verb(args: &[String]) -> Result<Verb, String> {
         "scan" => Command::Scan,
         "exec" => Command::Exec,
         "undo" => Command::Undo,
-        "plan" => return sub("plan", &[("show", Command::PlanShow)]),
+        "plan" => {
+            return sub(
+                "plan",
+                &[
+                    ("show", Command::PlanShow),
+                    ("from-targets", Command::PlanFromTargets),
+                ],
+            );
+        }
         "journal" => {
             return sub(
                 "journal",
@@ -257,6 +455,17 @@ fn verb(args: &[String]) -> Result<Verb, String> {
                     ("recover", Command::JournalRecover),
                     ("resume", Command::JournalResume),
                     ("rollback", Command::JournalRollback),
+                    ("show", Command::JournalShow),
+                    ("fault-points", Command::JournalFaultPoints),
+                ],
+            );
+        }
+        "quarantine" => {
+            return sub(
+                "quarantine",
+                &[
+                    ("expiring", Command::QuarantineExpiring),
+                    ("purge", Command::QuarantinePurge),
                 ],
             );
         }
@@ -439,6 +648,128 @@ fn plan_show(args: &[String]) -> Result<PlanShowArgs, String> {
     })
 }
 
+fn no_arguments(verb: &str, args: &[String]) -> Result<(), String> {
+    let p = options(verb, args, &[], &[])?;
+    no_positional(verb, &p)
+}
+
+fn optional_session(verb: &str, args: &[String]) -> Result<Option<String>, String> {
+    let p = options(verb, args, &["session"], &[])?;
+    no_positional(verb, &p)?;
+    Ok(p.value("session").map(str::to_owned))
+}
+
+fn from_targets(args: &[String]) -> Result<FromTargetsArgs, String> {
+    let verb = "plan from-targets";
+    let p = options(verb, args, &["out"], &[])?;
+    let targets = PathBuf::from(one_positional(verb, "<targets.json>", &p)?);
+    let out = p
+        .path("out")
+        .ok_or("plan from-targets: needs -o <plan.json> (the sidecar goes next to it)")?;
+    Ok(FromTargetsArgs { targets, out })
+}
+
+fn exec(args: &[String]) -> Result<ExecArgs, String> {
+    let p = options(
+        "exec",
+        args,
+        &["plan", "confirm", "select", "restore-point", "out"],
+        &["allow-irreversible"],
+    )?;
+    no_positional("exec", &p)?;
+    let plan = p.path("plan").ok_or("exec: needs --plan <plan.json>")?;
+    let confirm = p
+        .value("confirm")
+        .ok_or("exec: needs --confirm <hash> (the confirm hash of the plan and the selection)")?
+        .to_owned();
+    let restore_point = match p.value("restore-point") {
+        None => RestorePointArg::default(),
+        Some("off") => RestorePointArg::Off,
+        Some("high-risk") => RestorePointArg::HighRisk,
+        Some("always") => RestorePointArg::Always,
+        Some(other) => {
+            return Err(format!(
+                "exec: unknown --restore-point '{other}' (off, high-risk or always)"
+            ));
+        }
+    };
+    Ok(ExecArgs {
+        plan,
+        confirm,
+        select: p.path("select"),
+        allow_irreversible: p.flag("allow-irreversible"),
+        restore_point,
+        out: p.path("out"),
+    })
+}
+
+fn undo(args: &[String]) -> Result<UndoArgs, String> {
+    let p = options("undo", args, &["session", "items", "confirm", "out"], &[])?;
+    no_positional("undo", &p)?;
+    Ok(UndoArgs {
+        session: p
+            .value("session")
+            .ok_or("undo: needs --session <id>")?
+            .to_owned(),
+        items: p.path("items"),
+        confirm: p.value("confirm").map(str::to_owned),
+        out: p.path("out"),
+    })
+}
+
+/// `--ids a b c` and `--confirm-user-data a b`: each takes every following argument up to the next one
+/// that starts with `-`. The rest goes through [`options`].
+fn quarantine_purge(args: &[String]) -> Result<PurgeArgs, String> {
+    let verb = "quarantine purge";
+    let mut ids: Vec<String> = Vec::new();
+    let mut user_data: Vec<String> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    let mut rest: Vec<String> = Vec::new();
+    let mut it = args.iter().peekable();
+    while let Some(arg) = it.next() {
+        let list = match arg.as_str() {
+            "--ids" => &mut ids,
+            "--confirm-user-data" => &mut user_data,
+            _ => {
+                rest.push(arg.clone());
+                continue;
+            }
+        };
+        if seen.contains(&arg.as_str()) {
+            return Err(format!("{verb}: {arg} given twice"));
+        }
+        seen.push(arg.as_str());
+        let before = list.len();
+        while let Some(value) = it.next_if(|v| !(v.starts_with('-') && v.len() > 1)) {
+            if !value.is_empty() {
+                list.push(value.clone());
+            }
+        }
+        if list.len() == before {
+            return Err(format!("{verb}: {arg} needs at least one <session/op> id"));
+        }
+    }
+    let p = options(verb, &rest, &[], &["yes-irreversible"])?;
+    no_positional(verb, &p)?;
+    if ids.is_empty() {
+        return Err(format!("{verb}: needs --ids <session/op>..."));
+    }
+    if !p.flag("yes-irreversible") {
+        return Err(format!(
+            "{verb}: deleting quarantined items cannot be undone; pass --yes-irreversible"
+        ));
+    }
+    if let Some(stray) = user_data.iter().find(|u| !ids.contains(u)) {
+        return Err(format!(
+            "{verb}: --confirm-user-data names {stray}, which --ids does not list"
+        ));
+    }
+    Ok(PurgeArgs {
+        ids,
+        confirm_user_data: user_data,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,11 +791,6 @@ mod tests {
                 Command::Broker,
             ),
             ("--stdio", Command::Stdio),
-            ("exec --plan plan.json --confirm abc", Command::Exec),
-            ("undo --session s1", Command::Undo),
-            ("journal recover", Command::JournalRecover),
-            ("journal resume", Command::JournalResume),
-            ("journal rollback", Command::JournalRollback),
             (
                 "kb lint a.json b.json --baselines vm/baselines/",
                 Command::KbLint,
@@ -480,11 +806,164 @@ mod tests {
             }
         }
         assert_eq!(
-            p("undo --session s1"),
+            p("kb lint a.json"),
             Ok(Invocation::NotImplemented(
-                Command::Undo,
-                vec!["--session".into(), "s1".into()]
+                Command::KbLint,
+                vec!["a.json".into()]
             ))
+        );
+    }
+
+    fn exec_verb(line: &str) -> ExecVerb {
+        match p(line) {
+            Ok(Invocation::Executor(verb)) => verb,
+            other => panic!("{line}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn executor_verbs_and_their_arguments() {
+        assert_eq!(
+            exec_verb("plan from-targets t.json -o plan.json"),
+            ExecVerb::PlanFromTargets(FromTargetsArgs {
+                targets: "t.json".into(),
+                out: "plan.json".into()
+            })
+        );
+        assert_eq!(
+            exec_verb(
+                "exec --plan p.json --confirm abc --select s.json --allow-irreversible \
+                 --restore-point always -o r.json"
+            ),
+            ExecVerb::Exec(ExecArgs {
+                plan: "p.json".into(),
+                confirm: "abc".into(),
+                select: Some("s.json".into()),
+                allow_irreversible: true,
+                restore_point: RestorePointArg::Always,
+                out: Some("r.json".into())
+            })
+        );
+        assert_eq!(
+            exec_verb("exec --plan p.json --confirm abc"),
+            ExecVerb::Exec(ExecArgs {
+                plan: "p.json".into(),
+                confirm: "abc".into(),
+                select: None,
+                allow_irreversible: false,
+                restore_point: RestorePointArg::HighRisk,
+                out: None
+            })
+        );
+        for (word, want) in [
+            ("off", RestorePointArg::Off),
+            ("high-risk", RestorePointArg::HighRisk),
+            ("always", RestorePointArg::Always),
+        ] {
+            match exec_verb(&format!("exec --plan p --confirm c --restore-point {word}")) {
+                ExecVerb::Exec(a) => assert_eq!(a.restore_point, want),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(
+            exec_verb("undo --session s1 --items i.json --confirm h -o u.json"),
+            ExecVerb::Undo(UndoArgs {
+                session: "s1".into(),
+                items: Some("i.json".into()),
+                confirm: Some("h".into()),
+                out: Some("u.json".into())
+            })
+        );
+        assert_eq!(
+            exec_verb("undo --session s1"),
+            ExecVerb::Undo(UndoArgs {
+                session: "s1".into(),
+                items: None,
+                confirm: None,
+                out: None
+            })
+        );
+        assert_eq!(exec_verb("journal recover"), ExecVerb::JournalRecover);
+        assert_eq!(exec_verb("journal resume"), ExecVerb::JournalResume(None));
+        assert_eq!(
+            exec_verb("journal resume --session s1"),
+            ExecVerb::JournalResume(Some("s1".into()))
+        );
+        assert_eq!(
+            exec_verb("journal rollback --session=s1"),
+            ExecVerb::JournalRollback(Some("s1".into()))
+        );
+        assert_eq!(
+            exec_verb("journal rollback"),
+            ExecVerb::JournalRollback(None)
+        );
+        assert_eq!(
+            exec_verb("journal show --session s1"),
+            ExecVerb::JournalShow("s1".into())
+        );
+        assert_eq!(
+            exec_verb("journal fault-points"),
+            ExecVerb::JournalFaultPoints
+        );
+        assert_eq!(
+            exec_verb("quarantine expiring"),
+            ExecVerb::QuarantineExpiring
+        );
+        assert_eq!(
+            exec_verb("quarantine purge --ids s/1 s/2 --yes-irreversible --confirm-user-data s/2"),
+            ExecVerb::QuarantinePurge(PurgeArgs {
+                ids: vec!["s/1".into(), "s/2".into()],
+                confirm_user_data: vec!["s/2".into()]
+            })
+        );
+        assert_eq!(
+            exec_verb("quarantine purge --yes-irreversible --ids s/3"),
+            ExecVerb::QuarantinePurge(PurgeArgs {
+                ids: vec!["s/3".into()],
+                confirm_user_data: Vec::new()
+            })
+        );
+        for verb in [
+            exec_verb("exec --plan p --confirm c"),
+            exec_verb("journal fault-points"),
+            exec_verb("plan from-targets t -o p"),
+        ] {
+            assert_eq!(verb.command().milestone(), "M2");
+        }
+        assert!(Command::PlanFromTargets.is_rig_tool());
+        assert!(Command::JournalFaultPoints.is_rig_tool());
+        assert!(!Command::Exec.is_rig_tool());
+    }
+
+    #[test]
+    fn executor_usage_errors() {
+        assert!(err("plan from-targets -o p.json").contains("missing <targets.json>"));
+        assert!(err("plan from-targets t.json").contains("-o <plan.json>"));
+        assert!(err("exec --confirm c").contains("--plan"));
+        assert!(err("exec --plan p").contains("--confirm"));
+        assert!(err("exec --plan p --confirm c --restore-point never").contains("--restore-point"));
+        assert!(err("exec --plan p --confirm c --data-root d").contains("unknown option"));
+        assert!(err("exec --plan p --confirm c extra").contains("unexpected argument"));
+        assert!(err("undo").contains("--session"));
+        assert!(err("undo --session s --data-root d").contains("unknown option"));
+        assert!(err("journal recover --session s").contains("unknown option"));
+        assert!(err("journal show").contains("--session"));
+        assert!(err("journal fault-points x").contains("unexpected argument"));
+        assert!(err("journal delete").contains("unknown 'journal' sub-verb"));
+        assert!(err("quarantine").contains("needs a sub-verb"));
+        assert!(err("quarantine list").contains("unknown 'quarantine' sub-verb"));
+        assert!(err("quarantine expiring --all").contains("unknown option"));
+        assert!(err("quarantine purge --ids s/1").contains("--yes-irreversible"));
+        assert!(err("quarantine purge --yes-irreversible").contains("--ids"));
+        assert!(err("quarantine purge --ids --yes-irreversible").contains("at least one"));
+        assert!(err("quarantine purge --ids a --ids b --yes-irreversible").contains("given twice"));
+        assert!(
+            err("quarantine purge --ids s/1 --yes-irreversible --confirm-user-data s/2")
+                .contains("does not list")
+        );
+        assert!(
+            err("quarantine purge --ids s/1 --yes-irreversible --yes-irreversible")
+                .contains("given twice")
         );
     }
 

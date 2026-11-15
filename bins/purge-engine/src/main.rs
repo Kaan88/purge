@@ -5,7 +5,9 @@
 //! - CLI verbs for the VM rig and power users. Headless `exec` exists only with the `rig-exec` feature.
 //!
 //! Milestone: the CLI verbs `inventory`, `harvest`, `uninstall`, `scan` and `plan show` in M1a;
-//! `exec`/`undo`/`journal` in M2, `--stdio` and `--broker` in M3 (§11.1). Those report "not implemented"
+//! `exec`/`undo`/`journal`/`quarantine` in M2, `--stdio` and `--broker` in M3 (§11.1). The M2 executor
+//! verbs run only in a `rig-exec` build (the VM rig); a normal build refuses them with exit code 5
+//! because they need the consent dialog. `--stdio`, `--broker` and `kb lint` report "not implemented"
 //! with exit code 1.
 //!
 //! This file only wires the live machine into [`purge_engine::cli::run`]: the `Live` sources, the live

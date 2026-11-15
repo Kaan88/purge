@@ -131,6 +131,11 @@ function Complete-Round($Rec, $Row, [string]$After) {
             } else { $Row.execdiff_ok = $null; $Row.notes += 'no report after resume: execdiff skipped' }
             $u = Invoke-M2Engine -Step "undo-$tag" -Arguments (New-M2UndoArgs $Rec.session '' '' (F "undo-$tag.json")) -Calls $Calls -StdoutFile (F "undo-$tag.out") -NoThrow
             $Row.undo_exit = $u.exit
+        } elseif ($Row.after_exit -eq 0) {
+            # Resume finishes only the undo ops the crash interrupted (M2-CLI); the rest of the session is
+            # still executed, so the undo is run again to bring everything back before deep C.
+            $u = Invoke-M2Engine -Step "undo-$tag" -Arguments (New-M2UndoArgs $Rec.session '' '' (F "undo-$tag.json")) -Calls $Calls -StdoutFile (F "undo-$tag.out") -NoThrow
+            $Row.undo_exit = $u.exit
         }
     }
     $null = Copy-M2Session $Rec.session $D "sess-$tag"

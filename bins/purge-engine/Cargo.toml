@@ -13,7 +13,9 @@ path = "src/lib.rs"
 
 [features]
 # Headless `exec` without the consent dialog, for the VM rig only (ENGINE_PLAN.md §3.4). Never in releases.
-rig-exec = ["purge-exec/fault-inject"]
+# The executor is linked only with this feature: a normal build has no code path into purge-exec
+# (`cargo xtask check-deps` enforces it).
+rig-exec = ["dep:purge-exec", "purge-exec/fault-inject"]
 
 [dependencies]
 purge-model.workspace = true
@@ -27,12 +29,17 @@ purge-scan.workspace = true
 purge-guard.workspace = true
 purge-policy.workspace = true
 purge-plan.workspace = true
-purge-exec.workspace = true
+purge-exec = { workspace = true, optional = true }
 purge-kb.workspace = true
 purge-rpc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+# The relaxed test store and the in-memory boot-move list for tests/exec_cli.rs (test builds only).
+purge-exec = { workspace = true, features = ["test-support"] }
+purge-win = { workspace = true, features = ["read", "write"] }
 
 [lints]
 workspace = true

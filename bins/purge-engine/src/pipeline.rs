@@ -896,7 +896,11 @@ fn run_scan(
 }
 
 /// The canonical form of each directory; ones that do not canonicalise are dropped with a warning.
-fn canonical_dirs(dirs: &[String], guard: &GuardEnv, warnings: &mut Vec<String>) -> Vec<String> {
+pub(crate) fn canonical_dirs(
+    dirs: &[String],
+    guard: &GuardEnv,
+    warnings: &mut Vec<String>,
+) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for dir in dirs {
         match canon_path(dir.trim_end_matches('\\'), guard, None) {
