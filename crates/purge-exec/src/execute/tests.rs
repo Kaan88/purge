@@ -2125,6 +2125,7 @@ fn a_validated_key_counts_its_subkeys_toward_the_classes_limit() {
             is_link: false,
             owner: "S-1-5-32-544".into(),
             last_write_time: purge_model::FileTime(1),
+            tree_sha256: None,
         })
     };
     let reasons = |facts_of: &dyn Fn(OpId) -> Option<ItemFacts>| {
