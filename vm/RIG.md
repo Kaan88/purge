@@ -482,6 +482,15 @@ used from Linux. Nothing in the guest changes; the guest still gets the Windows 
   driver `ALSA` (with `useDefault="true"`, so each host picks its own); Windows VirtualBox 7.2.20+ reads it.
   The pre-Linux settings files are in `<vmdir>/_vbox-backup-20261114/`. Power the VMs off before booting Windows;
   Windows VirtualBox still lists them under their `E:\` paths.
+- **A VM shows as `<inaccessible>` after the other host used it** ("Could not find an open hard disk with UUID
+  ..."). VirtualBox keeps the VM's disk tree in the host's own global `VirtualBox.xml`, not in the `.vbox`, and
+  every snapshot restore makes a new current-state disk. So after one host ran a campaign, the other host's
+  registry names a disk that is gone. Repair, with the VM powered off:
+  `pwsh -NoProfile -File vm/fix-vbox-media.ps1 -Vbox <path to the .vbox>` (`-Print` only shows the block). It
+  reads the VDI headers and writes the tree of the disks in use into the `.vbox`; VirtualBox reads it on the
+  next access and moves it to its global file when it next saves the VM. A copy of the `.vbox` is kept beside
+  it. Used on Windows on 2026-11-15 for Inbound (by hand, then the script was written from it and checked with
+  `-Print`); not yet run on Linux, where Inbound will need it at the next switch.
 - **VirtualBox with the KVM backend (since 2026-11-14 02:45).** The stock `virtualbox` package (VT-x through
   `vboxdrv`) cannot run beside a KVM guest: in a deliberate test (02:27, Android emulator running) the kernel logged
   `kvm_intel: vmread failed` / `vmwrite failed` one second after `startvm`, and the emulator's `qemu-system-x86`

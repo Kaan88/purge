@@ -10,7 +10,8 @@ is at policy **m1a.6** and verified: full CI, snapshot tests, an independent rev
 follow-up ("accept"), a mutation run, an offline re-plan of every capture, and a short live campaign with the
 final binary. The work is committed locally on `m1a` on top of `f0923b2`; **nothing of it is pushed.** One
 point is a judgement the user may want to look at: the live repeat of the two Firefox gate runs was done on
-Clean-Pro, because the Inbound VM cannot be loaded on Windows at present (below).
+Clean-Pro, because the Inbound VM could not be loaded on Windows at the time. It has been repaired since
+(below), so the repeat can now be run on Inbound itself if wanted; it has not been.
 
 ## Engine
 
@@ -96,14 +97,13 @@ Store self-updates, classified sanity residual, scoring on Windows).
 
 - **Windows, for the user:** run `chkdsk C: /f` (needs elevation and a restart); the Linux side logged NTFS
   index errors on C: on 2026-11-14. Not done by the assistant.
-- **Inbound-Win11-Test cannot be loaded by VirtualBox on Windows.** `VBoxManage list vms` shows it as
-  `<inaccessible>`: "Could not find an open hard disk with UUID {85ca7a67-…}". Its
-  `E:\inbound-vm\Inbound-Win11-Test\Inbound-Win11-Test.vbox` was last written by the Linux build (settings
-  version 1.20-linux) and has no `<MediaRegistry>`; on Linux the disks are registered in that host's global
-  `VirtualBox.xml`. The backup in `_vbox-backup-20261114/` has the registry but names the current-state disk
-  `{0ffb9df5-…}`, which no longer exists (the current one is `{acaf0b8e-…}`, child of `{f85c3eb0-…}`). A repair
-  is to put the backup's `<MediaRegistry>` block into the current `.vbox` with that one UUID changed, with
-  VirtualBox closed and a copy of the file kept. Nothing was changed. From Linux the VM presumably still works.
+- **Inbound-Win11-Test works on Windows again** (repaired 2026-11-15, after the live check). It was
+  `<inaccessible>` because each host keeps the VM's disk tree in its own global `VirtualBox.xml` and the Linux
+  session had made a new current-state disk. The tree was written into the `.vbox`; the VM loads, has its four
+  snapshots, boots from `rig-base` to the `tester` logon, and is powered off at `rig-base`. The pre-repair
+  `.vbox` is `Inbound-Win11-Test.vbox.before-mediaregistry-20261115` in the VM folder.
+  **On Linux the VM will now be inaccessible for the same reason**; run `vm/fix-vbox-media.ps1` there
+  (`vm/RIG.md`, Linux host section). The script has only been run on Windows.
 - Purge-CleanPro works on Windows, is powered off, current snapshot `rig-base`.
 - The VM password file is outside the repo and is never committed.
 - `target/release/purge-engine.exe` and `vm/rigtool/target/release/rigtool.exe` are now Windows msvc builds of
