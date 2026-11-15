@@ -52,6 +52,7 @@ impl World {
             baseline: self.baseline.as_ref(),
             inventory: &self.inventory,
             target: &self.inventory[0],
+            cutoff: None,
         }
     }
 
@@ -1443,6 +1444,437 @@ fn a_list_hit_that_can_no_longer_be_placed_is_not_recorded_on_the_whole_value() 
         assert_eq!(entries, [], "{now:?}");
         assert_eq!(weak, 1, "{now:?}");
     }
+}
+
+/// Rig run x1-vscode-userstate: the user made empty `.gemspec\OpenWithProgids` and
+/// `.edn\OpenWithProgids` keys before the install, the installer wrote its one value into each, and
+/// after the uninstall both keys of each pair were preselected as the app's skeletons. The times are
+/// the run's: the planted `.ext` key keeps its time from before the install directory existed, its
+/// subkey got a new one when the value was written.
+#[test]
+fn a_key_older_than_the_install_is_not_a_skeleton_of_the_app() {
+    const SECOND: u64 = 10_000_000;
+    const INSTALL: u64 = 134_000_000_000_000_000;
+    let planted = INSTALL - 21 * SECOND;
+    let written = INSTALL + 31 * SECOND;
+    let command = format!("\"{CODE}\\Code.exe\" \"%1\"");
+    let mut b = builder();
+    for ext in ["gemspec", "gradle", "ini", "kts"] {
+        let progid = format!(r"{CLASSES}\VSCode.{ext}");
+        b = b
+            .sz(&format!(r"{progid}\shell\open\command"), "", &command)
+            .key_lwt(&progid, written)
+            .sz(
+                &format!(r"{CLASSES}\.{ext}\OpenWithProgids"),
+                &format!("VSCode.{ext}"),
+                "",
+            )
+            .key_lwt(&format!(r"{CLASSES}\.{ext}\OpenWithProgids"), written);
+    }
+    let fixture = b
+        // The user's: made before the install, with the subkey already in it.
+        .key_lwt(&format!(r"{CLASSES}\.gemspec"), planted)
+        // The installer's: the key and the subkey were created by the install.
+        .key_lwt(&format!(r"{CLASSES}\.gradle"), written)
+        // What the rule cannot see: the key was there, the installer created the subkey in it and so
+        // moved the key's own time.
+        .key_lwt(&format!(r"{CLASSES}\.ini"), written)
+        // A key with a new time whose subkey has an old one (somebody wrote into the key since).
+        .key_lwt(&format!(r"{CLASSES}\.kts"), written)
+        .key_lwt(&format!(r"{CLASSES}\.kts\OpenWithProgids"), planted)
+        // Creating `.gradle` moved the time of the Classes key itself.
+        .key_lwt(CLASSES, written)
+        .build();
+    let mut anchors = AnchorSet::new();
+    anchors.add_root(CODE);
+    for ext in ["gemspec", "gradle", "ini", "kts"] {
+        anchors.add_progid(&format!("VSCode.{ext}"));
+    }
+    let world = World {
+        fixture,
+        anchors,
+        roots: vec![install_root(CODE)],
+        inno: Vec::new(),
+        baseline: Some(baseline(&[r"HKLM\SOFTWARE", CLASSES])),
+        inventory: vec![entry(
+            "{EA457B21-F73E-494C-ACAB-524FDE069978}_is1",
+            "Microsoft Visual Studio Code",
+            "Microsoft Corporation",
+            CODE,
+            &format!(r"{CODE}\unins000.exe"),
+        )],
+    };
+    let subtrees = |cutoff: Option<purge_harvest::anchors::ComCutoff>| {
+        let mut ctx = world.ctx();
+        ctx.cutoff = cutoff;
+        let snapshot = refsnap::capture(&ctx);
+        subtree::capture(&ctx, &subtree::keys(&ctx, &snapshot))
+    };
+    let cutoff = |exact: bool| {
+        Some(purge_harvest::anchors::ComCutoff {
+            time: purge_model::FileTime(INSTALL),
+            exact,
+        })
+    };
+    let ext = |name: &str| format!(r"{CLASSES}\.{name}");
+    let sub = |name: &str| format!(r"{CLASSES}\.{name}\OpenWithProgids");
+
+    // Without any install time every pair looks like the app's.
+    let got = subtrees(None);
+    for name in ["gemspec", "gradle", "ini"] {
+        assert!(attributed(&got, &ext(name)), "{name}");
+        assert!(attributed(&got, &sub(name)), "{name}");
+    }
+
+    // With the exact time: the planted key is older than the install, and its subkey existed
+    // before the install too (creating it would have moved the planted key's time).
+    let got = subtrees(cutoff(true));
+    assert!(!attributed(&got, &ext("gemspec")));
+    assert!(!attributed(&got, &sub("gemspec")));
+    // The installer's own pair is untouched by the rule.
+    assert!(attributed(&got, &ext("gradle")));
+    assert!(attributed(&got, &sub("gradle")));
+    // The known gap: a pre-existing key the installer wrote a subkey into has a new time.
+    assert!(attributed(&got, &ext("ini")));
+    // An older subkey takes the key above it along.
+    assert!(!attributed(&got, &ext("kts")));
+    assert!(!attributed(&got, &sub("kts")));
+
+    // The same verdicts as a list for the fingerprint (`older_keys`), for every proof the scan has.
+    let older = |cutoff| {
+        let mut ctx = world.ctx();
+        ctx.cutoff = cutoff;
+        let keys = ["gemspec", "gradle", "ini", "kts", "nokey"]
+            .into_iter()
+            .flat_map(|name| [ext(name), sub(name)]);
+        subtree::older_keys(&ctx, keys)
+    };
+    assert_eq!(
+        older(cutoff(true)),
+        [ext("gemspec"), sub("gemspec"), sub("kts")]
+    );
+    assert!(older(cutoff(false)).is_empty());
+    assert!(older(None).is_empty());
+
+    // A looser hint concludes nothing here.
+    let got = subtrees(cutoff(false));
+    assert!(attributed(&got, &ext("gemspec")));
+}
+
+/// A registry that refuses to tell about one key (an ACL that denies `KEY_QUERY_VALUE`), over a
+/// fixture.
+struct Unreadable<'a> {
+    inner: &'a Fixture,
+    key: String,
+}
+
+impl purge_source::registry::RegistrySource for Unreadable<'_> {
+    fn key_info(
+        &self,
+        key: &str,
+    ) -> purge_source::types::SourceResult<purge_source::types::KeyInfo> {
+        if key.eq_ignore_ascii_case(&self.key) {
+            return Err(purge_source::types::SourceError::AccessDenied);
+        }
+        self.inner.key_info(key)
+    }
+    fn subkeys(&self, key: &str) -> purge_source::types::SourceResult<Vec<String>> {
+        self.inner.subkeys(key)
+    }
+    fn values(
+        &self,
+        key: &str,
+    ) -> purge_source::types::SourceResult<Vec<purge_source::types::RegValue>> {
+        self.inner.values(key)
+    }
+    fn value(
+        &self,
+        key: &str,
+        name: &str,
+    ) -> purge_source::types::SourceResult<purge_source::types::RegData> {
+        self.inner.value(key, name)
+    }
+    fn loaded_user_sids(&self) -> purge_source::types::SourceResult<Vec<String>> {
+        self.inner.loaded_user_sids()
+    }
+    fn current_control_set(&self) -> purge_source::types::SourceResult<u32> {
+        self.inner.current_control_set()
+    }
+}
+
+/// `older_keys` says "this key existed before the install" and a key it does not name can be
+/// proven the app's skeleton. Whatever it cannot find out must therefore count as older: a key
+/// without a time, a key that cannot be read, a key whose parent has no time or cannot be read.
+/// Only a key that is not there, and one that is read with its parent and is newer, are left out.
+#[test]
+fn older_keys_take_what_they_cannot_tell_for_older() {
+    const INSTALL: u64 = 134_000_000_000_000_000;
+    let (old, new) = (INSTALL - 10_000_000, INSTALL + 10_000_000);
+    let key = |name: &str| format!(r"{CLASSES}\{name}");
+    let fixture = builder()
+        .key_lwt(CLASSES, new)
+        // No time at all (a source that does not report one).
+        .key_lwt(&key(".notime"), 0)
+        // New, in a parent without a time.
+        .key_lwt(&key(".notime\\OpenWithProgids"), new)
+        // New, in a new parent: the installer's.
+        .key_lwt(&key(".new"), new)
+        .key_lwt(&key(".new\\OpenWithProgids"), new)
+        // New, in a new parent that cannot be read (see `Unreadable`).
+        .key_lwt(&key(".closed"), new)
+        .key_lwt(&key(".closed\\OpenWithProgids"), new)
+        // New, in an old parent; and old in a new one.
+        .key_lwt(&key(".old"), old)
+        .key_lwt(&key(".old\\OpenWithProgids"), new)
+        .key_lwt(&key(".kts"), new)
+        .key_lwt(&key(".kts\\OpenWithProgids"), old)
+        // There, and refused: the fixture knows nothing below it.
+        .denied(&key(".refused"))
+        .build();
+    let mut anchors = AnchorSet::new();
+    anchors.add_root(CODE);
+    let world = World {
+        fixture,
+        anchors,
+        roots: vec![install_root(CODE)],
+        inno: Vec::new(),
+        baseline: None,
+        inventory: vec![entry(
+            "{EA457B21-F73E-494C-ACAB-524FDE069978}_is1",
+            "Microsoft Visual Studio Code",
+            "Microsoft Corporation",
+            CODE,
+            &format!(r"{CODE}\unins000.exe"),
+        )],
+    };
+    let reg = Unreadable {
+        inner: &world.fixture,
+        key: key(".closed"),
+    };
+    let names = [
+        ".notime", ".new", ".closed", ".old", ".kts", ".refused", ".absent",
+    ];
+    let asked = || {
+        names
+            .into_iter()
+            .flat_map(|name| [key(name), key(&format!(r"{name}\OpenWithProgids"))])
+    };
+    let older = |exact: bool| {
+        let mut ctx = world.ctx();
+        ctx.reg = &reg;
+        ctx.cutoff = Some(purge_harvest::anchors::ComCutoff {
+            time: purge_model::FileTime(INSTALL),
+            exact,
+        });
+        subtree::older_keys(&ctx, asked())
+    };
+    let sub = |name: &str| key(&format!(r"{name}\OpenWithProgids"));
+    let mut want = vec![
+        // The key cannot be read; its subkey can, but not the key above it.
+        key(".closed"),
+        sub(".closed"),
+        // Older by its own time.
+        sub(".kts"),
+        // No time; and a parent without one.
+        key(".notime"),
+        sub(".notime"),
+        // Older by its own time, and by its parent's.
+        key(".old"),
+        sub(".old"),
+        // Refused, with whatever is below it.
+        key(".refused"),
+        sub(".refused"),
+    ];
+    want.sort();
+    assert_eq!(older(true), want);
+    // `.new`, its subkey and `.kts` are read and newer; `.absent` is not there.
+    assert!(older(false).is_empty());
+
+    // The subtree capture judges with the same clock: a subtree whose key has no time, or whose
+    // parent cannot be read, is not attributed under an exact cutoff.
+    let mut ctx = world.ctx();
+    ctx.reg = &reg;
+    ctx.cutoff = Some(purge_harvest::anchors::ComCutoff {
+        time: purge_model::FileTime(INSTALL),
+        exact: true,
+    });
+    let got = subtree::capture(&ctx, &asked().collect::<Vec<_>>());
+    for name in [".notime", ".closed", ".old", ".kts"] {
+        for k in [key(name), sub(name)] {
+            if let Some(tree) = find(&got, &k) {
+                assert!(!tree.fully_attributed, "{k}");
+            }
+        }
+    }
+}
+
+/// The keys `older_keys` is asked about come from four places, and a scanner may start a
+/// skeleton proof from a key of any of them: each must be there for itself.
+#[test]
+fn older_key_candidates_come_from_four_sources() {
+    let ext = format!(r"{CLASSES}\.tidy");
+    let tree = SubtreeBaseline {
+        key: format!(r"{CLASSES}\Tidy.Document"),
+        values: Vec::new(),
+        subkeys: vec!["shell".into(), r"shell\open".into()],
+        lwt: purge_model::FileTime(1),
+        ti_owned: false,
+        fully_attributed: true,
+    };
+    let journal = purge_model::ExtJournalEntry {
+        ext: ".tidy".into(),
+        key: ext.clone(),
+        openwith_ours: vec!["Tidy.Document".into()],
+        openwith_others: Vec::new(),
+        subkey_count: 1,
+        default: None,
+        previous_default: None,
+        other_values: Vec::new(),
+        other_subkeys: Vec::new(),
+        ti_owned: false,
+        vendor_backup: None,
+        file_exts_key: None,
+        toast_values: Vec::new(),
+    };
+    let logged = inno_key(
+        InnoRecordKind::RegDeleteKeyIfEmpty,
+        r"HKLM\SOFTWARE\Acme Tools",
+    );
+    // A record on a value names no key of its own.
+    let mut value_record = logged.clone();
+    value_record.target = Target::RegValue {
+        path: r"HKLM\SOFTWARE\Other".into(),
+        name: "x".into(),
+    };
+    let from = subtree::older_key_candidates;
+    assert_eq!(
+        from(std::slice::from_ref(&tree), &[], &[]),
+        [
+            format!(r"{CLASSES}\Tidy.Document"),
+            format!(r"{CLASSES}\Tidy.Document\shell"),
+            format!(r"{CLASSES}\Tidy.Document\shell\open"),
+        ]
+    );
+    assert_eq!(
+        from(&[], std::slice::from_ref(&journal), &[]),
+        [ext.clone(), format!(r"{ext}\OpenWithProgids")]
+    );
+    assert_eq!(
+        from(&[], &[], &[logged.clone(), value_record.clone()]),
+        [r"HKLM\SOFTWARE\Acme Tools"]
+    );
+    assert_eq!(
+        from(&[tree], &[journal], &[value_record, logged]).len(),
+        3 + 2 + 1
+    );
+}
+
+/// The harvest and REG-ENV must agree on what an entry of `Path` is and where it stands: both split
+/// with `prefix::list_entries`. A `;` inside quotes does not make two entries, an entry written
+/// that way is nobody's, and the entry after it keeps its position.
+#[test]
+fn a_quoted_semicolon_in_path_is_one_entry_for_the_snapshot() {
+    let env = format!(r"HKU\{SID}\Environment");
+    let fixture = builder()
+        .expand_sz(
+            &env,
+            "Path",
+            &format!(r#""{CODE};x\bin";{CODE}\bin;"{CODE}\cmd;C:\Users\tester\tools"#),
+        )
+        .build();
+    let mut anchors = AnchorSet::new();
+    anchors.add_root(CODE);
+    let world = World {
+        fixture,
+        anchors,
+        roots: vec![install_root(CODE)],
+        inno: Vec::new(),
+        baseline: None,
+        inventory: vec![entry(
+            "{EA457B21-F73E-494C-ACAB-524FDE069978}_is1",
+            "Microsoft Visual Studio Code",
+            "Microsoft Corporation",
+            CODE,
+            &format!(r"{CODE}\unins000.exe"),
+        )],
+    };
+    let snapshot = refsnap::capture(&world.ctx());
+    let segments: Vec<&Target> = snapshot
+        .iter()
+        .map(|e| &e.target)
+        .filter(|t| matches!(t, Target::RegMultiSzSegment { .. }))
+        .collect();
+    assert_eq!(
+        segments,
+        [&Target::RegMultiSzSegment {
+            path: env,
+            name: "Path".into(),
+            segment: format!(r"{CODE}\bin"),
+            index: Some(1),
+        }]
+    );
+}
+
+/// An entry of `Path` that begins with the app's folder and holds more is not the app's entry:
+/// a second path after a quote, a comma or a blank, or a reference to a variable that holds a list.
+/// The harvest reads an entry as REG-ENV does (`prefix::ListEntry::read`, as written and
+/// expanded), records none of them, and keeps the positions of the entries it does record.
+#[test]
+fn a_path_entry_that_holds_more_than_one_directory_is_not_in_the_snapshot() {
+    let env = format!(r"HKU\{SID}\Environment");
+    let tools = r"C:\Users\tester\tools";
+    let entries = [
+        "%MYDIRS%".to_owned(),
+        format!(r#""{CODE}\bin" "{tools}""#),
+        format!(r"{CODE}\bin,{tools}"),
+        format!(r"{CODE}\bin {tools}"),
+        "%QUOTED%".to_owned(),
+        r"%MYDIRS%\x".to_owned(),
+        // One directory each: recorded.
+        "%MYDIR%".to_owned(),
+        format!(r"{CODE}\bin,tools"),
+        format!(r#""{CODE}\bin\""#),
+    ];
+    let fixture = builder()
+        .expand_sz(&env, "Path", &entries.join(";"))
+        .env("MYDIRS", &format!(r"{CODE}\bin;{tools}"))
+        .env("QUOTED", &format!(r#"{CODE}\bin" "{tools}"#))
+        .env("MYDIR", &format!(r"{CODE}\bin"))
+        .build();
+    let mut anchors = AnchorSet::new();
+    anchors.add_root(CODE);
+    let world = World {
+        fixture,
+        anchors,
+        roots: vec![install_root(CODE)],
+        inno: Vec::new(),
+        baseline: None,
+        inventory: vec![entry(
+            "{EA457B21-F73E-494C-ACAB-524FDE069978}_is1",
+            "Microsoft Visual Studio Code",
+            "Microsoft Corporation",
+            CODE,
+            &format!(r"{CODE}\unins000.exe"),
+        )],
+    };
+    let snapshot = refsnap::capture(&world.ctx());
+    let segments: Vec<(u32, &str)> = snapshot
+        .iter()
+        .filter_map(|e| match &e.target {
+            Target::RegMultiSzSegment { segment, index, .. } => {
+                Some((index.expect("a position"), segment.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        segments,
+        [
+            (6, entries[6].as_str()),
+            (7, entries[7].as_str()),
+            (8, entries[8].as_str())
+        ]
+    );
 }
 
 #[test]

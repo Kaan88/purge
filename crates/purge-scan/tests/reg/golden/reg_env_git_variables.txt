@@ -7,5 +7,6 @@
     root=C:\Program Files\Git
 [REG-ENV] DeleteValue RegValue HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment | "GIT_SSH"
   id=c-2844deac340f8c25 owner="Git" category=Registration harm=Low reversibility=Full child_count=None
-  evidence InstallerManifest(Inno) A/8 Value AdminOnly source=inno:log
+  evidence InstallerManifest(Inno) B/8 Value AdminOnly source=inno:log
     record=RegDeleteValue
+    unproven=the variable does not lead into the app's folder

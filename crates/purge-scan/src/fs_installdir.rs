@@ -10,6 +10,16 @@
 //!   the common blockers. A file created or written after the uninstall ended gives the
 //!   `ModifiedAfterUninstall` negative and the `UnmatchedChildren` soft blocker: something is still
 //!   writing there.
+//! - **What is left in it must be shown to be the app's.** That the directory was the app's does not
+//!   make every file in it the app's: people keep notes, projects and other tools in an install
+//!   folder, and an uninstaller leaves exactly those behind. A file counts as the app's only when the
+//!   installer's log names it itself (a file record or an `[UninstallDelete]` item on the file; a
+//!   record on a directory above it names nothing in it). Every other file is unproven, whoever made
+//!   it and whenever: the root then gets `UnmatchedChildren` with their number (and `UserData` when
+//!   one of them is not a program file), so it is listed unticked, and the files and directories the
+//!   log does name are offered one by one next to it. A root that holds no file at all (empty
+//!   directories only) has nothing foreign in it and stays as it was. Without an installer log no
+//!   file is proven, so a root with any file left is always unticked.
 //! - **An InferredRoot is never offered whole** (§5.2 "Root kinds"). Only descendants the Inno uninstall
 //!   log names are offered, each with its own `InstallerManifest` evidence.
 //! - A referenced data directory is not this scanner's business.
@@ -54,29 +64,41 @@ impl Scanner for FsInstallDir {
     fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
         let mut out = Vec::new();
         let processes = ctx.sys.processes();
+        // What the log names is offered item by item only once the app is verified gone. While it
+        // is installed every file of the log is still there: thousands of rows that could only
+        // be Blocked (`NotGone`), next to a root that says the same in one (rig runs f1d-git:
+        // 9,546 items, f1d-vscode-user: 3,278).
+        let gone = ctx.verify_gone_passed();
         for root in &ctx.fp.roots {
             match root.kind {
-                RootKind::InstallRoot => whole_root(ctx, root, &processes, &mut out),
-                RootKind::InferredRoot => owned_descendants(ctx, root, &processes, &mut out),
-                RootKind::ReferencedDataDir => {}
+                RootKind::InstallRoot => {
+                    if whole_root(ctx, root, &processes, &mut out) && gone {
+                        owned_descendants(ctx, root, &processes, &mut out);
+                    }
+                }
+                RootKind::InferredRoot if gone => {
+                    owned_descendants(ctx, root, &processes, &mut out);
+                }
+                RootKind::InferredRoot | RootKind::ReferencedDataDir => {}
             }
         }
         out
     }
 }
 
-/// Offers a still existing InstallRoot as one directory.
+/// Offers a still existing InstallRoot as one directory. Returns whether it holds files that are not
+/// shown to be the app's: the caller then offers what the installer's log names one by one.
 fn whole_root(
     ctx: &ScanCtx<'_>,
     root: &Root,
     processes: &SourceResult<Vec<ProcessInfo>>,
     out: &mut Vec<Candidate>,
-) {
+) -> bool {
     let Ok(meta) = ctx.fs.metadata(&root.path) else {
-        return;
+        return false;
     };
     if !meta.is_dir() {
-        return;
+        return false;
     }
     let mut b = ctx.candidate(
         ID,
@@ -87,7 +109,7 @@ fn whole_root(
         Category::AppFiles,
     );
     if !b.inside_install_root() {
-        return;
+        return false;
     }
     b.require_verify_gone().common_blockers();
     live_blockers(ctx, &mut b, &root.path, processes);
@@ -104,14 +126,22 @@ fn whole_root(
             detail = detail.with("path", path.clone());
         }
         b.negative(EvidenceKind::ModifiedAfterUninstall, detail);
-        b.blocker(Blocker::UnmatchedChildren {
-            n: measured.modified_after,
-        });
+    }
+    // The directory was the app's; a file in it is the app's only when the installer's log says so.
+    let unproven = undeclared(ctx, &root.path);
+    let unmatched = unproven.files.max(measured.modified_after);
+    if unmatched > 0 {
+        b.blocker(Blocker::UnmatchedChildren { n: unmatched });
+    }
+    if unproven.not_programs > 0 {
+        b.blocker(Blocker::UserData);
     }
     emit(out, b);
+    unproven.files > 0
 }
 
-/// Offers what the Inno log names under an InferredRoot; the root itself is never a target.
+/// Offers what the Inno log names under an InferredRoot, or under an InstallRoot that cannot go whole;
+/// the root itself is not a target here.
 fn owned_descendants(
     ctx: &ScanCtx<'_>,
     root: &Root,
@@ -127,11 +157,15 @@ fn owned_descendants(
             InnoRecordKind::DeleteDirOrFiles => false,
             _ => continue,
         };
+        // An item under an InstallRoot that lies inside this (inferred) root is that root's.
+        let other_root = ctx
+            .inside_install_root(path)
+            .is_some_and(|inner| !prefix::is_same(&inner.path, &root.path));
         if record.existed_before
             || record.shared
             || has_dot_segment(path)
             || !prefix::is_inside(path, &root.path)
-            || ctx.inside_install_root(path).is_some()
+            || other_root
         {
             continue;
         }
@@ -158,27 +192,50 @@ fn owned_descendants(
         // does not name itself (a `[Dirs]` entry is only removed when empty), and an InferredRoot gives
         // them no cover either. Such a directory is offered unchecked.
         if meta.is_dir() {
-            let undeclared = undeclared_files(ctx, path);
-            if undeclared > 0 {
-                b.blocker(Blocker::UnmatchedChildren { n: undeclared });
+            let unproven = undeclared(ctx, path);
+            if unproven.files > 0 {
+                b.blocker(Blocker::UnmatchedChildren { n: unproven.files });
             }
         }
         emit(out, b);
     }
 }
 
-/// The number of files under `dir` that no file record of the Inno log names. Files in directories the
-/// bounded walk could not read are not counted here; [`sized`] flags such a walk as `TooLarge`.
-fn undeclared_files(ctx: &ScanCtx<'_>, dir: &str) -> u32 {
-    let declared = |file: &str| {
-        ctx.fp.inno.iter().any(|r| {
-            r.kind == InnoRecordKind::DeleteFile
-                && !r.existed_before
-                && !r.shared
-                && matches!(&r.target, Target::Path { path } if prefix::is_same(path, file))
-        })
-    };
-    let mut count = 0u32;
+/// The files under a directory that the installer's log does not name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Undeclared {
+    /// How many there are.
+    files: u32,
+    /// How many of them are not program files (documents, notes, settings: possibly the user's own).
+    not_programs: u32,
+}
+
+/// Counts the files under `dir` that the Inno log does not name itself: no file record and no
+/// `[UninstallDelete]` record on the file (records flagged as older than the install or as shared
+/// name nothing, and a record on a directory names nothing in it: carry-over rule, §5.5). Without a
+/// log that is every file. Files in directories the bounded walk could not read are not counted here;
+/// [`sized`] flags such a walk as `TooLarge`.
+fn undeclared(ctx: &ScanCtx<'_>, dir: &str) -> Undeclared {
+    let mut files: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for r in ctx
+        .fp
+        .inno
+        .iter()
+        .filter(|r| !r.existed_before && !r.shared)
+    {
+        let Target::Path { path } = &r.target else {
+            continue;
+        };
+        if matches!(
+            r.kind,
+            InnoRecordKind::DeleteFile | InnoRecordKind::DeleteDirOrFiles
+        ) && prefix::is_inside(path, dir)
+        {
+            files.insert(prefix::fold(path));
+        }
+    }
+    let declared = |file: &str| files.contains(&prefix::fold(file));
+    let mut count = Undeclared::default();
     let mut visited = 0usize;
     let mut stack = vec![(dir.trim_end_matches(prefix::SEP).to_owned(), 0u32)];
     while let Some((dir, depth)) = stack.pop() {
@@ -196,7 +253,10 @@ fn undeclared_files(ctx: &ScanCtx<'_>, dir: &str) -> u32 {
                     stack.push((child, depth + 1));
                 }
             } else if !declared(&child) {
-                count = count.saturating_add(1);
+                count.files = count.files.saturating_add(1);
+                if !has_extension(&entry.name, EXECUTABLE_EXTS) {
+                    count.not_programs = count.not_programs.saturating_add(1);
+                }
             }
         }
     }

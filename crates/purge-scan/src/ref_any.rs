@@ -50,6 +50,22 @@
 //! harvested token in its name (under `SOFTWARE\Microsoft` only the record counts). Structural
 //! containers are never offered.
 //!
+//! # One key, two names
+//!
+//! `HKLM\SOFTWARE\Classes` is one key for the 64-bit and the 32-bit view; only `CLSID`, `Interface`,
+//! `DirectShow`, `Media Type` and `MediaFoundation` exist once per view. A path through the 32-bit node
+//! to anything else (`HKLM\SOFTWARE\WOW6432Node\Classes\.txt\OpenWithProgids`) is a second name of the
+//! shared key, and both the reference scan and the harvest's subtree baselines reach it under both
+//! names. Such a value or key is offered once, under the canonical name
+//! (`ScanCtx::shared_classes_alias`, which also checks that the source shows the two names to be one
+//! key).
+//!
+//! # COM classes
+//!
+//! A value inside the key of a COM class the fingerprint does not attribute to the app is not offered
+//! (`ScanCtx::in_unowned_com_class`): the class is another product's or a shared one, and the app
+//! only pointed it at its own server.
+//!
 //! # Other apps and services
 //!
 //! A value whose name or data refers to another installed app as well gets `ReferencedByOtherApp`.
@@ -192,7 +208,11 @@ fn scan_app(ctx: &ScanCtx<'_>, app: &AppIdentityView, out: &mut Vec<Candidate>) 
                 continue;
             }
             last = Some(this);
-            let Ok(data) = ctx.reg.value(&hit.key, &hit.value_name) else {
+            // A 32-bit-view spelling of a shared Classes key is the same key under a second name: the
+            // value is offered once, under the canonical name (which the scan reaches as well).
+            let canonical = ctx.shared_classes_alias(&hit.key);
+            let hit_key = canonical.as_deref().unwrap_or(&hit.key);
+            let Ok(data) = ctx.reg.value(hit_key, &hit.value_name) else {
                 continue;
             };
             let value = purge_source::types::RegValue {
@@ -203,12 +223,12 @@ fn scan_app(ctx: &ScanCtx<'_>, app: &AppIdentityView, out: &mut Vec<Candidate>) 
             // integration, which the policy never preselects (a service is removed as a whole by its
             // own scanner, not by editing one value of it). It is named through `CurrentControlSet`,
             // the spelling a plan must use (see REG-ENV).
-            let (key, category) = match below_control_set(&hit.key) {
+            let (key, category) = match below_control_set(hit_key) {
                 Some(rest) => (
                     format!(r"HKLM\SYSTEM\CurrentControlSet\{rest}"),
                     Category::System,
                 ),
-                None => (hit.key.clone(), Category::Registration),
+                None => (hit_key.to_owned(), Category::Registration),
             };
             // A record-like REG_MULTI_SZ value is one unit; everything else is a whole value or a
             // list of entries.
@@ -223,10 +243,24 @@ fn scan_app(ctx: &ScanCtx<'_>, app: &AppIdentityView, out: &mut Vec<Candidate>) 
         }
     }
     for subtree in ctx.fp.subtrees.iter().filter(|s| s.fully_attributed) {
-        if scope.contains(&subtree.key) && !containers::is_value_container(&subtree.key, ctx.guard)
+        if !scope.contains(&subtree.key) || containers::is_value_container(&subtree.key, ctx.guard)
         {
-            attributed_key(ctx, subtree, out);
+            continue;
         }
+        // The harvest walks the 32-bit node of Classes too and records a shared key a second time
+        // under that spelling. It is one key: it is offered once, on the record of its canonical
+        // name.
+        if let Some(canonical) = ctx.shared_classes_alias(&subtree.key) {
+            let recorded = ctx
+                .fp
+                .subtrees
+                .iter()
+                .any(|s| s.fully_attributed && ctx.same_key(&s.key, &canonical));
+            if recorded {
+                continue;
+            }
+        }
+        attributed_key(ctx, subtree, out);
     }
 }
 
@@ -234,7 +268,9 @@ fn scan_app(ctx: &ScanCtx<'_>, app: &AppIdentityView, out: &mut Vec<Candidate>) 
 /// still holds only what the harvest attributed and has Key-scope evidence of its own.
 fn attributed_key(ctx: &ScanCtx<'_>, subtree: &SubtreeBaseline, out: &mut Vec<Candidate>) {
     let key = subtree.key.as_str();
-    if !ctx.reg.key_exists(key).is_present() {
+    // A key inside a COM registration that is not the app's own is part of that registration, even
+    // when all it ever held was a path the app wrote there.
+    if ctx.in_unowned_com_class(key) || !ctx.reg.key_exists(key).is_present() {
         return;
     }
     let mut b = ctx.candidate(

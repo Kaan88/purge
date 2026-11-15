@@ -577,6 +577,12 @@ const REG: &[Row] = &[
         "The capability consent store.",
     ),
     (
+        "reg.restart-manager",
+        S,
+        r"*\SOFTWARE\Microsoft\RestartManager",
+        "Restart Manager session state.",
+    ),
+    (
         "reg.servicing",
         S,
         r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing",

@@ -104,6 +104,8 @@ pub fn fingerprint(
             main: true,
         }],
         outside_root_files: Vec::new(),
+        uninstallers: Vec::new(),
+        older_keys: Vec::new(),
         anchors: Anchors::default(),
         tokens: Vec::new(),
         inno: Vec::new(),
@@ -123,7 +125,7 @@ pub fn fingerprint(
     }
 }
 
-fn identity(names: &[&str], vendors: &[&str], tokens: &[&str]) -> IdentitySnapshot {
+pub fn identity(names: &[&str], vendors: &[&str], tokens: &[&str]) -> IdentitySnapshot {
     let own = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect();
     IdentitySnapshot {
         names: own(names),

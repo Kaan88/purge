@@ -73,6 +73,10 @@ pub enum NotProven {
     /// The harvest did not attribute the whole subtree to the app, and no installer record creates the
     /// key.
     NotAttributed,
+    /// The key lies in a COM class, type library or AppID registration that is not one of the app's
+    /// own (`ScanCtx::in_unowned_com_class`): whatever the app wrote there, the key is part of another
+    /// product's registration.
+    UnownedComRegistration,
     /// The key no longer exists: there is nothing to offer.
     Gone,
     /// The key, or the named subkey, still holds a value.
@@ -107,6 +111,9 @@ pub fn proven_owned_skeleton(ctx: &ScanCtx<'_>, key: &str) -> Option<Evidence> {
 
 /// Like [`proven_owned_skeleton`], naming the first condition that fails.
 pub fn check(ctx: &ScanCtx<'_>, key: &str) -> Result<Evidence, NotProven> {
+    if ctx.in_unowned_com_class(key) {
+        return Err(NotProven::UnownedComRegistration);
+    }
     let baseline = ctx.baseline.ok_or(NotProven::NoBaseline)?;
     // The machine as it is now decides; the fingerprint's record of it is the fallback.
     let os = ctx.sys.os_info().unwrap_or_else(|_| ctx.fp.os.clone());
@@ -243,6 +250,11 @@ fn prove<'a>(
     if baseline.has_key(key) {
         return Err(NotProven::InBaseline(key.to_owned()));
     }
+    // Older than the install: not the app's, whichever proof would speak for it (the subtree
+    // record, the installer's key record, the verbs under a `shell` key).
+    if ctx.predates_install(key) {
+        return Err(NotProven::NotAttributed);
+    }
     let proof = attribution(ctx, key).ok_or(NotProven::NotAttributed)?;
     // `vouched`: the harvest checked the owner of every key of the subtree, not only of its top.
     let (subtree, vouched) = match &proof {
@@ -306,6 +318,9 @@ fn empty_now(
     let info = ctx.reg.key_info(key).map_err(unreadable)?;
     if info.is_link {
         return Err(NotProven::Link(key.to_owned()));
+    }
+    if !top && ctx.predates_install(key) {
+        return Err(NotProven::UnprovenSubkey(key.to_owned()));
     }
     let subtree = record.subtree;
     // The owner: TrustedInstaller now is fatal. "Unknown now" is acceptable only when the source records
@@ -888,6 +903,56 @@ mod tests {
             ],
         ));
         world
+    }
+
+    /// A key the harvest found to be older than the install is no skeleton of the app, whichever
+    /// proof would speak for it: the subtree record, the verbs under a `shell` key, or the
+    /// installer's key record.
+    #[test]
+    fn a_key_older_than_the_install_is_not_proven_by_any_proof() {
+        // The subtree record.
+        let mut w = world();
+        assert!(check(&w.ctx(), SH_AUTO_FILE).is_ok());
+        w.fp.older_keys = vec![SH_AUTO_FILE.to_ascii_uppercase()];
+        assert_eq!(check(&w.ctx(), SH_AUTO_FILE), Err(NotProven::NotAttributed));
+        // A subkey of it that is older: the key is not empty of other people's keys.
+        let shell = format!(r"{SH_AUTO_FILE}\shell");
+        w.fp.older_keys = vec![shell.clone()];
+        assert_eq!(
+            check(&w.ctx(), SH_AUTO_FILE),
+            Err(NotProven::UnprovenSubkey(shell))
+        );
+
+        // The verbs under a `shell` key.
+        let mut w = verb_world();
+        assert!(check(&w.ctx(), LIBRARY_SHELL).is_ok());
+        w.fp.older_keys = vec![LIBRARY_SHELL.into()];
+        assert_eq!(
+            check(&w.ctx(), LIBRARY_SHELL),
+            Err(NotProven::NotAttributed)
+        );
+
+        // The installer's key record.
+        let mut w = world();
+        w.fp.subtrees.clear();
+        w.fp.inno = vec![purge_model::InnoRecord {
+            kind: purge_model::InnoRecordKind::RegDeleteEntireKey,
+            target: Target::RegKey {
+                path: LIBRARY_SHELL.into(),
+            },
+            view: None,
+            user_hive: false,
+            existed_before: false,
+            shared: false,
+            key_create: true,
+        }];
+        let e = check(&w.ctx(), LIBRARY_SHELL).unwrap();
+        assert_eq!(e.detail.get("via"), Some("inno-key-create"));
+        w.fp.older_keys = vec![LIBRARY_SHELL.into()];
+        assert_eq!(
+            check(&w.ctx(), LIBRARY_SHELL),
+            Err(NotProven::NotAttributed)
+        );
     }
 
     #[test]

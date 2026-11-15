@@ -17,7 +17,10 @@
 //!   key is not a structural container, not under `SOFTWARE\Microsoft` and not older than the install
 //!   (when the install time is unknown that last test cannot be made and is skipped). A key that is
 //!   also a vendor alias gets it only when its name is the app's full name (`ExactFullName`);
-//!   otherwise it stays a delete-if-empty vendor container;
+//!   otherwise it stays a delete-if-empty vendor container. One exception: a vendor-alias key whose
+//!   name is the app's full name, and which no other installed app's name contains, is the product's
+//!   own key (`Software\Notepad++`, `Software\7-Zip`). It is offered whole on its name like any
+//!   product key, unticked, instead of as a container that its own values keep from ever being empty;
 //! - a name match alone (`ExactFullName`, `ProductSubfolderOfVendor`, `NameTokenExact`), which never
 //!   reaches Tier A and leaves the key Likely or Weak. `ProductSubfolderOfVendor` also holds for a key
 //!   directly below a vendor key that is named like the app without its vendor ([`vendor_product`]):
@@ -48,12 +51,12 @@
 //! installer or a fully attributed subtree baseline on the key makes it a product key.
 //!
 //! Firefox leaves `mozilla.org\Mozilla` with one version value and no reference to the app, and its
-//! NSIS uninstaller has no log, so no Tier A evidence exists for it. Its evidence path is
-//! `VendorContainer` from two independent observations (its own name is a vendor alias or a variant
-//! of one; it holds no value and its only subkey, `Mozilla`, is again a vendor alias) plus
-//! `TimeWindow` when its last write lies in the session's window. That scores 2 + 1 + 1 = 4: listed
-//! Likely, as a delete-if-empty offer that turns Safe only if the plan empties it. Without a session
-//! window (or with a last write outside it) the score is 3 and the key is listed Weak.
+//! NSIS uninstaller has no log, so no Tier A evidence exists for it. Its evidence is `VendorContainer`
+//! once, for its name, plus `TimeWindow` when its last write lies in the session's window: 2 + 1 = 3,
+//! Weak. The name is not counted a second time for the subkey `Mozilla` being a vendor alias too: that
+//! is the same observation, and two of them made the key Likely on a name. The offer turns Safe only
+//! if the plan empties the key; while `Mozilla` holds a value that nothing claims, the plan cannot,
+//! and purge-plan leaves both containers out (`empty_after::unemptiable`).
 //!
 //! # Co-removed products
 //!
@@ -163,11 +166,12 @@ fn scan_app(ctx: &ScanCtx<'_>, app: &AppIdentityView, out: &mut Vec<Candidate>) 
             };
             if !microsoft {
                 // A key that is both a vendor alias and app-named goes whole only with Tier A
-                // evidence; otherwise it is a vendor container.
-                let outcome =
-                    pass.product_key(&key1, vendor, None, false, vendor_match.is_none(), out);
+                // evidence, or, on its name, when that name is the product's own
+                // (`Pass::product_named`); otherwise it is a vendor container.
+                let emit_named = vendor_match.is_none() || pass.product_named(vendor);
+                let outcome = pass.product_key(&key1, vendor, None, false, emit_named, out);
                 if let Some(m) = &vendor_match {
-                    if outcome != Outcome::Owned {
+                    if outcome == Outcome::Nothing {
                         pass.vendor_container(&key1, m, out);
                     }
                     let walk = common::walk(ctx, &key1);
@@ -303,6 +307,28 @@ fn recorded_keys(ctx: &ScanCtx<'_>) -> HashSet<String> {
 }
 
 impl Pass<'_, '_> {
+    /// Whether a key directly below `Software` that is a vendor alias is named after the product
+    /// itself: `Software\Notepad++` of Notepad++, `Software\7-Zip` of 7-Zip. Vendor and product
+    /// carry one name, so the key is the product's settings key, not a vendor's namespace for several
+    /// products, and it is judged like any other product key: offered whole on the evidence it has
+    /// (its name alone never reaches Tier A, so it is listed unticked).
+    ///
+    /// It needs the key's name to be the app's full name (every word, versions and architecture tags
+    /// aside), and no other installed app to carry that name in its own: with "Notepad++ Plugin
+    /// Manager" installed the key may be shared, and it stays a delete-if-empty vendor container.
+    fn product_named(&self, leaf: &str) -> bool {
+        if self.app.identity.matches_full_name(leaf).is_none() {
+            return false;
+        }
+        let name = format!(" {} ", full_name_key(leaf));
+        !self
+            .ctx
+            .other_apps
+            .apps()
+            .iter()
+            .any(|other| format!(" {} ", full_name_key(&other.name)).contains(&name))
+    }
+
     /// Looks at one key of depth 1 (`parent` is `None`) or 2 as a product key and emits it when
     /// something attributes it. A key with name evidence only is emitted when `emit_named` is set.
     fn product_key(
@@ -534,19 +560,9 @@ impl Pass<'_, '_> {
         if !b.vendor_container_pending(m, children) {
             return;
         }
-        // A key that holds no value and whose every subkey is again named after the vendor is the
-        // vendor's namespace by its content as well as by its name: a second, independent source.
-        if values.is_empty() && !subkeys.is_empty() {
-            let inner: Vec<IdentityMatch> = subkeys
-                .iter()
-                .map_while(|s| vendor_alias(self.app, s))
-                .collect();
-            if inner.len() == subkeys.len() {
-                if let Some(other) = inner.iter().find(|i| i.matched != m.matched) {
-                    b.vendor_container(other);
-                }
-            }
-        }
+        // The name is the only thing this offer rests on, and it counts once. That every subkey is
+        // again named after the vendor is the same observation made one level down, not a second
+        // source: counted twice it lifted `mozilla.org` to Likely on its name alone.
         if info.lwt.0 != 0 {
             b.time_window(info.lwt);
         }
@@ -727,15 +743,11 @@ mod tests {
 
         let org = on_key(&found, r"HKLM\SOFTWARE\zorblat.org").expect("the variant key is listed");
         assert_eq!(org.action, Action::RemoveDirIfEmpty);
-        // Its name, its content (nothing but a vendor-named subkey) and the window: no Tier A, and
-        // the pending marker with the full listing, so the plan decides by emptiness.
+        // Its name, once, and the window: no Tier A, and the pending marker with the full listing,
+        // so the plan decides by emptiness.
         assert_eq!(
             kinds(org),
-            vec![
-                EvidenceKind::VendorContainer,
-                EvidenceKind::VendorContainer,
-                EvidenceKind::TimeWindow
-            ]
+            vec![EvidenceKind::VendorContainer, EvidenceKind::TimeWindow]
         );
         assert_eq!(
             org.evidence[0].detail.get("empty_after_plan"),
@@ -956,7 +968,7 @@ pub(crate) mod common {
     };
     use purge_source::types::{BINARY_UTF16_SCAN_MAX, RegValue};
 
-    use crate::framework::{AppIdentityView, CandidateBuilder, ScanCtx};
+    use crate::framework::{AppIdentityView, CandidateBuilder, EntryStanding, ScanCtx};
 
     /// `Microsoft\Windows\CurrentVersion`, below a `Software` base.
     pub(crate) const CURRENT_VERSION: &str = r"Microsoft\Windows\CurrentVersion";
@@ -1052,30 +1064,7 @@ pub(crate) mod common {
 
     /// `s` with every `%NAME%` the environment knows replaced (names are upper-cased in `env`).
     pub(crate) fn expand_env(s: &str, env: &BTreeMap<String, String>) -> String {
-        let mut out = String::with_capacity(s.len());
-        let mut rest = s;
-        while let Some(start) = rest.find('%') {
-            out.push_str(&rest[..start]);
-            let after = &rest[start + 1..];
-            match after.find('%') {
-                Some(end) => match env.get(&after[..end].to_uppercase()) {
-                    Some(value) if end > 0 => {
-                        out.push_str(value);
-                        rest = &after[end + 1..];
-                    }
-                    _ => {
-                        out.push('%');
-                        rest = after;
-                    }
-                },
-                None => {
-                    out.push('%');
-                    rest = after;
-                }
-            }
-        }
-        out.push_str(rest);
-        out
+        prefix::expand_env(s, env)
     }
 
     // ---- reading a subtree -------------------------------------------------------------------------------
@@ -1158,6 +1147,15 @@ pub(crate) mod common {
             .unwrap_or_default()
     }
 
+    /// Whether the value's data names a path of any kind: a drive path, a UNC path or one below a
+    /// `%NAME%` reference. Data that is cut short or unknown may hold one, so it counts.
+    pub(crate) fn names_a_path(value: &RegValue) -> bool {
+        !value.data.is_complete()
+            || data_strings(value).iter().any(|s| {
+                s.contains(":\\") || s.contains(":/") || s.contains("\\\\") || s.contains("%\\")
+            })
+    }
+
     /// Every anchor of `refs` the value's name or (complete) data refers to.
     pub(crate) fn value_matches(refs: &RefMatcher, value: &RegValue) -> Vec<RefMatch> {
         let mut found = refs.find_all(&value.name);
@@ -1203,7 +1201,7 @@ pub(crate) mod common {
     /// The entries of a `;`-separated list of paths, or the string itself when it is not one (a
     /// command line may hold a `;` too).
     pub(crate) fn split_list(s: &str) -> Vec<&str> {
-        let parts: Vec<&str> = s.split(';').collect();
+        let parts: Vec<&str> = prefix::list_entries(s);
         let mut entries = parts.iter().filter(|p| !p.trim().is_empty());
         let is_list = entries.clone().count() >= 2 && entries.all(|e| looks_like_path(e));
         if is_list { parts } else { vec![s] }
@@ -1392,7 +1390,14 @@ pub(crate) mod common {
     }
 
     /// Offers `value` of `key` when it refers to the app: the whole value, or the entries of a list
-    /// that do. Returns the ids of the candidates pushed to `out`.
+    /// that do. Returns the ids of the candidates pushed to `out`. Nothing is offered inside a COM
+    /// class the fingerprint does not attribute to the app.
+    ///
+    /// An entry of a list is offered only when it is one path (`ScanCtx::entry_standing`), and it
+    /// is Tier A only in a list that is the app's by where it is (`ScanCtx::owns_list_entry`): the
+    /// installer's record on a value of another product says nothing about one entry of it. What
+    /// a value offered whole holds is judged where every candidate is finished
+    /// (`ScanCtx::value_content_unproven`, applied by `CandidateBuilder::build`).
     // One parameter per thing the three callers vary; a struct would only rename them.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn offer_value(
@@ -1406,16 +1411,27 @@ pub(crate) mod common {
         out: &mut Vec<Candidate>,
     ) -> Vec<CandidateId> {
         let mut ids = Vec::new();
-        let mut emit =
-            |target: Target, action: Action, matches: &[RefMatch], other: Option<String>| {
-                let mut b = ctx.candidate(scanner, target, action, category);
-                if !add_value_evidence(ctx, &mut b, matches, other) {
-                    return;
-                }
-                let candidate = b.build();
-                ids.push(candidate.id.clone());
-                out.push(candidate);
-            };
+        // A value in a COM class that is not the app's own registration is a modification of that
+        // registration, not a leftover (see `ScanCtx::in_unowned_com_class`).
+        if ctx.in_unowned_com_class(key) {
+            return ids;
+        }
+        let mut emit = |target: Target,
+                        action: Action,
+                        matches: &[RefMatch],
+                        other: Option<String>,
+                        unproven: Option<&'static str>| {
+            let mut b = ctx.candidate(scanner, target, action, category);
+            if !add_value_evidence(ctx, &mut b, matches, other) {
+                return;
+            }
+            if let Some(why) = unproven {
+                b.cap_at_tier_b(why);
+            }
+            let candidate = b.build();
+            ids.push(candidate.id.clone());
+            out.push(candidate);
+        };
         match classify(&app.refs, value) {
             None => {}
             Some(ValueRefs::Whole(matches)) => emit(
@@ -1427,9 +1443,23 @@ pub(crate) mod common {
                 &matches,
                 // The whole value goes: nothing in its name or data may be another app's.
                 foreign.in_value(&app.refs, value),
+                None,
             ),
             Some(ValueRefs::Segments(segments)) => {
+                let by_place = ctx.owns_list_entry(key);
                 for (n, segment) in segments.iter().enumerate() {
+                    // An entry edit takes the entry's whole text out. An entry that is not one
+                    // path holds something next to the app's (a second path, another program's
+                    // command line with a file of the app as an argument): it is not offered.
+                    let unproven = match ctx.entry_standing(&segment.text) {
+                        EntryStanding::NotOnePath => continue,
+                        EntryStanding::Unproven(why) => Some(why),
+                        // The installer's record on the value names the list, not its entries.
+                        EntryStanding::Plain if !by_place => {
+                            Some("the list is not the app's own and nothing records its entries")
+                        }
+                        EntryStanding::Plain => None,
+                    };
                     // The index tells a repeated entry from its first occurrence; the first needs none.
                     let repeated = segments[..n]
                         .iter()
@@ -1445,6 +1475,7 @@ pub(crate) mod common {
                         &segment.matches,
                         // Only this entry goes: the other entries of the list stay as they are.
                         foreign.in_text(&app.refs, &segment.text),
+                        unproven,
                     );
                 }
             }
@@ -1468,6 +1499,19 @@ pub(crate) mod common {
             let mut set = AnchorSet::new();
             assert!(set.add_root(r"C:\Program Files\Git"));
             RefMatcher::new(&set)
+        }
+
+        /// The same entries as the harvest and REG-ENV see (`prefix::list_entries`): a `;` inside
+        /// quotes does not cut an entry in two.
+        #[test]
+        fn split_list_keeps_a_quoted_semicolon() {
+            assert_eq!(
+                split_list(r#"C:\a;"C:\Program Files\Git;x\bin";C:\d"#),
+                [r"C:\a", r#""C:\Program Files\Git;x\bin""#, r"C:\d"]
+            );
+            assert_eq!(split_list(r"C:\a;C:\b"), [r"C:\a", r"C:\b"]);
+            // Not a list of paths: the string itself.
+            assert_eq!(split_list("a;b"), ["a;b"]);
         }
 
         #[test]

@@ -37,8 +37,37 @@
 //!
 //! and none of the following holds: the capture hit a cap or an unreadable key, the subtree contains a
 //! registry link, the key is in the baseline, an Inno record says the key existed before the install,
-//! a key of the subtree is TrustedInstaller-owned, or the source can tell owners but could not for a
-//! key of the subtree.
+//! a key of the subtree is TrustedInstaller-owned, the source can tell owners but could not for a
+//! key of the subtree, or a key of the subtree is older than the install (below).
+//!
+//! # Keys older than the install
+//!
+//! Somebody else's empty key looks exactly like the app's skeleton once the app wrote its one value
+//! into it (a user's `.ext\OpenWithProgids` made before the install; rig run x1-vscode-userstate).
+//! The registry's own clock tells them apart in part. A key's LastWriteTime moves when one of its
+//! values is set or deleted and when a direct subkey is created or deleted, and at no other time.
+//! So, with the creation time of the install directory as the exact start of the install
+//! ([`ComCutoff`] with `exact`):
+//!
+//! - a key last written before that existed before the install, with every direct subkey it has;
+//! - a key whose **parent** was last written before that existed before the install too, although
+//!   its own time is new (the installer wrote a value into it): creating it would have moved the
+//!   parent's time.
+//!
+//! A subtree whose key, whose key's parent, or one of whose subkeys is such a key is not fully
+//! attributed. This catches `.ext` with a pre-made `OpenWithProgids` (both keys). It misses a
+//! pre-existing key the installer or anybody else wrote into directly since: a pre-existing `.ext`
+//! in which the installer itself created `OpenWithProgids`, or set a value, has a new time and
+//! cannot be told from a key the installer created. That gap is a documented limit, kept on
+//! purpose: such a key was empty before the install and is empty after the uninstall, so a
+//! baseline that does not have it lets it go as the app's skeleton and no content is lost (the
+//! reasoning and what the rig calls it are in `purge-scan`, `cls_assoc::handler`, "Known limit").
+//! With only a looser install-time hint nothing
+//! is concluded here: such a hint can be later than the first install (an upgrade rewrites the
+//! Uninstall key and its `InstallDate`), and the app's own keys would be taken for older.
+//!
+//! Whatever cannot be found out counts as older under an exact cutoff: a key without a time, a
+//! key that is there and cannot be read, a parent that cannot be read ([`older_keys`]).
 //!
 //! # Decisions on open points
 //!
@@ -165,6 +194,86 @@ fn too_shallow(key: &str) -> bool {
 
 fn in_baseline(baseline: Option<&Baseline>, key: &str) -> bool {
     baseline.is_some_and(|b| Baseline::key_in_scope(key) && b.has_key(key))
+}
+
+/// Whether a key last written at `lwt` is older than the install, by the exact cutoff only (see the
+/// module documentation). With an exact cutoff a key without a time is taken for older: nothing
+/// shows that it is not.
+fn older(ctx: &HarvestCtx<'_>, lwt: purge_model::FileTime) -> bool {
+    ctx.cutoff
+        .is_some_and(|cutoff| cutoff.exact && (lwt.0 == 0 || cutoff.is_after(lwt)))
+}
+
+/// Whether `key`, last written at `lwt`, existed before the install: it, or its parent, was last
+/// written before it. A parent that is there and cannot be read counts as older.
+fn predates_install(ctx: &HarvestCtx<'_>, key: &str, lwt: purge_model::FileTime) -> bool {
+    older(ctx, lwt)
+        || prefix::parent(key).is_some_and(|parent| match ctx.reg.key_info(parent) {
+            Ok(info) => older(ctx, info.lwt),
+            Err(purge_source::types::SourceError::NotFound) => false,
+            Err(_) => ctx.cutoff.is_some_and(|cutoff| cutoff.exact),
+        })
+}
+
+/// Those of `keys` that existed before the install (`Fingerprint::older_keys`): by their own
+/// time or their parent's against the exact cutoff. Sorted, each once; empty without an exact
+/// cutoff. A key that is not there is left out; one that cannot be read is taken for older.
+pub fn older_keys<I>(ctx: &HarvestCtx<'_>, keys: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    if !ctx.cutoff.is_some_and(|cutoff| cutoff.exact) {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = keys
+        .into_iter()
+        .filter(|key| match ctx.reg.key_info(key) {
+            Ok(info) => predates_install(ctx, key, info.lwt),
+            Err(purge_source::types::SourceError::NotFound) => false,
+            Err(_) => true,
+        })
+        .collect();
+    out.sort_by_key(|key| prefix::fold(key));
+    out.dedup_by(|a, b| prefix::is_same(a, b));
+    out
+}
+
+/// Every key a skeleton proof can start from, for [`older_keys`]. Four sources, each needed for
+/// itself (a scanner asks about a key from any of them):
+///
+/// - the keys of the recorded subtrees;
+/// - every subkey of those subtrees;
+/// - the extension keys of the association journal, and the `OpenWithProgids` key of each (the
+///   journal is taken where the subtree capture records nothing: an extension the app only
+///   wrote one value into);
+/// - the keys the installer's log has a record on.
+///
+/// In that order; a key may come twice.
+pub fn older_key_candidates(
+    subtrees: &[SubtreeBaseline],
+    journal: &[purge_model::ExtJournalEntry],
+    inno: &[purge_model::InnoRecord],
+) -> Vec<String> {
+    let sep = prefix::SEP;
+    subtrees
+        .iter()
+        .flat_map(|s| {
+            std::iter::once(s.key.clone()).chain(
+                s.subkeys
+                    .iter()
+                    .map(move |rel| format!("{}{sep}{rel}", s.key)),
+            )
+        })
+        .chain(
+            journal
+                .iter()
+                .flat_map(|e| [e.key.clone(), format!("{}{sep}OpenWithProgids", e.key)]),
+        )
+        .chain(inno.iter().filter_map(|r| match &r.target {
+            Target::RegKey { path } => Some(path.clone()),
+            _ => None,
+        }))
+        .collect()
 }
 
 /// The keys whose subtrees the harvest records (see the module documentation), ordered
@@ -440,6 +549,17 @@ struct State<'a, 'c> {
 }
 
 impl State<'_, '_> {
+    /// Whether a key last written at `lwt` is older than the install, by the exact cutoff only (see
+    /// the module documentation).
+    fn older(&self, lwt: purge_model::FileTime) -> bool {
+        older(self.ctx, lwt)
+    }
+
+    /// Whether `key` existed before the install: it, or its parent, was last written before it.
+    fn predates_install(&self, key: &str, lwt: purge_model::FileTime) -> bool {
+        predates_install(self.ctx, key, lwt)
+    }
+
     /// Whether an owner flag lets the key be attributed; counts owners that should be known and are not.
     fn owner_ok(&self, ti_owned: Option<bool>, unknown: &mut usize) -> bool {
         match ti_owned {
@@ -464,6 +584,7 @@ impl State<'_, '_> {
             || too_shallow(&tree.key)
             || is_value_container(&tree.key, &self.env)
             || !self.owner_ok(tree.ti_owned, unknown_owners)
+            || self.predates_install(&tree.key, tree.lwt)
         {
             return false;
         }
@@ -483,7 +604,12 @@ impl State<'_, '_> {
             }
             match ctx.reg.key_info(&full(rel)) {
                 Ok(info) => {
-                    if info.is_link || !self.owner_ok(info.ti_owned, unknown_owners) {
+                    // A subkey older than the install is not the app's (its own parent is in the
+                    // subtree and is checked the same way, so the parent rule needs no second read).
+                    if info.is_link
+                        || !self.owner_ok(info.ti_owned, unknown_owners)
+                        || self.older(info.lwt)
+                    {
                         return false;
                     }
                 }

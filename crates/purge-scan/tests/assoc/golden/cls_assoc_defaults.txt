@@ -19,9 +19,10 @@
     restore_to=foofile
 [CLS-ASSOC] DeleteValue RegValue HKLM\SOFTWARE\Classes\.bar | ""
   id=c-5d6f10511983d892 category=Association harm=Medium reversibility=Full origin=Scanner child_count=None
-  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKLM\SOFTWARE\Classes\.bar|
+  evidence InPreUninstallRefSnapshot B/8 Value AdminOnly source=refsnap:HKLM\SOFTWARE\Classes\.bar|
     action=restore
     anchor=VSCode.bar
+    anchor_kind=id
     baseline=EnterpriseSEval-26100.1742
     ext=.bar
     group=File associations

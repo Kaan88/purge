@@ -105,10 +105,29 @@ fn the_inno_key_record_adds_the_manifest() {
 fn without_a_baseline_only_the_command_value_is_offered() {
     let mut world = world();
     world.baseline = None;
+    // The harvest found the scheme to be the app's own registration.
+    world.fp.anchors.progids = vec!["vscode".into()];
     assert_golden(
         world.golden(&ClsProtocol),
         &[&format!(
             r"value {}\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+            vscode()
+        )],
+    );
+}
+
+/// VM run x0-vscode-zipcopy: the scheme key was made by a portable copy before the install, which
+/// only rewrote the command. The harvest does not take such a scheme as the app's, and a command
+/// that points at the app does not make the key the app's: Tier B, listed and not preselected.
+#[test]
+fn the_command_of_a_scheme_that_is_not_the_apps_is_not_tier_a() {
+    let mut world = world();
+    world.baseline = None;
+    assert!(world.fp.anchors.progids.is_empty());
+    assert_golden(
+        world.golden(&ClsProtocol),
+        &[&format!(
+            r"value {}\shell\open\command| DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]",
             vscode()
         )],
     );
@@ -124,8 +143,9 @@ fn a_scheme_windows_ships_is_never_a_key_candidate() {
         .set_value(&command, "", RegData::from_sz(OPEN_URL));
     let candidates = world.run(&ClsProtocol);
     assert!(on_key(&candidates, &format!(r"{HKLM_CLASSES}\mailto")).is_none());
+    // The key is Windows': the reference alone is Tier B.
     assert!(render(&candidates).contains(&format!(
-        "value {command}| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]"
+        "value {command}| DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]"
     )));
 }
 

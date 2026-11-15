@@ -5,7 +5,9 @@
 //! Each scanner has golden files under `tests/reg/golden` (see [`golden`]); the assertions next to them
 //! spell out the properties the design depends on.
 
+mod com;
 mod golden;
+mod hostile;
 mod world;
 
 use purge_guard::containers;
@@ -162,11 +164,11 @@ fn software_firefox_golden() {
         assert!(!tier_a_in_scope(service) && score(service) >= 4);
     }
 
-    // `mozilla.org`: a vendor container, delete-if-empty, Likely by its score.
+    // `mozilla.org`: a vendor container, delete-if-empty, Weak: its name counts once, plus the window.
     let org = expect(&found, &key(r"HKLM\SOFTWARE\mozilla.org"));
     assert_eq!(org.action, Action::RemoveDirIfEmpty);
     assert!(!tier_a_in_scope(org));
-    assert_eq!(score(org), 4, "{:?}", org.evidence);
+    assert_eq!(score(org), 3, "{:?}", org.evidence);
     let marker = &org.evidence[0];
     assert_eq!(marker.kind, EvidenceKind::VendorContainer);
     assert_eq!(marker.detail.get("empty_after_plan"), Some("pending"));
@@ -429,6 +431,156 @@ fn apppaths_golden() {
     assert!(find(&found, &key(machine_paths)).is_none());
 }
 
+/// VM run x0-git-toolsdir (`App Paths\rg.exe`): the user's own tool sits in the app's folder, the
+/// uninstaller left it there, and its `App Paths` key was preselected because it leads into the root.
+#[test]
+fn apppaths_key_of_a_file_that_outlived_the_uninstall_is_not_offered() {
+    let tool = format!(r"{GIT}\rg.exe");
+    let own = format!(r"{GIT}\git-bash.exe");
+    let paths = app_paths(r"HKLM\SOFTWARE");
+    let fixture = || {
+        machine()
+            .file(&tool, 5_000)
+            .sz(&format!(r"{paths}\rg.exe"), "", &tool)
+            .sz(&format!(r"{paths}\git-bash.exe"), "", &own)
+    };
+    let mut fp = git();
+    // The harvest's exe set is every program in the root, the user's tool included.
+    fp.exes.push(purge_model::ExeFile {
+        path: tool.clone(),
+        main: false,
+    });
+    let world = World::new(fixture(), fp.clone());
+    let found = world.scan(&RegAppPaths);
+    // The registration of a program that still works, which nothing shows to be the app's.
+    assert!(find(&found, &key(format!(r"{paths}\rg.exe"))).is_none());
+    // While the app is not verified gone its files are all still there: a file that is present
+    // says nothing, and the key is listed (never Tier A) as before.
+    let live = World::new(fixture().file(&own, 5_000), fp.clone());
+    let ctx = purge_scan::framework::ScanCtx {
+        verify_gone: Some(purge_model::VerifyGone::new(false, true, false)),
+        ..live.ctx()
+    };
+    let view = purge_scan::framework::AppIdentityView::from_fingerprint(&live.fp, &live.env);
+    let found = ctx.run(&RegAppPaths, &view);
+    for exe in ["rg.exe", "git-bash.exe"] {
+        let c = expect(&found, &key(format!(r"{paths}\{exe}")));
+        assert!(c.evidence.iter().all(|e| e.tier != Tier::A), "{c:?}");
+    }
+    // The key of the program the uninstaller removed is the app's as before.
+    let gone = expect(&found, &key(format!(r"{paths}\git-bash.exe")));
+    assert!(tier_a_in_scope(gone) && score(gone) >= 8);
+
+    // A file the installer's log names stays the app's when it survives (it was locked).
+    fp.inno = vec![purge_model::InnoRecord {
+        kind: InnoRecordKind::DeleteFile,
+        target: Target::Path { path: tool.clone() },
+        view: None,
+        user_hive: false,
+        existed_before: false,
+        shared: false,
+        key_create: false,
+    }];
+    let world = World::new(fixture(), fp);
+    let found = world.scan(&RegAppPaths);
+    assert!(tier_a_in_scope(expect(
+        &found,
+        &key(format!(r"{paths}\rg.exe"))
+    )));
+}
+
+/// Extended campaign x2, the foreign items offered as Likely: a `Classes\Applications\<exe>` key was
+/// listed on the bare file name of a main exe, whatever it held. A portable copy of the same program
+/// (x2-npp-userfiles), another install of it (x2-vscode-userstate) and a sibling's `updater.exe`
+/// (x2-ff-devedition) carry the name too.
+#[test]
+fn apppaths_bare_exe_name_is_not_ownership() {
+    let user = format!(r"HKU\{SID}_Classes\Applications");
+    let named = format!(r"{user}\firefox.exe");
+    let generic = r"HKLM\SOFTWARE\Classes\Applications\updater.exe";
+    let mut fp = firefox();
+    fp.exes.push(purge_model::ExeFile {
+        path: format!(r"{FIREFOX}\updater.exe"),
+        main: true,
+    });
+    let scan = |fixture: FixtureBuilder, fp: &purge_model::Fingerprint| {
+        World::new(fixture, fp.clone()).scan(&RegAppPaths)
+    };
+
+    // The product's own exe name and nothing that points anywhere: offered, on the name alone.
+    let found = scan(machine().sz(&named, "FriendlyAppName", "Firefox"), &fp);
+    let c = expect(&found, &key(named.clone()));
+    assert!(has(c, EvidenceKind::ChainedRef));
+    assert!(c.evidence.iter().all(|e| e.tier != Tier::A), "{c:?}");
+
+    // The same key of a portable copy: its command, its icon or a path below a variable leads
+    // somewhere else.
+    for (sub, name, data) in [
+        (
+            r"\shell\open\command",
+            "",
+            r#""C:\Users\tester\Tools\ff-portable\firefox.exe" -osint -url "%1""#,
+        ),
+        (r"\DefaultIcon", "", r"D:\Portable\firefox.exe,0"),
+        ("", "Icon", r"%LOCALAPPDATA%\Portable\firefox.exe"),
+        ("", "Share", r"\\server\tools\firefox.exe"),
+    ] {
+        let fixture = machine().sz(&named, "FriendlyAppName", "Firefox").sz(
+            &format!("{named}{sub}"),
+            name,
+            data,
+        );
+        assert!(scan(fixture, &fp).is_empty(), "{data}");
+    }
+    // A path that is binary data is a path all the same.
+    let bytes: Vec<u8> = r"D:\Portable\firefox.exe"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    assert!(scan(machine().binary(&named, "Target", bytes), &fp).is_empty());
+
+    // A sibling install that is known claims the name: the key is listed as kept for it.
+    let portable = machine().sz(&named, "FriendlyAppName", "Firefox").sz(
+        &format!(r"{named}\DefaultIcon"),
+        "",
+        r"C:\Program Files\Firefox Developer Edition\firefox.exe,0",
+    );
+    let mut world = World::new(portable, fp.clone());
+    world.other_apps = OtherApps::new(vec![OtherApp {
+        name: "Firefox Developer Edition".into(),
+        anchors: vec![AnchorRef {
+            kind: AnchorKind::Exe,
+            text: "firefox.exe".into(),
+        }],
+        ..OtherApp::default()
+    }]);
+    let found = world.scan(&RegAppPaths);
+    let kept = expect(&found, &key(named.clone()));
+    assert!(kept.blockers.contains(&Blocker::ReferencedByOtherApp {
+        app: "Firefox Developer Edition".into()
+    }));
+
+    // A name any product may use, with nothing to check it against: not offered.
+    let flags = || {
+        machine()
+            .sz(generic, "NoOpenWith", "")
+            .dword(generic, "IsHostApp", 1)
+    };
+    assert!(scan(flags(), &fp).is_empty());
+    // The installer's record covers the key: it is the app's whatever its name.
+    let mut recorded = fp.clone();
+    recorded.inno = vec![inno(InnoRecordKind::RegDeleteEntireKey, key(generic))];
+    let found = scan(flags(), &recorded);
+    assert!(tier_a_in_scope(expect(&found, &key(generic))));
+    // And so does a path in it that leads into the app.
+    let command = format!(r#""{FIREFOX}\updater.exe" /bg"#);
+    let found = scan(
+        flags().sz(&format!(r"{generic}\shell\open\command"), "", &command),
+        &fp,
+    );
+    assert!(tier_a_in_scope(expect(&found, &key(generic))));
+}
+
 #[test]
 fn apppaths_exe_claimed_by_another_app_is_blocked() {
     let exe = format!(r"{FIREFOX}\firefox.exe");
@@ -508,6 +660,19 @@ fn run_golden() {
             "Mail.lnk",
             ENABLED.to_vec(),
         )
+        // The same, made by the installer: its log names the shortcut.
+        .binary(
+            &approved(&hkcu(), "StartupFolder"),
+            "Git Agent.lnk",
+            ENABLED.to_vec(),
+        )
+        .shortcut(
+            &format!(r"{startup}\Git Agent.lnk"),
+            ShortcutInfo {
+                raw_path: Some(format!(r"{GIT}\cmd\git-agent.exe")),
+                ..ShortcutInfo::default()
+            },
+        )
         .shortcut(
             &format!(r"{startup}\Git Tray.lnk"),
             ShortcutInfo {
@@ -534,6 +699,19 @@ fn run_golden() {
         AnchorKind::Root,
         GIT,
     )];
+    // The installer's log records one of the start entries; nothing shows who made the others.
+    fp.inno = vec![
+        inno(
+            InnoRecordKind::RegDeleteValue,
+            value(run_key(hklm, "Run"), "GitTray"),
+        ),
+        inno(
+            InnoRecordKind::DeleteFile,
+            Target::Path {
+                path: format!(r"{startup}\Git Agent.lnk"),
+            },
+        ),
+    ];
     let mut world = World::new(fixture, fp);
     world.other_apps = thunderbird();
     let found = world.scan(&RegRun);
@@ -547,24 +725,34 @@ fn run_golden() {
         value(run_key(&hkcu(), "RunOnce"), "GitCleanup"),
         value(approved(&hkcu(), "Run"), "GitAgent"),
         value(approved(&hkcu(), "StartupFolder"), "Git Tray.lnk"),
+        value(approved(&hkcu(), "StartupFolder"), "Git Agent.lnk"),
     ];
     assert_eq!(found.len(), targets.len(), "{}", golden::render(&found));
-    for target in &targets {
+    for (n, target) in targets.iter().enumerate() {
         let c = expect(&found, target);
-        // Value targets only, all with Value-scope Tier A evidence.
+        // Value targets only.
         assert_eq!(c.action, Action::DeleteValue);
-        assert!(tier_a_in_scope(c), "{}", golden::target_text(target));
         assert!(c.blockers.is_empty());
+        // `Run` is written by every program and by the user (VM run x0-git-userstate: the user's own
+        // `GitAutoFetch` entry was preselected). Tier A only for the entry the installer recorded and
+        // its switch, and for the switch of a Startup shortcut the installer's log names. A Startup
+        // shortcut into the app's folder that nobody recorded (index 6) is the user's as likely as
+        // the app's: its switch is listed and never preselected.
+        let owned = n < 2 || n == 7;
+        assert_eq!(tier_a_in_scope(c), owned, "{}", golden::target_text(target));
     }
     let run = expect(&found, &targets[0]);
-    assert_eq!(
-        kinds(run),
-        vec![
-            EvidenceKind::InPreUninstallRefSnapshot,
-            EvidenceKind::PointsIntoInstallRoot,
-            EvidenceKind::DanglingRef
-        ]
+    assert!(has(run, EvidenceKind::InPreUninstallRefSnapshot));
+    assert!(has(run, EvidenceKind::PointsIntoInstallRoot));
+    assert!(has(run, EvidenceKind::DanglingRef));
+    assert!(
+        run.evidence
+            .iter()
+            .any(|e| matches!(e.kind, EvidenceKind::InstallerManifest(_)))
     );
+    // Not recorded: the same evidence, capped at Tier B and marked as found in a shared place.
+    let unrecorded = expect(&found, &targets[2]);
+    assert!(unrecorded.evidence.iter().all(|e| e.tier != Tier::A));
     let switch = expect(&found, &targets[1]);
     assert!(has(switch, EvidenceKind::ChainedRef) && score(switch) >= 8);
     assert!(find(&found, &value(approved(hklm, "Run"), "GitUpdate")).is_none());
@@ -734,6 +922,860 @@ fn env_user_path_is_compared_expanded_and_snapshot_may_name_the_value() {
     }
 }
 
+/// A directory name may hold a `;` when the entry is quoted. Cut at that `;`, the first half of
+/// `"C:\Program Files\Git;x\bin"` reads as Git's folder and was offered as an entry to take out.
+#[test]
+fn env_semicolon_inside_quotes_does_not_split_an_entry() {
+    let user_env = format!(r"HKU\{SID}\Environment");
+    let mut fp = git();
+    fp.ref_snapshot = vec![snap(
+        value(user_env.clone(), "Path"),
+        RefCarrier::Data,
+        AnchorKind::Root,
+        GIT,
+    )];
+    let theirs = format!(r#""{GIT};x\bin""#);
+    let world = World::new(
+        machine().expand_sz(
+            &user_env,
+            "Path",
+            &format!(r"C:\Users\tester\bin;{theirs};C:\Tools"),
+        ),
+        fp.clone(),
+    );
+    let found = world.scan(&RegEnv);
+    assert!(found.is_empty(), "{}", golden::render(&found));
+
+    // A quote that is never closed runs to the end of the list, over the user's later entries:
+    // nothing from the quote on is offered, with or without the installer's record on the value.
+    let unclosed = format!(r#"C:\Users\tester\bin;"{GIT}\cmd;C:\Users\tester\tools;C:\Other"#);
+    let mut recorded = fp.clone();
+    recorded.inno = vec![inno(
+        InnoRecordKind::RegDeleteValue,
+        value(user_env.clone(), "Path"),
+    )];
+    for fp in [fp.clone(), recorded] {
+        let world = World::new(machine().expand_sz(&user_env, "Path", &unclosed), fp);
+        let found = world.scan(&RegEnv);
+        assert!(found.is_empty(), "{}", golden::render(&found));
+    }
+
+    // The app's own quoted entry is still found, whole.
+    let own = format!(r#""{GIT}\cmd""#);
+    let world = World::new(
+        machine().expand_sz(&user_env, "Path", &format!(r"{theirs};{own}")),
+        fp,
+    );
+    let found = world.scan(&RegEnv);
+    assert_eq!(found.len(), 1, "{}", golden::render(&found));
+    assert_eq!(found[0].target, segment(user_env, "Path", &own));
+}
+
+/// The installer recorded `GIT_LIBS`; it now holds the app's directory and one of the user's inside
+/// one pair of quotes. That is not "a variable that leads into the app's folder": it is listed and
+/// the policy never ticks it.
+#[test]
+fn env_recorded_variable_with_a_quoted_list_is_not_preselected() {
+    use purge_policy::band::{PolicyCtx, TargetScope, decide};
+    let mut fp = git();
+    fp.ref_snapshot = vec![snap(
+        value(MACHINE_ENV, "GIT_LIBS"),
+        RefCarrier::Data,
+        AnchorKind::Root,
+        GIT,
+    )];
+    fp.inno = vec![inno(
+        InnoRecordKind::RegDeleteValue,
+        value(MACHINE_ENV, "GIT_LIBS"),
+    )];
+    let decided = |data: &str| {
+        let world = World::new(machine().sz(MACHINE_ENV, "GIT_LIBS", data), fp.clone());
+        let found = world.scan(&RegEnv);
+        assert_eq!(found.len(), 1, "{}", golden::render(&found));
+        let decision = decide(
+            &found[0],
+            &PolicyCtx {
+                mode: purge_model::ScanMode::Post,
+                verify_gone: purge_model::VerifyGone::new(true, true, true),
+                target_scope: TargetScope::Machine,
+            },
+        );
+        (
+            tier_a_in_scope(&found[0]),
+            decision.band,
+            decision.preselected,
+        )
+    };
+    let (tier_a, band, ticked) = decided(&format!(r#""{GIT}\lib;C:\Users\tester\mylibs""#));
+    assert!(!tier_a);
+    assert_ne!(band, purge_model::Band::Safe);
+    assert!(!ticked);
+    // The same variable holding the app's directory alone is the installer's, and Safe.
+    let (tier_a, band, ticked) = decided(&format!(r"{GIT}\lib"));
+    assert!(tier_a);
+    assert_eq!((band, ticked), (purge_model::Band::Safe, true));
+
+    // One install run of the log found the variable in place: not the installer's alone, although
+    // another run recorded it plainly.
+    let mut found_in_place = inno(
+        InnoRecordKind::RegDeleteValue,
+        value(MACHINE_ENV, "GIT_LIBS"),
+    );
+    found_in_place.existed_before = true;
+    fp.inno.push(found_in_place);
+    let world = World::new(
+        machine().sz(MACHINE_ENV, "GIT_LIBS", &format!(r"{GIT}\lib")),
+        fp,
+    );
+    let found = world.scan(&RegEnv);
+    assert!(
+        found.iter().all(|c| !tier_a_in_scope(c)),
+        "{}",
+        golden::render(&found)
+    );
+}
+
+/// An entry edit takes one entry's whole text out of the list. With the installer's record on the
+/// user's `Path` and a fingerprint that names the value, an entry that begins with the app's folder
+/// and holds more (through a variable that is a list, as a second quoted path, after a comma or a
+/// blank) was offered Safe and ticked: the user's directory went with the app's. Such an entry is
+/// not one directory and is not offered at all; one that is a bare reference to another variable
+/// or has a comma in its name is one directory, listed and never ticked. Through the policy
+/// (`purge_policy::band::decide`), whatever the fingerprint says.
+#[test]
+fn env_entry_that_holds_more_than_the_apps_directory_is_never_preselected() {
+    use purge_model::Band;
+    use purge_policy::band::{PolicyCtx, TargetScope, decide};
+    let user_env = format!(r"HKU\{SID}\Environment");
+    let cmd = git_cmd();
+    let tools = r"C:\Users\tester\tools";
+    let mut fp = git();
+    // The broadest record a harvest can leave: the value as a whole, referring to the root.
+    fp.ref_snapshot = vec![snap(
+        value(user_env.clone(), "Path"),
+        RefCarrier::Data,
+        AnchorKind::Root,
+        GIT,
+    )];
+    fp.inno = vec![inno(
+        InnoRecordKind::RegDeleteValue,
+        value(user_env.clone(), "Path"),
+    )];
+    let decided = |entry: &str, variable: Option<(&str, String)>| -> Vec<(Target, Band, bool)> {
+        let mut fixture =
+            machine().expand_sz(&user_env, "Path", &format!(r"C:\Users\tester\bin;{entry}"));
+        if let Some((name, holds)) = &variable {
+            fixture = fixture.sz(&user_env, name, holds);
+        }
+        let mut world = World::new(fixture, fp.clone());
+        if let Some((name, holds)) = variable {
+            world.env.insert(name.to_uppercase(), holds);
+        }
+        world
+            .scan(&RegEnv)
+            .iter()
+            .map(|c| {
+                let decision = decide(
+                    c,
+                    &PolicyCtx {
+                        mode: purge_model::ScanMode::Post,
+                        verify_gone: purge_model::VerifyGone::new(true, true, true),
+                        target_scope: TargetScope::Machine,
+                    },
+                );
+                assert_eq!(
+                    decision.preselected,
+                    decision.band == Band::Safe,
+                    "{}",
+                    golden::render(std::slice::from_ref(c))
+                );
+                (c.target.clone(), decision.band, decision.preselected)
+            })
+            .collect()
+    };
+    let entry_of = |text: &str, band: Band| {
+        vec![(
+            segment(user_env.clone(), "Path", text),
+            band,
+            band == Band::Safe,
+        )]
+    };
+
+    // The control: the app's own entry, plain or quoted, is the installer's and Safe.
+    assert_eq!(decided(&cmd, None), entry_of(&cmd, Band::Safe));
+    let quoted = format!(r#""{cmd}\""#);
+    assert_eq!(decided(&quoted, None), entry_of(&quoted, Band::Safe));
+    let through = r"%ProgramFiles%\Git\cmd";
+    assert_eq!(decided(through, None), entry_of(through, Band::Safe));
+
+    // Not one directory: nothing is offered.
+    for (entry, variable) in [
+        (
+            "%MYDIRS%".to_owned(),
+            Some(("MYDIRS", format!("{cmd};{tools}"))),
+        ),
+        (format!(r#""{cmd}" "{tools}""#), None),
+        (format!("{cmd},{tools}"), None),
+        (format!("{cmd} {tools}"), None),
+        // No second drive path: the quote left inside decides.
+        (format!(r#""{cmd}" "tools""#), None),
+        (format!(r#""{cmd}"\bin"#), None),
+        // A tab or a line break separates two things.
+        (format!("{cmd}\ttools"), None),
+        (format!("{cmd}\r\n{tools}"), None),
+        // `..` is not resolved by anything here: the entry starts with the app's folder and
+        // leads out of it, as written or through a variable.
+        (format!(r"{cmd}\..\..\..\Users\tester\tools"), None),
+        (format!(r"{cmd}\.\x"), None),
+        (
+            format!(r"{cmd}\%UP%"),
+            Some(("UP", r"..\..\..\Users\tester\tools".to_owned())),
+        ),
+        (format!(r#"{cmd}" "{tools}"#), None),
+        (
+            "%MYDIRS%".to_owned(),
+            Some(("MYDIRS", format!(r#"{cmd}" "{tools}"#))),
+        ),
+        (
+            "%MYDIRS%".to_owned(),
+            Some(("MYDIRS", format!("{cmd},{tools}"))),
+        ),
+        (
+            r"%MYDIRS%\bin".to_owned(),
+            Some(("MYDIRS", format!("{cmd};{tools}"))),
+        ),
+    ] {
+        assert_eq!(
+            decided(&entry, variable.clone()),
+            [],
+            "{entry} {variable:?}"
+        );
+    }
+
+    // One directory that is not provably the installer's entry: listed, not ticked.
+    assert_eq!(
+        decided("%MYDIR%", Some(("MYDIR", cmd.clone()))),
+        entry_of("%MYDIR%", Band::Likely)
+    );
+    for unsure in [
+        format!("{cmd},tools"),
+        format!(r"{cmd},\\server\tools"),
+        format!(r"{cmd} \\server\tools"),
+        // A blank before what starts a second path.
+        format!(r"{cmd} \Users\tester\tools"),
+        format!(r"{cmd} /Users/tester/tools"),
+        format!(r"{cmd} %NOPE%\tools"),
+    ] {
+        assert_eq!(decided(&unsure, None), entry_of(&unsure, Band::Likely));
+    }
+    // What a reference expands to is read as well: a comma or a second path start behind it.
+    for (name, holds) in [("TAIL", "cmd,x"), ("TAIL", r"cmd \Users\tester\tools")] {
+        let entry = format!(r"{GIT}\%{name}%");
+        assert_eq!(
+            decided(&entry, Some((name, holds.to_owned()))),
+            entry_of(&entry, Band::Likely),
+            "{holds}"
+        );
+    }
+    let plain_tail = format!(r"{GIT}\%TAIL%");
+    assert_eq!(
+        decided(&plain_tail, Some(("TAIL", "cmd".to_owned()))),
+        entry_of(&plain_tail, Band::Safe)
+    );
+    // References only, however they are put together.
+    for evasion in ["%MYDIR%%EMPTY%", r"%MYDIR%\%EMPTY%"] {
+        assert_eq!(
+            decided(evasion, Some(("MYDIR", cmd.clone()))),
+            entry_of(evasion, Band::Likely)
+        );
+    }
+    let two = r"%ProgramFiles%\%MYREL%";
+    assert_eq!(
+        decided(two, Some(("MYREL", r"Git\cmd".to_owned()))),
+        entry_of(two, Band::Likely)
+    );
+}
+
+/// A reference is expanded with the interactive user's environment. Windows expands only
+/// `REG_EXPAND_SZ` values, and the machine's `Path` is read by everybody: an entry there that
+/// refers to a variable a user sets for themselves leads to the app's folder for that user only.
+#[test]
+fn env_reference_is_expanded_as_windows_does_and_for_whom_the_key_is() {
+    use purge_model::Band;
+    use purge_policy::band::{PolicyCtx, TargetScope, decide};
+    let user_env = format!(r"HKU\{SID}\Environment");
+    let closed = std::cell::Cell::new(false);
+    let band = |key: &str, plan_key: &str, expand: bool, entry: &str, user_root: bool| {
+        let mut fp = git();
+        fp.ref_snapshot = vec![snap(
+            value(plan_key, "Path"),
+            RefCarrier::Data,
+            AnchorKind::Root,
+            GIT,
+        )];
+        fp.inno = vec![inno(
+            InnoRecordKind::RegDeleteValue,
+            value(plan_key, "Path"),
+        )];
+        let text = format!(r"C:\Windows;{entry}");
+        let mut fixture = if expand {
+            machine().expand_sz(key, "Path", &text)
+        } else {
+            machine().sz(key, "Path", &text)
+        };
+        if user_root {
+            fixture = fixture.sz(&user_env, "ROOT", GIT);
+        }
+        if closed.get() {
+            fixture = fixture.denied(&format!(r"HKU\{SID}\Volatile Environment"));
+        }
+        let mut world = World::new(fixture, fp);
+        world.env.insert("ROOT".into(), GIT.into());
+        world.env.insert("TEMP".into(), GIT.into());
+        let found = world.scan(&RegEnv);
+        assert!(found.len() <= 1, "{}", golden::render(&found));
+        found.first().map(|c| {
+            decide(
+                c,
+                &PolicyCtx {
+                    mode: purge_model::ScanMode::Post,
+                    verify_gone: purge_model::VerifyGone::new(true, true, true),
+                    target_scope: TargetScope::Machine,
+                },
+            )
+            .band
+        })
+    };
+    let machine_path = |expand, entry: &str, user_root| {
+        band(MACHINE_ENV, MACHINE_ENV_PLAN, expand, entry, user_root)
+    };
+    // A machine variable in the machine's list: the installer's entry.
+    assert_eq!(machine_path(true, r"%ROOT%\cmd", false), Some(Band::Safe));
+    assert_eq!(
+        machine_path(true, r"%ProgramFiles%\Git\cmd", false),
+        Some(Band::Safe)
+    );
+    // The user sets `ROOT` for themselves: what the machine's entry leads to is not known.
+    assert_eq!(machine_path(true, r"%ROOT%\cmd", true), Some(Band::Likely));
+    // A variable Windows sets per user, whatever it holds for this one.
+    assert_eq!(machine_path(true, r"%TEMP%\cmd", false), Some(Band::Likely));
+    // In the user's own list the user's variable is the one that counts.
+    assert_eq!(
+        band(&user_env, &user_env, true, r"%ROOT%\cmd", true),
+        Some(Band::Safe)
+    );
+    // A user key that cannot be read may set it.
+    closed.set(true);
+    assert_eq!(machine_path(true, r"%ROOT%\cmd", false), Some(Band::Likely));
+    assert_eq!(machine_path(true, &git_cmd(), false), Some(Band::Safe));
+    closed.set(false);
+    // `REG_SZ`: `%ROOT%` is text, and the entry names nothing of the app.
+    assert_eq!(machine_path(false, r"%ROOT%\cmd", false), None);
+    assert_eq!(machine_path(false, &git_cmd(), false), Some(Band::Safe));
+}
+
+/// The caps of an entry (`prefix::ListEntry`) hold for a variable the installer recorded and that
+/// is offered whole: `GIT_HOME` = `%MYDIR%` leads to the app's folder through a variable of the
+/// user's, and `<app>\lib,x` may be two things. Listed, never ticked.
+#[test]
+fn env_recorded_variable_that_leads_there_indirectly_is_not_preselected() {
+    use purge_model::Band;
+    use purge_policy::band::{PolicyCtx, TargetScope, decide};
+    let mut fp = git();
+    fp.ref_snapshot = vec![snap(
+        value(MACHINE_ENV_PLAN, "GIT_HOME"),
+        RefCarrier::Data,
+        AnchorKind::Root,
+        GIT,
+    )];
+    fp.inno = vec![inno(
+        InnoRecordKind::RegDeleteValue,
+        value(MACHINE_ENV_PLAN, "GIT_HOME"),
+    )];
+    let decided = |data: &str| {
+        let mut world = World::new(
+            machine().expand_sz(MACHINE_ENV, "GIT_HOME", data),
+            fp.clone(),
+        );
+        world.env.insert("MYDIR".into(), format!(r"{GIT}\lib"));
+        let found = world.scan(&RegEnv);
+        assert_eq!(found.len(), 1, "{}", golden::render(&found));
+        assert_eq!(found[0].target, value(MACHINE_ENV_PLAN, "GIT_HOME"));
+        let decision = decide(
+            &found[0],
+            &PolicyCtx {
+                mode: purge_model::ScanMode::Post,
+                verify_gone: purge_model::VerifyGone::new(true, true, true),
+                target_scope: TargetScope::Machine,
+            },
+        );
+        (
+            tier_a_in_scope(&found[0]),
+            decision.band,
+            decision.preselected,
+        )
+    };
+    assert_eq!(decided(&format!(r"{GIT}\lib")), (true, Band::Safe, true));
+    assert_eq!(decided(r"%ProgramFiles%\Git\lib"), (true, Band::Safe, true));
+    for data in [
+        "%MYDIR%".to_owned(),
+        format!(r"{GIT}\lib,x"),
+        format!(r"{GIT}\lib \\server\x"),
+    ] {
+        assert_eq!(decided(&data), (false, Band::Likely, false), "{data}");
+    }
+}
+
+/// A `;`-list outside the `Environment` keys (another product's search path). The installer's log
+/// has a record on the value, the app's folder is gone, and an entry begins with the app's
+/// folder. An entry edit takes the entry's whole text: an entry that holds more than one path is
+/// not offered, and no entry is the app's on the strength of the record, which names the list and
+/// not its entries. Only in a list that is the app's by where it is can an entry be Safe.
+#[test]
+fn list_entry_outside_environment_is_read_like_a_path_entry() {
+    use purge_model::Band;
+    use purge_policy::band::{PolicyCtx, TargetScope, decide};
+    let cmd = git_cmd();
+    let tools = r"C:\Users\tester\tools";
+    let theirs = r"HKLM\SOFTWARE\Other Vendor\Tool";
+    let own = r"HKLM\SOFTWARE\Git\Settings";
+    let decided = |key: &str, entry: &str, variable: Option<(&str, String)>| {
+        let mut fp = git();
+        fp.ref_snapshot = vec![snap(
+            value(key, "SearchPath"),
+            RefCarrier::Data,
+            AnchorKind::Root,
+            GIT,
+        )];
+        fp.inno = vec![inno(
+            InnoRecordKind::RegDeleteValue,
+            value(key, "SearchPath"),
+        )];
+        let fixture = machine().sz(key, "SearchPath", &format!(r"C:\Users\tester\bin;{entry}"));
+        let mut world = World::new(fixture, fp);
+        if let Some((name, holds)) = variable {
+            world.env.insert(name.to_uppercase(), holds);
+        }
+        let mut out: Vec<(Target, Band, bool)> = Vec::new();
+        for scanner in [&RefAny as &dyn Scanner, &RegSoftware] {
+            for c in world.scan(scanner) {
+                let decision = decide(
+                    &c,
+                    &PolicyCtx {
+                        mode: purge_model::ScanMode::Post,
+                        verify_gone: purge_model::VerifyGone::new(true, true, true),
+                        target_scope: TargetScope::Machine,
+                    },
+                );
+                let row = (c.target.clone(), decision.band, decision.preselected);
+                if matches!(c.target, Target::RegMultiSzSegment { .. }) && !out.contains(&row) {
+                    out.push(row);
+                }
+            }
+        }
+        out
+    };
+    let entry_of = |key: &str, text: &str, band: Band| {
+        vec![(segment(key, "SearchPath", text), band, band == Band::Safe)]
+    };
+    // More than one path in the entry: nothing is offered, in either place.
+    for key in [theirs, own] {
+        for (entry, variable) in [
+            (format!(r#""{cmd}" "{tools}""#), None),
+            (format!("{cmd},{tools}"), None),
+            (format!("{cmd} {tools}"), None),
+            (
+                "%MYDIRS%".to_owned(),
+                Some(("MYDIRS", format!("{tools};{cmd}"))),
+            ),
+            // Another program's command line with a file of the app as an argument.
+            (
+                format!(r#""C:\Users\tester\my tool.exe" --with "{cmd}\x.exe""#),
+                None,
+            ),
+            (format!(r"{cmd}\..\..\..\Users\tester\tools"), None),
+        ] {
+            assert_eq!(decided(key, &entry, variable.clone()), [], "{key}: {entry}");
+        }
+    }
+    // A plain entry in another product's list: the record on the value does not make it the
+    // app's. Listed, not ticked.
+    assert_eq!(
+        decided(theirs, &cmd, None),
+        entry_of(theirs, &cmd, Band::Likely)
+    );
+    // The same in a list of the app's own key: Safe; with a comma or behind a reference, listed.
+    assert_eq!(decided(own, &cmd, None), entry_of(own, &cmd, Band::Safe));
+    let file = format!(r"{cmd}\git.exe");
+    assert_eq!(decided(own, &file, None), entry_of(own, &file, Band::Safe));
+    let comma = format!("{cmd},tools");
+    assert_eq!(
+        decided(own, &comma, None),
+        entry_of(own, &comma, Band::Likely)
+    );
+    let argument = format!(r"{cmd}\git.exe /quiet");
+    assert_eq!(
+        decided(own, &argument, None),
+        entry_of(own, &argument, Band::Likely)
+    );
+    assert_eq!(
+        decided(own, "%MYDIR%", Some(("MYDIR", cmd.clone()))),
+        entry_of(own, "%MYDIR%", Band::Likely)
+    );
+
+    // A key the installer's log deletes whole is the app's place as well (with a baseline that
+    // does not have it): the record on the key, unlike one on the value, covers what is in it.
+    let logged = r"HKLM\SOFTWARE\Contoso\Bridge";
+    let mut fp = git();
+    fp.inno = vec![inno(InnoRecordKind::RegDeleteEntireKey, key(logged))];
+    let world = World::new(
+        machine().sz(logged, "SearchPath", &format!(r"C:\Users\tester\bin;{cmd}")),
+        fp,
+    );
+    let found = world.scan(&RefAny);
+    assert!(tier_a_in_scope(expect(
+        &found,
+        &segment(logged, "SearchPath", &cmd)
+    )));
+
+    // A list offered whole because every entry refers to the app: an entry that is more than a
+    // path of the app keeps the value from being the app's alone, record or no record.
+    let whole = |data: String| {
+        let mut fp = git();
+        fp.inno = vec![inno(
+            InnoRecordKind::RegDeleteValue,
+            value(theirs, "SearchPath"),
+        )];
+        let world = World::new(machine().sz(theirs, "SearchPath", &data), fp);
+        let found = world.scan(&RefAny);
+        tier_a_in_scope(expect(&found, &value(theirs, "SearchPath")))
+    };
+    assert!(whole(format!(r"{cmd};{GIT}\bin")));
+    assert!(!whole(format!(r#"{GIT}\bin;"{cmd}" "{tools}""#)));
+    assert!(!whole(format!(r"{GIT}\bin;{cmd},tools")));
+
+    // An entry that names the app without being a path of the app (a folder of somebody else's
+    // that carries the app's token, recorded by the harvest) is not the app's entry, even in
+    // the app's own key.
+    let own_list = r"HKLM\SOFTWARE\Mozilla\Firefox\Extensions";
+    let named = format!(r"D:\Other\{HASH}\x.dll");
+    let inside = format!(r"{FIREFOX}\browser\y.dll");
+    let mut fp = firefox();
+    for (index, text) in [(1u32, &named), (2, &inside)] {
+        fp.ref_snapshot.push(snap(
+            Target::RegMultiSzSegment {
+                path: own_list.into(),
+                name: "Load".into(),
+                segment: text.clone(),
+                index: Some(index),
+            },
+            RefCarrier::Segment,
+            AnchorKind::Token,
+            HASH,
+        ));
+    }
+    let world = World::new(
+        machine().multi_sz(
+            own_list,
+            "Load",
+            &[r"C:\Users\tester\a.dll", &named, &inside],
+        ),
+        fp,
+    );
+    let found = world.scan(&RefAny);
+    assert!(!tier_a_in_scope(expect(
+        &found,
+        &segment(own_list, "Load", &named)
+    )));
+    assert!(tier_a_in_scope(expect(
+        &found,
+        &segment(own_list, "Load", &inside)
+    )));
+
+    // A sibling product's key below the vendor's key is not the app's place for an entry
+    // (Thunderbird next to Firefox), whether or not that product is in the inventory: the
+    // inventory gives another app its Uninstall key, roots and anchors, never its settings
+    // key. Listed, not ticked. The same list in the product's own key is the app's.
+    let entry = format!(r"{FIREFOX}\browser");
+    let in_key = |key: &str| {
+        let world = World::new(
+            machine().sz(key, "SearchPath", &format!(r"C:\Users\tester\bin;{entry}")),
+            firefox(),
+        );
+        let mut bands: Vec<(Band, bool)> = Vec::new();
+        for scanner in [&RefAny as &dyn Scanner, &RegSoftware] {
+            for c in world.scan(scanner) {
+                if c.target != segment(key, "SearchPath", &entry) {
+                    continue;
+                }
+                let decision = decide(
+                    &c,
+                    &PolicyCtx {
+                        mode: purge_model::ScanMode::Post,
+                        verify_gone: purge_model::VerifyGone::new(true, true, true),
+                        target_scope: TargetScope::Machine,
+                    },
+                );
+                bands.push((decision.band, decision.preselected));
+            }
+        }
+        bands.dedup();
+        bands
+    };
+    assert_eq!(
+        in_key(r"HKLM\SOFTWARE\Mozilla\Thunderbird\Paths"),
+        [(Band::Likely, false)]
+    );
+    assert_eq!(
+        in_key(r"HKLM\SOFTWARE\Mozilla\Firefox\Paths"),
+        [(Band::Safe, true)]
+    );
+
+    // `..` is refused wherever a path is tested against the roots.
+    let world = World::new(machine(), git());
+    let ctx = world.ctx();
+    assert!(ctx.inside_install_root(&cmd).is_some());
+    assert!(
+        ctx.inside_install_root(&format!(r"{GIT}\..\..\Users\tester\tools"))
+            .is_none()
+    );
+}
+
+/// The `Environment` key counts as the app's own place when the installer's log deletes the key
+/// whole and the baseline does not have it (a per-user key, a baseline without the key). A
+/// variable without a record of its own is then Tier A through the key, and the caps of an entry
+/// must hold on that branch too: a bare reference, a comma, a variable Windows sets per user.
+#[test]
+fn env_single_value_in_a_key_the_log_deletes_whole_keeps_the_entry_caps() {
+    use purge_model::Band;
+    use purge_policy::band::{PolicyCtx, TargetScope, decide};
+    let decided = |data: &str| {
+        let mut fp = git();
+        fp.ref_snapshot = vec![snap(
+            value(MACHINE_ENV_PLAN, "GIT_HOME"),
+            RefCarrier::Data,
+            AnchorKind::Root,
+            GIT,
+        )];
+        fp.inno = vec![inno(
+            InnoRecordKind::RegDeleteEntireKey,
+            key(MACHINE_ENV_PLAN),
+        )];
+        let mut world = World::new(machine().expand_sz(MACHINE_ENV, "GIT_HOME", data), fp);
+        world.env.insert("MYDIR".into(), format!(r"{GIT}\lib"));
+        world.env.insert("USERPROFILE".into(), GIT.into());
+        let found = world.scan(&RegEnv);
+        assert_eq!(found.len(), 1, "{}", golden::render(&found));
+        let decision = decide(
+            &found[0],
+            &PolicyCtx {
+                mode: purge_model::ScanMode::Post,
+                verify_gone: purge_model::VerifyGone::new(true, true, true),
+                target_scope: TargetScope::Machine,
+            },
+        );
+        (
+            tier_a_in_scope(&found[0]),
+            decision.band,
+            decision.preselected,
+        )
+    };
+    // The construction does make the place the app's: a plain value is Safe.
+    assert_eq!(decided(&format!(r"{GIT}\lib")), (true, Band::Safe, true));
+    for data in [
+        "%MYDIR%".to_owned(),
+        format!(r"{GIT}\lib,x"),
+        r"%USERPROFILE%\x".to_owned(),
+    ] {
+        assert_eq!(decided(&data), (false, Band::Likely, false), "{data}");
+    }
+}
+
+/// The other half of `per_user_reference`: another user's `Environment` key (the user the app is
+/// installed for, who is not the interactive one). An entry there that refers to a variable a
+/// user sets was expanded with the wrong user's environment.
+#[test]
+fn env_reference_in_another_users_key_is_not_proven() {
+    use purge_model::Band;
+    use purge_policy::band::{PolicyCtx, TargetScope, decide};
+    const OTHER: &str = "S-1-5-21-1004336348-1177238915-682003330-1002";
+    let other_env = format!(r"HKU\{OTHER}\Environment");
+    let band = |entry: &str| {
+        let mut fp = git();
+        fp.app.program_id =
+            purge_model::ProgramId::user(OTHER, purge_model::View::K64, "Git_is1").unwrap();
+        fp.ref_snapshot = vec![snap(
+            value(other_env.clone(), "Path"),
+            RefCarrier::Data,
+            AnchorKind::Root,
+            GIT,
+        )];
+        fp.inno = vec![inno(
+            InnoRecordKind::RegDeleteValue,
+            value(other_env.clone(), "Path"),
+        )];
+        let fixture = machine()
+            .expand_sz(&other_env, "Path", &format!(r"C:\Users\other\bin;{entry}"))
+            .sz(&other_env, "ROOT", r"D:\Elsewhere");
+        let mut world = World::new(fixture, fp);
+        world.env.insert("ROOT".into(), GIT.into());
+        let found = world.scan(&RegEnv);
+        let rows: Vec<Band> = found
+            .iter()
+            .filter(|c| matches!(c.target, Target::RegMultiSzSegment { .. }))
+            .map(|c| {
+                decide(
+                    c,
+                    &PolicyCtx {
+                        mode: purge_model::ScanMode::Post,
+                        verify_gone: purge_model::VerifyGone::new(true, true, true),
+                        target_scope: TargetScope::PerUser,
+                    },
+                )
+                .band
+            })
+            .collect();
+        assert!(rows.len() <= 1, "{}", golden::render(&found));
+        (rows.first().copied(), found.iter().any(tier_a_in_scope))
+    };
+    // Written out, the entry is the installer's in that user's list as in any other.
+    let (plain_band, plain_tier_a) = band(&git_cmd());
+    assert!(plain_tier_a, "{plain_band:?}");
+    // Through a variable that user sets (to something else than the interactive user's).
+    let (_, tier_a) = band(r"%ROOT%\cmd");
+    assert!(!tier_a);
+    assert_ne!(band(r"%ROOT%\cmd").0, Some(Band::Safe));
+}
+
+/// A root that is not the app's alone (the installer was pointed at a folder that held other
+/// things: `shared_root` demotes it to an InferredRoot) proves nothing about a `Path` entry that
+/// lies under it, whatever the log says about `Path`: another tool's stale entry looks the same
+/// (rig run x0-git-toolsdir). No entry is offered from such a root.
+#[test]
+fn env_entry_under_a_root_that_is_not_the_apps_alone_is_not_offered() {
+    let mut fp = git();
+    fp.ref_snapshot = vec![snap(
+        value(MACHINE_ENV_PLAN, "Path"),
+        RefCarrier::Data,
+        AnchorKind::Root,
+        GIT,
+    )];
+    fp.inno = vec![inno(
+        InnoRecordKind::RegDeleteValue,
+        value(MACHINE_ENV_PLAN, "Path"),
+    )];
+    let fixture = || path_value(&[r"C:\Windows", &git_cmd(), &format!(r"{GIT}\rg")]);
+    // The control: an InstallRoot.
+    let found = World::new(fixture(), fp.clone()).scan(&RegEnv);
+    assert_eq!(found.len(), 2, "{}", golden::render(&found));
+    assert!(found.iter().all(tier_a_in_scope));
+    fp.roots[0].kind = purge_model::RootKind::InferredRoot;
+    let found = World::new(fixture(), fp).scan(&RegEnv);
+    assert!(
+        found.iter().all(|c| !tier_a_in_scope(c)),
+        "{}",
+        golden::render(&found)
+    );
+}
+
+/// A value offered whole (`DeleteValue`) in another product's key, with the installer's record on
+/// it: the record says who made the value, not what it holds now. Data that holds more than one
+/// path of the app (the tool rewrote its search path; another program's command line) is listed
+/// and never ticked, whether or not the data splits as a list of paths and whatever its type.
+#[test]
+fn recorded_value_of_another_product_that_holds_more_than_the_apps_path_is_not_preselected() {
+    use purge_model::Band;
+    use purge_policy::band::{PolicyCtx, TargetScope, decide};
+    let cmd = git_cmd();
+    let tools = r"C:\Users\tester\tools";
+    let theirs = r"HKLM\SOFTWARE\Other Vendor\Tool";
+    let own = r"HKLM\SOFTWARE\Git\Settings";
+    let decided = |key: &str, fixture: FixtureBuilder| {
+        let mut fp = git();
+        fp.ref_snapshot = vec![snap(
+            value(key, "SearchPath"),
+            RefCarrier::Data,
+            AnchorKind::Root,
+            GIT,
+        )];
+        fp.inno = vec![inno(
+            InnoRecordKind::RegDeleteValue,
+            value(key, "SearchPath"),
+        )];
+        let world = World::new(fixture, fp);
+        let mut out: Vec<(Band, bool)> = Vec::new();
+        for scanner in [&RefAny as &dyn Scanner, &RegSoftware] {
+            for c in world.scan(scanner) {
+                if c.target != value(key, "SearchPath") {
+                    continue;
+                }
+                let decision = decide(
+                    &c,
+                    &PolicyCtx {
+                        mode: purge_model::ScanMode::Post,
+                        verify_gone: purge_model::VerifyGone::new(true, true, true),
+                        target_scope: TargetScope::Machine,
+                    },
+                );
+                out.push((decision.band, decision.preselected));
+            }
+        }
+        out.dedup();
+        out
+    };
+    let sz = |key: &str, data: String| decided(key, machine().sz(key, "SearchPath", &data));
+    let multi = |key: &str, strings: &[String]| {
+        let strings: Vec<&str> = strings.iter().map(String::as_str).collect();
+        decided(key, machine().multi_sz(key, "SearchPath", &strings))
+    };
+    let command = format!(r#""C:\Users\tester\my tool.exe" --with "{cmd}\x.exe""#);
+    let listed = [(Band::Likely, false)];
+    let safe = [(Band::Safe, true)];
+    // The control: the value still holds what the installer wrote, one path of the app.
+    assert_eq!(sz(theirs, cmd.clone()), safe);
+    assert_eq!(sz(theirs, format!(r#""{cmd}\""#)), safe);
+    assert_eq!(sz(theirs, format!(r"{cmd};{GIT}\bin")), safe);
+    assert_eq!(multi(theirs, &[cmd.clone(), format!(r"{GIT}\bin")]), safe);
+    for data in [
+        format!(r#"C:\Users\tester\bin;"{cmd}" "{tools}";relative"#),
+        format!(r#"bin;"{cmd}" "{tools}""#),
+        format!(r"C:\Users\tester\bin;{cmd};relative"),
+        format!(r"C:\Users\tester\bin {cmd}"),
+        format!("{tools},{cmd}"),
+        // One string that is a command line of somebody else's, or of the app's.
+        command.clone(),
+        format!(r#""{cmd}\git.exe" --with "{tools}""#),
+    ] {
+        assert_eq!(sz(theirs, data.clone()), listed, "{data}");
+    }
+    assert_eq!(multi(theirs, &[cmd.clone(), command.clone()]), listed);
+    assert_eq!(multi(theirs, &[format!("{tools};{cmd}")]), listed);
+    // A value that is the app's by its name (a path of the app) is not judged by data that
+    // does not refer to the app at all.
+    let named = format!(r"{cmd}\git.exe");
+    let mut fp = git();
+    fp.inno = vec![inno(InnoRecordKind::RegDeleteValue, value(theirs, &named))];
+    let world = World::new(machine().sz(theirs, &named, "RUNASADMIN"), fp);
+    assert!(tier_a_in_scope(expect(
+        &world.scan(&RefAny),
+        &value(theirs, &named)
+    )));
+    // In the app's own key a single string and a `REG_MULTI_SZ` value stay the app's; a `;`-list
+    // with somebody else's entry does not.
+    assert_eq!(
+        sz(own, format!(r#""{cmd}\git.exe" --with "{tools}""#)),
+        safe
+    );
+    assert_eq!(
+        multi(own, &[cmd.clone(), format!(r#""{cmd}\git.exe" --flag"#)]),
+        safe
+    );
+    assert_eq!(
+        sz(own, format!(r#"{GIT}\bin;"{cmd}" "{tools}";relative"#)),
+        listed
+    );
+}
+
 #[test]
 fn env_whole_variable_needs_an_inno_value_record() {
     let home = format!(r"{GIT}\home");
@@ -764,15 +1806,188 @@ fn env_whole_variable_needs_an_inno_value_record() {
     let root_var = expect(&found, &value(MACHINE_ENV_PLAN, "GIT_INSTALL_ROOT"));
     assert_eq!(root_var.action, Action::DeleteValue);
     assert!(has(root_var, EvidenceKind::PointsIntoInstallRoot));
-    assert!(tier_a_in_scope(expect(
-        &found,
-        &value(MACHINE_ENV_PLAN, "GIT_SSH")
-    )));
+    assert!(tier_a_in_scope(root_var));
+    // The record names the variable, not what it holds: the installer logged `GIT_SSH`, and a
+    // `GIT_SSH` that does not lead into the app's folder may as well be one the user set again for
+    // a copy of their own after an uninstall. Listed, never preselected.
+    let elsewhere = expect(&found, &value(MACHINE_ENV_PLAN, "GIT_SSH"));
+    assert!(!tier_a_in_scope(elsewhere));
+    assert!(
+        elsewhere
+            .evidence
+            .iter()
+            .all(|e| e.detail.get("unproven").is_some())
+    );
+}
+
+/// VM run x0-git-userstate: the user set `GIT_SSH` to Git's ssh and put Git's `cmd` on their own
+/// `Path`. `GIT_SSH` is one value, not a list: it was offered as an entry edit (which leaves an empty
+/// variable behind) and preselected.
+#[test]
+fn env_single_value_variable_is_the_value_and_a_users_entry_is_not_tier_a() {
+    let user_env = format!(r"HKU\{SID}\Environment");
+    let ssh = format!(r"{GIT}\usr\bin\ssh.exe");
+    let cmd = git_cmd();
+    let mut fp = git();
+    fp.ref_snapshot = vec![
+        snap(
+            value(user_env.clone(), "GIT_SSH"),
+            RefCarrier::Data,
+            AnchorKind::Root,
+            GIT,
+        ),
+        snap(
+            value(user_env.clone(), "Path"),
+            RefCarrier::Data,
+            AnchorKind::Root,
+            GIT,
+        ),
+    ];
+    let fixture = machine()
+        .sz(&user_env, "GIT_SSH", &ssh)
+        .expand_sz(&user_env, "Path", &cmd);
+    let world = World::new(fixture, fp);
+    let found = world.scan(&RegEnv);
+    assert_eq!(found.len(), 2, "{}", golden::render(&found));
+
+    // One value: offered as the value, never as an entry of it.
+    let var = expect(&found, &value(user_env.clone(), "GIT_SSH"));
+    assert_eq!(var.action, Action::DeleteValue);
+    assert!(
+        !found.iter().any(|c| matches!(
+            &c.target,
+            Target::RegMultiSzSegment { name, .. } if name == "GIT_SSH"
+        )),
+        "{}",
+        golden::render(&found)
+    );
+    // `Path` is a list even with one entry in it.
+    let entry = expect(&found, &segment(user_env.clone(), "Path", &cmd));
+    assert_eq!(entry.action, Action::EditSegment);
+
+    // Nothing shows that Git wrote either: the references are there, at Tier B.
+    assert!(has(var, EvidenceKind::InPreUninstallRefSnapshot));
+    for c in [var, entry] {
+        assert!(has(c, EvidenceKind::PointsIntoInstallRoot));
+        assert!(has(c, EvidenceKind::DanglingRef));
+        assert!(c.evidence.iter().all(|e| e.tier == Tier::B), "{c:?}");
+        assert!(!tier_a_in_scope(c));
+    }
+}
+
+/// The same variable when the installer's log records it: the app's own, Tier A.
+#[test]
+fn env_single_value_variable_the_installer_recorded_is_tier_a() {
+    let ssh = format!(r"{GIT}\usr\bin\ssh.exe");
+    let mut fp = git();
+    fp.ref_snapshot = vec![snap(
+        value(MACHINE_ENV, "GIT_SSH"),
+        RefCarrier::Data,
+        AnchorKind::Root,
+        GIT,
+    )];
+    fp.inno = vec![inno(
+        InnoRecordKind::RegDeleteValue,
+        value(MACHINE_ENV, "GIT_SSH"),
+    )];
+    let world = World::new(machine().sz(MACHINE_ENV, "GIT_SSH", &ssh), fp);
+    let found = world.scan(&RegEnv);
+    assert_eq!(found.len(), 1, "{}", golden::render(&found));
+    assert_eq!(found[0].action, Action::DeleteValue);
+    assert!(tier_a_in_scope(&found[0]));
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // REF-ANY
 // ---------------------------------------------------------------------------------------------------------
+
+/// VM runs x0-git-userstate and x0-git-toolsdir: a setting of another program
+/// (`TortoiseGit|MSysGit`, `ContosoTools\Settings|GitExecutable`) that holds a path into the app was
+/// preselected. It is in the reference snapshot and it dangles, and it is still not the app's.
+#[test]
+fn ref_any_setting_of_another_program_is_not_tier_a() {
+    let exe = format!(r"{FIREFOX}\firefox.exe");
+    let tortoise = format!(r"HKU\{SID}\Software\TortoiseGit");
+    let contoso = format!(r"HKU\{SID}\Software\ContosoTools\Settings");
+    let own = format!(r"HKU\{SID}\Software\Mozilla\Firefox\Launcher");
+    let mut fp = firefox();
+    fp.ref_snapshot = vec![
+        snap(
+            value(tortoise.clone(), "Browser"),
+            RefCarrier::Data,
+            AnchorKind::Exe,
+            &exe,
+        ),
+        snap(
+            value(contoso.clone(), "BrowserExecutable"),
+            RefCarrier::Data,
+            AnchorKind::Exe,
+            &exe,
+        ),
+        snap(
+            value(own.clone(), "Path"),
+            RefCarrier::Data,
+            AnchorKind::Exe,
+            &exe,
+        ),
+    ];
+    let fixture = machine()
+        .sz(&tortoise, "Browser", &exe)
+        .sz(&contoso, "BrowserExecutable", &exe)
+        .sz(&own, "Path", &exe);
+    let world = World::new(fixture, fp);
+    let found = world.scan(&RefAny);
+    for target in [
+        value(tortoise, "Browser"),
+        value(contoso, "BrowserExecutable"),
+    ] {
+        let c = expect(&found, &target);
+        assert!(has(c, EvidenceKind::InPreUninstallRefSnapshot));
+        assert!(has(c, EvidenceKind::DanglingRef));
+        assert!(
+            c.evidence.iter().all(|e| e.tier != Tier::A),
+            "{}",
+            golden::target_text(&target)
+        );
+        assert!(
+            c.evidence
+                .iter()
+                .all(|e| e.detail.get("place") == Some("shared"))
+        );
+    }
+    // The same reference in the app's own key keeps its tier.
+    assert!(tier_a_in_scope(expect(&found, &value(own, "Path"))));
+}
+
+/// VM runs x0-vscode-userstate and x0-git-upgrade: the Restart Manager's session values (the files
+/// the uninstaller asked about) were preselected. They are Windows' own short-lived state.
+#[test]
+fn ref_any_restart_manager_sessions_are_not_read() {
+    let session = format!(r"HKU\{SID}\Software\Microsoft\RestartManager\Session0000");
+    let fixture = machine()
+        .multi_sz(
+            &session,
+            "RegFiles0000",
+            &[
+                &format!(r"{GIT}\cmd\git.exe"),
+                &format!(r"{GIT}\git-bash.exe"),
+            ],
+        )
+        .sz(&session, "SessionHash", "00")
+        .sz(
+            &format!(r"HKU\{SID}\Software\Vendor\Tool"),
+            "Git",
+            &format!(r"{GIT}\cmd\git.exe"),
+        );
+    let world = World::new(fixture, git());
+    let found = world.scan(&RefAny);
+    // The control: the other value that points at Git is found.
+    assert_eq!(found.len(), 1, "{}", golden::render(&found));
+    assert_eq!(
+        found[0].target,
+        value(format!(r"HKU\{SID}\Software\Vendor\Tool"), "Git")
+    );
+}
 
 fn subtree(key_path: &str, values: &[(&str, &str)], subkeys: &[&str]) -> SubtreeBaseline {
     SubtreeBaseline {
@@ -1232,4 +2447,46 @@ fn ref_any_token_named_key_under_microsoft_is_not_offered() {
     assert!(find(&found, &key(outside)).is_some());
     // The value itself is still a value target.
     assert!(find(&found, &value(inside, "DisplayIcon")).is_some());
+}
+
+/// The M1a campaign case (r0-npp): `Software\WOW6432Node\Notepad++` is named like the product, and the
+/// product's name is also one of its vendor aliases. It holds one value that names nothing of the
+/// app. As a vendor container it could never be emptied; it is the product's own key and is offered
+/// whole on its name: no Tier A evidence, so listed and never ticked. With another installed app that
+/// carries the name in its own, the key may be shared and stays a delete-if-empty container.
+#[test]
+fn software_key_named_like_the_product_is_a_product_key_not_a_vendor_container() {
+    let npp_key = r"HKLM\SOFTWARE\WOW6432Node\Notepad++";
+    let world = |other: Option<&str>| {
+        let mut fp = notepadpp();
+        fp.identity = identity(
+            &["Notepad++ (64-bit x64)", "Notepad++"],
+            &["Notepad++ Team", "NOTEPAD++"],
+            &["notepad++"],
+        );
+        let mut world = World::new(machine().dword(npp_key, "InstallerLanguage", 1033), fp);
+        if let Some(name) = other {
+            world.other_apps = OtherApps::new(vec![OtherApp {
+                name: name.into(),
+                ..OtherApp::default()
+            }]);
+        }
+        world
+    };
+    let found = world(None).scan(&RegSoftware);
+    assert_eq!(found.len(), 1, "{}", golden::render(&found));
+    let product = expect(&found, &key(npp_key));
+    assert_eq!(product.action, Action::DeleteKey);
+    assert!(has(product, EvidenceKind::ExactFullName));
+    assert!(!has(product, EvidenceKind::VendorContainer));
+    assert!(!tier_a_in_scope(product), "{product:?}");
+    assert!(product.blockers.is_empty());
+
+    // An unrelated app changes nothing; one that carries the product's name does.
+    let found = world(Some("Acme Editor")).scan(&RegSoftware);
+    assert_eq!(expect(&found, &key(npp_key)).action, Action::DeleteKey);
+    let found = world(Some("Notepad++ Plugin Manager")).scan(&RegSoftware);
+    let shared = expect(&found, &key(npp_key));
+    assert_eq!(shared.action, Action::RemoveDirIfEmpty);
+    assert_eq!(kinds(shared), vec![EvidenceKind::VendorContainer]);
 }

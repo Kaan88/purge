@@ -292,6 +292,7 @@ dependencies = [
  "purge-identity",
  "purge-index",
  "purge-model",
+ "purge-policy",
  "purge-source",
 ]
 

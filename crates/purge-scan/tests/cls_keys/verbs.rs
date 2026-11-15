@@ -129,10 +129,12 @@ fn without_a_baseline_only_the_values_are_offered() {
     world.baseline = None;
     let lines = world.golden(&ClsVerbs);
     assert_eq!(lines.len(), 6, "{lines:?}");
+    // `*\shell`, `Directory\shell` and the like are places every program and the user add verbs to:
+    // without an installer record a value that points at the app is Tier B.
     assert!(lines.iter().all(|l| l.starts_with("value ")
-        && l.ends_with("DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]")));
+        && l.ends_with("DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]")));
     assert!(lines.contains(&format!(
-        "value {}|Icon DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+        "value {}|Icon DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]",
         verb("*", "AcmeEdit")
     )));
 }
@@ -148,7 +150,7 @@ fn a_verb_windows_ships_is_never_a_key_candidate() {
     let candidates = world.run(&ClsVerbs);
     assert!(on_key(&candidates, &verb("Directory", "cmd")).is_none());
     assert!(render(&candidates).contains(&format!(
-        "value {command}| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]"
+        "value {command}| DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]"
     )));
 }
 

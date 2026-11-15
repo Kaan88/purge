@@ -30,6 +30,9 @@
 //! target) to the caller's `redecide` function, which decides the container again with it. A container
 //! that is not empty is left as decided: `VendorContainer` alone weighs 2, so it stays Weak.
 //!
+//! A container that holds something the plan does not list at all can never be emptied by the plan.
+//! [`unemptiable`] finds those, and [`crate::collapse`] leaves them out of the plan.
+//!
 //! `EmptyAfterPlan` alone reaches the Safe score, so this computation is the only safeguard for removing
 //! a vendor container. It therefore fails closed everywhere: no listing, an unparsable listing, a child
 //! the plan does not remove, or an action other than delete-if-empty all mean no evidence.
@@ -145,6 +148,17 @@ pub struct Emptiness {
 /// run. `None` when it is not a pending container or would not be empty.
 #[must_use]
 pub fn emptiness(decided: &[Candidate], index: usize) -> Option<Emptiness> {
+    covered(decided, index, |_, c| removes_whole(c))
+}
+
+/// The children of the pending container at `index` matched against the candidates that `covers`
+/// accepts. `None` when it is not a pending container, its listing cannot be read, or a child has no
+/// accepted candidate on exactly that child.
+fn covered(
+    decided: &[Candidate],
+    index: usize,
+    covers: impl Fn(usize, &Candidate) -> bool,
+) -> Option<Emptiness> {
     let container = decided.get(index)?;
     if !is_pending(container) {
         return None;
@@ -176,6 +190,7 @@ pub fn emptiness(decided: &[Candidate], index: usize) -> Option<Emptiness> {
                 find(
                     decided,
                     index,
+                    &covers,
                     |t| matches!(t, Target::Path { path } if prefix::is_same(path, &child_path)),
                 )
             }
@@ -184,10 +199,11 @@ pub fn emptiness(decided: &[Candidate], index: usize) -> Option<Emptiness> {
                 find(
                     decided,
                     index,
+                    &covers,
                     |t| matches!(t, Target::RegKey { path } if prefix::is_same(path, &child_key)),
                 )
             }
-            Target::RegKey { path } => find(decided, index, |t| {
+            Target::RegKey { path } => find(decided, index, &covers, |t| {
                 matches!(t, Target::RegValue { path: key, name: value }
                     if prefix::is_same(key, path) && prefix::eq_ci(value, name))
             }),
@@ -198,13 +214,56 @@ pub fn emptiness(decided: &[Candidate], index: usize) -> Option<Emptiness> {
     Some(result)
 }
 
-/// The index of a candidate other than `skip` that removes a target accepted by `is_child`.
-fn find(decided: &[Candidate], skip: usize, is_child: impl Fn(&Target) -> bool) -> Option<usize> {
+/// The index of a candidate other than `skip` that `covers` accepts and whose target `is_child` accepts.
+fn find(
+    decided: &[Candidate],
+    skip: usize,
+    covers: impl Fn(usize, &Candidate) -> bool,
+    is_child: impl Fn(&Target) -> bool,
+) -> Option<usize> {
     decided
         .iter()
         .enumerate()
-        .find(|(i, c)| *i != skip && is_child(&c.target) && removes_whole(c))
+        .find(|(i, c)| *i != skip && is_child(&c.target) && covers(*i, c))
         .map(|(i, _)| i)
+}
+
+/// The pending containers that no selection of the plan's items can empty, deepest first.
+///
+/// Delete-if-empty succeeds only on an empty container. A container is worth listing while every child
+/// it holds is itself in the plan, ticked or not: the user can tick the children and the container
+/// follows. A child that the plan does not hold at all (another product's key or folder, a value or
+/// file nobody claimed) stays whatever the user ticks, so the container's action can never succeed and
+/// listing it only suggests that the vendor's shared key or folder is the app's to remove.
+///
+/// A child counts as held by the plan when a candidate that is not Blocked targets exactly that child
+/// and removes it whole (`Quarantine`, `DeleteKey`, `DeleteValue`), or is itself a pending container
+/// that is kept. `desktop.ini` and `Thumbs.db` count as they do for [`emptiness`]. A container without
+/// a readable listing cannot be shown to be emptiable and is returned too. Blocked containers are not
+/// returned: they are listed for transparency and are not actionable.
+#[must_use]
+pub fn unemptiable(decided: &[Candidate]) -> Vec<usize> {
+    let blocked = |c: &Candidate| c.decision.as_ref().is_some_and(|d| d.band == Band::Blocked);
+    let mut pending: Vec<usize> = (0..decided.len())
+        .filter(|&i| is_pending(&decided[i]) && !blocked(&decided[i]))
+        .collect();
+    pending.sort_by_key(|&i| (std::cmp::Reverse(depth(&decided[i])), i));
+    let mut dropped: Vec<usize> = Vec::new();
+    for index in pending {
+        let held = covered(decided, index, |i, c| {
+            !blocked(c)
+                && !dropped.contains(&i)
+                && match c.action {
+                    Action::Quarantine | Action::DeleteKey | Action::DeleteValue => true,
+                    Action::RemoveDirIfEmpty => is_pending(c),
+                    Action::EditSegment | Action::RemovePackage | Action::ReportOnly => false,
+                }
+        });
+        if held.is_none() {
+            dropped.push(index);
+        }
+    }
+    dropped
 }
 
 /// The `EmptyAfterPlan` evidence for a container found empty.

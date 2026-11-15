@@ -37,6 +37,13 @@
 //! `Category::Cache`, and still need Tier A evidence of their own to be offered at all.
 //!
 //! Name-attributed folders also get the negatives `ExecutablesPresent`, `ManyFiles` and `GenericName`.
+//!
+//! # A folder a family shares
+//!
+//! A `<Vendor>\<Product>` folder whose product name another app that stays installed carries as well
+//! (`Mozilla\Firefox` beside Firefox ESR or Firefox Developer Edition) holds that app's live data: it
+//! gets the hard blocker `ReferencedByOtherApp` naming that app, so it is listed as kept and never
+//! offered for removal (`Scan::other_app_named`).
 
 use purge_guard::prefix;
 use purge_identity::identity::IdentityMatch;
@@ -332,7 +339,16 @@ impl Scan<'_, '_> {
             b.installer_manifest();
         }
         if let Some(token) = token {
-            b.harvested_token(token);
+            // The token names this install and nothing else (weight 7, Tier A). The folder's own age
+            // is the second, independent observation: created within the install's window. Only the
+            // creation time counts. A last-write time says nothing about age: the uninstaller itself
+            // touches such folders, so on a source without creation times every token-named folder
+            // would pass. Asked only next to the token: a time alone attributes nothing.
+            if b.harvested_token(token) {
+                if let Some(created) = meta.times.created {
+                    b.time_window(created);
+                }
+            }
         }
         if category == Category::UserData {
             b.referenced_by_app();
@@ -367,6 +383,18 @@ impl Scan<'_, '_> {
             if Kb::shipped().generic.contains(&prefix::fold(leaf)) {
                 b.negative(EvidenceKind::GenericName, Facts::new().with("name", leaf));
             }
+        }
+        // `<Vendor>\<Product>` does not single this app out when a product that stays installed
+        // carries the name too: products of one family keep their data in one folder
+        // (`Mozilla\Firefox` of Firefox, of Firefox ESR and of Firefox Developer Edition). The
+        // folder then holds a live profile and is kept.
+        let family = names
+            .iter()
+            .any(|m| m.kind == EvidenceKind::ProductSubfolderOfVendor)
+            .then(|| self.other_app_named(leaf))
+            .flatten();
+        if let Some(app) = family {
+            b.blocker(Blocker::ReferencedByOtherApp { app });
         }
         b.common_blockers();
         if kind == Kind::Folder && meta.is_dir() {
@@ -476,6 +504,35 @@ impl Scan<'_, '_> {
                     .anchors
                     .iter()
                     .any(|a| a.kind == AnchorKind::Exe && is_exe(&a.text))
+        })
+    }
+
+    /// The display name of another installed app whose name holds every significant token of the
+    /// directory name `leaf` (the app's own vendor words aside): `Firefox` beside an installed
+    /// `Firefox Developer Edition` or `Mozilla Firefox ESR`. Such a folder may hold that app's data
+    /// whatever this app's name says.
+    fn other_app_named(&self, leaf: &str) -> Option<String> {
+        let generic = &Kb::shipped().generic;
+        let vendors: Vec<&str> = self
+            .app
+            .identity
+            .vendor_aliases()
+            .iter()
+            .flat_map(|alias| alias.split(' '))
+            .collect();
+        let wanted: Vec<String> = significant_tokens(leaf, generic)
+            .into_iter()
+            .filter(|t| !vendors.contains(&t.as_str()))
+            .collect();
+        if wanted.is_empty() {
+            return None;
+        }
+        self.ctx.other_apps.apps().iter().find_map(|other| {
+            let theirs = significant_tokens(&other.name, generic);
+            wanted
+                .iter()
+                .all(|t| theirs.contains(t))
+                .then(|| other.name.clone())
         })
     }
 
@@ -611,6 +668,8 @@ mod tests {
                 })
                 .collect(),
             outside_root_files: Vec::new(),
+            uninstallers: Vec::new(),
+            older_keys: Vec::new(),
             anchors: Anchors::default(),
             tokens: Vec::new(),
             inno: Vec::new(),
@@ -862,6 +921,84 @@ mod tests {
         };
         let found = scan_beside(&fixture, &fp, vec![unrelated]);
         assert_eq!(paths(&found), [format!(r"{ROAMING}\Code")]);
+        // Nor does its name keep a folder directly under a base: only a product folder below the
+        // vendor's is one a family shares.
+        assert_eq!(found[0].blockers, [Blocker::UserData]);
+    }
+
+    /// `<Vendor>\<Product>` is one folder for a family of products: Firefox, Firefox Developer
+    /// Edition and Firefox ESR all keep their profiles in `Mozilla\Firefox`. While one of them stays
+    /// installed the folder's name does not single out the app being removed.
+    #[test]
+    fn a_product_folder_another_installed_app_is_named_after_is_kept() {
+        let fixture = machine()
+            .file(&format!(r"{ROAMING}\Mozilla\Firefox\profiles.ini"), 10)
+            .file(
+                &format!(r"{LOCAL}\Mozilla\Firefox\Profiles\x\cache.bin"),
+                10,
+            )
+            .build();
+        let fp = fingerprint(
+            &["Mozilla Firefox"],
+            "Mozilla",
+            &["firefox"],
+            r"C:\Program Files\Mozilla Firefox",
+            &[(r"C:\Program Files\Mozilla Firefox\firefox.exe", true)],
+        );
+        let other = |name: &str| OtherApp {
+            name: name.into(),
+            ..OtherApp::default()
+        };
+        let shared = |found: &[Candidate]| -> Vec<(String, Option<String>)> {
+            found
+                .iter()
+                .filter(|c| {
+                    c.evidence
+                        .iter()
+                        .any(|e| e.kind == EvidenceKind::ProductSubfolderOfVendor)
+                })
+                .map(|c| {
+                    let Target::Path { path } = &c.target else {
+                        panic!("a path target");
+                    };
+                    let app = c.blockers.iter().find_map(|b| match b {
+                        Blocker::ReferencedByOtherApp { app } => Some(app.clone()),
+                        _ => None,
+                    });
+                    (path.clone(), app)
+                })
+                .collect()
+        };
+        let folders = [
+            format!(r"{ROAMING}\Mozilla\Firefox"),
+            format!(r"{LOCAL}\Mozilla\Firefox"),
+        ];
+        let expect = |app: Option<&str>| -> Vec<(String, Option<String>)> {
+            folders
+                .iter()
+                .map(|f| (f.clone(), app.map(str::to_owned)))
+                .collect()
+        };
+        // Alone, and beside products that are not named after the folder.
+        assert_eq!(shared(&scan(&fixture, &fp)), expect(None));
+        for name in [
+            "Mozilla Thunderbird (x64 en-US)",
+            "Mozilla Maintenance Service",
+            "Waterfox",
+            "Fire Fox Tools",
+        ] {
+            let found = scan_beside(&fixture, &fp, vec![other(name)]);
+            assert_eq!(shared(&found), expect(None), "{name}");
+        }
+        // Beside a product of the same family.
+        for name in [
+            "Firefox Developer Edition (x64 en-US)",
+            "Mozilla Firefox ESR (x64 en-US)",
+            "Firefox",
+        ] {
+            let found = scan_beside(&fixture, &fp, vec![other("Unrelated"), other(name)]);
+            assert_eq!(shared(&found), expect(Some(name)), "{name}");
+        }
     }
 
     #[test]

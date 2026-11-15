@@ -38,14 +38,14 @@ use purge_identity::tokenizer::vendor_key;
 use purge_index::baseline::Baseline;
 use purge_index::matcher::AnchorSet;
 use purge_model::{
-    AppRef, FileTime, Fingerprint, FingerprintSchema, InventoryDoc, InventoryEntry, OsInfo,
-    TimeWindow,
+    AppRef, ExeFile, FileTime, Fingerprint, FingerprintSchema, InventoryDoc, InventoryEntry,
+    OsInfo, TimeWindow,
 };
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::system::SystemSource;
 
-use crate::anchors::{self, AnchorInput, ModifiedProgId};
+use crate::anchors::{self, AnchorInput, ModifiedClsid, ModifiedProgId};
 use crate::appx_link::{self, LinkedPackage};
 use crate::assoc;
 use crate::coproducts::{self, CoProductPre};
@@ -53,8 +53,47 @@ use crate::exes::{self, ExeLimits};
 use crate::inno_map::{self, UserBinding};
 use crate::refsnap::{self, HarvestCtx};
 use crate::roots::{self, InnoRootFacts, RejectedRoot, RootEnv, env_map};
+use crate::shared_root;
 use crate::subtree::{self, SubtreeOptions};
 use crate::tokens::{self, DroppedToken, TokenInput};
+
+/// The time before which a registry key is older than the app ([`anchors::ComCutoff`]).
+///
+/// The cutoff is only ever used one way: a key older than it is not the app's. A cutoff that is too
+/// early therefore lets things through and never takes the app's own keys for older, and of two
+/// candidates the later one is the stricter guard as long as it is not later than the install.
+///
+/// - A shared root: the start of the install as the walk found it (the earliest file the log
+///   names). The directory's own creation time says nothing about an install into an existing
+///   folder.
+/// - Otherwise the inventory's hints: the creation time of the install directory (exact), else
+///   the earliest other hint (a day of slack).
+/// - A root the installer did not create and that was judged the app's alone (a folder the user
+///   made beforehand, a reinstall into a leftover folder) has an install start from the walk too.
+///   When that is later than the directory's creation it is the cutoff: the folder is older than
+///   the install by as much as the user made it earlier.
+///
+/// What stays too early, and so unguarded for the time between: an upgrade (the directory and the
+/// overwritten files keep the times of the first install, and what the user made between the
+/// first install and the upgrade is younger than the cutoff), and every app without an Inno log
+/// that was updated in place.
+fn install_cutoff(
+    demoted: &shared_root::Demoted,
+    hints: &[purge_model::InstallTimeEvidence],
+) -> Option<anchors::ComCutoff> {
+    if let Some(time) = demoted.shared.iter().map(|s| s.install_start).min() {
+        return Some(anchors::ComCutoff { time, exact: true });
+    }
+    let hinted = anchors::ComCutoff::of(hints);
+    match (hinted, demoted.own_start) {
+        (Some(cutoff), Some(start)) if cutoff.exact && cutoff.time >= start => Some(cutoff),
+        (_, Some(start)) => Some(anchors::ComCutoff {
+            time: start,
+            exact: true,
+        }),
+        (hinted, None) => hinted,
+    }
+}
 
 /// The value of an Inno Setup Uninstall key that names the app directory.
 const INNO_APP_PATH: &str = "Inno Setup: App Path";
@@ -106,6 +145,8 @@ pub struct HarvestReport {
     pub rejected_roots: Vec<RejectedRoot>,
     /// Pre-existing or shared ProgIDs the app added verbs to; not in P.
     pub modified_progids: Vec<ModifiedProgId>,
+    /// COM classes pointed at the app's files that are not its own registration; not anchors.
+    pub modified_clsids: Vec<ModifiedClsid>,
     /// Candidate tokens that were not kept.
     pub dropped_tokens: Vec<DroppedToken>,
     /// The linked sparse packages, with their locations.
@@ -276,19 +317,53 @@ pub fn harvest_report(
             .filter(|s| !s.trim().is_empty()),
         log_app_dirs: inno.app_dirs.clone(),
     };
-    let root_set = roots::collect(fs, entry, &inno_facts, &env, &root_env);
+    let mut root_set = roots::collect(fs, entry, &inno_facts, &env, &root_env);
     warnings.extend(root_set.rejected.iter().map(|r| format!("roots: {r}")));
+    // A directory that held other things before the app was installed into it is not the app's alone
+    // (`shared_root`): it is kept as an inferred root.
+    let demoted = if inno.parsed {
+        shared_root::demote(fs, &mut root_set.roots, &inno.records, &inno.created_dirs)
+    } else {
+        shared_root::Demoted::default()
+    };
+    for unjudged in &demoted.unjudged {
+        warnings.push(format!(
+            "roots: {} existed before the install and it cannot be shown that everything in it is \
+             the app's ({}); it is treated as a shared folder, not as the app's own directory",
+            unjudged.path, unjudged.why
+        ));
+    }
+    for shared in &demoted.shared {
+        warnings.push(format!(
+            "roots: {} existed before the install and holds {} file(s) older than it that the \
+             uninstall log does not name (first: {}); it is treated as a shared folder, not as the \
+             app's own directory",
+            shared.path, shared.foreign, shared.first
+        ));
+    }
     if root_set.roots.is_empty() {
         warnings
             .push("roots: the app has no validated root; nothing can be attributed by path".into());
     }
-    let exe_set = exes::collect(
+    let mut exe_set = exes::collect(
         fs,
         &root_set.roots,
         identity.main_exes(),
         ExeLimits::default(),
     );
     warnings.extend(exe_set.warnings.iter().cloned());
+    // In a shared folder a program is the app's by the installer's record, not by where it lies.
+    for path in shared_root::declared_code_files(fs, &demoted, &inno.records) {
+        if !exe_set
+            .files
+            .iter()
+            .any(|f| prefix::is_same(&f.path, &path))
+        {
+            exe_set.files.push(ExeFile { path, main: false });
+        }
+    }
+    exe_set.files.sort_by_key(|f| prefix::fold(&f.path));
+    let cutoff = install_cutoff(&demoted, &entry.install_time_evidence);
 
     // 5. Anchors and tokens.
     let anchor_harvest = anchors::collect(AnchorInput {
@@ -301,8 +376,18 @@ pub fn harvest_report(
         env: &env_vars,
         user_sids: &user_sids,
         baseline: matching_baseline,
+        other_dirs: root_env.other_dirs(),
+        other_files: root_env.other_files(),
+        install_time: cutoff,
     });
     warnings.extend(anchor_harvest.warnings.iter().cloned());
+    for class in &anchor_harvest.modified_clsids {
+        warnings.push(format!(
+            "anchors: the COM class {} points at the app's files but is not the app's own registration \
+             ({:?}); it is not used as an anchor",
+            class.id, class.reason
+        ));
+    }
     let token_harvest = tokens::harvest(TokenInput {
         entry,
         inventory: &inventory.entries,
@@ -319,6 +404,22 @@ pub fn harvest_report(
         .as_deref()
         .map(|log| inno_map::outside_root_files(&inno.records, &root_set.roots, log))
         .unwrap_or_default();
+    // The app's own uninstaller: what its uninstall commands run, and the Inno log next to it.
+    let mut uninstallers: Vec<String> = [&entry.uninstall_string, &entry.quiet_uninstall_string]
+        .into_iter()
+        .flatten()
+        .filter(|command| !purge_inventory::kind::is_msiexec(command))
+        .filter_map(|command| roots::command_exe(command, &env, guard))
+        .filter(|exe| !prefix::is_same_or_inside(exe, &guard.windir))
+        .collect();
+    if let Some(log) = &inno.log_path {
+        uninstallers.push(log.clone());
+        if let Some(stem) = log.strip_suffix(".dat") {
+            uninstallers.push(format!("{stem}.msg"));
+        }
+    }
+    uninstallers.sort_by_key(|path| prefix::fold(path));
+    uninstallers.dedup_by(|a, b| prefix::is_same(a, b));
     let appx = appx_link::link(sys, &root_set.roots, guard);
     warnings.extend(appx.warnings.iter().cloned());
     let mut fp_anchors = anchor_harvest.anchors;
@@ -341,6 +442,8 @@ pub fn harvest_report(
         roots: root_set.roots,
         exes: exe_set.files,
         outside_root_files,
+        uninstallers,
+        older_keys: Vec::new(),
         anchors: fp_anchors,
         tokens: token_harvest.tokens,
         inno: inno.records,
@@ -371,6 +474,7 @@ pub fn harvest_report(
         baseline,
         inventory: &inventory.entries,
         target: entry,
+        cutoff,
     };
     let (snapshot, subtrees, journal, co_candidates) = if anchor_set.is_empty() {
         warnings.push(
@@ -402,12 +506,15 @@ pub fn harvest_report(
     fp.ref_snapshot = snapshot.entries;
     fp.subtrees = subtrees.subtrees;
     fp.ext_journal = journal.records.into_iter().map(|r| r.entry).collect();
+    let candidates = subtree::older_key_candidates(&fp.subtrees, &fp.ext_journal, &fp.inno);
+    fp.older_keys = subtree::older_keys(&ctx, candidates);
     fp.warnings = warnings;
 
     HarvestReport {
         fingerprint: fp,
         rejected_roots: root_set.rejected,
         modified_progids: anchor_harvest.modified_progids,
+        modified_clsids: anchor_harvest.modified_clsids,
         dropped_tokens: token_harvest.dropped,
         linked_packages: appx.packages,
         inno: inno_summary,
@@ -506,7 +613,7 @@ mod tests {
                     0,
                     &[r"C:\Program Files\Microsoft VS Code\Code.exe"],
                 ),
-                (testlog::DIR, 0, &[r"C:\Program Files\Microsoft VS Code"]),
+                (testlog::DIR, 2, &[r"C:\Program Files\Microsoft VS Code"]),
                 (testlog::KEY, testlog::HKCR, &["VSCode.txt"]),
                 (
                     testlog::KEY,
@@ -654,6 +761,16 @@ mod tests {
         assert_eq!(fp.roots[0].trust, SourceTrust::AdminOnly);
         assert_eq!(fp.roots[0].volume_serial, Some(0xAABB_CCDD));
         assert!(fp.roots[0].parent_existed);
+        // The app's own uninstaller: the program of the `UninstallString` and the log that was read,
+        // with the message file of the same number.
+        assert_eq!(
+            fp.uninstallers,
+            [
+                r"C:\Program Files\Microsoft VS Code\unins000.dat",
+                r"C:\Program Files\Microsoft VS Code\unins000.exe",
+                r"C:\Program Files\Microsoft VS Code\unins000.msg",
+            ]
+        );
         assert!(
             report.rejected_roots.is_empty(),
             "{:?}",
@@ -877,6 +994,65 @@ mod tests {
         assert!(fp.inno[0].user_hive && fp.inno[0].key_create);
     }
 
+    /// The cutoff "older than this is not the app's": see `install_cutoff`.
+    #[test]
+    fn the_install_cutoff_is_the_latest_time_known_not_to_be_after_the_install() {
+        use purge_model::{FileTime, InstallTimeEvidence, InstallTimeSource};
+        let hint = |source, time| InstallTimeEvidence {
+            source,
+            time: FileTime(time),
+        };
+        let dir = [
+            hint(InstallTimeSource::InstallDirCreation, 1_000),
+            hint(InstallTimeSource::ArpInstallDate, 900),
+        ];
+        let exact = |time| {
+            Some(anchors::ComCutoff {
+                time: FileTime(time),
+                exact: true,
+            })
+        };
+        let none = shared_root::Demoted::default();
+        assert_eq!(install_cutoff(&none, &dir), exact(1_000));
+        // Without the directory's time: the earliest other hint, not exact.
+        assert_eq!(
+            install_cutoff(&none, &dir[1..]),
+            Some(anchors::ComCutoff {
+                time: FileTime(900),
+                exact: false
+            })
+        );
+        assert_eq!(install_cutoff(&none, &[]), None);
+        // A shared root: the start of the install as the walk found it, not the folder's time.
+        let shared = shared_root::Demoted {
+            shared: vec![shared_root::SharedRoot {
+                path: r"C:\Tools".into(),
+                install_start: FileTime(5_000),
+                foreign: 1,
+                first: r"C:\Tools\x".into(),
+            }],
+            ..shared_root::Demoted::default()
+        };
+        assert_eq!(install_cutoff(&shared, &dir), exact(5_000));
+        // A folder made before the install and judged the app's alone: the later of the two.
+        let own = |start| shared_root::Demoted {
+            own_start: Some(FileTime(start)),
+            ..shared_root::Demoted::default()
+        };
+        assert_eq!(install_cutoff(&own(5_000), &dir), exact(5_000));
+        assert_eq!(install_cutoff(&own(500), &dir), exact(1_000));
+        assert_eq!(install_cutoff(&own(500), &dir[1..]), exact(500));
+        // A root that could not be judged changes nothing: the folder's time is early at worst.
+        let unjudged = shared_root::Demoted {
+            unjudged: vec![shared_root::UnjudgedRoot {
+                path: r"C:\Tools".into(),
+                why: "x".into(),
+            }],
+            ..shared_root::Demoted::default()
+        };
+        assert_eq!(install_cutoff(&unjudged, &dir), exact(1_000));
+    }
+
     #[test]
     fn an_entry_without_a_usable_root_still_gives_a_document() {
         // InstallLocation is Program Files itself; the uninstaller sits in the Windows directory.
@@ -895,6 +1071,8 @@ mod tests {
         assert!(fp.roots.is_empty(), "{:?}", fp.roots);
         assert!(!report.rejected_roots.is_empty());
         assert!(fp.exes.is_empty() && fp.anchors.progids.is_empty());
+        // A program in the Windows directory is nobody's own uninstaller.
+        assert!(fp.uninstallers.is_empty(), "{:?}", fp.uninstallers);
         assert!(fp.ref_snapshot.is_empty() && fp.subtrees.is_empty());
         assert!(
             fp.warnings.iter().any(|w| w.contains("rejected")),

@@ -1,10 +1,13 @@
 [REG-ENV] EditSegment Segment HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment | "Path" | "C:\\Program Files\\Git\\cmd" @ None
   id=c-3fa235af931f2bbf owner="Git" category=Registration harm=Medium reversibility=Full child_count=None
-  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKLM\SYSTEM\ControlSet001\Control\Session Manager\Environment|Path
+  evidence InPreUninstallRefSnapshot B/8 Value AdminOnly source=refsnap:HKLM\SYSTEM\ControlSet001\Control\Session Manager\Environment|Path
     anchor=C:\Program Files\Git
-  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:C:\Program Files\Git\cmd
+    place=shared
+  evidence PointsIntoInstallRoot B/6 Value AdminOnly source=points:C:\Program Files\Git\cmd
     path=C:\Program Files\Git\cmd
+    place=shared
     root=C:\Program Files\Git
-  evidence DanglingRef A/7 Value AdminOnly source=dangling:C:\Program Files\Git\cmd
+  evidence DanglingRef B/7 Value AdminOnly source=dangling:C:\Program Files\Git\cmd
     path=C:\Program Files\Git\cmd
+    place=shared
     root=C:\Program Files\Git

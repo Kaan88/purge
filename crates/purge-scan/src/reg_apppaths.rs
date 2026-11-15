@@ -6,10 +6,33 @@
 //! - an `App Paths\<exe>` key whose default value names a file at or under an InstallRoot, or a file of
 //!   the exe set;
 //! - a `Classes\Applications\<exe>` key in which a value (a verb's command, an icon) does, or which is
-//!   named after one of the app's main executables.
+//!   named after one of the app's main executables and says nothing against it (see "A bare name").
 //!
 //! A reference into a root that is gone (a dangling reference) lands under the recorded root all the
 //! same, so "into the roots or dangling" is one lexical test here.
+//!
+//! A file that outlived the uninstall without the installer's log naming it is not shown to be the
+//! app's (`ScanCtx::survived_unproven`: the user's own tool in the app's folder, x0-git-toolsdir's
+//! `App Paths\rg.exe`). A key whose every path leads to such a file is the registration of a program
+//! that still works: it is not offered unless the installer's record covers the key.
+//!
+//! # A bare name
+//!
+//! An executable's file name is not an identity: a portable copy of the same program, another install
+//! of it and any other product's `updater.exe` carry it too. A `Classes\Applications\<exe>` key that
+//! is matched by the name of a main exe alone, with no path in it that leads into the app, is offered
+//! only when
+//!
+//! - the installer's record covers the key, or
+//! - the whole subtree was read, no value in it names a path (so nothing in it points anywhere else:
+//!   the portable copy's `shell\open\command`), **and** the name is the product's own (`firefox.exe`
+//!   of Firefox), not one any product might use (`updater.exe`, `Code.exe`).
+//!
+//! A key another installed app claims (by the exe name, or by something in the key) is listed all the
+//! same, with `ReferencedByOtherApp`: it is shown as kept for that app.
+//!
+//! [`bare_name_leads_elsewhere`] is the same question for scanners that meet the bare name somewhere
+//! else (`OpenWithList`).
 //!
 //! The key is not the app's alone when another app claims the exe name or when something in the key
 //! refers to another app: it is then still listed, with `ReferencedByOtherApp`.
@@ -133,6 +156,41 @@ fn own_paths<'v>(app: &AppIdentityView, values: impl Iterator<Item = &'v RegValu
     paths
 }
 
+/// Whether `path` is a file that outlived the app's removal without being shown to be the app's
+/// (`ScanCtx::survived_unproven`). While the app is not verified gone its own files are all still
+/// there, and a file that is present says nothing.
+fn outlived(ctx: &ScanCtx<'_>, path: &str) -> bool {
+    ctx.verify_gone_passed() && ctx.survived_unproven(path)
+}
+
+/// Whether the `Classes\Applications\<exe>` keys show that the bare name `exe` is not this app's: one
+/// of them holds a path, and none holds a path that leads into the app (a file that outlived the
+/// uninstall unproven does not count as the app's). With no such key, or none that names a path,
+/// nothing is known and the answer is `false`.
+pub(crate) fn bare_name_leads_elsewhere(
+    ctx: &ScanCtx<'_>,
+    app: &AppIdentityView,
+    exe: &str,
+) -> bool {
+    let mut elsewhere = false;
+    for (container, app_paths) in containers(ctx) {
+        if app_paths {
+            continue;
+        }
+        let walk = common::walk(ctx, &format!(r"{container}\{exe}"));
+        let own = own_paths(app, walk.values.iter().map(|(_, value)| value));
+        if own.iter().any(|path| !outlived(ctx, path)) {
+            return false;
+        }
+        elsewhere |= !own.is_empty()
+            || walk
+                .values
+                .iter()
+                .any(|(_, value)| common::names_a_path(value));
+    }
+    elsewhere
+}
+
 fn exe_key(
     ctx: &ScanCtx<'_>,
     app: &AppIdentityView,
@@ -171,16 +229,45 @@ fn exe_key(
     );
     let mut any = b.installer_manifest();
     any |= b.proven_owned_skeleton();
+    let recorded = any;
+    let stem = exe.rsplit_once('.').map_or(exe, |(stem, _)| stem);
+    let names: Vec<_> = [
+        app.identity.matches_full_name(stem),
+        app.identity.matches_name(stem),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     let other = foreign.in_walk(&app.refs, &walk);
+    let claimed = ctx.other_apps.anchor_blocker(AnchorKind::Exe, exe);
+    // A key that is kept for a known other app stays listed as kept, with that app's name.
+    if !recorded && other.is_none() && claimed.is_none() {
+        if paths.is_empty() {
+            // A bare name (module documentation).
+            let elsewhere = !walk.complete
+                || walk
+                    .values
+                    .iter()
+                    .any(|(_, value)| common::names_a_path(value));
+            let product_name = names.iter().any(|m| !m.needs_tier_ab_neighbour);
+            if elsewhere || !product_name {
+                return;
+            }
+        } else if paths.iter().all(|path| outlived(ctx, path)) {
+            // Every path leads to a file that is still there and that nothing shows to be the app's.
+            return;
+        }
+    }
     for path in &paths {
         let in_root = ctx.inside_install_root(path).is_some();
-        let tier = if in_root || ctx.is_app_file(path) {
+        let unproven = ctx.survived_unproven(path);
+        let tier = if (in_root || ctx.is_app_file(path)) && !unproven {
             Tier::A
         } else {
             Tier::B
         };
         any |= b.chained_ref(tier, path);
-        if in_root && names_file(path, exe) && walk.complete && other.is_none() {
+        if in_root && !unproven && names_file(path, exe) && walk.complete && other.is_none() {
             any |= b.app_named_key_with_root_ref(path);
         }
     }
@@ -190,20 +277,13 @@ fn exe_key(
     if !any {
         return;
     }
-    let stem = exe.rsplit_once('.').map_or(exe, |(stem, _)| stem);
-    for m in [
-        app.identity.matches_full_name(stem),
-        app.identity.matches_name(stem),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        b.name_match(&m);
+    for m in &names {
+        b.name_match(m);
     }
     if let Some(app) = other {
         b.blocker(Blocker::ReferencedByOtherApp { app });
     }
-    if let Some(blocker) = ctx.other_apps.anchor_blocker(AnchorKind::Exe, exe) {
+    if let Some(blocker) = claimed {
         b.blocker(blocker);
     }
     b.child_count(walk.count());

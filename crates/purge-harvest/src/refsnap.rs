@@ -56,6 +56,8 @@ use purge_source::registry::RegistrySource;
 use purge_source::system::SystemSource;
 use purge_source::types::{REG_EXPAND_SZ, REG_SZ};
 
+use crate::anchors::ComCutoff;
+
 /// Everything the second half of the harvest reads.
 ///
 /// The fields are public: the orchestrator builds the context with a struct literal once the first half
@@ -82,6 +84,9 @@ pub struct HarvestCtx<'a> {
     pub inventory: &'a [InventoryEntry],
     /// The entry being harvested.
     pub target: &'a InventoryEntry,
+    /// When the app was installed, for "this key is older than the app" ([`ComCutoff`]); `None`
+    /// when nothing is known, and then no key is taken for older.
+    pub cutoff: Option<ComCutoff>,
 }
 
 impl<'a> HarvestCtx<'a> {
@@ -273,6 +278,8 @@ fn entry(hit: &RefHit, target: Target, carrier: RefCarrier) -> RefSnapEntry {
 /// references are dropped; the second result is how many.
 pub fn entries_from_hits(ctx: &HarvestCtx<'_>, hits: &[RefHit]) -> (Vec<RefSnapEntry>, usize) {
     let matcher = ctx.matcher();
+    // The environment the matcher expands with: what an entry of a list leads to is read from it.
+    let env: BTreeMap<String, String> = ctx.sys.env().unwrap_or_default();
     let mut entries = Vec::with_capacity(hits.len());
     let mut weak = 0usize;
     // The `;`-lists already split: (folded key, folded value name).
@@ -331,8 +338,14 @@ pub fn entries_from_hits(ctx: &HarvestCtx<'_>, hits: &[RefHit]) -> (Vec<RefSnapE
                     .ok()
                     .and_then(|data| data.string())
                     .unwrap_or_default();
-                for (index, piece) in text.split(';').enumerate() {
+                for (index, piece) in prefix::list_entries(&text).into_iter().enumerate() {
                     let piece = piece.trim();
+                    // Not one plainly written directory, as written or with its references
+                    // expanded (`prefix::ListEntry::read`, which REG-ENV reads entries with too):
+                    // never recorded as an entry of the app.
+                    if prefix::ListEntry::read(piece, &env).is_none() {
+                        continue;
+                    }
                     let Some(found) = matcher.find(piece) else {
                         continue;
                     };

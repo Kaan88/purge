@@ -412,6 +412,7 @@ pub fn uninstall(
                 baseline: None,
                 inventory: &before.doc.entries,
                 target: entry,
+                cutoff: None,
             })
         })
         .unwrap_or_default();
@@ -852,7 +853,8 @@ fn run_scan(
     let mut candidates = Vec::new();
     let mut per_scanner = Vec::new();
     for scanner in all_scanners() {
-        let found = scanner.scan(&ctx, &app);
+        // `run`, not `scan`: the rule about what a value holds is applied to every candidate.
+        let found = ctx.run(scanner.as_ref(), &app);
         step.done(&format!(
             "scan: {} {} candidate(s)",
             scanner.id(),
@@ -1024,6 +1026,20 @@ mod tests {
     use purge_source::types::RegData;
 
     const SID: &str = GuardEnv::SAMPLE_SID;
+
+    /// The scanners run through `ScanCtx::run`, which applies the rule about what a value holds
+    /// to every candidate; a direct call of `Scanner::scan` here would leave that out.
+    #[test]
+    fn scanners_run_through_the_sealing_driver() {
+        let source = include_str!("pipeline.rs");
+        let direct = ["scanner", ".scan("].concat();
+        let driver = ["ctx", ".run(scanner"].concat();
+        assert!(
+            !source.contains(&direct),
+            "pipeline.rs calls a scanner directly"
+        );
+        assert_eq!(source.matches(&driver).count(), 1);
+    }
 
     fn entry(key: &str, name: &str) -> InventoryEntry {
         let program_id = ProgramId::machine(View::K64, key).unwrap();

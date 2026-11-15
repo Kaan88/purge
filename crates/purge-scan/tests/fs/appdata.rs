@@ -117,6 +117,50 @@ fn firefox_profile_is_user_data_and_nothing_of_thunderbird_is_listed() {
     assert_eq!(found.len(), 3);
 }
 
+/// The per-install update directory is Safe by the table only with a second observation beside the
+/// token (7): its creation time inside the install's window (1). A folder created before the install,
+/// or one whose creation time is unknown, stays on the token alone. A last-write time never counts:
+/// the uninstaller touches these folders.
+#[test]
+fn token_folder_counts_its_creation_time_when_it_lies_in_the_window() {
+    use purge_source::types::FileTimes;
+    let updates = format!(
+        r"C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\{FIREFOX_HASH}"
+    );
+    let times = |created: Option<u64>, modified: Option<u64>| FileTimes {
+        created: created.map(purge_model::FileTime),
+        modified: modified.map(purge_model::FileTime),
+        accessed: None,
+    };
+    let kinds_at = |when: FileTimes| -> Vec<EvidenceKind> {
+        let mut world = firefox_with_thunderbird();
+        world.fixture.set_times(&updates, when);
+        let found = world.scan(&FsAppData);
+        assert!(!paths(&found).iter().any(|p| p.contains("D78BF5DD33499EC2")));
+        by_path(&found, &updates)
+            .evidence
+            .iter()
+            .map(|e| e.kind)
+            .collect()
+    };
+    let in_window = crate::T_INSTALL + 5;
+    let token_and_time = [EvidenceKind::HarvestedToken, EvidenceKind::TimeWindow];
+    let token_only = [EvidenceKind::HarvestedToken];
+    assert_eq!(kinds_at(times(Some(in_window), None)), token_and_time);
+    // Created long before the install, written during the uninstall: an older folder.
+    assert_eq!(
+        kinds_at(times(
+            Some(crate::T_INSTALL - 3 * 864_000_000_000),
+            Some(crate::T_START + 1)
+        )),
+        token_only
+    );
+    // No creation time (a snapshot source): the last write inside the window proves nothing.
+    assert_eq!(kinds_at(times(None, Some(in_window))), token_only);
+    assert_eq!(kinds_at(times(None, None)), token_only);
+    assert_eq!(kinds_at(times(Some(crate::T_END + 1), None)), token_only);
+}
+
 #[test]
 fn token_claimed_by_another_app_attributes_nothing() {
     let mut world = firefox_with_thunderbird();

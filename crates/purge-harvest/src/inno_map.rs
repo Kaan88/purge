@@ -94,6 +94,10 @@ pub struct InnoHarvest {
     pub app_name: Option<String>,
     /// The app directories the install runs name, each once, in log order.
     pub app_dirs: Vec<String>,
+    /// The directories an install run of the log created (canonical, each once): see
+    /// [`LogRecord::created_dir`]. A directory that is not here existed before the first install the
+    /// log records.
+    pub created_dirs: Vec<String>,
     /// The mapped records: bound, canonical, without duplicates.
     pub records: Vec<InnoRecord>,
     /// Number of records in the log, of every type.
@@ -187,6 +191,19 @@ fn map_into(log: &UninstallLog, binding: &UserBinding, guard: &GuardEnv, out: &m
         // `UninstallLog::model_records`.
         if !admin && reg_root(&record.op) == Some(RegRoot::ClassesRoot) {
             continue;
+        }
+        if let Some(dir) = record.created_dir() {
+            if let Ok(canon) = canon_path(&dir, guard, None) {
+                let redirected = !log.header.is_64bit && !record.fs_redirection_disabled();
+                let dir = if redirected {
+                    syswow64(&canon.path, guard)
+                } else {
+                    canon.path
+                };
+                if !out.created_dirs.iter().any(|d| prefix::is_same(d, &dir)) {
+                    out.created_dirs.push(dir);
+                }
+            }
         }
         let Some(model) = record.to_model() else {
             continue;

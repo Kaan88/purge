@@ -16,6 +16,13 @@
 //!   themselves attributed. The constructors therefore test the candidate's own target (its leaf segment,
 //!   its exact key, its exact value), never an ancestor. The one exception is `InsideInstallRoot`, which
 //!   holds for everything under a validated InstallRoot.
+//! - **A reference does not make a registration the app's (§5.3, "reference evidence").** That a value
+//!   points at the app's files says what the value is about, not who put it there: another program's
+//!   setting, a `Run` entry or an environment variable the user made, all name the app's files without
+//!   being the app's. `InPreUninstallRefSnapshot`, `PointsIntoInstallRoot` and `DanglingRef` on a
+//!   registry value are therefore Tier A only where the registration itself is the app's
+//!   ([`ScanCtx::owns_registration`]); everywhere else the constructors lower them to Tier B, so the
+//!   value is listed but never preselected on them.
 //! - **All reads go through `purge-source`** ([`ScanCtx::reg`], [`ScanCtx::fs`], [`ScanCtx::sys`]), so a
 //!   scanner runs unchanged over the live system, a JSON fixture or a rig snapshot.
 //!
@@ -32,7 +39,7 @@ use purge_guard::canon::GuardEnv;
 use purge_guard::prefix::{self, Relation};
 use purge_identity::identity::{AppIdentity, IdentityMatch};
 use purge_index::baseline::Baseline;
-use purge_index::matcher::{AnchorSet, RefMatcher};
+use purge_index::matcher::{AnchorSet, MatchHow, RefMatcher};
 use purge_model::{
     Action, AnchorKind, AnchorRef, AppRef, Blocker, Candidate, CandidateId, Category, Evidence,
     EvidenceKind, Facts, FileTime, Fingerprint, Harm, InnoRecord, InnoRecordKind, ManifestKind,
@@ -42,7 +49,7 @@ use purge_model::{
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::system::SystemSource;
-use purge_source::types::ExistsState;
+use purge_source::types::{ExistsState, RegData};
 
 use crate::skeleton;
 
@@ -434,6 +441,582 @@ impl<'a> ScanCtx<'a> {
                 .any(|f| prefix::is_same(&f.path, path))
     }
 
+    /// Whether `path` is a file that outlived the uninstall without the installer's log naming it.
+    ///
+    /// The exe set is every program file found in the InstallRoots at harvest, so it also holds what
+    /// the user or another product put there (a tool of their own in the app's folder). After an
+    /// uninstall such a file is told apart by what happened to it: the uninstaller removed the app's
+    /// files and left this one. A file that is still there (or whose state cannot be read) and that
+    /// no file record of the log names is therefore not shown to be the app's, and a registration
+    /// that leads to it (`App Paths\<name>`) is not shown to be the app's either. A logged file that
+    /// survived (it was locked) stays the app's. Nothing is concluded when no uninstaller ran
+    /// ([`ScanMode::Forced`]).
+    pub fn survived_unproven(&self, path: &str) -> bool {
+        if self.mode == ScanMode::Forced || self.fs.exists(path).is_absent() {
+            return false;
+        }
+        !self.installer_logged_file(path)
+    }
+
+    /// Whether the harvest found `key` to be older than the install (`Fingerprint::older_keys`):
+    /// somebody made it before the app was installed, so it is no skeleton of the app.
+    pub fn predates_install(&self, key: &str) -> bool {
+        self.fp.older_keys.iter().any(|k| self.same_key(k, key))
+    }
+
+    /// Whether a file record of the installer's log names `path` as a file the installer created
+    /// (not one that existed before, not a shared one).
+    pub fn installer_logged_file(&self, path: &str) -> bool {
+        self.fp.inno.iter().any(|r| {
+            r.kind == InnoRecordKind::DeleteFile
+                && !r.existed_before
+                && !r.shared
+                && matches!(&r.target, Target::Path { path: p } if prefix::is_same(p, path))
+        })
+    }
+
+    /// Whether `key` is, or lies in, the key of a COM registration (`…\CLSID\{id}`, `…\TypeLib\{id}`,
+    /// `…\AppID\{id}`) that the fingerprint does not list among the app's own.
+    ///
+    /// The harvest takes such a registration for the app's only when it is the app's own
+    /// (`purge-harvest` `anchors`: not in the baseline, not older than the install, for a class its
+    /// server not shipped by another installed app). One it left out is somebody else's, or one the
+    /// app only re-pointed at its own files: a value in it is a modification of that registration,
+    /// not a leftover of the app, however plainly it names the app's files, and a subkey of it that
+    /// held nothing but such a value is part of the other product's registration. The scanners offer
+    /// nothing in such a key: no value, and no key either (REF-ANY's attributed keys,
+    /// `ProvenOwnedSkeleton`).
+    pub fn in_unowned_com_class(&self, key: &str) -> bool {
+        com_registration_of(key).is_some_and(|(kind, id)| {
+            let own = match kind {
+                ComKind::Class => &self.fp.anchors.clsids,
+                ComKind::TypeLib => &self.fp.anchors.typelibs,
+                ComKind::AppId => &self.fp.anchors.appids,
+            };
+            !own.iter().any(|own| prefix::eq_ci(own, id))
+        })
+    }
+
+    /// Whether the registration a value of `key` named `name` makes is the app's **own**: the installer
+    /// recorded it, or it sits in a place that belongs to the app by what that place is. Only there is
+    /// a reference to the app's files Tier A evidence (see the module documentation).
+    ///
+    /// The registration is the app's own when one of these holds:
+    ///
+    /// 1. **The installer's record** ([`ScanCtx::installer_recorded_value`]). The Inno log has a
+    ///    record on exactly this value, or, with a baseline of this Windows, a delete-the-whole-key
+    ///    record on exactly its key (records flagged as older than the install or as shared do not
+    ///    count).
+    /// 2. **The app's own COM registration, ProgID, AUMID, client registration or Uninstall key.** The
+    ///    key is, or lies in, a `CLSID`/`TypeLib`/`AppID` key, a ProgID key of the Classes, a
+    ///    `Classes\AppUserModelId\<id>` key, a `Software\Clients\<kind>\<registered name>` key or the
+    ///    Uninstall key that the fingerprint lists as the app's (the harvest takes no id that predates
+    ///    the install, that Windows ships or that another product shares).
+    /// 3. **The `App Paths` or `Classes\Applications` key of one of the app's programs**:
+    ///    `App Paths\<name>` and `Applications\<name>` where `<name>` is the file name of a file of the
+    ///    exe set.
+    /// 4. **The app's own settings key.** The first key below `Software` is a vendor alias of the app
+    ///    (never for a mega-vendor, never `Microsoft`) or carries the app's full name, or the first two
+    ///    are `<vendor>\<product>` of the app.
+    ///
+    /// Everything else is a shared place: another vendor's key, `Run`, `Environment`, a list of recent
+    /// files. A value there may have been written by anyone, and it is the app's only when (1) says so.
+    ///
+    /// A store that Windows keeps as a ring or list of numbered slots (`…\CurrentVersion\UFH\SHC`,
+    /// an MRU list) is a shared place too, although only Windows writes it: the value's name is a slot
+    /// number, not the app's, Windows reuses a slot for the next program (on a machine with history
+    /// the slot held another product's record before the install), and taking the value out leaves a
+    /// hole in a structure Windows manages. What the slot holds now is the app's record; whose the
+    /// slot is, nothing shows.
+    pub fn owns_registration(&self, key: &str, name: &str) -> bool {
+        // 1. The installer's record.
+        self.installer_recorded_value(key, name) || self.owns_place(key, true)
+    }
+
+    /// Whether `key` is the app's **own place** for what a value in it holds: the key belongs to
+    /// the app by what it is (2 to 4 of [`ScanCtx::owns_registration`]), or the installer's log
+    /// deletes exactly this key whole. A record on a value does not count here. It says that the
+    /// installer wrote (to) the value, not what the value holds now, and not which entry of a
+    /// list is the installer's: in another product's search path the app's entry stands next to
+    /// entries of others.
+    ///
+    /// A structural value container is never the app's place by such a record.
+    ///
+    /// The settings key (4) counts only when it is named after the **product**
+    /// (`Software\<product>`, `Software\<vendor>\<product>`), not anywhere below the vendor's key.
+    /// `Software\Mozilla\Thunderbird\Paths` is a sibling product's key, and nothing protects it:
+    /// another installed app is known to the scan by its Uninstall key, its roots and its
+    /// anchors, not by its settings key, so a sibling's key reads like any other key below the
+    /// vendor whether or not the sibling is in the inventory.
+    ///
+    /// Outside the own place the data of a value must be wholly the app's
+    /// ([`ScanCtx::value_content_unproven`]).
+    pub fn owns_list_entry(&self, key: &str) -> bool {
+        // A key that only holds other parties' single values (`Run`, `Environment`,
+        // `RegisteredApplications`) is nobody's place, whatever a log says about deleting it.
+        (self.installer_recorded(key, None)
+            && !purge_guard::containers::is_value_container(key, self.guard))
+            || self.owns_place(key, false)
+    }
+
+    /// Reads one entry of a list value (an entry of `Path`, a string of a `REG_MULTI_SZ` list,
+    /// one `;` part of a search path) with `prefix::ListEntry::read`, as written and expanded.
+    /// Such an entry may be a file as well as a directory. It is the app's only when the path it
+    /// is, taken whole, lies at or under an InstallRoot or is a file of the app: a reference
+    /// somewhere inside other text (a token in somebody else's path, an argument of somebody
+    /// else's command line) is none.
+    pub fn entry_standing(&self, entry: &str) -> EntryStanding {
+        let Some(read) = prefix::ListEntry::read(entry, self.env) else {
+            return EntryStanding::NotOnePath;
+        };
+        if read.indirect {
+            return EntryStanding::Unproven("the entry is a reference to another variable");
+        }
+        if read.ambiguous {
+            return EntryStanding::Unproven(
+                "the entry holds a comma or a second path start and may be two entries",
+            );
+        }
+        let own = [read.bare, read.expanded.as_str()]
+            .into_iter()
+            .any(|path| self.inside_install_root(path).is_some() || self.is_app_file(path));
+        if !own {
+            return EntryStanding::Unproven("the entry is not a path of the app");
+        }
+        EntryStanding::Plain
+    }
+
+    /// **The one rule about what a value holds.** Why the data of the registry value (or the
+    /// entry of one) that `target` names is not wholly the app's; `None` when it is, and for a
+    /// target that is no value.
+    ///
+    /// Deleting a value deletes everything in it, and editing an entry out of a list takes the
+    /// entry's whole text. Evidence says who the value refers to; it does not say that nothing
+    /// else is in it. A search path another product keeps, a start entry, a list of recent files
+    /// can hold the app's path **next to** somebody else's text (the product rewrote its list,
+    /// the user edited the command), and the installer's record on the value says who made the
+    /// value, not what it holds now. So, outside the app's own place
+    /// ([`ScanCtx::owns_list_entry`]), the data must be the app's and nothing else:
+    ///
+    /// - **An entry of a list** (`RegMultiSzSegment`): the entry is exactly one path of the app
+    ///   ([`ScanCtx::entry_standing`]) or exactly one of its ids.
+    /// - **A whole value** (`RegValue`), by what the place is:
+    ///   - a command line (a `Run`/`RunOnce` value, the value of a `command` key): the program
+    ///     it starts is the app's. The first token, unquoted and expanded, is exactly one path of
+    ///     the app and named like a program file (`prefix::is_program_file`); what follows are
+    ///     that program's arguments. A launcher of Windows or of
+    ///     somebody else in front (`cmd /c`, `powershell -File`, another tool with a file of
+    ///     the app as an argument) makes the command somebody else's;
+    ///   - a registration (`RegisteredApplications`): the data names one key below `Software`
+    ///     and nothing else. Whose that key is, is the scanner's question (CLS-REGAPPS reads
+    ///     the `Capabilities` key it names); the rule here is only that nothing stands next
+    ///     to it;
+    ///   - anything else is read as its entries: the strings of a `REG_MULTI_SZ` value, each
+    ///     split at its `;` (`prefix::list_entries`). Every entry is exactly one path of the app
+    ///     (an icon or resource reference `path,-101` / `@path,-101` is one path), exactly one
+    ///     of its ids (a ProgID, CLSID, AUMID or harvested token; not a root or a file, which
+    ///     must lie in an InstallRoot or be a file of the app to count as a path), or exactly one
+    ///     registry key that is the app's own place (`Software\Clients\Mail\<name>\Capabilities`,
+    ///     as a registration names it). One entry of anything else, and the value is not the
+    ///     app's alone.
+    ///
+    ///   A number (`REG_DWORD`, `REG_QWORD`) and an empty string pass: there is nothing of
+    ///   anybody's in them. Data of any other type that is no string (`REG_BINARY`, `REG_NONE`)
+    ///   is read for its runs of UTF-16 text as the scanners read it; a run shaped like a path
+    ///   (a drive path, a UNC path) must be exactly one path of the app, other runs are not
+    ///   judged, and data too large to read does not pass. Text that was not read in full does
+    ///   not pass, and neither does a string with text after its terminating NUL.
+    /// - **In the app's own place** only a `;`-string of two or more entries is read (a list is
+    ///   a list wherever it stands); a single string and a `REG_MULTI_SZ` value are the app's
+    ///   with their key.
+    /// - **A value named after the app** is the app's by its name, whatever it holds: the whole
+    ///   value name is exactly one path at or under an InstallRoot or of a file of the app
+    ///   (`…\MuiCache | <app>\x.exe.FriendlyAppName`; `<app>\x.exe user text` and
+    ///   `<app>\x.exe;C:\tools` are not), or the name carries one of the app's ids as a delimited
+    ///   part (`RegisteredApplications | <id>`, `<ProgID>_.ext`). **Not in a command place**:
+    ///   there the value starts a program whatever it is called, and the command rule decides.
+    ///
+    /// The verdict depends on the target and on what the registry holds, never on the scanner
+    /// that asks. It is applied twice, by [`CandidateBuilder::build`] to every candidate a
+    /// scanner finishes and by [`ScanCtx::run`] to every candidate a scanner returns: all copies
+    /// of one target that different scanners emit get the same cap, so the union the plan makes
+    /// of them cannot bring Tier A back.
+    pub fn value_content_unproven(&self, target: &Target) -> Option<&'static str> {
+        self.content_unproven(target)
+    }
+
+    /// Runs `scanner` and returns what it found, **with the rule about what a value holds
+    /// applied to every candidate** ([`ScanCtx::seal`]). The engine runs its scanners through
+    /// this and nothing else, so no scanner can offer a value on Tier A evidence the rule
+    /// refuses: not by building a candidate by hand, and not by adding evidence to one after
+    /// [`CandidateBuilder::build`].
+    pub fn run(&self, scanner: &dyn Scanner, app: &AppIdentityView) -> Vec<Candidate> {
+        let mut found = scanner.scan(self, app);
+        for candidate in &mut found {
+            // A candidate of a co-removed product is judged as that product's: its paths and
+            // ids are the product's, not the app's (`reg_software::common::for_each_app`).
+            let owner = (candidate.owner != self.fp.app)
+                .then(|| {
+                    self.fp
+                        .co_removed
+                        .iter()
+                        .filter(|product| product.app == candidate.owner)
+                        .find_map(|product| product.fingerprint.as_deref())
+                })
+                .flatten();
+            match owner {
+                Some(fp) => ScanCtx { fp, ..*self }.seal(candidate),
+                None => self.seal(candidate),
+            }
+        }
+        found
+    }
+
+    /// Applies [`ScanCtx::value_content_unproven`] to a candidate: when the data of its value
+    /// is not wholly the app's, its positive Tier A evidence is lowered to Tier B and says why
+    /// (`unproven`). Applying it twice changes nothing, given the context of the candidate's
+    /// owner (the app, or the co-removed product the candidate belongs to).
+    pub fn seal(&self, candidate: &mut Candidate) {
+        let tier_a = |e: &Evidence| e.weight > 0 && e.tier == Tier::A;
+        if !candidate.evidence.iter().any(tier_a) {
+            return;
+        }
+        if let Some(why) = self.content_unproven(&candidate.target) {
+            for e in candidate.evidence.iter_mut().filter(|e| tier_a(e)) {
+                e.tier = Tier::B;
+                e.detail = std::mem::take(&mut e.detail).with("unproven", why);
+            }
+        }
+    }
+
+    fn content_unproven(&self, target: &Target) -> Option<&'static str> {
+        match target {
+            Target::RegMultiSzSegment {
+                path,
+                name,
+                segment,
+                ..
+            } => {
+                if self.owns_list_entry(path) {
+                    return None;
+                }
+                let why = self.entry_unproven(segment)?;
+                (!self.named_after_app(name)).then_some(why)
+            }
+            Target::RegValue { path, name } => match self.reg.value(path, name) {
+                Ok(data) => self.data_unproven(path, name, &data),
+                // Nothing is there to delete; what is offered is a record of the harvest.
+                Err(purge_source::types::SourceError::NotFound) => None,
+                Err(_) if self.owns_list_entry(path) || self.named_after_app(name) => None,
+                Err(_) => Some("the value could not be read"),
+            },
+            _ => None,
+        }
+    }
+
+    /// [`ScanCtx::value_content_unproven`] for data at hand: the value `name` of `key` holding
+    /// `data` (the value as read, or as the harvest recorded it).
+    pub fn data_unproven(&self, key: &str, name: &str, data: &RegData) -> Option<&'static str> {
+        let own = self.owns_list_entry(key);
+        let command = is_command_place(key);
+        let (strings, string) = match data.string() {
+            Some(text) => (vec![text], true),
+            None => match data.multi_sz() {
+                Some(strings) => (strings, false),
+                None => (Vec::new(), false),
+            },
+        };
+        let text_type = string || data.multi_sz().is_some();
+        let why = if !data.is_complete() {
+            (!own).then_some("the data was not read in full")
+        } else if string && data.has_text_after_nul() {
+            // `C:\App\bin` NUL `C:\Users\me\tools`: the string ends at the NUL and the data
+            // does not.
+            (!own).then_some("the data holds text after the end of its string")
+        } else if !text_type {
+            // Not a string type. A number holds no text. Anything else (`REG_BINARY`,
+            // `REG_NONE`, an unknown type) is read for the text in it as the scanners read it
+            // (`RegData::binary_utf16_strings`): a run of text that is shaped like a path must
+            // be exactly one path of the app, like an entry of a list. Runs that are no path
+            // (a switch, a counter, a timestamp) say nothing about anybody.
+            let number = matches!(
+                data.ty,
+                purge_source::types::REG_DWORD
+                    | purge_source::types::REG_DWORD_BIG_ENDIAN
+                    | purge_source::types::REG_QWORD
+            );
+            if number || own {
+                None
+            } else if data.bytes.len() > purge_source::types::BINARY_UTF16_SCAN_MAX {
+                Some("the data is too large to be read for text")
+            } else {
+                data.binary_utf16_strings()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|run| is_path_shaped(run))
+                    .find_map(|run| self.entry_unproven(resource_path(run.trim())))
+            }
+        } else if string && !own && command {
+            let whole = strings.first().map_or("", String::as_str);
+            match program_of(whole) {
+                None if whole.trim().is_empty() => None,
+                None => Some("the command line names no program"),
+                // A folder of the app in front (`"<app>\bin" "C:\tools"`) is no program: the
+                // text is a list written like a command.
+                Some(program) if !prefix::is_program_file(program) => {
+                    Some("the command line does not start with a program file")
+                }
+                Some(program) => match self.entry_standing(program) {
+                    EntryStanding::Plain => None,
+                    _ => Some("the command starts a program that is not the app's"),
+                },
+            }
+        } else if string && !own && is_registration_place(key) {
+            let whole = strings.first().map_or("", String::as_str);
+            (!is_software_key_path(whole))
+                .then_some("the registration does not name one key below Software")
+        } else {
+            let parts: Vec<&str> = strings
+                .iter()
+                .flat_map(|text| prefix::list_entries(text))
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect();
+            let list = string && parts.len() >= 2;
+            if own && !list {
+                None
+            } else {
+                parts
+                    .into_iter()
+                    .find_map(|part| self.entry_unproven(resource_path(part)))
+            }
+        };
+        let why = why?;
+        // In a command place the name decides nothing: the value starts a program, and which
+        // one is in the data.
+        (command || !self.named_after_app(name)).then_some(why)
+    }
+
+    /// Why `entry` is neither exactly one path of the app nor exactly one of its ids.
+    fn entry_unproven(&self, entry: &str) -> Option<&'static str> {
+        let why = match self.entry_standing(entry) {
+            EntryStanding::Plain => return None,
+            EntryStanding::NotOnePath => "the data holds more than one path of the app",
+            EntryStanding::Unproven(why) => why,
+        };
+        // Exactly one registry key of the app, as registrations name one
+        // (`RegisteredApplications | <name> = Software\Clients\Mail\<name>\Capabilities`).
+        if self.names_own_key(entry) {
+            return None;
+        }
+        // Exactly an id of the app. A root or a file that is an anchor is judged as the path
+        // it is, above: a referenced data directory is an anchor and not the app's alone.
+        let id = self.app_refs().find_all(entry).iter().any(|m| {
+            m.how == MatchHow::Whole && !matches!(m.anchor.kind, AnchorKind::Root | AnchorKind::Exe)
+        });
+        (!id).then_some(why)
+    }
+
+    /// Whether `entry` is the path of a key below `Software` (as values spell it, without a hive)
+    /// that is the app's own place in the machine's hive or in a scanned user's.
+    fn names_own_key(&self, entry: &str) -> bool {
+        let entry = entry.trim().trim_end_matches(prefix::SEP);
+        if !is_software_key_path(entry) {
+            return false;
+        }
+        let mut hives = vec!["HKLM".to_owned()];
+        hives.extend(
+            [
+                Some(self.fp.user_sid.as_str()),
+                self.fp.app.program_id.hive_sid(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|sid| format!(r"HKU\{}", sid.trim())),
+        );
+        hives
+            .iter()
+            .any(|hive| self.owns_place(&format!(r"{hive}\{entry}"), false))
+    }
+
+    /// Whether a value name is the app's: a path of the app or one of its ids and nothing else
+    /// around it, or a name that carries an id of the app as a delimited part.
+    fn named_after_app(&self, name: &str) -> bool {
+        if name.trim().is_empty() {
+            return false;
+        }
+        // The whole name is one path of the app (`<app>\x.exe`, `<app>\x.exe.FriendlyAppName`):
+        // nothing after it, no second path.
+        if self.entry_standing(name) == EntryStanding::Plain {
+            return true;
+        }
+        // An id of the app as a delimited part of the name (`<ProgID>_.ext`, `<hash>`): the
+        // matcher finds an id only at a boundary that fits its kind, never inside a word.
+        self.app_refs()
+            .find_all(name)
+            .iter()
+            .any(|m| !m.name_only && !matches!(m.anchor.kind, AnchorKind::Root | AnchorKind::Exe))
+    }
+
+    /// The app's anchors as a matcher, for the content rule. Built on demand: the rule needs it
+    /// only for a value whose data is not plainly a path of the app.
+    fn app_refs(&self) -> RefMatcher {
+        RefMatcher::with_env(&AnchorSet::from_fingerprint(self.fp), self.env.iter())
+    }
+
+    /// 2 to 4 of [`ScanCtx::owns_registration`]: the key belongs to the app by what it is.
+    /// `vendor_wide`: a key anywhere below a vendor alias of the app counts for (4); without it
+    /// only a key named after the product does.
+    fn owns_place(&self, key: &str, vendor_wide: bool) -> bool {
+        let fp = self.fp;
+        // 2. The app's own COM registration, ProgID or Uninstall key.
+        if com_registration_of(key).is_some() {
+            return !self.in_unowned_com_class(key);
+        }
+        // A program of that name that the uninstaller left behind without the log naming it is
+        // not shown to be the app's (`survived_unproven`).
+        let own_program = |exe: &str| {
+            fp.exes
+                .iter()
+                .map(|e| e.path.as_str())
+                .chain(fp.outside_root_files.iter().map(|f| f.path.as_str()))
+                .any(|path| {
+                    prefix::leaf(path).is_some_and(|leaf| prefix::eq_ci(leaf, exe))
+                        && !self.survived_unproven(path)
+                })
+        };
+        let own_aumid = |id: &str| fp.anchors.aumids.iter().any(|a| prefix::eq_ci(a, id));
+        if let Some(below) = below_classes(key) {
+            let Some(class) = below.first() else {
+                return false;
+            };
+            if prefix::eq_ci(class, "AppUserModelId") {
+                return below.get(1).is_some_and(|id| own_aumid(id));
+            }
+            if prefix::eq_ci(class, "Applications") {
+                return below.get(1).is_some_and(|exe| own_program(exe));
+            }
+            return fp.anchors.progids.iter().any(|p| prefix::eq_ci(p, class));
+        }
+        if matches!(
+            self.key_relation(key, &fp.app.program_id.key_path()),
+            Relation::Same | Relation::Inside
+        ) {
+            return true;
+        }
+        let Some(below) = below_software(key) else {
+            return false;
+        };
+        let is = |i: usize, want: &str| below.get(i).is_some_and(|s| prefix::eq_ci(s, want));
+        if is(0, "Microsoft") {
+            let current_version = is(1, "Windows") && is(2, "CurrentVersion");
+            // 3. `App Paths\<name of one of the app's programs>`.
+            if current_version && is(3, "App Paths") {
+                return below.get(4).is_some_and(|exe| own_program(exe));
+            }
+            // Everything else under `Microsoft` is Windows' or another Microsoft product's, the
+            // numbered-slot stores Windows keeps about programs (`UFH\SHC`) included.
+            return false;
+        }
+        // `Clients\<kind>\<the name the app is registered under>`: the app's full name, one of its
+        // ids, or a name that carries one of its harvested tokens (`Firefox-<hash>`).
+        if is(0, "Clients") {
+            let identity = AppIdentity::from_snapshot(&fp.identity);
+            return below.get(2).is_some_and(|name| {
+                own_aumid(name)
+                    || identity.matches_full_name(name).is_some()
+                    || fp.tokens.iter().any(|t| {
+                        contains_delimited(name, &t.token)
+                            && self
+                                .other_apps
+                                .claimant(AnchorKind::Token, &t.token)
+                                .is_none()
+                            && !self.baseline.is_some_and(|b| b.has_token(&t.token))
+                    })
+            });
+        }
+        if is(0, "RegisteredApplications") || is(0, "Policies") {
+            return false;
+        }
+        // 4. The app's own settings key.
+        let identity = AppIdentity::from_snapshot(&fp.identity);
+        let Some(first) = below.first() else {
+            return false;
+        };
+        (vendor_wide && !identity.mega_vendor() && identity.matches_vendor(first).is_some())
+            || identity.matches_full_name(first).is_some()
+            || below
+                .get(1)
+                .is_some_and(|second| identity.matches_product_subfolder(first, second).is_some())
+    }
+
+    /// Whether the installer's log covers the value `name` of `key`: it has a record on exactly this
+    /// value, or a delete-the-whole-key record on exactly this key and a baseline of this Windows is
+    /// at hand. Records flagged `existed_before` or `shared` do not count.
+    ///
+    /// The key record is read narrowly on purpose, and the same way everywhere it is asked:
+    ///
+    /// - **Only "delete the whole key".** `RegDeleteKeyIfEmpty` also carries `key_create`, but it is
+    ///   what installers put on shared keys they merely add to, and says nothing about the values.
+    /// - **Only the key itself, not a key above it.** The record says the uninstaller takes the key
+    ///   with everything below; it does not say the installer made what is below. A subkey somebody
+    ///   added later (a verb of the user's under the app's menu entry) is not the installer's, and a
+    ///   record far up (`…\Classes\<name>`) would otherwise vouch for every value under it.
+    /// - **Only with a baseline that does not have the key.** Installers put this record on keys
+    ///   they share as well (`.sh`, a vendor key). A key of the baseline is Windows' own, and a
+    ///   value in it is not the installer's because the installer would delete the key; without a
+    ///   baseline the record is a strong hint and no proof, exactly as for the key itself
+    ///   ([`CandidateBuilder::installer_manifest`]).
+    pub fn installer_recorded_value(&self, key: &str, name: &str) -> bool {
+        self.installer_recorded(key, Some(name))
+    }
+
+    /// [`ScanCtx::installer_recorded_value`]; without a `name` only the record on the key counts.
+    fn installer_recorded(&self, key: &str, name: Option<&str>) -> bool {
+        self.fp
+            .inno
+            .iter()
+            .filter(|r| !r.existed_before && !r.shared)
+            .any(|r| match &r.target {
+                Target::RegValue { path, name: n } => {
+                    name.is_some_and(|name| self.same_key(path, key) && prefix::eq_ci(n, name))
+                }
+                Target::RegKey { path } => {
+                    self.baseline
+                        .is_some_and(|b| !(Baseline::key_in_scope(key) && b.has_key(key)))
+                        && r.key_create
+                        && r.kind == InnoRecordKind::RegDeleteEntireKey
+                        && self.same_key(path, key)
+                }
+                _ => false,
+            })
+    }
+
+    /// The canonical spelling of `key` when it is a 32-bit-view spelling of a key of the machine's
+    /// Classes that both views share, and the source confirms that the two spellings are one key.
+    ///
+    /// `HKLM\SOFTWARE\Classes` is shared between the 64-bit and the 32-bit view ("Registry Keys Affected
+    /// by WOW64"); only a few of its subkeys are redirected and exist a second time under
+    /// `Classes\WOW6432Node` ([`CLASSES_REDIRECTED`]). `HKLM\SOFTWARE\WOW6432Node\Classes` is a link to
+    /// `HKLM\SOFTWARE\Classes\WOW6432Node`, and below it Windows resolves every name that is not
+    /// redirected to the shared key: `…\WOW6432Node\Classes\.txt` opens `…\Classes\.txt`. Such a path
+    /// is a second name of the same key, not a second key, and an item on it duplicates the item on
+    /// the canonical path.
+    ///
+    /// The rule above is not trusted alone (older Windows versions reflected instead of sharing): the
+    /// spelling is folded only when both keys can be read now and agree in last-write time and in
+    /// their value and subkey counts. `None` for every other key.
+    pub fn shared_classes_alias(&self, key: &str) -> Option<String> {
+        let canonical = classes_alias_target(key)?;
+        let info = |k: &str| self.reg.key_info(k).ok().filter(|i| !i.is_link);
+        let (alias, shared) = (info(key)?, info(&canonical)?);
+        (alias.lwt.0 != 0
+            && alias.lwt == shared.lwt
+            && alias.n_values == shared.n_values
+            && alias.n_subkeys == shared.n_subkeys)
+            .then_some(canonical)
+    }
+
     /// The full `DanglingRef` rule (§5.3) for a path under one of the fingerprint's InstallRoots.
     /// See [`ScanCtx::dangling_in`].
     pub fn dangling(&self, path: &str) -> Option<Dangling<'a>> {
@@ -615,7 +1198,191 @@ impl<'a> ScanCtx<'a> {
     }
 }
 
+/// The segments of `key` below the `Software` key of the machine or of a user hive, in either view
+/// (`HKLM\SOFTWARE\WOW6432Node\X\Y` gives `[X, Y]`). `None` for a key that is not below one, and for
+/// the Classes (see [`below_classes`]).
+fn below_software(key: &str) -> Option<Vec<&str>> {
+    let mut segments = prefix::segments(key);
+    let hive = segments.next()?;
+    if prefix::eq_ci(hive, "HKU") {
+        let sid = segments.next()?;
+        if sid.to_ascii_lowercase().ends_with("_classes") {
+            return None;
+        }
+    } else if !prefix::eq_ci(hive, "HKLM") {
+        return None;
+    }
+    if !prefix::eq_ci(segments.next()?, "SOFTWARE") {
+        return None;
+    }
+    let mut below: Vec<&str> = segments.collect();
+    if below
+        .first()
+        .is_some_and(|s| prefix::eq_ci(s, "WOW6432Node"))
+    {
+        below.remove(0);
+    }
+    (!below.first().is_some_and(|s| prefix::eq_ci(s, "Classes"))).then_some(below)
+}
+
+/// The segments of `key` below a Classes root: `HKLM\SOFTWARE\Classes`, its 32-bit node in both
+/// spellings, `HKU\<sid>_Classes` and `HKU\<sid>\Software\Classes`. `None` for any other key.
+fn below_classes(key: &str) -> Option<Vec<&str>> {
+    let mut segments = prefix::segments(key);
+    let hive = segments.next()?;
+    let mut rest: Vec<&str>;
+    if prefix::eq_ci(hive, "HKU") {
+        let sid = segments.next()?;
+        rest = segments.collect();
+        if !sid.to_ascii_lowercase().ends_with("_classes") {
+            if !rest.first().is_some_and(|s| prefix::eq_ci(s, "SOFTWARE")) {
+                return None;
+            }
+            rest.remove(0);
+            if rest
+                .first()
+                .is_some_and(|s| prefix::eq_ci(s, "WOW6432Node"))
+            {
+                rest.remove(0);
+            }
+            if !rest.first().is_some_and(|s| prefix::eq_ci(s, "Classes")) {
+                return None;
+            }
+            rest.remove(0);
+        }
+    } else if prefix::eq_ci(hive, "HKLM") {
+        rest = segments.collect();
+        if !rest.first().is_some_and(|s| prefix::eq_ci(s, "SOFTWARE")) {
+            return None;
+        }
+        rest.remove(0);
+        if rest
+            .first()
+            .is_some_and(|s| prefix::eq_ci(s, "WOW6432Node"))
+        {
+            rest.remove(0);
+        }
+        if !rest.first().is_some_and(|s| prefix::eq_ci(s, "Classes")) {
+            return None;
+        }
+        rest.remove(0);
+    } else {
+        return None;
+    }
+    if rest
+        .first()
+        .is_some_and(|s| prefix::eq_ci(s, "WOW6432Node"))
+    {
+        rest.remove(0);
+    }
+    Some(rest)
+}
+
+/// How one entry of a list value stands as something of the app's ([`ScanCtx::entry_standing`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryStanding {
+    /// Not one plainly written path (`prefix::ListEntry::read`): more than the app's path may
+    /// be in it.
+    NotOnePath,
+    /// One path, but not provably the app's entry: Tier B at most, with the reason.
+    Unproven(&'static str),
+    /// One path at or under an InstallRoot, or a file of the app, written out in the entry.
+    Plain,
+}
+
+/// Whether the string values of `key` are command lines: a `Run` or `RunOnce` key of any hive
+/// and view, or a `command` key (a shell verb).
+fn is_command_place(key: &str) -> bool {
+    let mut up = prefix::segments(key).rev();
+    let (leaf, above) = (up.next().unwrap_or(""), up.next().unwrap_or(""));
+    prefix::eq_ci(leaf, "command")
+        || (["Run", "RunOnce", "RunOnceEx"]
+            .iter()
+            .any(|run| prefix::eq_ci(leaf, run))
+            && prefix::eq_ci(above, "CurrentVersion"))
+}
+
+/// Whether a run of text read from binary data is shaped like a path: it holds a drive path
+/// (`X:\`, `X:/`) or a UNC start (`\\`).
+fn is_path_shaped(run: &str) -> bool {
+    run.contains(":\\") || run.contains(":/") || run.contains("\\\\")
+}
+
+/// Whether the values of `key` are registrations that name a key: `RegisteredApplications`
+/// directly below a `Software` key.
+fn is_registration_place(key: &str) -> bool {
+    let mut up = prefix::segments(key).rev();
+    let (leaf, above) = (up.next().unwrap_or(""), up.next().unwrap_or(""));
+    prefix::eq_ci(leaf, "RegisteredApplications")
+        && (prefix::eq_ci(above, "SOFTWARE") || prefix::eq_ci(above, "WOW6432Node"))
+}
+
+/// Whether `text` is the path of one key below `Software`, written without a hive as
+/// registrations write it (`Software\Clients\Mail\<name>\Capabilities`), and nothing else.
+fn is_software_key_path(text: &str) -> bool {
+    let text = text.trim();
+    text.get(..9)
+        .is_some_and(|head| head.eq_ignore_ascii_case(r"Software\"))
+        && prefix::is_one_path(text)
+        && !prefix::steps_back(text)
+        && !text.contains(['%', ',', '/'])
+        && text
+            .split(prefix::SEP)
+            .all(|segment| segment == segment.trim())
+}
+
+/// The program a command line starts, as written: what stands between the quotes when the
+/// command starts with one; otherwise the text up to the first executable extension that ends a
+/// word (so that `C:\Program Files\App\x.exe /s` keeps its blank), or up to the first blank.
+/// `None` for an empty command and for a quote that is never closed.
+fn program_of(command: &str) -> Option<&str> {
+    let command = command.trim();
+    if let Some(rest) = command.strip_prefix('"') {
+        let program = rest[..rest.find('"')?].trim();
+        return (!program.is_empty()).then_some(program);
+    }
+    let lower = command.to_ascii_lowercase();
+    let end = lower
+        .match_indices('.')
+        .filter_map(|(at, _)| {
+            let end = [".exe", ".com", ".bat", ".cmd"]
+                .iter()
+                .find(|ext| lower[at..].starts_with(**ext))
+                .map(|ext| at + ext.len())?;
+            let ends_word = command[end..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_whitespace() || c == '"' || c == '/');
+            (ends_word && command.is_char_boundary(end)).then_some(end)
+        })
+        .next()
+        .or_else(|| command.find(char::is_whitespace))
+        .unwrap_or(command.len());
+    let program = command[..end].trim();
+    (!program.is_empty()).then_some(program)
+}
+
+/// The path of an icon or resource reference (`C:\App\x.exe,0`, `@C:\App\x.dll,-101`); any other
+/// text as it is.
+fn resource_path(entry: &str) -> &str {
+    let is_index = |index: &str| {
+        let digits = index.strip_prefix('-').unwrap_or(index);
+        !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+    };
+    let text = entry.strip_prefix('@').unwrap_or(entry);
+    match text.rsplit_once(',') {
+        Some((path, index)) if is_index(index.trim()) => path.trim(),
+        _ => entry,
+    }
+}
+
+/// The deepest InstallRoot `path` is, or lies under. A path with a `..` segment lies under none:
+/// the containment test compares segments and does not resolve it, so
+/// `<root>\..\..\Users\me\tools` would pass for a path of the app.
 fn install_root_of<'r>(roots: &'r [Root], path: &str) -> Option<&'r Root> {
+    if prefix::steps_back(path) {
+        return None;
+    }
     roots
         .iter()
         .filter(|r| r.kind == RootKind::InstallRoot && prefix::is_same_or_inside(path, &r.path))
@@ -790,11 +1557,112 @@ fn children_json<'a>(children: impl IntoIterator<Item = ContainerChild<'a>>) -> 
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// COM classes and the shared Classes key
+// ---------------------------------------------------------------------------------------------------------
+
+/// Whether `s` has the shape of a braced GUID (`{8-4-4-4-12}` hex digits).
+fn is_braced_guid(s: &str) -> bool {
+    let Some(inner) = s.strip_prefix('{').and_then(|r| r.strip_suffix('}')) else {
+        return false;
+    };
+    let groups: Vec<&str> = inner.split('-').collect();
+    groups.len() == 5
+        && groups
+            .iter()
+            .zip([8usize, 4, 4, 4, 12])
+            .all(|(g, len)| g.len() == len && g.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The kinds of COM registration keyed by a GUID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComKind {
+    /// `CLSID\{id}`.
+    Class,
+    /// `TypeLib\{id}`.
+    TypeLib,
+    /// `AppID\{id}`.
+    AppId,
+}
+
+/// The COM registration a registry key belongs to: the kind and `{id}` of the first `CLSID\{id}`,
+/// `TypeLib\{id}` or `AppID\{id}` pair of its path.
+pub fn com_registration_of(key: &str) -> Option<(ComKind, &str)> {
+    let mut segments = prefix::segments(key).peekable();
+    while let Some(segment) = segments.next() {
+        let kind = if prefix::eq_ci(segment, "CLSID") {
+            ComKind::Class
+        } else if prefix::eq_ci(segment, "TypeLib") {
+            ComKind::TypeLib
+        } else if prefix::eq_ci(segment, "AppID") {
+            ComKind::AppId
+        } else {
+            continue;
+        };
+        if let Some(id) = segments.peek().copied().filter(|id| is_braced_guid(id)) {
+            return Some((kind, id));
+        }
+    }
+    None
+}
+
+/// The COM class a registry key belongs to: the `{id}` of its `CLSID\{id}` pair, when that is the
+/// first COM registration its path names.
+pub fn com_class_of(key: &str) -> Option<&str> {
+    com_registration_of(key)
+        .filter(|(kind, _)| *kind == ComKind::Class)
+        .map(|(_, id)| id)
+}
+
+/// The subkeys of `HKLM\SOFTWARE\Classes` that WOW64 redirects: each exists once per view, the 32-bit
+/// one under `Classes\WOW6432Node` (Microsoft, "Registry Keys Affected by WOW64"; the rig snapshots of
+/// Windows 11 26100 show exactly these as real keys there, next to links for `AppID`, `PROTOCOLS` and
+/// `TypeLib`). Everything else in Classes is one key for both views.
+pub const CLASSES_REDIRECTED: [&str; 5] = [
+    "CLSID",
+    "DirectShow",
+    "Interface",
+    "Media Type",
+    "MediaFoundation",
+];
+
+/// For a path through the 32-bit node of the machine's Classes (`HKLM\SOFTWARE\WOW6432Node\Classes\X\…`
+/// or `HKLM\SOFTWARE\Classes\WOW6432Node\X\…`) whose `X` is not redirected: the path of the shared key,
+/// `HKLM\SOFTWARE\Classes\X\…`. `None` for every other path, the 32-bit node itself included.
+///
+/// This is the naming rule only; [`ScanCtx::shared_classes_alias`] checks it against the source.
+pub fn classes_alias_target(key: &str) -> Option<String> {
+    let segments: Vec<&str> = prefix::segments(key).collect();
+    let is = |i: usize, name: &str| segments.get(i).is_some_and(|s| prefix::eq_ci(s, name));
+    if !(is(0, "HKLM") && is(1, "SOFTWARE")) {
+        return None;
+    }
+    let through_node =
+        (is(2, "WOW6432Node") && is(3, "Classes")) || (is(2, "Classes") && is(3, "WOW6432Node"));
+    let first = segments.get(4)?;
+    if !through_node
+        || CLASSES_REDIRECTED.iter().any(|r| prefix::eq_ci(r, first))
+        || prefix::eq_ci(first, "WOW6432Node")
+    {
+        return None;
+    }
+    Some(format!(
+        r"HKLM\SOFTWARE\Classes\{}",
+        segments[4..].join("\\")
+    ))
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Candidate builder
 // ---------------------------------------------------------------------------------------------------------
 
 /// Ticks of one day in `FILETIME` units.
 const DAY_TICKS: u64 = 24 * 60 * 60 * 10_000_000;
+
+/// Detail key that marks reference evidence lowered because the value is in a shared place. Equal to
+/// `purge_policy::explain::SHARED_PLACE_KEY`.
+pub const SHARED_PLACE_KEY: &str = "place";
+/// Detail value of [`SHARED_PLACE_KEY`].
+pub const SHARED_PLACE_VALUE: &str = "shared";
 
 /// Builds one [`Candidate`]. Made by [`ScanCtx::candidate`].
 ///
@@ -854,6 +1722,41 @@ impl CandidateBuilder<'_> {
         }
     }
 
+    /// Whether the target is a registry value (or an entry of one) in a place that is not the app's
+    /// own ([`ScanCtx::owns_registration`]): reference evidence on it is then no proof of ownership.
+    fn in_shared_place(&self) -> bool {
+        match &self.candidate.target {
+            Target::RegValue { path, name }
+            | Target::RegValueChanged { path, name, .. }
+            | Target::RegMultiSzSegment { path, name, .. } => {
+                !self.ctx.owns_registration(path, name)
+            }
+            _ => false,
+        }
+    }
+
+    /// Adds reference evidence of `kind` ("the value points at the app"): with the table's tier where
+    /// the registration is the app's own, lowered to Tier B in a shared place.
+    fn push_reference(
+        &mut self,
+        kind: EvidenceKind,
+        scope: Option<Scope>,
+        trust: SourceTrust,
+        source: String,
+        detail: Facts,
+    ) -> bool {
+        let Some(mut evidence) = scope.and_then(|scope| Evidence::new(kind, scope, trust, source))
+        else {
+            return false;
+        };
+        let mut detail = detail;
+        if self.in_shared_place() {
+            evidence.tier = evidence.tier.at_most(Tier::B);
+            detail = detail.with(SHARED_PLACE_KEY, SHARED_PLACE_VALUE);
+        }
+        self.push_evidence(evidence.with_detail(detail))
+    }
+
     // ---- evidence ----------------------------------------------------------------------------------------
 
     fn push_evidence(&mut self, evidence: Evidence) -> bool {
@@ -897,7 +1800,8 @@ impl CandidateBuilder<'_> {
     /// `InstallerManifest(Inno)`: the fingerprint's Inno log has a record on exactly this target.
     ///
     /// A key-create record gives Key scope for that key; a value record gives Value scope for that value
-    /// (or for a segment of it); a file or directory record gives Path scope for that path. Records
+    /// (or for a segment of it); a file or directory record gives Path scope for that path. A key
+    /// record is Tier A only with a baseline of this Windows, Tier B without one. Records
     /// flagged `existed_before` or `shared` do not count: the item is not the app's alone. Neither do
     /// `IniDeleteEntry`, `IniDeleteSection` and `DecrementSharedCount` records: their target is the file
     /// the uninstaller edits or counts, which the installer need not own (`win.ini`).
@@ -911,14 +1815,25 @@ impl CandidateBuilder<'_> {
         else {
             return false;
         };
-        let detail = Facts::new().with("record", format!("{:?}", record.kind));
-        self.push(
+        let mut detail = Facts::new().with("record", format!("{:?}", record.kind));
+        let Some(mut evidence) = Evidence::new(
             EvidenceKind::InstallerManifest(ManifestKind::Inno),
-            Some(scope),
+            scope,
             inno_trust(fp),
             "inno:log".to_owned(),
-            detail,
-        )
+        ) else {
+            return false;
+        };
+        // A key record says that the installer asked for the key to be deleted on uninstall, not
+        // that it created the key: the log has no "existed before" flag for the registry, and scripts
+        // do put such a record on keys they share (`.sh`, a vendor key). With a baseline of this
+        // Windows the key is at least shown not to be Windows' own; without one nothing shows that,
+        // and the work is values-only (§5.7.1 step 3): the record is then a strong hint, no proof.
+        if scope == Scope::Key && self.ctx.baseline.is_none() {
+            evidence.tier = evidence.tier.at_most(Tier::B);
+            detail = detail.with("baseline", "none");
+        }
+        self.push_evidence(evidence.with_detail(detail))
     }
 
     /// The scope an Inno record proves for this candidate's target, if it speaks about it at all.
@@ -961,6 +1876,9 @@ impl CandidateBuilder<'_> {
     /// of the app's anchors. A root anchor counts only when it is an InstallRoot (or lies in one); a
     /// reference to an inferred root or to a referenced data directory is refused. The scanner is responsible for re-reading the value when it matters that it
     /// still says the same.
+    ///
+    /// Tier A only where the registration is the app's own ([`ScanCtx::owns_registration`]); Tier B
+    /// in a shared place.
     pub fn in_ref_snapshot(&mut self) -> bool {
         let fp = self.ctx.fp;
         let Some(entry) = self.ref_snap_entry() else {
@@ -974,20 +1892,55 @@ impl CandidateBuilder<'_> {
             return false;
         }
         let trust = anchor_trust(fp, &entry.anchor);
-        let detail = Facts::new().with("anchor", entry.anchor.text.clone());
+        let mut detail = Facts::new().with("anchor", entry.anchor.text.clone());
         let source = match &entry.target {
             Target::RegValue { path, name } | Target::RegMultiSzSegment { path, name, .. } => {
                 format!("refsnap:{path}|{name}")
             }
             _ => "refsnap".to_owned(),
         };
-        self.push(
+        // An id is a name, not a location: that a value mentioned the app's ProgID, CLSID, AUMID
+        // or harvested token before the uninstall does not show who wrote the value (three interface keys of another
+        // product name a proxy class the app re-pointed at its own DLL). Such an entry is a strong
+        // hint only, unless the installer's own record covers the value or the key that holds it.
+        let id_only = matches!(
+            entry.anchor.kind,
+            AnchorKind::ProgId | AnchorKind::Clsid | AnchorKind::Aumid | AnchorKind::Token
+        ) && !self.manifest_covers_value();
+        if id_only {
+            detail = detail.with("anchor_kind", "id");
+        }
+        let Some(mut evidence) = Evidence::new(
             EvidenceKind::InPreUninstallRefSnapshot,
-            Some(Scope::Value),
+            Scope::Value,
             trust,
             source,
-            detail,
-        )
+        ) else {
+            return false;
+        };
+        if id_only {
+            evidence.tier = evidence.tier.at_most(Tier::B);
+        }
+        // That the value pointed at the app's files before the uninstall does not show who wrote it.
+        // (An id anchor is judged above: it names a registration of the app, not a location.)
+        let path_anchor = matches!(entry.anchor.kind, AnchorKind::Root | AnchorKind::Exe);
+        if path_anchor && self.in_shared_place() {
+            evidence.tier = evidence.tier.at_most(Tier::B);
+            detail = detail.with(SHARED_PLACE_KEY, SHARED_PLACE_VALUE);
+        }
+        self.push_evidence(evidence.with_detail(detail))
+    }
+
+    /// Whether the installer's log covers this candidate's value
+    /// ([`ScanCtx::installer_recorded_value`]): the corroboration an id-anchored snapshot entry
+    /// needs for Tier A.
+    fn manifest_covers_value(&self) -> bool {
+        match &self.candidate.target {
+            Target::RegValue { path, name } | Target::RegMultiSzSegment { path, name, .. } => {
+                self.ctx.installer_recorded_value(path, name)
+            }
+            _ => false,
+        }
     }
 
     /// `ProvenOwnedSkeleton`: the target is a key that [`skeleton::proven_owned_skeleton`] accepts.
@@ -1002,12 +1955,12 @@ impl CandidateBuilder<'_> {
     }
 
     /// `DanglingRef`: the value (or segment) points at `dangling`, which [`ScanCtx::dangling`] proved
-    /// missing. Value scope only.
+    /// missing. Value scope only. Tier B in a shared place ([`ScanCtx::owns_registration`]).
     pub fn dangling_ref(&mut self, dangling: &Dangling<'_>) -> bool {
         let detail = Facts::new()
             .with("root", dangling.root.path.clone())
             .with("path", dangling.path.clone());
-        self.push(
+        self.push_reference(
             EvidenceKind::DanglingRef,
             self.scope(),
             dangling.root.trust,
@@ -1018,7 +1971,8 @@ impl CandidateBuilder<'_> {
 
     /// `PointsIntoInstallRoot`: the value's data or name resolves to `referenced`, which is at or under
     /// an InstallRoot or is a file of the exe set. Value scope only. The scanner resolves the reference
-    /// (expansion, quotes, arguments); this checks where it lands.
+    /// (expansion, quotes, arguments); this checks where it lands. Tier B in a shared place
+    /// ([`ScanCtx::owns_registration`]).
     pub fn points_into_install_root(&mut self, referenced: &str) -> bool {
         let fp = self.ctx.fp;
         let (trust, root) = match self.ctx.inside_install_root(referenced) {
@@ -1039,7 +1993,7 @@ impl CandidateBuilder<'_> {
         if let Some(root) = root {
             detail = detail.with("root", root);
         }
-        self.push(
+        self.push_reference(
             EvidenceKind::PointsIntoInstallRoot,
             self.scope(),
             trust,
@@ -1125,6 +2079,19 @@ impl CandidateBuilder<'_> {
             format!("arp:{what}"),
             Facts::new().with("anchor", what),
         )
+    }
+
+    /// Lowers the positive evidence gathered so far to Tier B at most and notes why (`unproven`).
+    /// For a target that is the app's by its place and its name only, where neither is the app's
+    /// alone: it stays listed and can never be preselected on that evidence.
+    pub fn cap_at_tier_b(&mut self, why: &str) -> &mut Self {
+        for e in &mut self.candidate.evidence {
+            if e.weight > 0 && e.tier == Tier::A {
+                e.tier = Tier::B;
+                e.detail = std::mem::take(&mut e.detail).with("unproven", why);
+            }
+        }
+        self
     }
 
     /// `AppxExternalLocation`: the target is a package whose full name or family the harvest linked to
@@ -1449,8 +2416,35 @@ impl CandidateBuilder<'_> {
         self
     }
 
+    /// Adds `evidence` gathered elsewhere (on the entries of the value) after what is there.
+    pub(crate) fn evidence_also(&mut self, evidence: impl IntoIterator<Item = Evidence>) {
+        for evidence in evidence {
+            self.push_evidence(evidence);
+        }
+    }
+
+    /// Puts `evidence` in front of what has been gathered (the record a candidate rests on goes
+    /// first); what is already there is not added twice.
+    pub(crate) fn evidence_first(&mut self, evidence: impl IntoIterator<Item = Evidence>) {
+        let mut all: Vec<Evidence> = evidence.into_iter().collect();
+        for built in std::mem::take(&mut self.candidate.evidence) {
+            if !all.contains(&built) {
+                all.push(built);
+            }
+        }
+        self.candidate.evidence = all;
+    }
+
     /// The finished candidate, undecided.
-    pub fn build(self) -> Candidate {
+    ///
+    /// The rule about what a value holds is applied here ([`ScanCtx::seal`]): a value, or an
+    /// entry of one, whose data is not wholly the app's keeps no Tier A evidence, whatever the
+    /// scanner gathered and whatever the installer recorded. [`ScanCtx::run`] applies it again
+    /// to what the scanner returns, for evidence a scanner adds after this. `purge-plan` only
+    /// merges candidates on one target, which all passed there, and adds `EmptyAfterPlan` to
+    /// containers, never to a value.
+    pub fn build(mut self) -> Candidate {
+        self.ctx.seal(&mut self.candidate);
         self.candidate
     }
 }
@@ -1530,6 +2524,8 @@ pub(crate) mod testkit {
             }],
             exes: Vec::new(),
             outside_root_files: Vec::new(),
+            uninstallers: Vec::new(),
+            older_keys: Vec::new(),
             anchors: Anchors::default(),
             tokens: Vec::new(),
             inno: Vec::new(),
@@ -2718,5 +3714,268 @@ mod tests {
                 .is_match(&format!(r#""{GIT_ROOT}\cmd\git.exe" --version"#))
         );
         assert!(!view.refs.is_match(r"C:\Program Files\GitHub\x.exe"));
+    }
+
+    // ---- whose a registration is ---------------------------------------------------------------------------
+
+    fn recorded_value(key: &str, name: &str) -> InnoRecord {
+        InnoRecord {
+            kind: InnoRecordKind::RegDeleteValue,
+            target: value(key, name),
+            view: Some(View::K64),
+            user_hive: false,
+            existed_before: false,
+            shared: false,
+            key_create: false,
+        }
+    }
+
+    fn recorded_key(key: &str) -> InnoRecord {
+        InnoRecord {
+            kind: InnoRecordKind::RegDeleteEntireKey,
+            target: self::key(key),
+            view: Some(View::K64),
+            user_hive: false,
+            existed_before: false,
+            shared: false,
+            key_create: true,
+        }
+    }
+
+    /// A file the log names counts only when the record says the installer created it.
+    #[test]
+    fn a_logged_file_that_existed_before_or_is_shared_is_not_the_installers() {
+        let lnk = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\Git Tray.lnk";
+        let record = |existed_before: bool, shared: bool| InnoRecord {
+            kind: InnoRecordKind::DeleteFile,
+            target: Target::Path { path: lnk.into() },
+            view: None,
+            user_hive: false,
+            existed_before,
+            shared,
+            key_create: false,
+        };
+        let mut world = World::new(uninstalled());
+        for (existed_before, shared, logged) in [
+            (false, false, true),
+            (true, false, false),
+            (false, true, false),
+        ] {
+            world.fp.inno = vec![record(existed_before, shared)];
+            assert_eq!(
+                world.ctx().installer_logged_file(&lnk.to_uppercase()),
+                logged,
+                "existed_before={existed_before} shared={shared}"
+            );
+        }
+        // A record of another kind on the path is no file record.
+        world.fp.inno = vec![InnoRecord {
+            kind: InnoRecordKind::DeleteDirOrFiles,
+            ..record(false, false)
+        }];
+        assert!(!world.ctx().installer_logged_file(lnk));
+    }
+
+    /// The VM campaign's rows (x0-git-userstate, x0-git-toolsdir): values the user or another program
+    /// wrote, which only point at Git.
+    #[test]
+    fn a_value_that_points_at_the_app_is_not_the_apps_registration() {
+        let user = format!(r"HKU\{SID}");
+        let mut world = World::new(uninstalled());
+        world.fp.exes = vec![purge_model::ExeFile {
+            path: format!(r"{GIT_ROOT}\git-bash.exe"),
+            main: true,
+        }];
+        world.fp.anchors.progids = vec!["GitBash.Document".into()];
+        world.fp.inno = vec![
+            recorded_value(
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+                "GitTray",
+            ),
+            recorded_key(r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell"),
+        ];
+        let ctx = world.ctx();
+        let foreign = [
+            (format!(r"{user}\Software\TortoiseGit"), "MSysGit"),
+            (
+                format!(r"{user}\Software\ContosoTools\Settings"),
+                "GitExecutable",
+            ),
+            (
+                format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\Run"),
+                "GitAutoFetch",
+            ),
+            (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run".to_owned(),
+                "Backup",
+            ),
+            (format!(r"{user}\Environment"), "Path"),
+            (format!(r"{user}\Environment"), "GIT_SSH"),
+            (
+                r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment".to_owned(),
+                "Path",
+            ),
+            (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\rg.exe".to_owned(),
+                "",
+            ),
+            (
+                format!(r"{user}\Software\Microsoft\RestartManager\Session0000"),
+                "RegFiles0000",
+            ),
+            (
+                r"HKLM\SOFTWARE\Classes\Directory\shell\my_verb\command".to_owned(),
+                "",
+            ),
+            // Below a key the installer deletes whole: the record is about that key, and does not
+            // say who made the subkey.
+            (
+                r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell\command".to_owned(),
+                "",
+            ),
+            (
+                r"HKLM\SOFTWARE\Classes\txtfile\shell\open\command".to_owned(),
+                "",
+            ),
+            (r"HKLM\SOFTWARE\RegisteredApplications".to_owned(), "Git"),
+            (r"HKLM\SOFTWARE\Policies\Git".to_owned(), "Path"),
+        ];
+        for (key, name) in &foreign {
+            assert!(!ctx.owns_registration(key, name), "{key}|{name}");
+        }
+        let own = [
+            // The installer's record: the value itself, or the key it deletes whole.
+            (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run".to_owned(),
+                "GitTray",
+            ),
+            (
+                r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell".to_owned(),
+                "Icon",
+            ),
+            // The app's own ProgID, Uninstall key, App Paths key and settings key.
+            (
+                r"HKLM\SOFTWARE\Classes\GitBash.Document\shell\open\command".to_owned(),
+                "",
+            ),
+            (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1".to_owned(),
+                "InstallLocation",
+            ),
+            (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\git-bash.exe".to_owned(),
+                "",
+            ),
+            (
+                r"HKLM\SOFTWARE\The Git Development Community\Settings".to_owned(),
+                "Path",
+            ),
+        ];
+        // Dirty-base runs f0d-git, f0d-npp, f0d-vlc: slot 15 of Windows' ring of new Start-menu
+        // shortcuts held another product's record before the install reused it.
+        assert!(!ctx.owns_registration(
+            &format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\UFH\SHC"),
+            "15"
+        ));
+        for (key, name) in &own {
+            assert!(ctx.owns_registration(key, name), "{key}|{name}");
+        }
+        // A key of the baseline is Windows' own: the record on it vouches for no value in it.
+        let git_shell = r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell";
+        world.baseline = Some(baseline(EDITION, &[git_shell]));
+        assert!(!world.ctx().owns_registration(git_shell, "Icon"));
+        // Without a baseline the key record is a hint, no proof; the value record stays.
+        world.baseline = None;
+        let ctx = world.ctx();
+        assert!(!ctx.owns_registration(r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell", "Icon"));
+        assert!(ctx.owns_registration(
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+            "GitTray"
+        ));
+    }
+
+    /// Reference evidence keeps its Tier A in the app's own key and drops to Tier B, marked, anywhere
+    /// else: whoever wrote the value, it cannot make the candidate Safe.
+    #[test]
+    fn reference_evidence_in_a_shared_place_is_tier_b() {
+        let user = format!(r"HKU\{SID}");
+        let git = format!(r"{GIT_ROOT}\cmd\git.exe");
+        let theirs = value(&format!(r"{user}\Software\TortoiseGit"), "MSysGit");
+        let own = value(
+            r"HKLM\SOFTWARE\The Git Development Community",
+            "InstallPath",
+        );
+        let mut world = World::new(uninstalled());
+        world.fp.ref_snapshot = [&theirs, &own]
+            .into_iter()
+            .map(|target| RefSnapEntry {
+                target: target.clone(),
+                carrier: RefCarrier::Data,
+                anchor: AnchorRef {
+                    kind: AnchorKind::Root,
+                    text: GIT_ROOT.into(),
+                },
+                parent_values: 1,
+                parent_subkeys: 0,
+                data_hash: None,
+            })
+            .collect();
+        let ctx = world.ctx();
+        let build = |target: &Target| {
+            let mut b = ctx.candidate(
+                "T",
+                target.clone(),
+                Action::DeleteValue,
+                Category::Registration,
+            );
+            assert!(b.in_ref_snapshot());
+            assert!(b.points_into_install_root(&git));
+            assert!(b.dangling_ref(&ctx.dangling(&git).unwrap()));
+            b.build()
+        };
+        let c = build(&theirs);
+        assert_eq!(c.evidence.len(), 3);
+        for e in &c.evidence {
+            assert_eq!(e.tier, Tier::B, "{:?}", e.kind);
+            assert_eq!(e.detail.get(SHARED_PLACE_KEY), Some(SHARED_PLACE_VALUE));
+        }
+        let c = build(&own);
+        for e in &c.evidence {
+            assert_eq!(e.tier, Tier::A, "{:?}", e.kind);
+            assert_eq!(e.detail.get(SHARED_PLACE_KEY), None);
+        }
+    }
+
+    /// VM run x0-nb-git: `HKLM\SOFTWARE\Classes\sh_auto_file` went Safe on the installer's key record
+    /// alone, on a Windows without a matching baseline.
+    #[test]
+    fn a_key_record_without_a_baseline_is_tier_b() {
+        let sh = r"HKLM\SOFTWARE\Classes\sh_auto_file";
+        let mut world = World::new(uninstalled());
+        world.fp.inno = vec![
+            recorded_key(sh),
+            recorded_value(r"HKLM\SOFTWARE\Classes\.sh", "Content Type"),
+        ];
+        let manifest = |world: &World, target: Target, action: Action| {
+            let ctx = world.ctx();
+            let mut b = ctx.candidate("T", target, action, Category::Registration);
+            assert!(b.installer_manifest());
+            b.build().evidence.remove(0)
+        };
+        let e = manifest(&world, key(sh), Action::DeleteKey);
+        assert_eq!((e.tier, e.scope), (Tier::A, Scope::Key));
+        assert_eq!(e.detail.get("baseline"), None);
+
+        world.baseline = None;
+        let e = manifest(&world, key(sh), Action::DeleteKey);
+        assert_eq!((e.tier, e.scope), (Tier::B, Scope::Key));
+        assert_eq!(e.detail.get("baseline"), Some("none"));
+        // A value record names the value the installer wrote: it needs no baseline.
+        let e = manifest(
+            &world,
+            value(r"HKLM\SOFTWARE\Classes\.sh", "Content Type"),
+            Action::DeleteValue,
+        );
+        assert_eq!((e.tier, e.scope), (Tier::A, Scope::Value));
     }
 }

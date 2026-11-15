@@ -176,6 +176,8 @@ fn fingerprint(
         }],
         exes: Vec::new(),
         outside_root_files: Vec::new(),
+        uninstallers: Vec::new(),
+        older_keys: Vec::new(),
         anchors: Anchors::default(),
         tokens: Vec::new(),
         inno: Vec::new(),

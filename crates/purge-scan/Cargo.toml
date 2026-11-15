@@ -14,5 +14,9 @@ purge-identity.workspace = true
 purge-index.workspace = true
 purge-guard.workspace = true
 
+[dev-dependencies]
+# Tests only: the association scanners' tests ask the real policy what band a candidate gets.
+purge-policy.workspace = true
+
 [lints]
 workspace = true

@@ -5,7 +5,9 @@
 //! owner's display name and a few detail values the producer recorded in [`Facts`] (a root, an anchor, a
 //! token), which are stripped of control characters and cut to [`MAX_FACT_CHARS`] before use.
 //!
-//! Detail keys the templates understand (all optional): `root`, `path`, `anchor`, `token`, `baseline`.
+//! Detail keys the templates understand (all optional): `root`, `path`, `anchor`, `token`, `baseline`,
+//! and `place` (`shared`: the evidence was lowered because the value is not in a place of the app's own,
+//! which adds [`shared_place_line`]).
 //!
 //! A Blocked candidate is explained by its hard blockers only ("Kept: …"). Any other candidate lists its
 //! evidence from the strongest kind down, then what speaks against it, then the soft blockers and the
@@ -20,6 +22,21 @@ pub const SEPARATOR: &str = " · ";
 
 /// The longest detail value a template takes over, in characters.
 pub const MAX_FACT_CHARS: usize = 160;
+
+/// Detail key by which a scanner marks reference evidence it lowered because the value lies in a place
+/// that is not the app's own (`purge_scan::framework::SHARED_PLACE_KEY`).
+pub const SHARED_PLACE_KEY: &str = "place";
+/// Detail value of [`SHARED_PLACE_KEY`].
+pub const SHARED_PLACE_VALUE: &str = "shared";
+
+/// The line shown for an item whose reference evidence was lowered for lying in a shared place.
+#[must_use]
+pub fn shared_place_line(owner: &str) -> String {
+    format!(
+        "In a place other software and you also write to; nothing shows that {} put it there",
+        clean_name(owner)
+    )
+}
 
 /// A remark of the policy itself on how it reached a decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -249,10 +266,15 @@ pub fn render(candidate: &Candidate, band: Band, notes: &[Note]) -> Vec<String> 
         .collect();
     // Strongest first; the negatives (below zero) end up last. The sort is stable.
     shown.sort_by_key(|e| std::cmp::Reverse(effective_weight(e)));
+    let mut shared_place = false;
     for e in shown {
         for line in evidence_lines(e, owner) {
             push_unique(&mut lines, line);
         }
+        shared_place |= e.detail.get(SHARED_PLACE_KEY) == Some(SHARED_PLACE_VALUE);
+    }
+    if shared_place {
+        push_unique(&mut lines, shared_place_line(owner));
     }
     for b in candidate.blockers.iter().filter(|b| !b.is_hard()) {
         push_unique(&mut lines, blocker_line(b));

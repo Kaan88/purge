@@ -25,6 +25,32 @@
 //! to Tier B, which is band-neutral: enough for the policy to list the key (Likely, unticked), never
 //! enough for Safe.
 //!
+//! # Known limit: an empty `.ext` key that was there before the install
+//!
+//! A key somebody made before the install is not the app's skeleton, and [`skeleton`] refuses one
+//! the harvest found to be older than the install (`ScanCtx::predates_install`, from the key's and
+//! its parent's LastWriteTime; `purge-harvest`, `subtree`, "Keys older than the install"). That
+//! clock cannot see one case: an **empty** `.ext` key that existed before the install and that the
+//! installer then wrote into directly, by setting its default value or by creating
+//! `OpenWithProgids` in it. Either write moves the key's time past the start of the install, and
+//! the key reads exactly like one the installer created. With a baseline that does not have the
+//! key it is offered as `ProvenOwnedSkeleton` and is Safe.
+//!
+//! This is accepted, not fixed (decided for M1a). The alternative is to take the proof away from
+//! every skeleton that rests on the journal alone, which would list every `.ext` key an app made
+//! as Likely for the sake of this one. What is at stake is small and bounded by the conditions
+//! above: the key is on no clean Windows of this build (it is not in the baseline), it held
+//! nothing of anybody else's at harvest (no other value, no other subkey, no other default, no
+//! vendor backup) and it is empty now, so deleting it loses a key name and no content. The rig
+//! reports such a key as the non-blocking class `old_empty_ext_key`. No cheap signal tells the two
+//! cases apart: the registry keeps no creation time, the parent's time only proves age while
+//! nothing else was created in `Classes` since, an owner is the same for both on a machine-wide
+//! install, and the Inno log records what to delete, not what existed. A record of the machine from
+//! before the install (the remembered manifest of a later milestone) would.
+//!
+//! Without a matching baseline none of this arises: the key is then the X-SYSTIDY fallback above,
+//! Tier B, listed and never preselected.
+//!
 //! # TrustedInstaller on rig snapshots
 //!
 //! The journal records the owner of the `.ext` key only, and a rig snapshot does not record owners at
@@ -251,15 +277,11 @@ pub(crate) fn finish(
     extra: impl IntoIterator<Item = Evidence>,
     facts: &Facts,
 ) -> Option<Candidate> {
+    // Evidence from the journal goes first: it is the record the candidate rests on. It is added
+    // before the candidate is finished, so that `CandidateBuilder::build` judges all of it.
+    let mut builder = builder;
+    builder.evidence_first(extra);
     let mut candidate = builder.build();
-    // Evidence from the journal goes first: it is the record the candidate rests on.
-    let mut evidence: Vec<Evidence> = extra.into_iter().collect();
-    for built in std::mem::take(&mut candidate.evidence) {
-        if !evidence.contains(&built) {
-            evidence.push(built);
-        }
-    }
-    candidate.evidence = evidence;
     if !candidate.evidence.iter().any(|e| e.weight > 0) {
         return None;
     }
@@ -406,6 +428,13 @@ pub(crate) fn skeleton(
         return None;
     }
     let owp_key = subkey(&entry.key, OPEN_WITH_PROGIDS);
+    // A key somebody made before the install is no skeleton of the app, although the app's value
+    // was the only thing in it (rig run x1-vscode-userstate: the user's empty
+    // `.gemspec\OpenWithProgids`). The harvest marks `OpenWithProgids` as older when it or the
+    // extension key is; then neither key qualifies.
+    if ctx.predates_install(&owp_key) {
+        return None;
+    }
     let owp_empty = owp_state.is_empty();
     let ti = entry.ti_owned || ext_state.ti_owned() || owp_state.ti_owned();
     let with_ti = |standing: Standing| {
@@ -440,7 +469,7 @@ pub(crate) fn skeleton(
         _ => false,
     };
 
-    if ext_was_ours && ext_is_bare {
+    if ext_was_ours && ext_is_bare && !ctx.predates_install(&entry.key) {
         let child = owp_empty.then(|| owp_key.clone());
         let mut keys = vec![entry.key.as_str()];
         keys.extend(child.as_deref());

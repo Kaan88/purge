@@ -23,7 +23,11 @@
 //! - the key is not in the clean-Windows baseline (when one matches this Windows) and is not owned by
 //!   TrustedInstaller: Windows did not ship it. A key whose owner cannot be read counts as owned by
 //!   Windows;
-//! - no registered application that is not the app's lists it in its `Capabilities` associations.
+//! - no registered application that is not the app's lists it in its `Capabilities` associations;
+//! - the key itself is not older than the app's install ([`ComCutoff`], as for COM classes). A URL
+//!   scheme that a second, unregistered copy of the same program set up first and that the installed
+//!   app re-pointed at itself (`HKCU\Software\Classes\vscode` of a portable VS Code) keeps the last
+//!   write time of its first registration: the installed app only rewrote the command below it.
 //!
 //! A candidate that fails one of these existed before the app, or is shared with something else; the
 //! app only modified it. It is reported in [`AnchorHarvest::modified_progids`] and is never an anchor.
@@ -31,10 +35,25 @@
 //!
 //! # COM ids
 //!
-//! A CLSID is the app's when its `InprocServer32` or `LocalServer32` lies in the app's files and the
-//! key is not in the baseline; its `AppID` value gives an AppID. A type library is the app's when one
-//! of its `win32`/`win64` paths does. They are recorded as anchors for the reference scanners; removing
-//! COM keys is a later milestone.
+//! A CLSID is a *candidate* when its `InprocServer32` or `LocalServer32` lies in the app's files. That
+//! alone says only that the app wrote the server path: an installer overwrites the server of a class
+//! another product registered first (two products of one vendor that both register the same proxy DLL
+//! under one CLSID, each pointing it at its own copy). A candidate is the app's only when, in every
+//! Classes root that has it,
+//!
+//! - the key is not in the baseline and is not owned by TrustedInstaller (an owner that cannot be read
+//!   counts as Windows);
+//! - the key is not older than the app's install (its last write is not more than a day before the
+//!   earliest install-time hint; a key that existed before was only modified);
+//! - no other installed app ships a file with the name of the server in one of its own directories
+//!   (the class is shared, and whichever product was installed last holds the path).
+//!
+//! A candidate that fails one of these is "modified, not owned": it is reported in
+//! [`AnchorHarvest::modified_clsids`] and is never an anchor, so nothing that merely mentions the id
+//! (an `Interface\{iid}\ProxyStubClsid32` value, say) is attributed through it. The `AppID` value of
+//! an owned class gives an AppID. A type library is the app's when one of its `win32`/`win64` paths
+//! lies in the app's files and its key passes the baseline and age tests. They are recorded as
+//! anchors for the reference scanners; removing COM keys is a later milestone.
 //!
 //! # AUMIDs
 //!
@@ -57,14 +76,14 @@ use purge_guard::prefix;
 use purge_index::baseline::Baseline;
 use purge_index::matcher::{AnchorSet, RefMatcher};
 use purge_inventory::kind::is_braced_guid;
-use purge_model::{AnchorKind, Anchors, ExeFile, Root, RootKind, RunEntry};
+use purge_model::{AnchorKind, Anchors, ExeFile, FileTime, Root, RootKind, RunEntry};
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::system::SystemSource;
-use purge_source::types::{KnownFolder, SourceError};
+use purge_source::types::{ExistsState, KnownFolder, SourceError};
 use purge_win::env::EnvMap;
 
-use crate::roots::{canon_file, clean_value, command_exe, env_map};
+use crate::roots::{OtherAnchor, canon_file, clean_value, command_exe, env_map, parent_dir};
 
 /// `HKLM\SOFTWARE\Classes`.
 const HKLM_CLASSES: &str = r"HKLM\SOFTWARE\Classes";
@@ -197,6 +216,9 @@ pub enum ModifiedReason {
         /// The `RegisteredApplications` name of that application.
         by: String,
     },
+    /// The ProgID's key was last written before the app's install ([`ComCutoff`]): something else
+    /// registered it first, and the app only pointed its command at itself.
+    PredatesInstall,
 }
 
 /// A pre-existing or shared ProgID the app added verbs to: not in P, never an anchor.
@@ -208,6 +230,35 @@ pub struct ModifiedProgId {
     pub reason: ModifiedReason,
 }
 
+/// Why a CLSID whose server is one of the app's files is not an anchor.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ModifiedClsidReason {
+    /// The key is owned by TrustedInstaller, or its owner could not be read.
+    WindowsOwned,
+    /// The key was last written before the app's install ([`ComCutoff`]): it existed before.
+    PredatesInstall,
+    /// A server value names the app's root in a form that resolves to no file (a command line that
+    /// cannot be taken apart), so the shared-server test cannot be made. Unknown is not owned.
+    UnresolvedServer,
+    /// Another installed app ships a file with the server's name: the class is shared.
+    SharedServer {
+        /// The display name of that app.
+        by: String,
+    },
+}
+
+/// A COM class the app points at its own server without owning the registration: never an anchor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModifiedClsid {
+    /// The CLSID, braced.
+    pub id: String,
+    /// Why it is not the app's.
+    pub reason: ModifiedClsidReason,
+}
+
+/// One day in `FILETIME` ticks: the slack of the "not older than the install" test for a loose hint.
+const DAY_TICKS: u64 = 24 * 60 * 60 * 10_000_000;
+
 /// What [`collect`] found.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnchorHarvest {
@@ -216,6 +267,8 @@ pub struct AnchorHarvest {
     pub anchors: Anchors,
     /// ProgIDs the app only modified, sorted by name.
     pub modified_progids: Vec<ModifiedProgId>,
+    /// COM classes whose server path the app set without owning the key, sorted by id.
+    pub modified_clsids: Vec<ModifiedClsid>,
     /// Names registered by something else (see the module documentation), sorted.
     pub foreign_names: Vec<String>,
     /// What could not be read, for the fingerprint's warnings.
@@ -243,6 +296,55 @@ pub struct AnchorInput<'a> {
     pub user_sids: &'a [String],
     /// The baseline **for this Windows**, when there is one.
     pub baseline: Option<&'a Baseline>,
+    /// The directories of every other installed app (`RootEnv::other_dirs`), for the shared-server
+    /// test of COM classes.
+    pub other_dirs: &'a [OtherAnchor],
+    /// The files of every other installed app (`RootEnv::other_files`); the directory of a
+    /// `DisplayIcon` file outside Windows counts as one of that app's directories.
+    pub other_files: &'a [OtherAnchor],
+    /// The time before which a registry key cannot be this install's own registration, when one is
+    /// known. See [`ComCutoff`].
+    pub install_time: Option<ComCutoff>,
+}
+
+/// The time before which a registry key cannot have been written by this install of the app.
+///
+/// The creation time of the install directory is exact: no file of this install existed before it,
+/// so a registration last written even a second earlier was made by something else and can at most
+/// have been re-pointed by the app (the M1a gate: Thunderbird registered its accessibility class 44
+/// seconds before Firefox's directory was created). Every other hint is loose: `InstallDate` has day
+/// precision, and the Uninstall key and the uninstall log are written at the end of an install or by
+/// a later update, so they get one day of slack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComCutoff {
+    /// The hint.
+    pub time: FileTime,
+    /// Whether `time` is the creation time of the install directory.
+    pub exact: bool,
+}
+
+impl ComCutoff {
+    /// The cutoff for an app with these install-time hints: the install directory's creation time
+    /// when the inventory has it, the earliest other hint otherwise.
+    #[must_use]
+    pub fn of(hints: &[purge_model::InstallTimeEvidence]) -> Option<Self> {
+        use purge_model::InstallTimeSource::InstallDirCreation;
+        let earliest = |exact: bool| {
+            hints
+                .iter()
+                .filter(|h| (h.source == InstallDirCreation) == exact && h.time.0 != 0)
+                .map(|h| h.time)
+                .min()
+                .map(|time| Self { time, exact })
+        };
+        earliest(true).or_else(|| earliest(false))
+    }
+
+    /// Whether a key last written at `lwt` is older than this install.
+    pub(crate) fn is_after(self, lwt: FileTime) -> bool {
+        let slack = if self.exact { 0 } else { DAY_TICKS };
+        lwt.0 != 0 && lwt.0 < self.time.0.saturating_sub(slack)
+    }
 }
 
 /// A registry reader that turns "not there" into nothing and counts everything else.
@@ -398,6 +500,124 @@ impl<'a> Pass<'a> {
             Err(SourceError::NotFound) => false,
             Err(_) => true,
         }
+    }
+
+    /// Whether the key was last written before the app's install ([`ComCutoff`]: before the install
+    /// directory existed, or more than a day before a looser hint). Unknown times (no install-time
+    /// hint, a key without a recorded time) prove nothing and give `false`.
+    fn predates_install(&self, key: &str) -> bool {
+        let Some(cutoff) = self.input.install_time else {
+            return false;
+        };
+        self.input
+            .reg
+            .key_info(key)
+            .is_ok_and(|info| cutoff.is_after(info.lwt))
+    }
+
+    /// The canonical path a server value names, when it is one of the app's files.
+    fn own_file(&self, raw: &str) -> Option<String> {
+        clean_value(raw, &self.env)
+            .and_then(|p| canon_file(&p, self.input.guard))
+            .filter(|p| self.is_ours(p))
+            .or_else(|| command_exe(raw, &self.env, self.input.guard).filter(|p| self.is_ours(p)))
+            .or_else(|| self.hosted_file(raw))
+    }
+
+    /// The app's file that a host's command line names (`rundll32.exe "C:\App\helper.dll",Serve`):
+    /// the text from the first mention of an InstallRoot up to the next quote or comma, shortened at
+    /// spaces until it names a file of the exe set or one that is there. `None` when no such file is found; the caller
+    /// then knows nothing about the server.
+    fn hosted_file(&self, command: &str) -> Option<String> {
+        let folded = command.to_ascii_lowercase();
+        let start = self
+            .install_roots
+            .iter()
+            .filter_map(|root| folded.find(&root.to_ascii_lowercase()))
+            .min()?;
+        let rest = command.get(start..)?;
+        let mut text = rest.split(['"', ',']).next()?.trim();
+        loop {
+            if let Some(path) = canon_file(text, self.input.guard).filter(|p| self.is_ours(p)) {
+                let known = self
+                    .input
+                    .exes
+                    .iter()
+                    .any(|e| prefix::is_same(&e.path, &path));
+                if known || self.input.fs.exists(&path) == ExistsState::Present {
+                    return Some(path);
+                }
+            }
+            text = text.rsplit_once(' ')?.0.trim_end();
+        }
+    }
+
+    /// The other installed app that ships a file named like `file` (one of the app's files) in one of
+    /// its own directories: directly in it, or at the place the file has below the app's InstallRoot.
+    /// Only a file that is positively there counts.
+    ///
+    /// The other app's directories are its `InstallLocation` and the directories of the files its
+    /// Uninstall entry and services name (uninstaller, icon, service image), unless such a file lies
+    /// in the Windows directory (`msiexec.exe`, a system icon): that names no directory of the app.
+    ///
+    /// A directory that is one of this app's own says nothing about another app (a second
+    /// registration of the same program names the same directory) and is skipped. A directory
+    /// *above* this app's root is tested (a suite root such as `Program Files\Vendor` that a sibling
+    /// product registers), but only for a file that is not inside this app's root: the app's own copy
+    /// must not count as the other product's.
+    fn shipped_by_other(&self, file: &str) -> Option<String> {
+        let name = prefix::leaf(file).filter(|n| !n.is_empty())?;
+        let relative = self
+            .install_roots
+            .iter()
+            .find_map(|root| prefix::strip_prefix(file, root))
+            .map(|rest| rest.trim_matches(prefix::SEP))
+            .filter(|rest| !rest.is_empty() && !prefix::eq_ci(rest, name));
+        let dirs = self
+            .input
+            .other_dirs
+            .iter()
+            .map(|d| (d.app.as_str(), d.path.clone()))
+            .chain(
+                self.input
+                    .other_files
+                    .iter()
+                    .filter_map(|f| parent_dir(&f.path).map(|dir| (f.app.as_str(), dir))),
+            );
+        let windir = self.input.guard.windir.trim_end_matches(['\\', '/']);
+        for (app, dir) in dirs {
+            let dir = dir.trim_end_matches(prefix::SEP);
+            if dir.is_empty() || (!windir.is_empty() && prefix::is_same_or_inside(dir, windir)) {
+                continue;
+            }
+            if self.is_ours(dir) {
+                continue;
+            }
+            let there = |rest: &str| {
+                let path = format!(r"{dir}\{rest}");
+                !self.is_ours(&path) && self.input.fs.exists(&path) == ExistsState::Present
+            };
+            if there(name) || relative.is_some_and(there) {
+                return Some(app.to_owned());
+            }
+        }
+        None
+    }
+
+    /// Why the COM class at `key`, whose server values `servers` name the app's files, is not the
+    /// app's own registration; `None` when nothing speaks against it.
+    fn clsid_modified(&self, key: &str, servers: &[String]) -> Option<ModifiedClsidReason> {
+        if self.ti_owned(key) {
+            return Some(ModifiedClsidReason::WindowsOwned);
+        }
+        if self.predates_install(key) {
+            return Some(ModifiedClsidReason::PredatesInstall);
+        }
+        let files: Vec<String> = servers.iter().filter_map(|s| self.own_file(s)).collect();
+        if let Some(by) = files.iter().find_map(|file| self.shipped_by_other(file)) {
+            return Some(ModifiedClsidReason::SharedServer { by });
+        }
+        (files.len() < servers.len()).then_some(ModifiedClsidReason::UnresolvedServer)
     }
 
     fn classes_roots(&self) -> Vec<String> {
@@ -579,6 +799,7 @@ fn collect_com(
     clsids: &mut NameSet,
     appids: &mut NameSet,
     typelibs: &mut NameSet,
+    modified: &mut Vec<ModifiedClsid>,
 ) {
     let mut clsid_roots: Vec<String> = pass
         .classes_roots()
@@ -589,34 +810,57 @@ fn collect_com(
     for sid in pass.input.user_sids {
         clsid_roots.push(format!(r"HKU\{sid}_Classes\WOW6432Node\CLSID"));
     }
+    // A class is the app's only when every key that points it at the app passes: one that fails in
+    // any root is "modified" in all of them.
+    let mut owned = NameSet::default();
+    let mut owned_appids: Vec<(String, String)> = Vec::new();
+    let mut not_owned: BTreeMap<String, ModifiedClsid> = BTreeMap::new();
     for root in &clsid_roots {
         for id in pass.reader.subkeys(root) {
             if !is_braced_guid(&id) {
                 continue;
             }
             let key = format!(r"{root}\{id}");
-            if !clsid_servers(pass, &key)
-                .iter()
-                .any(|s| pass.path_is_ours(s))
-            {
+            let ours: Vec<String> = clsid_servers(pass, &key)
+                .into_iter()
+                .filter(|s| pass.path_is_ours(s))
+                .collect();
+            if ours.is_empty() || pass.in_baseline(&key) {
                 continue;
             }
-            if pass.in_baseline(&key) {
+            if let Some(reason) = pass.clsid_modified(&key, &ours) {
+                not_owned
+                    .entry(prefix::fold(&id))
+                    .or_insert(ModifiedClsid { id, reason });
                 continue;
             }
-            clsids.insert(&id);
+            owned.insert(&id);
             if let Some(appid) = pass.reader.string(&key, "AppID") {
                 let appid = appid.trim();
                 let appid_key = format!(
                     r"{}\AppID\{appid}",
                     prefix::parent(root).unwrap_or(HKLM_CLASSES)
                 );
-                if is_braced_guid(appid) && !pass.in_baseline(&appid_key) {
-                    appids.insert(appid);
+                if is_braced_guid(appid)
+                    && !pass.in_baseline(&appid_key)
+                    && !pass.predates_install(&appid_key)
+                {
+                    owned_appids.push((prefix::fold(&id), appid.to_owned()));
                 }
             }
         }
     }
+    for id in owned.into_sorted() {
+        if !not_owned.contains_key(&prefix::fold(&id)) {
+            clsids.insert(&id);
+        }
+    }
+    for (clsid, appid) in owned_appids {
+        if !not_owned.contains_key(&clsid) {
+            appids.insert(&appid);
+        }
+    }
+    modified.extend(not_owned.into_values());
 
     for classes in pass.classes_roots() {
         let root = format!(r"{classes}\TypeLib");
@@ -635,7 +879,7 @@ fn collect_com(
                     })
                 })
             });
-            if ours && !pass.in_baseline(&key) {
+            if ours && !pass.in_baseline(&key) && !pass.predates_install(&key) {
                 typelibs.insert(&id);
             }
         }
@@ -786,10 +1030,12 @@ pub fn collect(input: AnchorInput<'_>) -> AnchorHarvest {
             .any(|n| n.eq_ignore_ascii_case(&facts.name))
         {
             Some(ModifiedReason::WellKnownShared)
+        } else if let Some(by) = claimed_outside.get(&prefix::fold(&facts.name)) {
+            Some(ModifiedReason::ReferencedOutside { by: by.clone() })
+        } else if facts.keys.iter().any(|k| pass.predates_install(k)) {
+            Some(ModifiedReason::PredatesInstall)
         } else {
-            claimed_outside
-                .get(&prefix::fold(&facts.name))
-                .map(|by| ModifiedReason::ReferencedOutside { by: by.clone() })
+            None
         };
         match reason {
             None => progids.insert(&facts.name),
@@ -803,7 +1049,13 @@ pub fn collect(input: AnchorInput<'_>) -> AnchorHarvest {
     // COM ids.
     let (mut clsids, mut appids, mut typelibs) =
         (NameSet::default(), NameSet::default(), NameSet::default());
-    collect_com(&pass, &mut clsids, &mut appids, &mut typelibs);
+    collect_com(
+        &pass,
+        &mut clsids,
+        &mut appids,
+        &mut typelibs,
+        &mut out.modified_clsids,
+    );
 
     // AUMIDs.
     for classes in pass.classes_roots() {
@@ -862,6 +1114,7 @@ pub fn collect(input: AnchorInput<'_>) -> AnchorHarvest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::roots::OtherAnchorKind;
     use purge_model::{RootSource, SourceTrust};
     use purge_source::fixture::{Fixture, FixtureBuilder};
     use purge_source::types::ShortcutInfo;
@@ -906,6 +1159,9 @@ mod tests {
             env: &env,
             user_sids: &sids,
             baseline: None,
+            other_dirs: &[],
+            other_files: &[],
+            install_time: None,
         })
     }
 
@@ -1125,6 +1381,340 @@ mod tests {
         // The registered name is an anchor; the other application's name is foreign.
         assert_eq!(got.anchors.aumids, ["App-0011223344556677"]);
         assert_eq!(got.foreign_names, ["Other Browser"]);
+    }
+
+    /// VM run x0-vscode-zipcopy: a portable copy of the app registered the `vscode` scheme, then the
+    /// installer only pointed its command at the installed copy. The scheme key is older than the
+    /// install: the app modified it, it does not own it.
+    #[test]
+    fn a_progid_key_older_than_the_install_is_modified_not_owned() {
+        const DAY: u64 = 24 * 60 * 60 * 10_000_000;
+        const INSTALL: u64 = 400 * DAY;
+        let scheme = format!(r"HKU\{SID}_Classes\vscode");
+        let fixture = |key_lwt: u64| {
+            command(
+                Fixture::builder()
+                    .sz(&scheme, "URL Protocol", "")
+                    .key_lwt(&scheme, key_lwt)
+                    .file(r"C:\Program Files\App\App.exe", 10),
+                &scheme,
+                "open",
+                r#""C:\Program Files\App\App.exe" --open-url -- "%1""#,
+            )
+            // The installer rewrote the command: that key is new.
+            .key_lwt(&format!(r"{scheme}\shell\open\command"), INSTALL + 5)
+            .build()
+        };
+        let (roots, exes) = app_roots();
+        let run = |f: &Fixture, install_time: Option<ComCutoff>| {
+            let guard = GuardEnv::sample();
+            let env: BTreeMap<String, String> = BTreeMap::new();
+            let sids = [SID.to_owned()];
+            collect(AnchorInput {
+                reg: f,
+                fs: f,
+                sys: f,
+                roots: &roots,
+                exes: &exes,
+                guard: &guard,
+                env: &env,
+                user_sids: &sids,
+                baseline: None,
+                other_dirs: &[],
+                other_files: &[],
+                install_time,
+            })
+        };
+        let exact = Some(ComCutoff {
+            time: FileTime(INSTALL),
+            exact: true,
+        });
+
+        // Written 58 seconds before the install directory existed.
+        let got = run(&fixture(INSTALL - 580_000_000), exact);
+        assert!(got.anchors.progids.is_empty(), "{:?}", got.anchors.progids);
+        assert_eq!(
+            got.modified_progids,
+            [ModifiedProgId {
+                name: "vscode".into(),
+                reason: ModifiedReason::PredatesInstall
+            }]
+        );
+        // Written by the install: the app's own.
+        let got = run(&fixture(INSTALL + 5), exact);
+        assert_eq!(got.anchors.progids, ["vscode"]);
+        assert!(got.modified_progids.is_empty());
+        // A looser hint has a day of slack, and without any hint nothing is concluded.
+        let loose = Some(ComCutoff {
+            time: FileTime(INSTALL),
+            exact: false,
+        });
+        assert_eq!(
+            run(&fixture(INSTALL - 580_000_000), loose).anchors.progids,
+            ["vscode"]
+        );
+        assert!(
+            run(&fixture(INSTALL - 2 * DAY), loose)
+                .anchors
+                .progids
+                .is_empty()
+        );
+        assert_eq!(
+            run(&fixture(INSTALL - 2 * DAY), None).anchors.progids,
+            ["vscode"]
+        );
+    }
+
+    #[test]
+    fn com_cutoff_prefers_the_install_directory() {
+        use purge_model::{InstallTimeEvidence, InstallTimeSource};
+        let hint = |source, time| InstallTimeEvidence {
+            source,
+            time: FileTime(time),
+        };
+        // Visual Studio Code in the gate run: InstallDate (midnight), the key, the directory, the log.
+        let all = [
+            hint(InstallTimeSource::ArpInstallDate, 100),
+            hint(InstallTimeSource::KeyLastWrite, 900),
+            hint(InstallTimeSource::InstallDirCreation, 500),
+            hint(InstallTimeSource::UninstallLogCreation, 510),
+        ];
+        assert_eq!(
+            ComCutoff::of(&all),
+            Some(ComCutoff {
+                time: FileTime(500),
+                exact: true
+            })
+        );
+        // No directory time (a snapshot source): the earliest hint, loose.
+        assert_eq!(
+            ComCutoff::of(&[all[1].clone(), all[0].clone()]),
+            Some(ComCutoff {
+                time: FileTime(100),
+                exact: false
+            })
+        );
+        assert_eq!(ComCutoff::of(&[]), None);
+    }
+
+    /// The M1a gate case: Thunderbird registered the accessibility proxy class and its interfaces;
+    /// Firefox, installed afterwards, only pointed the class at its own copy of the DLL. The class is
+    /// shared, not Firefox's, whether the two installs are seconds or months apart.
+    #[test]
+    fn a_shared_or_older_com_class_is_modified_not_owned() {
+        const PROXY: &str = "{1814CEEB-49E2-407F-AF99-FA755A7D2607}";
+        const OWN: &str = "{1021605B-F25D-4D6E-8EE4-8D0BDCBBD4CD}";
+        const OWN_APPID: &str = "{1021605B-F25D-4D6E-8EE4-8D0BDCBBD4CE}";
+        const OLD_TLB: &str = "{DDDDDDDD-2222-3333-4444-555555555555}";
+        const DAY: u64 = 24 * 60 * 60 * 10_000_000;
+        const INSTALL: u64 = 400 * DAY;
+        let clsid = r"HKLM\SOFTWARE\Classes\CLSID";
+        let other = r"C:\Program Files\Other Mail";
+        let fixture = |proxy_key_lwt: u64, other_ships_it: bool| {
+            let mut b = Fixture::builder()
+                .sz(&format!(r"{clsid}\{PROXY}"), "", "PSFactoryBuffer")
+                .key_lwt(&format!(r"{clsid}\{PROXY}"), proxy_key_lwt)
+                .sz(
+                    &format!(r"{clsid}\{PROXY}\InProcServer32"),
+                    "",
+                    r"C:\Program Files\App\helper.dll",
+                )
+                .key_lwt(&format!(r"{clsid}\{PROXY}\InProcServer32"), INSTALL + 5)
+                // A class the app created itself, with its AppID.
+                .sz(
+                    &format!(r"{clsid}\{OWN}\LocalServer32"),
+                    "",
+                    r#""C:\Program Files\App\App.exe" -Embedding"#,
+                )
+                .sz(&format!(r"{clsid}\{OWN}"), "AppID", OWN_APPID)
+                .key_lwt(&format!(r"{clsid}\{OWN}"), INSTALL + 5)
+                .file(r"C:\Program Files\App\App.exe", 10)
+                .file(r"C:\Program Files\App\helper.dll", 10)
+                .file(r"C:\Program Files\Other Mail\mail.exe", 10);
+            if other_ships_it {
+                b = b.file(r"C:\Program Files\Other Mail\helper.dll", 10);
+            }
+            b.build()
+        };
+        let other_dirs = [OtherAnchor {
+            app: "Other Mail".into(),
+            kind: OtherAnchorKind::InstallLocation,
+            path: other.into(),
+        }];
+        let (roots, exes) = app_roots();
+        // Whether `INSTALL` is the creation time of the install directory or a looser hint.
+        let exact = std::cell::Cell::new(false);
+        let run = |f: &Fixture, dirs: &[OtherAnchor], files: &[OtherAnchor]| {
+            let guard = GuardEnv::sample();
+            let env: BTreeMap<String, String> = BTreeMap::new();
+            let sids = [SID.to_owned()];
+            collect(AnchorInput {
+                reg: f,
+                fs: f,
+                sys: f,
+                roots: &roots,
+                exes: &exes,
+                guard: &guard,
+                env: &env,
+                user_sids: &sids,
+                baseline: None,
+                other_dirs: dirs,
+                other_files: files,
+                install_time: Some(ComCutoff {
+                    time: FileTime(INSTALL),
+                    exact: exact.get(),
+                }),
+            })
+        };
+
+        // Installed 45 seconds after the other product (inside the one-day slack of the age test):
+        // the other product ships a file of the same name, so the class is shared.
+        let got = run(&fixture(INSTALL - 450_000_000, true), &other_dirs, &[]);
+        assert_eq!(got.anchors.clsids, [OWN]);
+        assert_eq!(got.anchors.appids, [OWN_APPID]);
+        assert_eq!(
+            got.modified_clsids,
+            [ModifiedClsid {
+                id: PROXY.into(),
+                reason: ModifiedClsidReason::SharedServer {
+                    by: "Other Mail".into()
+                }
+            }]
+        );
+        // The other product is known only by its icon: the icon's directory is its directory.
+        let icon = [OtherAnchor {
+            app: "Other Mail".into(),
+            kind: OtherAnchorKind::DisplayIcon,
+            path: r"C:\Program Files\Other Mail\mail.exe".into(),
+        }];
+        let got = run(&fixture(INSTALL + 5, true), &[], &icon);
+        assert_eq!(got.anchors.clsids, [OWN]);
+        assert_eq!(got.modified_clsids.len(), 1);
+
+        // Known only by its uninstaller, which sits in the product's folder: the same.
+        let uninstaller = [OtherAnchor {
+            app: "Other Mail".into(),
+            kind: OtherAnchorKind::Uninstaller,
+            path: r"C:\Program Files\Other Mail\mail.exe".into(),
+        }];
+        let got = run(&fixture(INSTALL + 5, true), &[], &uninstaller);
+        assert_eq!(got.anchors.clsids, [OWN]);
+        // An uninstaller in the Windows directory (msiexec) names no directory of the product.
+        let msiexec = [OtherAnchor {
+            app: "Other Mail".into(),
+            kind: OtherAnchorKind::Uninstaller,
+            path: r"C:\Windows\System32\msiexec.exe".into(),
+        }];
+        let mut f = fixture(INSTALL + 5, false);
+        f.add_file(r"C:\Windows\System32\helper.dll", 10);
+        let got = run(&f, &[], &msiexec);
+        assert_eq!(got.anchors.clsids, [OWN, PROXY]);
+        // A sibling registered on the suite folder above the app's root: a copy of the DLL directly
+        // in the suite folder is the suite's, the app's own copy below it is not counted.
+        let suite = [OtherAnchor {
+            app: "Suite".into(),
+            kind: OtherAnchorKind::InstallLocation,
+            path: r"C:\Program Files".into(),
+        }];
+        let got = run(&fixture(INSTALL + 5, false), &suite, &[]);
+        assert_eq!(got.anchors.clsids, [OWN, PROXY]);
+        let mut f = fixture(INSTALL + 5, false);
+        f.add_file(r"C:\Program Files\helper.dll", 10);
+        let got = run(&f, &suite, &[]);
+        assert_eq!(got.anchors.clsids, [OWN]);
+        assert_eq!(
+            got.modified_clsids[0].reason,
+            ModifiedClsidReason::SharedServer { by: "Suite".into() }
+        );
+        // A server value that names the app's folder but resolves to no file of the app: the test
+        // cannot be made, and a class that cannot be tested is not an anchor.
+        let mut f = fixture(INSTALL + 5, false);
+        f.set_value(
+            &format!(r"{clsid}\{PROXY}\InProcServer32"),
+            "",
+            purge_source::types::RegData::from_sz(
+                r"rundll32.exe C:\Program Files\App\plugins\gone.dll,Run",
+            ),
+        );
+        let got = run(&f, &[], &[]);
+        assert_eq!(got.anchors.clsids, [OWN]);
+        assert_eq!(
+            got.modified_clsids[0].reason,
+            ModifiedClsidReason::UnresolvedServer
+        );
+
+        // The key is months older than the install: it existed before, whoever else ships what.
+        let got = run(&fixture(INSTALL - 90 * DAY, false), &[], &[]);
+        assert_eq!(got.anchors.clsids, [OWN]);
+        assert_eq!(
+            got.modified_clsids,
+            [ModifiedClsid {
+                id: PROXY.into(),
+                reason: ModifiedClsidReason::PredatesInstall
+            }]
+        );
+
+        // The gate case with nothing known about the other product (no directory in its Uninstall
+        // entry, a differently named server): the class key is 45 seconds older than the app's
+        // install directory. Against that exact time there is no slack: the key was there before
+        // any file of this install, so the app only re-pointed it.
+        exact.set(true);
+        let got = run(&fixture(INSTALL - 450_000_000, false), &[], &[]);
+        assert_eq!(got.anchors.clsids, [OWN]);
+        assert_eq!(
+            got.modified_clsids,
+            [ModifiedClsid {
+                id: PROXY.into(),
+                reason: ModifiedClsidReason::PredatesInstall
+            }]
+        );
+        // A key written one tick after the directory was created is the install's own.
+        let got = run(&fixture(INSTALL + 1, false), &[], &[]);
+        assert_eq!(got.anchors.clsids, [OWN, PROXY]);
+        // Against a loose hint (day-precision InstallDate, the Uninstall key's last write) 45
+        // seconds prove nothing either way: only the one-day slack applies.
+        exact.set(false);
+        let got = run(&fixture(INSTALL - 450_000_000, false), &[], &[]);
+        assert_eq!(got.anchors.clsids, [OWN, PROXY]);
+
+        // Created by the app's own install and shipped by nobody else: the app's.
+        let got = run(&fixture(INSTALL + 5, false), &other_dirs, &icon);
+        assert_eq!(got.anchors.clsids, [OWN, PROXY]);
+        assert!(got.modified_clsids.is_empty());
+
+        // The same class owned in the 64-bit root and older in the 32-bit one is modified in both.
+        let mut f = fixture(INSTALL + 5, false);
+        let wow = format!(r"HKLM\SOFTWARE\Classes\WOW6432Node\CLSID\{PROXY}");
+        f.set_value(
+            &format!(r"{wow}\InProcServer32"),
+            "",
+            purge_source::types::RegData::from_sz(r"C:\Program Files\App\helper.dll"),
+        );
+        f.set_key_lwt(&wow, FileTime(INSTALL - 90 * DAY));
+        // A type library older than the install is not the app's either.
+        let tlb = format!(r"HKLM\SOFTWARE\Classes\TypeLib\{OLD_TLB}");
+        f.set_value(
+            &format!(r"{tlb}\1.0\0\win64"),
+            "",
+            purge_source::types::RegData::from_sz(r"C:\Program Files\App\helper.dll"),
+        );
+        f.set_key_lwt(&tlb, FileTime(INSTALL - 90 * DAY));
+        let got = run(&f, &[], &[]);
+        assert_eq!(got.anchors.clsids, [OWN]);
+        assert!(got.anchors.typelibs.is_empty());
+        assert_eq!(got.modified_clsids.len(), 1);
+
+        // A class Windows owns is never the app's.
+        let mut f = fixture(INSTALL + 5, false);
+        f.set_ti_owned(&format!(r"{clsid}\{PROXY}"), true);
+        let got = run(&f, &[], &[]);
+        assert_eq!(
+            got.modified_clsids,
+            [ModifiedClsid {
+                id: PROXY.into(),
+                reason: ModifiedClsidReason::WindowsOwned
+            }]
+        );
     }
 
     #[test]

@@ -348,6 +348,19 @@ pub struct Fingerprint {
     /// Files its installer declares outside the roots.
     #[serde(default)]
     pub outside_root_files: Vec<AppFileOutsideRoot>,
+    /// The app's own uninstaller files, as canonical paths: the program its `UninstallString` and
+    /// `QuietUninstallString` run and, for Inno Setup, the uninstall log and message file of the same
+    /// number. Empty when the app has no uninstaller program of its own (MSI) or the fingerprint is
+    /// older than this field; a file named like an uninstaller is then nobody's in particular.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uninstallers: Vec<String>,
+    /// Registry keys the harvest looked at that existed before the app was installed, by the
+    /// registry's own clock against the exact start of the install (canonical paths; empty when
+    /// that start is not known). Such a key is not a skeleton of the app, whatever it holds: an
+    /// empty key somebody made before the install looks like the app's once the app wrote its one
+    /// value into it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub older_keys: Vec<String>,
     /// Its registry and package anchors.
     #[serde(default)]
     pub anchors: Anchors,
@@ -418,6 +431,8 @@ mod tests {
             "exes": [{"path": "C:\\Program Files\\Microsoft VS Code\\Code.exe", "main": true},
                      {"path": "C:\\Program Files\\Microsoft VS Code\\ffmpeg.dll", "main": false}],
             "outside_root_files": [{"path": "C:\\Windows\\py.exe", "source": "inno:unins000.dat"}],
+            "uninstallers": ["C:\\Program Files\\Microsoft VS Code\\unins000.exe"],
+            "older_keys": ["HKLM\\SOFTWARE\\Classes\\.gemspec"],
             "anchors": {
                 "progids": ["VSCode.txt", "VSCodeSourceFile"],
                 "clsids": ["{0632BBFB-D195-4972-B458-53ADEB984588}"],
@@ -596,6 +611,8 @@ mod tests {
         for name in [
             "mega_vendor",
             "outside_root_files",
+            "uninstallers",
+            "older_keys",
             "package_families",
             "RegDeleteKeyIfEmpty",
             "existed_before",

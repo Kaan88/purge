@@ -27,8 +27,6 @@
     children=["Mozilla\\"]
     empty_after_plan=pending
     vendor=mozilla org
-  evidence VendorContainer C/2 Key AdminOnly source=identity:mozilla
-    vendor=mozilla
   evidence TimeWindow C/1 Key AdminOnly source=window
 [REG-SOFTWARE] RemoveDirIfEmpty RegKey HKLM\SOFTWARE\mozilla.org\Mozilla
   id=c-d2eb2e1563143a48 owner="Mozilla Firefox (x64 en-US)" category=Registration harm=None reversibility=Full child_count=Some(1)

@@ -16,6 +16,13 @@
 //!   through the `Run` value: `ChainedRef` with that value's tier, plus `PointsIntoInstallRoot` /
 //!   `DanglingRef` for the command its name stands for. When the uninstaller already removed the `Run`
 //!   value, the harvested Run entry (`Anchors::run_entries`) stands in for it.
+//! - `Run` is a place every program and the user write to: the reference evidence of a value there is
+//!   Tier A only when the installer's log records the value (`ScanCtx::owns_registration`) **and**
+//!   the program the command starts is the app's (`ScanCtx::value_content_unproven`: the first
+//!   token, unquoted and expanded, is a path of the app). A start entry somebody made by hand for
+//!   one of the app's programs is listed, never preselected, and so is its switch; so is an entry
+//!   the installer recorded whose command now starts something else with a file of the app as an
+//!   argument.
 //! - A `StartupApproved\StartupFolder` value: the switch of a shortcut in the Startup folder of the
 //!   same scope. It is offered when that shortcut still exists and its target leads into the app
 //!   (`ChainedRef` to the shortcut, plus the reference evidence of its target).
@@ -154,8 +161,12 @@ fn run_list(
         if !common::add_value_evidence(ctx, &mut b, &matches, other) {
             continue;
         }
-        let tier = if b
-            .evidence()
+        // The switch is as much the app's as the entry it switches: its tier is the entry's as
+        // finished, after the rule about what the command starts
+        // (`ScanCtx::value_content_unproven`).
+        let candidate = b.build();
+        let tier = if candidate
+            .evidence
             .iter()
             .any(|e| e.tier == Tier::A && e.weight > 0)
         {
@@ -163,7 +174,7 @@ fn run_list(
         } else {
             Tier::B
         };
-        out.push(b.build());
+        out.push(candidate);
         if let (Some(approved_key), false) = (approved_key, shared) {
             approval(ctx, approved_key, &value.name, run_key, tier, &matches, out);
         }
@@ -176,15 +187,18 @@ fn run_list(
         let gone = !values.iter().any(|v| prefix::eq_ci(&v.name, &entry.name));
         if gone && ctx.same_key(&entry.key, run_key) {
             let matches = app.refs.find_all(&entry.data);
-            approval(
-                ctx,
-                approved_key,
-                &entry.name,
-                run_key,
-                Tier::A,
-                &matches,
-                out,
-            );
+            // The harvest records every Run value that pointed at the app, the user's own too: the
+            // entry is the app's only when the installer recorded it.
+            // ... and when the command it held started a program of the app's.
+            let recorded = purge_source::types::RegData::from_sz(&entry.data);
+            let tier = if ctx.owns_registration(run_key, &entry.name)
+                && ctx.data_unproven(run_key, &entry.name, &recorded).is_none()
+            {
+                Tier::A
+            } else {
+                Tier::B
+            };
+            approval(ctx, approved_key, &entry.name, run_key, tier, &matches, out);
         }
     }
 }
@@ -284,7 +298,16 @@ fn startup_folder(
             Action::DeleteValue,
             Category::Startup,
         );
-        if add_path_evidence(ctx, &mut b, &matches) && b.chained_ref(Tier::A, &shortcut) {
+        // The switch is as much the app's as the shortcut it switches. A shortcut in the Startup
+        // folder that leads into the app is the installer's only when its log names it; the user
+        // makes such shortcuts too (their own tool in the app's folder, the app itself with other
+        // arguments), and then nothing here is Tier A.
+        let tier = if ctx.installer_logged_file(&shortcut) {
+            Tier::A
+        } else {
+            Tier::B
+        };
+        if add_path_evidence(ctx, &mut b, &matches) && b.chained_ref(tier, &shortcut) {
             b.common_blockers();
             out.push(b.build());
         }

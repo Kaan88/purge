@@ -65,19 +65,31 @@ fn assert_grouped(candidates: &[Candidate]) {
     }
 }
 
-/// Whether the candidate could be Safe as far as a scanner can tell: Tier A evidence of the target's own
-/// scope weighing at least 8, harm at most Low, an action that fits and no blocker.
+/// Whether the policy itself (`purge_policy::band::decide`) lists the candidate Safe and ticked after
+/// an uninstall that verified gone: the real rule, with its tiers, score, category, harm and
+/// reversibility checks, not an approximation of it.
 fn safe_eligible(c: &Candidate) -> bool {
-    let scope = Scope::of(&c.target);
-    let fits = matches!(
-        (c.action, &c.target),
-        (Action::DeleteKey, Target::RegKey { .. }) | (Action::DeleteValue, Target::RegValue { .. })
+    use purge_policy::band::{PolicyCtx, TargetScope, decide};
+    let hive = match &c.target {
+        Target::RegKey { path } | Target::RegValue { path, .. } => path.as_str(),
+        _ => "",
+    };
+    let per_user = hive
+        .get(..4)
+        .is_some_and(|root| root.eq_ignore_ascii_case(r"HKU\"));
+    let decision = decide(
+        c,
+        &PolicyCtx {
+            mode: purge_model::ScanMode::Post,
+            verify_gone: purge_model::VerifyGone::new(true, true, true),
+            target_scope: if per_user {
+                TargetScope::PerUser
+            } else {
+                TargetScope::Machine
+            },
+        },
     );
-    fits && c.blockers.is_empty()
-        && c.harm <= Harm::Low
-        && c.evidence
-            .iter()
-            .any(|e| e.tier == Tier::A && Some(e.scope) == scope && e.weight >= 8)
+    decision.band == purge_model::Band::Safe && decision.preselected
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -143,6 +155,57 @@ fn vscode_world() -> World {
         &[],
     ));
     world
+}
+
+/// Rig run x1-vscode-userstate: the user made empty `.gemspec\OpenWithProgids` and
+/// `.edn\OpenWithProgids` keys before the install; the journal saw nothing in them but the app's
+/// value, and after the uninstall both keys of each pair were preselected as skeletons (through
+/// REF-ANY first, and through this scanner once that was closed). The harvest names the keys that
+/// are older than the install; none of them is a skeleton.
+#[test]
+fn an_extension_key_older_than_the_install_is_not_a_skeleton() {
+    let proven = |out: &[Candidate], ext: &str| -> Vec<Target> {
+        of_ext(out, ext)
+            .into_iter()
+            .filter(|c| kinds(c).contains(&EvidenceKind::ProvenOwnedSkeleton) || safe_eligible(c))
+            .map(|c| c.target.clone())
+            .collect()
+    };
+    let mut world = vscode_world();
+    let out = world.scan(&ClsAssoc);
+    assert_eq!(proven(&out, ".vsnew"), [key(classes(".vsnew"))]);
+    assert_eq!(
+        proven(&out, ".xaml"),
+        [key(classes(r".xaml\OpenWithProgids"))]
+    );
+
+    // As the harvest records a planted pair: the extension key and, by its parent, the subkey.
+    world.fp.older_keys = vec![
+        classes(".vsnew"),
+        classes(r".vsnew\OpenWithProgids"),
+        classes(r".xaml\OpenWithProgids"),
+    ];
+    let out = world.scan(&ClsAssoc);
+    assert_eq!(proven(&out, ".vsnew"), []);
+    assert_eq!(proven(&out, ".xaml"), []);
+    for c in &out {
+        if let Target::RegKey { path } = &c.target {
+            assert!(
+                !path.contains(".vsnew") && !path.ends_with(r".xaml\OpenWithProgids"),
+                "offered: {path}"
+            );
+        }
+    }
+
+    // The extension key alone is named (a fingerprint that lost the subkey's entry): the key is
+    // still no skeleton, whatever is said about `OpenWithProgids`.
+    world.fp.older_keys = vec![classes(".vsnew")];
+    let out = world.scan(&ClsAssoc);
+    assert!(
+        !proven(&out, ".vsnew").contains(&key(classes(".vsnew"))),
+        "{:?}",
+        proven(&out, ".vsnew")
+    );
 }
 
 #[test]
@@ -715,6 +778,44 @@ fn file_exts_values_are_offered_at_value_level() {
     assert!(!safe_eligible(txt[0]));
 
     assert_eq!(out.len(), 5);
+}
+
+/// x2-npp-userfiles: the user registered a portable copy of the program (`Classes\Applications\<exe>`
+/// with its own command) and picked it for an extension. The `OpenWithList` entry carries the bare exe
+/// name of the removed install, and is the portable copy's.
+#[test]
+fn file_exts_entry_of_a_portable_copy_is_not_offered() {
+    let md = file_exts(".md");
+    let app_key = format!(r"HKU\{SID}_Classes\Applications\Code.exe");
+    let world = |command: Option<&str>| {
+        let mut b = Fixture::builder()
+            .os(EDITION, BUILD, UBR)
+            .user_sid(SID)
+            .sz(&format!(r"{md}\OpenWithList"), "a", "Code.exe")
+            .sz(&format!(r"{md}\OpenWithList"), "MRUList", "a");
+        if let Some(command) = command {
+            b = b.sz(&app_key, "FriendlyAppName", "Code").sz(
+                &format!(r"{app_key}\shell\open\command"),
+                "",
+                command,
+            );
+        }
+        let mut fp = fingerprint(&["VSCode.md"]);
+        let mut entry = journal(".md", &["VSCode.md"]);
+        entry.file_exts_key = Some(md.clone());
+        fp.ext_journal = vec![entry];
+        World::new(b.build(), fp)
+    };
+    let listed = |command: Option<&str>| world(command).scan(&ClsFileExts).len();
+    // No such key, or one that leads into the removed install: the entry and its letter are offered.
+    assert_eq!(listed(None), 2);
+    let own = format!(r#""{}\Code.exe" "%1""#, world::CODE_ROOT);
+    assert_eq!(listed(Some(&own)), 2);
+    // The key of the portable copy: nothing.
+    assert_eq!(
+        listed(Some(r#""C:\Users\tester\Tools\VSCode\Code.exe" "%1""#)),
+        0
+    );
 }
 
 #[test]

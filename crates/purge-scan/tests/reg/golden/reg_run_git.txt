@@ -1,5 +1,7 @@
 [REG-RUN] DeleteValue RegValue HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run | "GitTray"
   id=c-d41421b0c7e6593c owner="Git" category=Startup harm=Low reversibility=Full child_count=None
+  evidence InstallerManifest(Inno) A/8 Value AdminOnly source=inno:log
+    record=RegDeleteValue
   evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|GitTray
     anchor=C:\Program Files\Git
   evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\git\cmd\git-tray.exe
@@ -12,55 +14,79 @@
   id=c-e0b88c1f70ff9a55 owner="Git" category=Startup harm=Low reversibility=Full child_count=None
   evidence ChainedRef A/5 Value AdminOnly source=chain:HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|GitTray
     anchor=HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run|GitTray
-  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\git\cmd\git-tray.exe
+  evidence PointsIntoInstallRoot B/6 Value AdminOnly source=points:c:\program files\git\cmd\git-tray.exe
     path=c:\program files\git\cmd\git-tray.exe
+    place=shared
     root=C:\Program Files\Git
-  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\git\cmd\git-tray.exe
+  evidence DanglingRef B/7 Value AdminOnly source=dangling:c:\program files\git\cmd\git-tray.exe
     path=c:\program files\git\cmd\git-tray.exe
+    place=shared
     root=C:\Program Files\Git
 [REG-RUN] DeleteValue RegValue HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run | "GitUpdate"
   id=c-769ace7635ec8249 owner="Git" category=Startup harm=Low reversibility=Full child_count=None
-  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\git\update.exe
+  evidence PointsIntoInstallRoot B/6 Value AdminOnly source=points:c:\program files\git\update.exe
     path=c:\program files\git\update.exe
+    place=shared
     root=C:\Program Files\Git
-  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\git\update.exe
+  evidence DanglingRef B/7 Value AdminOnly source=dangling:c:\program files\git\update.exe
     path=c:\program files\git\update.exe
+    place=shared
     root=C:\Program Files\Git
 [REG-RUN] DeleteValue RegValue HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32 | "GitUpdate"
   id=c-976ea75068b24b0d owner="Git" category=Startup harm=Low reversibility=Full child_count=None
-  evidence ChainedRef A/5 Value AdminOnly source=chain:HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run|GitUpdate
+  evidence ChainedRef B/5 Value AdminOnly source=chain:HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run|GitUpdate
     anchor=HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run|GitUpdate
-  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\git\update.exe
+  evidence PointsIntoInstallRoot B/6 Value AdminOnly source=points:c:\program files\git\update.exe
     path=c:\program files\git\update.exe
+    place=shared
     root=C:\Program Files\Git
-  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\git\update.exe
+  evidence DanglingRef B/7 Value AdminOnly source=dangling:c:\program files\git\update.exe
     path=c:\program files\git\update.exe
+    place=shared
     root=C:\Program Files\Git
 [REG-RUN] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run | "GitAgent"
   id=c-a51ebd0c4f31af4c owner="Git" category=Startup harm=Low reversibility=Full child_count=None
-  evidence ChainedRef A/5 Value AdminOnly source=chain:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Run|GitAgent
+  evidence ChainedRef B/5 Value AdminOnly source=chain:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Run|GitAgent
     anchor=HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Run|GitAgent
-  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\git\agent.exe
+  evidence PointsIntoInstallRoot B/6 Value AdminOnly source=points:c:\program files\git\agent.exe
     path=c:\program files\git\agent.exe
+    place=shared
     root=C:\Program Files\Git
-  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\git\agent.exe
+  evidence DanglingRef B/7 Value AdminOnly source=dangling:c:\program files\git\agent.exe
     path=c:\program files\git\agent.exe
+    place=shared
     root=C:\Program Files\Git
 [REG-RUN] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\RunOnce | "GitCleanup"
   id=c-6156f6e91992ee5d owner="Git" category=Startup harm=Low reversibility=Full child_count=None
-  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\git\cleanup.cmd
+  evidence PointsIntoInstallRoot B/6 Value AdminOnly source=points:c:\program files\git\cleanup.cmd
     path=c:\program files\git\cleanup.cmd
+    place=shared
     root=C:\Program Files\Git
-  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\git\cleanup.cmd
+  evidence DanglingRef B/7 Value AdminOnly source=dangling:c:\program files\git\cleanup.cmd
     path=c:\program files\git\cleanup.cmd
+    place=shared
     root=C:\Program Files\Git
 [REG-RUN] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder | "Git Tray.lnk"
   id=c-664953b2329b6964 owner="Git" category=Startup harm=Low reversibility=Full child_count=None
-  evidence PointsIntoInstallRoot A/6 Value AdminOnly source=points:c:\program files\git\cmd\git-tray.exe
+  evidence PointsIntoInstallRoot B/6 Value AdminOnly source=points:c:\program files\git\cmd\git-tray.exe
     path=c:\program files\git\cmd\git-tray.exe
+    place=shared
     root=C:\Program Files\Git
-  evidence DanglingRef A/7 Value AdminOnly source=dangling:c:\program files\git\cmd\git-tray.exe
+  evidence DanglingRef B/7 Value AdminOnly source=dangling:c:\program files\git\cmd\git-tray.exe
     path=c:\program files\git\cmd\git-tray.exe
+    place=shared
     root=C:\Program Files\Git
-  evidence ChainedRef A/5 Value AdminOnly source=chain:C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Git Tray.lnk
+  evidence ChainedRef B/5 Value AdminOnly source=chain:C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Git Tray.lnk
     anchor=C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Git Tray.lnk
+[REG-RUN] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder | "Git Agent.lnk"
+  id=c-ebb3fd9ac86cc6c3 owner="Git" category=Startup harm=Low reversibility=Full child_count=None
+  evidence PointsIntoInstallRoot B/6 Value AdminOnly source=points:c:\program files\git\cmd\git-agent.exe
+    path=c:\program files\git\cmd\git-agent.exe
+    place=shared
+    root=C:\Program Files\Git
+  evidence DanglingRef B/7 Value AdminOnly source=dangling:c:\program files\git\cmd\git-agent.exe
+    path=c:\program files\git\cmd\git-agent.exe
+    place=shared
+    root=C:\Program Files\Git
+  evidence ChainedRef A/5 Value AdminOnly source=chain:C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Git Agent.lnk
+    anchor=C:\Users\tester\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Git Agent.lnk

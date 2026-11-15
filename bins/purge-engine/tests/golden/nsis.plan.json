@@ -68,20 +68,10 @@
     },
     {
       "target": {
-        "type": "RegKey",
-        "path": "HKLM\\SOFTWARE\\Fennec"
-      },
-      "band": "Weak",
-      "preselected": false,
-      "scanner": "REG-SOFTWARE",
-      "category": "Registration"
-    },
-    {
-      "target": {
         "type": "Path",
         "path": "C:\\Users\\tester\\AppData\\Local\\Fennec\\Fennec Browser"
       },
-      "band": "Weak",
+      "band": "Likely",
       "preselected": false,
       "scanner": "FS-APPDATA",
       "category": "UserData"
@@ -91,7 +81,7 @@
         "type": "Path",
         "path": "C:\\Users\\tester\\AppData\\Roaming\\Fennec\\Fennec Browser"
       },
-      "band": "Weak",
+      "band": "Likely",
       "preselected": false,
       "scanner": "FS-APPDATA",
       "category": "UserData"
@@ -109,32 +99,12 @@
     {
       "target": {
         "type": "Path",
-        "path": "C:\\Users\\tester\\AppData\\Roaming\\Fennec"
-      },
-      "band": "Weak",
-      "preselected": false,
-      "scanner": "FS-VENDORPARENT",
-      "category": "AppData"
-    },
-    {
-      "target": {
-        "type": "Path",
         "path": "C:\\Program Files\\Fennec Browser"
       },
-      "band": "Safe",
-      "preselected": true,
+      "band": "Likely",
+      "preselected": false,
       "scanner": "FS-INSTALLDIR",
       "category": "AppFiles"
-    },
-    {
-      "target": {
-        "type": "Path",
-        "path": "C:\\ProgramData\\Fennec"
-      },
-      "band": "Weak",
-      "preselected": false,
-      "scanner": "FS-VENDORPARENT",
-      "category": "AppData"
     }
   ]
 }

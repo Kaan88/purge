@@ -18,5 +18,6 @@ pub mod inno;
 pub mod inno_map;
 pub mod refsnap;
 pub mod roots;
+pub mod shared_root;
 pub mod subtree;
 pub mod tokens;

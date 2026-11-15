@@ -206,6 +206,9 @@ pub fn default_prune() -> Vec<String> {
         r"HKLM\SOFTWARE\Classes\ActivatableClasses",
         r"HKU\*\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository",
         r"HKU\*\ActivatableClasses",
+        // Restart Manager sessions: Windows' own short-lived state, written while an installer or
+        // uninstaller runs (the files it asked about) and removed by Windows. Never an app's leftover.
+        r"HKU\*\Software\Microsoft\RestartManager",
     ]
     .into_iter()
     .map(String::from)

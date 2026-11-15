@@ -3,3 +3,10 @@ FS-INSTALLDIR Quarantine AppFiles C:\Program Files\Git
   + InsideInstallRoot A/9 Path AdminOnly [root:C:\Program Files\Git] {root=C:\Program Files\Git}
   + ModifiedAfterUninstall C/-4 Path AdminOnly [scan] {path=C:\Program Files\Git\etc\new.log, root=C:\Program Files\Git}
   ! UnmatchedChildren { n: 1 }
+  ! UserData
+FS-INSTALLDIR Quarantine AppFiles C:\Program Files\Git\etc\gitconfig
+  harm=Low reversibility=Full size=120 files=1
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteFile}
+FS-INSTALLDIR Quarantine AppFiles C:\Program Files\Git\mingw64\bin\libcurl-4.dll
+  harm=Low reversibility=Full size=4096 files=1
+  + InstallerManifest(Inno) A/8 Path AdminOnly [inno:log] {record=DeleteFile}

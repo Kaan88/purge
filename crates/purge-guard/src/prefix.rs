@@ -14,6 +14,8 @@
 //! the two agree on everything but a handful of exotic code points, and a mismatch there can only make two
 //! names look different (never equal), which errs on the side of "unrelated".
 
+use std::collections::BTreeMap;
+
 /// The separator of canonical paths and registry keys.
 pub const SEP: char = '\\';
 
@@ -126,9 +128,408 @@ pub fn depth(path: &str) -> usize {
     segments(path).count()
 }
 
+/// The entries of a `;`-separated list of paths (`Path`, `PATHEXT`), empty ones included, each as
+/// written (quotes and blanks kept).
+///
+/// A `;` between double quotes belongs to the entry: `"C:\Program Files\App;x\bin"` is one
+/// directory, and cutting it there would make two entries of which the first looks like the folder
+/// `C:\Program Files\App`. A quote that is never closed takes the rest of the text. The harvest
+/// and the scanners must agree on what an entry and its position are, so both split with this.
+///
+/// An entry that comes out with a `;` in it, or with a quote that is not closed, is not one
+/// directory that anybody can name with certainty ([`is_plain_list_entry`]): programs disagree on
+/// how to read it, and it may hold several entries of the user's. It keeps its position in the
+/// list and is never taken for an entry of an app.
+pub fn list_entries(text: &str) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    for (at, c) in text.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            ';' if !quoted => {
+                entries.push(&text[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    entries.push(&text[start..]);
+    entries
+}
+
+/// An entry of [`list_entries`] without the one pair of double quotes around it and the blanks
+/// around that; an entry that is not quoted that way is returned trimmed.
+pub fn unquoted_list_entry(entry: &str) -> &str {
+    let entry = entry.trim();
+    entry
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .map_or(entry, str::trim)
+}
+
+/// Whether `text` (an entry without its quotes, or what its `%NAME%` references expand to) can be
+/// the name of **one** directory: no `;`, no `"`, no control character (a tab or a line break
+/// separates things and is in no path), and no `:` other than the one after a drive letter that
+/// starts the text.
+///
+/// `C:\App\cmd" "C:\Users\me\tools`, `C:\App\cmd,C:\Users\me\tools` and
+/// `C:\App\cmd C:\Users\me\tools` all begin with the app's folder and all hold a second path:
+/// whatever stands between the two, the second one starts with a drive letter and its `:`, which
+/// no file name can hold. A `,` alone decides nothing (`C:\Program Files\Foo, Inc\bin` is one
+/// directory): see [`ListEntry::ambiguous`].
+pub fn is_one_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    !text.contains([';', '"', '<', '>', '|', '?', '*'])
+        && !text.chars().any(char::is_control)
+        && !text
+            .get(if drive { 2 } else { 0 }..)
+            .unwrap_or("")
+            .contains(':')
+}
+
+/// Whether an entry of [`list_entries`] is one plainly written item, as written: its text without
+/// the quotes around it is [`is_one_path`]. `"C:\App;x\bin"` is not (a quoted `;`), neither is
+/// `"C:\App\cmd;C:\Users\me\bin` (the quote is never closed and the entry runs to the end of the
+/// list, over entries that belong to somebody else), nor `"C:\App\cmd" "C:\Users\me\bin"` (two
+/// quoted paths in one entry: the quotes are balanced, and a `"` is left inside).
+///
+/// What the entry's `%NAME%` references lead to is not looked at here: [`ListEntry::read`] does.
+pub fn is_plain_list_entry(entry: &str) -> bool {
+    is_one_path(unquoted_list_entry(entry))
+}
+
+/// Whether `path` has a segment that is `..` (or more dots: Win32 drops trailing dots and
+/// blanks, so `.. ` and `...` step back as well), with `\` and `/` both read as separators.
+///
+/// Such a path can leave the folder it starts in: `C:\App\..\..\Users\me\tools` begins with
+/// `C:\App` and is not in it. No containment test of this module resolves `..` (they compare
+/// segments), so whoever concludes "this path is the app's" from one must refuse these first.
+pub fn steps_back(path: &str) -> bool {
+    has_dot_segment(path, 2)
+}
+
+/// Whether a segment of `path` is made of dots and blanks only, with at least `least` dots
+/// (`..`, `.. `, `. .`, `.. .`: how Win32 reads a name of dots and blanks is not something to
+/// rely on, so every such segment counts).
+fn has_dot_segment(path: &str, least: usize) -> bool {
+    path.split(['\\', '/']).any(|segment| {
+        let dots = segment.chars().filter(|c| *c == '.').count();
+        dots >= least && segment.chars().all(|c| c == '.' || c.is_whitespace())
+    })
+}
+
+/// What `text` says by itself: `text` without its `%NAME%` references, known or not.
+fn literal_part(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) if end > 0 => rest = &after[end + 1..],
+            _ => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `text` with every `%NAME%` reference the environment knows replaced; a reference to a name it
+/// does not know stays as written. Names are upper-cased in `env`
+/// (`SystemSource::env`).
+pub fn expand_env(text: &str, env: &BTreeMap<String, String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) => match env.get(&after[..end].to_uppercase()) {
+                Some(value) if end > 0 => {
+                    out.push_str(value);
+                    rest = &after[end + 1..];
+                }
+                _ => {
+                    out.push('%');
+                    rest = after;
+                }
+            },
+            None => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// File extensions of programs and scripts, lower case with the dot: a blank after one of them
+/// ends a file name ([`ListEntry::ambiguous`]), and the program of a command line ends in one
+/// ([`is_program_file`]).
+pub const PROGRAM_EXTENSIONS: [&str; 12] = [
+    ".exe", ".com", ".bat", ".cmd", ".dll", ".msi", ".scr", ".cpl", ".ps1", ".vbs", ".js", ".lnk",
+];
+
+/// Whether the last segment of `path` is named like a program or script file.
+pub fn is_program_file(path: &str) -> bool {
+    let lower = path.trim().trim_matches('"').to_ascii_lowercase();
+    PROGRAM_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
+}
+
+/// One entry of a `;`-separated list of directories (`Path`) that can be told to be one
+/// directory, read the way the harvest and REG-ENV both must read it.
+///
+/// An entry edit takes the entry's whole text out of the list. That is right only when the text
+/// stands for one directory, as written **and** after its `%NAME%` references are expanded:
+/// `%MYDIRS%` is one entry of `Path`, and with `MYDIRS` = `C:\App\cmd;C:\Users\me\tools` it
+/// stands for two directories, of which one is the user's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListEntry<'a> {
+    /// The entry without the quotes around it and without a `\` at its end.
+    pub bare: &'a str,
+    /// [`ListEntry::bare`] with its `%NAME%` references expanded.
+    pub expanded: String,
+    /// The entry is nothing but `%NAME%` references to variables the environment knows
+    /// (`%MYDIRS%`; also `%MYDIRS%%EMPTY%` and `%A%\%B%`: no name of a folder is written in it).
+    /// The entry says where to look, the variable says what is there: whoever
+    /// wrote the entry, the directory is named somewhere else, and taking the entry out is
+    /// taking out somebody's pointer rather than a mention of the app's folder. An installer's
+    /// record on the list does not name its entries, so such an entry is never proven to be
+    /// the installer's.
+    pub indirect: bool,
+    /// The entry holds a `,`, a `\\` after its start, or a blank followed by `\`, `/` or `%`.
+    /// Windows does not split `Path` at a `,` or a blank and a directory name may hold either,
+    /// and a doubled separator inside a path is harmless (`%JAVA_HOME%\bin` with a `JAVA_HOME`
+    /// that ends in `\`), so the entry is read as one directory; but a list written with `,` or
+    /// blanks by mistake looks the same (`C:\App\cmd,tools`, `C:\App\cmd \\server\tools`,
+    /// `C:\App\cmd \Users\me\tools`, `C:\App\cmd %USERPROFILE%\tools`), and so does a
+    /// program with an argument (`C:\App\x.exe /quiet`): nothing tells them apart. A blank
+    /// before a plain word decides nothing and is not counted (`C:\Program Files\Tidy Notes`),
+    /// except after the name of a program file (`C:\App\x.exe user text`). Text after a folder
+    /// name (`C:\App\cmd user text`) cannot be told from a folder of that name: after an
+    /// uninstall nothing exists to measure the path against, and no installer's record lists
+    /// the app's folders.
+    pub ambiguous: bool,
+}
+
+impl<'a> ListEntry<'a> {
+    /// Reads one entry of [`list_entries`]. `None` when it is empty or not one plainly written
+    /// directory, as written or expanded: not [`is_one_path`], or with a `.` or `..` segment
+    /// (`C:\App\..\..\Users\me\tools` starts with the app's folder and is not in it; nothing
+    /// here resolves such a path, and no installer writes one).
+    pub fn read(entry: &'a str, env: &BTreeMap<String, String>) -> Option<Self> {
+        let one = |text: &str| is_one_path(text) && !has_dot_segment(text, 1);
+        let unquoted = unquoted_list_entry(entry);
+        if unquoted.is_empty() || !one(unquoted) {
+            return None;
+        }
+        let bare = unquoted.trim_end_matches(SEP);
+        let expanded = expand_env(bare, env);
+        if !one(&expanded) {
+            return None;
+        }
+        let second_start = |text: &str| {
+            text.char_indices().any(|(at, c)| {
+                c.is_whitespace() && text[at + c.len_utf8()..].starts_with(['\\', '/', '%'])
+            })
+        };
+        // `x.exe user text`: a program file's name, a blank, and more. A folder is not named
+        // like that; a program with its arguments, or with somebody's words after it, is.
+        let text_after_program = |text: &str| {
+            let lower = text.to_ascii_lowercase();
+            PROGRAM_EXTENSIONS.iter().any(|ext| {
+                lower.match_indices(ext).any(|(at, _)| {
+                    lower[at + ext.len()..]
+                        .chars()
+                        .next()
+                        .is_some_and(char::is_whitespace)
+                })
+            })
+        };
+        let ambiguous = [bare, expanded.as_str()].into_iter().any(|text| {
+            text.contains(',')
+                || text.get(1..).is_some_and(|rest| rest.contains(r"\\"))
+                || second_start(text)
+                || text_after_program(text)
+        });
+        let indirect = expanded != bare
+            && literal_part(bare)
+                .chars()
+                .all(|c| c == SEP || c == '/' || c.is_whitespace());
+        Some(Self {
+            bare,
+            indirect,
+            ambiguous,
+            expanded,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_entries_keep_a_quoted_semicolon() {
+        assert_eq!(list_entries(r"C:\a;C:\b;"), [r"C:\a", r"C:\b", ""]);
+        assert_eq!(list_entries(""), [""]);
+        assert_eq!(
+            list_entries(r#"C:\a;"C:\Program Files\App;x\bin";C:\b"#),
+            [r"C:\a", r#""C:\Program Files\App;x\bin""#, r"C:\b"]
+        );
+        // Never closed: the rest is one entry.
+        assert_eq!(
+            list_entries(r#"C:\a;"C:\b;C:\c"#),
+            [r"C:\a", r#""C:\b;C:\c"#]
+        );
+        for entry in [
+            r"C:\a",
+            r#""C:\Program Files\App\bin""#,
+            "",
+            " %X%\\y ",
+            r#" "C:\a" "#,
+            r"C:\Program Files\Foo, Inc\bin",
+            r"\\server\share\bin",
+        ] {
+            assert!(is_plain_list_entry(entry), "{entry:?}");
+        }
+        for entry in [
+            r#""C:\Program Files\App;x\bin""#,
+            r#""C:\b;C:\c"#,
+            r#""C:\b"#,
+            r#"C:\b""#,
+            // Two paths in one entry, whatever stands between them.
+            r#""C:\App\cmd" "C:\Users\me\tools""#,
+            r#"C:\App\"cmd""#,
+            r"C:\App\cmd,C:\Users\me\tools",
+            r"C:\App\cmd C:\Users\me\tools",
+            r"C:\App\cmd:stream",
+            r"%X%\cmd,D:\tools",
+        ] {
+            assert!(!is_plain_list_entry(entry), "{entry:?}");
+        }
+        // Without quotes it is `str::split`.
+        let plain = r"%SystemRoot%\system32;;C:\Tools\bin";
+        assert_eq!(list_entries(plain), plain.split(';').collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_list_entry_is_one_directory_as_written_and_expanded() {
+        let env: BTreeMap<String, String> = [
+            ("MYDIRS", r"C:\App\cmd;C:\Users\me\tools"),
+            ("QUOTED", r#"C:\App\cmd" "C:\Users\me\tools"#),
+            ("COMMAS", r"C:\App\cmd,C:\Users\me\tools"),
+            ("ONE", r"C:\App\cmd"),
+            ("PF", r"C:\Program Files"),
+            ("EMPTY", ""),
+            ("REL", r"Git\cmd"),
+            ("COMMA", "cmd,x"),
+            ("BLANK", r"cmd \Users\me\tools"),
+            ("UP", r"..\..\Users\me\tools"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        assert_eq!(
+            expand_env(r"%pf%\x;%NOPE%;50%;%%", &env),
+            r"C:\Program Files\x;%NOPE%;50%;%%"
+        );
+
+        // What the reference leads to is not one directory.
+        for entry in [
+            "%MYDIRS%",
+            "%QUOTED%",
+            "%COMMAS%",
+            r#""%MYDIRS%""#,
+            r"%MYDIRS%\x",
+            "",
+        ] {
+            assert_eq!(ListEntry::read(entry, &env), None, "{entry:?}");
+        }
+        let read = |entry| ListEntry::read(entry, &env).expect(entry);
+        let plain = read(r#" "%PF%\Git\cmd\" "#);
+        assert_eq!(plain.bare, r"%PF%\Git\cmd");
+        assert_eq!(plain.expanded, r"C:\Program Files\Git\cmd");
+        assert!(!plain.indirect && !plain.ambiguous);
+        // A bare reference: one directory, but named by the variable and not by the entry.
+        assert!(read("%ONE%").indirect);
+        assert!(read(r#""%one%\""#).indirect);
+        assert!(!read(r"%ONE%\bin").indirect);
+        // A name the environment does not know is text, not a reference.
+        assert!(!read("%NOPE%").indirect);
+        // A `,` does not split the entry and is remembered.
+        assert!(read(r"C:\Program Files\Foo, Inc\bin").ambiguous);
+        assert!(read(r"C:\App\cmd,tools").ambiguous);
+        // A blank before something that starts a path, or an argument; not before a plain word.
+        for entry in [
+            r"C:\App\cmd \Users\me\tools",
+            r"C:\App\cmd /Users/me/tools",
+            r"C:\App\cmd %NOPE%\tools",
+            r"C:\App\x.exe /quiet",
+        ] {
+            assert!(read(entry).ambiguous, "{entry:?}");
+        }
+        // Text after the name of a program file.
+        for entry in [
+            r"C:\App\x.exe user text",
+            r"C:\App\x.DLL  ty",
+            r"C:\App\run.cmd now",
+        ] {
+            assert!(read(entry).ambiguous, "{entry:?}");
+        }
+        for entry in [
+            r"C:\App\x.exe",
+            r"C:\App\x.exe.config",
+            r"C:\App 1.2 beta\x.exe",
+            r"C:\Program Files\Tidy Notes\cmd",
+            r"%PF%\Tidy Notes\cmd",
+            r"C:\App\cmd tools",
+        ] {
+            assert!(!read(entry).ambiguous, "{entry:?}");
+        }
+        // What the reference expands to counts as much as what is written.
+        assert!(read(r"C:\App\%COMMA%").ambiguous && read(r"C:\App\%BLANK%").ambiguous);
+        assert!(!read(r"C:\App\%REL%").ambiguous);
+        // A control character separates; `.` and `..` segments leave the folder: not one path.
+        for entry in [
+            "C:\\App\\cmd\ttools",
+            "C:\\App\\cmd\ntools",
+            r"C:\App\..\..\Users\me\tools",
+            r"C:\App\.\cmd",
+            r"C:\App\.. \x",
+            r"C:\App\...\x",
+            r"C:\App\. .\x",
+            r"C:\App\.. .\x",
+            r"C:\App\ . \x",
+            r"C:/App/../x",
+            r"%ONE%\%UP%",
+            r"%ONE%\.",
+        ] {
+            assert_eq!(ListEntry::read(entry, &env), None, "{entry:?}");
+        }
+        assert!(steps_back(r"C:\App\..\x") && steps_back("a/.. /b") && steps_back(r"x\..."));
+        assert!(steps_back(r"C:\App\. .\x") && steps_back(r"C:\App\.. .\x"));
+        assert!(!steps_back(r"C:\App\ . \x") && !steps_back(r"C:\App\a .. b\x"));
+        assert!(!steps_back(r"C:\App\.\x") && !steps_back(r"C:\App\a..b\.x"));
+        assert!(read(r"C:\App\a..b\.cfg").expanded.ends_with(".cfg"));
+        // References only, however many: no folder is named in the entry.
+        assert!(read("%ONE%%EMPTY%").indirect);
+        assert!(read("%ONE%%NOPE%").indirect);
+        assert!(!read("%ONE%50%").indirect);
+        assert!(read(r"%PF%\%REL%").indirect);
+        assert!(!read(r"%PF%\Git\cmd").indirect);
+        // So is a second path that starts with `\\`, and a doubled separator that is none.
+        assert!(read(r"C:\App\cmd \\server\tools").ambiguous);
+        assert!(read(r"C:\App\\cmd").ambiguous);
+        assert!(!read(r"\\server\share\cmd").ambiguous);
+        assert!(!read(r"C:\App\cmd").ambiguous);
+    }
 
     #[test]
     fn relation_table() {

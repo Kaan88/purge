@@ -25,6 +25,7 @@
 //! | exe path | as a root | end; white space; `"` `,` `;` `\|` `<` `>` `*` `?` `:`; a MuiCache suffix (`.FriendlyAppName`, `.ApplicationCompany`) |
 //! | exe name | start, `\`, white space, or one of `"` `'` `;` `,` `=` `\|` `<` `>` `:` `*` `?` | as an exe path |
 //! | ProgID, AUMID, token | start, or anything but a letter, digit, `.`, `-`, `_` | end, or anything but those |
+//! | ProgID, AUMID, in addition | not the `\` of a file path (below) | |
 //! | CLSID (`{…}`) | anything | anything |
 //!
 //! So the root `C:\Program Files\Git` matches `C:\Program Files\Git\cmd` and
@@ -33,6 +34,49 @@
 //! value's whole data or as `…\updates\308046B0AF4A39CB`, not inside `A308046B0AF4A39CB0` and not inside
 //! `FirefoxURL-308046B0AF4A39CB` (which is a ProgID anchor of its own). Composite names such as the
 //! `<ProgID>_<.ext>` values of `ApplicationAssociationToasts` are for their scanner to take apart.
+//!
+//! A ProgID or AUMID is the name of a registration, not of a folder. A short one (`vscode`, the URL
+//! protocol) is also what people call a folder: `D:\Tools\VSCode\Code.exe` is the user's own copy of
+//! the program and names no registration of the installed app (rig run x1-vscode-userstate). So an
+//! id is not matched inside a **file path**. The id is looked at in the piece of text it stands in
+//! (from one of `"` `;` `|` `<` `>` `*` `?` or a line end to the next): when that piece has a `\` or
+//! `/` anywhere, it is a path, and the id matches only when the path is a registry path, that is,
+//! when it starts with `HKEY_…`, `HKLM`, `HKCU`, `HKCR`, `HKU`, `HKCC`, `Software`, `SYSTEM` or
+//! `Classes`, or with `\Registry\Machine\` or `\Registry\User\` (the one spelling with a `\` in
+//! front), or with `shell:`
+//! (`shell:AppsFolder\<AUMID>`). So `Software\Classes\git_shell\shell\open` and
+//! `Software\Clients\StartMenuInternet\<id>\Capabilities` match, and `C:\Tools\My VSCode\Code.exe`,
+//! `Tools\vscode\Code.exe`, `..\vscode\x`, `~\vscode\x` and `%LOCALAPPDATA%\vscode\x` do not.
+//!
+//! A piece that starts with one of those words is still a file path, and the id is not matched,
+//! when anything in it shows so:
+//!
+//! - it starts with a separator and is not `\Registry\Machine\…` or `\Registry\User\…`
+//!   (`\\` is read as `\` here, so a server called `registry` with a share called `machine` is the
+//!   one UNC path still taken for a key): `\\software\share\vscode\Code.exe` and
+//!   `\\system\c$\vscode\x.exe` are UNC paths to servers of those names, and
+//!   `\Software\Stuff\vscode\readme.txt` is a folder at the root of a drive (no value of the
+//!   captured rig runs spells a key with a `\` in front);
+//! - it holds a drive path (`X:\` or `X:/`) anywhere: `HKLM\Software\X\C:\Tools\vscode\Code.exe`;
+//! - it holds a `%` before the id (`software\%x%\vscode`: what the reference expands to is not
+//!   known here).
+//!
+//! An id followed by `:` is a URL scheme and matches in two spellings only: at the very start of
+//! its piece (`vscode:x`, `"mailto:%1"`), or followed by `://` where it does not stand directly
+//! after a separator (`run.exe --open-url vscode://file/…`; `:/` and `:\` read the same as `://`
+//! here). As the name of a file or folder it is not a scheme: `C:\Tools\vscode:stream`,
+//! `/opt/vscode:/usr/bin`, `D:\x\vscode: failed to start`. (No value of the captured rig runs has
+//! an id followed by `:` at all; the protocol registrations name the scheme as a key name and as
+//! `URL:<id>`, where the id ends the piece.) A token keeps matching path segments: that is what it
+//! is harvested from.
+//!
+//! The price: an id written without quotes after a path in one command line
+//! (`C:\x\run.exe --open vscode`) is not matched either. What remains matched although it could
+//! be a file path: a relative one that starts with a root word, `Software\Tools\vscode\Code.exe`.
+//! Nothing tells it from `Software\Clients\…\<id>\Capabilities`. An id match is no Tier A fact
+//! by itself wherever it is used (`CandidateBuilder::in_ref_snapshot` caps an id-anchored
+//! snapshot entry at Tier B unless the installer's record covers the value), so such a value is
+//! listed and never preselected.
 //!
 //! A root never matches a path that steps back out of it: `C:\Program Files\Git\..\Other\x.exe` is not a
 //! reference into `C:\Program Files\Git`. A root or exe path that starts with a separator (a UNC path;
@@ -589,6 +633,61 @@ fn steps_back(below: &str) -> bool {
     })
 }
 
+/// The first segments of a registry path as values spell them (folded). `\Registry\Machine\…`
+/// and `\Registry\User\…`, the one spelling that starts with a separator, are tested apart.
+const REGISTRY_ROOTS: [&str; 8] = [
+    "hklm", "hkcu", "hkcr", "hku", "hkcc", "software", "system", "classes",
+];
+
+/// Whether the folded `piece` holds a drive path (`x:\` or `x:/`) anywhere.
+fn holds_drive_path(piece: &str) -> bool {
+    piece
+        .as_bytes()
+        .windows(3)
+        .any(|w| w[0].is_ascii_alphabetic() && w[1] == b':' && matches!(w[2], b'\\' | b'/'))
+}
+
+/// Whether the id at `start..end` of the folded `hay` stands inside a file path: the piece of text
+/// around it (between the characters that end a quoted or listed path) has a separator and is not a
+/// registry path, a `shell:` name or a URL of the id's own scheme. See the module documentation.
+fn in_file_path(hay: &str, start: usize, end: usize) -> bool {
+    const ENDS: [char; 11] = ['"', ';', '|', '<', '>', '*', '?', '\0', '\t', '\r', '\n'];
+    // `… vscode://file/…`: the id is the scheme. The text is folded, so `://` reads `:\` here and
+    // `/opt/vscode:/usr/bin` looks the same after the id: what tells them apart is that a scheme
+    // does not stand directly after a separator.
+    if hay[end..].starts_with(":\\") && !hay[..start].ends_with('\\') {
+        return false;
+    }
+    let from = hay[..start].rfind(ENDS).map_or(0, |at| at + 1);
+    let to = hay[end..].find(ENDS).map_or(hay.len(), |at| end + at);
+    let before = hay[from..start].trim_start();
+    // `vscode:x`: a scheme only where the piece starts with it. After anything else the `:` is
+    // part of a path (`C:\Tools\vscode:stream`) or of a sentence.
+    if before.is_empty() && hay[end..].starts_with(':') {
+        return false;
+    }
+    let piece = hay[from..to].trim_start();
+    if !piece.contains(['\\', '/']) {
+        return false;
+    }
+    if piece.starts_with("shell:") {
+        return false;
+    }
+    // A key path holds no drive path, and nothing shows what a `%NAME%` in front of the id stands
+    // for.
+    if holds_drive_path(piece) || before.contains('%') {
+        return true;
+    }
+    // With a separator in front it is a UNC path or a folder at the root of a drive, unless it is
+    // the kernel's spelling of a key.
+    if piece.starts_with('\\') {
+        return !(piece.starts_with("\\registry\\machine\\")
+            || piece.starts_with("\\registry\\user\\"));
+    }
+    let first = piece.split('\\').next().unwrap_or("");
+    !(first.starts_with("hkey_") || REGISTRY_ROOTS.contains(&first))
+}
+
 /// Applies the boundary rules of the module documentation to a needle found at `start..end`.
 fn boundary(class: Class, hay: &str, start: usize, end: usize) -> Option<MatchHow> {
     let before = hay[..start].chars().next_back();
@@ -603,8 +702,11 @@ fn boundary(class: Class, hay: &str, start: usize, end: usize) -> Option<MatchHo
     };
     let ok = match class {
         Class::Clsid => true,
-        Class::Ident | Class::Token => {
-            !before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char)
+        Class::Token => !before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char),
+        Class::Ident => {
+            !before.is_some_and(is_ident_char)
+                && !after.is_some_and(is_ident_char)
+                && !in_file_path(hay, start, end)
         }
         Class::File => path_start(hay, start, before) && file_end(),
         Class::FileName => {
@@ -1185,6 +1287,97 @@ mod tests {
         assert_eq!(m.find("{CA586C7F-7C84-4B88-8537-726724DF6920}"), None);
         // Without braces it is not a CLSID reference.
         assert_eq!(m.find("CA586C7F-7C84-4B88-8537-726724DF6929"), None);
+
+        // A registry path names the registration; a file path with a folder of that name does not
+        // (rig run x1-vscode-userstate: the user's own copy in `…\Tools\VSCode`).
+        let mut set = AnchorSet::new();
+        set.add_progid("vscode");
+        set.add_aumid("Microsoft.VisualStudioCode");
+        let url = RefMatcher::new(&set);
+        for input in [
+            "vscode",
+            r"Software\Classes\vscode\shell\open\command",
+            r"HKEY_CURRENT_USER\Software\Classes\vscode",
+            "vscode://file/x",
+            r"shell:AppsFolder\Microsoft.VisualStudioCode",
+        ] {
+            assert!(url.find(input).is_some(), "{input:?}");
+        }
+        for input in [
+            r#""C:\Users\tester\Tools\VSCode\Code.exe" "%1""#,
+            r"C:\Users\tester\Tools\VSCode",
+            r"D:/portable/vscode/bin",
+            r"%USERPROFILE%\vscode\Code.exe",
+            r"\\srv\share\vscode\Code.exe",
+            r#"cmd /c "D:\Apps\vscode\code.cmd""#,
+            // Not directly after a separator, or not in an absolute path.
+            r"C:\Tools\My VSCode\Code.exe",
+            r"C:\Tools\(vscode)\Code.exe",
+            r"C:\Tools\apps,vscode\Code.exe",
+            r"Tools\vscode\Code.exe",
+            r"..\vscode\Code.exe",
+            r".\vscode\Code.exe",
+            r"C:vscode\Code.exe",
+            r"~\vscode\Code.exe",
+            r"$env:LOCALAPPDATA\vscode\Code.exe",
+            r"C:\Tools\a;b\vscode\Code.exe",
+            r"C:\Tools\vscode",
+            r"vscode\Code.exe",
+            // A `:` after the id is a scheme only at the start of the piece or as `://`.
+            r"C:\Tools\vscode:stream",
+            "/opt/vscode:/usr/bin",
+            r"D:\x\vscode: failed to start",
+            r"C:\Tools\vscode://x",
+            r"D:\x\run.exe vscode: failed to start",
+            // A separator in front: a UNC path or a folder at the root of a drive, whatever the
+            // first name is.
+            r"\Software\Stuff\vscode\readme.txt",
+            r"\Software\Classes\vscode",
+            r"\\software\share\vscode\Code.exe",
+            r"\\system\c$\vscode\x.exe",
+            r"\\registry\share\vscode\x.exe",
+            r"\registry",
+            r"\HKLM\Software\vscode",
+            "//software/share/vscode/x",
+            // A root word in front of what is a file path all the same.
+            r"software\%x%\vscode",
+            r"HKLM\Software\X\C:\Tools\vscode\Code.exe",
+            r"HKLM\Software\X\C:/Tools/vscode/Code.exe",
+        ] {
+            assert_eq!(url.find(input), None, "{input:?}");
+        }
+        // A scheme at the start of its piece, or followed by `://` anywhere.
+        for input in [
+            "vscode:",
+            "vscode:x",
+            r#""vscode:%1""#,
+            " vscode:x",
+            r"vscode:\x",
+            r"C:\Tools\run.exe vscode://file/x",
+            r"C:\Tools\run.exe --url=vscode://file/x",
+        ] {
+            assert!(url.find(input).is_some(), "{input:?}");
+        }
+        // Registry paths in every spelling values use.
+        for input in [
+            r"\Registry\Machine\Software\Classes\vscode",
+            r"\REGISTRY\USER\S-1-5-21-1-2-3-1001\Software\Classes\vscode",
+            r"Software\Classes\vscode",
+            r"Software\Classes\vscode\100%",
+            // Relative, and nothing tells it from a key path (see the module documentation).
+            r"Software\Tools\vscode\Code.exe",
+            r"HKEY_CLASSES_ROOT\vscode\shell\open\command",
+            r"HKCR\vscode",
+            r"Classes\vscode\shell",
+            r"SYSTEM\CurrentControlSet\Services\vscode",
+        ] {
+            assert!(url.find(input).is_some(), "{input:?}");
+        }
+        // Two things in one text are judged each at its own place.
+        assert!(
+            url.find(r#""C:\Tools\VSCode\Code.exe" --open-url vscode"#)
+                .is_some()
+        );
 
         let code = vscode();
         assert_eq!(

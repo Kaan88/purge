@@ -69,6 +69,8 @@ pub fn fingerprint(progids: &[&str]) -> Fingerprint {
             main: true,
         }],
         outside_root_files: Vec::new(),
+        uninstallers: Vec::new(),
+        older_keys: Vec::new(),
         anchors: Anchors {
             progids: progids.iter().map(|p| (*p).to_owned()).collect(),
             ..Anchors::default()

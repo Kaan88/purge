@@ -255,7 +255,7 @@ pub(super) fn offer(
         path: key.to_owned(),
         name: value.name.clone(),
     };
-    if ctx.in_baseline(&target) {
+    if ctx.in_baseline(&target) || ctx.in_unowned_com_class(key) {
         return;
     }
     let mut b = ctx.candidate(ID, target, Action::DeleteValue, category);
@@ -275,13 +275,10 @@ pub(super) fn offer(
             n: record.unmatched(),
         });
     }
-    let mut candidate = b.build();
-    for evidence in snapshot {
-        if !candidate.evidence.contains(&evidence) {
-            candidate.evidence.push(evidence);
-        }
-    }
-    out.push(candidate);
+    // The entries' evidence stands for the whole value only when everything in the value is the
+    // app's: it goes in before `build`, which applies that rule.
+    b.evidence_also(snapshot);
+    out.push(b.build());
 }
 
 #[cfg(test)]
@@ -432,8 +429,10 @@ mod tests {
     }
 
     /// The harvest records a reference in a `REG_MULTI_SZ` value under the entry that holds it. For a
-    /// record that is evidence about the value: with the install root still there (nothing dangling)
-    /// it is what makes the whole value Tier A at score 8 or more.
+    /// record that is evidence about the value. It is Tier B: the store is a ring of numbered slots
+    /// that Windows manages and reuses (dirty-base runs f0d-git, f0d-npp, f0d-vlc: slot 15 held
+    /// another product's record before the install), so the slot is never shown to be the app's and
+    /// the value is listed, not preselected.
     #[test]
     fn a_record_carries_the_snapshot_evidence_of_its_entries() {
         let target_exe = exe("git-cmd.exe");
@@ -465,8 +464,9 @@ mod tests {
             .filter(|e| e.kind == EvidenceKind::InPreUninstallRefSnapshot)
             .collect();
         assert_eq!(snap.len(), 1, "{recorded:#?}");
-        assert_eq!((snap[0].tier, snap[0].scope), (Tier::A, Scope::Value));
+        assert_eq!((snap[0].tier, snap[0].scope), (Tier::B, Scope::Value));
         assert!(has(recorded, EvidenceKind::PointsIntoInstallRoot));
+        assert!(recorded.evidence.iter().all(|e| e.tier != Tier::A));
         // The slots the harvest did not record have the reference alone.
         let other = expect(&found, &value(&shc(), "2"));
         assert!(!has(other, EvidenceKind::InPreUninstallRefSnapshot));

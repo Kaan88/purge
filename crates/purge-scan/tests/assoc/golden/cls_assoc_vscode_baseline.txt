@@ -17,8 +17,9 @@
     via=ext-journal
 [CLS-ASSOC] DeleteValue RegValue HKLM\SOFTWARE\Classes\.txt\OpenWithProgids | "VSCode.txt"
   id=c-38063b8bb7a35bf7 category=Association harm=Low reversibility=Full origin=Scanner child_count=None
-  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKLM\SOFTWARE\Classes\.txt\OpenWithProgids|VSCode.txt
+  evidence InPreUninstallRefSnapshot B/8 Value AdminOnly source=refsnap:HKLM\SOFTWARE\Classes\.txt\OpenWithProgids|VSCode.txt
     anchor=VSCode.txt
+    anchor_kind=id
     ext=.txt
     group=File associations
     progid=VSCode.txt

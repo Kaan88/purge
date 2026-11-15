@@ -530,6 +530,7 @@ mod tests {
             baseline: None,
             inventory: &inventory,
             target: &inventory[0],
+            cutoff: None,
         };
 
         let found = candidates(&ctx);

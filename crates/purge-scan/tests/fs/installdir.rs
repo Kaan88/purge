@@ -5,9 +5,25 @@ use purge_scan::fs_installdir::FsInstallDir;
 use purge_source::fixture::FixtureBuilder;
 use purge_source::types::ProcessInfo;
 
-use crate::{SERIAL, T_END, T_INSTALL, World, at, by_path, git_fp, golden, inno_path, machine};
+use crate::{SERIAL, T_END, T_INSTALL, World, at, by_path, golden, inno_path, machine};
 
 const GIT: &str = r"C:\Program Files\Git";
+
+/// Git with the uninstall log that names the two files of [`git_leftovers`].
+fn git_fp() -> purge_model::Fingerprint {
+    let mut fp = crate::git_fp();
+    fp.inno = vec![
+        inno_path(
+            InnoRecordKind::DeleteFile,
+            r"C:\Program Files\Git\etc\gitconfig",
+        ),
+        inno_path(
+            InnoRecordKind::DeleteFile,
+            r"C:\Program Files\Git\mingw64\bin\libcurl-4.dll",
+        ),
+    ];
+    fp
+}
 
 /// What Git's uninstaller left behind: a config file and a locked DLL.
 fn git_leftovers() -> FixtureBuilder {
@@ -122,7 +138,109 @@ fn file_written_after_the_uninstall_is_a_negative() {
             .iter()
             .any(|e| e.kind == EvidenceKind::ModifiedAfterUninstall && e.weight < 0)
     );
-    assert_eq!(root.blockers, [Blocker::UnmatchedChildren { n: 1 }]);
+    assert_eq!(
+        root.blockers,
+        [Blocker::UnmatchedChildren { n: 1 }, Blocker::UserData]
+    );
+}
+
+/// VM run x0-git-userstate: the user kept notes and a project in Git's folder, the uninstaller left
+/// them, and the folder was offered whole and preselected.
+#[test]
+fn a_file_the_log_does_not_name_keeps_the_root_unticked() {
+    let fixture = git_leftovers()
+        .file(r"C:\Program Files\Git\notes\todo.txt", 40)
+        .times(r"C:\Program Files\Git\notes\todo.txt", at(T_INSTALL + 5))
+        .file(r"C:\Program Files\Git\my-tool.exe", 900)
+        .times(r"C:\Program Files\Git\my-tool.exe", at(T_INSTALL + 5))
+        .build();
+    let mut world = World::new(fixture, git_fp());
+    let found = world.scan(&FsInstallDir);
+    // The root is listed, not preselected: two files in it are not shown to be Git's, one of them is
+    // not a program.
+    assert_eq!(
+        by_path(&found, GIT).blockers,
+        [Blocker::UnmatchedChildren { n: 2 }, Blocker::UserData]
+    );
+    // What the log names is offered file by file; what it does not name is not offered at all.
+    assert_eq!(
+        crate::paths(&found),
+        [
+            GIT,
+            r"C:\Program Files\Git\etc\gitconfig",
+            r"C:\Program Files\Git\mingw64\bin\libcurl-4.dll",
+        ]
+    );
+    for file in &crate::paths(&found)[1..] {
+        let c = by_path(&found, file);
+        assert!(c.blockers.is_empty(), "{file}");
+        assert!(
+            c.evidence
+                .iter()
+                .any(|e| matches!(e.kind, EvidenceKind::InstallerManifest(_))),
+            "{file}"
+        );
+    }
+
+    // While the app is installed (rig runs f1d-git, f1d-vscode-user: a live scan listed every file
+    // of the log, 9,546 Blocked rows) the root says it in one row: nothing is offered file by file
+    // before the app is verified gone.
+    for not_gone in [None, Some(purge_model::VerifyGone::new(false, true, false))] {
+        world.verify_gone = not_gone;
+        let found = world.scan(&FsInstallDir);
+        assert_eq!(crate::paths(&found), [GIT]);
+        assert!(by_path(&found, GIT).blockers.contains(&Blocker::NotGone));
+    }
+}
+
+/// Only program files are left that the log does not name: still unproven, so still unticked.
+#[test]
+fn an_unnamed_program_file_keeps_the_root_unticked() {
+    let fixture = git_leftovers()
+        .file(r"C:\Program Files\Git\rg.exe", 900)
+        .build();
+    let found = World::new(fixture, git_fp()).scan(&FsInstallDir);
+    assert_eq!(
+        by_path(&found, GIT).blockers,
+        [Blocker::UnmatchedChildren { n: 1 }]
+    );
+}
+
+/// Without an installer log nothing shows whose the files are (an NSIS or MSI app, or an unreadable
+/// log): a root with any file left is never preselected.
+#[test]
+fn a_root_without_an_installer_log_is_never_preselected() {
+    let found = World::new(git_leftovers().build(), crate::git_fp()).scan(&FsInstallDir);
+    assert_eq!(crate::paths(&found), [GIT]);
+    assert_eq!(
+        by_path(&found, GIT).blockers,
+        [Blocker::UnmatchedChildren { n: 2 }, Blocker::UserData]
+    );
+}
+
+/// A record the log flags as older than the install names nothing.
+#[test]
+fn a_file_that_existed_before_the_install_is_not_the_apps() {
+    let mut fp = git_fp();
+    fp.inno[0].existed_before = true;
+    let found = World::new(git_leftovers().build(), fp).scan(&FsInstallDir);
+    assert_eq!(
+        by_path(&found, GIT).blockers,
+        [Blocker::UnmatchedChildren { n: 1 }, Blocker::UserData]
+    );
+    assert_eq!(
+        crate::paths(&found),
+        [GIT, r"C:\Program Files\Git\mingw64\bin\libcurl-4.dll"]
+    );
+}
+
+/// Empty directories are nobody's files: the root goes whole as before.
+#[test]
+fn a_root_with_only_empty_directories_is_offered_whole() {
+    let fixture = machine().dir(r"C:\Program Files\Git\usr\share").build();
+    let found = World::new(fixture, crate::git_fp()).scan(&FsInstallDir);
+    assert_eq!(crate::paths(&found), [GIT]);
+    assert!(by_path(&found, GIT).blockers.is_empty());
 }
 
 #[test]
@@ -193,12 +311,16 @@ fn inferred_root_is_never_offered_whole() {
         .file(r"C:\Tools\Lumen\unrelated.txt", 1)
         .file(r"C:\Tools\other.dll", 1)
         .build();
-    let found = World::new(fixture, fp).scan(&FsInstallDir);
+    let mut world = World::new(fixture, fp);
+    let found = world.scan(&FsInstallDir);
     golden("installdir_inferred_root", &found);
     assert_eq!(
         crate::paths(&found),
         [r"C:\Tools\Lumen\lumen.dll", r"C:\Tools\Lumen\plugins"]
     );
+    // Not before the app is verified gone.
+    world.verify_gone = None;
+    assert!(world.scan(&FsInstallDir).is_empty());
 }
 
 #[test]

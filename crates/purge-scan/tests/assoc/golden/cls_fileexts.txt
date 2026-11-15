@@ -1,7 +1,8 @@
 [CLS-FILEEXTS] DeleteValue RegValue HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\OpenWithProgids | "VSCode.md"
   id=c-c98b0a59f349e1bc category=Association harm=Low reversibility=Full origin=Scanner child_count=None
-  evidence InPreUninstallRefSnapshot A/8 Value AdminOnly source=refsnap:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\OpenWithProgids|VSCode.md
+  evidence InPreUninstallRefSnapshot B/8 Value AdminOnly source=refsnap:HKU\S-1-5-21-1004336348-1177238915-682003330-1001\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\OpenWithProgids|VSCode.md
     anchor=VSCode.md
+    anchor_kind=id
     ext=.md
     group=File associations
     progid=VSCode.md

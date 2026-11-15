@@ -126,8 +126,9 @@ fn recorded_registrations_are_offered_without_their_capabilities_key() {
         "value {}|Acme Mail User DeleteValue [InstallerManifest/A/Value]",
         user_registered()
     )));
+    // Known only from the snapshot, through a ProgID: Tier B, so it cannot be Safe on that alone.
     assert!(lines.contains(
-        &r"value HKLM\SOFTWARE\RegisteredApplications|Acme Mail (old) DeleteValue [InPreUninstallRefSnapshot/A/Value]"
+        &r"value HKLM\SOFTWARE\RegisteredApplications|Acme Mail (old) DeleteValue [InPreUninstallRefSnapshot/B/Value]"
             .to_owned()
     ));
     assert_eq!(lines.len(), 5, "{lines:?}");
@@ -137,6 +138,8 @@ fn recorded_registrations_are_offered_without_their_capabilities_key() {
 fn without_a_baseline_keys_are_not_offered() {
     let mut world = world();
     world.baseline = None;
+    // The client key carries the app's name: its values are the app's registration.
+    world.fp.identity.tokens = vec!["acme".into(), "mail".into()];
     assert_golden(
         world.golden(&ClsRegApps),
         &[

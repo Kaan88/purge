@@ -176,7 +176,7 @@ fn the_interactive_users_environment_is_not_applied_to_another_users_hive() {
     assert_golden(
         world.golden(&ClsVerbs),
         &[&format!(
-            "value {own}| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]"
+            "value {own}| DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]"
         )],
     );
 }

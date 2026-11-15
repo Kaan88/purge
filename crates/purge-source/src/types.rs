@@ -250,6 +250,16 @@ impl RegData {
         Some(String::from_utf16_lossy(&units[..end]))
     }
 
+    /// Whether anything but NULs follows the first NUL of the data: text the string accessors
+    /// ([`string`](Self::string), [`sz`](Self::sz)) do not return. `false` for unknown data.
+    pub fn has_text_after_nul(&self) -> bool {
+        let units = bytes_to_units(&self.bytes);
+        units
+            .iter()
+            .position(|&c| c == 0)
+            .is_some_and(|end| units[end..].iter().any(|&c| c != 0))
+    }
+
     /// The string of a `REG_SZ` value (up to the first NUL).
     pub fn sz(&self) -> Option<String> {
         (self.ty == REG_SZ).then(|| self.text()).flatten()

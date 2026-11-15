@@ -1,9 +1,24 @@
 //! FS-UNINSTALLER.
 
-use purge_model::{Blocker, EvidenceKind, Root, RootKind, RootSource, SourceTrust};
+use purge_model::{Blocker, EvidenceKind, Root, RootKind, RootSource, SourceTrust, Tier};
 use purge_scan::fs_uninstaller::FsUninstaller;
 
-use crate::{SERIAL, World, by_path, firefox_fp, git_fp, golden, machine, paths};
+use crate::{SERIAL, World, by_path, firefox_fp, golden, machine, paths};
+
+/// Git with its own Inno uninstaller files, as the harvest records them from the `UninstallString`.
+fn git_fp() -> purge_model::Fingerprint {
+    let mut fp = crate::git_fp();
+    fp.uninstallers = vec![
+        r"C:\Program Files\Git\unins000.dat".into(),
+        r"C:\Program Files\Git\unins000.exe".into(),
+        r"C:\Program Files\Git\unins000.msg".into(),
+    ];
+    fp
+}
+
+fn all_tier_b(c: &purge_model::Candidate) -> bool {
+    c.evidence.iter().all(|e| e.tier != Tier::A)
+}
 
 fn root(path: &str, kind: RootKind, source: RootSource) -> Root {
     Root {
@@ -55,6 +70,7 @@ fn uninstaller_directory_inside_the_install_root() {
         RootKind::InferredRoot,
         RootSource::UninstallerDir,
     ));
+    fp.uninstallers = vec![r"C:\Program Files\Mozilla Firefox\uninstall\helper.exe".into()];
     let fixture = machine()
         .file(
             r"C:\Program Files\Mozilla Firefox\uninstall\helper.exe",
@@ -144,4 +160,95 @@ fn another_apps_uninstaller_is_blocked() {
             app: "Git Extras".into()
         }]
     );
+}
+
+/// A shared folder holds other tools with uninstallers of their own, registered or not. A name
+/// like `uninstall.exe` in the app's root is the app's only when it is the app's own uninstaller.
+#[test]
+fn a_file_named_like_an_uninstaller_that_is_not_the_apps_own_is_tier_b() {
+    let fixture = machine()
+        .file(r"C:\Program Files\Git\unins000.exe", 3_000_000)
+        .file(r"C:\Program Files\Git\unins001.exe", 2_000_000)
+        .file(r"C:\Program Files\Git\unins001.dat", 1_000)
+        .file(r"C:\Program Files\Git\uninstall.exe", 500_000)
+        .build();
+    let found = World::new(fixture, git_fp()).scan(&FsUninstaller);
+    let own = by_path(&found, r"C:\Program Files\Git\unins000.exe");
+    assert!(own.evidence.iter().any(|e| e.tier == Tier::A));
+    for theirs in ["unins001.exe", "unins001.dat", "uninstall.exe"] {
+        let c = by_path(&found, &format!(r"C:\Program Files\Git\{theirs}"));
+        assert!(all_tier_b(c), "{theirs}: {c:?}");
+        assert!(
+            c.evidence
+                .iter()
+                .all(|e| e.detail.get("unproven").is_some()),
+            "{theirs}"
+        );
+    }
+    // A fingerprint that does not name the app's uninstaller (an MSI app, an older fingerprint)
+    // proves none of them.
+    let fixture = machine()
+        .file(r"C:\Program Files\Git\unins000.exe", 3_000_000)
+        .build();
+    let found = World::new(fixture, crate::git_fp()).scan(&FsUninstaller);
+    assert!(all_tier_b(&found[0]));
+}
+
+/// `<root>\Uninstall` of another tool in a shared root: nothing in it is the app's uninstaller.
+#[test]
+fn an_uninstall_directory_that_is_not_the_apps_own_is_not_preselected() {
+    let fixture = machine()
+        .file(r"C:\Program Files\Git\Uninstall\tool-setup.exe", 400_000)
+        .file(r"C:\Program Files\Git\Uninstall\tool.dat", 10)
+        .build();
+    let found = World::new(fixture, git_fp()).scan(&FsUninstaller);
+    let dir = by_path(&found, r"C:\Program Files\Git\Uninstall");
+    assert!(all_tier_b(dir), "{dir:?}");
+    assert_eq!(dir.blockers, [Blocker::UnmatchedChildren { n: 2 }]);
+}
+
+/// A directory in the uninstaller's folder that cannot be read: nothing shows what is in it.
+#[test]
+fn an_uninstall_directory_that_cannot_be_read_is_not_preselected() {
+    let mut fp = firefox_fp();
+    fp.uninstallers = vec![r"C:\Program Files\Mozilla Firefox\uninstall\helper.exe".into()];
+    let dir = r"C:\Program Files\Mozilla Firefox\uninstall";
+    let fixture = machine()
+        .file(&format!(r"{dir}\helper.exe"), 1_200_000)
+        .file(&format!(r"{dir}\locked\x.bin"), 5)
+        .denied(&format!(r"{dir}\locked"))
+        .build();
+    let found = World::new(fixture, fp).scan(&FsUninstaller);
+    let c = by_path(&found, dir);
+    assert!(
+        c.blockers.contains(&Blocker::UnmatchedChildren { n: 1 }),
+        "{:?}",
+        c.blockers
+    );
+}
+
+/// The app's own uninstaller directory with something in it that is not the uninstaller's: the
+/// directory is the app's, what it holds is not shown to be.
+#[test]
+fn the_apps_uninstall_directory_with_other_files_in_it_is_not_preselected() {
+    let mut fp = firefox_fp();
+    fp.uninstallers = vec![r"C:\Program Files\Mozilla Firefox\uninstall\helper.exe".into()];
+    let dir = r"C:\Program Files\Mozilla Firefox\uninstall";
+    let fixture = |extra: bool| {
+        let mut b = machine()
+            .file(&format!(r"{dir}\helper.exe"), 1_200_000)
+            .file(&format!(r"{dir}\uninstall.log"), 50_000);
+        if extra {
+            b = b.file(&format!(r"{dir}\notes\mine.txt"), 5);
+        }
+        b.build()
+    };
+    let found = World::new(fixture(false), fp.clone()).scan(&FsUninstaller);
+    let c = by_path(&found, dir);
+    assert!(c.blockers.is_empty(), "{:?}", c.blockers);
+    assert!(c.evidence.iter().any(|e| e.tier == Tier::A));
+
+    let found = World::new(fixture(true), fp).scan(&FsUninstaller);
+    let c = by_path(&found, dir);
+    assert_eq!(c.blockers, [Blocker::UnmatchedChildren { n: 1 }]);
 }

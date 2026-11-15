@@ -22,7 +22,10 @@
 //!    - the category is neither `UserData` nor `System`;
 //!    - the action fits the target and is not `ReportOnly`.
 //! 4. Otherwise **Likely** iff Tier A evidence exists together with a soft blocker (stated or implied, see
-//!    above) or a (stored) harm ≥ Medium, or S ≥ 4, or `ExactFullName` is present; otherwise **Weak**.
+//!    above) or a (stored) harm ≥ Medium, or S ≥ 4, or `ExactFullName` is present, or the item is the
+//!    app's own data folder named after the product (a `UserData` path with the `UserData` blocker and
+//!    `ProductSubfolderOfVendor` about that path, without `GenericName`): shown, and by its category and
+//!    blocker never Safe; otherwise **Weak**.
 //! 5. **Caps.** A `Signature` candidate is at most Likely (no shipped-and-anchored knowledge rule exists in
 //!    M1a). A `ProbeAgent` candidate needs engine Tier A for Safe like any other, and is never preselected.
 //! 6. **Mode rules.** `external`: Safe only if the supporting Tier A evidence is `AdminOnly` and the score
@@ -43,7 +46,7 @@ use crate::score::{LIKELY_MIN, SAFE_MIN, effective_weight, score, score_where};
 
 /// Version of the rule set in this crate. Bump it with every change that can alter a decision or an
 /// explanation; the golden tests are keyed by it and it is part of the plan hash.
-pub const POLICY_VERSION: &str = "m1a.2";
+pub const POLICY_VERSION: &str = "m1a.6";
 
 /// Whether a target is machine-wide or belongs to one user, for Rule T (§5.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -244,6 +247,26 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
         .iter()
         .any(|e| e.kind == EvidenceKind::ExactFullName && e.tier != Tier::Ai);
 
+    // The app's own data folder, named after the product below its vendor's folder
+    // (`%APPDATA%\<Vendor>\<Product>`): shown, never preselected (§1.4). It is user data with the
+    // `UserData` blocker, so it can never be Safe; what the score would say about deleting it
+    // unseen (programs inside, many files) is what "shown, not ticked" already says, and a
+    // hidden profile is a leftover nobody gets to decide about. The evidence is about this
+    // exact folder: the vendor's folder itself (`VendorContainer`) and a sibling product's
+    // folder do not carry it. A folder with a generic name is not lifted.
+    let product_data_folder = c.category == Category::UserData
+        && matches!(c.target, Target::Path { .. })
+        && c.blockers.iter().any(|b| matches!(b, Blocker::UserData))
+        && c.evidence.iter().any(|e| {
+            e.kind == EvidenceKind::ProductSubfolderOfVendor
+                && e.tier != Tier::Ai
+                && effective_weight(e) > 0
+        })
+        && !c
+            .evidence
+            .iter()
+            .any(|e| e.kind == EvidenceKind::GenericName);
+
     let mut notes: Vec<Note> = Vec::new();
     let strong = supported && total >= SAFE_MIN && !soft;
     let safe = strong && harm <= Harm::Low && category_ok && actionable;
@@ -252,6 +275,7 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
     } else if (any_tier_a && (soft || c.harm >= Harm::Medium))
         || total >= LIKELY_MIN
         || exact_full_name
+        || product_data_folder
     {
         Band::Likely
     } else {

@@ -306,6 +306,29 @@ pub fn cli(switch: &Switch, host: &mut FakeHost, args: &[&str]) -> Ran {
 
 /// [`cli`] with the runner's options.
 pub fn cli_with(switch: &Switch, host: &mut FakeHost, args: &[&str], run: RunOptions) -> Ran {
+    cli_in(switch, host, args, run, Settings::default())
+}
+
+/// The shipped baselines (`kb/baselines`): the fixtures' Windows is one of them.
+pub fn shipped_baselines() -> Settings {
+    Settings {
+        baseline_dir: Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../kb/baselines")
+                .to_path_buf(),
+        ),
+        ..Settings::default()
+    }
+}
+
+/// [`cli_with`] with the engine's settings (a baseline directory).
+pub fn cli_in(
+    switch: &Switch,
+    host: &mut FakeHost,
+    args: &[&str],
+    run: RunOptions,
+    settings: Settings,
+) -> Ran {
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
     let exit = cli::run(
@@ -313,7 +336,7 @@ pub fn cli_with(switch: &Switch, host: &mut FakeHost, args: &[&str], run: RunOpt
         &mut Env {
             sources: switch.sources(),
             host,
-            settings: Settings::default(),
+            settings,
             run_options: run,
             stdout: &mut out,
             stderr: &mut err,

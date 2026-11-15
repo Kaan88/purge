@@ -20,6 +20,11 @@
 //!      `UnmatchedChildren { n }` with the number of such descendants, so the parent is Likely and
 //!      unticked.
 //!
+//!    The first of these holds for **every** parent whose action removes the whole tree, ticked or
+//!    not (Likely, Weak, Safe but unticked): an item the user may tick must not take with it what the
+//!    engine keeps for another owner (the URL-scheme key of a product that stays installed, offered
+//!    as a key while the command value below it is kept, x2-vscode-with-user).
+//!
 //!    The parent is then decided again. Removing it would have removed what the engine itself refused or
 //!    left unticked, so it must not stay preselected. A delete-if-empty container that counted on the
 //!    parent being removed loses its `EmptyAfterPlan` again ([`crate::empty_after::revalidate`]).
@@ -27,6 +32,10 @@
 //!    ancestor: its id is appended to that ancestor's `children` and it leaves the top level. What is
 //!    absorbed is Safe itself, or merely short of evidence of its own (Likely or Weak on score alone); the
 //!    parent's proof of the whole tree covers it.
+//!
+//!    Before that, a delete-if-empty container that holds something the plan does not list at all
+//!    (another product's key or folder, a value nobody claimed) is left out of the plan
+//!    ([`crate::empty_after::unemptiable`]): its action could never succeed.
 //! 3. A parent that is not absorbing **never absorbs**: it and its descendants all stay top-level items
 //!    (the BCU nested-delete regression: parent Likely + child Safe gives two items, and the order puts the
 //!    child first).
@@ -89,16 +98,27 @@ fn band(candidate: &Candidate) -> Option<Band> {
     candidate.decision.as_ref().map(|d| d.band)
 }
 
+/// Whether the candidate's action removes everything below its target.
+fn removes_whole(candidate: &Candidate) -> bool {
+    matches!(
+        (&candidate.target, candidate.action),
+        (Target::Path { .. }, Action::Quarantine) | (Target::RegKey { .. }, Action::DeleteKey)
+    )
+}
+
 /// Whether the candidate would take its descendants with it: Safe, preselected, whole-tree removal.
 fn is_absorbing(candidate: &Candidate) -> bool {
     candidate
         .decision
         .as_ref()
         .is_some_and(|d| d.band == Band::Safe && d.preselected)
-        && matches!(
-            (&candidate.target, candidate.action),
-            (Target::Path { .. }, Action::Quarantine) | (Target::RegKey { .. }, Action::DeleteKey)
-        )
+        && removes_whole(candidate)
+}
+
+/// Whether the candidate is offered (in any band but Blocked) with an action that removes the whole
+/// tree.
+fn is_offered_whole(candidate: &Candidate) -> bool {
+    removes_whole(candidate) && band(candidate).is_some_and(|b| b != Band::Blocked)
 }
 
 /// What a descendant means for a parent that would remove it.
@@ -142,11 +162,14 @@ fn objection(descendant: &Candidate) -> Objection {
     }
 }
 
-/// Rule 1: the blockers each absorbing parent earns from its descendants, by index of the parent.
+/// Rule 1: the blockers each parent earns from its descendants, by index of the parent. An absorbing
+/// parent earns both kinds; any other parent offered with a whole-tree action earns only the
+/// other-owner blocker.
 fn objections(decided: &[Candidate]) -> Vec<(usize, Vec<Blocker>)> {
     let mut demotions: Vec<(usize, Vec<Blocker>)> = Vec::new();
     for (pi, parent) in decided.iter().enumerate() {
-        if !is_absorbing(parent) {
+        let absorbing = is_absorbing(parent);
+        if !absorbing && !is_offered_whole(parent) {
             continue;
         }
         let mut unmatched: u32 = 0;
@@ -166,9 +189,17 @@ fn objections(decided: &[Candidate]) -> Vec<(usize, Vec<Blocker>)> {
                 Objection::Unmatched => unmatched = unmatched.saturating_add(1),
             }
         }
-        if unmatched > 0 {
+        if unmatched > 0 && absorbing {
             blockers.push(Blocker::UnmatchedChildren { n: unmatched });
         }
+        // Only what the parent does not carry yet is an objection: the caller repeats this pass until
+        // it finds none, so a blocker must never be reported twice, whatever band it led to.
+        blockers.retain(|new| {
+            !parent.blockers.iter().any(|old| match (old, new) {
+                (Blocker::UnmatchedChildren { .. }, Blocker::UnmatchedChildren { .. }) => true,
+                _ => old == new,
+            })
+        });
         if !blockers.is_empty() {
             demotions.push((pi, blockers));
         }
@@ -184,7 +215,8 @@ pub fn collapse(mut decided: Vec<Candidate>, ctx: &DecideCtx<'_>) -> Collapsed {
     // object is itself a descendant of the parents above it. The pass is repeated only because a demotion
     // can leave a delete-if-empty container non-empty (its `EmptyAfterPlan` is then taken back, and a
     // container that loses the Start Menu exemption with it becomes Blocked). Every round turns at least
-    // one Safe item into something else, so the loop ends.
+    // one Safe item into something else or gives a parent a blocker it did not have (a blocker a
+    // parent already carries is never reported again), so the loop ends.
     loop {
         let demotions = objections(&decided);
         let demoted = !demotions.is_empty();
@@ -199,6 +231,17 @@ pub fn collapse(mut decided: Vec<Candidate>, ctx: &DecideCtx<'_>) -> Collapsed {
         if !demoted && revoked.is_empty() {
             break;
         }
+    }
+
+    // A delete-if-empty container holding something the plan does not list can never be emptied: it is
+    // not offered. Judged on the final decisions, so a child that became Blocked above no longer counts.
+    let unemptiable = empty_after::unemptiable(&decided);
+    if !unemptiable.is_empty() {
+        let mut index = 0;
+        decided.retain(|_| {
+            index += 1;
+            !unemptiable.contains(&(index - 1))
+        });
     }
 
     // Rule 2: the outermost absorbing ancestor of each candidate, if any.
@@ -376,6 +419,67 @@ mod tests {
         );
         assert_eq!(verdict(parent), (Band::Blocked, false));
         assert_eq!(out.top.len(), 3);
+    }
+
+    /// x2-vscode-with-user: the URL-scheme key was offered Likely (unticked) as a whole key while the
+    /// command value below it was kept for the install that stays. Ticking the key would have taken
+    /// the kept value with it.
+    #[test]
+    fn a_child_kept_for_another_owner_blocks_an_unticked_parent_too() {
+        let scheme = r"HKLM\SOFTWARE\Vendor\App\scheme";
+        let parent = || {
+            let mut c = cand("parent", key(scheme), "CLS-PROTOCOL");
+            c.evidence
+                .push(ev(EvidenceKind::ExactFullName, Scope::Key, "name"));
+            c
+        };
+        let child = |blocker: Option<Blocker>| {
+            let mut c = owned_value("child", &format!(r"{scheme}\shell\open\command"), "");
+            c.blockers.extend(blocker);
+            c
+        };
+        // Nothing kept below it: Likely, as decided.
+        let out = run(vec![parent(), child(None)]);
+        assert_eq!(verdict(&out.top[0]), (Band::Likely, false));
+        assert!(out.top[0].blockers.is_empty());
+        // A value kept for the other install: the key is kept too, and says for whom.
+        let kept = Blocker::ReferencedByOtherApp {
+            app: "VS Code (User)".into(),
+        };
+        let out = run(vec![parent(), child(Some(kept))]);
+        assert_eq!(ids(&out.top), ["parent", "child"]);
+        assert_eq!(
+            out.top[0].blockers,
+            vec![Blocker::ContainsOtherApp {
+                app: "VS Code (User)".into()
+            }]
+        );
+        assert_eq!(verdict(&out.top[0]), (Band::Blocked, false));
+        // A child the engine refuses for a reason of its own says nothing about another owner: an
+        // unticked parent stays as it is.
+        let out = run(vec![parent(), child(Some(Blocker::TrustedInstallerOwned))]);
+        assert_eq!(verdict(&out.top[0]), (Band::Likely, false));
+        assert!(out.top[0].blockers.is_empty());
+        // A parent that is kept for a reason of its own is not offered: nothing is added to it.
+        let mut own_reason = parent();
+        own_reason.blockers.push(Blocker::TrustedInstallerOwned);
+        let kept = Blocker::ReferencedByOtherApp {
+            app: "VS Code (User)".into(),
+        };
+        let out = run(vec![own_reason, child(Some(kept))]);
+        assert_eq!(out.top[0].blockers, vec![Blocker::TrustedInstallerOwned]);
+        // A parent that removes nothing but itself is not concerned.
+        let mut if_empty = parent();
+        if_empty.action = Action::RemoveDirIfEmpty;
+        let kept = Blocker::ReferencedByOtherApp {
+            app: "VS Code (User)".into(),
+        };
+        let out = run(vec![if_empty, child(Some(kept))]);
+        assert!(
+            out.top
+                .iter()
+                .all(|c| !matches!(c.blockers[..], [Blocker::ContainsOtherApp { .. }]))
+        );
     }
 
     #[test]
@@ -570,6 +674,108 @@ mod tests {
         assert_eq!(verdict(&out.top[0]), (Band::Safe, false));
         assert_eq!(ids(&out.top), ["parent", "child"]);
         assert!(out.top[0].children.is_empty());
+    }
+
+    fn pending(id: &str, target: Target, children: &[crate::empty_after::Child<'_>]) -> Candidate {
+        use crate::empty_after::mark_pending;
+        use purge_model::Facts;
+        let scope = Scope::of(&target).unwrap();
+        let mut c = cand(id, target, "REG-SOFTWARE");
+        c.action = Action::RemoveDirIfEmpty;
+        c.evidence.push(
+            ev(EvidenceKind::VendorContainer, scope, "vendor")
+                .with_detail(mark_pending(Facts::new(), children.iter().copied())),
+        );
+        c
+    }
+
+    /// The gate case: Firefox is removed, Thunderbird stays. `Software\Mozilla` still holds
+    /// `Thunderbird`, which is nothing the plan lists, so the vendor key is not offered at all.
+    #[test]
+    fn vendor_key_holding_another_products_key_is_not_offered() {
+        use crate::empty_after::Child;
+        let vendor = r"HKLM\SOFTWARE\WOW6432Node\Vendor";
+        let out = run(vec![
+            pending(
+                "vendor",
+                key(vendor),
+                &[Child::Container("App"), Child::Container("Other")],
+            ),
+            owned_key("app", &format!(r"{vendor}\App")),
+        ]);
+        assert_eq!(ids(&out.top), ["app"]);
+        assert!(out.absorbed.is_empty());
+        // The same listing without the other product: the key is emptied and goes.
+        let out = run(vec![
+            pending("vendor", key(vendor), &[Child::Container("App")]),
+            owned_key("app", &format!(r"{vendor}\App")),
+        ]);
+        assert_eq!(ids(&out.top), ["vendor", "app"]);
+        assert_eq!(verdict(&out.top[0]), (Band::Safe, true));
+    }
+
+    /// The file-system equivalent: a vendor folder that still holds a sibling product's folder.
+    #[test]
+    fn vendor_folder_holding_another_products_folder_is_not_offered() {
+        use crate::empty_after::Child;
+        let out = run(vec![
+            pending(
+                "vendor",
+                path(r"C:\Program Files\Vendor"),
+                &[Child::Container("App"), Child::Container("Mail")],
+            ),
+            owned_path("app", r"C:\Program Files\Vendor\App"),
+        ]);
+        assert_eq!(ids(&out.top), ["app"]);
+    }
+
+    /// A container that holds a value nobody claimed can never be deleted-if-empty, and neither can the
+    /// container above it (`HKLM\SOFTWARE\mozilla.org\Mozilla` with `CurrentVersion`).
+    #[test]
+    fn container_holding_an_unclaimed_value_is_not_offered_and_neither_is_its_parent() {
+        use crate::empty_after::Child;
+        let out = run(vec![
+            pending(
+                "outer",
+                key(r"HKLM\SOFTWARE\vendor.org"),
+                &[Child::Container("Vendor")],
+            ),
+            pending(
+                "inner",
+                key(r"HKLM\SOFTWARE\vendor.org\Vendor"),
+                &[Child::Leaf("CurrentVersion")],
+            ),
+        ]);
+        assert!(out.top.is_empty(), "{:?}", ids(&out.top));
+    }
+
+    /// A child that is in the plan but not ticked keeps the container listed: ticking the child makes
+    /// the container's action possible (`Roaming\Mozilla` above the profile folder).
+    #[test]
+    fn container_whose_children_are_all_listed_stays_even_when_they_are_unticked() {
+        use crate::empty_after::Child;
+        let out = run(vec![
+            pending(
+                "vendor",
+                path(r"C:\ProgramData\Vendor"),
+                &[Child::Container("App"), Child::Leaf("desktop.ini")],
+            ),
+            named("app", r"C:\ProgramData\Vendor\App"),
+        ]);
+        assert_eq!(ids(&out.top), ["vendor", "app"]);
+        assert_eq!(verdict(&out.top[0]), (Band::Weak, false));
+        // A Blocked child is not something the user can tick.
+        let mut blocked = named("app", r"C:\ProgramData\Vendor\App");
+        blocked.blockers.push(Blocker::ExistedBeforeInstall);
+        let out = run(vec![
+            pending(
+                "vendor",
+                path(r"C:\ProgramData\Vendor"),
+                &[Child::Container("App")],
+            ),
+            blocked,
+        ]);
+        assert_eq!(ids(&out.top), ["app"]);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use purge_model::{
 use purge_policy::band::{POLICY_VERSION, PolicyCtx, TargetScope, decide, effective_tier, rank};
 
 /// The policy version the rows below were written for.
-const GOLDEN_VERSION: &str = "m1a.2";
+const GOLDEN_VERSION: &str = "m1a.6";
 
 const ADMIN: SourceTrust = SourceTrust::AdminOnly;
 const USER: SourceTrust = SourceTrust::UserWritable;
@@ -762,6 +762,113 @@ fn golden() -> Vec<Case> {
         Likely,
         false,
         -1,
+    );
+    // The app's own data folder, `<Vendor>\<Product>`: shown whatever is in it, never ticked.
+    let profile = |category: Category, kinds: &[EvidenceKind]| {
+        cand(
+            path(r"C:\Users\u\AppData\Roaming\Vendor\App"),
+            Action::Quarantine,
+            category,
+            kinds
+                .iter()
+                .map(|k| ev(*k, Scope::Path, USER, "name"))
+                .collect(),
+        )
+    };
+    add(
+        "product data folder with programs in it is shown",
+        profile(
+            Category::UserData,
+            &[ProductSubfolderOfVendor, ExecutablesPresent],
+        )
+        .blocker(Blocker::UserData),
+        post_user(),
+        Likely,
+        false,
+        -1,
+    );
+    add(
+        "product data folder alone is shown",
+        profile(Category::UserData, &[ProductSubfolderOfVendor]).blocker(Blocker::UserData),
+        post_user(),
+        Likely,
+        false,
+        3,
+    );
+    add(
+        "product data folder with a generic name stays weak",
+        profile(Category::UserData, &[ProductSubfolderOfVendor, GenericName])
+            .blocker(Blocker::UserData),
+        post_user(),
+        Weak,
+        false,
+        0,
+    );
+    add(
+        "product subfolder that is not user data stays weak",
+        profile(Category::AppData, &[ProductSubfolderOfVendor]).blocker(Blocker::UserData),
+        post_user(),
+        Weak,
+        false,
+        3,
+    );
+    add(
+        "product data folder without the user-data blocker stays weak",
+        profile(Category::UserData, &[ProductSubfolderOfVendor]),
+        post_user(),
+        Weak,
+        false,
+        3,
+    );
+    add(
+        "product data folder is lowered by an assistant's note like any other",
+        profile(Category::UserData, &[ProductSubfolderOfVendor])
+            .blocker(Blocker::UserData)
+            .more(ai(-1)),
+        post_user(),
+        Weak,
+        false,
+        3,
+    );
+    add(
+        "product data folder named by an assistant only stays weak",
+        {
+            let mut c =
+                profile(Category::UserData, &[ProductSubfolderOfVendor]).blocker(Blocker::UserData);
+            c.evidence[0].tier = Tier::Ai;
+            c
+        },
+        post_user(),
+        Weak,
+        false,
+        0,
+    );
+    add(
+        "product-named key is not lifted",
+        cand(
+            key(r"HKLM\SOFTWARE\Vendor\App"),
+            Action::DeleteKey,
+            Category::UserData,
+            vec![ev(ProductSubfolderOfVendor, Scope::Key, ADMIN, "name")],
+        )
+        .blocker(Blocker::UserData),
+        post_machine(),
+        Weak,
+        false,
+        3,
+    );
+    add(
+        "vendor container next to a product data folder stays weak",
+        cand(
+            path(r"C:\Users\u\AppData\Roaming\Vendor"),
+            Action::RemoveDirIfEmpty,
+            Category::AppData,
+            vec![ev(VendorContainer, Scope::Path, USER, "vendor")],
+        ),
+        post_user(),
+        Weak,
+        false,
+        2,
     );
     add(
         "name token alone is weak",

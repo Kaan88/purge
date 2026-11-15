@@ -11,7 +11,9 @@
 //!   for each of them the edit of `MRUList` that drops its letter. The letter is emitted as a
 //!   `RegMultiSzSegment` of `MRUList` with its position: the order string is a list of one-letter
 //!   entries. A bare exe name is a Tier B anchor, so these stay unticked unless the reference snapshot
-//!   has the value;
+//!   has the value. The name is resolved first: when a `Classes\Applications\<exe>` key of that name
+//!   leads somewhere else (a portable copy the user registered), the entry is that program's and is not
+//!   offered (`reg_apppaths::bare_name_leads_elsewhere`);
 //! - `UserChoice\ProgId` naming a ProgID of P, as a report-only item. The deny-list refuses any change to
 //!   `UserChoice` (`reg.userchoice`); the user picks a new default in Settings.
 //!
@@ -61,7 +63,7 @@ impl Scanner for ClsFileExts {
         VALUE_CONTAINERS
     }
 
-    fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
+    fn scan(&self, ctx: &ScanCtx<'_>, app: &AppIdentityView) -> Vec<Candidate> {
         let mut out: Vec<Candidate> = Vec::new();
         let mut done: Vec<String> = Vec::new();
         for entry in &ctx.fp.ext_journal {
@@ -75,7 +77,7 @@ impl Scanner for ClsFileExts {
             done.push(folded);
             let facts = Facts::new().with("ext", entry.ext.clone());
             open_with_progids(ctx, &key, &facts, &mut out);
-            open_with_list(ctx, &key, &facts, &mut out);
+            open_with_list(ctx, app, &key, &facts, &mut out);
             out.extend(user_choice(ctx, &key, entry, &facts));
         }
         out
@@ -125,7 +127,13 @@ fn open_with_progids(ctx: &ScanCtx<'_>, key: &str, facts: &Facts, out: &mut Vec<
 }
 
 /// `OpenWithList` entries whose data is one of the app's main exe names, with the `MRUList` edits.
-fn open_with_list(ctx: &ScanCtx<'_>, key: &str, facts: &Facts, out: &mut Vec<Candidate>) {
+fn open_with_list(
+    ctx: &ScanCtx<'_>,
+    app: &AppIdentityView,
+    key: &str,
+    facts: &Facts,
+    out: &mut Vec<Candidate>,
+) {
     let list_key = handler::subkey(key, OPEN_WITH_LIST);
     let state = handler::key_state(ctx, &list_key);
     let mru = state
@@ -143,6 +151,9 @@ fn open_with_list(ctx: &ScanCtx<'_>, key: &str, facts: &Facts, out: &mut Vec<Can
         else {
             continue;
         };
+        if crate::reg_apppaths::bare_name_leads_elsewhere(ctx, app, exe) {
+            continue;
+        }
         let facts = facts.clone().with("exe", exe);
 
         let target = Target::RegValue {

@@ -11,6 +11,20 @@
 //! - the uninstaller's own directory, when it is a subdirectory of an InstallRoot (`<root>\uninstall`,
 //!   or an `UninstallerDir` root strictly inside an InstallRoot).
 //!
+//! # Whose uninstaller
+//!
+//! A name like `uninstall.exe` and a place in the app's folder do not make a file the app's: other
+//! tools live in shared folders with uninstallers of their own, registered or not. The fingerprint
+//! names the app's own uninstaller files (`Fingerprint::uninstallers`: the program of the
+//! `UninstallString`, and the Inno log and message file of the same number).
+//!
+//! - **A file** that is one of them keeps the evidence of its place and name (Tier A). Any other
+//!   file named like an uninstaller gets the same evidence at Tier B: listed, never preselected.
+//! - **A directory** is Tier A only when it holds one of them (or is the directory the harvest read
+//!   from the uninstaller's location). Whatever it holds that is neither one of them, nor named
+//!   `unins…`, nor named by the installer's log, is unproven: the directory gets
+//!   `UnmatchedChildren` and is not preselected.
+//!
 //! A root guessed from `DisplayIcon` is not searched: nothing ties a file named `uninstall.exe` there to
 //! this app. Every candidate needs verify-gone (removing the uninstaller of an app that is still
 //! installed would strand it), and one another app's records point at is blocked by the common blockers.
@@ -19,7 +33,9 @@
 //! MSI work of M1b.
 
 use purge_guard::prefix;
-use purge_model::{Action, Candidate, Category, Root, RootKind, RootSource, Target};
+use purge_model::{
+    Action, Blocker, Candidate, Category, InnoRecordKind, Root, RootKind, RootSource, Target,
+};
 use purge_source::types::FileMeta;
 
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner};
@@ -68,7 +84,7 @@ impl Scanner for FsUninstaller {
                 && prefix::parent(&root.path)
                     .is_some_and(|parent| ctx.inside_install_root(parent).is_some())
             {
-                artifact(ctx, &root.path, &meta, "uninstaller directory", &mut out);
+                directory(ctx, &root.path, &meta, true, &mut out);
             }
             let Some(entries) = list(ctx, &root.path) else {
                 continue;
@@ -80,13 +96,17 @@ impl Scanner for FsUninstaller {
                         .iter()
                         .any(|n| entry.name.eq_ignore_ascii_case(n));
                     if named && root.kind == RootKind::InstallRoot {
-                        artifact(ctx, &path, &entry.meta, "uninstaller directory", &mut out);
+                        let from_harvest = ctx.fp.roots.iter().any(|r| {
+                            r.source == RootSource::UninstallerDir
+                                && prefix::is_same(&r.path, &path)
+                        });
+                        directory(ctx, &path, &entry.meta, from_harvest, &mut out);
                     }
                 } else if !entry.meta.is_dir()
                     && !entry.meta.is_reparse_point()
                     && let Some(what) = uninstaller_file(&entry.name)
                 {
-                    artifact(ctx, &path, &entry.meta, what, &mut out);
+                    artifact(ctx, &path, &entry.meta, what, own(ctx, &path), &mut out);
                 }
             }
         }
@@ -123,8 +143,121 @@ fn uninstaller_file(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Offers one uninstaller file or directory.
-fn artifact(ctx: &ScanCtx<'_>, path: &str, meta: &FileMeta, what: &str, out: &mut Vec<Candidate>) {
+/// Whether `path` is one of the app's own uninstaller files.
+fn own(ctx: &ScanCtx<'_>, path: &str) -> bool {
+    ctx.fp
+        .uninstallers
+        .iter()
+        .any(|file| prefix::is_same(file, path))
+}
+
+/// Offers an uninstaller directory. `from_harvest`: it is the directory the harvest read from the
+/// uninstaller's own location.
+fn directory(
+    ctx: &ScanCtx<'_>,
+    path: &str,
+    meta: &FileMeta,
+    from_harvest: bool,
+    out: &mut Vec<Candidate>,
+) {
+    let holds_own = ctx
+        .fp
+        .uninstallers
+        .iter()
+        .any(|file| prefix::is_inside(file, path));
+    let unproven = unproven_files(ctx, path);
+    let Some(mut b) = builder(
+        ctx,
+        path,
+        "uninstaller directory",
+        from_harvest || holds_own,
+    ) else {
+        return;
+    };
+    match unproven {
+        Some(0) => {}
+        Some(n) => {
+            b.blocker(Blocker::UnmatchedChildren { n });
+        }
+        // Not read to the end: nothing in it is shown to be the uninstaller's.
+        None => {
+            b.blocker(Blocker::UnmatchedChildren { n: 1 });
+        }
+    }
+    sized(&mut b, &measure(ctx, path, meta));
+    emit(out, b);
+}
+
+/// The number of files under `dir` that are not shown to belong to the uninstaller: not one of the
+/// app's own uninstaller files, not named like an uninstaller file, and not named by a file record of
+/// the installer's log. `None` when the directory could not be read to the end.
+fn unproven_files(ctx: &ScanCtx<'_>, dir: &str) -> Option<u32> {
+    let logged = |file: &str| {
+        ctx.fp.inno.iter().any(|r| {
+            r.kind == InnoRecordKind::DeleteFile
+                && !r.existed_before
+                && !r.shared
+                && matches!(&r.target, Target::Path { path } if prefix::is_same(path, file))
+        })
+    };
+    let mut count = 0u32;
+    let mut visited = 0usize;
+    let mut stack = vec![(dir.trim_end_matches(prefix::SEP).to_owned(), 0u32)];
+    while let Some((dir, depth)) = stack.pop() {
+        let entries = list(ctx, &dir)?;
+        for entry in &entries {
+            visited += 1;
+            if visited > ctx.limits.max_walk_entries {
+                return None;
+            }
+            let child = join(&dir, &entry.name);
+            if is_plain_dir(&entry.meta) {
+                if depth >= ctx.limits.max_depth {
+                    return None;
+                }
+                stack.push((child, depth + 1));
+            } else if entry.meta.is_dir() || entry.meta.is_reparse_point() {
+                // A link: whatever is behind it is not the uninstaller's.
+                count = count.saturating_add(1);
+            } else if !own(ctx, &child) && !uninstaller_named(&entry.name) && !logged(&child) {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    Some(count)
+}
+
+/// Whether a file in an uninstaller directory is named like a part of the uninstaller: `unins…` with
+/// any extension (`uninstall.exe`, `uninstall.log`, `unins000.dat`).
+fn uninstaller_named(name: &str) -> bool {
+    name.get(..5)
+        .is_some_and(|start| start.eq_ignore_ascii_case("unins"))
+}
+
+/// Offers one uninstaller file. `own`: it is one of the app's own uninstaller files.
+fn artifact(
+    ctx: &ScanCtx<'_>,
+    path: &str,
+    meta: &FileMeta,
+    what: &str,
+    own: bool,
+    out: &mut Vec<Candidate>,
+) {
+    let Some(mut b) = builder(ctx, path, what, own) else {
+        return;
+    };
+    sized(&mut b, &measure(ctx, path, meta));
+    emit(out, b);
+}
+
+/// The candidate for an uninstaller file or directory with its evidence and common blockers. Unless
+/// it is the app's `own`, place and name are Tier B: they are not the app's alone.
+fn builder<'a>(
+    ctx: &'a ScanCtx<'a>,
+    path: &str,
+    what: &str,
+    own: bool,
+) -> Option<crate::framework::CandidateBuilder<'a>> {
     let mut b = ctx.candidate(
         ID,
         Target::Path {
@@ -136,11 +269,13 @@ fn artifact(ctx: &ScanCtx<'_>, path: &str, meta: &FileMeta, what: &str, out: &mu
     // Under an InstallRoot the file is the app's by its place as well.
     b.inside_install_root();
     if !b.uninstaller_artifact(what) {
-        return;
+        return None;
+    }
+    if !own {
+        b.cap_at_tier_b("not the app's own uninstaller");
     }
     b.require_verify_gone().common_blockers();
-    sized(&mut b, &measure(ctx, path, meta));
-    emit(out, b);
+    Some(b)
 }
 
 #[cfg(test)]

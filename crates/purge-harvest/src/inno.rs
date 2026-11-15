@@ -623,6 +623,26 @@ impl LogRecord {
         self.dir_flag(flags::DIR_DELETE_SUBDIRS_ALSO)
     }
 
+    /// `DeleteDirOrFiles` only: the directory this record shows the installer to have **created**, without
+    /// the extended-length prefix.
+    ///
+    /// Inno Setup logs a directory it makes (the app directory, the directories of its files) as a
+    /// delete-if-empty record: the directory flag alone, without "delete the files" and without the
+    /// "extra item" flag of an `[UninstallDelete]` entry. A directory that was already there is not
+    /// logged, so the absence of such a record for the app directory in every install run of the log
+    /// means the app was installed into a folder that existed before.
+    pub fn created_dir(&self) -> Option<String> {
+        let LogOp::DeleteDirOrFiles { path } = &self.op else {
+            return None;
+        };
+        let made = self.dir_is_dir()
+            && !self.dir_deletes_files()
+            && !self.dir_flag(flags::DIR_EXTRA)
+            && !has_wildcard(path);
+        let path = strip_extended_prefix(path);
+        (made && !path.is_empty()).then_some(path)
+    }
+
     /// Maps the record to the model's [`InnoRecord`]. Prefer [`UninstallLog::model_records`], which
     /// also knows the header.
     ///
