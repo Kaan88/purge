@@ -1539,6 +1539,51 @@ fn value_actions_bind_to_the_validated_data() {
     ));
 }
 
+/// A segment edit's act-time binding (review item 4): the edit is one read-modify-write of the value as
+/// it is at the act, so other content of the same type passes, while another type is
+/// `VALUE_CHANGED`; a value that is gone is vanished.
+#[test]
+fn segment_edits_bind_to_the_validated_type_not_the_content() {
+    let k = TestKey::new();
+    k.create("Env");
+    k.set("Env", "Path", REG_SZ, &utf16z("a;b;c"));
+    let mut ctx = ctx(&[]);
+    let seg = ExecOp::EditSegment {
+        key: k.wire("Env"),
+        name: "Path".into(),
+        segment: "b".into(),
+        index: Some(1),
+    };
+    let item = GateItem::new(&seg, long());
+    let id = validate_and_record(&mut ctx, &item);
+
+    // Other content, same type: passes, with the value as it is now on the handle.
+    k.set("Env", "Path", REG_SZ, &utf16z("a;b;c;d"));
+    let checked = open_and_check_key(&ctx, id).pass().unwrap();
+    assert_eq!(checked.value().unwrap().data, utf16z("a;b;c;d"));
+    // The handle can act on the value.
+    checked
+        .key()
+        .set_value_raw("Probe", REG_DWORD, &[1, 0, 0, 0])
+        .unwrap();
+    drop(checked);
+    // Shorter, segment gone: still the gate's pass; the plan on the handle decides (vanished).
+    k.set("Env", "Path", REG_SZ, &utf16z("a"));
+    assert!(matches!(open_and_check_key(&ctx, id), GateOutcome::Pass(_)));
+    // Same bytes, another type (a list still): changed since the scan.
+    k.set("Env", "Path", 2, &utf16z("a;b;c")); // REG_EXPAND_SZ
+    assert_refused(
+        &open_and_check_key(&ctx, id),
+        Blocker::ChangedSinceScan,
+        live_reason::VALUE_CHANGED,
+    );
+    // Gone.
+    k.open("Env", KeyAccess::SET_VALUE)
+        .delete_value("Path")
+        .unwrap();
+    assert!(open_and_check_key(&ctx, id).is_vanished());
+}
+
 #[test]
 fn key_actions_and_emptiness() {
     let k = TestKey::new();
@@ -1717,6 +1762,53 @@ fn registry_links_at_the_leaf_and_on_the_path_are_refused() {
     assert_eq!(
         (refusal.blocker, refusal.reason),
         (Blocker::ChangedSinceScan, reason::UNDO_KEY_MISSING)
+    );
+}
+
+/// Review item 5: a value or segment op whose own key was replaced by a registry link after validation
+/// is the link refusal, not a vanished value (the link key holds no such value, only its target).
+#[test]
+fn a_value_or_segment_key_replaced_by_a_link_is_the_link_refusal() {
+    let mut k = TestKey::new();
+    k.create(r"Real\Sub");
+    k.set(r"Real\Sub", "v", REG_SZ, &utf16z("a;b"));
+    k.create("Holder");
+    k.set("Holder", "v", REG_SZ, &utf16z("a;b"));
+    let mut ctx = ctx(&[]);
+    let value = value_op(&k.wire("Holder"), "v");
+    let seg = ExecOp::EditSegment {
+        key: k.wire("Holder"),
+        name: "v".into(),
+        segment: "b".into(),
+        index: Some(1),
+    };
+    let value_item = GateItem::new(&value, long());
+    let seg_item = GateItem::new(&seg, long());
+    let value_id = validate_and_record(&mut ctx, &value_item);
+    let seg_id = validate_and_record(&mut ctx, &seg_item);
+
+    TestKey::nuke(&k.open("Holder", KeyAccess::DELETE));
+    k.link("Holder", r"Real\Sub");
+    for id in [value_id, seg_id] {
+        assert_refused(
+            &open_and_check_key(&ctx, id),
+            Blocker::RegLink,
+            live_reason::KEY_IS_LINK,
+        );
+    }
+    assert_refused(
+        &validate(&ctx, &value_item),
+        Blocker::RegLink,
+        live_reason::KEY_IS_LINK,
+    );
+    // The value behind the link is untouched.
+    assert_eq!(
+        k.open(r"Real\Sub", KeyAccess::READ)
+            .value("v")
+            .unwrap()
+            .unwrap()
+            .data,
+        utf16z("a;b")
     );
 }
 

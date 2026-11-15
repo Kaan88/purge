@@ -12,12 +12,23 @@
 //!   reads it back, parses it, compares it with what was meant to be written and hashes the bytes read.
 //!   Only that path and [`read_verified`] (which checks size and SHA-256 against the journal's
 //!   [`BackupRef`] before parsing) produce a [`VerifiedBackup`], and every function that deletes or
-//!   restores takes one.
+//!   restores takes one. Both go through the store's checked handles only ([`SessionDir::create_file`],
+//!   [`SessionDir::open_file`], [`StoreFile`](crate::storage::StoreFile)); no file inside the store is
+//!   opened, created, flushed or removed here by path.
+//! - **One route to a key.** Nothing here maps a key path to a key: restores act below the parent the
+//!   gate opened and checked ([`CheckedKeyParent`], [`CheckedValueKey`] from `gate::check_undo_key`), and
+//!   a tree restore refuses a parent whose leaf is not the backup's root key
+//!   ([`RestoreError::NotThisKey`]). The backup
+//!   document records the plan's spelling of the key (`RegBackup::key`); the `purge.regbackup/1` schema
+//!   has no field for the canonical address the gate opened, so undo derives that address again from the
+//!   journalled target through the gate's probe, the route the delete took.
 //! - **Deletes act on inspected handles.** [`delete_tree`] reopens every key of the backup below the
 //!   caller's root handle, compares it with its backup node, and deletes that same handle, deepest first.
 //!   A key that became a link, gained a subkey or a value, or changed its data, class or security stops the
 //!   walk ([`Change`]); the keys already deleted are then put back from the backup, so a subtree goes
-//!   whole or not at all. A key that is not in the backup is never opened.
+//!   whole or not at all. A key that is not in the backup is never opened. A resumed delete
+//!   ([`finish_delete_tree`]) that stops says how many keys an earlier, interrupted run had deleted and
+//!   are still missing ([`Rollback::PartialBefore`]); [`restore_missing`] puts exactly those back.
 //! - **Restore never forces.** [`restore_tree`] recreates keys with their recorded class and security
 //!   descriptor (applied atomically at creation), and follows the conflict rules of §7.8: an existing key
 //!   under `Installer`, `Services` or a COM root is a conflict, elsewhere an existing key is merged into only
@@ -31,33 +42,43 @@
 //! whose reads are exact; the Win32 reads of `reg::Key` may change the last byte of odd-length strings.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::Path;
+use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use purge_guard::live::{KeyAddress, KeyProbe, KeyRoot};
+use purge_guard::live::KeyAddress;
+use purge_model::Blocker;
+use purge_model::FileTime;
 use purge_model::exec::journal::UndoConflict;
 use purge_model::exec::op::{BackupRef, Sha256Hex};
 use purge_model::exec::regbackup::{
     BytesB64, KeyNode, RegBackup, RegBackupBody, RegBackupSchema, RegTree, ValueBackup, WideB64,
 };
-use purge_model::{Blocker, FileTime, View};
-use purge_win::fs_write::{FsError, create_file_secure, flush, flush_dir};
+use purge_win::fs_write::FsError;
 use purge_win::os::Win32Error;
-use purge_win::reg::{REG_EXPAND_SZ, REG_LINK, REG_MULTI_SZ, REG_SZ, RegRoot, RegValue, RegView};
+use purge_win::reg::{REG_EXPAND_SZ, REG_LINK, REG_MULTI_SZ, REG_SZ, RegValue};
 use purge_win::reg_write::{
     CreatedKey, HAS_SUBKEYS, HAS_VALUES, KeyAccess, NAME_NOT_REPRESENTABLE, WKey,
 };
 use sha2::{Digest, Sha256};
+
+use crate::fault;
+use crate::gate::{CheckedKeyParent, CheckedValueKey};
+use crate::storage::{SessionDir, StorageError};
 
 /// The blast-radius limit for one key tree (ENGINE_PLAN.md §5.10): a tree with more keys is refused
 /// ([`CaptureError::TooLarge`]) unless the plan item is an absorbing Safe parent whose children were
 /// counted, in which case the caller passes that count to [`capture_tree`] instead.
 pub const DEFAULT_KEY_LIMIT: usize = 50;
 
-/// The largest backup file [`read_verified`] reads. Anything larger is refused before it is read.
+/// The largest backup file [`read_verified`] reads. Anything larger is refused before it is read, and
+/// [`write_verified`] refuses to write a larger one.
 pub const MAX_BACKUP_FILE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// The most raw bytes (names, classes, security descriptors and value data) [`capture_tree`] holds in
+/// memory before it refuses the tree ([`CaptureError::TooManyBytes`]). Base64 grows data by a third,
+/// so a capture within this budget makes a file well below [`MAX_BACKUP_FILE_BYTES`]: what is captured
+/// can be read back at undo time.
+pub const MAX_CAPTURE_BYTES: u64 = MAX_BACKUP_FILE_BYTES / 2;
 
 /// `ERROR_KEY_DELETED`: the key behind a handle was deleted.
 const KEY_DELETED: Win32Error = Win32Error(1018);
@@ -120,6 +141,12 @@ pub enum CaptureError {
         /// The limit.
         limit: usize,
     },
+    /// The tree holds more bytes than a backup file can carry ([`MAX_CAPTURE_BYTES`]).
+    #[error("the tree holds more than {budget} bytes")]
+    TooManyBytes {
+        /// The budget.
+        budget: u64,
+    },
     /// The key no longer exists.
     #[error("the key no longer exists")]
     Vanished,
@@ -135,7 +162,7 @@ impl CaptureError {
     pub fn blocker(&self) -> Option<Blocker> {
         match self {
             Self::RegLink { .. } => Some(Blocker::RegLink),
-            Self::TooLarge { .. } => Some(Blocker::TooLarge),
+            Self::TooLarge { .. } | Self::TooManyBytes { .. } => Some(Blocker::TooLarge),
             Self::NameNotRepresentable { .. } | Self::Volatile { .. } | Self::LinkValue { .. } => {
                 Some(Blocker::CannotBackUp)
             }
@@ -175,6 +202,29 @@ pub enum BackupFileError {
         /// The error.
         error: FsError,
     },
+    /// The store refused to create or open the file, or a call on its checked handle failed (an
+    /// integrity failure, an existing file of that name, I/O). [`BackupFileError::Missing`] is used
+    /// for a file that does not exist.
+    #[error("the store: {0}")]
+    Store(Box<StorageError>),
+}
+
+impl BackupFileError {
+    /// The store's error, with a missing file as [`BackupFileError::Missing`].
+    fn from_store(error: StorageError) -> BackupFileError {
+        match error {
+            StorageError::Io {
+                source: FsError::NotFound,
+                ..
+            } => BackupFileError::Missing,
+            other => BackupFileError::store(other),
+        }
+    }
+
+    /// A store error, boxed.
+    fn store(error: StorageError) -> BackupFileError {
+        BackupFileError::Store(Box::new(error))
+    }
 }
 
 /// How a live key differs from its backup node.
@@ -228,6 +278,10 @@ pub enum DeleteFailure {
     /// reverse).
     #[error("the backup is of the wrong kind")]
     WrongBackupKind,
+    /// The checked parent's leaf is not the backup's root key ([`finish_delete_tree`]); nothing was
+    /// opened below it.
+    #[error("the checked key is not the key of the backup")]
+    NotThisKey,
     /// A call failed.
     #[error("{op} failed: {error}")]
     Os {
@@ -238,10 +292,13 @@ pub enum DeleteFailure {
     },
 }
 
-/// What was done to undo the part of an operation that had already happened.
+/// What was done to undo the part of an operation that had already happened, and so what is on the
+/// machine afterwards. Only [`Rollback::NotNeeded`] and [`Rollback::Done`] mean that every key Purge
+/// deleted (in this call, or for [`finish_delete_tree`] in the interrupted run before it) is back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rollback {
-    /// Nothing had been changed, so nothing was undone.
+    /// Nothing had been changed, so nothing was undone. After a resumed delete
+    /// ([`finish_delete_tree`]): no key of the backup is missing either.
     NotNeeded,
     /// Everything that had been changed was undone. `keys` counts the keys put back (after a delete)
     /// or removed again (after a restore).
@@ -259,12 +316,28 @@ pub enum Rollback {
         /// Keys put back or removed again before the failure.
         keys: usize,
     },
+    /// A resumed delete ([`finish_delete_tree`]) stopped: the keys it deleted itself were put back
+    /// (`keys`), but `missing` keys of the backup, deleted before it by the interrupted run, are still
+    /// missing. The tree is half deleted; [`restore_missing`] puts those keys back (and only those),
+    /// from the same backup.
+    PartialBefore {
+        /// Keys of the backup still missing.
+        missing: usize,
+        /// Keys this call deleted and put back.
+        keys: usize,
+        /// What could not be put back exactly of those `keys`.
+        differences: Vec<Difference>,
+    },
 }
 
 impl Rollback {
-    /// Whether the system is back where the operation started (nothing changed, or all undone).
+    /// Whether the system is back where the operation started (nothing changed, or all undone):
+    /// `false` for [`Rollback::Incomplete`] and [`Rollback::PartialBefore`].
     pub fn is_complete(&self) -> bool {
-        !matches!(self, Rollback::Incomplete { .. })
+        !matches!(
+            self,
+            Rollback::Incomplete { .. } | Rollback::PartialBefore { .. }
+        )
     }
 }
 
@@ -321,6 +394,12 @@ pub enum DifferenceKind {
     RootClassKept,
     /// The backup was merged into an existing empty root key, which keeps its own security.
     RootSecurityKept,
+    /// A key that exists differs from its backup node ([`restore_missing`], which never changes an
+    /// existing key): the first such key found, left as it is.
+    ExistingKeyDiffers {
+        /// How it differs.
+        change: Change,
+    },
 }
 
 /// How a restore ended.
@@ -366,15 +445,20 @@ pub enum RestoreConflict {
     /// The value exists with another type or other data.
     #[error("the value exists with other data")]
     ValueDiffers,
+    /// The root key exists again, empty, with another volatility than the backup recorded: merging
+    /// into it would leave the restored tree volatile (or stable) where it was not.
+    #[error("the key exists again with another volatility")]
+    VolatilityDiffers,
 }
 
 impl RestoreConflict {
     /// The journal's form of this conflict.
     pub fn undo_conflict(&self) -> UndoConflict {
         match self {
-            Self::KeyExistsProtected | Self::KeyNotEmpty | Self::Diverged { .. } => {
-                UndoConflict::KeyExists
-            }
+            Self::KeyExistsProtected
+            | Self::KeyNotEmpty
+            | Self::Diverged { .. }
+            | Self::VolatilityDiffers => UndoConflict::KeyExists,
             Self::Link => UndoConflict::GateBlocked {
                 blocker: Blocker::RegLink,
             },
@@ -392,6 +476,10 @@ pub enum RestoreError {
     /// The backup is not of the kind the call needs.
     #[error("the backup is of the wrong kind")]
     WrongBackupKind,
+    /// The checked undo destination is not the backup's key: the leaf of [`CheckedKeyParent`] is not
+    /// the backup's root key name. Nothing was opened below it or changed.
+    #[error("the checked key is not the key of the backup")]
+    NotThisKey,
     /// A call failed; what had been created was removed again as far as `rollback` says.
     #[error("{failure}; rollback: {rollback:?}")]
     Failed {
@@ -557,48 +645,30 @@ pub fn is_protected_root(key_path: &str) -> bool {
     })
 }
 
-/// Opens the key at `addr` with `access`, through [`WKey::open`]: component-wise, never through a link
-/// ([`Win32Error::LINK_ON_PATH`] for a link on the way; a link as the key itself is returned as the
-/// link).
-///
-/// `addr` is the address the guard hands out ([`KeyProbe::open`] of `purge_guard::live::key_probe`),
-/// never one derived here from the wire spelling of [`RegBackup::key`]: the gate, the delete and the
-/// restore then open one key by one route (root and view one-to-one, the 32-bit view by its view flag,
-/// `CurrentControlSet` and `Software\Classes` already resolved; see [`KeyAddress`]).
-pub fn open_key_path(addr: &KeyAddress, access: KeyAccess) -> Result<WKey, Win32Error> {
-    let root = match addr.root {
-        KeyRoot::Hklm => RegRoot::Hklm,
-        KeyRoot::Hku => RegRoot::Hku,
-    };
-    let view = match addr.view {
-        View::K64 => RegView::K64,
-        View::K32 => RegView::K32,
-    };
-    WKey::open(root, &addr.path, view, access)
+/// Whether a key exists again in a place where that is always a conflict ([`is_protected_root`]), judged
+/// on the plan's spelling the backup records and on the canonical address the gate opened (either is
+/// enough).
+fn is_protected(backup: &RegBackup, address: &KeyAddress) -> bool {
+    is_protected_root(&backup.key) || is_protected_root(&address.path)
 }
 
-/// Opens the parent of the key of `probe` with `access` and returns it with the key's own name: what
-/// [`restore_tree`] and [`probe_tree`] take. The parent is the last of [`KeyProbe::ancestors`] (same
-/// root and view as [`KeyProbe::open`]), opened by [`open_key_path`]. Fails with
-/// `ERROR_INVALID_PARAMETER` when the key lies directly below its root, or the probe's ancestors do not
-/// end at the key's parent.
-pub fn open_parent(probe: &KeyProbe, access: KeyAccess) -> Result<(WKey, String), Win32Error> {
-    let (parent_path, leaf) = probe
-        .open
-        .path
-        .rsplit_once('\\')
-        .filter(|(parent, leaf)| !parent.is_empty() && !leaf.is_empty())
-        .ok_or(Win32Error::INVALID_PARAMETER)?;
-    let parent = probe
-        .ancestors
-        .last()
-        .filter(|parent| {
-            parent.root == probe.open.root
-                && parent.view == probe.open.view
-                && parent.path == parent_path
-        })
-        .ok_or(Win32Error::INVALID_PARAMETER)?;
-    Ok((open_key_path(parent, access)?, leaf.to_owned()))
+/// Whether two key names are the same name: registry names compare without case.
+fn same_name(a: &[u16], b: &[u16]) -> bool {
+    fold(a) == fold(b)
+}
+
+/// The tree of `backup`, when it is a tree backup of the key `parent` hands out: the parent's leaf is the
+/// backup's root key name ([`RestoreError::NotThisKey`] otherwise).
+fn tree_below<'a>(
+    parent: &CheckedKeyParent,
+    backup: &'a VerifiedBackup,
+) -> Result<&'a RegTree, RestoreError> {
+    let tree = backup.tree().ok_or(RestoreError::WrongBackupKind)?;
+    let leaf: Vec<u16> = parent.leaf().encode_utf16().collect();
+    if !same_name(&leaf, &tree.keys[0].name_b64.0) {
+        return Err(RestoreError::NotThisKey);
+    }
+    Ok(tree)
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -700,7 +770,50 @@ fn node_volatile(node: &KeyNode) -> bool {
 ///
 /// For a delete-if-empty key, call it with `limit` 1 after checking that the key has no subkeys: the
 /// result is a one-key tree holding its class and security.
+///
+/// A tree whose names, classes, security descriptors and value data add up to more than
+/// [`MAX_CAPTURE_BYTES`] is refused while it is captured ([`CaptureError::TooManyBytes`]), so that no
+/// tree is deleted whose backup could not be read back at undo time.
 pub fn capture_tree(root: &WKey, key_path: &str, limit: usize) -> Result<RegBackup, CaptureError> {
+    capture_tree_within(root, key_path, limit, MAX_CAPTURE_BYTES)
+}
+
+/// What the JSON of a key node adds to its own bytes at most (field names, parent index, flags, last
+/// write time), and of a value.
+const NODE_OVERHEAD: u64 = 256;
+const VALUE_OVERHEAD: u64 = 64;
+
+/// The bytes a node holds, as [`MAX_CAPTURE_BYTES`] counts them: its raw names, class, security
+/// descriptor and value data, plus the JSON around them.
+fn node_bytes(node: &KeyNode) -> u64 {
+    let units = |w: &WideB64| 2 * w.0.len() as u64;
+    NODE_OVERHEAD
+        + units(&node.name_b64)
+        + node.class_b64.as_ref().map_or(0, units)
+        + node.sddl.len() as u64
+        + node
+            .values
+            .iter()
+            .map(|v| VALUE_OVERHEAD + units(&v.name_b64) + v.data_b64.0.len() as u64)
+            .sum::<u64>()
+}
+
+/// [`capture_tree`] with a byte budget.
+fn capture_tree_within(
+    root: &WKey,
+    key_path: &str,
+    limit: usize,
+    budget: u64,
+) -> Result<RegBackup, CaptureError> {
+    let mut held = 0u64;
+    let mut hold = |node: &KeyNode| {
+        held = held.saturating_add(node_bytes(node));
+        if held > budget {
+            Err(CaptureError::TooManyBytes { budget })
+        } else {
+            Ok(())
+        }
+    };
     let leaf = leaf_name(key_path).ok_or_else(|| {
         CaptureError::Os(KeyOpError {
             at: String::new(),
@@ -717,6 +830,7 @@ pub fn capture_tree(root: &WKey, key_path: &str, limit: usize) -> Result<RegBack
         }
         other => other?,
     };
+    hold(&root_node)?;
 
     struct Frame {
         index: usize,
@@ -757,6 +871,7 @@ pub fn capture_tree(root: &WKey, key_path: &str, limit: usize) -> Result<RegBack
         };
         let parent = u32::try_from(top.index).map_err(|_| CaptureError::TooLarge { limit })?;
         let (node, names) = read_node(&child, WideB64::from(name.as_str()), Some(parent), &at)?;
+        hold(&node)?;
         keys.push(node);
         stack.push(Frame {
             index: keys.len() - 1,
@@ -902,133 +1017,124 @@ fn check_doc(doc: &RegBackup) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads a whole backup file, refusing one larger than [`MAX_BACKUP_FILE_BYTES`] or of another size than
-/// `expected`.
-fn read_file(path: &Path, expected: Option<u64>) -> Result<Vec<u8>, BackupFileError> {
-    let io = |op: &'static str| {
-        move |e: std::io::Error| match e.kind() {
-            std::io::ErrorKind::NotFound => BackupFileError::Missing,
-            _ => BackupFileError::Fs {
-                op,
-                error: FsError::from(Win32Error(
-                    e.raw_os_error()
-                        .and_then(|c| u32::try_from(c).ok())
-                        .unwrap_or(0),
-                )),
-            },
-        }
-    };
-    let mut file = File::open(path).map_err(io("open backup file"))?;
-    let len = file.metadata().map_err(io("read backup file size"))?.len();
-    if len > MAX_BACKUP_FILE_BYTES {
-        return Err(BackupFileError::TooBig);
-    }
-    if expected.is_some_and(|expected| expected != len) {
-        return Err(BackupFileError::Tampered);
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
-    file.read_to_end(&mut bytes)
-        .map_err(io("read backup file"))?;
-    Ok(bytes)
-}
-
-/// Writes `doc` to `session_dir\rel_path` as a new file with security descriptor `file_sddl`, flushes and
-/// closes it, flushes the directory, reads it back, parses it, compares it with `doc`, and returns it as a
-/// [`VerifiedBackup`] whose reference carries the SHA-256 of the bytes read back.
+/// Writes `doc` as the new session file `rel` of `session` and returns it as a [`VerifiedBackup`] whose
+/// reference carries the size and SHA-256 of the bytes written. The only writer of registry backups.
 ///
-/// `rel_path` must be session-relative (for example `reg\000042.regbackup.json`) and its directory must
-/// exist; an existing file of that name is never replaced. When anything after the file's creation fails,
-/// the file is removed again. Without an `Ok` from here the caller must not delete.
+/// Through the store's handles only: the file is created new with the store's file descriptor
+/// ([`SessionDir::create_file`], which re-checks the session directory chain and creates `reg` when
+/// needed), written, flushed with its directory through the checked handles, and read back through the
+/// same handle; then it is closed (fault point `backup.written`), opened again through the store's
+/// checks ([`SessionDir::open_file`]), required to be the same file (volume serial and file id), read
+/// through that handle, checked against the size and SHA-256 of the bytes meant to be written
+/// ([`verify_bytes`]) and parsed back to `doc` (fault point `backup.verified`). Each fault point is hit
+/// exactly once per call that gets that far.
+///
+/// `rel` must be session-relative (for example `reg\000042.regbackup.json`, see
+/// `storage::backup_rel`); an existing file of that name is never replaced
+/// ([`BackupFileError::Store`]). A failure while the created handle is open discards the file through
+/// that handle; nothing is removed by name. Without an `Ok` from here the caller must not delete.
 pub fn write_verified(
-    session_dir: &Path,
-    rel_path: &str,
-    file_sddl: &str,
+    session: &SessionDir,
+    rel: &str,
     doc: &RegBackup,
 ) -> Result<VerifiedBackup, BackupFileError> {
-    let mut reference = BackupRef {
-        path: rel_path.to_owned(),
+    let reference = BackupRef {
+        path: rel.to_owned(),
         sha256: Sha256Hex([0; 32]),
         bytes: 0,
     };
     if !reference.is_session_relative() {
-        return Err(BackupFileError::NotSessionRelative(rel_path.to_owned()));
+        return Err(BackupFileError::NotSessionRelative(rel.to_owned()));
     }
     check_doc(doc).map_err(BackupFileError::Invalid)?;
     let text = serde_json::to_vec(doc).map_err(|e| BackupFileError::Invalid(e.to_string()))?;
-    let path = session_dir.join(rel_path);
-    let file = create_file_secure(&path, file_sddl).map_err(|error| BackupFileError::Fs {
-        op: "create backup file",
-        error,
-    })?;
-    let result = finish_write(file, &path, &text, doc);
-    match result {
-        Ok((sha256, bytes)) => {
-            reference.sha256 = sha256;
-            reference.bytes = bytes;
-            Ok(VerifiedBackup {
-                doc: doc.clone(),
-                reference,
-            })
-        }
-        Err(e) => {
-            // The file is Purge's own, created a moment ago, and holds no verified backup.
-            let _ = std::fs::remove_file(&path);
-            Err(e)
-        }
+    let bytes = u64::try_from(text.len()).map_err(|_| BackupFileError::TooBig)?;
+    if bytes > MAX_BACKUP_FILE_BYTES {
+        return Err(BackupFileError::TooBig);
     }
+    let reference = BackupRef {
+        sha256: sha256(&text),
+        bytes,
+        ..reference
+    };
+
+    let mut created = session.create_file(rel).map_err(BackupFileError::store)?;
+    if let Err(e) = write_created(&mut created, &text) {
+        // The file is Purge's own, created a moment ago, and holds no verified backup.
+        let _ = created.discard();
+        return Err(e);
+    }
+    let written_id = created.file_id();
+    drop(created);
+    fault::point(fault::BACKUP_WRITTEN);
+
+    let mut opened = session
+        .open_file(rel)
+        .map_err(BackupFileError::from_store)?;
+    if opened.file_id() != written_id {
+        return Err(BackupFileError::ReadBackMismatch);
+    }
+    let back = opened
+        .read_all(MAX_BACKUP_FILE_BYTES)
+        .map_err(BackupFileError::from_store)?;
+    drop(opened);
+    let verified = verify_bytes(&reference, &back).map_err(|e| match e {
+        BackupFileError::Tampered => BackupFileError::ReadBackMismatch,
+        other => other,
+    })?;
+    if verified.doc() != doc {
+        return Err(BackupFileError::ReadBackMismatch);
+    }
+    fault::point(fault::BACKUP_VERIFIED);
+    Ok(verified)
 }
 
-/// The part of [`write_verified`] after the file exists: write, flush, close, read back, compare, hash.
-fn finish_write(
-    mut file: File,
-    path: &Path,
-    text: &[u8],
-    doc: &RegBackup,
-) -> Result<(Sha256Hex, u64), BackupFileError> {
-    let write_err = |e: std::io::Error| BackupFileError::Fs {
+/// Writes `text` through the created store file, flushes it and its directory (through the directory's
+/// checked handle), and reads it back through the same handle.
+fn write_created(file: &mut crate::storage::StoreFile, text: &[u8]) -> Result<(), BackupFileError> {
+    file.write_all(text).map_err(|e| BackupFileError::Fs {
         op: "write backup file",
         error: FsError::from(Win32Error(
             e.raw_os_error()
                 .and_then(|c| u32::try_from(c).ok())
                 .unwrap_or(0),
         )),
-    };
-    file.write_all(text).map_err(write_err)?;
-    flush(&file).map_err(|error| BackupFileError::Fs {
-        op: "flush backup file",
-        error,
     })?;
-    drop(file);
-    if let Some(dir) = path.parent() {
-        flush_dir(dir).map_err(|error| BackupFileError::Fs {
-            op: "flush session directory",
-            error,
-        })?;
-    }
-    let back = read_file(path, None)?;
+    file.sync().map_err(BackupFileError::store)?;
+    file.sync_dir().map_err(BackupFileError::store)?;
+    let back = file
+        .read_all(MAX_BACKUP_FILE_BYTES)
+        .map_err(BackupFileError::store)?;
     if back != text {
         return Err(BackupFileError::ReadBackMismatch);
     }
-    let parsed: RegBackup =
-        serde_json::from_slice(&back).map_err(|_| BackupFileError::ReadBackMismatch)?;
-    if &parsed != doc {
-        return Err(BackupFileError::ReadBackMismatch);
-    }
-    let len = u64::try_from(back.len()).map_err(|_| BackupFileError::TooBig)?;
-    Ok((sha256(&back), len))
+    Ok(())
 }
 
-/// Reads the backup file `reference` names below `session_dir`: refuses a path that leaves the session
-/// directory, checks size and SHA-256 against the reference before parsing ([`BackupFileError::Tampered`]
-/// on a mismatch), then parses and checks the document.
+/// Reads the backup file `reference` names in `session`: refuses a path that leaves the session
+/// directory, opens the file through the store's checks ([`SessionDir::open_file`]: no reparse point,
+/// one link, the store's owner and descriptor, inside its checked directory) and reads it through that
+/// handle, refusing more than [`MAX_BACKUP_FILE_BYTES`]; then checks size and SHA-256 against the
+/// reference before parsing ([`BackupFileError::Tampered`] on a mismatch), and parses and checks the
+/// document ([`verify_bytes`]). A missing file is [`BackupFileError::Missing`].
 pub fn read_verified(
-    session_dir: &Path,
+    session: &SessionDir,
     reference: &BackupRef,
 ) -> Result<VerifiedBackup, BackupFileError> {
     if !reference.is_session_relative() {
         return Err(BackupFileError::NotSessionRelative(reference.path.clone()));
     }
-    let bytes = read_file(&session_dir.join(&reference.path), Some(reference.bytes))?;
+    let mut file = session
+        .open_file(&reference.path)
+        .map_err(BackupFileError::from_store)?;
+    if file.len_at_open() != reference.bytes {
+        return Err(BackupFileError::Tampered);
+    }
+    let bytes = match file.read_all(MAX_BACKUP_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(StorageError::TooLarge { .. }) => return Err(BackupFileError::TooBig),
+        Err(e) => return Err(BackupFileError::from_store(e)),
+    };
     verify_bytes(reference, &bytes)
 }
 
@@ -1193,14 +1299,27 @@ struct Restorer<'a> {
     /// Created keys in creation order (parent-first), with their tree index.
     created: Vec<(usize, CreatedKey)>,
     differences: Vec<Difference>,
+    /// Whether fault point `regrestore.mid` is hit before each key after the first one created: for
+    /// undo and recovery restores, not for the put-back of a stopped delete (which has its own point).
+    fault_mid: bool,
 }
 
 impl<'a> Restorer<'a> {
+    /// A restorer for the put-back of a stopped delete.
     fn new(tree: &'a RegTree) -> Self {
         Self {
             tree,
             created: Vec::new(),
             differences: Vec::new(),
+            fault_mid: false,
+        }
+    }
+
+    /// A restorer for undo and recovery.
+    fn for_undo(tree: &'a RegTree) -> Self {
+        Self {
+            fault_mid: true,
+            ..Self::new(tree)
         }
     }
 
@@ -1233,6 +1352,11 @@ impl<'a> Restorer<'a> {
                 }
             };
             member[i] = true;
+            // Fault point for crash tests: between the creations of two keys, so the process dies
+            // with part of the tree re-created.
+            if self.fault_mid && !self.created.is_empty() {
+                fault::point(fault::REGRESTORE_MID);
+            }
             match create_key(self.tree, parent_key, i, &mut self.differences) {
                 Ok(key) => {
                     self.created.push((i, key));
@@ -1375,7 +1499,7 @@ fn finish_key(
 
 /// Restores the whole tree below `parent`, where the root does not exist. All or nothing.
 fn restore_fresh(parent: &WKey, tree: &RegTree) -> Result<RestoreReport, RestoreError> {
-    let mut restorer = Restorer::new(tree);
+    let mut restorer = Restorer::for_undo(tree);
     match restorer.restore_subtree(parent, 0) {
         Ok(()) => Ok(RestoreReport {
             outcome: RestoreOutcome::Restored,
@@ -1415,30 +1539,54 @@ fn failed_early(at: &str, op: &'static str, error: Win32Error) -> RestoreError {
 
 /// What a walk over the existing part of a tree found.
 struct Walk {
-    /// Handles of the keys that exist (opened for reading), by tree index.
+    /// Handles of the keys below the root that exist (opened for reading), by tree index. The root's
+    /// handle is the caller's ([`Walk::handle`]).
     handles: Vec<Option<WKey>>,
-    /// The first key that differs.
+    /// The first key that differs, in walk order.
     diverged: Option<(usize, Change)>,
+    /// The first key the walk could not look below: a link, or a backup name that cannot be opened.
+    /// The backup keys below it are counted neither as existing nor as missing.
+    blocked: Option<(usize, Change)>,
     /// Tree indexes of the missing keys whose parent exists.
     missing_roots: Vec<usize>,
     /// Number of missing keys.
     missing_keys: usize,
 }
 
-/// Walks the existing part of `tree` from the open root key, parent-first, comparing each existing key
-/// with its node and its subkey names with the node's children.
-fn walk_existing(root: WKey, tree: &RegTree, owner_strict: bool) -> Result<Walk, KeyOpError> {
+impl Walk {
+    /// The open key at tree index `index`: `root` for 0, the handle the walk opened otherwise.
+    fn handle<'k>(&'k self, root: &'k WKey, index: usize) -> Option<&'k WKey> {
+        if index == 0 {
+            Some(root)
+        } else {
+            self.handles.get(index).and_then(Option::as_ref)
+        }
+    }
+}
+
+/// Walks the existing part of `tree` below the open root key, parent-first, comparing each existing key
+/// with its node and its subkey names with the node's children. With `stop`, the walk ends at the first
+/// difference. Without, it goes on past keys that differ, so that every missing key is counted; it never
+/// looks below a key that is a link (or whose backup name cannot be opened), see [`Walk::blocked`].
+fn walk_existing(
+    root: &WKey,
+    tree: &RegTree,
+    owner_strict: bool,
+    stop: bool,
+) -> Result<Walk, KeyOpError> {
     let n = tree.keys.len();
     let children = child_lists(tree);
     let mut walk = Walk {
         handles: Vec::with_capacity(n),
         diverged: None,
+        blocked: None,
         missing_roots: Vec::new(),
         missing_keys: 0,
     };
-    walk.handles.push(Some(root));
     walk.handles.resize_with(n, || None);
     let mut missing = vec![false; n];
+    // Keys the walk does not look at: below a link or below a name that cannot be opened.
+    let mut hidden = vec![false; n];
     let os = |index: usize, (error, op): (Win32Error, &'static str)| KeyOpError {
         at: display_path(tree, index),
         op,
@@ -1451,37 +1599,60 @@ fn walk_existing(root: WKey, tree: &RegTree, owner_strict: bool) -> Result<Walk,
                 walk.missing_keys += 1;
                 continue;
             }
-            let Some(name) = name_of(&tree.keys[i].name_b64) else {
-                walk.diverged = Some((i, Change::NameNotRepresentable));
-                return Ok(walk);
-            };
-            let opened = match &walk.handles[p] {
-                Some(parent) => parent.open_subkey(&name, KeyAccess::READ),
-                None => return Err(os(i, (Win32Error::INVALID_DATA, "find parent"))),
-            };
-            match opened {
-                Ok(key) => walk.handles[i] = Some(key),
-                Err(e) if e.is_not_found() => {
-                    missing[i] = true;
-                    walk.missing_keys += 1;
-                    walk.missing_roots.push(i);
-                    continue;
+            if hidden[p] || hidden[i] {
+                hidden[i] = true;
+                continue;
+            }
+            let blocked = match name_of(&tree.keys[i].name_b64) {
+                None => Some((i, Change::NameNotRepresentable)),
+                Some(name) => {
+                    let opened = match walk.handle(root, p) {
+                        Some(parent) => parent.open_subkey(&name, KeyAccess::READ),
+                        None => return Err(os(i, (Win32Error::INVALID_DATA, "find parent"))),
+                    };
+                    match opened {
+                        Ok(key) => {
+                            walk.handles[i] = Some(key);
+                            None
+                        }
+                        Err(e) if e.is_not_found() => {
+                            missing[i] = true;
+                            walk.missing_keys += 1;
+                            walk.missing_roots.push(i);
+                            continue;
+                        }
+                        Err(e) if e == Win32Error::LINK_ON_PATH => Some((p, Change::BecameLink)),
+                        Err(e) => return Err(os(i, (e, "open key"))),
+                    }
                 }
-                Err(e) if e == Win32Error::LINK_ON_PATH => {
-                    walk.diverged = Some((p, Change::BecameLink));
+            };
+            if let Some(found) = blocked {
+                walk.diverged.get_or_insert(found);
+                walk.blocked.get_or_insert(found);
+                if stop {
                     return Ok(walk);
                 }
-                Err(e) => return Err(os(i, (e, "open key"))),
+                hidden[i] = true;
+                continue;
             }
         }
-        let Some(key) = &walk.handles[i] else {
+        let Some(key) = walk.handle(root, i) else {
             return Err(os(i, (Win32Error::INVALID_DATA, "find key")));
         };
-        if let Some(change) =
-            compare_with_children(key, tree, &children, i, owner_strict).map_err(|e| os(i, e))?
-        {
-            walk.diverged = Some((i, change));
-            return Ok(walk);
+        let change =
+            compare_with_children(key, tree, &children, i, owner_strict).map_err(|e| os(i, e))?;
+        if let Some(change) = change {
+            walk.diverged.get_or_insert((i, change));
+            if stop {
+                return Ok(walk);
+            }
+            if change == Change::BecameLink {
+                walk.blocked.get_or_insert((i, change));
+                // The key exists, but what is below a link is not the backup's.
+                for &child in &children[i] {
+                    hidden[child] = true;
+                }
+            }
         }
     }
     Ok(walk)
@@ -1500,13 +1671,37 @@ fn open_root(parent: &WKey, tree: &RegTree) -> Result<Option<WKey>, RestoreError
     }
 }
 
-/// Compares the live tree below `parent` with the backup tree, changing nothing: the probe recovery uses
-/// to tell an interrupted delete or restore ([`TreeState::Partial`]) from one that had not started
-/// ([`TreeState::Intact`]) or had finished ([`TreeState::Absent`]). Owners are not compared (an owner
-/// the token could not assign is a reported restore difference, not a change).
-pub fn probe_tree(parent: &WKey, backup: &VerifiedBackup) -> Result<TreeState, RestoreError> {
-    let tree = backup.tree().ok_or(RestoreError::WrongBackupKind)?;
-    let root = match open_root(parent, tree) {
+/// Refuses a parent that is a registry link (the gate checked it; this reads it again on the handle).
+fn parent_not_link(parent: &WKey) -> Result<(), RestoreError> {
+    match parent.is_link() {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(RestoreError::Conflict(RestoreConflict::Link)),
+        Err(e) => Err(failed_early("", "query parent link", e)),
+    }
+}
+
+/// A walk's failure, before anything was changed.
+fn walk_failed(failure: KeyOpError) -> RestoreError {
+    RestoreError::Failed {
+        failure,
+        rollback: Rollback::NotNeeded,
+    }
+}
+
+/// Compares the live tree below `parent` (the parent the gate checked, [`gate::check_undo_key`]) with
+/// the backup tree, changing nothing: the probe recovery uses to tell an interrupted delete or restore
+/// ([`TreeState::Partial`]) from one that had not started ([`TreeState::Intact`]) or had finished
+/// ([`TreeState::Absent`]). Owners are not compared (an owner the token could not assign is a reported
+/// restore difference, not a change). [`RestoreError::NotThisKey`] when the parent's leaf is not the
+/// backup's root key.
+///
+/// [`gate::check_undo_key`]: crate::gate::check_undo_key
+pub fn probe_tree(
+    parent: &CheckedKeyParent,
+    backup: &VerifiedBackup,
+) -> Result<TreeState, RestoreError> {
+    let tree = tree_below(parent, backup)?;
+    let root = match open_root(parent.parent(), tree) {
         Ok(Some(root)) => root,
         Ok(None) => return Ok(TreeState::Absent),
         Err(RestoreError::Conflict(RestoreConflict::Link)) => {
@@ -1517,10 +1712,7 @@ pub fn probe_tree(parent: &WKey, backup: &VerifiedBackup) -> Result<TreeState, R
         }
         Err(e) => return Err(e),
     };
-    let walk = walk_existing(root, tree, false).map_err(|failure| RestoreError::Failed {
-        failure,
-        rollback: Rollback::NotNeeded,
-    })?;
+    let walk = walk_existing(&root, tree, false, true).map_err(walk_failed)?;
     Ok(match walk.diverged {
         Some((index, change)) => TreeState::Diverged {
             at: display_path(tree, index),
@@ -1533,32 +1725,35 @@ pub fn probe_tree(parent: &WKey, backup: &VerifiedBackup) -> Result<TreeState, R
     })
 }
 
-/// Restores a deleted key tree below `parent` (the open parent of [`RegBackup::key`]) from a verified
-/// backup, following the conflict rules of §7.8:
+/// Restores a deleted key tree below `parent` (the parent of [`RegBackup::key`] the gate opened and
+/// checked, [`gate::check_undo_key`]) from a verified backup, following the conflict rules of §7.8:
 ///
+/// - parent's leaf not the backup's root key name: [`RestoreError::NotThisKey`];
 /// - root absent: the tree is created, parent-first, each key with its recorded class and security
 ///   descriptor; all or nothing (keys created so far are removed again on a failure);
 /// - root present and equal to the backup (owners aside): [`RestoreOutcome::AlreadyRestored`];
-/// - root present below a protected root ([`is_protected_root`]): [`RestoreConflict::KeyExistsProtected`];
+/// - root present below a protected root ([`is_protected_root`], judged on the backup's key and on the
+///   gate's canonical address): [`RestoreConflict::KeyExistsProtected`];
 /// - root present and empty: the backup is merged into it (its values and subkeys are added; the existing
-///   key keeps its class and security, reported as differences);
+///   key keeps its class and security, reported as differences); another volatility than recorded is
+///   [`RestoreConflict::VolatilityDiffers`];
 /// - root present with content: [`RestoreConflict::KeyNotEmpty`].
 ///
-/// A partly deleted tree (an interrupted delete) is a conflict here; recovery uses [`complete_tree`].
-pub fn restore_tree(parent: &WKey, backup: &VerifiedBackup) -> Result<RestoreReport, RestoreError> {
-    let tree = backup.tree().ok_or(RestoreError::WrongBackupKind)?;
-    match parent.is_link() {
-        Ok(false) => {}
-        Ok(true) => return Err(RestoreError::Conflict(RestoreConflict::Link)),
-        Err(e) => return Err(failed_early("", "query parent link", e)),
-    }
-    let Some(root) = open_root(parent, tree)? else {
-        return restore_fresh(parent, tree);
+/// A partly deleted tree (an interrupted delete) is a conflict here; recovery uses [`complete_tree`] or
+/// [`restore_missing`].
+///
+/// [`gate::check_undo_key`]: crate::gate::check_undo_key
+pub fn restore_tree(
+    parent: &CheckedKeyParent,
+    backup: &VerifiedBackup,
+) -> Result<RestoreReport, RestoreError> {
+    let tree = tree_below(parent, backup)?;
+    let parent_key = parent.parent();
+    parent_not_link(parent_key)?;
+    let Some(root) = open_root(parent_key, tree)? else {
+        return restore_fresh(parent_key, tree);
     };
-    let walk = walk_existing(root, tree, false).map_err(|failure| RestoreError::Failed {
-        failure,
-        rollback: Rollback::NotNeeded,
-    })?;
+    let walk = walk_existing(&root, tree, false, true).map_err(walk_failed)?;
     if walk.diverged.is_none() && walk.missing_keys == 0 {
         return Ok(RestoreReport {
             outcome: RestoreOutcome::AlreadyRestored,
@@ -1570,16 +1765,23 @@ pub fn restore_tree(parent: &WKey, backup: &VerifiedBackup) -> Result<RestoreRep
         return Err(RestoreError::Conflict(RestoreConflict::Link));
     }
     drop(walk);
-    if is_protected_root(&backup.doc().key) {
+    drop(root);
+    if is_protected(backup.doc(), parent.address()) {
         return Err(RestoreError::Conflict(RestoreConflict::KeyExistsProtected));
     }
     merge_into_empty(parent, tree)
 }
 
-/// Merges the backup into an existing, empty root key.
-fn merge_into_empty(parent: &WKey, tree: &RegTree) -> Result<RestoreReport, RestoreError> {
+/// Merges the backup into an existing, empty root key below the checked parent. The root must have
+/// the recorded volatility ([`RestoreConflict::VolatilityDiffers`]): the keys created below a volatile
+/// key would be volatile, below a stable key stable.
+fn merge_into_empty(
+    parent: &CheckedKeyParent,
+    tree: &RegTree,
+) -> Result<RestoreReport, RestoreError> {
     let name = root_name(tree)?;
-    let root = match parent.open_subkey(&name, KeyAccess::SET_VALUE | KeyAccess::CREATE_SUB_KEY) {
+    let access = KeyAccess::SET_VALUE | KeyAccess::CREATE_SUB_KEY;
+    let root = match parent.parent().open_subkey(&name, access) {
         Ok(root) => root,
         Err(e) if e == Win32Error::LINK_ON_PATH => {
             return Err(RestoreError::Conflict(RestoreConflict::Link));
@@ -1598,6 +1800,15 @@ fn merge_into_empty(parent: &WKey, tree: &RegTree) -> Result<RestoreReport, Rest
         return Err(RestoreError::Conflict(RestoreConflict::KeyNotEmpty));
     }
     let node = &tree.keys[0];
+    let flags = root
+        .flags()
+        .map_err(|e| failed_early("", "query key flags", e))?;
+    if flags.link {
+        return Err(RestoreError::Conflict(RestoreConflict::Link));
+    }
+    if flags.volatile != node_volatile(node) {
+        return Err(RestoreError::Conflict(RestoreConflict::VolatilityDiffers));
+    }
     let mut differences = Vec::new();
     let class = node
         .class_b64
@@ -1620,7 +1831,7 @@ fn merge_into_empty(parent: &WKey, tree: &RegTree) -> Result<RestoreReport, Rest
         });
     }
 
-    let mut restorer = Restorer::new(tree);
+    let mut restorer = Restorer::for_undo(tree);
     let mut set_values: Vec<String> = Vec::new();
     let mut result = Ok(());
     for value in &node.values {
@@ -1690,24 +1901,18 @@ fn merge_into_empty(parent: &WKey, tree: &RegTree) -> Result<RestoreReport, Rest
 /// otherwise nothing is changed and [`RestoreConflict::Diverged`] is returned. The missing subtrees are
 /// then created as in [`restore_tree`], all or nothing. An absent root is restored whole; an intact tree
 /// is [`RestoreOutcome::AlreadyRestored`]. The protected-root rule does not apply: nothing that exists is
-/// changed.
+/// changed. `parent` and [`RestoreError::NotThisKey`] as for [`restore_tree`].
 pub fn complete_tree(
-    parent: &WKey,
+    parent: &CheckedKeyParent,
     backup: &VerifiedBackup,
 ) -> Result<RestoreReport, RestoreError> {
-    let tree = backup.tree().ok_or(RestoreError::WrongBackupKind)?;
-    match parent.is_link() {
-        Ok(false) => {}
-        Ok(true) => return Err(RestoreError::Conflict(RestoreConflict::Link)),
-        Err(e) => return Err(failed_early("", "query parent link", e)),
-    }
-    let Some(root) = open_root(parent, tree)? else {
-        return restore_fresh(parent, tree);
+    let tree = tree_below(parent, backup)?;
+    let parent_key = parent.parent();
+    parent_not_link(parent_key)?;
+    let Some(root) = open_root(parent_key, tree)? else {
+        return restore_fresh(parent_key, tree);
     };
-    let walk = walk_existing(root, tree, false).map_err(|failure| RestoreError::Failed {
-        failure,
-        rollback: Rollback::NotNeeded,
-    })?;
+    let walk = walk_existing(&root, tree, false, true).map_err(walk_failed)?;
     if let Some((index, change)) = walk.diverged {
         if (index, change) == (0, Change::BecameLink) {
             return Err(RestoreError::Conflict(RestoreConflict::Link));
@@ -1717,17 +1922,76 @@ pub fn complete_tree(
             change,
         }));
     }
+    create_missing(&root, &walk, tree, Vec::new())
+}
+
+/// Puts back the keys of the backup that are missing below `parent` (the gate's checked parent, as for
+/// [`restore_tree`]), and nothing else: the repair after a resumed delete stopped with
+/// [`Rollback::PartialBefore`], or after any interrupted delete or restore whose tree no longer matches
+/// the backup ([`TreeState::Diverged`]).
+///
+/// Never changes a key that exists: a key that differs from its backup node (another value, an extra
+/// subkey, ...) stays as it is and the first one found is reported as
+/// [`DifferenceKind::ExistingKeyDiffers`]; the missing subtrees are created below the keys that exist,
+/// parent-first, with their recorded class, security and values, all or nothing. The result is the
+/// backup plus the changes made to it since. An absent root is restored whole. A link where a backup
+/// key is ([`RestoreConflict::Link`]), or a backup name that cannot be opened
+/// ([`RestoreConflict::Diverged`]), hides what is below it; then nothing is created. Nothing missing is
+/// [`RestoreOutcome::AlreadyRestored`]. The protected-root rule does not apply: nothing that exists is
+/// changed.
+pub fn restore_missing(
+    parent: &CheckedKeyParent,
+    backup: &VerifiedBackup,
+) -> Result<RestoreReport, RestoreError> {
+    let tree = tree_below(parent, backup)?;
+    let parent_key = parent.parent();
+    parent_not_link(parent_key)?;
+    let Some(root) = open_root(parent_key, tree)? else {
+        return restore_fresh(parent_key, tree);
+    };
+    let walk = walk_existing(&root, tree, false, false).map_err(walk_failed)?;
+    match walk.blocked {
+        Some((_, Change::BecameLink)) => {
+            return Err(RestoreError::Conflict(RestoreConflict::Link));
+        }
+        Some((index, change)) => {
+            return Err(RestoreError::Conflict(RestoreConflict::Diverged {
+                at: display_path(tree, index),
+                change,
+            }));
+        }
+        None => {}
+    }
+    let differences = walk
+        .diverged
+        .map(|(index, change)| Difference {
+            at: display_path(tree, index),
+            kind: DifferenceKind::ExistingKeyDiffers { change },
+        })
+        .into_iter()
+        .collect();
+    create_missing(&root, &walk, tree, differences)
+}
+
+/// Creates every missing subtree a walk found below the keys it opened, all or nothing.
+/// `differences` go in front of the restorer's own.
+fn create_missing(
+    root: &WKey,
+    walk: &Walk,
+    tree: &RegTree,
+    mut differences: Vec<Difference>,
+) -> Result<RestoreReport, RestoreError> {
     if walk.missing_roots.is_empty() {
         return Ok(RestoreReport {
             outcome: RestoreOutcome::AlreadyRestored,
             keys_created: 0,
-            differences: Vec::new(),
+            differences,
         });
     }
-    let mut restorer = Restorer::new(tree);
+    let mut restorer = Restorer::for_undo(tree);
     for &missing in &walk.missing_roots {
         let parent_index = tree.keys[missing].parent.map_or(0, |p| p as usize);
-        let result = match &walk.handles[parent_index] {
+        let result = match walk.handle(root, parent_index) {
             Some(parent_key) => restorer.restore_subtree(parent_key, missing),
             None => Err(restorer.fail(missing, "find parent", Win32Error::INVALID_DATA)),
         };
@@ -1738,10 +2002,11 @@ pub fn complete_tree(
             });
         }
     }
+    differences.append(&mut restorer.differences);
     Ok(RestoreReport {
         outcome: RestoreOutcome::Restored,
         keys_created: restorer.created.len(),
-        differences: restorer.differences,
+        differences,
     })
 }
 
@@ -1821,7 +2086,10 @@ fn delete_walk(
                 }
             }
             Step::Fail(index, failure) => {
-                let rollback = put_back(root, tree, &children, &stack, &deleted);
+                let mut rollback = put_back(root, tree, &children, &stack, &deleted);
+                if resume {
+                    rollback = missing_before(root, tree, rollback);
+                }
                 return Err(DeleteError {
                     at: display_path(tree, index),
                     failure,
@@ -1868,7 +2136,7 @@ fn delete_walk(
             // Fault point for crash tests: between the deletes of two keys. Hit only once a key is
             // gone, so the process dies with some keys of the tree deleted and this one still there.
             if count > 0 {
-                crate::fault::point("regdelete.mid");
+                fault::point(fault::REGDELETE_MID);
             }
             if !hook(index) {
                 return Ok(Walked::Interrupted);
@@ -1946,6 +2214,32 @@ fn put_back(
     Rollback::Done { keys, differences }
 }
 
+/// After a resumed delete stopped and put back what it had deleted itself: whether keys of the backup
+/// that the interrupted run before it deleted are still missing below `root`. If so the rollback is
+/// [`Rollback::PartialBefore`], never "complete": the tree is half deleted. Keys below a link (which the
+/// failure itself reports) are not looked at. If the tree cannot be read, the rollback is
+/// [`Rollback::Incomplete`].
+fn missing_before(root: &WKey, tree: &RegTree, rollback: Rollback) -> Rollback {
+    let (keys, differences) = match rollback {
+        Rollback::NotNeeded => (0, Vec::new()),
+        Rollback::Done { keys, differences } => (keys, differences),
+        unfinished => return unfinished,
+    };
+    match walk_existing(root, tree, false, false) {
+        Ok(walk) if walk.missing_keys > 0 => Rollback::PartialBefore {
+            missing: walk.missing_keys,
+            keys,
+            differences,
+        },
+        Ok(_) if keys == 0 && differences.is_empty() => Rollback::NotNeeded,
+        Ok(_) => Rollback::Done { keys, differences },
+        Err(failure) => Rollback::Incomplete {
+            failure: Box::new(failure),
+            keys,
+        },
+    }
+}
+
 /// Runs a delete walk with no hook.
 fn run_delete(
     root: &WKey,
@@ -1989,11 +2283,51 @@ pub fn delete_tree(root: &WKey, backup: &VerifiedBackup) -> Result<DeleteReport,
 /// As [`delete_tree`], for recovery after an interrupted delete: backup keys that are already gone are
 /// taken as deleted by the interrupted run and skipped. Use it only when the journal shows the delete's
 /// intent without its done record.
+///
+/// `parent` is the parent of the backup's key as the gate opened and checked it
+/// ([`gate::check_undo_key`] on the journalled target): recovery cannot gate the half-deleted root
+/// itself against facts recorded before the delete. The root is opened below it with
+/// [`KeyAccess::DELETE`] and `REG_OPTION_OPEN_LINK` (a link root stops the delete as
+/// [`Change::BecameLink`]); an absent root means the interrupted run had finished (`Ok` with no key
+/// deleted); a parent whose leaf is not the backup's root key is [`DeleteFailure::NotThisKey`].
+///
+/// When the resumed delete stops, the keys it deleted are put back; keys the interrupted run had
+/// deleted are not, and [`Rollback::PartialBefore`] says how many are still missing. The two ways out
+/// both work from the backup alone: call this again once the change is gone (finish the delete), or
+/// [`restore_missing`] (put the tree back as the backup holds it, plus the change).
+///
+/// [`gate::check_undo_key`]: crate::gate::check_undo_key
 pub fn finish_delete_tree(
-    root: &WKey,
+    parent: &CheckedKeyParent,
     backup: &VerifiedBackup,
 ) -> Result<DeleteReport, DeleteError> {
-    run_delete(root, backup, true)
+    let stop = |failure| DeleteError {
+        at: String::new(),
+        failure,
+        rollback: Rollback::NotNeeded,
+    };
+    let tree = match tree_below(parent, backup) {
+        Ok(tree) => tree,
+        Err(RestoreError::NotThisKey) => return Err(stop(DeleteFailure::NotThisKey)),
+        Err(_) => return Err(stop(DeleteFailure::WrongBackupKind)),
+    };
+    let Some(name) = name_of(&tree.keys[0].name_b64) else {
+        return Err(stop(DeleteFailure::Changed(Change::NameNotRepresentable)));
+    };
+    let root = match parent.parent().open_subkey(&name, KeyAccess::DELETE) {
+        Ok(root) => root,
+        Err(e) if e.is_not_found() => return Ok(DeleteReport { keys_deleted: 0 }),
+        Err(e) if e == Win32Error::LINK_ON_PATH => {
+            return Err(stop(DeleteFailure::Changed(Change::BecameLink)));
+        }
+        Err(error) => {
+            return Err(stop(DeleteFailure::Os {
+                op: "open key",
+                error,
+            }));
+        }
+    };
+    run_delete(&root, backup, true)
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -2024,10 +2358,19 @@ pub fn delete_value(key: &WKey, backup: &VerifiedBackup) -> Result<ValueDelete, 
     }
 }
 
-/// Restores the value that `backup` holds into `key` (opened with [`KeyAccess::SET_VALUE`]): absent →
-/// written and read back; present with the same type and data → [`RestoreOutcome::AlreadyRestored`];
-/// present otherwise → [`RestoreConflict::ValueDiffers`].
-pub fn restore_value(key: &WKey, backup: &VerifiedBackup) -> Result<RestoreReport, RestoreError> {
+/// Restores the value that `backup` holds into `key` (the key the gate opened with
+/// [`KeyAccess::SET_VALUE`] and checked, [`gate::check_undo_key`]): absent → written and read back;
+/// present with the same type and data → [`RestoreOutcome::AlreadyRestored`]; present otherwise →
+/// [`RestoreConflict::ValueDiffers`]. The key is the backup's because the caller validated the backup
+/// for the operation (`RegBackup::validate_for`, the same key text) and the gate resolved that
+/// operation's journalled target.
+///
+/// [`gate::check_undo_key`]: crate::gate::check_undo_key
+pub fn restore_value(
+    key: &CheckedValueKey,
+    backup: &VerifiedBackup,
+) -> Result<RestoreReport, RestoreError> {
+    let key = key.key();
     let value = backup.value().ok_or(RestoreError::WrongBackupKind)?;
     let name = name_of(&value.name_b64)
         .ok_or_else(|| failed_early("", "read value name", NAME_NOT_REPRESENTABLE))?;
@@ -2079,10 +2422,11 @@ pub fn restore_value(key: &WKey, backup: &VerifiedBackup) -> Result<RestoreRepor
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SegmentError {
     /// The value is not a list Purge edits: not `REG_SZ`, `REG_EXPAND_SZ` or `REG_MULTI_SZ`, an odd
-    /// number of bytes, or a NUL inside a `;` list.
+    /// number of bytes, or a NUL or an unclosed double quote inside a `;` list.
     #[error("the value is not an editable list")]
     NotAList,
-    /// The segment is empty, holds a NUL, or holds a `;` in a `;` list.
+    /// The segment is empty, holds a NUL, or in a `;` list is not one element (a `;` outside quotes,
+    /// or an unclosed quote).
     #[error("the segment cannot be a list element")]
     BadSegment,
     /// The value does not exist.
@@ -2170,6 +2514,8 @@ impl List {
         }
         let segments = if body.is_empty() {
             Vec::new()
+        } else if kind == ListKind::Semicolon {
+            split_semicolons(body).ok_or(SegmentError::NotAList)?
         } else {
             body.split(|&u| u == kind.separator())
                 .map(<[u16]>::to_vec)
@@ -2232,13 +2578,41 @@ impl List {
     }
 }
 
-/// The segment as UTF-16, checked for the list kind.
+/// Splits the body of a `;` list at every `;` outside double quotes: Windows reads
+/// `"C:\a;b";C:\c` as two entries, the first one quoted. `None` when a quote is left open, which no
+/// reader agrees on.
+fn split_semicolons(body: &[u16]) -> Option<Vec<Vec<u16>>> {
+    let quote = u16::from(b'"');
+    let separator = u16::from(b';');
+    let mut segments = Vec::new();
+    let mut current = Vec::new();
+    let mut quoted = false;
+    for &unit in body {
+        if unit == quote {
+            quoted = !quoted;
+        }
+        if unit == separator && !quoted {
+            segments.push(std::mem::take(&mut current));
+        } else {
+            current.push(unit);
+        }
+    }
+    if quoted {
+        return None;
+    }
+    segments.push(current);
+    Some(segments)
+}
+
+/// The segment as UTF-16, checked for the list kind: never empty or with a NUL, and in a `;` list one
+/// element (a `;` only inside quotes, every quote closed).
 fn segment_units(kind: ListKind, segment: &str) -> Result<Vec<u16>, SegmentError> {
     let units: Vec<u16> = segment.encode_utf16().collect();
-    if units.is_empty()
-        || units.contains(&0)
-        || (kind == ListKind::Semicolon && units.contains(&u16::from(b';')))
-    {
+    let one_element = match kind {
+        ListKind::Semicolon => split_semicolons(&units).is_some_and(|parts| parts.len() == 1),
+        ListKind::MultiSz => true,
+    };
+    if units.is_empty() || units.contains(&0) || !one_element {
         return Err(SegmentError::BadSegment);
     }
     Ok(units)
@@ -2383,7 +2757,8 @@ pub enum ReinsertOutcome {
     },
 }
 
-/// Puts a removed segment back into value `undo.name` of `key` (opened with [`KeyAccess::SET_VALUE`]):
+/// Puts a removed segment back into value `undo.name` of `key` (the key the gate opened with
+/// [`KeyAccess::SET_VALUE`] and checked, [`gate::check_undo_key`](crate::gate::check_undo_key)):
 ///
 /// - value data equal to the original: [`ReinsertOutcome::AlreadyRestored`];
 /// - value equal to what Purge wrote: the original data is written back (from the backup when given,
@@ -2393,7 +2768,11 @@ pub enum ReinsertOutcome {
 /// - value changed otherwise and the segment merely missing: the segment is inserted at the recorded
 ///   index, clamped to the list length, keeping the value's type and terminators;
 /// - value gone or no longer a list: [`SegmentError::ValueAbsent`] / [`SegmentError::NotAList`].
-pub fn reinsert_segment(key: &WKey, undo: &SegmentUndo) -> Result<ReinsertOutcome, SegmentError> {
+pub fn reinsert_segment(
+    key: &CheckedValueKey,
+    undo: &SegmentUndo,
+) -> Result<ReinsertOutcome, SegmentError> {
+    let key = key.key();
     let os = |op| {
         move |error| {
             SegmentError::Os(KeyOpError {
@@ -2460,7 +2839,11 @@ mod tests {
         REG_OPTION_CREATE_LINK, REG_OPTION_OPEN_LINK, RegCloseKey, RegCreateKeyExW, RegOpenKeyExW,
         RegSetValueExW, hkey_users, wz,
     };
-    use purge_win::reg::{REG_BINARY, REG_DWORD, REG_DWORD_BIG_ENDIAN, REG_NONE, REG_QWORD};
+    use purge_guard::live::KeyRoot;
+    use purge_model::View;
+    use purge_win::reg::{
+        REG_BINARY, REG_DWORD, REG_DWORD_BIG_ENDIAN, REG_NONE, REG_QWORD, RegRoot, RegView,
+    };
     use purge_win::sid::current_user_sid;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -2655,11 +3038,11 @@ mod tests {
         }
     }
 
-    /// A fresh temp directory with a `reg` subdirectory, removed on drop.
-    struct TempDir(PathBuf);
+    /// A fresh temp directory, removed on drop (after everything holding a handle in it).
+    struct Scratch(PathBuf);
 
-    impl TempDir {
-        fn new() -> TempDir {
+    impl Scratch {
+        fn new() -> Scratch {
             static COUNTER: AtomicU32 = AtomicU32::new(0);
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -2672,19 +3055,39 @@ mod tests {
                 COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
             std::fs::create_dir(&dir).unwrap();
-            std::fs::create_dir(dir.join("reg")).unwrap();
-            TempDir(dir)
+            Scratch(dir)
         }
     }
 
-    impl Drop for TempDir {
+    impl Drop for Scratch {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_dir_all(purge_win::secure::extended_path(&self.0).unwrap());
         }
     }
 
-    fn file_sddl() -> String {
-        format!("D:P(A;;FA;;;{})", current_user_sid().unwrap())
+    /// A relaxed test store in a fresh temp directory, with one session for the backup files.
+    struct TempDir {
+        session: SessionDir,
+        /// Last: removed after the session's handles are closed.
+        _scratch: Scratch,
+    }
+
+    impl TempDir {
+        fn new() -> TempDir {
+            let scratch = Scratch::new();
+            let roots =
+                crate::storage::StorageRoots::install_relaxed(&scratch.0.join("data")).unwrap();
+            let session = roots.create_session().unwrap();
+            TempDir {
+                session,
+                _scratch: scratch,
+            }
+        }
+
+        /// Where backup file `n` is, for tests that change it behind the store's back.
+        fn file(&self, n: u32) -> PathBuf {
+            self.session.path().join(rel_file(n))
+        }
     }
 
     fn rel_file(n: u32) -> String {
@@ -2692,7 +3095,38 @@ mod tests {
     }
 
     fn save(dir: &TempDir, n: u32, doc: &RegBackup) -> VerifiedBackup {
-        write_verified(&dir.0, &rel_file(n), &file_sddl(), doc).unwrap()
+        write_verified(&dir.session, &rel_file(n), doc).unwrap()
+    }
+
+    /// The canonical address of `HKU\<path>` in the 64-bit view, as the gate resolves a test key.
+    fn hku(path: &str) -> KeyAddress {
+        KeyAddress {
+            root: KeyRoot::Hku,
+            view: View::K64,
+            path: path.to_owned(),
+        }
+    }
+
+    /// The parent of the backup's key, as `gate::check_undo_key` would hand it out (opened here with
+    /// `KEY_CREATE_SUB_KEY` at the 64-bit address the test key has).
+    fn parent_of(backup: &VerifiedBackup) -> CheckedKeyParent {
+        let path = backup.doc().key.strip_prefix(r"HKU\").unwrap();
+        let (parent, leaf) = path.rsplit_once('\\').unwrap();
+        let key = WKey::open(
+            RegRoot::Hku,
+            parent,
+            RegView::K64,
+            KeyAccess::CREATE_SUB_KEY,
+        )
+        .unwrap();
+        CheckedKeyParent::unchecked_for_tests(key, leaf, hku(path))
+    }
+
+    /// The key of a value backup, as `gate::check_undo_key` would hand it out (`KEY_SET_VALUE`).
+    fn value_key(backup: &VerifiedBackup) -> CheckedValueKey {
+        let path = backup.doc().key.strip_prefix(r"HKU\").unwrap();
+        let key = WKey::open(RegRoot::Hku, path, RegView::K64, KeyAccess::SET_VALUE).unwrap();
+        CheckedValueKey::unchecked_for_tests(key, hku(path))
     }
 
     fn utf16z(text: &str) -> Vec<u8> {
@@ -2830,26 +3264,35 @@ mod tests {
         let dir = TempDir::new();
         let written = save(&dir, 1, &doc);
         assert_eq!(written.reference().path, rel_file(1));
-        let bytes = std::fs::read(dir.0.join(rel_file(1))).unwrap();
+        let bytes = std::fs::read(dir.session.path().join(rel_file(1))).unwrap();
         assert_eq!(written.reference().bytes, bytes.len() as u64);
         assert_eq!(written.reference().sha256, sha256(&bytes));
-        let backup = read_verified(&dir.0, written.reference()).unwrap();
+        let backup = read_verified(&dir.session, written.reference()).unwrap();
         assert_eq!(backup.doc(), &doc);
 
-        assert_eq!(probe_tree(&root.key, &backup).unwrap(), TreeState::Intact);
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Intact
+        );
         assert_eq!(delete_tree(&key, &backup).unwrap().keys_deleted, 5);
         assert!(!root.exists("Rich"));
-        assert_eq!(probe_tree(&root.key, &backup).unwrap(), TreeState::Absent);
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Absent
+        );
 
-        let report = restore_tree(&root.key, &backup).unwrap();
+        let report = restore_tree(&parent_of(&backup), &backup).unwrap();
         assert_eq!(report.outcome, RestoreOutcome::Restored);
         assert_eq!(report.keys_created, 5);
         assert_eq!(report.differences, []);
         assert_eq!(shape(&capture(&root, "Rich")), shape(&doc));
-        assert_eq!(probe_tree(&root.key, &backup).unwrap(), TreeState::Intact);
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Intact
+        );
 
         // Restoring again changes nothing.
-        let again = restore_tree(&root.key, &backup).unwrap();
+        let again = restore_tree(&parent_of(&backup), &backup).unwrap();
         assert_eq!(again.outcome, RestoreOutcome::AlreadyRestored);
         assert_eq!(shape(&capture(&root, "Rich")), shape(&doc));
     }
@@ -2882,14 +3325,16 @@ mod tests {
         let doc = capture_tree(&key, &root.key_path("k0"), 1000).unwrap();
         assert_eq!(doc.tree().unwrap().keys.len(), depth as usize);
         let dir = TempDir::new();
-        let backup = read_verified(&dir.0, save(&dir, 7, &doc).reference()).unwrap();
+        let backup = read_verified(&dir.session, save(&dir, 7, &doc).reference()).unwrap();
         assert_eq!(
             delete_tree(&key, &backup).unwrap().keys_deleted,
             depth as usize
         );
         assert!(!root.exists("k0"));
         assert_eq!(
-            restore_tree(&root.key, &backup).unwrap().keys_created,
+            restore_tree(&parent_of(&backup), &backup)
+                .unwrap()
+                .keys_created,
             depth as usize
         );
         assert_eq!(shape(&capture(&root, "k0")), shape(&doc));
@@ -3034,6 +3479,30 @@ mod tests {
         );
     }
 
+    /// Review M5: a tree is refused while it is captured once it holds more than the byte budget, so
+    /// nothing is deleted whose backup file could not be read back at undo time.
+    #[test]
+    fn a_tree_over_the_byte_budget_is_refused() {
+        let root = TestRoot::new();
+        small_tree(&root);
+        let key = root.open("T", KeyAccess::READ);
+        let path = root.key_path("T");
+        let doc = capture_tree(&key, &path, 10).unwrap();
+        let total: u64 = doc.tree().unwrap().keys.iter().map(node_bytes).sum();
+        let within = capture_tree_within(&key, &path, 10, total).unwrap();
+        assert_eq!(shape(&within), shape(&doc));
+        let err = capture_tree_within(&key, &path, 10, total - 1).unwrap_err();
+        assert_eq!(err, CaptureError::TooManyBytes { budget: total - 1 });
+        assert_eq!(err.blocker(), Some(Blocker::TooLarge));
+        // The budget, base64 and all, stays below what `read_verified` reads.
+        let json = serde_json::to_vec(&doc).unwrap().len() as u64;
+        assert!(
+            json <= total.div_ceil(3) * 4,
+            "{json} bytes of JSON for {total}"
+        );
+        assert!(MAX_CAPTURE_BYTES.div_ceil(3) * 4 < MAX_BACKUP_FILE_BYTES);
+    }
+
     #[test]
     fn concurrent_changes_stop_the_delete_and_put_deleted_keys_back() {
         // (index whose turn it is, change made at that moment, expected stop, expected path, keys put
@@ -3104,7 +3573,7 @@ mod tests {
                 }
             );
             // Everything of the backup is back; only the injected change remains.
-            let state = probe_tree(&root.key, &backup).unwrap();
+            let state = probe_tree(&parent_of(&backup), &backup).unwrap();
             assert!(
                 matches!(state, TreeState::Diverged { .. }),
                 "{state:?} after {at:?}"
@@ -3165,7 +3634,10 @@ mod tests {
             }
         );
         assert!(matches!(err.rollback, Rollback::Done { keys: 4, .. }));
-        assert_eq!(probe_tree(&root.key, &backup).unwrap(), TreeState::Intact);
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Intact
+        );
 
         // A value backup is not a tree.
         let value = capture_value(&root.open("T", KeyAccess::READ), &root.key_path("T"), "")
@@ -3179,7 +3651,7 @@ mod tests {
             DeleteFailure::WrongBackupKind
         );
         assert_eq!(
-            restore_tree(&root.key, &value),
+            restore_tree(&parent_of(&value), &value),
             Err(RestoreError::WrongBackupKind)
         );
     }
@@ -3199,22 +3671,22 @@ mod tests {
         assert!(matches!(walked, Walked::Interrupted));
         drop(key);
         assert_eq!(
-            probe_tree(&root.key, &backup).unwrap(),
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
             TreeState::Partial { missing_keys: 2 }
         );
         // Undo's restore does not merge into a non-empty key; recovery completes the tree.
         assert_eq!(
-            restore_tree(&root.key, &backup),
+            restore_tree(&parent_of(&backup), &backup),
             Err(RestoreError::Conflict(RestoreConflict::KeyNotEmpty))
         );
-        let report = complete_tree(&root.key, &backup).unwrap();
+        let report = complete_tree(&parent_of(&backup), &backup).unwrap();
         assert_eq!(
             (report.outcome, report.keys_created),
             (RestoreOutcome::Restored, 2)
         );
         assert_eq!(shape(&capture(&root, "T")), shape(&before));
         assert_eq!(
-            complete_tree(&root.key, &backup).unwrap().outcome,
+            complete_tree(&parent_of(&backup), &backup).unwrap().outcome,
             RestoreOutcome::AlreadyRestored
         );
 
@@ -3224,11 +3696,31 @@ mod tests {
             delete_walk(&key, tree, false, &mut |index| index != 1).unwrap(),
             Walked::Interrupted
         ));
-        assert_eq!(finish_delete_tree(&key, &backup).unwrap().keys_deleted, 3);
+        assert_eq!(
+            finish_delete_tree(&parent_of(&backup), &backup)
+                .unwrap()
+                .keys_deleted,
+            3
+        );
         drop(key);
-        assert_eq!(probe_tree(&root.key, &backup).unwrap(), TreeState::Absent);
+        // Run again on the finished delete: the root is absent, nothing to do.
+        assert_eq!(
+            finish_delete_tree(&parent_of(&backup), &backup)
+                .unwrap()
+                .keys_deleted,
+            0
+        );
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Absent
+        );
         // Recovery after a finished delete restores everything.
-        assert_eq!(complete_tree(&root.key, &backup).unwrap().keys_created, 5);
+        assert_eq!(
+            complete_tree(&parent_of(&backup), &backup)
+                .unwrap()
+                .keys_created,
+            5
+        );
         assert_eq!(shape(&capture(&root, "T")), shape(&before));
 
         // A partial tree that changed meanwhile is not completed.
@@ -3241,13 +3733,178 @@ mod tests {
             .set_value_raw("v", REG_SZ, &utf16z("other"))
             .unwrap();
         assert_eq!(
-            complete_tree(&root.key, &backup),
+            complete_tree(&parent_of(&backup), &backup),
             Err(RestoreError::Conflict(RestoreConflict::Diverged {
                 at: "B".into(),
                 change: Change::ValuesDiffer
             }))
         );
-        assert!(!root.exists("T\\A\\A1"));
+        // The repair puts back what is missing and leaves the changed key as it is: the backup plus
+        // the change, never a half-deleted tree (review S2).
+        let report = restore_missing(&parent_of(&backup), &backup).unwrap();
+        assert_eq!(
+            (report.outcome, report.keys_created, report.differences),
+            (
+                RestoreOutcome::Restored,
+                2,
+                vec![Difference {
+                    at: "B".into(),
+                    kind: DifferenceKind::ExistingKeyDiffers {
+                        change: Change::ValuesDiffer
+                    }
+                }]
+            )
+        );
+        assert!(root.exists("T\\A\\A1") && root.exists("T\\A\\A2"));
+        assert_eq!(
+            root.open("T\\B", KeyAccess::READ)
+                .value("v")
+                .unwrap()
+                .unwrap()
+                .data,
+            utf16z("other")
+        );
+        let mut want = shape(&before);
+        let mut got = shape(&capture(&root, "T"));
+        let b = |s: &mut Shape| s.iter_mut().find(|k| k.0 == "B").unwrap().3.clear();
+        b(&mut want);
+        b(&mut got);
+        assert_eq!(got, want);
+    }
+
+    /// `T` with `T\A\A1` and `T\B`: indexes 0 T, 1 A, 2 A1, 3 B. Post-order: A1, A, B, T.
+    fn s2_tree(root: &TestRoot) {
+        let t = root.key.create_subkey("T", "", None, false).unwrap();
+        let a = t.create_subkey("A", "", None, false).unwrap();
+        a.create_subkey("A1", "", None, false)
+            .unwrap()
+            .set_value_raw("y", REG_BINARY, &[7])
+            .unwrap();
+        t.create_subkey("B", "", None, false)
+            .unwrap()
+            .set_value_raw("v", REG_SZ, &utf16z("b"))
+            .unwrap();
+    }
+
+    /// The review's S2 experiment: an interrupted tree delete, then a foreign change, then the
+    /// resumed delete. In either walk order the result says what is on the machine, and both ways out
+    /// (finish the delete, put the tree back) work from the backup alone.
+    #[test]
+    fn a_resumed_delete_that_stops_never_reports_a_half_deleted_tree_as_complete() {
+        let root = TestRoot::new();
+        s2_tree(&root);
+        let before = capture(&root, "T");
+        let dir = TempDir::new();
+        let backup = save(&dir, 1, &before);
+        let tree = backup.tree().unwrap();
+        let change_b = |text: &str| {
+            root.open("T\\B", KeyAccess::SET_VALUE)
+                .set_value_raw("v", REG_SZ, &utf16z(text))
+                .unwrap();
+        };
+
+        // The first run deleted A1 and A, and crashed when B's turn came. B changes meanwhile.
+        let key = root.open("T", KeyAccess::DELETE);
+        assert!(matches!(
+            delete_walk(&key, tree, false, &mut |index| index != 3).unwrap(),
+            Walked::Interrupted
+        ));
+        drop(key);
+        change_b("changed");
+        let err = finish_delete_tree(&parent_of(&backup), &backup).unwrap_err();
+        assert_eq!(
+            (err.at.as_str(), &err.failure),
+            ("B", &DeleteFailure::Changed(Change::ValuesDiffer))
+        );
+        assert_eq!(
+            err.rollback,
+            Rollback::PartialBefore {
+                missing: 2,
+                keys: 0,
+                differences: Vec::new()
+            }
+        );
+        assert!(!err.rollback.is_complete());
+        assert!(!root.exists("T\\A"));
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Diverged {
+                at: "B".into(),
+                change: Change::ValuesDiffer
+            }
+        );
+        // Way out 1: once the change is gone, the resumed delete finishes (B and T are left).
+        change_b("b");
+        assert_eq!(
+            finish_delete_tree(&parent_of(&backup), &backup)
+                .unwrap()
+                .keys_deleted,
+            2
+        );
+        assert!(!root.exists("T"));
+        restore_tree(&parent_of(&backup), &backup).unwrap();
+        assert_eq!(shape(&capture(&root, "T")), shape(&before));
+
+        // Way out 2, from the same state: put the tree back as the backup holds it, plus the change.
+        let key = root.open("T", KeyAccess::DELETE);
+        assert!(matches!(
+            delete_walk(&key, tree, false, &mut |index| index != 3).unwrap(),
+            Walked::Interrupted
+        ));
+        drop(key);
+        change_b("changed");
+        assert!(matches!(
+            finish_delete_tree(&parent_of(&backup), &backup)
+                .unwrap_err()
+                .rollback,
+            Rollback::PartialBefore { missing: 2, .. }
+        ));
+        let report = restore_missing(&parent_of(&backup), &backup).unwrap();
+        assert_eq!(
+            (report.outcome, report.keys_created),
+            (RestoreOutcome::Restored, 2)
+        );
+        assert!(root.exists("T\\A\\A1"));
+        assert_eq!(
+            restore_missing(&parent_of(&backup), &backup)
+                .unwrap()
+                .outcome,
+            RestoreOutcome::AlreadyRestored
+        );
+        change_b("b");
+        assert_eq!(shape(&capture(&root, "T")), shape(&before));
+
+        // The other walk order: only A1 was deleted, so the resumed run deletes A itself before it
+        // meets B. It puts A back with A1, and the tree is whole again.
+        let key = root.open("T", KeyAccess::DELETE);
+        assert!(matches!(
+            delete_walk(&key, tree, false, &mut |index| index != 1).unwrap(),
+            Walked::Interrupted
+        ));
+        drop(key);
+        change_b("changed");
+        let err = finish_delete_tree(&parent_of(&backup), &backup).unwrap_err();
+        assert_eq!(err.failure, DeleteFailure::Changed(Change::ValuesDiffer));
+        assert_eq!(
+            err.rollback,
+            Rollback::Done {
+                keys: 2,
+                differences: Vec::new()
+            }
+        );
+        assert!(root.exists("T\\A\\A1"));
+
+        // A parent whose leaf is not the backup's key is refused before anything is opened.
+        let other = CheckedKeyParent::unchecked_for_tests(
+            root.open("", KeyAccess::CREATE_SUB_KEY),
+            "Other",
+            hku(&root.rel("Other")),
+        );
+        assert_eq!(
+            finish_delete_tree(&other, &backup).unwrap_err().failure,
+            DeleteFailure::NotThisKey
+        );
+        assert!(root.exists("T\\A\\A1"));
     }
 
     #[test]
@@ -3257,7 +3914,7 @@ mod tests {
         let doc = capture(&root, "T");
         let dir = TempDir::new();
         let written = save(&dir, 1, &doc);
-        let path = dir.0.join(rel_file(1));
+        let path = dir.file(1);
         let original = std::fs::read(&path).unwrap();
 
         // One byte changed: refused on the hash.
@@ -3266,42 +3923,49 @@ mod tests {
         bytes[mid] ^= 0x01;
         std::fs::write(&path, &bytes).unwrap();
         assert_eq!(
-            read_verified(&dir.0, written.reference()),
+            read_verified(&dir.session, written.reference()),
             Err(BackupFileError::Tampered)
         );
         // Another length: refused before reading.
         bytes.push(b' ');
         std::fs::write(&path, &bytes).unwrap();
         assert_eq!(
-            read_verified(&dir.0, written.reference()),
+            read_verified(&dir.session, written.reference()),
             Err(BackupFileError::Tampered)
         );
         std::fs::write(&path, &original).unwrap();
-        assert!(read_verified(&dir.0, written.reference()).is_ok());
+        assert!(read_verified(&dir.session, written.reference()).is_ok());
 
         // Missing, and references that leave the session directory.
         let mut other = written.reference().clone();
         other.path = rel_file(9);
-        assert_eq!(read_verified(&dir.0, &other), Err(BackupFileError::Missing));
+        assert_eq!(
+            read_verified(&dir.session, &other),
+            Err(BackupFileError::Missing)
+        );
         for bad in [r"..\x.json", r"C:\x.json", "reg/x.json", ""] {
             other.path = bad.into();
             assert_eq!(
-                read_verified(&dir.0, &other),
+                read_verified(&dir.session, &other),
                 Err(BackupFileError::NotSessionRelative(bad.into()))
             );
             assert_eq!(
-                write_verified(&dir.0, bad, &file_sddl(), &doc),
+                write_verified(&dir.session, bad, &doc),
                 Err(BackupFileError::NotSessionRelative(bad.into()))
             );
         }
 
-        // An existing file is never replaced.
-        assert_eq!(
-            write_verified(&dir.0, &rel_file(1), &file_sddl(), &doc),
-            Err(BackupFileError::Fs {
-                op: "create backup file",
-                error: FsError::AlreadyExists
-            })
+        // An existing file is never replaced: the store refuses to create it.
+        let existing = write_verified(&dir.session, &rel_file(1), &doc);
+        assert!(
+            matches!(
+                &existing,
+                Err(BackupFileError::Store(e)) if matches!(**e, StorageError::Io {
+                    source: FsError::AlreadyExists,
+                    ..
+                })
+            ),
+            "{existing:?}"
         );
         assert_eq!(std::fs::read(&path).unwrap(), original);
 
@@ -3322,12 +3986,154 @@ mod tests {
             let name = rel_file(100 + i as u32);
             assert!(
                 matches!(
-                    write_verified(&dir.0, &name, &file_sddl(), &bad),
+                    write_verified(&dir.session, &name, &bad),
                     Err(BackupFileError::Invalid(_))
                 ),
                 "edit {i}"
             );
-            assert!(!dir.0.join(&name).exists());
+            assert!(!dir.session.path().join(&name).exists());
+        }
+    }
+
+    /// Set only in a child process of the test binary: the data root of the parent's store.
+    const CHILD_ROOT: &str = "PURGE_TEST_REGBACKUP_CHILD_ROOT";
+    /// Set only in a child process: the session id in that store.
+    const CHILD_SESSION: &str = "PURGE_TEST_REGBACKUP_CHILD_SESSION";
+    /// Set only in a child process: the parent's test key, relative to `HKU`.
+    const CHILD_KEY: &str = "PURGE_TEST_REGBACKUP_CHILD_KEY";
+    /// Set only in a child process: the JSON of the `BackupRef` to restore from; unset to write the
+    /// backup of `T` as file 1 instead.
+    const CHILD_RESTORE: &str = "PURGE_TEST_REGBACKUP_CHILD_RESTORE";
+
+    /// The child half of the crash tests: writes the backup of `<key>\T` through [`write_verified`],
+    /// or restores `T` from a backup with [`restore_tree`]. Does nothing when run as an ordinary test.
+    /// The parent owns the store and the key and removes both.
+    #[test]
+    fn child_regbackup_scenario() {
+        let (Some(data_root), Ok(id), Ok(key)) = (
+            std::env::var_os(CHILD_ROOT),
+            std::env::var(CHILD_SESSION),
+            std::env::var(CHILD_KEY),
+        ) else {
+            return;
+        };
+        let roots =
+            crate::storage::StorageRoots::relaxed(std::path::Path::new(&data_root)).unwrap();
+        let session = roots.open_session(&id.parse().unwrap()).unwrap();
+        match std::env::var(CHILD_RESTORE) {
+            Ok(reference) => {
+                let reference: BackupRef = serde_json::from_str(&reference).unwrap();
+                let backup = read_verified(&session, &reference).unwrap();
+                restore_tree(&parent_of(&backup), &backup).unwrap();
+            }
+            Err(_) => {
+                let t = WKey::open(
+                    RegRoot::Hku,
+                    &format!(r"{key}\T"),
+                    RegView::K64,
+                    KeyAccess::READ,
+                )
+                .unwrap();
+                let doc = capture_tree(&t, &format!(r"HKU\{key}\T"), 10).unwrap();
+                write_verified(&session, &rel_file(1), &doc).unwrap();
+            }
+        }
+    }
+
+    #[cfg(feature = "fault-inject")]
+    mod crash {
+        use super::*;
+
+        /// The exit code of a process ended by `std::process::abort` on Windows (`__fastfail`).
+        const ABORT_CODE: i32 = 0xC000_0409_u32 as i32;
+
+        /// Runs [`child_regbackup_scenario`] on `root`'s key and `dir`'s session, faulting at `at`.
+        fn run(
+            root: &TestRoot,
+            dir: &TempDir,
+            at: &str,
+            restore: Option<&BackupRef>,
+        ) -> Option<i32> {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "regbackup::tests::child_regbackup_scenario",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_ROOT, dir.session.roots().data_root())
+                .env(CHILD_SESSION, dir.session.id().as_str())
+                .env(CHILD_KEY, &root.path)
+                .env(fault::ENV_AT, at)
+                .env_remove(fault::ENV_PAUSE)
+                .env_remove(CHILD_RESTORE)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            if let Some(reference) = restore {
+                command.env(CHILD_RESTORE, serde_json::to_string(reference).unwrap());
+            }
+            command.status().unwrap().code()
+        }
+
+        /// Review S1: the one backup writer hits `backup.written` and `backup.verified` exactly once
+        /// each: the first hit aborts, a second hit is never reached.
+        #[test]
+        fn the_backup_writer_hits_each_backup_point_once() {
+            for point in [fault::BACKUP_WRITTEN, fault::BACKUP_VERIFIED] {
+                let root = TestRoot::new();
+                small_tree(&root);
+                let dir = TempDir::new();
+                assert_eq!(run(&root, &dir, point, None), Some(ABORT_CODE), "{point}");
+                // The file was written (and flushed) before either point.
+                let bytes = std::fs::read(dir.file(1)).unwrap();
+                let doc: RegBackup = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(shape(&doc), shape(&capture(&root, "T")));
+
+                let dir = TempDir::new();
+                assert_eq!(
+                    run(&root, &dir, &format!("{point}:2"), None),
+                    Some(0),
+                    "{point} hit twice"
+                );
+                assert!(dir.file(1).exists());
+            }
+        }
+
+        /// Review M6: `regrestore.mid` is hit inside the restore walk once a key is re-created; the
+        /// crash leaves a partly restored tree that recovery completes from the backup.
+        #[test]
+        fn a_crash_in_the_middle_of_a_restore_is_completed() {
+            let root = TestRoot::new();
+            small_tree(&root);
+            let dir = TempDir::new();
+            let before = capture(&root, "T");
+            let backup = save(&dir, 1, &before);
+            delete_tree(&root.open("T", KeyAccess::DELETE), &backup).unwrap();
+
+            // Five keys: the point is hit before each of the last four.
+            let reference = backup.reference();
+            assert_eq!(
+                run(&root, &dir, "regrestore.mid:5", Some(reference)),
+                Some(0)
+            );
+            assert_eq!(shape(&capture(&root, "T")), shape(&before));
+            delete_tree(&root.open("T", KeyAccess::DELETE), &backup).unwrap();
+
+            assert_eq!(
+                run(&root, &dir, "regrestore.mid:2", Some(reference)),
+                Some(ABORT_CODE)
+            );
+            assert_eq!(
+                probe_tree(&parent_of(&backup), &backup).unwrap(),
+                TreeState::Partial { missing_keys: 3 }
+            );
+            assert_eq!(
+                complete_tree(&parent_of(&backup), &backup)
+                    .unwrap()
+                    .keys_created,
+                3
+            );
+            assert_eq!(shape(&capture(&root, "T")), shape(&before));
         }
     }
 
@@ -3341,13 +4147,13 @@ mod tests {
 
         // Existing and equal: already restored. Existing with other content: conflict, nothing changed.
         assert_eq!(
-            restore_tree(&root.key, &backup).unwrap().outcome,
+            restore_tree(&parent_of(&backup), &backup).unwrap().outcome,
             RestoreOutcome::AlreadyRestored
         );
         root.open("T", KeyAccess::SET_VALUE)
             .set_value_raw("", REG_SZ, &utf16z("new"))
             .unwrap();
-        let conflict = restore_tree(&root.key, &backup).unwrap_err();
+        let conflict = restore_tree(&parent_of(&backup), &backup).unwrap_err();
         assert_eq!(
             conflict,
             RestoreError::Conflict(RestoreConflict::KeyNotEmpty)
@@ -3371,7 +4177,7 @@ mod tests {
         // Existing and empty elsewhere: merged; the existing key keeps its class.
         delete_tree(&root.open("T", KeyAccess::DELETE), &backup).unwrap();
         root.key.create_subkey("T", "Other", None, false).unwrap();
-        let report = restore_tree(&root.key, &backup).unwrap();
+        let report = restore_tree(&parent_of(&backup), &backup).unwrap();
         assert_eq!(report.outcome, RestoreOutcome::Restored);
         assert_eq!(report.keys_created, 4);
         assert!(report.differences.contains(&Difference {
@@ -3383,6 +4189,82 @@ mod tests {
         want[0].1 = None;
         got[0].1 = None;
         assert_eq!(got, want);
+
+        // The checked parent must be the backup's parent: another leaf is refused before anything is
+        // opened below it, by every restore and by the probe (review S3/S4).
+        let wrong = || {
+            CheckedKeyParent::unchecked_for_tests(
+                root.open("", KeyAccess::CREATE_SUB_KEY),
+                "U",
+                hku(&root.rel("U")),
+            )
+        };
+        assert_eq!(
+            restore_tree(&wrong(), &backup),
+            Err(RestoreError::NotThisKey)
+        );
+        assert_eq!(
+            complete_tree(&wrong(), &backup),
+            Err(RestoreError::NotThisKey)
+        );
+        assert_eq!(
+            restore_missing(&wrong(), &backup),
+            Err(RestoreError::NotThisKey)
+        );
+        assert_eq!(probe_tree(&wrong(), &backup), Err(RestoreError::NotThisKey));
+        assert!(!root.exists("U"));
+        // Case does not make another key.
+        let lower = CheckedKeyParent::unchecked_for_tests(
+            root.open("", KeyAccess::CREATE_SUB_KEY),
+            "t",
+            hku(&root.rel("t")),
+        );
+        assert!(matches!(
+            probe_tree(&lower, &backup),
+            Ok(TreeState::Diverged {
+                change: Change::ClassDiffers,
+                ..
+            })
+        ));
+
+        // The protected-root rule also judges the canonical address the gate resolved, not only the
+        // plan's spelling the backup records.
+        nuke(&root.key, "T", &root.path).unwrap();
+        root.key.create_subkey("T", "", None, false).unwrap();
+        let aliased = CheckedKeyParent::unchecked_for_tests(
+            root.open("", KeyAccess::CREATE_SUB_KEY),
+            "T",
+            hku(&root.rel(r"Installer\T")),
+        );
+        assert_eq!(
+            restore_tree(&aliased, &backup),
+            Err(RestoreError::Conflict(RestoreConflict::KeyExistsProtected))
+        );
+        // An empty key of another volatility is not merged into (review M9). The backup is made to
+        // record the root as volatile: a key re-created volatile right after the stable one was
+        // deleted came back stable on Windows 11 26300 (see the volatility test).
+        root.open("T", KeyAccess::DELETE).delete().unwrap();
+        root.key.create_subkey("T", "Other", None, false).unwrap();
+        restore_tree(&parent_of(&backup), &backup).unwrap();
+        let w = root.key.create_subkey("W", "", None, false).unwrap();
+        w.set_value_raw("v", REG_DWORD, &[1, 0, 0, 0]).unwrap();
+        let mut volatile = capture(&root, "W");
+        let RegBackupBody::Tree(tree) = &mut volatile.body else {
+            unreachable!("a tree capture")
+        };
+        tree.keys[0].volatile = true;
+        let volatile = save(&dir, 3, &volatile);
+        w.delete_value("v").unwrap();
+        assert_eq!(
+            restore_tree(&parent_of(&volatile), &volatile),
+            Err(RestoreError::Conflict(RestoreConflict::VolatilityDiffers))
+        );
+        assert_eq!(
+            RestoreConflict::VolatilityDiffers.undo_conflict(),
+            UndoConflict::KeyExists
+        );
+        assert_eq!(root.open("W", KeyAccess::READ).info().unwrap().n_values, 0);
+        drop(w);
 
         // Existing below a protected root: always a conflict, even when empty.
         let installer = root
@@ -3399,7 +4281,7 @@ mod tests {
         delete_tree(&root.open("Installer\\P", KeyAccess::DELETE), &p_backup).unwrap();
         installer.create_subkey("P", "", None, false).unwrap();
         assert_eq!(
-            restore_tree(&installer, &p_backup),
+            restore_tree(&parent_of(&p_backup), &p_backup),
             Err(RestoreError::Conflict(RestoreConflict::KeyExistsProtected))
         );
         assert_eq!(
@@ -3414,7 +4296,9 @@ mod tests {
             .delete()
             .unwrap();
         assert_eq!(
-            restore_tree(&installer, &p_backup).unwrap().outcome,
+            restore_tree(&parent_of(&p_backup), &p_backup)
+                .unwrap()
+                .outcome,
             RestoreOutcome::Restored
         );
 
@@ -3422,7 +4306,7 @@ mod tests {
         delete_tree(&root.open("T", KeyAccess::DELETE), &backup).unwrap_err();
         nuke(&root.key, "T", &root.path).unwrap();
         make_link(&root.path, "T", &root.nt_path("Installer"));
-        let err = restore_tree(&root.key, &backup).unwrap_err();
+        let err = restore_tree(&parent_of(&backup), &backup).unwrap_err();
         assert_eq!(err, RestoreError::Conflict(RestoreConflict::Link));
         assert_eq!(
             RestoreConflict::Link.undo_conflict(),
@@ -3430,13 +4314,21 @@ mod tests {
                 blocker: Blocker::RegLink
             }
         );
-        let link = root.open("T", KeyAccess::READ);
+        let link = CheckedKeyParent::unchecked_for_tests(
+            root.open("T", KeyAccess::READ),
+            "T",
+            hku(&root.rel("T\\T")),
+        );
         assert_eq!(
             restore_tree(&link, &backup),
             Err(RestoreError::Conflict(RestoreConflict::Link))
         );
         assert_eq!(
-            complete_tree(&root.key, &backup),
+            restore_missing(&parent_of(&backup), &backup),
+            Err(RestoreError::Conflict(RestoreConflict::Link))
+        );
+        assert_eq!(
+            complete_tree(&parent_of(&backup), &backup),
             Err(RestoreError::Conflict(RestoreConflict::Link))
         );
         assert!(!root.exists("Installer\\T"));
@@ -3459,7 +4351,7 @@ mod tests {
         let system_backup = save(&dir, 2, &system_owned);
         delete_tree(&root.open("O", KeyAccess::DELETE), &backup).unwrap();
 
-        let report = restore_tree(&root.key, &system_backup).unwrap();
+        let report = restore_tree(&parent_of(&system_backup), &system_backup).unwrap();
         assert_eq!(report.outcome, RestoreOutcome::Restored);
         assert_eq!(
             report.differences,
@@ -3480,7 +4372,9 @@ mod tests {
         assert!(root.exists("O\\c"));
         // Owners aside the tree is in place, so a second run changes nothing.
         assert_eq!(
-            restore_tree(&root.key, &system_backup).unwrap().outcome,
+            restore_tree(&parent_of(&system_backup), &system_backup)
+                .unwrap()
+                .outcome,
             RestoreOutcome::AlreadyRestored
         );
     }
@@ -3498,18 +4392,18 @@ mod tests {
         let dir = TempDir::new();
         for (n, name) in [(1, "odd"), (2, "")] {
             let doc = capture_value(&key, &path, name).unwrap().unwrap();
-            let backup = read_verified(&dir.0, save(&dir, n, &doc).reference()).unwrap();
+            let backup = read_verified(&dir.session, save(&dir, n, &doc).reference()).unwrap();
             let original = key.value(name).unwrap().unwrap();
             assert_eq!(delete_value(&key, &backup), Ok(ValueDelete::Deleted));
             assert_eq!(key.value(name).unwrap(), None);
             assert_eq!(delete_value(&key, &backup), Ok(ValueDelete::Vanished));
             assert_eq!(
-                restore_value(&key, &backup).unwrap().outcome,
+                restore_value(&value_key(&backup), &backup).unwrap().outcome,
                 RestoreOutcome::Restored
             );
             assert_eq!(key.value(name).unwrap(), Some(original));
             assert_eq!(
-                restore_value(&key, &backup).unwrap().outcome,
+                restore_value(&value_key(&backup), &backup).unwrap().outcome,
                 RestoreOutcome::AlreadyRestored
             );
             key.set_value_raw(name, REG_BINARY, &[1]).unwrap();
@@ -3518,13 +4412,13 @@ mod tests {
                 Err(DeleteFailure::Changed(Change::ValuesDiffer))
             );
             assert_eq!(
-                restore_value(&key, &backup),
+                restore_value(&value_key(&backup), &backup),
                 Err(RestoreError::Conflict(RestoreConflict::ValueDiffers))
             );
             assert_eq!(key.value(name).unwrap().unwrap().data, [1]);
             let tree = save(&dir, 10 + n, &capture(&root, "V"));
             assert_eq!(
-                restore_value(&key, &tree),
+                restore_value(&value_key(&tree), &tree),
                 Err(RestoreError::WrongBackupKind)
             );
         }
@@ -3572,20 +4466,23 @@ mod tests {
         let doc = capture_tree(&key, &root.key_path("VT"), DEFAULT_KEY_LIMIT).unwrap();
         let dir = TempDir::new();
         let written = save(&dir, 1, &doc);
-        let backup = read_verified(&dir.0, written.reference()).unwrap();
+        let backup = read_verified(&dir.session, written.reference()).unwrap();
         assert_eq!(backup.doc(), &doc);
 
         assert_eq!(delete_tree(&key, &backup).unwrap().keys_deleted, 5);
         drop(key);
         assert!(!root.exists("VT"));
-        let report = restore_tree(&root.key, &backup).unwrap();
+        let report = restore_tree(&parent_of(&backup), &backup).unwrap();
         assert_eq!(
             (report.outcome, report.keys_created, report.differences),
             (RestoreOutcome::Restored, 5, Vec::new())
         );
         assert_eq!(shape(&capture(&root, "VT")), shape(&doc));
         assert_eq!(volatility(&root, "VT"), before);
-        assert_eq!(probe_tree(&root.key, &backup).unwrap(), TreeState::Intact);
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Intact
+        );
 
         // A key whose volatility is not the recorded one stops the delete before anything goes. The
         // backup is made to record `E` as volatile: re-creating `E` volatile right after deleting the
@@ -3608,14 +4505,17 @@ mod tests {
         assert_eq!(err.at, "E");
         assert_eq!(err.rollback, Rollback::NotNeeded);
         assert_eq!(
-            probe_tree(&root.key, &flipped).unwrap(),
+            probe_tree(&parent_of(&flipped), &flipped).unwrap(),
             TreeState::Diverged {
                 at: "E".to_owned(),
                 change: Change::VolatilityDiffers,
             }
         );
         assert_eq!(volatility(&root, "VT"), before);
-        assert_eq!(probe_tree(&root.key, &backup).unwrap(), TreeState::Intact);
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Intact
+        );
     }
 
     #[test]
@@ -3630,6 +4530,21 @@ mod tests {
         let backup = save(&dir, 1, &doc);
         assert_eq!(delete_tree(&key, &backup).unwrap().keys_deleted, 5);
         assert!(!root.exists("T"));
+        let parent = CheckedKeyParent::unchecked_for_tests(
+            WKey::open(
+                RegRoot::Hku,
+                &root.path,
+                RegView::K32,
+                KeyAccess::CREATE_SUB_KEY,
+            )
+            .unwrap(),
+            "T",
+            KeyAddress {
+                root: KeyRoot::Hku,
+                view: View::K32,
+                path: root.rel("T"),
+            },
+        );
         assert_eq!(restore_tree(&parent, &backup).unwrap().keys_created, 5);
         // `HKCU\Software` is shared between the views: the 64-bit view sees the same tree.
         assert_eq!(shape(&capture(&root, "T")), shape(&doc));
@@ -3637,7 +4552,8 @@ mod tests {
 
     #[test]
     fn key_paths_open_and_protected_roots() {
-        // Keys are opened at the guard's probe address: the one route the gate uses too.
+        // Keys are opened at the guard's probe address, by the gate only (this module opens no key by
+        // path): the addresses it resolves.
         let probe = |key_path: &str| {
             purge_guard::live::key_probe(
                 &purge_model::Target::RegKey {
@@ -3654,14 +4570,9 @@ mod tests {
         };
         let root = TestRoot::new();
         small_tree(&root);
-        let key = open_key_path(&probe(&root.key_path("T\\A")).open, KeyAccess::READ).unwrap();
-        assert_eq!(key.info().unwrap().n_subkeys, 2);
-        let (parent, leaf) = open_parent(&probe(&root.key_path("T\\A")), KeyAccess::READ).unwrap();
-        assert_eq!(leaf, "A");
-        assert_eq!(parent.info().unwrap().n_subkeys, 2);
         assert_eq!(
-            open_parent(&probe(r"HKLM\SOFTWARE"), KeyAccess::READ).unwrap_err(),
-            Win32Error::INVALID_PARAMETER
+            probe(&root.key_path("T\\A")).open,
+            addr(KeyRoot::Hku, View::K64, &root.rel("T\\A"))
         );
         assert_eq!(
             probe(r"HKLM\SOFTWARE\WOW6432Node\Vendor").open,
@@ -3682,9 +4593,10 @@ mod tests {
             class.open,
             addr(KeyRoot::Hklm, View::K32, r"SOFTWARE\Classes\CLSID\{0}")
         );
-        let (class_parent, class_leaf) = open_parent(&class, KeyAccess::READ).unwrap();
-        assert_eq!(class_leaf, "{0}");
-        assert!(!class_parent.is_link().unwrap());
+        assert_eq!(
+            class.ancestors.last(),
+            Some(&addr(KeyRoot::Hklm, View::K32, r"SOFTWARE\Classes\CLSID"))
+        );
         // The current control set is reached through `ControlSet00N`, never through the link.
         assert_eq!(
             probe(r"HKLM\SYSTEM\CurrentControlSet\Services\Svc").open,
@@ -3788,6 +4700,24 @@ mod tests {
             (REG_SZ, "x", "x", None, 0, ""),
             (REG_SZ, ";x;\0\0", "x", None, 1, ";\0\0"),
             (REG_EXPAND_SZ, "%A%;C:\\x;D\0", "C:\\x", None, 1, "%A%;D\0"),
+            // A `;` inside double quotes is part of the element (review M8).
+            (
+                REG_SZ,
+                "\"C:\\a;b\";C:\\c\0",
+                "C:\\c",
+                Some(1),
+                1,
+                "\"C:\\a;b\"\0",
+            ),
+            (
+                REG_EXPAND_SZ,
+                "\"C:\\a;b\";C:\\c\0",
+                "\"C:\\a;b\"",
+                None,
+                0,
+                "C:\\c\0",
+            ),
+            (REG_SZ, "x;\"y\";z\0", "\"y\"", None, 1, "x;z\0"),
             // REG_MULTI_SZ: empty elements and terminators kept.
             (REG_MULTI_SZ, "a\0b\0\0", "b", None, 1, "a\0\0"),
             (REG_MULTI_SZ, "a\0b\0\0", "a", None, 0, "b\0\0"),
@@ -3829,7 +4759,7 @@ mod tests {
             List::parse(REG_SZ, &list("a\0b\0")),
             Err(SegmentError::NotAList)
         );
-        for bad in ["", "a;b", "a\0"] {
+        for bad in ["", "a;b", "a\0", "b\"", "\"a;b"] {
             assert_eq!(
                 segment_units(ListKind::Semicolon, bad),
                 Err(SegmentError::BadSegment),
@@ -3837,6 +4767,21 @@ mod tests {
             );
         }
         assert!(segment_units(ListKind::MultiSz, "a;b").is_ok());
+        assert!(segment_units(ListKind::Semicolon, "\"a;b\"").is_ok());
+        // An unclosed quote: no reader agrees where the elements are, so the value is not edited.
+        assert_eq!(
+            List::parse(REG_SZ, &list("\"C:\\a;b;C:\\c\0")),
+            Err(SegmentError::NotAList)
+        );
+        // Half of a quoted element is not an element: before M8 `b"` was one, and removing it broke
+        // the quoted path.
+        let quoted = List::parse(REG_SZ, &list("\"C:\\a;b\";C:\\c\0")).unwrap();
+        assert_eq!(quoted.segments.len(), 2);
+        assert!(
+            !quoted
+                .segments
+                .contains(&"b\"".encode_utf16().collect::<Vec<u16>>())
+        );
     }
 
     #[test]
@@ -3866,6 +4811,11 @@ mod tests {
         }
         drop(s);
         let key = root.open("S", KeyAccess::SET_VALUE);
+        // The same key as the gate hands it to undo.
+        let checked = CheckedValueKey::unchecked_for_tests(
+            root.open("S", KeyAccess::SET_VALUE),
+            hku(&root.rel("S")),
+        );
         for (name, ty, data, segment, index) in cases {
             let plan = plan_segment_removal(&key, name, segment, index).unwrap();
             assert_eq!(plan.original.data_b64.0, data);
@@ -3885,12 +4835,12 @@ mod tests {
             };
             // Without the value backup: rebuilt, and exact.
             assert_eq!(
-                reinsert_segment(&key, &undo),
+                reinsert_segment(&checked, &undo),
                 Ok(ReinsertOutcome::Reinserted { exact: true })
             );
             assert_eq!(key.value(name).unwrap().unwrap().data, data);
             assert_eq!(
-                reinsert_segment(&key, &undo),
+                reinsert_segment(&checked, &undo),
                 Ok(ReinsertOutcome::AlreadyRestored)
             );
 
@@ -3898,7 +4848,7 @@ mod tests {
             apply_segment_removal(&key, &plan).unwrap();
             undo.original = Some(plan.original.clone());
             assert_eq!(
-                reinsert_segment(&key, &undo),
+                reinsert_segment(&checked, &undo),
                 Ok(ReinsertOutcome::Reinserted { exact: true })
             );
             assert_eq!(key.value(name).unwrap().unwrap().data, data);
@@ -3927,23 +4877,26 @@ mod tests {
             original: Some(plan.original.clone()),
         };
         assert_eq!(
-            reinsert_segment(&key, &undo),
+            reinsert_segment(&checked, &undo),
             Ok(ReinsertOutcome::Reinserted { exact: false })
         );
         let live = key.value("path").unwrap().unwrap();
         assert_eq!((live.ty, live.data), (REG_EXPAND_SZ, utf16z("E;D:\\y")));
         // Present again: nothing to do.
         assert_eq!(
-            reinsert_segment(&key, &undo),
+            reinsert_segment(&checked, &undo),
             Ok(ReinsertOutcome::AlreadyPresent)
         );
         // Gone, or no longer a list: conflicts.
         key.delete_value("path").unwrap();
-        let err = reinsert_segment(&key, &undo).unwrap_err();
+        let err = reinsert_segment(&checked, &undo).unwrap_err();
         assert_eq!(err, SegmentError::ValueAbsent);
         assert_eq!(err.undo_conflict(), Some(UndoConflict::ValueChanged));
         key.set_value_raw("path", REG_DWORD, &[0; 4]).unwrap();
-        assert_eq!(reinsert_segment(&key, &undo), Err(SegmentError::NotAList));
+        assert_eq!(
+            reinsert_segment(&checked, &undo),
+            Err(SegmentError::NotAList)
+        );
 
         // Planning refusals.
         assert_eq!(

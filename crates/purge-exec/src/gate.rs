@@ -1622,6 +1622,13 @@ fn key_open_error<T>(e: Win32Error) -> GateOutcome<T> {
     }
 }
 
+/// Whether a value or segment item vanished: its value is absent from a key that is an ordinary key. A
+/// key replaced by a registry link has no such value either (the link key holds only its target), but
+/// that is the guard's link refusal, not a vanished item, so it goes on to the verdict.
+fn value_vanished(facts: &KeyFacts) -> bool {
+    facts.value == ValueState::Absent && facts.node == KeyNode::Plain
+}
+
 /// The access the act needs on the key.
 fn act_access(op: KeyOp) -> KeyAccess {
     match op {
@@ -1658,7 +1665,7 @@ fn gate_key(
             return match open_addr(&probe.open, KeyAccess::READ) {
                 Ok(read) => {
                     let seen = collect_key(ctx, &read, &probe, &target);
-                    if seen.facts.value == ValueState::Absent {
+                    if value_vanished(&seen.facts) {
                         return GateOutcome::Vanished;
                     }
                     match live::check_key(&check, &seen.facts, &ctx.deny) {
@@ -1674,7 +1681,7 @@ fn gate_key(
     };
     let seen = collect_key(ctx, &key, &probe, &target);
     // "Not found" is the executor's business, not the guard's.
-    if seen.facts.value == ValueState::Absent {
+    if value_vanished(&seen.facts) {
         return GateOutcome::Vanished;
     }
     if let Err(refusal) = live::check_key(&check, &seen.facts, &ctx.deny) {
@@ -1796,14 +1803,13 @@ pub fn open_and_check_key(ctx: &GateCtx, op: OpId) -> GateOutcome<CheckedKey> {
         return GateOutcome::Refused(rule(reason::OP_KIND));
     };
     // The guard compares values itself; it ignores the binding for key actions, whose recorded facts
-    // are compared below, from the same handle.
-    let (binding, key_facts) = match (op, &recorded.stamp) {
+    // are compared below, from the same handle. A segment edit has its own binding (see below).
+    let (binding, key_facts, segment_type) = match (op, &recorded.stamp) {
         (KeyOp::DeleteKeyTree | KeyOp::DeleteKeyIfEmpty, Stamp::Key(facts)) => {
-            (Binding::Capture, Some(facts))
+            (Binding::Capture, Some(facts), None)
         }
-        (KeyOp::DeleteValue | KeyOp::EditSegment, Stamp::Value(value)) => {
-            (Binding::Recheck(value), None)
-        }
+        (KeyOp::DeleteValue, Stamp::Value(value)) => (Binding::Recheck(value), None, None),
+        (KeyOp::EditSegment, Stamp::Value(value)) => (Binding::Capture, None, Some(value.ty)),
         _ => return GateOutcome::Refused(rule(reason::STAMP_KIND)),
     };
     gate_key(ctx, item, act_access(op), binding).and_then(|gated| {
@@ -1813,6 +1819,23 @@ pub fn open_and_check_key(ctx: &GateCtx, op: OpId) -> GateOutcome<CheckedKey> {
                 return GateOutcome::Refused(Refusal {
                     blocker: Blocker::ChangedSinceScan,
                     reason: reason::KEY_CHANGED,
+                });
+            }
+        }
+        // The segment binding. A segment edit is one read-modify-write of the value as it is at the act,
+        // and its backup is that value, so a value whose content changed since validation is acted on
+        // as long as the segment is in it; whether it is, is decided on this handle when the edit is
+        // planned (`act_reg`), not here. What is compared with the record: the value's type (a list
+        // turned into another type, or `REG_SZ` into `REG_EXPAND_SZ`, is another value). Length and hash
+        // are what any edit of the list changes, and are not compared. The key's link state and the
+        // ancestors' were judged by the guard above on this handle (a link is refused whatever the
+        // record says); a value record holds no key owner, so the owner is judged only by G3 on this
+        // handle.
+        if let Some(recorded_ty) = segment_type {
+            if !matches!(gated.facts.value, ValueState::Present(now) if now.ty == recorded_ty) {
+                return GateOutcome::Refused(Refusal {
+                    blocker: Blocker::ChangedSinceScan,
+                    reason: live::reason::VALUE_CHANGED,
                 });
             }
         }
@@ -1934,6 +1957,32 @@ impl CheckedValueKey {
     /// The key handle, giving up the rest.
     pub fn into_key(self) -> WKey {
         self.key
+    }
+}
+
+/// Undo destinations the gate did not check, for the unit tests of the restore engine
+/// (`regbackup`) only, which exercise the engine on handles they open themselves. The executor's
+/// tests go through [`check_undo_key`].
+#[cfg(test)]
+impl CheckedKeyParent {
+    pub(crate) fn unchecked_for_tests(parent: WKey, leaf: &str, address: KeyAddress) -> Self {
+        CheckedKeyParent {
+            parent,
+            leaf: leaf.to_owned(),
+            address,
+            facts: UndoKeyFacts::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl CheckedValueKey {
+    pub(crate) fn unchecked_for_tests(key: WKey, address: KeyAddress) -> Self {
+        CheckedValueKey {
+            key,
+            address,
+            facts: UndoKeyFacts::default(),
+        }
     }
 }
 

@@ -25,7 +25,7 @@ use purge_win::sid::current_user_sid;
 
 use super::*;
 use crate::gate::{self, GateCtx, GateItem, GateOutcome};
-use crate::journal::{JournalWriter, read};
+use crate::journal::{JournalWriter, read, sha256_bytes};
 use crate::regbackup;
 use crate::storage::{BackupKind, SessionDir, StorageRoots, backup_rel};
 
@@ -643,7 +643,7 @@ fn delete_key_tree_round_trips_exactly() {
         run.backup_path(1),
         "the backup is reg\\<op>.regbackup.json"
     );
-    let on_disk = regbackup::read_verified(run.session.path(), backup).unwrap();
+    let on_disk = regbackup::read_verified(&run.session, backup).unwrap();
     assert_eq!(shape(on_disk.doc()), shape(&before));
     assert!(matches!(intent.pre, ItemFacts::Key(_)));
 
@@ -861,19 +861,16 @@ fn edit_segment_round_trips_and_keeps_the_type() {
     assert_eq!(k.get("Env", "List"), Some((REG_MULTI_SZ, list)));
 }
 
-/// Changed in meaning (S5): a segment edit whose value changed after validation is no longer re-bound to
-/// the value as it is now (that took a stamp that was never journalled); the act-time gate refuses it
-/// against the journalled value and nothing is written. The plan step's own cases (segment gone, moved
-/// away from the recorded position) are covered on values that did not change since validation.
+/// A segment edit is one read-modify-write of the value as it is at the act, and its backup is that
+/// value: the act-time gate binds it to the value's type only (review S5 follow-up, item 4), and
+/// whether the segment is there is decided on the gated handle.
 #[test]
-fn edit_segment_on_a_value_changed_since_validation_is_skipped() {
+fn edit_segment_follows_a_changed_value_while_the_segment_is_there() {
     let k = TestKey::new();
     k.create("Env");
     for name in ["Grown", "Gone", "Moved", "Dword"] {
         k.set("Env", name, REG_SZ, &utf16z("a;b;c"));
     }
-    k.set("Env", "Absent", REG_SZ, &utf16z("a;x;c"));
-    k.set("Env", "Elsewhere", REG_SZ, &utf16z("b;a;c"));
     let mut run = Run::new(
         "segment-changed",
         vec![
@@ -882,27 +879,24 @@ fn edit_segment_on_a_value_changed_since_validation_is_skipped() {
             segment_op(k.wire("Env"), "Moved", "b", Some(1)),
             segment_op(k.wire("Env"), "Dword", "b", Some(1)),
             segment_op(k.wire("Env"), "Missing", "b", None),
-            segment_op(k.wire("Env"), "Absent", "b", None),
-            segment_op(k.wire("Env"), "Elsewhere", "b", Some(1)),
         ],
     );
     assert!((1..=4).all(|n| run.validated(n)));
-    assert!(!run.validated(5));
-    assert!(run.validated(6) && run.validated(7));
 
-    // Changed since validation, segment still at its place: skipped, the value untouched.
+    // Changed since validation, segment still at its place: the edit is made on the value as it is.
     k.set("Env", "Grown", REG_SZ, &utf16z("a;b;c;d"));
-    assert_outcome(&run.run(1), skipped(SkipReason::ChangedSinceScan));
+    assert_outcome(&run.run(1), ItemOutcome::Done);
+    assert_eq!(k.get("Env", "Grown"), Some((REG_SZ, utf16z("a;c;d"))));
+    // The backup is the value the edit was made on.
+    assert_undo(&run.undo(1), UndoOutcome::Restored);
     assert_eq!(k.get("Env", "Grown"), Some((REG_SZ, utf16z("a;b;c;d"))));
-    // Decided before any intent: no backup was written.
-    assert!(!run.backup_path(1).exists());
 
-    // The segment is gone since validation: skipped, the value untouched.
+    // The segment is gone: vanished, the value untouched.
     k.set("Env", "Gone", REG_SZ, &utf16z("a;x;c"));
-    assert_outcome(&run.run(2), skipped(SkipReason::ChangedSinceScan));
+    assert_outcome(&run.run(2), ItemOutcome::Vanished);
     assert_eq!(k.get("Env", "Gone"), Some((REG_SZ, utf16z("a;x;c"))));
 
-    // The segment moved away from the recorded position since validation.
+    // The segment moved away from the recorded position.
     k.set("Env", "Moved", REG_SZ, &utf16z("b;a;c"));
     assert_outcome(&run.run(3), skipped(SkipReason::ChangedSinceScan));
     assert_eq!(k.get("Env", "Moved"), Some((REG_SZ, utf16z("b;a;c"))));
@@ -911,13 +905,46 @@ fn edit_segment_on_a_value_changed_since_validation_is_skipped() {
     k.set("Env", "Dword", REG_DWORD, &[1, 0, 0, 0]);
     assert_outcome(&run.run(4), skipped(SkipReason::ChangedSinceScan));
     assert_eq!(k.get("Env", "Dword"), Some((REG_DWORD, vec![1, 0, 0, 0])));
+}
+
+/// The cases a segment edit skips or reports as vanished: a value of another type than validated (a
+/// list still, `REG_SZ` turned `REG_EXPAND_SZ`: the gate's segment binding), a value that never held
+/// the segment, and a segment that is not at the plan's recorded index although the value is
+/// unchanged. The model's `Inverse::undoes` requires the inverse's index to be the plan's, so a
+/// segment found at another index stays a skip.
+#[test]
+fn edit_segment_skips_another_type_or_another_index() {
+    let k = TestKey::new();
+    k.create("Env");
+    k.set("Env", "Typed", REG_SZ, &utf16z("a;b;c"));
+    k.set("Env", "Absent", REG_SZ, &utf16z("a;x;c"));
+    k.set("Env", "Elsewhere", REG_SZ, &utf16z("b;a;c"));
+    let mut run = Run::new(
+        "segment-skips",
+        vec![
+            segment_op(k.wire("Env"), "Typed", "b", Some(1)),
+            segment_op(k.wire("Env"), "Absent", "b", None),
+            segment_op(k.wire("Env"), "Elsewhere", "b", Some(1)),
+        ],
+    );
+    assert!((1..=3).all(|n| run.validated(n)));
+
+    // Same data, another type since validation: skipped at the gate, nothing written.
+    k.set("Env", "Typed", REG_EXPAND_SZ, &utf16z("a;b;c"));
+    assert_outcome(&run.run(1), skipped(SkipReason::ChangedSinceScan));
+    assert_eq!(
+        k.get("Env", "Typed"),
+        Some((REG_EXPAND_SZ, utf16z("a;b;c")))
+    );
+    // Decided before any intent: no backup was written.
+    assert!(!run.backup_path(1).exists());
 
     // Unchanged since validation, but the value never held the segment: vanished, untouched.
-    assert_outcome(&run.run(6), ItemOutcome::Vanished);
+    assert_outcome(&run.run(2), ItemOutcome::Vanished);
     assert_eq!(k.get("Env", "Absent"), Some((REG_SZ, utf16z("a;x;c"))));
 
     // Unchanged since validation, but the segment is not at the plan's recorded position.
-    assert_outcome(&run.run(7), skipped(SkipReason::ChangedSinceScan));
+    assert_outcome(&run.run(3), skipped(SkipReason::ChangedSinceScan));
     assert_eq!(k.get("Env", "Elsewhere"), Some((REG_SZ, utf16z("b;a;c"))));
 }
 
@@ -1146,6 +1173,120 @@ fn the_32_bit_views_are_addressed_explicitly() {
     }
 }
 
+/// Keys `HKU\<SID>\Software\Classes\PurgeTest-<random>-<n>` (stored at `HKU\<SID>_Classes\...`, the
+/// key the alias names), each with a value and a subkey with a value; removed on drop.
+struct ClassesKeys {
+    classes: WKey,
+    names: Vec<String>,
+}
+
+/// A [`ClassesKeys`] key's own value data and its subkey's, each if present.
+type OwnAndSub = (Option<Vec<u8>>, Option<Vec<u8>>);
+
+impl ClassesKeys {
+    fn new(count: usize) -> ClassesKeys {
+        let sid = current_user_sid().unwrap();
+        let classes = WKey::open(
+            RegRoot::Hku,
+            &format!("{sid}_Classes"),
+            RegView::K64,
+            KeyAccess::CREATE_SUB_KEY,
+        )
+        .unwrap();
+        let names: Vec<String> = (0..count).map(|_| unique("PurgeTest")).collect();
+        for name in &names {
+            let key = classes
+                .create_subkey(name, "", None, false)
+                .unwrap()
+                .into_key();
+            key.set_value_raw("own", REG_DWORD, &[1, 0, 0, 0]).unwrap();
+            key.create_subkey("Sub", "", None, false)
+                .unwrap()
+                .set_value_raw("v", REG_SZ, &utf16z("x"))
+                .unwrap();
+        }
+        ClassesKeys { classes, names }
+    }
+
+    /// The key `n` read at its storage address, if it exists: its own value and its subkey's.
+    fn read(&self, n: usize) -> Option<OwnAndSub> {
+        let key = self
+            .classes
+            .open_subkey(&self.names[n], KeyAccess::READ)
+            .ok()?;
+        let sub = key.open_subkey("Sub", KeyAccess::READ).ok();
+        Some((
+            key.value("own").unwrap().map(|v| v.data),
+            sub.and_then(|sub| sub.value("v").unwrap().map(|v| v.data)),
+        ))
+    }
+}
+
+impl Drop for ClassesKeys {
+    fn drop(&mut self) {
+        for name in &self.names {
+            if let Ok(key) = self.classes.open_subkey(name, KeyAccess::DELETE) {
+                if let Ok(sub) = key.open_subkey("Sub", KeyAccess::DELETE) {
+                    let _ = sub.delete();
+                }
+                let _ = key.delete();
+            }
+        }
+    }
+}
+
+/// Review S3/S4: a key spelled through an alias is deleted and undone at the canonical address the
+/// gate resolves, by delete and by undo (no second route to the key). `Software\Classes` of a user is
+/// stored as `<SID>_Classes`; `WOW6432Node` below it names the 32-bit view, where a top-level name such
+/// as these is shared with the 64-bit view. Machine aliases (`CurrentControlSet`) need HKLM write
+/// access and are only probed, read-only.
+#[test]
+fn keys_spelled_through_an_alias_are_deleted_and_undone_at_their_address() {
+    let sid = current_user_sid().unwrap();
+    let keys = ClassesKeys::new(3);
+    let classes = format!(r"HKU\{sid}\Software\Classes");
+    let mut run = Run::new(
+        "alias",
+        vec![
+            tree_op(format!(r"{classes}\{}", keys.names[0])),
+            tree_op(format!(r"{classes}\WOW6432Node\{}", keys.names[1])),
+            value_op(format!(r"{classes}\WOW6432Node\{}", keys.names[2]), "own"),
+        ],
+    );
+    assert!((1..=3).all(|n| run.validated(n)));
+    let before: Vec<_> = (0..3).map(|n| keys.read(n)).collect();
+    assert_eq!(before[0], Some((Some(vec![1, 0, 0, 0]), Some(utf16z("x")))));
+
+    assert_outcome(&run.run(1), ItemOutcome::Done);
+    assert_outcome(&run.run(2), ItemOutcome::Done);
+    assert_outcome(&run.run(3), ItemOutcome::Done);
+    assert_eq!(keys.read(0), None);
+    assert_eq!(keys.read(1), None);
+    assert_eq!(keys.read(2), Some((None, Some(utf16z("x")))));
+
+    for n in 1..=3 {
+        assert_undo(&run.undo(n), UndoOutcome::Restored);
+    }
+    let after: Vec<_> = (0..3).map(|n| keys.read(n)).collect();
+    assert_eq!(after, before);
+
+    // `CurrentControlSet`: all of `HKLM\SYSTEM` is deny-listed, so a key spelled through that alias
+    // is refused before anything is opened (its address is checked in `regbackup`'s probe test).
+    let ccs = format!(
+        r"HKLM\SYSTEM\CurrentControlSet\Control\{}",
+        unique("PurgeTest")
+    );
+    let mut machine = Run::new("alias-hklm", vec![tree_op(ccs)]);
+    assert!(!machine.validated(1));
+    machine.forge_key_record(1);
+    assert_outcome(
+        &machine.run(1),
+        blocked(Blocker::DenyListed {
+            rule: "reg.hklm.system".into(),
+        }),
+    );
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Undo conflicts
 // ---------------------------------------------------------------------------------------------------
@@ -1318,6 +1459,32 @@ fn undo_after_an_intent_without_done_completes_the_tree() {
     assert_eq!(shape(&k.capture("Partial")), shape(&before));
     assert_undo(&run.undo(2), UndoOutcome::AlreadyRestored);
     assert!(k.exists(r"Untouched\A\Deep"));
+}
+
+/// Review S2 through undo: the run stopped in a tree delete, and a key that was not deleted changed
+/// afterwards. Undo puts back the keys Purge deleted and leaves the changed key as it is (reported),
+/// instead of refusing and leaving the tree half deleted.
+#[test]
+fn undo_after_an_intent_without_done_puts_back_what_is_missing_beside_a_change() {
+    let k = TestKey::new();
+    k.create(r"Partial\A\Deep");
+    k.set(r"Partial\A\Deep", "d", REG_SZ, &utf16z("deep"));
+    k.create(r"Partial\B");
+    k.set(r"Partial\B", "v", REG_SZ, &utf16z("before"));
+    let before = k.capture(r"Partial\A");
+    let mut run = Run::new("resume-changed", vec![tree_op(k.wire("Partial"))]);
+    run.intent_only(1);
+    k.remove(r"Partial\A");
+    k.set(r"Partial\B", "v", REG_SZ, &utf16z("theirs"));
+
+    let undone = run.undo(1);
+    assert_undo(&undone, UndoOutcome::Restored);
+    let RegUndoResult::Done { detail, .. } = &undone else {
+        unreachable!()
+    };
+    assert!(detail.contains("differs from the backup"), "{detail}");
+    assert_eq!(shape(&k.capture(r"Partial\A")), shape(&before));
+    assert_eq!(k.get(r"Partial\B", "v"), Some((REG_SZ, utf16z("theirs"))));
 }
 
 #[test]
