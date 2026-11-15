@@ -47,7 +47,9 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
   rigtool deep --scope FILE... [--sid SID] -o deep.json
                 (FILE: purge.rig.deepscope/0, purge.rig.targets/0 or an m2-traps / m2-fixtures manifest)
   rigtool fidelity --before A.json --after C.json --journal journal.jsonl [--ambient ambient.json]
-                   [--sid SID] -o fidelity.json     (exit 1 = a differing object or an unverifiable row)
+                   [--sid SID] [--keep-items ID...] -o fidelity.json
+                   (exit 1 = a differing object or an unverifiable row; --keep-items: ops of these items were
+                   left quarantined on purpose, reported as row 'kept quarantined', not compared)
   rigtool execdiff --before A.tsv.gz --after B.tsv.gz --journal journal.jsonl --report report.json
                    [--traps m2-traps.json [m2-fixtures.json]...] [--group main ...] [--ambient ambient.json]
                    [--deep-before A.json --deep-after B.json] [--sid SID] -o execdiff.json
@@ -260,13 +262,14 @@ fn run(argv: Vec<String>) -> Result<()> {
             })
         }
         "fidelity" => {
-            let a = Args::parse(rest, &[], &[], &["--before", "--after", "--journal", "--ambient", "--sid", "-o"])?;
+            let a = Args::parse(rest, &[], &["--keep-items"], &["--before", "--after", "--journal", "--ambient", "--sid", "-o"])?;
             let rep = fidelity::cmd_fidelity(&fidelity::FidelityArgs {
                 before: a.req("--before")?,
                 after: a.req("--after")?,
                 journal: a.req("--journal")?,
                 ambient: a.path("--ambient"),
                 sid: a.get("--sid"),
+                keep_items: a.all("--keep-items"),
                 out: a.req("-o")?,
             })?;
             if !rep.ok {

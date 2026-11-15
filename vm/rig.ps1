@@ -869,7 +869,9 @@ function Get-M2ModeOpts {
         'm2-crash' {
             $o.batch = $(if ($BatchSize -lt 0) { 10 } else { $BatchSize })
             $o.hard_poweroff = [bool]$HardPowerOff
-            if (@($FaultPoints | Where-Object { $_ }).Count) { $o.points = @($FaultPoints | Where-Object { $_ }) }
+            # powershell.exe -File passes "-FaultPoints a,b" as one string: split it.
+            $fps = @($FaultPoints | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($fps.Count) { $o.points = $fps }
         }
     }
     [pscustomobject]@{ opts = $o; timeout = $to }

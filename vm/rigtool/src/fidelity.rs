@@ -47,6 +47,9 @@ pub const ROWS: &[&str] = &[
 pub const OUTSIDE: &str = "outside plan";
 /// Ops that ended without an intent record (refused by a gate, already gone, failed before any backup).
 pub const NOT_EXECUTED: &str = "not executed";
+/// Ops of items the run left quarantined on purpose (`--keep-items`, e.g. the m2-traps expiry item): reported, not
+/// compared.
+pub const KEPT: &str = "kept quarantined";
 
 /// Fields never compared (documented in the report).
 pub const EXCLUDED: &[&str] = &[
@@ -67,6 +70,8 @@ pub struct FidelityArgs {
     pub journal: PathBuf,
     pub ambient: Option<PathBuf>,
     pub sid: Option<String>,
+    /// Item ids whose ops the run did not undo on purpose (row `kept quarantined`, not compared).
+    pub keep_items: Vec<String>,
     pub out: PathBuf,
 }
 
@@ -1442,7 +1447,7 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
         {
             op_rows[i].objects += 1;
         }
-        if p.is_some_and(|p| p.kind == "RemovePackage") {
+        if p.is_some_and(|p| p.kind == "RemovePackage" || p.kind == KEPT) {
             return;
         }
         if matches!(o, Obj::File(_)) && !renamed {
@@ -1541,6 +1546,8 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
         };
         if l == "RemovePackage" {
             r.note = Some("Inverse None: not compared".into());
+        } else if l == KEPT {
+            r.note = Some("left quarantined by the run on purpose (--keep-items): not compared".into());
         } else {
             r.identical = n_obj - n_diff;
             r.differing = n_diff;
@@ -1585,7 +1592,12 @@ pub fn cmd_fidelity(a: &FidelityArgs) -> Result<FidelityReport> {
     let after = read_deep(&a.after)?;
     let text = journal::read_journal_text(&a.journal)?;
     let j = parse_journal(&text).with_context(|| format!("journal {}", a.journal.display()))?;
-    let (ops, jw) = (j.ops, j.warnings);
+    let (mut ops, jw) = (j.ops, j.warnings);
+    for o in &mut ops {
+        if o.kind.is_some() && a.keep_items.iter().any(|k| k == &o.item) {
+            o.kind = Some(KEPT.into());
+        }
+    }
     let amb = match &a.ambient {
         Some(p) => Some(AmbientSet::load(p)?),
         None => None,

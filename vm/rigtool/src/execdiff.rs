@@ -187,6 +187,9 @@ pub struct Trap {
     pub built: Option<bool>,
     pub build_objects: Vec<BuildObj>,
     pub items: Vec<TrapItem>,
+    /// The directory a race helper (`helper.action` swap) replaces with a junction while the engine is paused
+    /// (canonical path). Its own change and its parent's LastWriteTime are the helper's, not the engine's.
+    pub helper_dir: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -247,6 +250,11 @@ pub fn parse_manifest(text: &str, source: &str, sid: Option<&str>) -> Result<(Ma
                 })
                 .collect(),
             items: Vec::new(),
+            helper_dir: t
+                .get("helper")
+                .filter(|h| h.get("action").and_then(Value::as_str) == Some("swap"))
+                .and_then(|h| s_of(h, "dir"))
+                .map(|d| canon::canon_path(&d)),
             id: id.clone(),
         };
         for it in t.get("items").and_then(Value::as_array).into_iter().flatten() {
@@ -741,8 +749,61 @@ fn canary_deep(c: &Canary, da: Option<&DeepIdx>, db: &DeepIdx) -> Src {
     }
 }
 
+/// A trap item's build condition: the build record's attribute / reparse-tag objects at or under the item's target
+/// all set (`met`), one not set (`unmet`), none recorded (`unknown`); `None` when the item has no condition.
+fn condition_status(t: &Trap, it: &TrapItem) -> Option<&'static str> {
+    it.condition.as_ref().map(|_| {
+        let rel: Vec<&BuildObj> = t
+            .build_objects
+            .iter()
+            .filter(|o| matches!(o.k.as_str(), "attrs" | "cloud-tag") && canon::is_under_or_eq(&o.path, it.target.path()))
+            .collect();
+        if rel.is_empty() {
+            "unknown"
+        } else if rel.iter().all(|o| o.ok) {
+            "met"
+        } else {
+            "unmet"
+        }
+    })
+}
+
+/// FILETIME of a snapshot header time (`YYYY-MM-DDTHH:MM:SS`, UTC, optional fraction and `Z`); `None` if unreadable.
+fn header_filetime(iso: &str) -> Option<u64> {
+    let b = iso.as_bytes();
+    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| iso.get(r)?.parse::<i64>().ok();
+    let (y, m, d, hh, mm, ss) = (n(0..4)?, n(5..7)?, n(8..10)?, n(11..13)?, n(14..16)?, n(17..19)?);
+    // days from civil (H. Hinnant)
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let unix = days * 86400 + hh * 3600 + mm * 60 + ss;
+    u64::try_from((unix + 11_644_473_600) * 10_000_000).ok()
+}
+
+/// A directory whose only change is its LastWriteTime, from one time to another that both lie before the before
+/// snapshot was taken: NTFS updates the copy of a directory's times in its parent's index lazily, and the snapshot
+/// reads that copy, so a change made before the run can show up between two snapshots. Nothing the run did can
+/// carry a time earlier than the before snapshot.
+fn stale_dir_time(c: &Change, before_ft: Option<u64>) -> bool {
+    let Some(t0) = before_ft else { return false };
+    if c.rec != 'D' || c.op != '~' || c.changes.len() != 1 {
+        return false;
+    }
+    let Some(rest) = c.changes[0].strip_prefix("mtime ") else { return false };
+    let Some((x, y)) = rest.split_once("->") else { return false };
+    matches!((x.trim().parse::<u64>(), y.trim().parse::<u64>()), (Ok(x), Ok(y)) if x < t0 && y < t0)
+}
+
 /// Effect of one op in the snapshots.
-fn effect(o: &OpT, all: &[OpT], a: &Snap, b: &Snap) -> (String, String) {
+fn effect(o: &OpT, all: &[OpT], a: &Snap, b: &Snap, helper_dirs: &[String]) -> (String, String) {
     let ok = |d: &str| ("ok".to_string(), d.to_string());
     let unv = |d: &str| ("unverified".to_string(), d.to_string());
     let (Some(kind), Some(t)) = (o.kind.as_deref(), o.target.as_ref()) else {
@@ -811,6 +872,17 @@ fn effect(o: &OpT, all: &[OpT], a: &Snap, b: &Snap) -> (String, String) {
                     (true, true) => ("missing".into(), "value data unchanged".into()),
                     (false, _) => ("changed".into(), "the edited value is gone".into()),
                 };
+            }
+            // A race helper put a junction where the directory was: the engine moved the original object through
+            // its handle (an accepted race outcome); what stands at the path now is the helper's link.
+            if pb
+                && let Target::Path { path } = t
+                && helper_dirs.iter().any(|h| canon::ci_eq(path, h))
+                && let (Some(x), Some(y)) = (a.path(path), b.path(path))
+                && x.reparse == 0
+                && y.reparse != 0
+            {
+                return ok("moved through the handle; the race helper's link stands at the path after");
             }
             if pb { ("missing".into(), "still present after".into()) } else { ok("gone after") }
         }
@@ -936,6 +1008,19 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
     let mut stores: Vec<String> = vec![PURGE_STORE.to_string()];
     stores.extend(h.volumes.iter().map(|v| canon::canon_path(&v.quarantine)));
     let rig = RigRules::new(&[cx.a, cx.b]);
+    let scored: Vec<String> = if cx.groups.is_empty() { vec!["main".into()] } else { cx.groups.to_vec() };
+    let helper_dirs: Vec<String> = cx
+        .manifests
+        .iter()
+        .flat_map(|m| m.traps.iter())
+        .filter(|t| t.items.iter().any(|i| scored.contains(&i.group)))
+        .filter_map(|t| t.helper_dir.clone())
+        .collect();
+
+    let before_ft = header_filetime(&cx.a.header.time);
+    if before_ft.is_none() {
+        warnings.push(format!("before snapshot time {:?} unreadable: no stale-dir-time rule", cx.a.header.time));
+    }
 
     // Classify diff records.
     let d = diff::diff(cx.a, cx.b);
@@ -959,6 +1044,8 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
             Some("pending-rename")
         } else if cx.ambient.and_then(|m| m.union.matches(&t)).is_some() {
             Some("ambient")
+        } else if stale_dir_time(c, before_ft) {
+            Some("stale-dir-time")
         } else {
             None
         };
@@ -988,6 +1075,17 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
             _ => {}
         }
     }
+    // Race helpers of the scored groups: the swapped directory (now a junction) and its parent's LastWriteTime.
+    for (c, a) in d.iter().zip(auth.iter_mut()) {
+        if matches!(c.rec, 'D' | 'F') && helper_dirs.iter().any(|h| canon::ci_eq(&c.path, h)) {
+            if a.is_none() {
+                *a = Some("helper");
+            }
+            if let Some(p) = canon::parent(&c.path) {
+                dir_parents.insert(canon::fold(p));
+            }
+        }
+    }
     let mut collateral = Vec::new();
     let mut unexplained = Vec::new();
     for (c, a) in d.iter().zip(auth.iter_mut()) {
@@ -1013,7 +1111,7 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
     // Effects.
     let mut effects = Vec::new();
     for o in &ops {
-        let (verdict, detail) = effect(o, &ops, cx.a, cx.b);
+        let (verdict, detail) = effect(o, &ops, cx.a, cx.b, &helper_dirs);
         match verdict.as_str() {
             "missing" => counts.missing_effects += 1,
             "changed" => counts.changed_not_done += 1,
@@ -1034,9 +1132,34 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
     // Canaries.
     let da = cx.deep_a.map(DeepIdx::new);
     let db = cx.deep_b.map(DeepIdx::new);
+    // Targets of trap items whose build condition is unmet (e.g. a placeholder attribute Windows would not set):
+    // the object there is an ordinary file, so a canary on it is not a protected object and is not scored.
+    let unmet: Vec<(String, String)> = cx
+        .manifests
+        .iter()
+        .flat_map(|m| m.traps.iter())
+        .flat_map(|t| t.items.iter().map(move |it| (t, it)))
+        .filter(|(t, it)| condition_status(t, it) == Some("unmet"))
+        .map(|(_, it)| (it.id.clone(), canon::canon_path(it.target.path())))
+        .collect();
     let mut canaries = Vec::new();
     for m in cx.manifests {
         for c in &m.canaries {
+            if c.kind == "file"
+                && let Some((iid, _)) = unmet.iter().find(|(_, p)| canon::is_under_or_eq(&c.path, p))
+            {
+                canaries.push(CanaryRow {
+                    id: c.id.clone(),
+                    trap: c.trap.clone(),
+                    kind: c.kind.clone(),
+                    path: c.path.clone(),
+                    name: c.name.clone(),
+                    verdict: "not-scored".to_string(),
+                    verified_by: Vec::new(),
+                    evidence: vec![format!("trap item {iid}: build condition unmet, an ordinary plan item")],
+                });
+                continue;
+            }
             let mut srcs = vec![("snap", canary_snap(c, cx.a, cx.b))];
             if let Some(db) = &db {
                 srcs.push(("deep", canary_deep(c, da.as_ref(), db)));
@@ -1096,24 +1219,7 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
                 let jo = ri.and_then(|r| j.op(r.op));
                 let actual: Option<Outcome> =
                     jo.and_then(|o| o.effective.clone()).or_else(|| ri.map(|r| r.outcome.clone()));
-                // Condition: the build record's attribute / reparse-tag objects at or under the item's target.
-                let cond = it.condition.as_ref().map(|_| {
-                    let rel: Vec<&BuildObj> = t
-                        .build_objects
-                        .iter()
-                        .filter(|o| {
-                            matches!(o.k.as_str(), "attrs" | "cloud-tag")
-                                && canon::is_under_or_eq(&o.path, it.target.path())
-                        })
-                        .collect();
-                    if rel.is_empty() {
-                        "unknown"
-                    } else if rel.iter().all(|o| o.ok) {
-                        "met"
-                    } else {
-                        "unmet"
-                    }
-                });
+                let cond = condition_status(t, it);
                 let matched = actual.as_ref().map(|a| {
                     if it.expect.matches(a) {
                         "pass"

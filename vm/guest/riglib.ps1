@@ -1138,6 +1138,43 @@ function Get-M2DefaultSelection([string]$Plan) {
     @(for ($i = 0; $i -lt [Math]::Min($pi.Count, $si.Count); $i++) { if ("$($pi[$i].band)" -eq 'Safe' -and $pi[$i].preselected -eq $true -and $si[$i].id) { "$($si[$i].id)" } })
 }
 
+# Where a target lives for the nesting test: @(kind, path) with kind fs | key | inkey (a value or segment of the
+# key at path), or $null (service, task, ...). Mirrors purge-plan collapse::place.
+function Get-M2TargetPlace($Target) {
+    $p = "$($Target.path)".TrimEnd('\')
+    switch ("$($Target.type)") {
+        'Path' { return @('fs', $p) }
+        'RegKey' { return @('key', $p) }
+        { @('RegValue', 'RegMultiSzSegment') -contains $_ } { return @('inkey', $p) }
+    }
+    $null
+}
+
+# Whether target $Child lies inside target $Parent (purge-plan collapse::nests_in: strictly inside, except that a
+# value lies inside its own key; paths compared case-insensitively).
+function Test-M2TargetNests($Child, $Parent) {
+    $c = Get-M2TargetPlace $Child; $p = Get-M2TargetPlace $Parent
+    if (-not $c -or -not $p) { return $false }
+    $inside = $c[1].StartsWith($p[1] + '\', [StringComparison]::OrdinalIgnoreCase)
+    if ($c[0] -eq 'fs' -and $p[0] -eq 'fs') { return $inside }
+    if ($c[0] -eq 'key' -and $p[0] -eq 'key') { return $inside }
+    if ($c[0] -eq 'inkey' -and $p[0] -eq 'key') { return ($inside -or [string]::Equals($c[1], $p[1], [StringComparison]::OrdinalIgnoreCase)) }
+    $false
+}
+
+# The engine refuses a plan in which an item comes before an item nested in it (purge-exec plan_in step 5, "the
+# inner one comes first"). Each target is placed before the first earlier target that contains it; the order is
+# otherwise kept.
+function Sort-M2TargetsInnerFirst([object[]]$Targets) {
+    $out = New-Object System.Collections.ArrayList
+    foreach ($t in @($Targets)) {
+        $at = $out.Count
+        for ($i = 0; $i -lt $out.Count; $i++) { if (Test-M2TargetNests $t.target $out[$i].target) { $at = $i; break } }
+        $out.Insert($at, $t)
+    }
+    @($out)
+}
+
 # Merges purge.rig.targets/0 files into one for `plan from-targets`: the targets of group $Group (all groups when
 # empty), optionally only $OnlyIds, optionally in reverse order. Returns the ids written (the candidate ids
 # `plan from-targets` keeps).
@@ -1154,7 +1191,8 @@ function Write-M2Targets([string[]]$Files, [string]$Group, [string]$Out, [string
     }
     $list = @($all)
     if ($Reverse) { [Array]::Reverse($list) }
-    $doc = [ordered]@{ schema = 'purge.rig.targets/0'; source = 'riglib Write-M2Targets'; origin = 'ManualUser'; group = $Group; targets = $list }
+    $list = @(Sort-M2TargetsInnerFirst $list)
+    $doc =[ordered]@{ schema = 'purge.rig.targets/0'; source = 'riglib Write-M2Targets'; origin = 'ManualUser'; group = $Group; targets = $list }
     [IO.File]::WriteAllText($Out, (ConvertTo-Json -InputObject $doc -Depth 20), $RigUtf8)
     @($list | ForEach-Object { "$($_.id)" })
 }
@@ -1351,8 +1389,12 @@ function Invoke-M2Execdiff {
     Get-RigVerdict (Invoke-RigTool $a) $Out 'execdiff'
 }
 
-function Invoke-M2Fidelity([string]$Before, [string]$After, [string]$Journal, [string]$Out) {
-    $a = 'fidelity --before ' + (ConvertTo-EngineArg $Before) + ' --after ' + (ConvertTo-EngineArg $After) + ' --journal ' + (ConvertTo-EngineArg $Journal) + ' --sid ' + $RigUserSid + ' -o ' + (ConvertTo-EngineArg $Out)
+# -KeepItems: item ids the run left quarantined on purpose (not undone); rigtool reports them, never compares them.
+function Invoke-M2Fidelity([string]$Before, [string]$After, [string]$Journal, [string]$Out, [string[]]$KeepItems = @()) {
+    $a = 'fidelity --before ' + (ConvertTo-EngineArg $Before) + ' --after ' + (ConvertTo-EngineArg $After) + ' --journal ' + (ConvertTo-EngineArg $Journal) + ' --sid ' + $RigUserSid
+    $keep = @($KeepItems | Where-Object { "$_" -ne '' })
+    if ($keep.Count) { $a += ' --keep-items ' + (@($keep | ForEach-Object { ConvertTo-EngineArg "$_" }) -join ' ') }
+    $a += ' -o ' + (ConvertTo-EngineArg $Out)
     Get-RigVerdict (Invoke-RigTool $a) $Out 'fidelity'
 }
 
@@ -1468,7 +1510,14 @@ foreach ($x in $h) { $x.Dispose() }
 '@
     [IO.File]::WriteAllText($script, $body, $RigUtf8)
     $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $p = Start-Native $exe ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' + (ConvertTo-EngineArg $script) + ' -List ' + (ConvertTo-EngineArg $list) + ' -Ready ' + (ConvertTo-EngineArg $ready) + ' -Stop ' + (ConvertTo-EngineArg $stop))
+    # Shell-executed, not Start-Native: a CreateProcess child inherits the job's redirected stdout, and the agent
+    # (agent.ps1 '*>') then waits for the locker, which lives until the reboot, so <job>.done is never written.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $exe
+    $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' + (ConvertTo-EngineArg $script) + ' -List ' + (ConvertTo-EngineArg $list) + ' -Ready ' + (ConvertTo-EngineArg $ready) + ' -Stop ' + (ConvertTo-EngineArg $stop)
+    $psi.UseShellExecute = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $p = [System.Diagnostics.Process]::Start($psi)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while (-not (Test-Path -LiteralPath $ready) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
     $ok = (Test-Path -LiteralPath $ready)

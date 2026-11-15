@@ -311,7 +311,7 @@ switch ($Action) {
     }
     'check' {
         if (-not (Test-Path -LiteralPath $ManifestPath)) { throw "no manifest at $ManifestPath (run build first)" }
-        $doc = Get-Content -Raw -LiteralPath $ManifestPath | ConvertFrom-Json
+        $doc = Get-Content -Raw -Encoding UTF8 -LiteralPath $ManifestPath | ConvertFrom-Json
         $r = Invoke-M2Check $doc $Phase
         $r.schema = 'purge.rig.m2fixtures.check/0'
         $vals = @(foreach ($p in @($doc.phase_values)) {
@@ -328,7 +328,8 @@ switch ($Action) {
                     $b = @($now | Where-Object { $_.kind -eq $a.kind -and $_.path -eq $a.path }) | Select-Object -First 1
                     $fields = @(foreach ($p in $a.PSObject.Properties) {
                             if ($p.Name -in @('fixture', 'kind', 'path', 'error')) { continue }
-                            $bv = $(if ($b -and $b.Contains($p.Name)) { $b[$p.Name] } else { $null })
+                            # (Not $( ): it unrolls a one-element array, e.g. streams, to a scalar.)
+                            $bv = $null; if ($b -and $b.Contains($p.Name)) { $bv = $b[$p.Name] }
                             if ((ConvertTo-Json -InputObject $p.Value -Compress) -ne (ConvertTo-Json -InputObject $bv -Compress)) { $p.Name }
                         })
                     if ($fields.Count) { [ordered]@{ fixture = $a.fixture; kind = $a.kind; path = $a.path; fields = $fields } }

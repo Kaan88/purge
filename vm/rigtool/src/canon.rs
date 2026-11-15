@@ -262,7 +262,8 @@ pub fn looks_like_reg(s: &str) -> bool {
 pub fn canon_reg(s: &str, sid: Option<&str>) -> String {
     let mut t = s.trim();
     for pre in ["Microsoft.PowerShell.Core\\Registry::", "Registry::", "Computer\\"] {
-        if t.len() >= pre.len() && t[..pre.len()].eq_ignore_ascii_case(pre) {
+        // `get`: the key may hold non-ASCII text, and a byte index inside a character would panic.
+        if t.get(..pre.len()).is_some_and(|h| h.eq_ignore_ascii_case(pre)) {
             t = &t[pre.len()..];
         }
     }

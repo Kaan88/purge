@@ -723,10 +723,29 @@ function Get-M2TrapTable([string]$Sid, [string]$LocalAppData) {
     $seg = 'segment-' + ('x' * 42)   # 50 characters
     $long = (1..5 | ForEach-Object { "$seg$_" }) -join '\'
     $canaryVals = { param($tag) @((V 'CanaryValue' $REG_SZ (BSz "PURGE-CANARY $tag")), (V 'CanaryDword' $REG_DWORD (BDword 0x5EC0DE)), (V 'CanaryBinary' $REG_BINARY (BHex 'DEADBEEF00FF'))) }
+    # FORGED by the M2 rig (forged-user-fp): a well-formed purge.fp/0 (purge-model Fingerprint) whose claims are lies a
+    # standard user can write: machine-scope roots and a canary as admin-trusted install roots, the canary key as a
+    # run entry's key. The engine must parse it and still never make those paths Safe or preselected (Rule T).
+    # os: the Inbound m2-base build (kb\baselines\EnterpriseSEval-26100.1742), fixed so the -DryRun manifest does not
+    # depend on the machine that prints it.
+    $osEd = 'EnterpriseSEval'; $osBuild = 26100; $osUbr = 1742
+    $fpRoot = { param($p) [ordered]@{ path = $p; kind = 'InstallRoot'; source = 'ArpInstallLocation'; trust = 'AdminOnly'; volume_serial = $null; parent_existed = $true } }
     $fp = [ordered]@{
-        schema = 'purge.fp/0'; note = 'FORGED by the M2 rig (m2-traps forged-user-fp); the user-store format is provisional (ENGINE_PLAN 6.2)'
-        app = 'PurgeTrapApp'; scope = 'machine'
-        roots = @($R, "$C\fp\victim"); keys = @($K, "$KC\FpVictim"); exe_names = @('purgetrapapp.exe')
+        schema = 'purge.fp/0'
+        app = [ordered]@{ program_id = 'HKLM|64|PurgeTrapApp'; display_name = 'PurgeTrapApp' }
+        identity = [ordered]@{ names = @('PurgeTrapApp', 'purgetrapapp.exe'); vendors = @('PurgeTrapApp'); tokens = @('purgetrapapp'); mega_vendor = $false }
+        roots = @((& $fpRoot $R), (& $fpRoot "$C\fp\victim"))
+        exes = @([ordered]@{ path = "$R\purgetrapapp.exe"; main = $true })
+        anchors = [ordered]@{ progids = @(); clsids = @(); appids = @(); typelibs = @(); aumids = @(); package_families = @(); package_full_names = @()
+            run_entries = @([ordered]@{ key = "$KC\FpVictim"; name = 'CanaryValue'; data = "`"$R\purgetrapapp.exe`"" }) }
+        tokens = @([ordered]@{ token = 'PurgeTrapApp'; source = 'arp:key' })
+        os = [ordered]@{ edition = $osEd; build = $osBuild; ubr = $osUbr }
+        user_sid = $Sid
+        # A completed uninstall window and a passed verify-gone (scan --mode post refuses a fingerprint without them);
+        # fixed times (2026-11-01) so the -DryRun manifest is stable.
+        window = [ordered]@{ install_time = [uint64]134064000000000000; t_start = [uint64]134064036000000000; t_end = [uint64]134064036600000000 }
+        verify_gone = [ordered]@{ arp_gone = $true; msi_unknown_all_ctx = $true; main_exes_gone = $true; passed = $true }
+        warnings = @('FORGED by the M2 rig (m2-traps forged-user-fp)')
     }
     $fpJson = ConvertTo-Json -InputObject $fp -Depth 5
 
@@ -1149,7 +1168,13 @@ function Invoke-M2Object($o, $Trap) {
     try {
         switch ($o.k) {
             'dir'         { $N::MkDirs($o.path) }
-            'file'        { & $parent $o.path; $b = $(if ($o.Contains('bytes')) { [byte[]]$o.bytes } else { $M2Utf8.GetBytes([string]$o.text) }); $N::WriteAll($o.path, $b) }
+            'file'        {
+                & $parent $o.path
+                # Plain assignments: $( ) would unroll an empty byte array (an empty file) to $null.
+                if ($o.Contains('bytes') -and $null -ne $o.bytes) { [byte[]]$b = $o.bytes } else { [byte[]]$b = $M2Utf8.GetBytes([string]$o.text) }
+                if ($null -eq $b) { $b = New-Object byte[] 0 }
+                $N::WriteAll($o.path, $b)
+            }
             'canary-file' { & $parent $o.path; $N::WriteAll($o.path, (Get-CanaryBytes $o.id)) }
             'stream'      { $N::WriteAll(($o.path + ':' + $o.stream), $M2Utf8.GetBytes([string]$o.text)) }
             'junction'    { & $parent $o.path; $N::Junction($o.path, $o.target) }
@@ -1157,7 +1182,8 @@ function Invoke-M2Object($o, $Trap) {
             'filesym'     { & $parent $o.path; $N::Symlink($o.path, $o.target, $false) }
             'hardlink'    { & $parent $o.path; $N::HardLink($o.path, $o.existing) }
             'attrs' {
-                $a = 0; foreach ($n in $o.attrs) { $a = $a -bor $M2Attr[$n] }
+                # (Not $n: variable names are case-insensitive, and $N is the native helper type.)
+                $a = 0; foreach ($an in $o.attrs) { $a = $a -bor $M2Attr[$an] }
                 # Keep what is there, minus DIRECTORY (0x10) and NORMAL (0x80), which SetFileAttributes rejects in a combination.
                 $cur = [int64]$N::Attributes($o.path)
                 $want = ($cur -band [int64]0xFFFFFF6F) -bor $a
@@ -1325,8 +1351,23 @@ function Write-M2Targets($Table, [string]$Dir, [string]$Prefix, [string]$Source,
 function Invoke-M2Check($Doc, [string]$Label) {
     $built = @{}
     foreach ($t in @($Doc.traps)) { if ($t.build -and $t.build.ok) { $built[$t.id] = $true } }
+    # Item targets whose build condition is unmet (an optional attribute or reparse tag Windows would not set): the
+    # file there is an ordinary plan item, so its canary is not scored (same rule as rigtool execdiff).
+    $unmet = @(foreach ($t in @($Doc.traps)) {
+            if (-not $t.build) { continue }
+            foreach ($i in @($t.items)) {
+                if (-not $i -or -not $i.PSObject.Properties['condition'] -or -not $i.condition) { continue }
+                $tp = "$($i.target.path)".TrimEnd('\')
+                $rel = @(@($t.build.objects) | Where-Object { $_ -and @('attrs', 'cloud-tag') -contains "$($_.k)" -and ("$($_.path)" -ieq $tp -or "$($_.path)".StartsWith($tp + '\', [StringComparison]::OrdinalIgnoreCase)) })
+                if ($rel.Count -and @($rel | Where-Object { -not $_.ok }).Count) { $tp }
+            }
+        })
     $rows = @(foreach ($c in @($Doc.canaries)) {
             if (-not $built.ContainsKey($c.trap)) { continue }
+            if ($c.kind -eq 'file' -and @($unmet | Where-Object { "$($c.path)" -ieq $_ -or "$($c.path)".StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase) }).Count) {
+                [ordered]@{ id = $c.id; trap = $c.trap; kind = $c.kind; path = $c.path; expected_sha256 = $c.sha256; actual_sha256 = $null; present = $null; reparse = $null; same_file_id = $null; intact = $true; not_scored = 'build condition unmet: an ordinary plan item'; error = $null }
+                continue
+            }
             $m = Measure-M2Canary $c
             $was = $null
             if ($Doc.PSObject.Properties['measured'] -and $Doc.measured) { $was = @($Doc.measured | Where-Object { $_.id -eq $c.id }) | Select-Object -First 1 }

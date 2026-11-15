@@ -301,11 +301,13 @@ function Invoke-Torn {
             $bytes = [IO.File]::ReadAllBytes($rec.journal)
             $row.journal_bytes = $bytes.Length
             if ($v -eq 'tail') {
-                # The last record cut in half, as a power loss mid-append leaves it.
+                # Half of a record appended after the last whole one, as a power loss mid-append leaves it. (Not
+                # the last record cut: after act.after that is the flushed intent of an op that already acted, and
+                # a flushed record cannot be torn; cutting it leaves a quarantined object no record names.)
                 $end = $bytes.Length - 1; while ($end -gt 0 -and ($bytes[$end] -eq 10 -or $bytes[$end] -eq 13)) { $end-- }
                 $start = $end; while ($start -gt 0 -and $bytes[$start - 1] -ne 10) { $start-- }
-                $cut = $start + [int][Math]::Max(1, [Math]::Floor(($end - $start) / 2))
-                [IO.File]::WriteAllBytes($rec.journal, [byte[]]$bytes[0..($cut - 1)])
+                $half = [int][Math]::Max(1, [Math]::Floor(($end - $start) / 2))
+                [IO.File]::WriteAllBytes($rec.journal, [byte[]]($bytes + $bytes[$start..($start + $half - 1)]))
             } else {
                 # One byte inside a middle record changed: a record with a bad checksum before valid ones.
                 $lines = @(); $s0 = 0
@@ -354,6 +356,8 @@ try {
             $declared = @(ConvertFrom-M2FaultPoints ([IO.File]::ReadAllText((F 'fault-points.out'))))
             if (-not $declared.Count) { throw 'journal fault-points listed no point' }
             $want = @(Get-M2Opt $Opts 'points' @())
+            $unknown = @($want | Where-Object { $declared -notcontains $_ })
+            if ($unknown.Count) { throw "fault points the engine does not declare: $($unknown -join ', ')" }
             $points = $(if ($want.Count) { @($declared | Where-Object { $want -contains $_ }) } else { $declared })
             $its = New-Object System.Collections.ArrayList
             $n = 0

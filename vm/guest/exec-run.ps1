@@ -233,7 +233,7 @@ function Invoke-TrapsMode {
         Add-Result 'undo' 'main' ([ordered]@{ exit = $u.exit; items = $keep.Count; kept_for_expiry = $expiryIds })
     } $S
     Phase 'deep-c' { $null = Invoke-M2Deep @($TM, $script:Main.targets) (F 'deep-c.json') } $S
-    Phase 'fidelity-main' { $v = Invoke-M2Fidelity (F 'deep-a.json') (F 'deep-c.json') $script:Main.journal (F 'fidelity-main.json'); Add-Result 'fidelity' 'main' $v.ok } $S
+    Phase 'fidelity-main' { $v = Invoke-M2Fidelity (F 'deep-a.json') (F 'deep-c.json') $script:Main.journal (F 'fidelity-main.json') -KeepItems $expiryIds; Add-Result 'fidelity' 'main' $v.ok } $S
     Phase 'expiry' { Invoke-Expiry $expiry } $S
     Phase 'traps-check-after-expiry' { Invoke-TrapsScript '-Action check -Label after-expiry' 'after-expiry' -Verdict } $S
     foreach ($g in 'race-a', 'race-b') { Phase $g { Invoke-Race $g $TT $TM } $S }
@@ -274,9 +274,19 @@ function Invoke-Refusals($Main, [string]$TT, [string]$TM) {
     # (Variable names are case-insensitive: nothing here may be called $d, $r or $s, which would hide $D / $R / $S.)
     $dr = Invoke-RigTool ('diff ' + (Q $a) + ' ' + (Q $b) + ' --json')
     [IO.File]::WriteAllText((F 'refuse-diff.json'), "$($dr.stdout)", $RigUtf8)
-    $n = $null
-    try { $j = "$($dr.stdout)" | ConvertFrom-Json; $n = @($j.added).Count + @($j.removed).Count + @($j.changed).Count } catch { }
+    $n = $null; $mt = $null
+    try {
+        $j = "$($dr.stdout)" | ConvertFrom-Json
+        # A directory whose only change is its LastWriteTime, with nothing added or removed anywhere: the snapshot
+        # reads directory times from the parent's index, which NTFS updates lazily (seen on the VM: 15 trap dirs
+        # whose time moved by ~2 ms between two snaps a second apart, with no engine call writing anything).
+        $mtOnly = @(@($j.changed) | Where-Object { $_ -and $_.rec -eq 'D' -and @(@($_.changes) | Where-Object { "$_" -notmatch '^mtime ' }).Count -eq 0 })
+        $mt = $mtOnly.Count
+        $n = @($j.added).Count + @($j.removed).Count + @($j.changed).Count
+        if ((@($j.added).Count + @($j.removed).Count) -eq 0) { $n -= $mt }
+    } catch { }
     $res.diff_records = $n
+    $res.dir_mtime_only = $mt
     $res.no_change = ($n -eq 0)
     Set-M2Result $R 'refusals' $res
 }
@@ -436,7 +446,14 @@ function Invoke-FidelityMode {
                 if ($line -notmatch '"rec"\s*:\s*"intent"') { continue }
                 $j = $null; try { $j = $line | ConvertFrom-Json } catch { continue }
                 $bp = $null
-                foreach ($k in 'backup', 'definition') { if ($j.PSObject.Properties[$k] -and $j.$k -and $j.$k.path) { $bp = "$($j.$k.path)"; break } }
+                # The engine journal (purge.journal/1) carries the backup under the intent's inverse
+                # (RestoreKeyTree / RestoreValue / RecreateKey: inverse.backup.path, relative to the session dir).
+                $holders = @($j)
+                if ($j.PSObject.Properties['inverse'] -and $j.inverse) { $holders += $j.inverse }
+                foreach ($hd in $holders) {
+                    foreach ($k in 'backup', 'definition') { if ($hd.PSObject.Properties[$k] -and $hd.$k -and $hd.$k.path) { $bp = "$($hd.$k.path)"; break } }
+                    if ($bp) { break }
+                }
                 if ($bp) { $res.backup = $bp; $res.op = $j.op; $res.item = "$($j.item)"; break }
             }
         }
@@ -463,13 +480,16 @@ function Invoke-FidelityMode {
         $x = Invoke-ExecRec $rec -RestorePoint 'always'
         $res.first = [ordered]@{ exit = $x.exit; restore_point = $(if ($x.report) { (Read-Json $x.report).restore_point }) }
         $res.after = @(Get-M2RestorePoints).Count
+        # Undone before rp2 rebuilds the same fixture paths: undone after it, rp1's restore would occupy rp2's paths
+        # and rp2's undo would end in conflicts (seen on the VM: 11 conflicts, exit 11).
+        $null = Invoke-UndoRec $rec 'rp1'
         $rec2 = New-FixtureRound 'rp2'
         $x2 = Invoke-ExecRec $rec2 -RestorePoint 'always'
         $res.second = [ordered]@{ exit = $x2.exit; restore_point = $(if ($x2.report) { (Read-Json $x2.report).restore_point }) }
         $res.after_second = @(Get-M2RestorePoints).Count
         $res.frequency_value = Get-RegRaw 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' 'SystemRestorePointCreationFrequency'
         Set-M2Result $R 'restore_point' $res
-        foreach ($t in 'rp1', 'rp2') { $null = Invoke-UndoRec $(if ($t -eq 'rp1') { $rec } else { $rec2 }) $t }
+        $null = Invoke-UndoRec $rec2 'rp2'
     } $S
     Phase 'store' { Set-M2Result $R 'store_final' (Save-M2Store $D 'final') } $S
 }
@@ -488,6 +508,14 @@ function Invoke-AppStage {
         Copy-Item -LiteralPath $src -Destination $plan -Force
         Copy-Item -LiteralPath (Get-M2Sidecar $src) -Destination (Get-M2Sidecar $plan) -Force
         $ids = @(Get-M2DefaultSelection $plan)
+        if (-not $ids.Count) {
+            # The engine refuses an empty selection (exit 6, "nothing is selected"): no round trip to measure. Recorded,
+            # not a failed phase; m2.sh then has no fidelity-app-<id>.json for this app.
+            $bands = @(Read-Json $plan).items | ForEach-Object { "$($_.band)/$($_.preselected)" } | Group-Object | ForEach-Object { "$($_.Name) x$($_.Count)" }
+            Add-Result 'apps' $app ([ordered]@{ app_run = $appRun; selected = 0; skipped = 'no Safe + preselected item in the plan'; plan_items = @($bands) })
+            Log "  !! $tag`: the plan has no Safe + preselected item ($(@($bands) -join ', ')); no round trip"
+            return
+        }
         $sc = Read-Json (Get-M2Sidecar $plan)
         $tg = @(@($sc.items) | ForEach-Object { $_ } | Where-Object { $_ -and $ids -contains "$($_.id)" } | ForEach-Object {
                 $act = $_.action; if ($act -and -not ($act -is [string])) { $act = "$(@($act.PSObject.Properties)[0].Name)" }
