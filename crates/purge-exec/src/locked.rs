@@ -41,7 +41,7 @@
 //!
 //! | Situation | Outcome |
 //! |---|---|
-//! | not a `QuarantineMove`, invalid recorded identity, journalled intent differs | `Failed{Internal}` |
+//! | not a `QuarantineMove`, invalid recorded identity, journalled intent is another action | `Failed{Internal}` |
 //! | the open error does not mean "in use" ([`gate`]'s rule) | `Failed{AccessDenied}` / `Failed{Os}` |
 //! | the gate saw another identity or kind than validated | `Skipped{ChangedSinceScan}` |
 //! | the source is gone now | `Vanished` |
@@ -56,7 +56,7 @@
 //!    `done_without_intent`, or with `done(token, ..)` when the op already holds a token) or
 //!    [`LockPrepared::Ready`].
 //! 2. For `Ready`: when [`LockAction::intent_to_write`] is `Some`, write it with `JournalWriter::intent`
-//!    and take the token; when it is `None` the file action already journalled this very intent (checked
+//!    and take the token; when it is `None` the file action already journalled this very action (checked
 //!    by `prepare`), so use that token. Then hit `act.before`.
 //! 3. [`Ladder::act`] takes the token as proof of the durable intent. For a hold it changes nothing and
 //!    returns `HeldRetry`. For a boot move it re-checks the source and the whole boot-move rung, looks for
@@ -117,6 +117,7 @@ use purge_win::fs_write::{self, FsError, MoveHandle, PendingPair, extended_path,
 use purge_win::os::Win32Error;
 use purge_win::rm::RebootReasons;
 
+use crate::act_fs;
 use crate::fault;
 use crate::gate::{self, GateCtx, LockedPath};
 use crate::journal::{
@@ -907,8 +908,9 @@ impl<'a> Ladder<'a> {
     /// Climbs the ladder for `item` up to the decision (see the module docs). Changes nothing.
     ///
     /// `journalled` is the op's intent when the file action already wrote one (a lock met by the rename
-    /// after the intent); it must equal the intent the ladder builds, or the item fails with
-    /// `Failed{Internal}` and nothing is done.
+    /// after the intent); it must be the same action as the intent the ladder builds
+    /// (`act_fs::same_action`: sizes and times in `pre` may differ), or the item fails with
+    /// `Failed{Internal}` and nothing is done. The journalled intent is the one the action then carries.
     pub fn prepare(&self, item: &LockedItem, journalled: Option<&Intent>) -> LockPrepared {
         let decided = LockPrepared::Decided;
         let (Some(source), Some(intent)) = (item.source(), item.intent()) else {
@@ -933,7 +935,10 @@ impl<'a> Ladder<'a> {
                 format!("{source}: the recorded file id identifies nothing"),
             ));
         }
-        if journalled.is_some_and(|j| *j != intent) {
+        // The file action's intent carries `pre` from its act-time handle, the ladder's from the
+        // validated record: the same action when op, item, operation, inverse, identity and kind agree
+        // (M4 of the final M2 review; byte equality failed a directory that gained a file).
+        if journalled.is_some_and(|j| !act_fs::same_action(&intent, j)) {
             return decided(LockResult::failed(
                 FailCode::Internal,
                 None,
@@ -971,7 +976,8 @@ impl<'a> Ladder<'a> {
             Err(hold) => (LockPlan::Hold(hold.code), hold.detail),
         };
         LockPrepared::Ready(Box::new(LockAction {
-            intent,
+            // What the journal holds is what undo and recovery read.
+            intent: journalled.cloned().unwrap_or(intent),
             already_journalled: journalled.is_some(),
             plan,
             hold_detail,
@@ -1273,25 +1279,43 @@ fn failed_outcome(code: FailCode, os_error: Option<u32>, detail: &str) -> ItemOu
 }
 
 /// For crash recovery: whether an op the journal shows with an intent and no `done` left a registered
-/// boot-time move. `Some(PendingReboot{pair as stored, confirmed: true})` when our pair stands in the list
-/// exactly once (journal it with `done`); `None` otherwise (not a boot move, or not determinable: probe
-/// the item as for any quarantine move). Read-only.
-pub fn pending_after_crash(intent: &Intent, store: &dyn PendingRenames) -> Option<ItemOutcome> {
+/// boot-time move. Read-only.
+///
+/// - `Ok(Some(PendingReboot{pair as stored, confirmed: true}))` when our pair stands in the list exactly
+///   once: journal it with `done`.
+/// - `Ok(None)` when the intent is not a quarantine move, or our pair is not listed: probe the item as
+///   for any quarantine move.
+/// - `Err(why)` when the list cannot be read or holds our pair more than once: whether a restart will
+///   still move the item cannot be told, so nothing may move it by handle now (M7 of the final M2
+///   review); the op needs attention.
+pub fn pending_after_crash(
+    intent: &Intent,
+    store: &dyn PendingRenames,
+) -> Result<Option<ItemOutcome>, String> {
     let Inverse::MoveBack {
         quarantine_path,
         original_path,
         ..
     } = &intent.inverse
     else {
-        return None;
+        return Ok(None);
     };
-    let expected = expected_pair(original_path, quarantine_path).ok()?;
-    match occurrences(&store.list().ok()?, &expected).as_slice() {
-        [stored] => Some(ItemOutcome::PendingReboot {
+    let Ok(expected) = expected_pair(original_path, quarantine_path) else {
+        return Ok(None);
+    };
+    let list = store
+        .list()
+        .map_err(|e| format!("the boot-time move list cannot be read ({e})"))?;
+    match occurrences(&list, &expected).as_slice() {
+        [] => Ok(None),
+        [stored] => Ok(Some(ItemOutcome::PendingReboot {
             pair: model_pair(stored),
             confirmed: true,
-        }),
-        _ => None,
+        })),
+        more => Err(format!(
+            "the boot-time move of the item is registered {} times",
+            more.len()
+        )),
     }
 }
 
@@ -1320,7 +1344,13 @@ fn lock_state(op: &OpState) -> LockState {
     let of = |outcome: &ItemOutcome| match outcome {
         ItemOutcome::HeldRetry => LockState::Held,
         ItemOutcome::PendingReboot { pair, .. } => LockState::Pending(pair.clone()),
-        ItemOutcome::Done => LockState::Moved,
+        // A failed verify may have left the item in quarantine: the ordinary move back, in its
+        // completing form, looks where it is.
+        ItemOutcome::Done
+        | ItemOutcome::Failed {
+            code: FailCode::VerifyFailed,
+            ..
+        } => LockState::Moved,
         _ => LockState::Unchanged,
     };
     let mut state = match &op.outcome {

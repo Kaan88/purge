@@ -19,6 +19,7 @@
 //! | Op | Found | Probe |
 //! |---|---|---|
 //! | quarantine move | its boot-time move pair is registered, once | `Done(PendingReboot)` |
+//! | quarantine move | the boot-time move list cannot be read, or holds the pair more than once | `Attention` |
 //! | quarantine move | the source holds the recorded file id, the quarantine does not | `NotDone` |
 //! | quarantine move | the quarantine holds the recorded file id, the source does not | `Done(Done)` |
 //! | quarantine move | both, neither, or one cannot be read | `Attention` |
@@ -43,6 +44,7 @@
 //!
 //! | The session | What resume does |
 //! |---|---|
+//! | a run that has not ended and holds undo records (a rollback was interrupted) | continues the rollback ([`RecoverOutput::mode`] says `Rollback`, with a warning) |
 //! | no journal, one without a complete header, or an empty one | removes the directory by handle when it holds nothing but the scan copy and that journal ([`SessionDir::remove_unstarted`]; [`RecoverError::Unstarted`] otherwise) |
 //! | a journal without a `settings` record (written before the record existed) and validation incomplete | nothing was acted on: writes `aborted` (`Cancelled`) |
 //! | the run stopped before every item was validated | continued as if never interrupted ([`Run::resume`]): the items without a `validated` record are validated now, a journalled record is never validated again |
@@ -92,7 +94,8 @@ use crate::act_typed::{self, PackageBackend};
 use crate::execute::{self, Abort, ExecEnv, ExecError, ItemStep, Run};
 use crate::gate::{GateCtx, GateSetupError};
 use crate::journal::{
-    self, JournalError, JournalRead, JournalState, JournalWriter, OpState, OpStatus, sha256_bytes,
+    self, JournalError, JournalRead, JournalState, JournalWriter, OpState, OpStatus, UndoState,
+    sha256_bytes,
 };
 use crate::locked::{self, PendingRenames};
 use crate::prepare::LockerQuery;
@@ -551,7 +554,8 @@ pub struct SettledOp {
 pub struct RecoverOutput {
     /// The session.
     pub session: SessionId,
-    /// Resume or rollback.
+    /// What recovery did: resume or rollback. A resume of a session whose rollback was interrupted
+    /// continues the rollback and says `Rollback`.
     pub mode: RecoverMode,
     /// Where the session stands now; `None` when its directory was removed.
     pub state: Option<SessionState>,
@@ -638,7 +642,20 @@ fn recover(
     if !read.state.is_finished() {
         let state = &read.state;
         let validated = state.validated_count() == state.header().items;
+        // Undo records in a run that has not ended come from a rollback that was interrupted; going
+        // forward from there would commit a session that is neither the plan applied nor the machine
+        // as before (M2 of the final M2 review).
+        let rolling_back = state.ops().any(|op| op.undo != UndoState::NotStarted);
         match mode {
+            RecoverMode::Resume if rolling_back => {
+                out.mode = RecoverMode::Rollback;
+                out.warnings.push(
+                    "the run was being rolled back when it stopped; recovery continues the \
+                     rollback instead of resuming the run"
+                        .to_owned(),
+                );
+                rollback_run(&mut env, session, &read, &mut out)?;
+            }
             // A journal from before the `settings` record cannot be resumed; one that stopped in its
             // validation acted on nothing and ends here.
             RecoverMode::Resume if state.settings().is_none() && !validated => {

@@ -1081,6 +1081,100 @@ fn a_recorded_owner_the_token_cannot_assign_falls_back_to_the_default_owner() {
     );
 }
 
+/// S1 of the final M2 review: a directory standing where a removed one is to be recreated is adopted
+/// as `AlreadyRestored` only when its owner and DACL are the recorded ones. Before the fix any plain
+/// directory was `AlreadyRestored`, whoever had created it and whoever may write to it.
+#[test]
+fn an_existing_directory_counts_as_restored_only_with_the_recorded_owner_and_dacl() {
+    let s = Scratch::new("adopt");
+    let p = s.dir(r"src\Shared");
+    let mut env = Env::new(s, vec![rmdir(&p)]);
+    assert_done(&env.run(1));
+    // Created again by somebody else, the way the original was: same owner, same inherited DACL.
+    std::fs::create_dir(&p).unwrap();
+    let Inverse::RecreateDir { sddl, .. } = env.intents[&1].inverse.clone() else {
+        panic!()
+    };
+    let at = sddl.find("D:").unwrap();
+    let dacl = &sddl[at..];
+    let with_sddl = |env: &mut Env, sddl: String| {
+        let mut intent = env.intents[&1].clone();
+        let Inverse::RecreateDir { sddl: recorded, .. } = &mut intent.inverse else {
+            panic!()
+        };
+        *recorded = sddl;
+        env.undo_intent_as(1, Some(intent))
+    };
+
+    // The recorded DACL had one more ACE than the directory now has (or, read the other way, the
+    // directory now lets fewer or other principals in): not the recorded directory.
+    let more = format!("{}{dacl}(A;OICI;FA;;;WD)", &sddl[..at]);
+    let undo = with_sddl(&mut env, more);
+    let FsUndo::Conflict {
+        conflict: UndoConflict::DestinationExists,
+        detail,
+    } = &undo
+    else {
+        panic!("{undo:?}");
+    };
+    assert!(
+        detail.contains("DACL") && !detail.contains("owner"),
+        "{detail}"
+    );
+    // Another recorded owner.
+    let undo = with_sddl(&mut env, format!("O:SYG:SY{dacl}"));
+    let FsUndo::Conflict {
+        conflict: UndoConflict::DestinationExists,
+        detail,
+    } = &undo
+    else {
+        panic!("{undo:?}");
+    };
+    assert!(detail.contains("owner"), "{detail}");
+
+    // An extra ACE on the directory standing there (Everyone, full control): a conflict.
+    let status = Command::new("icacls")
+        .args([p.as_str(), "/grant", "*S-1-1-0:(OI)(CI)F", "/q"])
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(matches!(
+        env.undo(1),
+        FsUndo::Conflict {
+            conflict: UndoConflict::DestinationExists,
+            ..
+        }
+    ));
+    assert!(exists(&p), "a conflict changes nothing");
+
+    // Created again with the inherited descriptor only: the recorded owner and DACL, adopted.
+    std::fs::remove_dir(&p).unwrap();
+    std::fs::create_dir(&p).unwrap();
+    assert!(matches!(
+        env.undo(1),
+        FsUndo::Done {
+            outcome: UndoOutcome::AlreadyRestored,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn sddl_parts_are_cut_at_the_next_part() {
+    let full = "O:S-1-5-21-1-2-3-1001G:S-1-5-21-1-2-3-513D:AI(A;OICIID;FA;;;SY)S:(ML;;NW;;;LW)";
+    assert_eq!(sddl_part(full, b'O'), Some("S-1-5-21-1-2-3-1001"));
+    assert_eq!(sddl_part(full, b'G'), Some("S-1-5-21-1-2-3-513"));
+    assert_eq!(sddl_part(full, b'D'), Some("AI(A;OICIID;FA;;;SY)"));
+    assert_eq!(sddl_part(full, b'S'), Some("(ML;;NW;;;LW)"));
+    assert_eq!(sddl_part("O:BAG:SYD:P(A;;FA;;;BA)", b'O'), Some("BA"));
+    assert_eq!(
+        sddl_part("O:BAG:SYD:P(A;;FA;;;BA)", b'D'),
+        Some("P(A;;FA;;;BA)")
+    );
+    assert_eq!(sddl_part("D:(A;;FA;;;WD)", b'O'), None);
+}
+
 #[test]
 fn owner_and_group_are_cut_from_an_sddl() {
     assert_eq!(

@@ -150,22 +150,30 @@ fn a_registered_boot_move_is_found_before_the_item_is_looked_at() {
     let once = MemoryPendingRenames::with_pairs(&[(pair.src.as_str(), pair.dst.as_str())]);
     assert_eq!(
         locked::pending_after_crash(&intent, &once),
-        Some(ItemOutcome::PendingReboot {
+        Ok(Some(ItemOutcome::PendingReboot {
             pair: BootMovePair {
                 src: pair.src.clone(),
                 dst: pair.dst.clone(),
             },
             confirmed: true,
-        })
+        }))
     );
-    // Not listed, or listed twice: the probe falls back to the item itself.
+    // Not listed: the probe falls back to the item itself.
     let empty = MemoryPendingRenames::with_pairs(&[]);
-    assert_eq!(locked::pending_after_crash(&intent, &empty), None);
+    assert_eq!(locked::pending_after_crash(&intent, &empty), Ok(None));
+    // Listed twice, or a list that cannot be read: a restart may still move the item, so nothing may
+    // move it by handle now (M7 of the final M2 review; before, both fell back to the item and a
+    // `NotDone` probe completed the move by handle with the pair still registered).
     let twice = MemoryPendingRenames::with_pairs(&[
         (pair.src.as_str(), pair.dst.as_str()),
         (pair.src.as_str(), pair.dst.as_str()),
     ]);
-    assert_eq!(locked::pending_after_crash(&intent, &twice), None);
+    let why = locked::pending_after_crash(&intent, &twice).unwrap_err();
+    assert!(why.contains("2 times"), "{why}");
+    let mut broken = MemoryPendingRenames::default();
+    broken.fail = Some(FsError::Other(1450));
+    let why = locked::pending_after_crash(&intent, &broken).unwrap_err();
+    assert!(why.contains("cannot be read"), "{why}");
 }
 
 #[test]

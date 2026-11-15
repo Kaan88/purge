@@ -17,7 +17,7 @@ use purge_exec::undo::{LABELS_SCHEMA, UndoError, UndoLabels, UndoRequest, UndoSe
 use purge_model::exec::journal::{Expire, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{ItemOutcome, OpId};
 use purge_model::exec::session::{RetentionClass, SessionState, UndoResult};
-use purge_model::{Action, FileTime};
+use purge_model::{Action, Blocker, FileTime};
 use purge_win::reg::{REG_BINARY, REG_MULTI_SZ, REG_SZ};
 
 const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
@@ -207,25 +207,26 @@ fn every_action_type_round_trips() {
     assert_eq!(undone.report.state, SessionState::Undone);
     assert!(undone.pulled_in.is_empty() && undone.already_undone.is_empty());
 
-    // The directories come first (in reverse), then everything else in exact reverse order.
+    // The exact reverse order of the run (M1 of the final M2 review: the directories no longer jump
+    // the queue; the reverse already puts each one back before what was below it).
     let order: Vec<OpId> = undone.report.items.iter().map(|item| item.op).collect();
     let op = |id: &str| op_of(&read, id);
-    let mut expected = vec![op("c-app"), op("c-outer"), op("c-inner")];
-    expected.extend(
-        [
-            "c-emptykey",
-            "c-seg",
-            "c-val",
-            "c-key",
-            "c-tree",
-            "c-long",
-            "c-ads",
-            "c-hidden",
-            "c-readonly",
-            "c-plain",
-        ]
-        .map(op),
-    );
+    let expected = [
+        "c-emptykey",
+        "c-seg",
+        "c-val",
+        "c-key",
+        "c-app",
+        "c-outer",
+        "c-inner",
+        "c-tree",
+        "c-long",
+        "c-ads",
+        "c-hidden",
+        "c-readonly",
+        "c-plain",
+    ]
+    .map(op);
     assert_eq!(order, expected);
 
     // Everything is back: bytes, attributes, streams, times, security, file ids (a recreated
@@ -344,10 +345,10 @@ fn a_partial_undo_pulls_in_what_its_restores_depend_on() {
     assert_eq!(
         order,
         vec![
-            op("c-app"),
-            op("c-sub"),
             op("c-key"),
             op("c-val"),
+            op("c-app"),
+            op("c-sub"),
             op("c-a")
         ]
     );
@@ -586,6 +587,59 @@ fn conflicts_are_reported_and_never_forced_and_the_other_items_proceed() {
         }
     );
     assert_eq!(std::fs::read(ext(&taken)).unwrap(), b"original");
+}
+
+/// S1 of the final M2 review: the session quarantines `app\helper.exe` and removes `app`; somebody
+/// else creates `app` again and lets everyone write to it. Undo must not adopt that directory, and
+/// must not put the helper into it. Before the fix the directory was `AlreadyRestored` and the helper
+/// was renamed into it.
+#[test]
+fn nothing_is_restored_into_a_directory_somebody_else_created_again() {
+    let mut rig = Rig::new("recreated");
+    let s = &rig.s;
+    let helper = s.file(r"app\helper.exe", b"helper");
+    let app = s.path("app");
+    let items = vec![
+        quarantine("c-helper", &helper),
+        safe("c-app", path(&app), Action::RemoveDirIfEmpty),
+    ];
+    let done = rig.run(request(items, Vec::new()));
+    let read = rig.journal(&done.session);
+    assert_eq!(outcomes(&read), vec![Some(ItemOutcome::Done); 2]);
+    assert!(!exists(&app));
+
+    std::fs::create_dir(ext(&app)).unwrap();
+    let status = std::process::Command::new("icacls")
+        .args([app.as_str(), "/grant", "*S-1-1-0:(OI)(CI)F", "/q"])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let undone = rig.undo_all(&done.session);
+    assert_eq!(
+        conflict(result_of(&undone, &read, "c-app")),
+        &UndoConflict::DestinationExists
+    );
+    assert_eq!(
+        conflict(result_of(&undone, &read, "c-helper")),
+        &UndoConflict::GateBlocked {
+            blocker: Blocker::DenyListed {
+                rule: purge_exec::act_fs::reason::UNDO_PARENT_NOT_RESTORED.to_owned()
+            }
+        }
+    );
+    assert!(!exists(&helper));
+    assert!(exists(&quarantine_path(&read, 1)));
+    assert_eq!(undone.report.state, SessionState::PartiallyUndone);
+
+    // Once that directory is gone, the next undo restores both.
+    std::fs::remove_dir(ext(&app)).unwrap();
+    let again = rig.undo_all(&done.session);
+    assert_eq!(result_of(&again, &read, "c-app"), &restored());
+    assert_eq!(result_of(&again, &read, "c-helper"), &restored());
+    assert_eq!(again.report.state, SessionState::Undone);
+    assert_eq!(std::fs::read(ext(&helper)).unwrap(), b"helper");
 }
 
 // ---------------------------------------------------------------------------------------------------
