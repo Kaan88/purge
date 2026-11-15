@@ -272,11 +272,112 @@ pub fn verdict(
     Ok(())
 }
 
+/// Rights on a volume root that let a principal take `X:\.purge-q` away or give itself that right:
+/// `FILE_DELETE_CHILD` (rename or delete any entry), `WRITE_DAC`, `WRITE_OWNER` and `GENERIC_ALL`.
+pub const ROOT_TAKEOVER_RIGHTS: u32 = 0x40 | 0x0004_0000 | 0x0008_0000 | 0x1000_0000;
+/// `CREATOR OWNER`, whose entries apply only to objects created below.
+const CREATOR_OWNER_SID: &str = "S-1-3-0";
+/// `OWNER RIGHTS`, whose entries apply to the owner, checked separately.
+const OWNER_RIGHTS_SID: &str = "S-1-3-4";
+
+/// The verdict on the root of a volume that is to hold `X:\.purge-q`: `Ok` when only
+/// Administrators, SYSTEM and TrustedInstaller (and the test user under the relaxed policy) own it
+/// or hold [`ROOT_TAKEOVER_RIGHTS`] on the root itself.
+///
+/// `.purge-q` refuses everyone else, but a principal with delete-child on the root can rename it
+/// away and plant another; the store then rejects the planted one and the quarantined data is lost
+/// for undo. Such a volume is not used for quarantine. Inherit-only entries do not apply to the
+/// root and are ignored, as are deny entries; a NULL DACL fails.
+pub fn volume_root_verdict(
+    policy: &IntegrityPolicy,
+    owner: Option<&str>,
+    dacl: Option<&[Ace]>,
+) -> Result<(), IntegrityFailure> {
+    if !owner.is_some_and(|o| policy.is_admin_sid(o)) {
+        return Err(IntegrityFailure::Owner {
+            owner: owner.map(str::to_owned),
+        });
+    }
+    let Some(dacl) = dacl else {
+        return Err(IntegrityFailure::NullDacl);
+    };
+    for ace in dacl.iter().filter(|a| a.is_allow() && a.is_effective()) {
+        if ace.sid.as_deref().is_some_and(|s| {
+            policy.is_admin_sid(s) || s == CREATOR_OWNER_SID || s == OWNER_RIGHTS_SID
+        }) {
+            continue;
+        }
+        let rights = ace.mask & ROOT_TAKEOVER_RIGHTS;
+        if rights != 0 {
+            return Err(IntegrityFailure::ForeignAccess {
+                sid: ace.sid.clone(),
+                mask: rights,
+            });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const USERS: &str = "S-1-5-32-545";
+
+    #[test]
+    fn volume_roots_that_let_others_take_the_quarantine_away_are_refused() {
+        let strict = IntegrityPolicy::strict();
+        let admin = admin_dacl();
+        // A drive root as Windows sets it up: users may add folders and read, nothing more; inherit-only
+        // entries (CREATOR OWNER, Users' Modify on what is created below) do not count.
+        let mut drive = admin.clone();
+        drive.push(ace("S-1-5-11", 0x0000_0004, 0));
+        drive.push(ace(USERS, 0x0012_00A9, 0x03));
+        drive.push(ace("S-1-5-11", 0x0013_01BF, 0x0B));
+        drive.push(ace(CREATOR_OWNER_SID, 0x1000_0000, 0x0B));
+        let ok = |owner: &str, dacl: &[Ace]| volume_root_verdict(&strict, Some(owner), Some(dacl));
+        assert_eq!(ok(ADMINISTRATORS_SID, &drive), Ok(()));
+        assert_eq!(ok(TRUSTED_INSTALLER_SID, &drive), Ok(()));
+        // Modify on the root itself carries no delete-child.
+        let mut modify = admin.clone();
+        modify.push(ace("S-1-5-11", 0x0013_01BF, 0x03));
+        assert_eq!(ok(LOCAL_SYSTEM_SID, &modify), Ok(()));
+
+        for (mask, refused) in [
+            (0x001F_01FF, 0x000C_0040),
+            (0x40, 0x40),
+            (0x0004_0000, 0x0004_0000),
+            (0x1000_0000, 0x1000_0000),
+        ] {
+            let mut open = admin.clone();
+            open.push(ace(USERS, mask, 0));
+            assert_eq!(
+                ok(ADMINISTRATORS_SID, &open),
+                Err(IntegrityFailure::ForeignAccess {
+                    sid: Some(USERS.to_owned()),
+                    mask: refused
+                }),
+                "{mask:#x}"
+            );
+        }
+        assert_eq!(
+            ok(ME, &admin),
+            Err(IntegrityFailure::Owner {
+                owner: Some(ME.to_owned())
+            })
+        );
+        assert_eq!(
+            volume_root_verdict(&strict, Some(ADMINISTRATORS_SID), None),
+            Err(IntegrityFailure::NullDacl)
+        );
+        // The relaxed policy treats the test user as an administrator, nobody else.
+        let relaxed = IntegrityPolicy::relaxed(ME.to_owned());
+        let mut mine = admin.clone();
+        mine.push(ace(ME, 0x001F_01FF, 0x03));
+        assert_eq!(volume_root_verdict(&relaxed, Some(ME), Some(&mine)), Ok(()));
+        mine.push(ace(USERS, 0x40, 0));
+        assert!(volume_root_verdict(&relaxed, Some(ME), Some(&mine)).is_err());
+    }
     const ME: &str = "S-1-5-21-1-2-3-1001";
 
     fn ace(sid: &str, mask: u32, flags: u8) -> Ace {

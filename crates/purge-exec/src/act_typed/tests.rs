@@ -15,8 +15,8 @@ use purge_win::appx::{AppxPackage, SignatureKind};
 use purge_win::appx_write::{DeploymentError, RemovalScope, RemoveOutcome};
 
 use super::*;
-use crate::journal::{JournalWriter, read, sha256_file};
-use crate::storage::{JOURNAL_FILE, ObjectKind, SessionDir, StorageRoots};
+use crate::journal::{JournalWriter, read, sha256_reader};
+use crate::storage::{SessionDir, StorageRoots};
 
 /// The planned package.
 const NAME: &str = "Vendor.App_1.0.0.0_x64__abcdefghjkmnp";
@@ -94,9 +94,7 @@ impl Session {
             allow_irreversible: true,
             volumes: Vec::new(),
         };
-        let sddl = roots.policy().sddl_for(ObjectKind::StoreFile);
-        let mut journal =
-            JournalWriter::create(&session.path().join(JOURNAL_FILE), &sddl, header).unwrap();
+        let mut journal = JournalWriter::create(&session, header).unwrap();
         for (i, name) in names.iter().enumerate() {
             let n = i as u32 + 1;
             journal
@@ -161,7 +159,7 @@ impl Session {
     }
 
     fn records(&self) -> Vec<Record> {
-        read(self.journal.path()).unwrap().records
+        read(&self.session).unwrap().records
     }
 }
 
@@ -556,9 +554,9 @@ fn a_removal_writes_a_verified_definition_journals_the_intent_and_ends_done() {
 
     let def_ref = intent.definition.clone().unwrap();
     assert_eq!(def_ref.path, r"def\000001.json");
-    let (sha, bytes) = sha256_file(&s.def_path(1)).unwrap();
+    let (sha, bytes) = sha256_reader(&mut s.session.open_file(&def_ref.path).unwrap()).unwrap();
     assert_eq!((sha, bytes), (def_ref.sha256, def_ref.bytes));
-    crate::journal::verify_backup(s.session.path(), &def_ref).unwrap();
+    crate::journal::verify_backup(&s.session, &def_ref).unwrap();
     let def: PackageDefinition =
         serde_json::from_slice(&std::fs::read(s.def_path(1)).unwrap()).unwrap();
     assert_eq!(&def, removal.definition());
@@ -803,7 +801,8 @@ fn the_token_of_another_op_removes_nothing() {
 fn an_existing_definition_file_is_never_replaced() {
     let s = Session::new("defexists", &[NAME]);
     let fake = Fake::new(vec![info(NAME)]);
-    let (path, mut file) = s.session.create_file(r"def\000001.json").unwrap();
+    let mut file = s.session.create_file(r"def\000001.json").unwrap();
+    let path = file.report_path();
     file.write_all(b"not ours").unwrap();
     drop(file);
     let err = prepare_remove_package(
@@ -901,7 +900,7 @@ fn undo_of_a_removed_package_is_an_irreversible_record() {
     s.journal
         .undo_done_without_intent(OpId(2), UndoOutcome::NothingToUndo)
         .unwrap();
-    read(s.journal.path()).unwrap();
+    read(&s.session).unwrap();
 
     // Intent only (the run stopped during the removal) and a removal that could not be verified are
     // treated as removed.

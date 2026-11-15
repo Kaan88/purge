@@ -428,8 +428,9 @@ fn write_definition(
             text.len()
         )));
     }
-    let (path, file) = session.create_file(&rel)?;
-    let result = finish_definition(session, &rel, &path, file, &text, def);
+    let created = session.create_file(&rel)?;
+    let path = created.report_path();
+    let result = finish_definition(session, &rel, &path, created.into_file(), &text, def);
     if result.is_err() {
         // The file is Purge's own, created a moment ago, and holds no verified definition.
         let _ = std::fs::remove_file(&path);
@@ -459,13 +460,15 @@ fn finish_definition(
         fs_write::flush_dir(dir).map_err(|e| file_err("flush the directory of", e.to_string()))?;
     }
     fault::point(fault::BACKUP_WRITTEN);
-    let checked = session.open_file(rel)?;
+    let opened = session.open_file(rel)?;
+    let checked = opened.report_path();
     if checked != path {
         return Err(DefinitionError::ReadBackMismatch(checked));
     }
     let mut back = Vec::new();
-    std::fs::File::open(&checked)
-        .and_then(|f| f.take(MAX_DEFINITION_BYTES + 1).read_to_end(&mut back))
+    opened
+        .take(MAX_DEFINITION_BYTES + 1)
+        .read_to_end(&mut back)
         .map_err(|e| file_err("read back", e.to_string()))?;
     if back != text {
         return Err(DefinitionError::ReadBackMismatch(checked));

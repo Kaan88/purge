@@ -1,7 +1,9 @@
 //! Tests of the journal: format, rules, torn tail, corruption, hash chain, groups, hashing and fault
-//! points. Every file lives in a temp directory the test creates and removes.
+//! points. Every journal lives in a session of a relaxed test store under a temp directory the test
+//! creates and removes.
 
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use purge_model::exec::journal::{
     AbortReason, Expire, FileFacts, GateExemptions, Header, Intent, ItemFacts, JournalSchema,
@@ -13,15 +15,29 @@ use purge_model::exec::op::{
 };
 use purge_model::exec::session::{RetentionClass, SessionId};
 use purge_model::{CandidateId, FileTime, ScanMode, Target};
+use purge_win::fs_write::FsError;
 
 use super::frame::{CHAIN_SEED, SUFFIX_LEN, frame};
 use super::*;
+use crate::storage::{IntegrityFailure, SessionDir, StorageError, StorageRoots};
 
-/// A descriptor the unelevated test user can create, write and delete files with.
-const SDDL: &str = "D:P(A;;FA;;;OW)(A;;FA;;;SY)(A;;FA;;;BA)";
+/// A relaxed test store under a fresh temp directory with one session; everything is removed on drop.
+struct TempDir {
+    /// The session the journal belongs to. Declared first, so its handles close before the directory
+    /// is removed.
+    session: SessionDir,
+    roots: StorageRoots,
+    scratch: Scratch,
+}
 
 /// A fresh directory under the temp dir, removed on drop.
-struct TempDir(PathBuf);
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 impl TempDir {
     fn new(tag: &str) -> TempDir {
@@ -37,17 +53,27 @@ impl TempDir {
                 .as_nanos()
         ));
         std::fs::create_dir(&dir).unwrap();
-        TempDir(dir)
+        let scratch = Scratch(dir);
+        let roots = StorageRoots::install_relaxed(&scratch.0.join("data")).unwrap();
+        let session = roots.create_session().unwrap();
+        TempDir {
+            session,
+            roots,
+            scratch,
+        }
     }
 
+    /// The journal's path, for tests that plant or tamper with bytes; the code never opens it by path.
     fn journal(&self) -> PathBuf {
-        self.0.join(JOURNAL_FILE_NAME)
+        self.session.path().join(JOURNAL_FILE_NAME)
     }
-}
 
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+    /// A header of this session with `items` items.
+    fn header(&self, items: u32) -> Header {
+        Header {
+            session: self.session.id().clone(),
+            ..header(items)
+        }
     }
 }
 
@@ -127,7 +153,7 @@ fn pending_reboot(n: u32) -> ItemOutcome {
 
 /// A journal with `items` validated items.
 fn started(dir: &TempDir, items: u32) -> JournalWriter {
-    let mut w = JournalWriter::create(&dir.journal(), SDDL, header(items)).unwrap();
+    let mut w = JournalWriter::create(&dir.session, dir.header(items)).unwrap();
     for n in 1..=items {
         w.validated(validated(n)).unwrap();
     }
@@ -156,7 +182,7 @@ fn sample_journal(dir: &TempDir) -> Vec<u8> {
     w.commit(FileTime(134_078_121_950_000_000), 4096).unwrap();
     drop(w);
 
-    let mut w = JournalWriter::open_append(&dir.journal()).unwrap();
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
     let u1 = w.undo_intent(OpId(1)).unwrap();
     w.undo_done(u1, UndoOutcome::Restored).unwrap();
     w.undo_conflict_without_intent(OpId(4), UndoConflict::BackupTampered, "x".into())
@@ -221,7 +247,7 @@ fn refused<T: std::fmt::Debug>(result: Result<T, JournalError>) -> Violation {
 fn a_full_session_reads_back() {
     let dir = TempDir::new("full");
     let bytes = sample_journal(&dir);
-    let read = read(&dir.journal()).unwrap();
+    let read = read(&dir.session).unwrap();
     assert_eq!(read.torn_tail, 0);
     assert_eq!(read.valid_len, bytes.len() as u64);
     assert_eq!(read.records.len(), 1 + 4 + 3 + 4 + 1 + 1 + 5);
@@ -230,7 +256,7 @@ fn a_full_session_reads_back() {
 
     let state = &read.state;
     assert_eq!(state.phase(), Phase::Committed);
-    assert_eq!(state.session(), &header(4).session);
+    assert_eq!(state.session(), dir.session.id());
     assert_eq!(
         state.counts(),
         OutcomeCounts {
@@ -268,7 +294,7 @@ fn a_full_session_reads_back() {
         assert!(text[text.len() - 1 - SUFFIX_LEN..].starts_with(r#","chain":""#));
         assert!(!text.contains('\r'));
     }
-    let reopened = JournalWriter::open_append(&dir.journal()).unwrap();
+    let reopened = JournalWriter::open_append(&dir.session).unwrap();
     assert_eq!(reopened.head(), read.head);
     assert_eq!(reopened.len(), bytes.len() as u64);
     assert_eq!(reopened.discarded_tail(), 0);
@@ -311,7 +337,7 @@ fn intent_is_flushed_before_the_token_is_returned() {
     assert_eq!(w.syncs(), before + 1);
     assert_eq!((token.op(), token.item()), (OpId(1), &item(1)));
     // A second reader sees the intent while the writer holds the file.
-    let seen = read(&dir.journal()).unwrap();
+    let seen = read(&dir.session).unwrap();
     assert_eq!(
         seen.state.op(OpId(1)).unwrap().status(),
         OpStatus::IntentOnly
@@ -322,9 +348,214 @@ fn intent_is_flushed_before_the_token_is_returned() {
     assert_eq!(w.syncs(), before + 1);
     // A second writer cannot open the file meanwhile.
     assert!(matches!(
-        JournalWriter::open_append(&dir.journal()),
+        JournalWriter::open_append(&dir.session),
+        Err(JournalError::Store(StorageError::Io {
+            source: FsError::SharingViolation,
+            ..
+        }))
+    ));
+}
+
+/// S6: the `done` of a registered boot-time move is the only record of the pair, so it is flushed
+/// before `done` returns; other outcomes wait for the next flush.
+#[test]
+fn a_pending_reboot_done_is_flushed_at_once() {
+    let dir = TempDir::new("reboot-flush");
+    let mut w = started(&dir, 3);
+    let t1 = w.intent(intent(1)).unwrap();
+    let t2 = w.intent(intent(2)).unwrap();
+    let t3 = w.intent(intent(3)).unwrap();
+    let before = w.syncs();
+    w.done(t1, ItemOutcome::Done).unwrap();
+    w.done(t2, ItemOutcome::HeldRetry).unwrap();
+    assert_eq!(w.syncs(), before);
+    w.done(t3, pending_reboot(3)).unwrap();
+    assert_eq!(w.syncs(), before + 1);
+    // What a second reader sees now is what survives a power loss: the pair is there.
+    let seen = read(&dir.session).unwrap();
+    assert_eq!(
+        seen.state.op(OpId(3)).unwrap().status(),
+        OpStatus::Done(&pending_reboot(3))
+    );
+}
+
+/// S7: a token is proof that one intent is open; nobody gets a second one for the same op.
+#[test]
+fn resume_hands_out_one_token_per_open_intent_and_only_after_open_append() {
+    let dir = TempDir::new("resume-once");
+    let mut w = started(&dir, 3);
+    let t1 = w.intent(intent(1)).unwrap();
+    // The writer that wrote the intent already handed out its token.
+    assert!(w.resume_intent(OpId(1)).is_none());
+    w.done(t1, ItemOutcome::Done).unwrap();
+    let _lost = w.intent(intent(2)).unwrap();
+    let t3 = w.intent(intent(3)).unwrap();
+    w.done(t3, ItemOutcome::Done).unwrap();
+    drop(w);
+
+    // After a crash: one token for the op left open, once.
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    assert!(w.resume_intent(OpId(1)).is_none());
+    assert!(w.resume_intent(OpId(3)).is_none());
+    let token = w.resume_intent(OpId(2)).unwrap();
+    assert!(w.resume_intent(OpId(2)).is_none());
+    w.done(token, failed()).unwrap();
+    w.commit(FileTime(1), 0).unwrap();
+
+    // The same for an undo left in progress.
+    let u1 = w.undo_intent(OpId(1)).unwrap();
+    assert!(w.resume_undo(OpId(1)).is_none());
+    drop((u1, w));
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    let u1 = w.resume_undo(OpId(1)).unwrap();
+    assert!(w.resume_undo(OpId(1)).is_none());
+    assert!(w.resume_undo(OpId(3)).is_none());
+    w.undo_done(u1, UndoOutcome::Restored).unwrap();
+}
+
+/// S7: once expiry deleted an op's data, no undo of it starts; an expiry waits for an undo in
+/// progress. The reader applies the same rules.
+#[test]
+fn undo_is_refused_after_expiry_and_expiry_during_an_undo() {
+    let dir = TempDir::new("expired-undo");
+    let mut w = started(&dir, 2);
+    for n in 1..=2 {
+        let t = w.intent(intent(n)).unwrap();
+        w.done(t, ItemOutcome::Done).unwrap();
+    }
+    w.commit(FileTime(1), 0).unwrap();
+    let expire = |n, class| Expire {
+        at: FileTime(2),
+        op: OpId(n),
+        class,
+        bytes: 1,
+    };
+    w.expire(expire(1, RetentionClass::Quarantine)).unwrap();
+    assert_eq!(
+        refused(w.undo_intent(OpId(1))),
+        Violation::UndoAfterExpire(OpId(1))
+    );
+    // What the undo package records instead.
+    w.undo_conflict_without_intent(OpId(1), UndoConflict::BackupMissing, "expired".into())
+        .unwrap();
+
+    let u2 = w.undo_intent(OpId(2)).unwrap();
+    assert_eq!(
+        refused(w.expire(expire(2, RetentionClass::Quarantine))),
+        Violation::ExpireDuringUndo(OpId(2))
+    );
+    w.undo_done(u2, UndoOutcome::Restored).unwrap();
+    w.expire(expire(2, RetentionClass::Backup)).unwrap();
+    drop(w);
+    let seen = read(&dir.session).unwrap();
+    assert_eq!(
+        seen.state.op(OpId(1)).unwrap().undo,
+        UndoState::Conflict(UndoConflict::BackupMissing)
+    );
+
+    // A journal that holds an undo after an expiry is refused by the reader.
+    let bodies: Vec<String> = [
+        Record::Header(header(1)),
+        Record::Validated(validated(1)),
+        Record::Intent(intent(1)),
+        Record::Done(purge_model::exec::journal::Done {
+            op: OpId(1),
+            item: item(1),
+            outcome: ItemOutcome::Done,
+        }),
+        Record::GroupEnd(purge_model::exec::journal::GroupEnd { group: 1, ops: 1 }),
+        Record::Commit(purge_model::exec::journal::Commit {
+            at: FileTime(1),
+            counts: OutcomeCounts {
+                done: 1,
+                ..OutcomeCounts::default()
+            },
+            backup_bytes: 0,
+        }),
+        Record::Expire(expire(1, RetentionClass::Backup)),
+        Record::UndoIntent(purge_model::exec::journal::UndoIntent { op: OpId(1) }),
+    ]
+    .into_iter()
+    .map(body)
+    .collect();
+    assert_eq!(
+        corrupt(parse(&chained(&bodies))),
+        (8, Corruption::Rule(Violation::UndoAfterExpire(OpId(1))))
+    );
+}
+
+/// M9: a record whose write fails is not applied, and the writer takes nothing more.
+#[test]
+fn a_failed_write_poisons_the_writer_and_leaves_the_state_as_the_file() {
+    let dir = TempDir::new("poison");
+    let mut w = started(&dir, 2);
+    let t1 = w.intent(intent(1)).unwrap();
+    w.inject_write_failure();
+    assert!(matches!(
+        w.done(t1, ItemOutcome::Done),
         Err(JournalError::Io { .. })
     ));
+    assert!(w.is_poisoned());
+    assert_eq!(
+        w.state().op(OpId(1)).unwrap().status(),
+        OpStatus::IntentOnly
+    );
+    assert_eq!(w.state().counts(), OutcomeCounts::default());
+    assert!(matches!(w.intent(intent(2)), Err(JournalError::Poisoned)));
+    let state = w.state().clone();
+    drop(w);
+    assert_eq!(read(&dir.session).unwrap().state, state);
+}
+
+/// S1, M7: the journal is created, read and appended to only through the store, and only as the
+/// journal of the session whose directory it is in.
+#[test]
+fn the_journal_goes_through_the_store_and_belongs_to_its_session() {
+    // A header for another session is refused before anything is created.
+    let dir = TempDir::new("own-session");
+    assert!(matches!(
+        JournalWriter::create(&dir.session, header(1)),
+        Err(JournalError::WrongSession { .. })
+    ));
+    assert!(!dir.journal().exists());
+
+    // A journal copied into another session's directory is not that session's journal.
+    drop(started(&dir, 1));
+    let other = dir.roots.create_session().unwrap();
+    std::fs::copy(dir.journal(), other.path().join(JOURNAL_FILE_NAME)).unwrap();
+    assert!(matches!(
+        read(&other),
+        Err(JournalError::WrongSession { header, dir: d })
+            if &header == dir.session.id() && &d == other.id()
+    ));
+    assert!(matches!(
+        JournalWriter::open_append(&other),
+        Err(JournalError::WrongSession { .. })
+    ));
+
+    // The session directory swapped for a junction after it was opened: nothing is written there.
+    let dir = TempDir::new("own-junction");
+    let elsewhere = dir.scratch.0.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let real = dir.session.path().to_path_buf();
+    std::fs::rename(&real, dir.scratch.0.join("moved")).unwrap();
+    let status = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&real)
+        .arg(&elsewhere)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(matches!(
+        JournalWriter::create(&dir.session, dir.header(1)),
+        Err(JournalError::Store(StorageError::Integrity {
+            failure: IntegrityFailure::ReparsePoint { .. },
+            ..
+        }))
+    ));
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    assert!(read(&dir.session).is_err());
 }
 
 #[test]
@@ -340,7 +571,7 @@ fn groups_close_after_64_intents() {
     assert_eq!(w.syncs(), 1 + 130 + 3 + 1);
     drop(w);
 
-    let read = read(&dir.journal()).unwrap();
+    let read = read(&dir.session).unwrap();
     let groups: Vec<(usize, u32, u32)> = read
         .records
         .iter()
@@ -376,7 +607,7 @@ fn a_full_group_closes_before_the_65th_intent_even_with_intents_open() {
     }
     w.commit(FileTime(1), 0).unwrap();
     drop(w);
-    let read = read(&dir.journal()).unwrap();
+    let read = read(&dir.session).unwrap();
     let names: Vec<&str> = read.records.iter().map(Record::name).collect();
     let first_end = names.iter().position(|&n| n == "group_end").unwrap();
     assert!(matches!(&read.records[first_end + 1], Record::Intent(i) if i.op == OpId(65)));
@@ -386,7 +617,7 @@ fn a_full_group_closes_before_the_65th_intent_even_with_intents_open() {
 #[test]
 fn writer_refuses_rule_breaks_and_writes_nothing() {
     let dir = TempDir::new("refuse");
-    let mut w = JournalWriter::create(&dir.journal(), SDDL, header(3)).unwrap();
+    let mut w = JournalWriter::create(&dir.session, dir.header(3)).unwrap();
     w.validated(validated(1)).unwrap();
     // The run cannot start before every item is validated.
     assert_eq!(
@@ -510,7 +741,7 @@ fn writer_refuses_rule_breaks_and_writes_nothing() {
     // Nothing refused reached the file: it reads back as the writer's state.
     let len = w.len();
     w.sync().unwrap();
-    let read = read(&dir.journal()).unwrap();
+    let read = read(&dir.session).unwrap();
     assert_eq!(read.valid_len, len);
     assert_eq!(&read.state, w.state());
     assert!(!w.is_poisoned());
@@ -536,9 +767,10 @@ fn undo_and_reconcile_rules() {
         [OpId(3)]
     );
 
-    // An undo restarted after a crash: a second undo_intent while one is open.
+    // An undo restarted after a crash: a second undo_intent while one is open. The writer that wrote
+    // the first undo_intent hands out no second token for it (S7).
     let first = w.undo_intent(OpId(1)).unwrap();
-    assert!(w.resume_undo(OpId(1)).is_some());
+    assert!(w.resume_undo(OpId(1)).is_none());
     assert_eq!(
         refused(w.undo_done_without_intent(OpId(1), UndoOutcome::NothingToUndo)),
         Violation::TokenRequired(OpId(1))
@@ -626,7 +858,7 @@ fn undo_and_reconcile_rules() {
         Violation::AfterFinish("aborted")
     );
     drop(w);
-    let read = read(&dir.journal()).unwrap();
+    let read = read(&dir.session).unwrap();
     assert_eq!(read.state.op(OpId(2)).unwrap().reconciles.len(), 2);
 }
 
@@ -644,7 +876,7 @@ fn abort_ends_a_run_and_keeps_open_intents_for_recovery() {
     )
     .unwrap();
     drop(w);
-    let read = read(&dir.journal()).unwrap();
+    let read = read(&dir.session).unwrap();
     assert_eq!(read.state.phase(), Phase::Aborted);
     assert_eq!(
         read.state.aborted().unwrap().reason,
@@ -656,7 +888,7 @@ fn abort_ends_a_run_and_keeps_open_intents_for_recovery() {
         [OpId(2)]
     );
     // Once the run ended, no done can be added; the undo of the open intent can.
-    let mut w = JournalWriter::open_append(&dir.journal()).unwrap();
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
     assert!(w.resume_intent(OpId(2)).is_none());
     assert_eq!(
         refused(w.done_without_intent(OpId(3), ItemOutcome::Vanished)),
@@ -958,9 +1190,9 @@ fn open_append_cuts_a_torn_tail_and_continues() {
     bytes.extend_from_slice(&[0, 0, 0]);
     std::fs::write(dir.journal(), &bytes).unwrap();
 
-    let seen = read(&dir.journal()).unwrap();
+    let seen = read(&dir.session).unwrap();
     assert_eq!((seen.valid_len, seen.torn_tail), (valid, 28));
-    let mut w = JournalWriter::open_append(&dir.journal()).unwrap();
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
     assert_eq!(w.discarded_tail(), 28);
     assert_eq!(std::fs::metadata(dir.journal()).unwrap().len(), valid);
     let token = w.resume_intent(OpId(1)).unwrap();
@@ -975,7 +1207,7 @@ fn open_append_cuts_a_torn_tail_and_continues() {
     .unwrap();
     w.commit(FileTime(9), 0).unwrap();
     drop(w);
-    let read = read(&dir.journal()).unwrap();
+    let read = read(&dir.session).unwrap();
     assert_eq!(read.torn_tail, 0);
     assert_eq!(read.state.phase(), Phase::Committed);
 }
@@ -990,11 +1222,11 @@ fn a_corrupt_journal_is_refused_and_left_untouched() {
     std::fs::write(dir.journal(), &bytes).unwrap();
 
     assert!(matches!(
-        read(&dir.journal()),
+        read(&dir.session),
         Err(JournalError::Corrupt { .. })
     ));
     assert!(matches!(
-        JournalWriter::open_append(&dir.journal()),
+        JournalWriter::open_append(&dir.session),
         Err(JournalError::Corrupt { .. })
     ));
     // Not even the torn tail was cut.
@@ -1006,13 +1238,13 @@ fn a_journal_without_a_complete_header_is_empty() {
     let dir = TempDir::new("empty");
     std::fs::write(dir.journal(), b"").unwrap();
     assert!(matches!(
-        read(&dir.journal()),
+        read(&dir.session),
         Err(JournalError::Empty { torn_bytes: 0 })
     ));
     let partial = &body(Record::Header(header(1)))[..40];
     std::fs::write(dir.journal(), partial).unwrap();
     assert!(matches!(
-        JournalWriter::open_append(&dir.journal()),
+        JournalWriter::open_append(&dir.session),
         Err(JournalError::Empty { torn_bytes: 40 })
     ));
     assert_eq!(std::fs::read(dir.journal()).unwrap(), partial.as_bytes());
@@ -1023,30 +1255,79 @@ fn create_never_adopts_an_existing_file_and_paths_must_be_plain_files() {
     let dir = TempDir::new("create");
     std::fs::write(dir.journal(), b"planted").unwrap();
     assert!(matches!(
-        JournalWriter::create(&dir.journal(), SDDL, header(1)),
-        Err(JournalError::Fs { .. })
+        JournalWriter::create(&dir.session, dir.header(1)),
+        Err(JournalError::Store(StorageError::Io {
+            source: FsError::AlreadyExists,
+            ..
+        }))
     ));
     assert_eq!(std::fs::read(dir.journal()).unwrap(), b"planted");
 
-    // A directory is not a journal.
-    let sub = dir.0.join("sub");
-    std::fs::create_dir(&sub).unwrap();
-    assert!(read(&sub).is_err());
-    assert!(JournalWriter::open_append(&sub).is_err());
+    // A directory is not a journal, for the reader or the appender; it is renamed aside.
+    for append in [false, true] {
+        let dir = TempDir::new("create-dir");
+        std::fs::create_dir(dir.journal()).unwrap();
+        let result = if append {
+            JournalWriter::open_append(&dir.session).map(drop)
+        } else {
+            read(&dir.session).map(drop)
+        };
+        assert!(
+            matches!(
+                result,
+                Err(JournalError::Store(StorageError::Integrity {
+                    failure: IntegrityFailure::WrongKind {
+                        expected_dir: false
+                    },
+                    renamed_to: Some(_),
+                    ..
+                }))
+            ),
+            "{result:?}"
+        );
+        assert!(!dir.journal().exists());
+    }
 
-    // A hard link to a journal is refused.
-    let real = TempDir::new("create-real");
-    drop(started(&real, 1));
-    let link = dir.0.join("linked.jsonl");
-    std::fs::hard_link(real.journal(), &link).unwrap();
-    assert!(matches!(read(&link), Err(JournalError::NotPlainFile)));
+    // A journal with a second name is refused, and renamed aside.
+    let dir = TempDir::new("create-link");
+    drop(started(&dir, 1));
+    let link = dir.scratch.0.join("linked.jsonl");
+    std::fs::hard_link(dir.journal(), &link).unwrap();
     assert!(matches!(
-        JournalWriter::open_append(&link),
-        Err(JournalError::NotPlainFile)
+        read(&dir.session),
+        Err(JournalError::Store(StorageError::Integrity {
+            failure: IntegrityFailure::HardLinked { n_links: 2 },
+            ..
+        }))
+    ));
+    assert!(!dir.journal().exists());
+    assert!(matches!(
+        JournalWriter::open_append(&dir.session),
+        Err(JournalError::Store(StorageError::Io {
+            source: FsError::NotFound,
+            ..
+        }))
+    ));
+}
+
+/// M5: a journal over [`MAX_JOURNAL_BYTES`] is refused before it is read.
+#[test]
+fn an_oversized_journal_is_refused_unread() {
+    let dir = TempDir::new("oversized");
+    drop(started(&dir, 1));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.journal())
+        .unwrap();
+    file.set_len(MAX_JOURNAL_BYTES + 1).unwrap();
+    drop(file);
+    assert!(matches!(
+        read(&dir.session),
+        Err(JournalError::TooLarge { bytes, max: MAX_JOURNAL_BYTES }) if bytes == MAX_JOURNAL_BYTES + 1
     ));
     assert!(matches!(
-        read(&real.journal()),
-        Err(JournalError::NotPlainFile)
+        JournalWriter::open_append(&dir.session),
+        Err(JournalError::TooLarge { .. })
     ));
 }
 
@@ -1070,46 +1351,53 @@ fn sha256_vectors() {
     let (h, n) = sha256_reader(&mut std::io::Cursor::new(&million)).unwrap();
     assert_eq!((hex(h), n), (expected.to_owned(), 1_000_000));
 
+    // Through a store file, as backups are hashed.
     let dir = TempDir::new("sha");
-    let file = dir.0.join("big.bin");
-    std::fs::write(&file, &million).unwrap();
-    let (h, n) = sha256_file(&file).unwrap();
+    let mut file = dir
+        .session
+        .create_file(r"reg\000001.regbackup.json")
+        .unwrap();
+    file.write_all(&million).unwrap();
+    file.sync().unwrap();
+    drop(file);
+    let mut file = dir.session.open_file(r"reg\000001.regbackup.json").unwrap();
+    let (h, n) = sha256_reader(&mut file).unwrap();
     assert_eq!((hex(h), n), (expected.to_owned(), 1_000_000));
-    let empty = dir.0.join("empty.bin");
-    std::fs::write(&empty, b"").unwrap();
-    assert_eq!(sha256_file(&empty).unwrap(), (sha256_bytes(b""), 0));
-    assert!(sha256_file(&dir.0).is_err());
-    assert_eq!(
-        sha256_file(&dir.0.join("missing")).unwrap_err().kind(),
-        std::io::ErrorKind::NotFound
-    );
+    let mut empty = dir
+        .session
+        .create_file(r"reg\000002.regbackup.json")
+        .unwrap();
+    assert_eq!(sha256_reader(&mut empty).unwrap(), (sha256_bytes(b""), 0));
 }
 
 #[test]
 fn verify_backup_catches_tampering() {
     let dir = TempDir::new("backup");
-    std::fs::create_dir(dir.0.join("reg")).unwrap();
     let content = br#"{"schema":"purge.regbackup/1","x":[1,2,3]}"#;
-    let path = dir.0.join(r"reg\000002.regbackup.json");
-    std::fs::write(&path, content).unwrap();
+    let rel = r"reg\000002.regbackup.json";
+    let mut file = dir.session.create_file(rel).unwrap();
+    file.write_all(content).unwrap();
+    file.sync().unwrap();
+    drop(file);
+    let path = dir.session.path().join(rel);
     let backup = BackupRef {
-        path: r"reg\000002.regbackup.json".into(),
+        path: rel.into(),
         sha256: sha256_bytes(content),
         bytes: content.len() as u64,
     };
-    assert_eq!(verify_backup(&dir.0, &backup), Ok(()));
+    assert_eq!(verify_backup(&dir.session, &backup), Ok(()));
 
     // One byte changed, same size.
     let mut tampered = content.to_vec();
     tampered[20] ^= 0x01;
     std::fs::write(&path, &tampered).unwrap();
-    let err = verify_backup(&dir.0, &backup).unwrap_err();
+    let err = verify_backup(&dir.session, &backup).unwrap_err();
     assert!(matches!(err, BackupCheckError::HashMismatch { .. }));
     assert_eq!(err.conflict(), UndoConflict::BackupTampered);
 
     std::fs::write(&path, &content[..10]).unwrap();
     assert_eq!(
-        verify_backup(&dir.0, &backup),
+        verify_backup(&dir.session, &backup),
         Err(BackupCheckError::SizeMismatch {
             expected: content.len() as u64,
             actual: 10
@@ -1117,7 +1405,7 @@ fn verify_backup_catches_tampering() {
     );
 
     std::fs::remove_file(&path).unwrap();
-    let err = verify_backup(&dir.0, &backup).unwrap_err();
+    let err = verify_backup(&dir.session, &backup).unwrap_err();
     assert_eq!(err, BackupCheckError::Missing);
     assert_eq!(err.conflict(), UndoConflict::BackupMissing);
 
@@ -1126,43 +1414,76 @@ fn verify_backup_catches_tampering() {
         ..backup.clone()
     };
     assert_eq!(
-        verify_backup(&dir.0, &outside),
+        verify_backup(&dir.session, &outside),
         Err(BackupCheckError::NotSessionRelative)
     );
+    // A directory name is not a file the store hands out.
     let a_dir = BackupRef {
         path: "reg".into(),
-        ..backup
+        ..backup.clone()
     };
     assert!(matches!(
-        verify_backup(&dir.0, &a_dir),
-        Err(BackupCheckError::Unreadable(_))
+        verify_backup(&dir.session, &a_dir),
+        Err(BackupCheckError::Store(StorageError::InvalidPath(_)))
+    ));
+    // A backup that became a hard link is refused by the store, not read.
+    std::fs::write(&path, content).unwrap();
+    std::fs::hard_link(&path, dir.scratch.0.join("second-name")).unwrap();
+    assert!(matches!(
+        verify_backup(&dir.session, &backup),
+        Err(BackupCheckError::Store(StorageError::Integrity {
+            failure: IntegrityFailure::HardLinked { .. },
+            ..
+        }))
     ));
 }
 
-/// Set only in a child process of the test binary: the directory the child writes its journal in.
-const CHILD_DIR: &str = "PURGE_TEST_JOURNAL_CHILD_DIR";
+/// Set only in a child process of the test binary: the data root of the store the child's session is
+/// in.
+const CHILD_ROOT: &str = "PURGE_TEST_JOURNAL_CHILD_ROOT";
+/// Set only in a child process of the test binary: the id of the session the child writes its
+/// journal in.
+const CHILD_SESSION: &str = "PURGE_TEST_JOURNAL_CHILD_SESSION";
 
-/// The child half of the crash tests: a three-item run from header to commit. Does nothing when run as
-/// an ordinary test.
+/// The child half of the crash tests: a three-item run from header to commit (op 3 ends as a
+/// registered boot-time move), then the undo of op 1. Does nothing when run as an ordinary test.
 #[test]
 fn child_journal_scenario() {
-    let Some(dir) = std::env::var_os(CHILD_DIR) else {
+    let (Some(root), Some(id)) = (
+        std::env::var_os(CHILD_ROOT),
+        std::env::var(CHILD_SESSION).ok(),
+    ) else {
         return;
     };
-    let path = PathBuf::from(dir).join(JOURNAL_FILE_NAME);
+    let roots = StorageRoots::relaxed(Path::new(&root)).unwrap();
+    let session = roots.open_session(&id.parse().unwrap()).unwrap();
     let started = std::time::Instant::now();
-    let mut w = JournalWriter::create(&path, SDDL, header(3)).unwrap();
+    let mut w = JournalWriter::create(
+        &session,
+        Header {
+            session: session.id().clone(),
+            ..header(3)
+        },
+    )
+    .unwrap();
     for n in 1..=3 {
         w.validated(validated(n)).unwrap();
     }
     for n in 1..=3 {
         let token = w.intent(intent(n)).unwrap();
-        w.done(token, ItemOutcome::Done).unwrap();
+        let outcome = if n == 3 {
+            pending_reboot(3)
+        } else {
+            ItemOutcome::Done
+        };
+        w.done(token, outcome).unwrap();
     }
     w.commit(FileTime(1), 0).unwrap();
+    let undo = w.undo_intent(OpId(1)).unwrap();
+    w.undo_done(undo, UndoOutcome::Restored).unwrap();
     // Read by the pause test.
     std::fs::write(
-        path.with_file_name("elapsed-ms"),
+        session.path().join("elapsed-ms"),
         started.elapsed().as_millis().to_string(),
     )
     .unwrap();
@@ -1176,8 +1497,8 @@ mod crash {
     /// The exit code of a process ended by `std::process::abort` on Windows (`__fastfail`).
     const ABORT_CODE: i32 = 0xC000_0409_u32 as i32;
 
-    /// Runs [`child_journal_scenario`] with `env`; returns the exit code and the journal it left.
-    fn run(dir: &TempDir, env: &[(&str, &str)]) -> (Option<i32>, PathBuf) {
+    /// Runs [`child_journal_scenario`] in `dir`'s session with `env`; returns the exit code.
+    fn run(dir: &TempDir, env: &[(&str, &str)]) -> Option<i32> {
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command
             .args([
@@ -1185,7 +1506,8 @@ mod crash {
                 "journal::tests::child_journal_scenario",
                 "--test-threads=1",
             ])
-            .env(CHILD_DIR, &dir.0)
+            .env(CHILD_ROOT, dir.roots.data_root())
+            .env(CHILD_SESSION, dir.session.id().as_str())
             .env_remove(fault::ENV_AT)
             .env_remove(fault::ENV_PAUSE)
             .stdout(std::process::Stdio::null())
@@ -1193,7 +1515,7 @@ mod crash {
         for (key, value) in env {
             command.env(key, value);
         }
-        (command.status().unwrap().code(), dir.journal())
+        command.status().unwrap().code()
     }
 
     fn status(read: &JournalRead, n: u32) -> OpStatus<'_> {
@@ -1203,21 +1525,21 @@ mod crash {
     #[test]
     fn a_crash_at_each_journal_point_leaves_a_readable_journal() {
         let dir = TempDir::new("crash-header");
-        let (code, path) = run(&dir, &[(fault::ENV_AT, fault::JOURNAL_HEADER)]);
+        let code = run(&dir, &[(fault::ENV_AT, fault::JOURNAL_HEADER)]);
         assert_eq!(code, Some(ABORT_CODE));
-        let header_only = read(&path).unwrap();
+        let header_only = read(&dir.session).unwrap();
         assert_eq!(header_only.records.len(), 1);
         assert_eq!(header_only.state.phase(), Phase::Validating);
 
         let dir = TempDir::new("crash-intent");
-        let (code, path) = run(&dir, &[(fault::ENV_AT, "intent.flushed:2")]);
+        let code = run(&dir, &[(fault::ENV_AT, "intent.flushed:2")]);
         assert_eq!(code, Some(ABORT_CODE));
-        let seen = read(&path).unwrap();
+        let seen = read(&dir.session).unwrap();
         assert_eq!(status(&seen, 1), OpStatus::Done(&ItemOutcome::Done));
         assert_eq!(status(&seen, 2), OpStatus::IntentOnly);
         assert_eq!(status(&seen, 3), OpStatus::Validated);
         // Recovery finishes the run: the probe decided op 2 was done, op 3 never started.
-        let mut w = JournalWriter::open_append(&path).unwrap();
+        let mut w = JournalWriter::open_append(&dir.session).unwrap();
         let token = w.resume_intent(OpId(2)).unwrap();
         w.done(token, ItemOutcome::Done).unwrap();
         w.done_without_intent(
@@ -1229,42 +1551,74 @@ mod crash {
         .unwrap();
         w.commit(FileTime(2), 0).unwrap();
         drop(w);
-        assert_eq!(read(&path).unwrap().state.phase(), Phase::Committed);
+        assert_eq!(read(&dir.session).unwrap().state.phase(), Phase::Committed);
 
         let dir = TempDir::new("crash-done");
-        let (code, path) = run(&dir, &[(fault::ENV_AT, fault::DONE_BEFORE)]);
+        let code = run(&dir, &[(fault::ENV_AT, fault::DONE_BEFORE)]);
         assert_eq!(code, Some(ABORT_CODE));
-        let seen = read(&path).unwrap();
+        let seen = read(&dir.session).unwrap();
         assert_eq!(status(&seen, 1), OpStatus::IntentOnly);
         assert_eq!(seen.state.open_group_intents(), 1);
 
+        // M6: a crash right after the boot-time move was registered leaves op 3 open, for recovery
+        // to find the pending move. (That its done is flushed at once is checked by
+        // a_pending_reboot_done_is_flushed_at_once: a process crash cannot lose written bytes.)
+        let dir = TempDir::new("crash-bootmove");
+        let code = run(&dir, &[(fault::ENV_AT, fault::BOOTMOVE_REGISTERED)]);
+        assert_eq!(code, Some(ABORT_CODE));
+        let seen = read(&dir.session).unwrap();
+        assert_eq!(status(&seen, 2), OpStatus::Done(&ItemOutcome::Done));
+        assert_eq!(status(&seen, 3), OpStatus::IntentOnly);
+
         for point in [fault::GROUP_END, fault::COMMIT_BEFORE] {
             let dir = TempDir::new("crash-end");
-            let (code, path) = run(&dir, &[(fault::ENV_AT, point)]);
+            let code = run(&dir, &[(fault::ENV_AT, point)]);
             assert_eq!(code, Some(ABORT_CODE), "{point}");
-            let seen = read(&path).unwrap();
+            let seen = read(&dir.session).unwrap();
             assert_eq!(seen.state.phase(), Phase::Running, "{point}");
             assert_eq!(seen.state.groups_closed(), 1, "{point}");
-            assert_eq!(seen.state.counts().done, 3, "{point}");
+            assert_eq!(seen.state.counts().done, 2, "{point}");
+            assert_eq!(seen.state.counts().pending_reboot, 1, "{point}");
             assert!(seen.state.commit().is_none());
             // Only the commit is missing.
-            let mut w = JournalWriter::open_append(&path).unwrap();
+            let mut w = JournalWriter::open_append(&dir.session).unwrap();
             w.commit(FileTime(2), 0).unwrap();
         }
 
+        // M6: a crash after the undo intent is flushed leaves the undo in progress; the next
+        // writer resumes it once.
+        let dir = TempDir::new("crash-undo");
+        let code = run(&dir, &[(fault::ENV_AT, fault::UNDO_INTENT)]);
+        assert_eq!(code, Some(ABORT_CODE));
+        let seen = read(&dir.session).unwrap();
+        assert_eq!(seen.state.phase(), Phase::Committed);
+        assert_eq!(
+            seen.state
+                .undo_in_progress()
+                .map(|s| s.op)
+                .collect::<Vec<_>>(),
+            [OpId(1)]
+        );
+        let mut w = JournalWriter::open_append(&dir.session).unwrap();
+        let undo = w.resume_undo(OpId(1)).unwrap();
+        assert!(w.resume_undo(OpId(1)).is_none());
+        w.undo_done(undo, UndoOutcome::Restored).unwrap();
+
         // Without a fault the child runs to the end.
         let dir = TempDir::new("crash-none");
-        let (code, path) = run(&dir, &[]);
+        let code = run(&dir, &[]);
         assert_eq!(code, Some(0));
-        assert_eq!(read(&path).unwrap().state.phase(), Phase::Committed);
+        let seen = read(&dir.session).unwrap();
+        assert_eq!(seen.state.phase(), Phase::Committed);
+        assert_eq!(seen.state.undo_in_progress().count(), 0);
     }
 
     #[test]
     fn a_pause_holds_the_writer_after_each_flushed_intent() {
         let dir = TempDir::new("pause");
-        let (code, path) = run(&dir, &[(fault::ENV_PAUSE, "intent.flushed:150")]);
+        let code = run(&dir, &[(fault::ENV_PAUSE, "intent.flushed:150")]);
         assert_eq!(code, Some(0));
-        let elapsed: u64 = std::fs::read_to_string(path.with_file_name("elapsed-ms"))
+        let elapsed: u64 = std::fs::read_to_string(dir.session.path().join("elapsed-ms"))
             .unwrap()
             .parse()
             .unwrap();

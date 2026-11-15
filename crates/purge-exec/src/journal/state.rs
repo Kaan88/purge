@@ -130,6 +130,13 @@ pub enum Violation {
     /// A second `expire` of the same class for an op.
     #[error("op {0}: expired twice")]
     DuplicateExpire(OpId),
+    /// An `undo_intent` for an op whose kept data expiry deleted (an `expire` record of any class):
+    /// the inverse has nothing to restore from. An `undo_conflict` may still record that.
+    #[error("op {0}: undo after its data expired")]
+    UndoAfterExpire(OpId),
+    /// An `expire` while the op's undo is in progress: the inverse may still need the data.
+    #[error("op {0}: expire while its undo is in progress")]
+    ExpireDuringUndo(OpId),
 }
 
 /// Where a run stands.
@@ -261,15 +268,17 @@ fn pending_of(outcome: &ItemOutcome) -> Option<Pending> {
 /// record that breaks the rules and then leaves the state unchanged. The rules of the run are listed in
 /// the [module docs](crate::journal). The later records follow these:
 ///
-/// - `undo_intent`: the op has an intent and its undo has not settled. A second `undo_intent` while one is
-///   open is allowed (an undo restarted after a crash).
+/// - `undo_intent`: the op has an intent, its undo has not settled and none of its data expired
+///   ([`Violation::UndoAfterExpire`]). A second `undo_intent` while one is open is allowed (an undo
+///   restarted after a crash).
 /// - `undo_done`: after an open `undo_intent`, any outcome; without one, only `NothingToUndo` or
 ///   `AlreadyRestored`, for an op with an intent or a done. Not after the undo settled.
 /// - `undo_conflict`: ends the op's undo with or without an `undo_intent` before it, for an op with an
 ///   intent or a done; not after the undo settled. Failed and conflicting undos may be tried again.
 /// - `reconcile`: the op is pending ([`OpState::pending`]); `Retried` only for a held item, the other
 ///   results only for a boot-time move.
-/// - `expire`: after `commit` or `aborted`, for an op with an intent, once per retention class.
+/// - `expire`: after `commit` or `aborted`, for an op with an intent, once per retention class, not
+///   while the op's undo is in progress ([`Violation::ExpireDuringUndo`]).
 ///
 /// Undo and reconcile records may also come before `commit` or `aborted` (a crash rollback ends with
 /// `aborted` and reason `RolledBack`).
@@ -428,6 +437,14 @@ impl JournalState {
 
     /// Applies `record` after the records so far, or refuses it and changes nothing.
     pub fn apply(&mut self, record: &Record) -> Result<(), Violation> {
+        self.check(record)?;
+        self.record(record);
+        Ok(())
+    }
+
+    /// Whether `record` may follow the records so far ([`JournalState::apply`] would accept it).
+    /// Changes nothing.
+    pub fn check(&self, record: &Record) -> Result<(), Violation> {
         match record {
             Record::Header(_) => Err(Violation::DuplicateHeader),
             Record::Validated(v) => {
@@ -441,21 +458,6 @@ impl JournalState {
                 if self.ops.contains_key(&v.op) {
                     return Err(Violation::DuplicateValidated(v.op));
                 }
-                self.ops.insert(
-                    v.op,
-                    OpState {
-                        op: v.op,
-                        item: v.item.clone(),
-                        target: v.target.clone(),
-                        facts: v.facts.clone(),
-                        intent: None,
-                        outcome: None,
-                        reconciles: Vec::new(),
-                        undo: UndoState::NotStarted,
-                        undo_attempts: 0,
-                        expired: Vec::new(),
-                    },
-                );
                 Ok(())
             }
             Record::Intent(i) => {
@@ -480,10 +482,6 @@ impl JournalState {
                 if self.open_group_intents >= MAX_GROUP_INTENTS {
                     return Err(Violation::GroupFull(i.op));
                 }
-                self.known_mut(i.op).intent = Some(i.clone());
-                self.phase = Phase::Running;
-                self.open_group_intents += 1;
-                self.open_intents += 1;
                 Ok(())
             }
             Record::Done(d) => {
@@ -496,15 +494,8 @@ impl JournalState {
                 if d.item != s.item {
                     return Err(Violation::ItemMismatch(d.op));
                 }
-                let had_intent = s.intent.is_some();
-                if !had_intent && !d.outcome.allowed_without_intent() {
+                if s.intent.is_none() && !d.outcome.allowed_without_intent() {
                     return Err(Violation::DoneWithoutIntent(d.op));
-                }
-                self.known_mut(d.op).outcome = Some(d.outcome.clone());
-                self.phase = Phase::Running;
-                self.counts.record(&d.outcome);
-                if had_intent {
-                    self.open_intents -= 1;
                 }
                 Ok(())
             }
@@ -522,8 +513,6 @@ impl JournalState {
                         ops: g.ops,
                     });
                 }
-                self.groups_closed = expected_group;
-                self.open_group_intents = 0;
                 Ok(())
             }
             Record::Commit(c) => {
@@ -538,16 +527,9 @@ impl JournalState {
                 if c.counts != self.counts {
                     return Err(Violation::CountsMismatch);
                 }
-                self.commit = Some(c.clone());
-                self.phase = Phase::Committed;
                 Ok(())
             }
-            Record::Aborted(a) => {
-                self.run_open("aborted")?;
-                self.aborted = Some(a.clone());
-                self.phase = Phase::Aborted;
-                Ok(())
-            }
+            Record::Aborted(_) => self.run_open("aborted"),
             Record::UndoIntent(u) => {
                 let s = self.known(u.op)?;
                 if s.intent.is_none() {
@@ -556,9 +538,10 @@ impl JournalState {
                 if s.undo.is_settled() {
                     return Err(Violation::UndoSettled(u.op));
                 }
-                let s = self.known_mut(u.op);
-                s.undo = UndoState::InProgress;
-                s.undo_attempts = s.undo_attempts.saturating_add(1);
+                // Expiry deleted (some of) what the inverse would restore from.
+                if !s.expired.is_empty() {
+                    return Err(Violation::UndoAfterExpire(u.op));
+                }
                 Ok(())
             }
             Record::UndoDone(u) => {
@@ -577,7 +560,6 @@ impl JournalState {
                         return Err(Violation::UndoDoneWithoutIntent(u.op));
                     }
                 }
-                self.known_mut(u.op).undo = UndoState::Finished(u.outcome.clone());
                 Ok(())
             }
             Record::UndoConflict(c) => {
@@ -588,10 +570,9 @@ impl JournalState {
                 if s.intent.is_none() && s.outcome.is_none() {
                     return Err(Violation::UndoNotApplicable(c.op));
                 }
-                self.known_mut(c.op).undo = UndoState::Conflict(c.conflict.clone());
                 Ok(())
             }
-            Record::Reconcile(r) => self.reconcile(r),
+            Record::Reconcile(r) => self.check_reconcile(r),
             Record::Expire(e) => {
                 if !self.is_finished() {
                     return Err(Violation::ExpireBeforeFinish(e.op));
@@ -603,13 +584,82 @@ impl JournalState {
                 if s.expired.contains(&e.class) {
                     return Err(Violation::DuplicateExpire(e.op));
                 }
-                self.known_mut(e.op).expired.push(e.class);
+                // An undo in progress may still need the data.
+                if s.undo == UndoState::InProgress {
+                    return Err(Violation::ExpireDuringUndo(e.op));
+                }
                 Ok(())
             }
         }
     }
 
-    fn reconcile(&mut self, r: &Reconcile) -> Result<(), Violation> {
+    /// Applies a record [`JournalState::check`] accepted (the writer checks, writes, and only then
+    /// applies, so that its state never runs ahead of the file).
+    pub(super) fn record(&mut self, record: &Record) {
+        match record {
+            Record::Header(_) => {}
+            Record::Validated(v) => {
+                self.ops.insert(
+                    v.op,
+                    OpState {
+                        op: v.op,
+                        item: v.item.clone(),
+                        target: v.target.clone(),
+                        facts: v.facts.clone(),
+                        intent: None,
+                        outcome: None,
+                        reconciles: Vec::new(),
+                        undo: UndoState::NotStarted,
+                        undo_attempts: 0,
+                        expired: Vec::new(),
+                    },
+                );
+            }
+            Record::Intent(i) => {
+                self.known_mut(i.op).intent = Some(i.clone());
+                self.phase = Phase::Running;
+                self.open_group_intents += 1;
+                self.open_intents += 1;
+            }
+            Record::Done(d) => {
+                let s = self.known_mut(d.op);
+                let had_intent = s.intent.is_some();
+                s.outcome = Some(d.outcome.clone());
+                self.phase = Phase::Running;
+                self.counts.record(&d.outcome);
+                if had_intent {
+                    self.open_intents -= 1;
+                }
+            }
+            Record::GroupEnd(_) => {
+                self.groups_closed += 1;
+                self.open_group_intents = 0;
+            }
+            Record::Commit(c) => {
+                self.commit = Some(c.clone());
+                self.phase = Phase::Committed;
+            }
+            Record::Aborted(a) => {
+                self.aborted = Some(a.clone());
+                self.phase = Phase::Aborted;
+            }
+            Record::UndoIntent(u) => {
+                let s = self.known_mut(u.op);
+                s.undo = UndoState::InProgress;
+                s.undo_attempts = s.undo_attempts.saturating_add(1);
+            }
+            Record::UndoDone(u) => {
+                self.known_mut(u.op).undo = UndoState::Finished(u.outcome.clone());
+            }
+            Record::UndoConflict(c) => {
+                self.known_mut(c.op).undo = UndoState::Conflict(c.conflict.clone());
+            }
+            Record::Reconcile(r) => self.known_mut(r.op).reconciles.push(r.result.clone()),
+            Record::Expire(e) => self.known_mut(e.op).expired.push(e.class),
+        }
+    }
+
+    fn check_reconcile(&self, r: &Reconcile) -> Result<(), Violation> {
         let pending = self.known(r.op)?.pending();
         let fits = match (pending, &r.result) {
             (None, _) => return Err(Violation::NotPending(r.op)),
@@ -621,7 +671,6 @@ impl JournalState {
         if !fits {
             return Err(Violation::ReconcileMismatch(r.op));
         }
-        self.known_mut(r.op).reconciles.push(r.result.clone());
         Ok(())
     }
 }

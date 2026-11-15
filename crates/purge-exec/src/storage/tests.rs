@@ -612,11 +612,18 @@ fn session_files_are_created_new_and_checked_on_open() {
     let session = roots.create_session().unwrap();
     let started = session.id().started().to_unix_secs();
     assert!((sys::now().to_unix_secs() - started).abs() < 120);
-    let (path, mut file) = session.create_file(JOURNAL_FILE).unwrap();
+    let mut file = session.create_file(JOURNAL_FILE).unwrap();
     file.write_all(b"{}\n").unwrap();
+    let path = file.report_path();
+    let created_id = file.file_id();
     drop(file);
     assert_eq!(path, session.path().join(JOURNAL_FILE));
-    assert_eq!(session.open_file(JOURNAL_FILE).unwrap(), path);
+    let mut opened = session.open_file(JOURNAL_FILE).unwrap();
+    assert_eq!(opened.report_path(), path);
+    assert_eq!(opened.file_id(), created_id);
+    assert_eq!(opened.len_at_open(), 3);
+    assert_eq!(opened.read_all(16).unwrap(), b"{}\n");
+    drop(opened);
     assert!(matches!(
         session.create_file(JOURNAL_FILE),
         Err(StorageError::Io {
@@ -631,8 +638,13 @@ fn session_files_are_created_new_and_checked_on_open() {
         backup_rel(BackupKind::Definition, OpId(7)),
         r"def\000007.json"
     );
-    let (backup, _) = session.create_file(&rel).unwrap();
-    assert_eq!(backup, session.path().join(r"reg\000042.regbackup.json"));
+    let backup = session.create_file(&rel).unwrap();
+    assert_eq!(
+        backup.report_path(),
+        session.path().join(r"reg\000042.regbackup.json")
+    );
+    assert_eq!(backup.rel(), rel);
+    drop(backup);
     session.open_file(&rel).unwrap();
     assert!(matches!(
         session.open_file(r"def\000001.json"),
@@ -654,6 +666,8 @@ fn session_files_are_created_new_and_checked_on_open() {
         r"\x",
         "x:stream",
         "na me",
+        "reg",
+        "def",
     ] {
         assert!(
             matches!(session.create_file(bad), Err(StorageError::InvalidPath(_))),
@@ -1038,4 +1052,231 @@ fn other_volume_gets_its_own_hidden_quarantine() {
     let session_q = op.path().parent().unwrap().to_path_buf();
     drop((op, mover));
     std::fs::remove_dir_all(&session_q).unwrap();
+}
+
+/// S1: a store file is read and written through the handle that was checked. While it is open, the
+/// name cannot be pointed at another file; what is read is what was checked.
+#[test]
+fn store_files_are_used_through_the_checked_handle() {
+    let (s, roots) = fixture("handle");
+    let session = roots.create_session().unwrap();
+    let rel = backup_rel(BackupKind::Registry, OpId(1));
+    let mut file = session.create_file(&rel).unwrap();
+    file.write_all(b"checked").unwrap();
+    file.sync().unwrap();
+    file.sync_dir().unwrap();
+    assert_eq!(file.size().unwrap(), 7);
+    let path = file.report_path();
+    drop(file);
+
+    let mut opened = session.open_file(&rel).unwrap();
+    // Swapping the name for another file fails while the checked handle is open.
+    std::fs::write(s.path("other.json"), b"planted").unwrap();
+    assert!(std::fs::rename(s.path("other.json"), &path).is_err());
+    assert!(std::fs::rename(&path, s.path("moved.json")).is_err());
+    assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+    assert_eq!(opened.read_all(1 << 10).unwrap(), b"checked");
+    drop(opened);
+
+    // The reader's limit is checked before anything is read.
+    let mut opened = session.open_file(&rel).unwrap();
+    assert!(matches!(
+        opened.read_all(6),
+        Err(StorageError::TooLarge {
+            bytes: 7,
+            max: 6,
+            ..
+        })
+    ));
+    // Only a file the caller created can be discarded through its handle.
+    assert!(matches!(
+        opened.discard(),
+        Err(StorageError::Io {
+            source: FsError::WrongKind,
+            ..
+        })
+    ));
+    assert!(path.exists());
+    let created = session
+        .create_file(&backup_rel(BackupKind::Registry, OpId(2)))
+        .unwrap();
+    let created_path = created.report_path();
+    created.discard().unwrap();
+    assert!(!created_path.exists());
+    // The name is free again.
+    session
+        .create_file(&backup_rel(BackupKind::Registry, OpId(2)))
+        .unwrap();
+}
+
+/// M1: a process holding the index open without the sharing the store needs makes the index
+/// busy, never malformed or replaced by an empty one.
+#[test]
+fn an_index_held_open_by_another_process_is_busy() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let (_s, roots) = fixture("busy");
+    let session = roots.create_session().unwrap();
+    let written = roots
+        .update_index(|index| index.upsert(summary(session.id().clone(), 5, 10)))
+        .unwrap();
+
+    // A reader that shares only reading: the index cannot be replaced.
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(roots.index_path())
+        .unwrap();
+    let err = roots
+        .update_index(|index| index.upsert(summary(session.id().clone(), 5, 20)))
+        .unwrap_err();
+    assert!(matches!(err, StorageError::IndexBusy { .. }), "{err}");
+    assert!(err.is_index_unavailable());
+    drop(holder);
+    assert_eq!(roots.read_index().unwrap(), written);
+
+    // A holder that shares nothing: the index cannot be read either.
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(roots.index_path())
+        .unwrap();
+    let err = roots.read_index().unwrap_err();
+    assert!(matches!(err, StorageError::IndexBusy { .. }), "{err}");
+    drop(holder);
+    assert_eq!(roots.read_index().unwrap(), written);
+}
+
+/// M2: an index that is missing while sessions exist (rejected and renamed aside, or deleted) is
+/// lost, never read as an empty index; writing a rebuilt one ends that.
+#[test]
+fn a_missing_index_with_sessions_is_lost_not_empty() {
+    let (s, roots) = fixture("lost");
+    let session = roots.create_session().unwrap();
+    let written = roots
+        .update_index(|index| index.upsert(summary(session.id().clone(), 5, 10)))
+        .unwrap();
+    std::fs::hard_link(roots.index_path(), s.path("second-name.json")).unwrap();
+    assert!(matches!(
+        roots.read_index(),
+        Err(StorageError::Integrity {
+            failure: IntegrityFailure::HardLinked { .. },
+            renamed_to: Some(_),
+            ..
+        })
+    ));
+    for _ in 0..2 {
+        let err = roots.read_index().unwrap_err();
+        assert!(matches!(err, StorageError::IndexLost { .. }), "{err}");
+        assert!(err.is_index_unavailable());
+    }
+    assert!(matches!(
+        roots.update_index(|_| {}),
+        Err(StorageError::IndexLost { .. })
+    ));
+    assert!(!roots.index_path().exists());
+    roots.write_index(&written).unwrap();
+    assert_eq!(roots.read_index().unwrap(), written);
+
+    // Without any session, a missing index is an empty one (a fresh install).
+    let (_s, empty) = fixture("lost-empty");
+    std::fs::remove_file(empty.index_path()).unwrap();
+    assert_eq!(empty.read_index().unwrap(), SessionIndex::default());
+}
+
+/// M3: a volume root that is a reparse point is refused before anything is created through it.
+#[test]
+fn a_volume_root_that_is_a_junction_is_refused() {
+    let (s, roots) = fixture("rootjx");
+    let canary = Canary::new(s.path("elsewhere"));
+    junction(&s.path("voljx"), &canary.0);
+    let roots = roots.with_volume_probe(Arc::new(FakeVolumes(vec![
+        fake_volume(&s.0, true, "NTFS", 100 << 30),
+        fake_volume(&s.path("voljx"), true, "NTFS", 100 << 30),
+    ])));
+    let session = roots.create_session().unwrap();
+    let err = session
+        .create_op_dir(&s.path(r"voljx\app\a.txt"), real_serial(&s.0), OpId(1))
+        .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            StorageError::CannotBackUp {
+                reason: CannotBackUpReason::Store(inner),
+                ..
+            } if matches!(
+                inner.as_ref(),
+                StorageError::VolumeRoot {
+                    failure: IntegrityFailure::ReparsePoint { .. },
+                    ..
+                }
+            )
+        ),
+        "{err}"
+    );
+    canary.intact();
+}
+
+/// M4: `.purge-q` is created only at a volume root that nobody but Administrators and SYSTEM can
+/// take it away from, and (under the strict policy) only at a drive root.
+#[test]
+fn a_volume_root_others_could_rearrange_gets_no_quarantine() {
+    let (s, roots) = fixture("rootacl");
+    let me = purge_win::sid::current_user_sid().unwrap();
+    let root = s.path("volbu");
+    // Users may delete children of the root: they could rename `.purge-q` away and plant another.
+    fs_write::create_dir_secure(
+        &secure::extended_path(&root).unwrap(),
+        &format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{me})(A;;0x100040;;;BU)"),
+    )
+    .unwrap();
+    let roots = roots.with_volume_probe(Arc::new(FakeVolumes(vec![
+        fake_volume(&s.0, true, "NTFS", 100 << 30),
+        fake_volume(&root, true, "NTFS", 100 << 30),
+    ])));
+    let session = roots.create_session().unwrap();
+    let err = session
+        .create_op_dir(&root.join(r"app\a.txt"), real_serial(&s.0), OpId(1))
+        .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            StorageError::CannotBackUp {
+                reason: CannotBackUpReason::Store(inner),
+                ..
+            } if matches!(
+                inner.as_ref(),
+                StorageError::VolumeRoot {
+                    failure: IntegrityFailure::ForeignAccess { sid: Some(sid), mask },
+                    ..
+                } if sid == "S-1-5-32-545" && mask & 0x40 != 0
+            )
+        ),
+        "{err}"
+    );
+    assert_eq!(names(&root), Vec::<String>::new());
+
+    // Under the strict policy a volume mounted in a folder gets no `.purge-q` at all; nothing on
+    // disk is looked at.
+    let SessionDir { id, dir, .. } = session;
+    let strict = StorageRoots::new(roots.data_root())
+        .unwrap()
+        .with_volume_probe(Arc::new(FakeVolumes(vec![
+            fake_volume(&s.0, true, "NTFS", 100 << 30),
+            fake_volume(&s.path("volb"), true, "NTFS", 100 << 30),
+        ])));
+    let strict_session = SessionDir {
+        roots: strict,
+        id,
+        dir,
+    };
+    assert_eq!(
+        strict_session
+            .create_op_dir(&s.path(r"volb\app\a.txt"), real_serial(&s.0), OpId(1))
+            .unwrap_err(),
+        StorageError::CannotBackUp {
+            path: s.path(r"volb\app\a.txt"),
+            reason: CannotBackUpReason::MountedFolder,
+        }
+    );
+    assert_eq!(names(&s.path("volb")), Vec::<String>::new());
 }

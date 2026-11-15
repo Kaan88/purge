@@ -46,7 +46,15 @@
 //! **Durability.** The header is flushed (`FlushFileBuffers`) together with its directory; every `intent`
 //! is flushed before [`JournalWriter::intent`] returns the token the action needs; `done` and `validated`
 //! records are flushed with the next intent, `group_end` (written and flushed after at most 64 intents),
-//! `commit` or `aborted`. Undo, reconcile and expire records are flushed one by one.
+//! `commit` or `aborted`, except a `done` whose outcome is
+//! [`ItemOutcome::PendingReboot`](purge_model::exec::op::ItemOutcome::PendingReboot), which is flushed at
+//! once: its boot-move pair is the only record of the registration. Undo, reconcile and expire records
+//! are flushed one by one.
+//!
+//! **Through the store only.** The journal is created, opened and read only through a
+//! [`SessionDir`](crate::storage::SessionDir): relative to the session directory's checked handle,
+//! checked on the handle it is then read or written through. Its header must name that session
+//! ([`JournalError::WrongSession`]), and it is at most [`MAX_JOURNAL_BYTES`] long.
 //!
 //! # Write-ahead by construction
 //!
@@ -57,8 +65,9 @@
 //!
 //! # Hashing
 //!
-//! [`sha256_file`] streams a file into SHA-256 (backups, definition files); [`verify_backup`] checks a
-//! [`BackupRef`](purge_model::exec::op::BackupRef) before undo reads the file.
+//! [`sha256_reader`] streams a reader (a [`StoreFile`](crate::storage::StoreFile)) into SHA-256 (backups,
+//! definition files); [`verify_backup`] checks a [`BackupRef`](purge_model::exec::op::BackupRef) before
+//! undo reads the file, opening it through the store.
 
 mod frame;
 mod hash;
@@ -69,7 +78,7 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use hash::{BackupCheckError, sha256_bytes, sha256_file, sha256_reader, verify_backup};
+pub use hash::{BackupCheckError, sha256_bytes, sha256_reader, verify_backup};
 pub use reader::{JournalRead, parse, read};
 pub use state::{JournalState, OpState, OpStatus, Pending, Phase, UndoState, Violation};
 pub use writer::{IntentToken, JournalWriter, UndoToken};
@@ -77,7 +86,11 @@ pub use writer::{IntentToken, JournalWriter, UndoToken};
 pub use purge_model::exec::journal::MAX_GROUP_INTENTS;
 
 /// The file name of a session's journal inside its session directory.
-pub const JOURNAL_FILE_NAME: &str = "journal.jsonl";
+pub const JOURNAL_FILE_NAME: &str = crate::storage::JOURNAL_FILE;
+
+/// The largest journal the reader reads and the writer writes (256 MiB). A run of thousands of items
+/// stays far below; the limit keeps a planted or runaway file from exhausting memory.
+pub const MAX_JOURNAL_BYTES: u64 = 256 << 20;
 
 /// Why a journal could not be read or written.
 #[derive(Debug, thiserror::Error)]
@@ -91,18 +104,29 @@ pub enum JournalError {
         #[source]
         source: std::io::Error,
     },
-    /// Creating, flushing or inspecting the journal file failed.
-    #[error("journal file operation failed while {context}: {source}")]
-    Fs {
-        /// What was being done.
-        context: &'static str,
-        /// The error.
-        #[source]
-        source: purge_win::fs_write::FsError,
+    /// The store refused the journal or its directory (a directory, a reparse point or a second hard
+    /// link at the journal's name, a foreign owner or DACL, a failed check of the chain from the data
+    /// root), could not create or open it (already exists, missing, in use), or flushing it failed.
+    #[error("the store refused the journal: {0}")]
+    Store(crate::storage::StorageError),
+    /// The header names another session than the directory the journal is in (a journal copied
+    /// between sessions, or a header built for another session).
+    #[error("the journal's header names session {header}, its directory is session {dir}")]
+    WrongSession {
+        /// The session the header names.
+        header: purge_model::exec::session::SessionId,
+        /// The session directory's id.
+        dir: purge_model::exec::session::SessionId,
     },
-    /// The journal path is not a plain file with one link (a directory, a reparse point, a hard link).
-    #[error("the journal is not a plain file with a single link")]
-    NotPlainFile,
+    /// The journal is, or would become, larger than [`MAX_JOURNAL_BYTES`]. Nothing was read or
+    /// written.
+    #[error("the journal would hold {bytes} bytes, over the {max}-byte limit")]
+    TooLarge {
+        /// The size found or the size after the refused write.
+        bytes: u64,
+        /// The limit.
+        max: u64,
+    },
     /// The journal holds no complete line, so no header: nothing durable was written and no op ran.
     #[error(
         "the journal holds no complete header ({torn_bytes} bytes of an unfinished first line)"

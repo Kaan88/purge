@@ -1,20 +1,12 @@
 //! Reading a journal back: framing, chain, records and rules, with the torn-tail rule.
 
-use std::fs::{File, OpenOptions};
-use std::io::Read;
-use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-use std::path::Path;
-
 use purge_model::exec::journal::Record;
 use purge_model::exec::op::Sha256Hex;
-use purge_win::fs_write::FsError;
 
 use super::frame::{CHAIN_SEED, unframe};
-use super::hash::{
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
-};
 use super::state::{JournalState, Violation};
-use super::{Corruption, JournalError};
+use super::{Corruption, JournalError, MAX_JOURNAL_BYTES};
+use crate::storage::{FileMode, JOURNAL_FILE, SessionDir, StoreFile};
 
 /// A journal read back in full.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,17 +23,38 @@ pub struct JournalRead {
     pub head: Sha256Hex,
 }
 
-/// Reads the journal at `path` (see [`parse`]). The file is opened without following a reparse point and
-/// refused unless it is a plain file with one link; a writer may hold it open meanwhile.
-pub fn read(path: &Path) -> Result<JournalRead, JournalError> {
-    let mut file = open_plain(path, false)?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|source| JournalError::Io {
-            context: "reading the journal",
-            source,
-        })?;
-    parse(&bytes)
+/// Reads the journal of `session` (see [`parse`]) through the store: the file is opened relative to
+/// the session directory's checked handle and checked on that handle (a plain file with one link,
+/// not a reparse point, admin-only; a failing one is renamed aside), and a writer may hold it open
+/// meanwhile. Refuses a journal larger than [`MAX_JOURNAL_BYTES`] and one whose header names another
+/// session than the directory ([`JournalError::WrongSession`]).
+pub fn read(session: &SessionDir) -> Result<JournalRead, JournalError> {
+    let mut file = session
+        .open_file_with(JOURNAL_FILE, FileMode::ReadShared)
+        .map_err(JournalError::Store)?;
+    read_checked(session, &mut file)
+}
+
+/// Reads and parses the whole of an opened journal and checks that it belongs to `session`.
+pub(super) fn read_checked(
+    session: &SessionDir,
+    file: &mut StoreFile,
+) -> Result<JournalRead, JournalError> {
+    let bytes = file.read_all(MAX_JOURNAL_BYTES).map_err(|e| match e {
+        crate::storage::StorageError::TooLarge { bytes, max, .. } => {
+            JournalError::TooLarge { bytes, max }
+        }
+        e => JournalError::Store(e),
+    })?;
+    let read = parse(&bytes)?;
+    let header = read.state.session();
+    if header != session.id() {
+        return Err(JournalError::WrongSession {
+            header: header.clone(),
+            dir: session.id().clone(),
+        });
+    }
+    Ok(read)
 }
 
 /// Parses journal bytes: every `\n`-terminated line must frame, chain, parse and obey the rules; bytes
@@ -90,43 +103,4 @@ pub fn parse(bytes: &[u8]) -> Result<JournalRead, JournalError> {
         torn_tail,
         head: Sha256Hex::from(chain),
     })
-}
-
-/// Opens an existing journal without following a reparse point at its last component, and refuses
-/// anything but a plain file with one link. For writing, other handles may only read meanwhile (and an
-/// open by a second writer fails); for reading, a writer may hold it.
-pub(super) fn open_plain(path: &Path, write: bool) -> Result<File, JournalError> {
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .write(write)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .share_mode(if write {
-            FILE_SHARE_READ
-        } else {
-            FILE_SHARE_READ | FILE_SHARE_WRITE
-        });
-    let file = options.open(path).map_err(|source| JournalError::Io {
-        context: "opening the journal",
-        source,
-    })?;
-    let meta = file.metadata().map_err(|source| JournalError::Io {
-        context: "reading the journal's metadata",
-        source,
-    })?;
-    if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(JournalError::NotPlainFile);
-    }
-    // The handle above shares no delete access, so the name cannot move to another file while it is open:
-    // this second open by name sees the same file.
-    let facts = purge_win::fs::FileHandle::open(path)
-        .and_then(|h| h.metadata())
-        .map_err(|e| JournalError::Fs {
-            context: "checking the journal's link count",
-            source: FsError::from(e),
-        })?;
-    if facts.n_links != 1 || facts.reparse_tag != 0 || facts.is_dir {
-        return Err(JournalError::NotPlainFile);
-    }
-    Ok(file)
 }

@@ -29,6 +29,9 @@
 //! - Op directories are created by Purge only (create-new). `X:\.purge-q` is created with the `Store`
 //!   descriptor and marked hidden, system and not content indexed; one that fails the check (a user
 //!   pre-created it) is renamed aside and the volume is refused for the run ([`CannotBackUpReason`]).
+//!   It is created only at a drive root ([`CannotBackUpReason::MountedFolder`]) whose DACL lets
+//!   nobody but Administrators and SYSTEM rename it away or rewrite the root's DACL
+//!   ([`StorageError::VolumeRoot`], [`volume_root_verdict`]).
 //! - Same volume is proven by the volume serial of the source handle against the quarantine op
 //!   directory's handle.
 //! - The size cap is min(10 GiB, 5 % of the volume) per volume ([`check_cap`]); a run that would exceed
@@ -36,14 +39,24 @@
 //! - `sessions\index.json` is rewritten atomically: a temporary file created with the `Index`
 //!   descriptor, written and flushed, then renamed over the index inside the checked `sessions`
 //!   directory, which is flushed too. A crash leaves the old or the new index, never a torn one.
+//! - Files are never opened by path. Every file inside the layout (the index, its temporary file,
+//!   the journal, reports, backups, definitions) is created or opened with `NtCreateFile` relative
+//!   to the handle of its freshly checked directory, and its facts are checked on the handle that
+//!   is then used ([`StoreFile`]). Directories below a checked directory are created the same way.
+//! - The index is a convenience. A missing index while session directories exist is
+//!   [`StorageError::IndexLost`] (never an empty index), and an index held open by another process
+//!   is [`StorageError::IndexBusy`]; see [`StorageError::is_index_unavailable`] for what may go on
+//!   without it.
 
+mod at;
 mod cap;
 mod integrity;
 mod sys;
 
 use std::fmt;
-use std::io::Write;
-use std::os::windows::io::{AsHandle, BorrowedHandle};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::windows::io::{AsHandle, BorrowedHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,7 +64,7 @@ use std::time::Duration;
 use purge_guard::live::{StoreScope, StoreScopeError};
 use purge_model::exec::op::OpId;
 use purge_model::exec::session::{SessionId, SessionIndex, VolumeUsage};
-use purge_win::fs::{FileHandle, FileId, FileMeta};
+use purge_win::fs::{FileHandle, FileId};
 use purge_win::fs_write::{
     self, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_ATTRIBUTE_SYSTEM,
     FsError, MoveHandle,
@@ -60,8 +73,9 @@ use purge_win::secure;
 
 pub use cap::{CAP_ABSOLUTE_BYTES, CAP_VOLUME_PERCENT, CapExceeded, cap_bytes, check_cap};
 pub use integrity::{
-    IntegrityFailure, IntegrityPolicy, ObjectFacts, ObjectKind, SDDL_DATA_ROOT, SDDL_INDEX,
-    SDDL_SESSIONS, SDDL_STORE, SDDL_STORE_FILE, verdict,
+    IntegrityFailure, IntegrityPolicy, ObjectFacts, ObjectKind, ROOT_TAKEOVER_RIGHTS,
+    SDDL_DATA_ROOT, SDDL_INDEX, SDDL_SESSIONS, SDDL_STORE, SDDL_STORE_FILE, verdict,
+    volume_root_verdict,
 };
 
 // The three directory names of the layout that the guard's `StoreScope` derives the session's own
@@ -162,6 +176,63 @@ pub enum StorageError {
     /// A path or name the store does not hand out or accept.
     #[error("{0} is not a path the store accepts")]
     InvalidPath(String),
+    /// The session index is held open by another process without the sharing the store needs (a
+    /// backup or indexing tool, or any process that can read it: users may). The index was not
+    /// changed. See [`StorageError::is_index_unavailable`].
+    #[error("{} is held open by another process ({source}); the index was not changed", .path.display())]
+    IndexBusy {
+        /// The index path.
+        path: PathBuf,
+        /// The error of the last attempt.
+        source: FsError,
+    },
+    /// The session index is missing while session directories exist: it was rejected and renamed
+    /// aside, or removed. An empty index would hide every session and start the cap accounting at
+    /// zero, so it is never assumed; the caller rebuilds the index from the sessions' journals and
+    /// computes the cap from the directories meanwhile.
+    #[error("{} is missing while sessions exist; rebuild it from the session journals", .path.display())]
+    IndexLost {
+        /// The index path.
+        path: PathBuf,
+    },
+    /// A store file is larger than the reader accepts. Nothing of it was read.
+    #[error("{} has {bytes} bytes, over the {max}-byte limit", .path.display())]
+    TooLarge {
+        /// The file.
+        path: PathBuf,
+        /// Its size.
+        bytes: u64,
+        /// The limit.
+        max: u64,
+    },
+    /// The root of a volume would let someone other than Administrators and SYSTEM take its
+    /// `.purge-q` away (rename it, or rewrite the root's DACL), or is a reparse point. Nothing was
+    /// created on the volume.
+    #[error("the volume root {} {failure}", .root.display())]
+    VolumeRoot {
+        /// The volume root.
+        root: PathBuf,
+        /// What is wrong with it.
+        failure: IntegrityFailure,
+    },
+}
+
+impl StorageError {
+    /// Whether the error is about the session index only: it is busy ([`StorageError::IndexBusy`]),
+    /// lost ([`StorageError::IndexLost`]) or unreadable ([`StorageError::IndexMalformed`]).
+    ///
+    /// Undo, crash recovery, reconcile and expiry do not need the index: they open the session
+    /// directories and journals, act, and update the index afterwards when they can. A new run
+    /// needs it for the size cap, so it stops with this error until the index is rebuilt (the cap
+    /// may instead be computed from the quarantine directories).
+    pub fn is_index_unavailable(&self) -> bool {
+        matches!(
+            self,
+            StorageError::IndexBusy { .. }
+                | StorageError::IndexLost { .. }
+                | StorageError::IndexMalformed { .. }
+        )
+    }
 }
 
 fn aside_text(renamed_to: Option<&Path>, rename_error: Option<&FsError>) -> String {
@@ -198,9 +269,14 @@ pub enum CannotBackUpReason {
         quarantine_serial: u64,
     },
     /// The volume's quarantine directory failed its check (it was renamed aside when possible) or
-    /// could not be created or opened.
+    /// could not be created or opened, or the volume root does not keep it safe
+    /// ([`StorageError::VolumeRoot`]).
     #[error("{0}")]
     Store(Box<StorageError>),
+    /// The volume is mounted in a folder, not at a drive root: its `.purge-q` would not be at the
+    /// root of a drive, which the guard's store scope refuses.
+    #[error("the volume is mounted in a folder, not at a drive root")]
+    MountedFolder,
 }
 
 /// Facts about the volume holding a path.
@@ -283,6 +359,13 @@ fn same_path(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
+/// Whether `root` is the root of a drive, `X:\` (with or without the `\\?\` prefix).
+fn is_drive_root(root: &Path) -> bool {
+    let text = plain(root).to_string_lossy().into_owned();
+    let bytes = text.as_bytes();
+    bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
+}
+
 /// A file name Purge generates: ASCII letters, digits, `.`, `_`, `-`; not `.`/`..`, no trailing dot.
 fn is_store_name(name: &str) -> bool {
     !name.is_empty()
@@ -339,6 +422,186 @@ impl CheckedDir {
 impl AsHandle for CheckedDir {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
+    }
+}
+
+impl CheckedDir {
+    fn as_parent(&self) -> Parent<'_> {
+        Parent {
+            handle: &self.handle,
+            final_path: &self.final_path,
+        }
+    }
+}
+
+/// The directory an object is checked in: the handle the object is opened, created and renamed
+/// aside relative to, and the final path the object's own final path must extend by its name.
+#[derive(Debug, Clone, Copy)]
+struct Parent<'a> {
+    handle: &'a FileHandle,
+    final_path: &'a str,
+}
+
+/// A file of the store, created or opened relative to the handle of its freshly checked directory,
+/// whose facts (kind, reparse tag, link count, owner, DACL, final path) were checked on this very
+/// handle.
+///
+/// There is no call that returns a path to open: the handle is the file. [`StoreFile::report_path`]
+/// names the file for reports and messages only. Reads, writes and seeks go to the handle
+/// ([`Read`], [`Write`], [`Seek`]).
+#[derive(Debug)]
+pub struct StoreFile {
+    file: File,
+    dir: CheckedDir,
+    leaf: String,
+    rel: String,
+    id: FileId,
+    len: u64,
+    created: bool,
+}
+
+impl StoreFile {
+    /// The session-relative name the file was created or opened by (`journal.jsonl`,
+    /// `reg\000042.regbackup.json`, ...).
+    pub fn rel(&self) -> &str {
+        &self.rel
+    }
+
+    /// Where the file is, for reports and error messages only. Never open it by this path: the
+    /// object at the path may differ from the one this handle is on.
+    pub fn report_path(&self) -> PathBuf {
+        self.dir.path.join(&self.leaf)
+    }
+
+    /// Volume serial and file id of the file.
+    pub fn file_id(&self) -> FileId {
+        self.id
+    }
+
+    /// The file's size when it was opened (0 for a file this value created).
+    pub fn len_at_open(&self) -> u64 {
+        self.len
+    }
+
+    /// The open file.
+    pub fn file(&self) -> &File {
+        &self.file
+    }
+
+    /// The open file, for writing.
+    pub fn file_mut(&mut self) -> &mut File {
+        &mut self.file
+    }
+
+    /// The open file, giving up the directory handle (no [`StoreFile::sync_dir`] afterwards).
+    pub fn into_file(self) -> File {
+        self.file
+    }
+
+    /// The whole file from its start, refusing one larger than `max` bytes
+    /// ([`StorageError::TooLarge`]) before and while reading.
+    pub fn read_all(&mut self, max: u64) -> Result<Vec<u8>, StorageError> {
+        let too_large = |bytes: u64, path: PathBuf| StorageError::TooLarge { path, bytes, max };
+        let size = self.size()?;
+        if size > max {
+            return Err(too_large(size, self.report_path()));
+        }
+        self.file
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| io("seek in", &self.report_path(), os_error(&e)))?;
+        let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+        (&mut self.file)
+            .take(max.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|e| io("read", &self.report_path(), os_error(&e)))?;
+        let read = bytes.len() as u64;
+        if read > max {
+            return Err(too_large(read, self.report_path()));
+        }
+        Ok(bytes)
+    }
+
+    /// The file's current size, read from the handle.
+    pub fn size(&self) -> Result<u64, StorageError> {
+        Ok(at::facts(&self.file)
+            .map_err(|e| io("read the size of", &self.report_path(), e))?
+            .size)
+    }
+
+    /// Flushes the file to disk (`FlushFileBuffers`); needs a handle with write access (a created
+    /// file).
+    pub fn sync(&self) -> Result<(), StorageError> {
+        fs_write::flush(&self.file).map_err(|e| io("flush", &self.report_path(), e))
+    }
+
+    /// Flushes the directory the file was created in, through that directory's checked handle, so
+    /// that the file's creation is durable.
+    pub fn sync_dir(&self) -> Result<(), StorageError> {
+        at::flush_dir_at(&self.dir.handle).map_err(|e| io("flush", &self.dir.path, e))
+    }
+
+    /// Deletes a file this value created (it holds no verified content), through its own handle;
+    /// the name goes when the handle closes, here. A file that was opened, not created, is refused.
+    pub fn discard(self) -> Result<(), StorageError> {
+        if !self.created {
+            return Err(io("discard", &self.report_path(), FsError::WrongKind));
+        }
+        at::dispose(&self.file).map_err(|e| io("delete", &self.report_path(), e))
+    }
+}
+
+impl Read for StoreFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file.read(buf)
+    }
+}
+
+impl Write for StoreFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl Seek for StoreFile {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.file.seek(pos)
+    }
+}
+
+impl AsHandle for StoreFile {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        self.file.as_handle()
+    }
+}
+
+/// How a session file is opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileMode {
+    /// Read; others may read meanwhile, nobody may write or delete it.
+    Read,
+    /// Read while a writer may hold the file (the journal): others may read, write and delete.
+    ReadShared,
+    /// Read and write; others may only read meanwhile, so a second writer is excluded.
+    Append,
+}
+
+impl FileMode {
+    fn open(self) -> at::Open<'static> {
+        let (access, share) = match self {
+            FileMode::Read => (at::GENERIC_READ, at::SHARE_READ),
+            FileMode::ReadShared => (at::GENERIC_READ, at::SHARE_ALL),
+            FileMode::Append => (at::GENERIC_READ | at::GENERIC_WRITE, at::SHARE_READ),
+        };
+        at::Open {
+            access: access | at::READ_CONTROL,
+            share,
+            create: None,
+            kind: at::Kind::File,
+        }
     }
 }
 
@@ -422,6 +685,9 @@ fn split_rel(rel: &str) -> Result<(Option<&str>, &str), StorageError> {
         return Err(invalid());
     }
     match parts.as_slice() {
+        // A session-level name never names one of the subdirectories: the store would check the
+        // directory as a file and rename it aside.
+        [leaf] if *leaf == REG_BACKUP_DIR || *leaf == DEF_DIR => Err(invalid()),
         [leaf] => Ok((None, leaf)),
         [sub, leaf] if *sub == REG_BACKUP_DIR || *sub == DEF_DIR => Ok((Some(sub), leaf)),
         _ => Err(invalid()),
@@ -452,7 +718,7 @@ enum Create {
 #[derive(Debug)]
 struct Inspected {
     handle: FileHandle,
-    meta: FileMeta,
+    facts: at::Facts,
     final_path: String,
 }
 
@@ -697,9 +963,12 @@ impl StorageRoots {
         Ok(listing)
     }
 
-    /// Reads `sessions\index.json` after checking it (a file, not a reparse point, one link, admin
-    /// owner, protected DACL that gives others at most read). A missing index reads as empty, like the
-    /// installer's `{}`.
+    /// Reads `sessions\index.json` through a handle opened relative to the checked `sessions`
+    /// directory, after checking it on that handle (a file, not a reparse point, one link, admin
+    /// owner, protected DACL that gives others at most read). A missing index reads as empty, like
+    /// the installer's `{}`, only while no session directory exists; otherwise it is
+    /// [`StorageError::IndexLost`]. An index another process holds without read sharing is
+    /// [`StorageError::IndexBusy`].
     pub fn read_index(&self) -> Result<SessionIndex, StorageError> {
         let layout = self.layout()?;
         self.read_index_in(&layout.sessions)
@@ -755,10 +1024,40 @@ impl StorageRoots {
     }
 
     /// Creates the directory `path` with the descriptor of `kind`. `Ok(false)` when something already
-    /// has the name (it is not adopted here; the caller checks it).
+    /// has the name (it is not adopted here; the caller checks it). By path: only for the data root
+    /// of a test install, which has no checked parent.
+    #[cfg(any(test, feature = "test-support"))]
     fn make_dir(&self, path: &Path, kind: ObjectKind) -> Result<bool, StorageError> {
         match fs_write::create_dir_secure(&ext(path)?, &self.policy.sddl_for(kind)) {
             Ok(()) => Ok(true),
+            Err(FsError::AlreadyExists) => Ok(false),
+            Err(e) => Err(io("create", path, e)),
+        }
+    }
+
+    /// Creates the directory `leaf` in the directory behind `parent` with the descriptor of `kind`,
+    /// relative to that handle. `Ok(false)` when something already has the name (it is not adopted
+    /// here; the caller checks it).
+    fn make_dir_at(
+        &self,
+        parent: &FileHandle,
+        path: &Path,
+        leaf: &str,
+        kind: ObjectKind,
+    ) -> Result<bool, StorageError> {
+        let sddl = self.policy.sddl_for(kind);
+        let created = at::open_at(
+            parent,
+            leaf,
+            at::Open {
+                access: at::FILE_READ_ATTRIBUTES,
+                share: at::SHARE_ALL,
+                create: Some(&sddl),
+                kind: at::Kind::Dir,
+            },
+        );
+        match created {
+            Ok(_) => Ok(true),
             Err(FsError::AlreadyExists) => Ok(false),
             Err(e) => Err(io("create", path, e)),
         }
@@ -777,10 +1076,12 @@ impl StorageRoots {
         let path = parent.path.join(leaf);
         let created = match create {
             Create::Never => false,
-            Create::IfAbsent | Create::New => self.make_dir(&path, kind)?,
+            Create::IfAbsent | Create::New => {
+                self.make_dir_at(&parent.handle, &path, leaf, kind)?
+            }
         };
         // An existing object is checked even under `New`, so that a planted one is renamed aside.
-        let Some(inspected) = self.inspect(&path, kind, Some(&parent.final_path))? else {
+        let Some(inspected) = self.inspect(&path, kind, Some(parent.as_parent()))? else {
             return Ok(None);
         };
         if create == Create::New && !created {
@@ -789,32 +1090,65 @@ impl StorageRoots {
         Ok(Some(checked(path, inspected)))
     }
 
-    /// Opens `path` without following a final reparse point and checks it as `kind`. `Ok(None)` when
-    /// nothing has the name. With `parent_final`, the handle's final path must equal it plus the
-    /// object's name. A definite failure renames the object aside.
+    /// Opens the directory `path` without following a final reparse point and checks it as `kind`.
+    /// `Ok(None)` when nothing has the name. With `parent`, the handle's final path must equal the
+    /// parent's plus the object's name, and a definite failure renames the object aside inside the
+    /// parent's handle.
     fn inspect(
         &self,
         path: &Path,
         kind: ObjectKind,
-        parent_final: Option<&str>,
+        parent: Option<Parent<'_>>,
     ) -> Result<Option<Inspected>, StorageError> {
         let handle = match secure::open_for_security(&ext(path)?) {
             Ok(h) => h,
             Err(e) if e.is_not_found() => return Ok(None),
             Err(e) => return Err(io("open", path, e)),
         };
-        let meta = handle
-            .metadata()
-            .map_err(|e| io("read the attributes of", path, e))?;
-        let final_path = handle
-            .final_path()
-            .map_err(|e| io("read the final path of", path, e))?;
-        if let Some(parent_final) = parent_final {
+        let (facts, final_path) = self.verify(path, kind, parent, &handle)?;
+        Ok(Some(Inspected {
+            handle,
+            facts,
+            final_path,
+        }))
+    }
+
+    /// Reads the facts of the object behind `handle` (opened at `path`, with `READ_CONTROL`) and
+    /// checks them as `kind`: final path below `parent`, then [`verdict`]. A definite failure
+    /// renames the object aside.
+    fn verify(
+        &self,
+        path: &Path,
+        kind: ObjectKind,
+        parent: Option<Parent<'_>>,
+        handle: &impl AsHandle,
+    ) -> Result<(at::Facts, String), StorageError> {
+        match self.check_handle(path, kind, parent, handle)? {
+            Ok(checked) => Ok(checked),
+            Err((failure, id)) => Err(reject(path, parent, Some(id), failure)),
+        }
+    }
+
+    /// [`StorageRoots::verify`] without the rename: a verdict failure is returned with the identity
+    /// it was read on, so that the caller can first close a handle that does not share delete
+    /// access (a file handle of the store) and then call [`reject`].
+    #[allow(clippy::type_complexity)]
+    fn check_handle(
+        &self,
+        path: &Path,
+        kind: ObjectKind,
+        parent: Option<Parent<'_>>,
+        handle: &impl AsHandle,
+    ) -> Result<Result<(at::Facts, String), (IntegrityFailure, FileId)>, StorageError> {
+        let facts = at::facts(handle).map_err(|e| io("read the attributes of", path, e))?;
+        let final_path =
+            at::final_path(handle).map_err(|e| io("read the final path of", path, e))?;
+        if let Some(parent) = parent {
             let leaf = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let expected = format!(r"{}\{leaf}", parent_final.trim_end_matches('\\'));
+            let expected = format!(r"{}\{leaf}", parent.final_path.trim_end_matches('\\'));
             if !same_path(Path::new(&expected), Path::new(&final_path)) {
                 return Err(StorageError::Integrity {
                     path: path.to_path_buf(),
@@ -828,41 +1162,142 @@ impl StorageRoots {
             }
         }
         // The descriptor of a reparse point is irrelevant: the tag alone refuses it.
-        let security = if meta.reparse_tag == 0 {
-            Some(
-                secure::handle_security(&handle)
-                    .map_err(|e| io("read the security of", path, e))?,
-            )
+        let security = if facts.reparse_tag == 0 {
+            Some(secure::handle_security(handle).map_err(|e| io("read the security of", path, e))?)
         } else {
             None
         };
-        let facts = ObjectFacts {
-            reparse_tag: meta.reparse_tag,
-            is_dir: meta.is_dir,
-            n_links: meta.n_links,
+        let object = ObjectFacts {
+            reparse_tag: facts.reparse_tag,
+            is_dir: facts.is_dir,
+            n_links: facts.n_links,
             owner: security.as_ref().and_then(|s| s.owner.clone()),
             dacl_protected: security.as_ref().is_some_and(|s| s.dacl_protected),
             dacl: security.and_then(|s| s.dacl),
         };
-        if let Err(failure) = verdict(&self.policy, kind, &facts) {
-            return Err(reject(path, Some(meta.file_id), failure));
+        if let Err(failure) = verdict(&self.policy, kind, &object) {
+            return Ok(Err((failure, facts.file_id)));
         }
-        Ok(Some(Inspected {
-            handle,
-            meta,
-            final_path,
-        }))
+        Ok(Ok((facts, final_path)))
+    }
+
+    /// Checks the store file `handle` (opened or created as `leaf` of `dir`) as `kind`. On a
+    /// definite failure the handle is closed first, because it does not share delete access, and
+    /// the file is then renamed aside if it is still the object checked.
+    fn verify_file(
+        &self,
+        dir: &CheckedDir,
+        path: &Path,
+        kind: ObjectKind,
+        handle: OwnedHandle,
+    ) -> Result<(File, at::Facts), StorageError> {
+        match self.check_handle(path, kind, Some(dir.as_parent()), &handle)? {
+            Ok((facts, _)) => Ok((File::from(handle), facts)),
+            Err((failure, id)) => {
+                drop(handle);
+                Err(reject(path, Some(dir.as_parent()), Some(id), failure))
+            }
+        }
+    }
+
+    /// Opens the existing file `leaf` of the checked directory `dir` relative to its handle with
+    /// `how`, and checks it as `kind` on that handle. `Ok(None)` when nothing has the name.
+    fn open_file_at(
+        &self,
+        dir: &CheckedDir,
+        leaf: &str,
+        kind: ObjectKind,
+        how: at::Open<'_>,
+    ) -> Result<Option<(File, at::Facts)>, StorageError> {
+        let path = dir.path.join(leaf);
+        let handle = match at::open_at(&dir.handle, leaf, how) {
+            Ok(h) => h,
+            Err(FsError::NotFound) => return Ok(None),
+            Err(e) => return Err(io("open", &path, e)),
+        };
+        self.verify_file(dir, &path, kind, handle).map(Some)
+    }
+
+    /// Creates the file `leaf` new in the checked directory `dir`, relative to its handle, with the
+    /// descriptor of `kind`, open for reading, writing and deleting (others may read), and checks
+    /// it as `kind` on that handle.
+    fn create_file_at(
+        &self,
+        dir: &CheckedDir,
+        leaf: &str,
+        kind: ObjectKind,
+    ) -> Result<(File, at::Facts), StorageError> {
+        let path = dir.path.join(leaf);
+        let sddl = self.policy.sddl_for(kind);
+        let handle = at::open_at(
+            &dir.handle,
+            leaf,
+            at::Open {
+                access: at::GENERIC_READ | at::GENERIC_WRITE | at::DELETE | at::READ_CONTROL,
+                share: at::SHARE_READ,
+                create: Some(&sddl),
+                kind: at::Kind::File,
+            },
+        )
+        .map_err(|e| io("create", &path, e))?;
+        self.verify_file(dir, &path, kind, handle)
+    }
+
+    /// The root of a volume other than the data root's, opened without following a reparse point.
+    /// With `for_create`, it must keep a `.purge-q` safe: not a reparse point, and nobody but
+    /// Administrators and SYSTEM may take a child away or rewrite its DACL
+    /// ([`volume_root_verdict`]).
+    fn volume_root(
+        &self,
+        root: &Path,
+        for_create: bool,
+    ) -> Result<(FileHandle, String), StorageError> {
+        let handle = secure::open_for_security(&ext(root)?).map_err(|e| io("open", root, e))?;
+        let facts = at::facts(&handle).map_err(|e| io("read the attributes of", root, e))?;
+        let refuse = |failure| StorageError::VolumeRoot {
+            root: root.to_path_buf(),
+            failure,
+        };
+        if facts.reparse_tag != 0 {
+            return Err(refuse(IntegrityFailure::ReparsePoint {
+                tag: facts.reparse_tag,
+            }));
+        }
+        if for_create {
+            let security = secure::handle_security(&handle)
+                .map_err(|e| io("read the security of", root, e))?;
+            volume_root_verdict(
+                &self.policy,
+                security.owner.as_deref(),
+                security.dacl.as_deref(),
+            )
+            .map_err(refuse)?;
+        }
+        let final_path =
+            at::final_path(&handle).map_err(|e| io("read the final path of", root, e))?;
+        Ok((handle, final_path))
     }
 
     /// `<volume root>\.purge-q`, created when missing (and `create`), marked hidden, system and not
-    /// content indexed, and checked. Errors are the volume's, not the run's.
+    /// content indexed, and checked: its final path must be the root's plus its name. Errors are the
+    /// volume's, not the run's.
     fn volume_quarantine(&self, root: &Path, create: bool) -> Result<CheckedDir, StorageError> {
         let path = root.join(VOLUME_QUARANTINE_DIR);
+        let (root_handle, root_final) = self.volume_root(root, create)?;
         if create {
-            self.make_dir(&path, ObjectKind::Store)?;
+            self.make_dir_at(
+                &root_handle,
+                &path,
+                VOLUME_QUARANTINE_DIR,
+                ObjectKind::Store,
+            )?;
         }
+        let parent = Parent {
+            handle: &root_handle,
+            final_path: &root_final,
+        };
         let inspected = self
-            .inspect(&path, ObjectKind::Store, None)?
+            .inspect(&path, ObjectKind::Store, Some(parent))?
             .ok_or_else(|| io("open", &path, FsError::NotFound))?;
         let dir = checked(path, inspected);
         if dir.attributes & VOLUME_QUARANTINE_ATTRIBUTES != VOLUME_QUARANTINE_ATTRIBUTES {
@@ -873,7 +1308,12 @@ impl StorageRoots {
                 .map_err(|e| io("read the id of", &dir.path, e))?
                 != dir.id
             {
-                return Err(reject(&dir.path, None, IntegrityFailure::IdentityChanged));
+                return Err(reject(
+                    &dir.path,
+                    Some(parent),
+                    None,
+                    IntegrityFailure::IdentityChanged,
+                ));
             }
             mover
                 .set_attributes(VOLUME_QUARANTINE_ATTRIBUTES, 0)
@@ -882,24 +1322,63 @@ impl StorageRoots {
         Ok(dir)
     }
 
-    fn read_index_in(&self, sessions: &CheckedDir) -> Result<SessionIndex, StorageError> {
+    /// The bytes of the index, read through a handle opened relative to `sessions` and checked;
+    /// `Ok(None)` when there is no index.
+    fn read_index_bytes(&self, sessions: &CheckedDir) -> Result<Option<Vec<u8>>, StorageError> {
         let path = sessions.path.join(INDEX_FILE);
-        let Some(inspected) = self.inspect(&path, ObjectKind::Index, Some(&sessions.final_path))?
-        else {
-            return Ok(SessionIndex::default());
+        let opened = self.open_file_at(
+            sessions,
+            INDEX_FILE,
+            ObjectKind::Index,
+            at::Open {
+                access: at::GENERIC_READ | at::READ_CONTROL,
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::File,
+            },
+        );
+        let (file, facts) = match opened {
+            Ok(Some(found)) => found,
+            Ok(None) => return Ok(None),
+            Err(StorageError::Io {
+                source: source @ (FsError::SharingViolation | FsError::AccessDenied),
+                ..
+            }) => return Err(StorageError::IndexBusy { path, source }),
+            Err(e) => return Err(e),
         };
-        drop(inspected.handle);
-        if inspected.meta.size > MAX_INDEX_BYTES {
+        if facts.size > MAX_INDEX_BYTES {
             return Err(StorageError::IndexMalformed {
                 path,
                 detail: format!(
                     "{} bytes, over the {MAX_INDEX_BYTES}-byte limit",
-                    inspected.meta.size
+                    facts.size
                 ),
             });
         }
-        let bytes = read_file(&path)?;
-        parse_index(&path, &bytes)
+        let mut bytes = Vec::new();
+        file.take(MAX_INDEX_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| io("read", &path, os_error(&e)))?;
+        Ok(Some(bytes))
+    }
+
+    fn read_index_in(&self, sessions: &CheckedDir) -> Result<SessionIndex, StorageError> {
+        let path = sessions.path.join(INDEX_FILE);
+        match self.read_index_bytes(sessions)? {
+            Some(bytes) => parse_index(&path, &bytes),
+            None if self.has_session_dirs(sessions)? => Err(StorageError::IndexLost { path }),
+            None => Ok(SessionIndex::default()),
+        }
+    }
+
+    /// Whether anything in `sessions` is named like a session (checked or not: a lost index is
+    /// reported, never replaced by an empty one, while anything could be a session).
+    fn has_session_dirs(&self, sessions: &CheckedDir) -> Result<bool, StorageError> {
+        let entries = purge_win::fs::list_dir(&ext(&sessions.path)?)
+            .map_err(|e| io("list", &sessions.path, e))?;
+        Ok(entries
+            .iter()
+            .any(|entry| entry.name.parse::<SessionId>().is_ok()))
     }
 
     fn write_index_with(
@@ -911,43 +1390,44 @@ impl StorageRoots {
         let sessions = &layout.sessions;
         let dest = sessions.path.join(INDEX_FILE);
         let temp = sessions.path.join(INDEX_TEMP_FILE);
+        let inspect_only = at::Open {
+            access: at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
+            share: at::SHARE_ALL,
+            create: None,
+            kind: at::Kind::File,
+        };
         // The index being replaced must pass its own check: a planted object is refused and renamed
         // aside, never silently replaced.
-        self.inspect(&dest, ObjectKind::Index, Some(&sessions.final_path))?;
-        // A temporary file left by a crash is Purge's own (it passed the Index check): remove it.
-        if let Some(stale) = self.inspect(&temp, ObjectKind::Index, Some(&sessions.final_path))? {
-            let mover = MoveHandle::open(&ext(&temp)?).map_err(|e| io("open", &temp, e))?;
-            if mover
-                .file_id()
-                .map_err(|e| io("read the id of", &temp, e))?
-                != stale.meta.file_id
-            {
-                return Err(reject(&temp, None, IntegrityFailure::IdentityChanged));
-            }
-            mover.delete(true).map_err(|e| io("delete", &temp, e))?;
+        self.open_file_at(sessions, INDEX_FILE, ObjectKind::Index, inspect_only)?;
+        // A temporary file left by a crash is Purge's own (it passed the Index check): remove it,
+        // through the handle that was checked.
+        let stale = at::Open {
+            access: at::DELETE | at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
+            ..inspect_only
+        };
+        if let Some((stale, _)) =
+            self.open_file_at(sessions, INDEX_TEMP_FILE, ObjectKind::Index, stale)?
+        {
+            at::dispose(&stale).map_err(|e| io("delete", &temp, e))?;
         }
 
         let bytes = serde_json::to_vec(index).map_err(|e| StorageError::IndexMalformed {
             path: dest.clone(),
             detail: e.to_string(),
         })?;
-        let mut file =
-            fs_write::create_file_secure(&ext(&temp)?, &self.policy.sddl_for(ObjectKind::Index))
-                .map_err(|e| io("create", &temp, e))?;
+        let (mut file, _) = self.create_file_at(sessions, INDEX_TEMP_FILE, ObjectKind::Index)?;
         file.write_all(&bytes)
             .map_err(|e| io("write", &temp, os_error(&e)))?;
         fs_write::flush(&file).map_err(|e| io("flush", &temp, e))?;
-        drop(file);
         crate::fault::point("index.write");
         hook(IndexStep::TempWritten)?;
 
-        replace_file(&temp, &dest)?;
-        fs_write::flush_dir(&ext(&sessions.path)?).map_err(|e| io("flush", &sessions.path, e))?;
+        replace_index(&file, sessions, &dest)?;
+        drop(file);
+        at::flush_dir_at(&sessions.handle).map_err(|e| io("flush", &sessions.path, e))?;
 
         // Read back through the check: the replaced index must be the bytes just written.
-        self.inspect(&dest, ObjectKind::Index, Some(&sessions.final_path))?
-            .ok_or_else(|| io("open", &dest, FsError::NotFound))?;
-        if read_file(&dest)? != bytes {
+        if self.read_index_bytes(sessions)?.as_deref() != Some(bytes.as_slice()) {
             return Err(StorageError::IndexMalformed {
                 path: dest,
                 detail: "the index did not read back as written".into(),
@@ -961,8 +1441,8 @@ impl StorageRoots {
 fn checked(path: PathBuf, inspected: Inspected) -> CheckedDir {
     CheckedDir {
         path,
-        id: inspected.meta.file_id,
-        attributes: inspected.meta.attributes,
+        id: inspected.facts.file_id,
+        attributes: inspected.facts.attributes,
         handle: inspected.handle,
         final_path: inspected.final_path,
     }
@@ -978,11 +1458,17 @@ fn os_error(e: &std::io::Error) -> FsError {
 }
 
 /// The error for an object that failed its check, renaming it aside when the failure is definite.
-/// `checked_id` is the identity the check read; the rename happens only on that same object.
-fn reject(path: &Path, checked_id: Option<FileId>, failure: IntegrityFailure) -> StorageError {
+/// `checked_id` is the identity the check read; the rename happens only on that same object, inside
+/// `parent` when given.
+fn reject(
+    path: &Path,
+    parent: Option<Parent<'_>>,
+    checked_id: Option<FileId>,
+    failure: IntegrityFailure,
+) -> StorageError {
     let (mut renamed_to, mut rename_error) = (None, None);
     if let (true, Some(id)) = (failure.renames_aside(), checked_id) {
-        match rename_aside(path, id) {
+        match rename_aside(path, parent, id) {
             Ok(to) => renamed_to = Some(to),
             Err(e) => rename_error = Some(e),
         }
@@ -995,42 +1481,51 @@ fn reject(path: &Path, checked_id: Option<FileId>, failure: IntegrityFailure) ->
     }
 }
 
-/// Renames the object at `path` to `<name>.rejected-<utc>[-n]` in the same directory, through a
-/// handle opened on the object itself, after checking it is still the object with file id `id`.
-fn rename_aside(path: &Path, id: FileId) -> Result<PathBuf, FsError> {
-    let (Some(parent), Some(leaf)) = (path.parent(), path.file_name()) else {
+/// Renames the object at `path` to `<name>.rejected-<utc>[-n]` in its directory, after checking it is
+/// still the object with file id `id`. The object is opened (itself, not followed) and renamed
+/// relative to the handle of `parent`; without one (the data root, whose parent the store does not
+/// check), relative to a handle on the parent directory opened for the purpose.
+fn rename_aside(path: &Path, parent: Option<Parent<'_>>, id: FileId) -> Result<PathBuf, FsError> {
+    let (Some(parent_path), Some(leaf)) = (path.parent(), path.file_name()) else {
         return Err(FsError::Other(87));
     };
-    let ext_path = secure::extended_path(path)?;
-    let mover = MoveHandle::open(&ext_path)?;
-    if mover.file_id()? != id {
+    let leaf = leaf.to_string_lossy();
+    let opened;
+    let dir = match parent {
+        Some(parent) => parent.handle,
+        None => {
+            opened = secure::open_for_security(&secure::extended_path(parent_path)?)?;
+            &opened
+        }
+    };
+    let mover = at::open_at(
+        dir,
+        &leaf,
+        at::Open {
+            access: at::DELETE | at::FILE_READ_ATTRIBUTES,
+            share: at::SHARE_ALL,
+            create: None,
+            kind: at::Kind::File,
+        },
+    )?;
+    if at::facts(&mover)?.file_id != id {
         return Err(FsError::Other(ERROR_FILE_INVALID));
     }
     let stamp = SessionId::new(sys::now(), 0);
     let stamp = &stamp.as_str()[..16];
-    let leaf = leaf.to_string_lossy();
-    let dir = fs_write::DestDir::open(&secure::extended_path(parent)?)?;
     for n in 1..=64 {
         let name = if n == 1 {
             format!("{leaf}.rejected-{stamp}")
         } else {
             format!("{leaf}.rejected-{stamp}-{n}")
         };
-        let dest = parent.join(&name);
-        match mover.rename_into(&dir, &name) {
-            Ok(()) => return Ok(dest),
+        match at::rename_at(&mover, dir, &name, false) {
+            Ok(()) => return Ok(parent_path.join(&name)),
             Err(FsError::AlreadyExists) => continue,
             Err(e) => return Err(e),
         }
     }
     Err(FsError::AlreadyExists)
-}
-
-/// Reads a whole store file (at most [`MAX_INDEX_BYTES`] + 1 bytes) without following a reparse
-/// point.
-fn read_file(path: &Path) -> Result<Vec<u8>, StorageError> {
-    let max = usize::try_from(MAX_INDEX_BYTES + 1).unwrap_or(usize::MAX);
-    purge_win::fs::read_bytes(&ext(path)?, max).map_err(|e| io("read", path, e))
 }
 
 fn parse_index(path: &Path, bytes: &[u8]) -> Result<SessionIndex, StorageError> {
@@ -1041,22 +1536,24 @@ fn parse_index(path: &Path, bytes: &[u8]) -> Result<SessionIndex, StorageError> 
     })
 }
 
-/// Renames `temp` over `dest` (replacing it), retrying while a reader holds `dest` open without
-/// delete sharing.
-fn replace_file(temp: &Path, dest: &Path) -> Result<(), StorageError> {
-    let (from, to) = (ext(temp)?, ext(dest)?);
+/// Renames the written temporary index `temp` (open with `DELETE`) over the index inside the
+/// checked `sessions` directory, replacing it, through the two handles. Retries while another
+/// process holds the index open without delete sharing; then [`StorageError::IndexBusy`].
+fn replace_index(temp: &File, sessions: &CheckedDir, dest: &Path) -> Result<(), StorageError> {
     let mut waits = REPLACE_RETRY_MS.iter();
     loop {
-        match std::fs::rename(&from, &to) {
+        match at::rename_at(temp, &sessions.handle, INDEX_FILE, true) {
             Ok(()) => return Ok(()),
-            Err(e) => {
-                let code = os_error(&e);
-                let busy = matches!(code, FsError::SharingViolation | FsError::AccessDenied);
-                match waits.next() {
-                    Some(&ms) if busy => std::thread::sleep(Duration::from_millis(ms)),
-                    _ => return Err(io("replace", dest, code)),
+            Err(e @ (FsError::SharingViolation | FsError::AccessDenied)) => match waits.next() {
+                Some(&ms) => std::thread::sleep(Duration::from_millis(ms)),
+                None => {
+                    return Err(StorageError::IndexBusy {
+                        path: dest.to_path_buf(),
+                        source: e,
+                    });
                 }
-            }
+            },
+            Err(e) => return Err(io("replace", dest, e)),
         }
     }
 }
@@ -1107,7 +1604,12 @@ impl SessionDir {
             )?
             .ok_or_else(|| StorageError::SessionNotFound(self.id.clone()))?;
         if dir.id != self.dir.id {
-            return Err(reject(&dir.path, None, IntegrityFailure::IdentityChanged));
+            return Err(reject(
+                &dir.path,
+                Some(layout.sessions.as_parent()),
+                None,
+                IntegrityFailure::IdentityChanged,
+            ));
         }
         Ok(dir)
     }
@@ -1130,30 +1632,60 @@ impl SessionDir {
 
     /// Creates the session file `rel` (`journal.jsonl`, `report.json`, `reg\000042.regbackup.json`,
     /// ...; see [`backup_rel`]) with the admin-only file descriptor, create-new, after re-checking the
-    /// chain (and creating `reg` or `def` when needed). Returns its path and the file open for reading
-    /// and writing.
-    pub fn create_file(&self, rel: &str) -> Result<(PathBuf, std::fs::File), StorageError> {
+    /// chain (and creating `reg` or `def` when needed, relative to the session directory's handle).
+    ///
+    /// The file is created relative to the handle of its checked directory and checked on the
+    /// handle returned, which is open for reading, writing and deleting ([`StoreFile::discard`]);
+    /// others may only read it meanwhile. Fails with [`FsError::AlreadyExists`] when anything has
+    /// the name (nothing existing is opened or truncated).
+    pub fn create_file(&self, rel: &str) -> Result<StoreFile, StorageError> {
         let (sub, leaf) = split_rel(rel)?;
-        let parent = self.parent_of(sub, true)?;
-        let path = parent.path.join(leaf);
-        let file = fs_write::create_file_secure(
-            &ext(&path)?,
-            &self.roots.policy.sddl_for(ObjectKind::StoreFile),
-        )
-        .map_err(|e| io("create", &path, e))?;
-        Ok((path, file))
+        let dir = self.parent_of(sub, true)?;
+        let (file, facts) = self
+            .roots
+            .create_file_at(&dir, leaf, ObjectKind::StoreFile)?;
+        Ok(StoreFile {
+            file,
+            leaf: leaf.to_owned(),
+            rel: rel.to_owned(),
+            id: facts.file_id,
+            len: facts.size,
+            created: true,
+            dir,
+        })
     }
 
-    /// The path of the existing session file `rel`, after re-checking the chain and the file itself
-    /// (a file, not a reparse point, one link, admin owner, no access for others).
-    pub fn open_file(&self, rel: &str) -> Result<PathBuf, StorageError> {
+    /// Opens the existing session file `rel` for reading, after re-checking the chain, and checks
+    /// the file itself on the handle returned (a file, not a reparse point, one link, admin owner, no
+    /// access for others, final path inside its checked directory). Others may read it meanwhile but
+    /// not write or delete it. A file that fails is renamed aside ([`StorageError::Integrity`]); a
+    /// missing one is [`StorageError::Io`] with [`FsError::NotFound`].
+    pub fn open_file(&self, rel: &str) -> Result<StoreFile, StorageError> {
+        self.open_file_with(rel, FileMode::Read)
+    }
+
+    /// [`SessionDir::open_file`] with another access and share mode (the journal's reader and
+    /// appender).
+    pub(crate) fn open_file_with(
+        &self,
+        rel: &str,
+        mode: FileMode,
+    ) -> Result<StoreFile, StorageError> {
         let (sub, leaf) = split_rel(rel)?;
-        let parent = self.parent_of(sub, false)?;
-        let path = parent.path.join(leaf);
-        self.roots
-            .inspect(&path, ObjectKind::StoreFile, Some(&parent.final_path))?
-            .ok_or_else(|| io("open", &path, FsError::NotFound))?;
-        Ok(path)
+        let dir = self.parent_of(sub, false)?;
+        let (file, facts) = self
+            .roots
+            .open_file_at(&dir, leaf, ObjectKind::StoreFile, mode.open())?
+            .ok_or_else(|| io("open", &dir.path.join(leaf), FsError::NotFound))?;
+        Ok(StoreFile {
+            file,
+            leaf: leaf.to_owned(),
+            rel: rel.to_owned(),
+            id: facts.file_id,
+            len: facts.size,
+            created: false,
+            dir,
+        })
     }
 
     /// Creates the quarantine op directory for op `op`, for an item at `source_path` whose handle
@@ -1208,6 +1740,11 @@ impl SessionDir {
                 QuarantineRoot::DataRoot,
             )
         } else {
+            // The guard's store scope accepts `.purge-q` only at a drive root. The relaxed test
+            // policy accepts folders, because the tests' mocked volumes are folders.
+            if roots.policy.is_strict() && !is_drive_root(&volume.root) {
+                return Err(cannot(CannotBackUpReason::MountedFolder));
+            }
             let on_volume = || -> Result<CheckedDir, StorageError> {
                 let top = roots.volume_quarantine(&volume.root, true)?;
                 let session = roots

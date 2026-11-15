@@ -1,9 +1,9 @@
 //! Writing a journal: append-only, framed and chained lines, flushes where the write-ahead contract needs
 //! them, and tokens that prove an intent is durable.
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::io::{Seek, SeekFrom, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purge_model::exec::journal::{
@@ -12,13 +12,13 @@ use purge_model::exec::journal::{
 };
 use purge_model::exec::op::{ItemOutcome, OpId, Sha256Hex};
 use purge_model::{CandidateId, FileTime};
-use purge_win::fs_write;
 
 use super::frame::{CHAIN_SEED, frame};
-use super::reader::{open_plain, parse};
+use super::reader::read_checked;
 use super::state::{JournalState, OpStatus, UndoState, Violation};
-use super::{JournalError, JournalRead};
+use super::{JournalError, JournalRead, MAX_JOURNAL_BYTES};
 use crate::fault;
+use crate::storage::{FileMode, JOURNAL_FILE, SessionDir, StoreFile};
 
 /// Source of writer ids, so a token is only accepted by the writer that issued it.
 static NEXT_WRITER: AtomicU64 = AtomicU64::new(1);
@@ -75,15 +75,16 @@ impl UndoToken {
     }
 }
 
-/// The only writer of a session's journal. It applies every record to a [`JournalState`] first, so it
-/// never writes what the reader would refuse.
+/// The only writer of a session's journal. It checks every record against a [`JournalState`] first, so
+/// it never writes what the reader would refuse, and applies it to that state only once it is written,
+/// so the state never runs ahead of the file.
 ///
 /// After a failed write or flush the writer is poisoned: the file may end in a partial line, which stays
-/// the torn tail because nothing more is written ([`JournalError::Poisoned`]).
+/// the torn tail because nothing more is written ([`JournalError::Poisoned`]). Reopen it with
+/// [`JournalWriter::open_append`].
 #[derive(Debug)]
 pub struct JournalWriter {
-    file: File,
-    path: PathBuf,
+    file: StoreFile,
     id: u64,
     state: JournalState,
     chain: [u8; 32],
@@ -91,58 +92,79 @@ pub struct JournalWriter {
     discarded_tail: u64,
     poisoned: bool,
     syncs: u64,
+    /// Ops whose intent was open when [`JournalWriter::open_append`] read the journal and whose token
+    /// [`JournalWriter::resume_intent`] has not handed out yet.
+    resumable: BTreeSet<OpId>,
+    /// Ops whose undo was in progress when the journal was opened, for
+    /// [`JournalWriter::resume_undo`].
+    resumable_undo: BTreeSet<OpId>,
+    /// Test hook: the next line write fails as a disk error would.
+    #[cfg(test)]
+    fail_next_write: bool,
 }
 
 impl JournalWriter {
-    /// Creates the journal at `path` (absolute, inside a session directory the storage layer has checked)
-    /// with the security descriptor `sddl` applied at creation, writes `header`, and flushes the file and
-    /// its directory. Fails if anything already has that name; nothing existing is opened. Hits
-    /// [`fault::JOURNAL_HEADER`] at the end.
-    pub fn create(path: &Path, sddl: &str, header: Header) -> Result<JournalWriter, JournalError> {
-        let file = fs_write::create_file_secure(path, sddl).map_err(|source| JournalError::Fs {
-            context: "creating the journal",
-            source,
-        })?;
+    /// Creates the journal of `session` through the store ([`SessionDir::create_file`]: create-new,
+    /// relative to the session directory's checked handle, with the store's file descriptor, checked
+    /// on the handle it writes through), flushes the directory, writes `header` and flushes it. Fails
+    /// if anything already has the name (nothing existing is opened) and if `header` names another
+    /// session ([`JournalError::WrongSession`]). Hits [`fault::JOURNAL_HEADER`] at the end.
+    pub fn create(session: &SessionDir, header: Header) -> Result<JournalWriter, JournalError> {
+        if &header.session != session.id() {
+            return Err(JournalError::WrongSession {
+                header: header.session.clone(),
+                dir: session.id().clone(),
+            });
+        }
         let record = Record::Header(header.clone());
         let body = encode(&record)?;
-        let mut writer = JournalWriter::with(file, path, JournalState::new(header), CHAIN_SEED, 0);
+        let file = session
+            .create_file(JOURNAL_FILE)
+            .map_err(JournalError::Store)?;
+        // The directory entry is made durable before the header; a crash in between leaves an empty
+        // journal, which reads as "nothing ran".
+        file.sync_dir().map_err(JournalError::Store)?;
+        let mut writer = JournalWriter::with(file, JournalState::new(header), CHAIN_SEED, 0);
         writer.write_body(&body)?;
         writer.flush()?;
-        if let Some(dir) = path.parent() {
-            fs_write::flush_dir(dir).map_err(|source| {
-                writer.poisoned = true;
-                JournalError::Fs {
-                    context: "flushing the session directory",
-                    source,
-                }
-            })?;
-        }
         fault::point(fault::JOURNAL_HEADER);
         Ok(writer)
     }
 
-    /// Opens an existing journal to append to it (resume, rollback, undo, reconcile, expiry). Reads and
-    /// checks it in full first: a corrupt journal is refused and left byte for byte as it was. A torn tail
-    /// is cut off ([`JournalWriter::discarded_tail`]) and the file flushed before anything is appended.
-    pub fn open_append(path: &Path) -> Result<JournalWriter, JournalError> {
-        let mut file = open_plain(path, true)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(|source| JournalError::Io {
-                context: "reading the journal",
-                source,
-            })?;
+    /// Opens the existing journal of `session` to append to it (resume, rollback, undo, reconcile,
+    /// expiry), through the store ([`SessionDir`]: relative to the session directory's checked handle,
+    /// checked on the handle it then reads and writes; other handles may only read meanwhile, so a
+    /// second writer is excluded). Reads and checks it in full first: a corrupt journal, or one whose
+    /// header names another session, is refused and left byte for byte as it was. A torn tail is cut
+    /// off ([`JournalWriter::discarded_tail`]) and the file flushed before anything is appended.
+    pub fn open_append(session: &SessionDir) -> Result<JournalWriter, JournalError> {
+        let mut file = session
+            .open_file_with(JOURNAL_FILE, FileMode::Append)
+            .map_err(JournalError::Store)?;
         let JournalRead {
             state,
             valid_len,
             torn_tail,
             head,
             ..
-        } = parse(&bytes)?;
-        let mut writer = JournalWriter::with(file, path, state, head.0, valid_len);
+        } = read_checked(session, &mut file)?;
+        let (resumable, resumable_undo) = if state.is_finished() {
+            (
+                BTreeSet::new(),
+                state.undo_in_progress().map(|s| s.op).collect(),
+            )
+        } else {
+            (
+                state.open_intents().map(|s| s.op).collect(),
+                state.undo_in_progress().map(|s| s.op).collect(),
+            )
+        };
+        let mut writer = JournalWriter::with(file, state, head.0, valid_len);
+        writer.resumable = resumable;
+        writer.resumable_undo = resumable_undo;
         writer.discarded_tail = torn_tail;
         if torn_tail != 0 {
-            writer.file.set_len(valid_len).map_err(|source| {
+            writer.file.file().set_len(valid_len).map_err(|source| {
                 writer.poisoned = true;
                 JournalError::Io {
                     context: "cutting off the torn tail",
@@ -164,10 +186,9 @@ impl JournalWriter {
         Ok(writer)
     }
 
-    fn with(file: File, path: &Path, state: JournalState, chain: [u8; 32], len: u64) -> Self {
+    fn with(file: StoreFile, state: JournalState, chain: [u8; 32], len: u64) -> Self {
         JournalWriter {
             file,
-            path: path.to_path_buf(),
             id: NEXT_WRITER.fetch_add(1, Ordering::Relaxed),
             state,
             chain,
@@ -175,19 +196,23 @@ impl JournalWriter {
             discarded_tail: 0,
             poisoned: false,
             syncs: 0,
+            resumable: BTreeSet::new(),
+            resumable_undo: BTreeSet::new(),
+            #[cfg(test)]
+            fail_next_write: false,
         }
     }
 
-    /// The journal's path.
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// Where the journal is, for reports and messages only; it is never opened by this path.
+    pub fn report_path(&self) -> PathBuf {
+        self.file.report_path()
     }
 
-    /// The session as written so far.
+    /// The session as written so far: every record whose line was written, none that was refused or
+    /// whose write failed.
     pub fn state(&self) -> &JournalState {
         &self.state
     }
-
     /// The chain value of the last line written.
     pub fn head(&self) -> Sha256Hex {
         Sha256Hex::from(self.chain)
@@ -244,12 +269,22 @@ impl JournalWriter {
         })
     }
 
-    /// Writes the op's `done`, consuming its intent token. Not flushed by itself (the next intent,
-    /// group end, commit or abort flushes it); closes the group when it holds 64 intents and none is open.
-    /// Hits [`fault::DONE_BEFORE`] first.
+    /// Writes the op's `done`, consuming its intent token; closes the group when it holds 64 intents and
+    /// none is open. Hits [`fault::DONE_BEFORE`] first.
+    ///
+    /// A `done` is not flushed by itself (the next intent, group end, commit or abort flushes it): a
+    /// lost `done` after a flushed intent is the "intent only" case recovery probes from the disk. The
+    /// exception is [`ItemOutcome::PendingReboot`]: its pair is the only record of what was put in
+    /// `PendingFileRenameOperations`, which the disk cannot tell, so that `done` is flushed before this
+    /// returns (one `FlushFileBuffers` per boot-time move). [`fault::BOOTMOVE_REGISTERED`] is hit first
+    /// for it: the move is registered, its `done` not yet written.
     pub fn done(&mut self, token: IntentToken, outcome: ItemOutcome) -> Result<(), JournalError> {
         self.check_poison()?;
         self.own(token.writer, token.op)?;
+        let durable = needs_flush(&outcome);
+        if durable {
+            fault::point(fault::BOOTMOVE_REGISTERED);
+        }
         fault::point(fault::DONE_BEFORE);
         self.append(
             &Record::Done(Done {
@@ -257,7 +292,7 @@ impl JournalWriter {
                 item: token.item,
                 outcome,
             }),
-            false,
+            durable,
         )?;
         self.close_full_group()
     }
@@ -284,9 +319,14 @@ impl JournalWriter {
         self.close_full_group()
     }
 
-    /// A token for an op whose intent is in the journal with no done after it, for recovery to finish the
-    /// op after [`JournalWriter::open_append`]. `None` for any other op, or once the run ended.
-    pub fn resume_intent(&self, op: OpId) -> Option<IntentToken> {
+    /// The token of an op whose intent was open (no done after it) when [`JournalWriter::open_append`]
+    /// read the journal, for recovery to finish the op. Handed out once per op: `None` on a second
+    /// call, for any other op, on a writer made by [`JournalWriter::create`] (whose intents' tokens
+    /// came from [`JournalWriter::intent`]), and when the run had already ended.
+    pub fn resume_intent(&mut self, op: OpId) -> Option<IntentToken> {
+        if !self.resumable.remove(&op) {
+            return None;
+        }
         let state = self.state.op(op)?;
         if self.state.is_finished() || !matches!(state.status(), OpStatus::IntentOnly) {
             return None;
@@ -434,9 +474,14 @@ impl JournalWriter {
         )
     }
 
-    /// A token for an op whose undo is in progress (an `undo_intent` with nothing after it), for recovery
-    /// to finish the interrupted undo after [`JournalWriter::open_append`]. `None` for any other op.
-    pub fn resume_undo(&self, op: OpId) -> Option<UndoToken> {
+    /// The token of an op whose undo was in progress (an `undo_intent` with nothing after it) when
+    /// [`JournalWriter::open_append`] read the journal, for recovery to finish the interrupted undo.
+    /// Handed out once per op, like [`JournalWriter::resume_intent`]: `None` on a second call, for any
+    /// other op, and on a writer made by [`JournalWriter::create`].
+    pub fn resume_undo(&mut self, op: OpId) -> Option<UndoToken> {
+        if !self.resumable_undo.remove(&op) {
+            return None;
+        }
         (self.state.op(op)?.undo == UndoState::InProgress).then_some(UndoToken {
             writer: self.id,
             op,
@@ -490,13 +535,16 @@ impl JournalWriter {
         }
     }
 
-    /// Checks `record` against the rules, then writes it (and flushes when `sync`). A refused record
-    /// writes nothing.
+    /// Checks `record` against the rules, writes it, applies it to the state, and flushes when `sync`.
+    /// A refused record writes nothing and changes nothing; a record whose write fails poisons the
+    /// writer and is not applied. A record whose flush fails is in the file and in the state, and the
+    /// writer is poisoned.
     fn append(&mut self, record: &Record, sync: bool) -> Result<(), JournalError> {
         self.check_poison()?;
         let body = encode(record)?;
-        self.state.apply(record).map_err(JournalError::Refused)?;
+        self.state.check(record).map_err(JournalError::Refused)?;
         self.write_body(&body)?;
+        self.state.record(record);
         if sync {
             self.flush()?;
         }
@@ -506,6 +554,22 @@ impl JournalWriter {
     fn write_body(&mut self, body: &str) -> Result<(), JournalError> {
         self.check_poison()?;
         let (line, next) = frame(&self.chain, body);
+        let grown = self.len.saturating_add(line.len() as u64);
+        if grown > MAX_JOURNAL_BYTES {
+            // Nothing is written: the reader would refuse a longer journal.
+            return Err(JournalError::TooLarge {
+                bytes: grown,
+                max: MAX_JOURNAL_BYTES,
+            });
+        }
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_write) {
+            self.poisoned = true;
+            return Err(JournalError::Io {
+                context: "writing a journal line",
+                source: std::io::Error::from_raw_os_error(112),
+            });
+        }
         if let Err(source) = self.file.write_all(&line) {
             self.poisoned = true;
             return Err(JournalError::Io {
@@ -514,27 +578,36 @@ impl JournalWriter {
             });
         }
         self.chain = next;
-        self.len += line.len() as u64;
+        self.len = grown;
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), JournalError> {
         self.check_poison()?;
-        if let Err(source) = fs_write::flush(&self.file) {
+        if let Err(e) = self.file.sync() {
             self.poisoned = true;
-            return Err(JournalError::Fs {
-                context: "flushing the journal",
-                source,
-            });
+            return Err(JournalError::Store(e));
         }
         self.syncs += 1;
         Ok(())
+    }
+
+    /// Test hook: makes the next line write fail as a full disk would (`ERROR_DISK_FULL`).
+    #[cfg(test)]
+    pub(super) fn inject_write_failure(&mut self) {
+        self.fail_next_write = true;
     }
 
     /// How many flushes (`FlushFileBuffers`) this writer made.
     pub fn syncs(&self) -> u64 {
         self.syncs
     }
+}
+
+/// Whether a `done` with `outcome` must be flushed before [`JournalWriter::done`] returns: its outcome is
+/// the only record of a system change the disk state cannot show (a registered boot-time move).
+fn needs_flush(outcome: &ItemOutcome) -> bool {
+    matches!(outcome, ItemOutcome::PendingReboot { .. })
 }
 
 /// The compact JSON of `record`, checked to be one line that reads back as an equal record.
