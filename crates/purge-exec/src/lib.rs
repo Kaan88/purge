@@ -6,3 +6,21 @@
 //! Depends on `purge-win` with the `write` feature; must never be linked into `purge-mcp`.
 //!
 //! Milestone: M2 (§11.1).
+
+pub mod act_fs;
+pub mod act_reg;
+pub mod act_typed;
+pub mod execute;
+pub mod expiry;
+pub mod fault;
+pub mod gate;
+pub mod journal;
+pub mod locked;
+pub mod plan_in;
+pub mod prepare;
+pub mod recover;
+pub mod regbackup;
+pub mod regfile;
+pub mod report;
+pub mod storage;
+pub mod undo;

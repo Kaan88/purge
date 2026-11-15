@@ -19,15 +19,26 @@
 compile_error!("purge-win supports x86_64 Windows only (ENGINE_PLAN.md §3.2)");
 
 pub mod appx;
+#[cfg(feature = "write")]
+pub mod appx_write;
 pub mod cmdline;
 pub mod env;
 pub mod fs;
+#[cfg(feature = "write")]
+pub mod fs_write;
 pub mod known_folders;
 pub mod msi;
 pub mod os;
 pub mod process;
 pub mod reg;
+#[cfg(feature = "write")]
+pub mod reg_write;
+#[cfg(feature = "write")]
+pub mod rm;
+pub mod secure;
 pub mod shelllink;
 pub mod sid;
 pub mod signer;
+#[cfg(feature = "write")]
+pub mod sr;
 pub mod versioninfo;

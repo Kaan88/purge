@@ -26,6 +26,7 @@ mod appref;
 mod blocker;
 mod candidate;
 mod evidence;
+pub mod exec;
 mod fingerprint;
 mod ids;
 mod inventory;

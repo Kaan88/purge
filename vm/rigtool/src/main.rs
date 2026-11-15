@@ -6,10 +6,13 @@ mod canon;
 #[cfg(windows)]
 mod capture;
 mod convert;
+mod deep;
 mod deny;
 mod diff;
 mod err;
 mod escape;
+mod execdiff;
+mod fidelity;
 mod invdiff;
 mod items;
 mod jsonio;
@@ -239,6 +242,9 @@ fn run(argv: Vec<String>) -> Result<()> {
             }
             Ok(())
         }
+        "deep" => deep::cmd_deep(rest),
+        "fidelity" => fidelity::cmd_fidelity(rest),
+        "execdiff" => execdiff::cmd_execdiff(rest),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             Ok(())

@@ -13,7 +13,7 @@ path = "src/lib.rs"
 
 [features]
 # Headless `exec` without the consent dialog, for the VM rig only (ENGINE_PLAN.md §3.4). Never in releases.
-rig-exec = []
+rig-exec = ["purge-exec/fault-inject"]
 
 [dependencies]
 purge-model.workspace = true
