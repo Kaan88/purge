@@ -44,6 +44,10 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
   rigtool baseline --snap snap-0.tsv.gz -o FILE.tsv.gz|DIR\\
   rigtool invdiff --inv inventory.json --lists lists-<run>-<phase>.json [--explain inventory-explain.json]
                   [--sid SID] [--json out.json] [--md out.md]     (exit 1 = unexplained differences)
+  rigtool deep --scope FILE... [--sid SID] -o deep.json
+                (FILE: purge.rig.deepscope/0, purge.rig.targets/0 or an m2-traps / m2-fixtures manifest)
+  rigtool fidelity --before A.json --after C.json --journal journal.jsonl [--ambient ambient.json]
+                   [--sid SID] -o fidelity.json     (exit 1 = a differing object or an unverifiable row)
 ";
 
 struct Args {
@@ -242,8 +246,29 @@ fn run(argv: Vec<String>) -> Result<()> {
             }
             Ok(())
         }
-        "deep" => deep::cmd_deep(rest),
-        "fidelity" => fidelity::cmd_fidelity(rest),
+        "deep" => {
+            let a = Args::parse(rest, &[], &["--scope"], &["--sid", "-o"])?;
+            deep::cmd_deep(&deep::DeepArgs {
+                scopes: a.all("--scope").into_iter().map(PathBuf::from).collect(),
+                sid: a.get("--sid"),
+                out: a.req("-o")?,
+            })
+        }
+        "fidelity" => {
+            let a = Args::parse(rest, &[], &[], &["--before", "--after", "--journal", "--ambient", "--sid", "-o"])?;
+            let rep = fidelity::cmd_fidelity(&fidelity::FidelityArgs {
+                before: a.req("--before")?,
+                after: a.req("--after")?,
+                journal: a.req("--journal")?,
+                ambient: a.path("--ambient"),
+                sid: a.get("--sid"),
+                out: a.req("-o")?,
+            })?;
+            if !rep.ok {
+                bail!("fidelity: {} differing objects, {} failing rows", rep.differences.len(), rep.failing_rows());
+            }
+            Ok(())
+        }
         "execdiff" => execdiff::cmd_execdiff(rest),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
