@@ -774,6 +774,7 @@ pub fn safe(id: &str, target: Target, action: Action) -> Candidate {
         children: Vec::new(),
         size_bytes: None,
         child_count: None,
+        item_fp: None,
         decision: Some(Decision {
             band: Band::Safe,
             preselected: true,
