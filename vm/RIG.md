@@ -27,6 +27,16 @@ Principles:
   The manifest is in `vm\truth\dirty-base.json`, and the captured state in `vm\runs\dirty-base\` (snap0 and
   lists). It is used for the danger gates on a non-clean machine: run an app with
   `Invoke-Campaign -Snapshot dirty-base`.
+- Snapshot `m2-base` (powered off, child of `rig-base`; M2 executor tests, built 2026-11-15). It differs from
+  `rig-base` only in: a second disk `E:\purge-vm\inbound-m2-data.vdi` (2 GB dynamic VDI, SATA port 1) holding one
+  empty NTFS volume `D:` labelled `PURGE-D`; System Restore enabled on C: (shadow storage on C:, max 10 %); and
+  the rig-only value `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore`
+  `SystemRestorePointCreationFrequency` = 0 (DWORD), so restore points can be created back to back (the product
+  never sets it). No restore point exists in the snapshot. Built by `vm\setup-m2-base.ps1` (restore `rig-base`,
+  create and attach the disk, boot, agent job `guest\setup-m2.ps1`, then `-Check`, ACPI shutdown, `snapshot take
+  m2-base`, restore `rig-base`); `vm\setup-m2-base.ps1 -VerifyOnly` restores it, runs the check, creates a probe
+  restore point and discards it. The data disk lies outside the VM folder: `vm/fix-vbox-media.ps1` needs
+  `-ExtraDisk E:\purge-vm\inbound-m2-data.vdi` for this VM from now on.
 - VM `Purge-CleanPro` (ENGINE_PLAN §10.2 Clean-Pro, `E:\purge-vm`): Windows 11 **Pro** Insider
   10.0.26340.9882 from Microsoft's Insider ISO (`Windows11_InsiderPreview_Client_x64_en-us_26340_9882.iso`,
   image 6), EFI + Secure Boot + TPM 2.0, 4 vCPU, 4 GB, 3D off, user `tester`. Installed with

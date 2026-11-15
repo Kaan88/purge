@@ -10,31 +10,35 @@
 #
 #   pwsh -NoProfile -File vm/fix-vbox-media.ps1 -Vbox E:\inbound-vm\Inbound-Win11-Test\Inbound-Win11-Test.vbox
 #   ... -Print   shows the block and changes nothing
+#   ... -ExtraDisk E:\purge-vm\inbound-m2-data.vdi   a disk the VM uses that lies outside its folder
 #
 # Run it with the VM powered off. VirtualBox may stay open as long as the VM shows as inaccessible.
 param(
     [Parameter(Mandatory)] [string] $Vbox,
+    [string[]] $ExtraDisk = @(),
     [switch] $Print
 )
 $ErrorActionPreference = 'Stop'
 $dir = Split-Path -Parent (Resolve-Path $Vbox)
 $utf8 = [Text.UTF8Encoding]::new($false)
 $text = $utf8.GetString([IO.File]::ReadAllBytes($Vbox))
-if ($text.Contains('<MediaRegistry>')) { throw "$Vbox already has a <MediaRegistry>; nothing done" }
 
 # uuid -> parent and relative location, from the VDI headers (v1.1: uuid at 392, parent at 424)
 $disks = @{}
 $files = @(Get-ChildItem -LiteralPath $dir -Filter *.vdi) + @(Get-ChildItem -LiteralPath (Join-Path $dir 'Snapshots') -Filter *.vdi)
+$files += @($ExtraDisk | ForEach-Object { Get-Item -LiteralPath $_ })
 foreach ($file in $files) {
     $stream = [IO.File]::Open($file.FullName, 'Open', 'Read', 'ReadWrite')
     try { $head = New-Object byte[] 512; [void]$stream.Read($head, 0, 512) } finally { $stream.Close() }
     if ([BitConverter]::ToString($head, 64, 4) -ne '7F-10-DA-BE') { throw "$($file.Name) is not a VDI" }
     $uuid = [guid]::new([byte[]]$head[392..407]).ToString()
     $parent = [guid]::new([byte[]]$head[424..439])
-    $inSnapshots = $file.DirectoryName -ne $dir
+    $location = if ($file.DirectoryName -eq $dir) { $file.Name }
+    elseif ($file.DirectoryName -eq (Join-Path $dir 'Snapshots')) { "Snapshots/$($file.Name)" }
+    else { $file.FullName }
     $disks[$uuid] = @{
         Parent   = if ($parent -eq [guid]::Empty) { $null } else { $parent.ToString() }
-        Location = if ($inSnapshots) { "Snapshots/$($file.Name)" } else { $file.Name }
+        Location = $location
     }
 }
 
@@ -63,6 +67,7 @@ $block = (@('    <MediaRegistry>', '      <HardDisks>') + @($roots | ForEach-Obj
     @('      </HardDisks>', '    </MediaRegistry>')) -join $nl
 
 if ($Print) { $block; return }
+if ($text.Contains('<MediaRegistry>')) { throw "$Vbox already has a <MediaRegistry>; nothing done (remove that block by hand if it is the stale one)" }
 
 $machine = [regex]::Match($text, '<Machine [^>]*>')
 if (-not $machine.Success) { throw 'no <Machine> element' }
