@@ -652,12 +652,9 @@ fn read_node(
     Ok((node, subkeys))
 }
 
-/// The one place a [`KeyNode`] is built. `None` when the node cannot record what the key is: today a
-/// volatile key, because the model has no volatile flag yet and a volatile tree restored as non-volatile
-/// would differ (and a non-volatile key cannot be created below a volatile one, error 1021).
-///
-/// When `KeyNode::volatile` lands in purge-model, replace the `if volatile { return None; }` line by
-/// setting the field (`volatile,`) and change [`node_volatile`] to return `node.volatile`.
+/// The one place a [`KeyNode`] is built. `None` when the node cannot record what the key is; no such
+/// case is left since the model records volatility (a non-volatile key cannot be created below a
+/// volatile one, error 1021, so restore needs the flag).
 fn key_node(
     parent: Option<u32>,
     name_b64: WideB64,
@@ -667,9 +664,6 @@ fn key_node(
     values: Vec<ValueBackup>,
     volatile: bool,
 ) -> Option<KeyNode> {
-    if volatile {
-        return None;
-    }
     Some(KeyNode {
         parent,
         name_b64,
@@ -677,14 +671,14 @@ fn key_node(
         sddl,
         last_write_time,
         link: false,
+        volatile,
         values,
     })
 }
 
-/// Whether a backed-up key is to be re-created volatile. Replace the body by `node.volatile` once the
-/// model field lands (see [`key_node`]).
-fn node_volatile(_node: &KeyNode) -> bool {
-    false
+/// Whether a backed-up key is to be re-created volatile.
+fn node_volatile(node: &KeyNode) -> bool {
+    node.volatile
 }
 
 /// Captures the key behind `root` with its whole subtree as a `purge.regbackup/1` tree document.
@@ -2991,17 +2985,20 @@ mod tests {
             Err(CaptureError::LinkValue { at: String::new() })
         );
 
-        // A volatile key cannot be recorded yet.
+        // A volatile key is recorded as volatile.
         let vol = root.key.create_subkey("Vol", "", None, false).unwrap();
         vol.create_subkey("v", "", None, true).unwrap();
-        let err = capture_tree(
+        let doc = capture_tree(
             &root.open("Vol", KeyAccess::READ),
             &root.key_path("Vol"),
             10,
         )
-        .unwrap_err();
-        assert_eq!(err, CaptureError::Volatile { at: "v".into() });
-        assert_eq!(err.blocker(), Some(Blocker::CannotBackUp));
+        .unwrap();
+        let keys = &doc.tree().unwrap().keys;
+        assert_eq!(
+            keys.iter().map(|k| k.volatile).collect::<Vec<_>>(),
+            [false, true]
+        );
 
         // The blast radius: 5 keys.
         root.key.create_subkey("L", "", None, false).unwrap();

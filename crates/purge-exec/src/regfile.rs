@@ -418,7 +418,11 @@ mod tests {
             unreachable!()
         };
         tree.keys[2].link = true;
-        assert_eq!(reg_text(&backup), Err(RegFileError::Link));
+        // Refused either by the model's own tree check or by this module's.
+        assert!(matches!(
+            reg_text(&backup),
+            Err(RegFileError::Link | RegFileError::Malformed(_))
+        ));
         let RegBackupBody::Tree(tree) = &mut backup.body else {
             unreachable!()
         };
