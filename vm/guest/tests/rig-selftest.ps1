@@ -253,10 +253,15 @@ $StubCmd = @'
 setlocal
 >>"%STUB_EV%" echo engine:%*
 set "VERB=%~1"
+set "SUB=%~2"
 set "OUT="
+set "PLAN=none"
+set "SESS="
 :loop
 if "%~1"=="" goto run
 if "%~1"=="-o" set "OUT=%~2"
+if "%~1"=="--plan" set "PLAN=%~2"
+if "%~1"=="--session" set "SESS=%~2"
 shift
 goto loop
 :run
@@ -283,8 +288,54 @@ if "%VERB%"=="scan" (
   echo scan: 3 candidates 1>&2
   exit /b 0
 )
+if "%VERB%"=="plan" goto m2plan
+if "%VERB%"=="exec" goto m2exec
+if "%VERB%"=="undo" goto m2undo
+if "%VERB%"=="journal" goto m2journal
+if "%VERB%"=="quarantine" goto m2quar
 echo stub: unknown verb %VERB% 1>&2
 exit /b 1
+:m2plan
+set "PH=m2plan.scan.json"
+if not "%OUT:refuse=%"=="%OUT%" set "PH=m2plan-b.scan.json"
+copy /y "%STUB_DIR%\m2plan.json" "%OUT%" >nul
+copy /y "%STUB_DIR%\%PH%" "%OUT:.json=.scan.json%" >nul
+exit /b 0
+:m2exec
+if not "%PLAN:refuse=%"=="%PLAN%" goto m2refuse
+:m2sid
+set "SID=s%RANDOM%%RANDOM%"
+set "SD=%STUB_DATA%\sessions\%SID%"
+if exist "%SD%" goto m2sid
+mkdir "%SD%"
+>"%STUB_DATA%\sessions\index.json" echo {"last":"%SID%"}
+copy /y "%STUB_DIR%\journal.jsonl" "%SD%\journal.jsonl" >nul
+copy /y "%STUB_DIR%\backup.bin" "%SD%\b1.bin" >nul
+if defined PURGE_FAULT_AT exit /b -1073740791
+>"%SD%\report.json" echo {"schema":"purge.exec/1","session":"%SID%","items":[],"restore_point":null}
+if defined OUT copy /y "%SD%\report.json" "%OUT%" >nul
+exit /b 0
+:m2refuse
+echo stub: confirm or plan mismatch, nothing done 1>&2
+exit /b 4
+:m2undo
+if defined PURGE_FAULT_AT exit /b -1073740791
+if defined OUT >"%OUT%" echo {"schema":"purge.undo/1","session":"%SESS%","items":[]}
+exit /b 0
+:m2journal
+if "%SUB%"=="fault-points" goto m2fp
+echo journal %SUB% %SESS%: ok
+exit /b 0
+:m2fp
+echo journal.header  before the header record
+echo intent.flushed
+echo act.after
+echo undo.intent
+exit /b 0
+:m2quar
+if "%SUB%"=="purge" exit /b 0
+type "%STUB_DIR%\expiring.json"
+exit /b 0
 '@
 
 # Writes the stub engine and its canned JSON into $Dir; $MainKey is the ARP key name of the main entry.
@@ -309,6 +360,13 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
         '"t_start":' + $t0 + ',"t_end":' + ($t0 + 450000000) + ',"exit_code":0,"outcome":"Success",' +
         '"verify_gone":{"arp_gone":true,"msi_unknown_all_ctx":true,"main_exes_gone":true,"passed":true},"processes":[],"co_removed":[]}'
     [IO.File]::WriteAllText((Join-Path $stub 'engine-run.json'), $run)
+    # M2 verbs (plan from-targets, exec, undo, journal, quarantine).
+    [IO.File]::WriteAllText((Join-Path $stub 'm2plan.json'), '{"schema":"purge.plan/0","app":"x","tool":"purge","mode":"targets","items":[]}')
+    [IO.File]::WriteAllText((Join-Path $stub 'm2plan.scan.json'), '{"schema":"purge.scan/0","plan_hash":"abc123","items":[{"id":"t1","target":{"type":"Path","path":"C:\\Program Files\\PurgeTrapApp\\a"}}]}')
+    [IO.File]::WriteAllText((Join-Path $stub 'm2plan-b.scan.json'), '{"schema":"purge.scan/0","plan_hash":"abc124","items":[]}')
+    [IO.File]::WriteAllText((Join-Path $stub 'journal.jsonl'), ('{"rec":"header","v":1}' + "`n" + '{"rec":"intent","item":"i1","op":"o1","backup":{"path":"b1.bin"}}' + "`n" + '{"rec":"done","item":"i1","op":"o1"}' + "`n" + '{"rec":"commit"}' + "`n"))
+    [IO.File]::WriteAllText((Join-Path $stub 'backup.bin'), 'backup bytes of o1')
+    [IO.File]::WriteAllText((Join-Path $stub 'expiring.json'), '[{"id":"q1","original":"C:\\Program Files\\PurgeTrapApp\\expiry\\payload","quarantined":"2025-01-01T00:00:00Z"},{"id":"q2","original":"C:\\Other"}]')
     [pscustomobject]@{ exe = $exe; stub = $stub; t_start = $t0; root = $root }
 }
 
@@ -813,6 +871,344 @@ $EnginePhases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1
     $script:PushArgs = 'unset'
     $rec = @(Invoke-Campaign -Ids npp -Nulls 0)[0]
     Check 'Invoke-Campaign without -Engine: M0 run name, no plans copied, empty -Engine to Push-Tools' ($rec.ok -and $rec.run -eq 'npp' -and -not $rec.engine -and $script:PushArgs -eq '' -and -not (Test-Path (Join-Path $script:RunsDir 'npp\plans\purge.json'))) "ok=$($rec.ok) error=$($rec.error) push='$($script:PushArgs)'"
+}
+
+# ============================================================================== M2 executor runs (RIG.md §11)
+
+# ------------------------------------------------- m2-traps / m2-fixtures dry runs (no system change)
+& {
+    $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    foreach ($n in 'm2-traps', 'm2-fixtures') {
+        $od = Join-Path $Work "dry-$n"
+        $out = & $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Guest "$n.ps1") -DryRun -OutDir $od 2>&1
+        $code = $LASTEXITCODE
+        $files = @(Get-ChildItem -LiteralPath $od -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Sort-Object)
+        $want = @("$n-manifest.json", "$n-paths.txt", "$n-select.json", "$n-targets.json")
+        Check "$n.ps1 -DryRun: exit 0, manifest + targets + select + paths" ($code -eq 0 -and ($files -join ',') -eq ($want -join ',')) "exit $code; files $($files -join ','); $($out -join ' ')"
+        $t = $null; try { $t = [IO.File]::ReadAllText((Join-Path $od "$n-targets.json")) | ConvertFrom-Json } catch { }
+        Check "$n.ps1 -DryRun: targets are purge.rig.targets/0 with ids and groups" ($t -and $t.schema -eq 'purge.rig.targets/0' -and @($t.targets).Count -gt 0 -and -not @(@($t.targets) | Where-Object { -not $_.id -or -not $_.group }).Count) "$($t.schema) $(@($t.targets).Count)"
+    }
+    $a = ([IO.File]::ReadAllText((Join-Path $Work 'dry-m2-traps\m2-traps-manifest.json')) | ConvertFrom-Json | ConvertTo-Json -Depth 60 -Compress)
+    $b = ([IO.File]::ReadAllText((Join-Path $Vm 'truth\m2-traps.json')) | ConvertFrom-Json | ConvertTo-Json -Depth 60 -Compress)
+    Check 'm2-traps.ps1 -DryRun manifest equals vm\truth\m2-traps.json' ($a -eq $b) "lengths $($a.Length) / $($b.Length)"
+}
+
+# ----------------------------------------------------------------- riglib: M2 pure helpers
+& {
+    . (Join-Path $Guest 'riglib.ps1')
+    $ErrorActionPreference = 'Stop'
+    function Sha([string]$s) { $h = [Security.Cryptography.SHA256]::Create(); try { -join @($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($s)) | ForEach-Object { $_.ToString('x2') }) } finally { $h.Dispose() } }
+    $sel = Sha "a.x`nb.y`nc"
+    Check 'Get-M2SelectionHash: de-duplicated, ordinal sort, LF joined' ((Get-M2SelectionHash @('c', 'b.y', 'a.x', 'c')) -eq $sel) (Get-M2SelectionHash @('c', 'b.y', 'a.x', 'c'))
+    Check 'Get-M2Confirm: SHA-256(lower(plan_hash) || selection_hash)' ((Get-M2Confirm 'ABC123' @('c', 'a.x', 'b.y')) -eq (Sha ('abc123' + $sel)))
+    Check 'Get-M2SelectionHash: the empty selection hashes the empty string' ((Get-M2SelectionHash @()) -eq (Sha ''))
+    $m = $null; try { $null = Get-M2Confirm 'not-hex' @('a') } catch { $m = $_.Exception.Message }
+    Check 'Get-M2Confirm: a non-hex plan hash throws' ($m -match 'bad plan hash') $m
+    $e = New-M2ExecArgs 'C:\cr\out\r\plan-main.json' 'ff00' 'C:\cr\out\r\select-main.json' 'C:\cr\out\r\report-main.json' -RestorePoint always
+    Check 'New-M2ExecArgs: exec --plan --confirm --select --restore-point -o' ($e -ceq 'exec --plan C:\cr\out\r\plan-main.json --confirm ff00 --select C:\cr\out\r\select-main.json --restore-point always -o C:\cr\out\r\report-main.json') $e
+    $e = New-M2ExecArgs 'C:\a b\p.json' 'ff' -AllowIrreversible
+    Check 'New-M2ExecArgs: quotes a path with a space; --allow-irreversible' ($e -ceq 'exec --plan "C:\a b\p.json" --confirm ff --allow-irreversible') $e
+    $m = $null; try { $null = New-M2ExecArgs 'p' 'c' -RestorePoint sometimes } catch { $m = $_.Exception.Message }
+    Check 'New-M2ExecArgs: a bad --restore-point throws' ($m -match 'bad --restore-point') $m
+    Check 'New-M2UndoArgs: --session --items -o' ((New-M2UndoArgs 's1' 'C:\i.json' '' 'C:\u.json') -ceq 'undo --session s1 --items C:\i.json -o C:\u.json')
+    Check 'New-M2PlanArgs: plan from-targets <t> -o <p>' ((New-M2PlanArgs 'C:\t.json' 'C:\p.json') -ceq 'plan from-targets C:\t.json -o C:\p.json')
+    Check 'New-M2JournalArgs: recover / rollback --session / fault-points' ((New-M2JournalArgs 'recover') -ceq 'journal recover' -and (New-M2JournalArgs 'rollback' 's9') -ceq 'journal rollback --session s9' -and (New-M2JournalArgs 'fault-points') -ceq 'journal fault-points')
+    $m = $null; try { $null = New-M2JournalArgs 'show' } catch { $m = $_.Exception.Message }
+    Check 'New-M2JournalArgs: show without a session throws' ($m -match 'needs a session') $m
+    Check 'New-M2QuarantineArgs: purge --ids a b --yes-irreversible' ((New-M2QuarantineArgs 'purge' @('a', 'b')) -ceq 'quarantine purge --ids a b --yes-irreversible' -and (New-M2QuarantineArgs 'expiring') -ceq 'quarantine expiring')
+    $fp = @(ConvertFrom-M2FaultPoints "journal.header  before`r`nact.after`r`n  undo.act.after: x`r`nnot a point`r`nact.after")
+    Check 'ConvertFrom-M2FaultPoints: text lines, unique, dotted names only' (($fp -join ',') -eq 'journal.header,act.after,undo.act.after') ($fp -join ',')
+    $fp = @(ConvertFrom-M2FaultPoints '{"points":[{"name":"intent.flushed"},"regdelete.mid"]}')
+    Check 'ConvertFrom-M2FaultPoints: JSON {points: [obj|string]}' (($fp -join ',') -eq 'intent.flushed,regdelete.mid') ($fp -join ',')
+    $ids = @(Find-M2ExpiryIds '{"entries":[{"id":"q7","original":"C:\\Program Files\\X\\payload"},{"id":"q8","original":"C:\\Y"}]}' 'C:\Program Files\X\payload')
+    Check 'Find-M2ExpiryIds: the entry naming the path (JSON-escaped)' (($ids -join ',') -eq 'q7') ($ids -join ',')
+    $b = @('\??\C:\old.txt', '')
+    $c = Compare-PfroLists $b @('\??\C:\old.txt', '', '\??\C:\Program Files\T\a.dll', '\??\C:\ProgramData\Purge\Quarantine\x') @('C:\Program Files\T\a.dll') @('C:\U\b.dll')
+    Check 'Compare-PfroLists: pre-existing pair kept, expected source added once -> ok' ($c.ok -and $c.preexisting_identical -and @($c.added).Count -eq 1 -and $c.added[0].dst -eq 'C:\ProgramData\Purge\Quarantine\x')
+    $c = Compare-PfroLists $b @('\??\C:\U\b.dll', '') @('C:\Program Files\T\a.dll') @('C:\U\b.dll')
+    Check 'Compare-PfroLists: pre-existing pair lost, forbidden source, expected missing -> not ok' (-not $c.ok -and -not $c.preexisting_identical)
+    $c = Compare-PfroLists @() @('*1\??\C:\U\b.dll', '') @() @('C:\U\b.dll')
+    Check 'Compare-PfroLists: a forbidden (user-writable) source is reported' (-not $c.ok -and @($c.forbidden).Count -eq 1 -and @($c.unexpected).Count -eq 1)
+    $c = Compare-PfroLists @() @('\??\C:\A', '', '\??\C:\A', '') @('C:\A')
+    Check 'Compare-PfroLists: the same source registered twice is a duplicate' (-not $c.ok -and @($c.duplicates).Count -eq 1)
+    $o = ConvertFrom-M2Opts ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"batch":3,"points":["a.b"]}')))
+    Check 'ConvertFrom-M2Opts / Get-M2Opt: base64 JSON, defaults' ((Get-M2Opt $o 'batch' 0) -eq 3 -and (Get-M2Opt $o 'nope' 'd') -eq 'd' -and @((ConvertFrom-M2Opts ('__' + 'OPTS__')).PSObject.Properties).Count -eq 0)
+    Check 'Invoke-M2Engine / Invoke-Engine: fault abort code is 0xC0000409' ($RigFaultAbortExit -eq [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]3221226505), 0))
+}
+
+# --------------------------------------------------- rig.ps1: M2 names, engine separation, job text
+& {
+    . (Join-Path $Vm 'rig.ps1')
+    $ErrorActionPreference = 'Stop'
+    $repo = Join-Path $Work 'm2repo'
+    New-Item -ItemType Directory -Force (Join-Path $repo 'target\rig-exec\release'), (Join-Path $repo 'target\release') | Out-Null
+    $rx = Join-Path $repo 'target\rig-exec\release\purge-engine.exe'; [IO.File]::WriteAllText($rx, 'MZ rig-exec')
+    $rel = Join-Path $repo 'target\release\purge-engine.exe'; [IO.File]::WriteAllText($rel, 'MZ release')
+    Check 'Get-M2RunName: <prefix><mode>' ((Get-M2RunName -Mode 'm2-traps') -eq 'm2-traps' -and (Get-M2RunName -Mode 'm2-crash' -RunPrefix 'g3-') -eq 'g3-m2-crash')
+    $m = $null; try { $null = Get-M2RunName -Mode 'm2-traps' -RunPrefix 'G1-' } catch { $m = $_.Exception.Message }
+    Check 'Get-M2RunName: an uppercase prefix throws' ($m -match 'bad run name') $m
+    Check 'Get-M2Engine: default target\rig-exec\release\purge-engine.exe' ((Get-M2Engine -RepoRoot $repo) -eq $rx)
+    $m = $null; try { $null = Get-M2Engine -Engine $rel -RepoRoot $repo } catch { $m = $_.Exception.Message }
+    Check 'Get-M2Engine: the release engine target\release\purge-engine.exe is refused' ($m -match 'refusing the release engine') $m
+    $m = $null; try { $null = Get-M2Engine -Engine (Join-Path $repo 'target\release\..\release\purge-engine.exe') -RepoRoot $repo } catch { $m = $_.Exception.Message }
+    Check 'Get-M2Engine: the release engine through a relative path is refused too' ($m -match 'refusing the release engine') $m
+    $m = $null; try { $null = Get-M2Engine -Engine (Join-Path $repo 'nope.exe') -RepoRoot $repo } catch { $m = $_.Exception.Message }
+    Check 'Get-M2Engine: a missing engine throws' ($m -match 'not found') $m
+    Check 'Release engine file untouched by the M2 checks' ((Get-Content -Raw $rel) -eq 'MZ release')
+    $m = $null; try { Assert-RigVm 'Some-Other-VM' } catch { $m = $_.Exception.Message }
+    Check 'Assert-RigVm: only the two rig VMs' ($m -match 'not a rig VM' -and $null -eq (Assert-RigVm 'Purge-CleanPro') -and $null -eq (Assert-RigVm 'Inbound-Win11-Test'))
+    Check 'Get-M2Template: exec-run / m2-crash / m2-reboot' ((Get-M2Template 'm2-traps') -eq 'exec-run.ps1' -and (Get-M2Template 'm2-install') -eq 'exec-run.ps1' -and (Get-M2Template 'm2-crash') -eq 'm2-crash.ps1' -and (Get-M2Template 'm2-reboot') -eq 'm2-reboot.ps1')
+    $mo = Get-M2ModeOpts -Mode 'm2-crash' -HardPowerOff -FaultPoints @('act.after')
+    Check 'Get-M2ModeOpts m2-crash: batch 10 by default, hard_poweroff, points' ($mo.opts.batch -eq 10 -and $mo.opts.hard_poweroff -eq $true -and (@($mo.opts.points) -join ',') -eq 'act.after')
+    foreach ($ms in @(@('m2-traps', 'app'), @('m2-crash', 'matrix'), @('m2-reboot', 'after-reboot'))) {
+        $mode = $ms[0]; $stage = $ms[1]
+        $t = New-M2JobText -Mode $mode -Run 'g-run' -Stage $stage -Opts ([ordered]@{ batch = 2 })
+        $opts = [regex]::Match($t, "\`$OptsB64 = '([^']*)'").Groups[1].Value
+        $dec = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($opts)) | ConvertFrom-Json
+        Check "New-M2JobText $mode`: run, mode, stage and base64 options replaced" ($t.Contains("`$Run = 'g-run'") -and $t.Contains("`$Mode = '$mode'") -and $t.Contains("`$Stage = '$stage'") -and $dec.batch -eq 2)
+        $h = Test-HeadCheck $t
+        Check "$(Get-M2Template $mode) head check passes a replaced job" ($h.code -eq 7) "exit $($h.code): $($h.out)"
+        $raw = [IO.File]::ReadAllText((Join-Path $Guest (Get-M2Template $mode)))
+        $h = Test-HeadCheck $raw
+        Check "$(Get-M2Template $mode) unreplaced exits 2 before loading riglib" ($h.code -eq 2) "exit $($h.code): $($h.out)"
+    }
+    $m = $null; try { $null = New-M2JobText -Mode 'm2-traps' -Run 'Bad Run' } catch { $m = $_.Exception.Message }
+    Check 'New-M2JobText: a bad run name throws' ($m -match 'bad run name') $m
+}
+
+# ------------------------------- M2 end to end: host loop + guest scripts with fakes and the stub engine
+# Invoke-M2Mode runs as on the host; Invoke-GuestJob runs the generated job in a child powershell.exe with the
+# guest paths pointing at a work dir, the stub engine, and fakes for rigtool, the locker, PFRO, the boot id and
+# every system change. Continuations: Wait-GuestReboot / Invoke-HardPowerCycle advance a fake boot id.
+$M2Fakes = @'
+$RigOut = '@W@\out'; $RigTool = '@W@\rigtool.exe'; $RigEngine = '@W@\purge-engine.cmd'
+$RigPurgeData = '@W@\pd'; $RigEngineInstalled = '@W@\absent\purge-engine.exe'; $RigInstallScript = '@W@\install.ps1'
+$RigGuestDir = '@G@'; $RigWork = '@W@\work'; $RigDRoot = '@W@\dvol\'; $RigUserFpDir = '@W@\fp'
+$script:FakeEv = '@W@\events.txt'
+function Ev([string]$s) { [IO.File]::AppendAllText($script:FakeEv, $s + "`r`n") }
+function Start-Sleep { }
+function Suspend-EdgeUpdate { Ev 'edge-pause'; [ordered]@{ method = 'fake' } }
+function LaunchMedium([string]$Exe, [string]$Arguments = '', [string]$WorkDir = '', [string]$TaskName = 'PurgeRigLaunch', [int]$StartTimeoutSec = 30) { Ev "medium:$Arguments"; [pscustomobject]@{ task = $TaskName; pid = 4000001; found = $true } }
+function Stop-Launch($Launch, [int]$GraceSec = 5) { [pscustomobject]@{ closed = @(); killed = @() } }
+function Start-Native([string]$Exe, [string]$Arguments = '', [string]$WorkDir = '') {
+    Ev "start:$(Split-Path -Leaf $Exe) $Arguments"
+    $p = [pscustomobject]@{ Id = 4000002; ExitCode = 0 }
+    $p | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms) $true }
+    $p
+}
+function Get-RigBootId { [IO.File]::ReadAllText('@W@\bootid.txt').Trim() }
+function Invoke-RigShutdown([int]$DelaySec, [string]$Reason) { Ev "shutdown:$DelaySec" }
+function Start-M2Locker([string[]]$Paths, [string]$WorkDir, [int]$TimeoutSec = 60) { Ev "lock:$($Paths -join ',')"; [pscustomobject]@{ pid = 4000003; paths = $Paths; ready = $true; stop_file = '@W@\stop' } }
+function Stop-M2Locker($Locker, [int]$WaitSec = 10) { Ev 'unlock' }
+function Get-PfroList { if (-not (Test-Path -LiteralPath '@W@\pfro.json')) { return $null }; $x = [IO.File]::ReadAllText('@W@\pfro.json') | ConvertFrom-Json; , @($x | ForEach-Object { "$_" }) }
+function Set-PfroList([string[]]$Entries) { Ev "pfro-set:$(@($Entries).Count)"; [IO.File]::WriteAllText('@W@\pfro.json', (ConvertTo-Json -InputObject @($Entries))) }
+function Set-M2RegString([string]$Canon, [string]$Name, [string]$Data) { Ev "regset:$Canon|$Name"; $true }
+function Get-M2RestorePoints { @() }
+function Invoke-RigTool([string]$Arguments, [int]$TimeoutSec = 3600) { Ev "rigtool:$(($Arguments -split ' ')[0])"; [pscustomobject]@{ exit = 0; stdout = '{"added":[],"removed":[],"changed":[]}'; stderr = '' } }
+function Invoke-M2Snap([string]$Out, [string[]]$Roots = @()) { Ev "snap:$(Split-Path -Leaf $Out)"; [IO.File]::WriteAllText($Out, 'snap'); $Out }
+function Invoke-M2Deep([string[]]$Scopes, [string]$Out) { Ev "deep:$(Split-Path -Leaf $Out)"; [IO.File]::WriteAllText($Out, '{"schema":"purge.rig.deep/1","files":[],"keys":[],"errors":0}'); $Out }
+function Invoke-M2Execdiff {
+    param([string]$Before, [string]$After, [string]$Journal, [string]$Report, [string[]]$Traps = @(), [string[]]$Groups = @(), [string]$DeepBefore = '', [string]$DeepAfter = '', [string]$Out)
+    Ev "execdiff:$(Split-Path -Leaf $Out) groups=$($Groups -join ',') report=$(Split-Path -Leaf $Report)"
+    [IO.File]::WriteAllText($Out, '{"schema":"purge.rig.execdiff/1","ok":true,"session":"stub","counts":{"guard_escapes":0,"collateral":0,"unexplained":0,"missing_effects":0,"changed_not_done":0,"trap_mismatches":0,"not_scored":0,"unverified_canaries":0,"unverified_effects":0,"inconsistencies":0,"diff_records":0,"authorised":{}},"traps":[{"id":"stub-trap","gate":"G1","verdict":"pass","canaries_intact":true,"guard_escapes":0}],"collateral":[],"unexplained":[],"warnings":[]}')
+    [pscustomobject]@{ exit = 0; ok = $true; out = $Out }
+}
+function Invoke-M2Fidelity([string]$Before, [string]$After, [string]$Journal, [string]$Out) {
+    Ev "fidelity:$(Split-Path -Leaf $Out)"
+    [IO.File]::WriteAllText($Out, '{"schema":"purge.rig.fidelity/1","ok":true,"rows":[{"action":"QuarantineMove file","ops":1,"objects":1,"identical":1,"differing":0,"percent":100.0,"pass":true},{"action":"DeleteValue","ops":1,"objects":1,"identical":1,"differing":0,"percent":100.0,"pass":true},{"action":"DeleteService","ops":0,"objects":0,"identical":0,"differing":0,"percent":null,"pass":true,"note":"not executed in v1"}],"differences":[]}')
+    [pscustomobject]@{ exit = 0; ok = $true; out = $Out }
+}
+function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$TimeoutSec = 3600) {
+    $leaf = Split-Path -Leaf $Script
+    Ev "script:$leaf $Arguments"
+    function Arg([string]$n) { $m = [regex]::Match($Arguments, "-$n\s+(?:`"([^`"]*)`"|(\S+))"); if ($m.Success) { $m.Groups[1].Value + $m.Groups[2].Value } else { '' } }
+    $ok = [pscustomobject]@{ exit = 0; stdout = ''; stderr = ''; timed_out = $false }
+    if ($leaf -eq 'install.ps1') {
+        $rp = Arg 'ReportPath'
+        if ($rp) { [IO.File]::WriteAllText($rp, $(if (Test-Path -LiteralPath '@W@\installed') { '{"schema":"purge.install/1","changed":false,"renamed_aside":[]}' } else { '{"schema":"purge.install/1","changed":true,"renamed_aside":[{"path":"C:\\ProgramData\\Purge","to":"C:\\ProgramData\\Purge.rejected-1"}]}' })); [IO.File]::WriteAllText('@W@\installed', 'x') }
+        return $ok
+    }
+    $od = Arg 'OutDir'
+    if ($Arguments -match '-Action\s+check') {
+        $label = Arg 'Label'; $phase = Arg 'Phase'
+        $name = $(if ($leaf -eq 'm2-traps.ps1') { $(if ($label) { "m2-traps-check-$label.json" } else { 'm2-traps-check.json' }) } else { "m2-fixtures-check-$phase.json" })
+        [IO.File]::WriteAllText((Join-Path $od $name), '{"ok":true,"guard_escapes":0,"post_checks_failed":0,"traps":[]}')
+        return $ok
+    }
+    if ($Arguments -match '-Action\s+(reset|swap|plant-[a-z-]+)') { return $ok }
+    $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    Invoke-Native -Exe $exe -Arguments ('-NoProfile -ExecutionPolicy Bypass -File "' + $Script + '" ' + $Arguments + ' -DryRun') -TimeoutSec 300
+}
+'@
+
+& {
+    . (Join-Path $Vm 'rig.ps1')
+    $ErrorActionPreference = 'Stop'
+    $W = Join-Path $Work 'm2'
+    foreach ($d in 'out', 'pd', 'work', 'dvol', 'fp', 'host\runs', 'repo\target\rig-exec\release', 'repo\install') { New-Item -ItemType Directory -Force (Join-Path $W $d) | Out-Null }
+    [IO.File]::WriteAllText((Join-Path $W 'fp\forged.json'), '{"schema":"purge.fp/0"}')
+    [IO.File]::WriteAllText((Join-Path $W 'bootid.txt'), 'boot-1')
+    [IO.File]::WriteAllText((Join-Path $W 'repo\target\rig-exec\release\purge-engine.exe'), 'MZ rig-exec')
+    [IO.File]::WriteAllText((Join-Path $W 'repo\install\install.ps1'), '# fake')
+    $sd = New-StubEngine $W 'Fake-npp'
+    [IO.File]::WriteAllText((Join-Path $W 'm2fakes.ps1'), $M2Fakes.Replace('@W@', $W).Replace('@G@', $Guest), (New-Object System.Text.UTF8Encoding($true)))
+    $script:RunsDir = Join-Path $W 'host\runs'
+    $script:RepoRoot = Join-Path $W 'repo'
+    $script:M2Jobs = New-Object System.Collections.ArrayList
+    $script:M2Guest = New-Object System.Collections.ArrayList
+    $script:Boot = 1
+
+    function Get-PwFile { 'C:\nonexistent\pw.txt' }
+    function Restore-Base { param($Snapshot, $AgentTimeoutSec) [void]$script:M2Guest.Add("restore $Snapshot") }
+    function Push-Tools { param([string]$RigTool = '', [string]$Engine = '', [switch]$NoBaselines, [string[]]$Installers = @()) [void]$script:M2Guest.Add("push $Engine") }
+    function Wait-Agent { param([int]$TimeoutSec = 300) }
+    function Local([string]$GuestPath) { if ($GuestPath -like 'C:\cr\out\*') { Join-Path (Join-Path $W 'out') $GuestPath.Substring(10) } else { $null } }
+    function Invoke-Guest([string[]]$Sub) {
+        [void]$script:M2Guest.Add($Sub -join ' ')
+        if ($Sub[0] -eq 'copyfrom') {
+            $l = Local $Sub[1]
+            if ($l -and (Test-Path -LiteralPath $l)) { Copy-Item -LiteralPath $l -Destination $Sub[2] -Force; return [pscustomobject]@{ code = 0; out = @() } }
+            return [pscustomobject]@{ code = 1; out = @('no such file') }
+        }
+        [pscustomobject]@{ code = 0; out = @() }
+    }
+    function Invoke-GuestCmd([string]$CommandLine, [int]$TimeoutSec = 120) {
+        [void]$script:M2Guest.Add("cmd $CommandLine")
+        if ($CommandLine -match '^dir /b /a-d (C:\\cr\\out\\\S+)$') { return [pscustomobject]@{ code = 0; out = @(Get-ChildItem -LiteralPath (Local $Matches[1]) -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) } }
+        [pscustomobject]@{ code = 0; out = @() }
+    }
+    function Wait-GuestReboot { param([string]$BootBefore = '', [int]$TimeoutSec = 900) $script:Boot++; [IO.File]::WriteAllText((Join-Path $W 'bootid.txt'), "boot-$($script:Boot)"); [void]$script:M2Guest.Add("reboot from $BootBefore"); "boot-$($script:Boot)" }
+    function Invoke-HardPowerCycle { param([int]$AgentTimeoutSec = 600) $script:Boot++; [IO.File]::WriteAllText((Join-Path $W 'bootid.txt'), "boot-$($script:Boot)"); [void]$script:M2Guest.Add('hard power cycle') }
+    function Invoke-GuestJob {
+        param($Text, $Name, $TimeoutSec, $LogCopy)
+        $t = $Text.Replace('. C:\cr\guest\riglib.ps1', ". '$Guest\riglib.ps1'`r`n. '$W\m2fakes.ps1'")
+        $job = Join-Path $W ("job-{0:000}.ps1" -f ($script:M2Jobs.Count + 1))
+        [IO.File]::WriteAllText($job, $t, (New-Object System.Text.UTF8Encoding($true)))
+        $env:STUB_DIR = $sd.stub; $env:STUB_EV = Join-Path $W 'events.txt'; $env:STUB_DATA = Join-Path $W 'pd'; $env:STUB_FAIL = ''
+        try { $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $job 2>&1; $code = $LASTEXITCODE }
+        finally { Remove-Item Env:STUB_DIR, Env:STUB_EV, Env:STUB_DATA, Env:STUB_FAIL -ErrorAction SilentlyContinue }
+        [IO.File]::WriteAllText($LogCopy, ($out -join "`r`n"))
+        [void]$script:M2Jobs.Add([pscustomobject]@{ name = $Name; code = $code; out = ($out -join "`n") })
+        [pscustomobject]@{ name = $Name; done = $true; seconds = 1; log = ($out -join "`n"); log_file = $LogCopy }
+    }
+    # The real-app runs of m2-fidelity: a finished run-app job (run.json + plan-purge.json with one Safe item).
+    function Invoke-Run {
+        param([string]$Id, [string]$RunPrefix = '', [switch]$Engine)
+        $run = "$RunPrefix$Id"
+        $g = Join-Path (Join-Path $W 'out') $run; New-Item -ItemType Directory -Force $g | Out-Null
+        [IO.File]::WriteAllText((Join-Path $g 'plan-purge.json'), '{"schema":"purge.plan/0","app":"' + $Id + '","tool":"purge","mode":"post","items":[{"target":{"type":"Path","path":"C:\\fake\\left"},"band":"Safe","preselected":true,"scanner":"FS-INSTALLDIR"},{"target":{"type":"Path","path":"C:\\fake\\maybe"},"band":"Likely","preselected":false,"scanner":"FS-INSTALLDIR"}]}')
+        [IO.File]::WriteAllText((Join-Path $g 'plan-purge.scan.json'), '{"schema":"purge.scan/0","plan_hash":"abc123","items":[{"id":"c-left","target":{"type":"Path","path":"C:\\fake\\left"},"action":"Quarantine"},{"id":"c-maybe","target":{"type":"Path","path":"C:\\fake\\maybe"},"action":"Quarantine"}]}')
+        $h = Join-Path $script:RunsDir $run; New-Item -ItemType Directory -Force $h | Out-Null
+        [IO.File]::WriteAllText((Join-Path $h 'run.json'), (New-RunJson $run (Get-Date)))
+        [pscustomobject]@{ run = $run; done = $true; seconds = 1; pulled = @('run.json') }
+    }
+    function Ev-Lines { if (Test-Path (Join-Path $W 'events.txt')) { @([IO.File]::ReadAllLines((Join-Path $W 'events.txt'))) } else { @() } }
+    function Reset-Ev { Remove-Item -LiteralPath (Join-Path $W 'events.txt') -Force -ErrorAction SilentlyContinue; $script:M2Jobs.Clear(); $script:M2Guest.Clear() }
+    function RunJson([string]$Run) { [IO.File]::ReadAllText((Join-Path $script:RunsDir "$Run\run.json")) | ConvertFrom-Json }
+    function Failed($J) { @(@($J.phases) | Where-Object { -not $_.ok } | ForEach-Object { "$($_.name): $($_.error)" }) -join ' | ' }
+    $hex64 = '[0-9a-f]{64}'
+
+    # --- refusals before anything runs
+    $m = $null; try { $null = Invoke-M2Mode -Mode 'm2-traps' -Engine (Join-Path $W 'repo\target\release\purge-engine.exe') } catch { $m = $_.Exception.Message }
+    Check 'Invoke-M2Mode: a missing engine is refused before any VM call' ($m -match 'not found' -and $script:M2Guest.Count -eq 0) $m
+    $script:VmName = 'Some-Other-VM'
+    $m = $null; try { $null = Invoke-M2Mode -Mode 'm2-traps' } catch { $m = $_.Exception.Message }
+    Check 'Invoke-M2Mode: a VM other than the two rig VMs is refused' ($m -match 'not a rig VM' -and $script:M2Guest.Count -eq 0) $m
+    $script:VmName = 'Inbound-Win11-Test'
+    $m = $null; try { $null = Invoke-M2Mode -Mode 'm2-traps' -HardPowerOff } catch { $m = $_.Exception.Message }
+    Check 'Invoke-M2Mode: -HardPowerOff only with m2-crash' ($m -match 'm2-crash only') $m
+
+    # --- m2-install
+    Reset-Ev
+    $rec = Invoke-M2Mode -Mode 'm2-install'
+    $j = RunJson 'm2-install'
+    $ev = Ev-Lines
+    Check 'm2-install: one stage, run ok, restored m2-base, rig-exec engine + install.ps1 pushed' ($rec.ok -and @($rec.stages).Count -eq 1 -and $script:M2Guest[0] -eq 'restore m2-base' -and ($script:M2Guest -contains "push $(Join-Path $W 'repo\target\rig-exec\release\purge-engine.exe')") -and ($script:M2Guest -match 'copyto --target-directory C:\\cr\\install\\ ').Count -eq 1) "ok=$($rec.ok) error=$($rec.error) $(Failed $j)"
+    Check 'm2-install: install, re-run unchanged, check; D: queue pre-created at medium IL' ($j.results.install.exit -eq 0 -and $j.results.install.rerun_changed -eq $false -and $j.results.install.renamed_aside -eq 1 -and $j.results.d_volume.present -eq $true -and @($ev -match '^medium:/c mkdir \S+\\dvol\\\.purge-q & echo planted-by-user> ').Count -eq 1) ($j.results | ConvertTo-Json -Depth 4 -Compress)
+    Check 'm2-install: plan from-targets then exec --plan --confirm <sha256> --select -o' (@($ev -match '^engine:plan from-targets ').Count -eq 1 -and @($ev -match "^engine:exec --plan \S+plan-d-volume\.json --confirm $hex64 --select \S+select-d-volume\.json -o \S+report-d-volume\.json$").Count -eq 1) (($ev -match '^engine:') -join ' | ')
+    Check 'm2-install: job log and store pulled' ((Test-Path (Join-Path $script:RunsDir 'm2-install\job-01-start.log')) -and (Test-Path (Join-Path $script:RunsDir 'm2-install\final-sessions.zip')) -and (Test-Path (Join-Path $script:RunsDir 'm2-install\final-quarantine.json')))
+
+    # --- m2-traps
+    Reset-Ev
+    $rec = Invoke-M2Mode -Mode 'm2-traps' -RunPrefix 't-'
+    $j = RunJson 't-m2-traps'
+    $ev = Ev-Lines
+    $calls = @($j.engine.calls)
+    Check 'm2-traps: run t-m2-traps ok, every phase ok' ($rec.ok -and $rec.run -eq 't-m2-traps' -and -not (Failed $j)) "error=$($rec.error) $(Failed $j)"
+    $rf = $j.results.refusals
+    Check 'm2-traps: wrong confirm, tampered sidecar, reordered plan all refused with no new session' ($rf.wrong_confirm.refused -and $rf.tampered_sidecar.refused -and $rf.tampered_sidecar.tampered -and $rf.reordered_plan.refused -and $rf.reordered_plan.plan_hash_differs -and $rf.wrong_confirm.new_sessions -eq 0 -and $rf.no_change) ($rf | ConvertTo-Json -Depth 4 -Compress)
+    $main = @($calls | Where-Object { $_.step -eq 'exec-main' })[0]
+    $bad = @($calls | Where-Object { $_.step -eq 'exec-refuse-confirm' })[0]
+    Check 'm2-traps: the wrong confirm differs from the main confirm in the last digit only' ($main -and $bad -and ($main.cmd -replace '^.*--confirm (\S+).*$', '$1').Substring(0, 63) -eq ($bad.cmd -replace '^.*--confirm (\S+).*$', '$1').Substring(0, 63) -and ($main.cmd -replace '^.*--confirm (\S+).*$', '$1') -ne ($bad.cmd -replace '^.*--confirm (\S+).*$', '$1'))
+    Check 'm2-traps: race groups run with PURGE_FAULT_PAUSE from the manifest and the swap helper' (@($calls | Where-Object { $_.step -eq 'exec-race-a' -and $_.env -eq 'PURGE_FAULT_PAUSE=intent.flushed:8000' }).Count -eq 1 -and @($calls | Where-Object { $_.step -eq 'exec-race-b' -and $_.env -eq 'PURGE_FAULT_PAUSE=act.before:8000' }).Count -eq 1 -and @($ev -match '^start:powershell\.exe .*-Action swap -TrapId race-validate-open').Count -eq 1) (($calls | ForEach-Object { "$($_.step) [$($_.env)]" }) -join ', ')
+    Check 'm2-traps: execdiff per group (main, race-a, race-b) with the trap manifest' (@($ev -match '^execdiff:execdiff-main\.json groups=main').Count -eq 1 -and @($ev -match '^execdiff:execdiff-race-a\.json groups=race-a').Count -eq 1 -and @($ev -match '^execdiff:execdiff-race-b\.json groups=race-b').Count -eq 1)
+    Check 'm2-traps: expiry walk: quarantine expiring, purge --ids q1 --yes-irreversible' ((@($j.results.expiry.ids) -join ',') -eq 'q1' -and @($ev -match '^engine:quarantine purge --ids q1 --yes-irreversible$').Count -eq 1 -and @($ev -match '^script:m2-traps\.ps1 -Action plant-expiry-junction').Count -eq 1) ($j.results.expiry | ConvertTo-Json -Compress)
+    Check 'm2-traps: undo keeps the expiry item quarantined' ((@($j.results.undo.main.kept_for_expiry) -join ',') -eq 'expiry-junction.dir' -and @($calls | Where-Object { $_.step -eq 'undo-main' -and $_.cmd -match '--items ' }).Count -eq 1)
+    Check 'm2-traps: forged fingerprint scanned, no canary path Safe or preselected' ($j.results.forged_fp.ok -eq $true)
+    $files = @(Get-ChildItem -LiteralPath (Join-Path $script:RunsDir 't-m2-traps') -File | ForEach-Object { $_.Name })
+    $need = 'run.json', 'm2-traps-manifest.json', 'execdiff-main.json', 'execdiff-race-a.json', 'execdiff-race-b.json', 'fidelity-main.json', 'deep-a.json', 'deep-c.json', 'report-main.json', 'sess-main-journal.jsonl', 'm2-traps-check-final.json', 'expiring.json', 'final-index.json'
+    $miss = @($need | Where-Object { $files -notcontains $_ })
+    Check 'm2-traps: outputs pulled to vm\runs\t-m2-traps' (-not $miss.Count) "missing: $($miss -join ', ')"
+
+    # --- m2-fidelity, with one real-app round trip
+    Reset-Ev
+    $rec = Invoke-M2Mode -Mode 'm2-fidelity' -Apps @('npp')
+    $j = RunJson 'm2-fidelity'
+    $calls = @($j.engine.calls)
+    Check 'm2-fidelity: run ok, every phase ok (fixtures, partial, conflict, tamper, restore point, app)' ($rec.ok -and -not (Failed $j) -and @($rec.after).Count -eq 1 -and $rec.after[0].ok) "error=$($rec.error) $(Failed $j)"
+    Check 'm2-fidelity: partial undo with --items, half the items' (@($calls | Where-Object { $_.step -eq 'undo-partial' -and $_.cmd -match '--items ' }).Count -eq 1 -and @($j.results.partial_undo.undone).Count -ge 1)
+    Check 'm2-fidelity: backup tamper flips a byte of the intent''s backup file' ($j.results.backup_tamper.backup -eq 'b1.bin' -and $j.results.backup_tamper.undo_exit -eq 0)
+    Check 'm2-fidelity: restore point phase execs twice with --restore-point always' (@($calls | Where-Object { $_.cmd -match '--restore-point always' }).Count -eq 2 -and $j.results.restore_point.snapshot -eq 'm2-base')
+    Check 'm2-fidelity: app stage executes the default selection of the app plan (Safe + preselected)' ($j.results.apps.npp.selected -eq 1 -and (Get-Content -Raw (Join-Path $script:RunsDir 'm2-fidelity\select-app-npp.json')) -match 'c-left' -and (Get-Content -Raw (Join-Path $script:RunsDir 'm2-fidelity\select-app-npp.json')) -notmatch 'c-maybe' -and $j.results.fidelity.'app-npp' -eq $true)
+    Check 'm2-fidelity: two stages recorded in run.json (start, app)' ((@($j.stages | ForEach-Object { $_.stage }) -join ',') -eq 'start,app')
+
+    # --- m2-crash: batches with a reboot continuation, torn journals
+    Reset-Ev
+    $rec = Invoke-M2Mode -Mode 'm2-crash' -BatchSize 4
+    $j = RunJson 'm2-crash'
+    $mx = [IO.File]::ReadAllText((Join-Path $script:RunsDir 'm2-crash\crash-matrix.json')) | ConvertFrom-Json
+    $rows = @($mx.rows)
+    Check 'm2-crash: start (4 iterations) -> reboot continuation -> matrix (3 + torn); run ok' ($rec.ok -and (@($rec.stages | ForEach-Object { $_.stage }) -join ',') -eq 'start,matrix' -and $rec.stages[0].continuation.kind -eq 'reboot' -and ($script:M2Guest -contains 'reboot from boot-1') -and -not (Failed $j)) "error=$($rec.error) $(Failed $j) stages=$(($rec.stages | ConvertTo-Json -Compress -Depth 4))"
+    Check 'm2-crash: matrix rows: exec points x {resume, rollback} + undo points x resume' ($rows.Count -eq 7 -and @($rows | Where-Object { $_.phase -eq 'undo' -and $_.point -eq 'undo.intent' }).Count -eq 1 -and @($rows | Where-Object { $_.point -eq 'act.after' -and $_.after -eq 'rollback' }).Count -eq 1) ($rows | ForEach-Object { "$($_.point)/$($_.phase)/$($_.after)" })
+    Check 'm2-crash: every point crashed with 0xC0000409, recovered twice idempotently, passed' (@($rows | Where-Object { $_.hit -and $_.crashed -and $_.recover_idempotent -and $_.pass }).Count -eq 7) (($rows | ForEach-Object { "$($_.tag) hit=$($_.hit) pass=$($_.pass) err=$($_.error)" }) -join ' | ')
+    Check 'm2-crash: fault injected through PURGE_FAULT_AT, recover, resume and rollback issued' (@($j.engine.calls | Where-Object { $_.env -eq 'PURGE_FAULT_AT=act.after' }).Count -ge 2 -and @($j.engine.calls | Where-Object { $_.cmd -match ' journal rollback --session s\d+$' }).Count -ge 3 -and @($j.engine.calls | Where-Object { $_.cmd -match ' journal resume --session s\d+$' }).Count -ge 4 -and @($j.engine.calls | Where-Object { $_.cmd -match ' journal recover$' }).Count -ge 14)
+    Check 'm2-crash: torn tail and torn middle variants recorded' ($j.results.torn.tail.crashed -and $j.results.torn.middle.crashed -and $null -ne $j.results.torn.middle.recover_exit -and (Test-Path (Join-Path $script:RunsDir 'm2-crash\crash-torn.json')))
+    Check 'm2-crash: the continuation marker was archived as continue-1.json' ((Test-Path (Join-Path $script:RunsDir 'm2-crash\continue-1.json')) -and -not (Test-Path (Join-Path $script:RunsDir 'm2-crash\continue.json')))
+
+    # --- m2-reboot: two reboot continuations
+    Reset-Ev
+    [IO.File]::WriteAllText((Join-Path $W 'pfro.json'), '["\\??\\C:\\Windows\\Temp\\old.tmp","\\??\\C:\\Windows\\Temp\\new.tmp"]')
+    $rec = Invoke-M2Mode -Mode 'm2-reboot'
+    $j = RunJson 'm2-reboot'
+    $ev = Ev-Lines
+    Check 'm2-reboot: start -> after-reboot -> after-mismatch, run ok' ($rec.ok -and (@($rec.stages | ForEach-Object { $_.stage }) -join ',') -eq 'start,after-reboot,after-mismatch' -and -not (Failed $j)) "error=$($rec.error) $(Failed $j)"
+    Check 'm2-reboot: both locked files held before the exec, the guest restart requested twice' (@($ev -match '^lock:C:\\Program Files\\PurgeTrapApp\\locked\\admin-locked\.dll,C:\\PurgeTrapUW\\boot\\user-locked\.dll$').Count -eq 2 -and @($ev -match '^shutdown:').Count -eq 2)
+    Check 'm2-reboot: boot ids differ across both reboots' ($j.results.reboot.boot_changed -eq $true -and $j.results.mismatch.boot_changed -eq $true)
+    Check 'm2-reboot: scenario M keeps the pre-existing PFRO pair and adds only the decoy' (@($j.results.scenario_m.pfro_tampered).Count -eq 4 -and $j.results.scenario_m.pfro_tampered[0] -eq '\??\C:\Windows\Temp\old.tmp')
+    Check 'm2-reboot: retry after plant-boot-junction executes only the user-writable item' (@($ev -match '^script:m2-traps\.ps1 -Action plant-boot-junction').Count -eq 1 -and (Get-Content -Raw (Join-Path $script:RunsDir 'm2-reboot\select-retry.json')) -match 'boot-uw-planted\.file' -and (Get-Content -Raw (Join-Path $script:RunsDir 'm2-reboot\select-retry.json')) -notmatch 'boot-admin')
+    Check 'm2-reboot: journal show --session after each reboot' (@($j.engine.calls | Where-Object { $_.cmd -match ' journal show --session s\d+$' }).Count -eq 2)
+
+    # --- hard power-off: marker kind poweroff without -HardPowerOff is an error, with it a power cycle
+    $cont = Join-Path $W 'out\pw-run'
+    New-Item -ItemType Directory -Force $cont | Out-Null
+    function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy) [IO.File]::WriteAllText($LogCopy, 'log'); $script:PwJobs++
+        if ($script:PwJobs -eq 1) { [IO.File]::WriteAllText((Join-Path $cont 'continue.json'), '{"schema":"purge.rig.continue/1","seq":1,"kind":"poweroff","next":"after-poweroff","boot_before":"boot-x"}') } else { Remove-Item -LiteralPath (Join-Path $cont 'continue.json') -Force -ErrorAction SilentlyContinue }
+        [pscustomobject]@{ name = $Name; done = $true; seconds = 1; log = ''; log_file = $LogCopy } }
+    $script:PwJobs = 0; $script:M2Guest.Clear()
+    $r = Invoke-M2Job -Run 'pw-run' -Mode 'm2-crash'
+    Check 'Invoke-M2Job: a poweroff continuation without -HardPowerOff stops with an error' ($r.error -match 'HardPowerOff' -and -not ($script:M2Guest -contains 'hard power cycle'))
+    $script:PwJobs = 0; $script:M2Guest.Clear()
+    $r = Invoke-M2Job -Run 'pw-run' -Mode 'm2-crash' -HardPowerOff
+    Check 'Invoke-M2Job -HardPowerOff: power cycle, then stage after-poweroff' (-not $r.error -and $r.done -and ($script:M2Guest -contains 'hard power cycle') -and (@($r.stages | ForEach-Object { $_.stage }) -join ',') -eq 'start,after-poweroff')
+    function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy) [IO.File]::WriteAllText($LogCopy, 'log'); [IO.File]::WriteAllText((Join-Path $cont 'continue.json'), '{"seq":1,"kind":"reboot","next":"matrix","boot_before":"b"}'); [pscustomobject]@{ name = $Name; done = $true; seconds = 1; log = ''; log_file = $LogCopy } }
+    $r = Invoke-M2Job -Run 'pw-run' -Mode 'm2-crash'
+    Check 'Invoke-M2Job: a marker the next stage does not take (same seq twice) stops the loop' ($r.error -match 'seen twice' -and @($r.stages).Count -eq 2)
+
+    if ($env:RIG_SELFTEST_M2_OUT) {
+        New-Item -ItemType Directory -Force $env:RIG_SELFTEST_M2_OUT | Out-Null
+        Copy-Item -Path (Join-Path $script:RunsDir '*') -Destination $env:RIG_SELFTEST_M2_OUT -Recurse -Force
+        Write-Host "M2 stub runs copied to $env:RIG_SELFTEST_M2_OUT"
+    }
 }
 
 } catch {

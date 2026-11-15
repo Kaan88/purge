@@ -615,3 +615,157 @@ The agent wait is 900 s (`win-unit.ps1 -AgentTimeoutSec`): both rig-base snapsho
 autologon), which can take minutes on a loaded host. First proof (2026-11-14, Purge-CleanPro): 25 binaries, 959
 passed / 0 failed unelevated (Medium) and 961 / 0 elevated with --include-ignored, all 10 KNOWN wine failures pass;
 124 s from lock to snapshot restored.
+
+## 11. M2 executor runs (`rig.ps1 -Mode m2-*`, docs/M2_DESIGN.json gate G0-G6)
+
+Five modes, each one run from a fresh restore of `m2-base` (§1; `-Snapshot` overrides, e.g. `rig-base` for the
+G6 "System Protection off" leg or Clean-Pro, which has no `m2-base`). Only file, registry and AppX items are
+executed in v1; service, scheduled-task and firewall items are planned but deferred, so wherever a trap or
+fixture plants one, the expected outcome is "untouched" (fidelity rows `DeleteService`, `DeleteTask`,
+`DeleteFirewallRule` with ops 0; the gate fails if one has ops).
+
+    $env:VMPWFILE = '<guest password file>'
+    .\vm\rig.ps1 -Mode m2-install
+    .\vm\rig.ps1 -Mode m2-traps
+    .\vm\rig.ps1 -Mode m2-fidelity -Apps npp,7zip
+    .\vm\rig.ps1 -Mode m2-crash -HardPowerOff [-FaultPoints act.after,intent.flushed] [-BatchSize 10]
+    .\vm\rig.ps1 -Mode m2-reboot
+    bash truth/m2.sh                       # from vm/: results/m2-gate.json + .md
+
+Run names are `<RunPrefix><mode>` (`m2-traps`, or `g1-m2-traps` with `-RunPrefix g1-`); outputs go to
+`vm\runs\<run>\` as usual (Pull-Run, Test-RunResult), plus `job-<n>-<stage>.log` per guest job and
+`vm\runs\m2-<run>-<stamp>.log/.json` for the host side.
+
+### 11.1 Engine and pushed files
+
+- The engine is the `rig-exec` build (fault injection, `PURGE_FAULT_AT` / `PURGE_FAULT_PAUSE`, the expiry clock
+  override), built into its own target dir: `cargo build --release -p purge-engine --features rig-exec` with
+  `CARGO_TARGET_DIR=target\rig-exec`. `-Engine` defaults to `target\rig-exec\release\purge-engine.exe`;
+  `target\release\purge-engine.exe` (the release engine the M1a modes push) is refused, so an M2 run can never
+  replace or use it. The guest copy lands in `C:\cr\bin\purge-engine.exe` of the restored snapshot only.
+- Push: Push-Tools (rigtool, engine, baselines, `vm\guest\*.ps1`) and Push-M2Install (`install\install.ps1` ->
+  `C:\cr\install\install.ps1`). Every M2 job first runs install.ps1 with `-Engine C:\cr\bin\purge-engine.exe`; the
+  engine calls then use `C:\Program Files\Purge\purge-engine.exe` when it is there (riglib Get-M2EngineExe).
+- Guard rails in rig.ps1: Assert-RigVm (only `Inbound-Win11-Test` and `Purge-CleanPro`), run and stage names
+  `[a-z0-9][a-z0-9_.-]*`, the password only through `$env:VMPWFILE` / `--passwordfile` (never logged).
+
+### 11.2 Jobs, stages and the reboot-in-job mechanism
+
+A guest script is a template: `rig.ps1 New-M2JobText` replaces `__RUN__`, `__MODE__`, `__STAGE__` and `__OPTS__`
+(base64 of UTF-8 JSON; `mode`, `snapshot`, and per mode `batch`, `hard_poweroff`, `points`, `app`, `app_run`).
+An unreplaced or unknown value exits 2 before riglib is loaded. `exec-run.ps1` serves m2-install, m2-traps and
+m2-fidelity; `m2-crash.ps1` and `m2-reboot.ps1` their modes.
+
+A stage that needs a reboot ends with riglib `Request-RigContinuation`: it writes `C:\cr\out\<run>\continue.json`
+(`purge.rig.continue/1`: `seq`, `kind` reboot | poweroff, `next` stage, `data`, `boot_before` = LastBootUpTime UTC)
+and, for `reboot`, schedules `shutdown /r /t 45` so the job can finish. The host (Invoke-M2Job), after each job:
+reads the marker with `copyfrom`; none = run complete. `reboot`: Wait-GuestReboot polls the guest's boot time
+until it differs from `boot_before`, then Wait-Agent. `poweroff` (only with `-HardPowerOff`, else an error):
+Invoke-HardPowerCycle = `VBoxManage controlvm <vm> poweroff`, wait for poweroff/aborted, `startvm --type headless`,
+Wait-Agent. Then the same script is submitted with `__STAGE__ = next`. The next stage reopens run.json (Open-M2Run
+appends to `stages` and `phases`; only stage `start` clears the run dir) and archives the marker as
+`continue-<seq>.json` with `boot_after`. A marker whose `seq` the host has seen already stops the loop (a stage
+that did not take its marker), as do more than 60 continuations.
+
+`Invoke-SnapshotJob -Run <name> -Mode <mode> [-Template <script>] [-Opts @{...}] [-Snapshot ...] [-After {...}]`
+is the generic entry: Move-RunToOld, Restore-Base, Push-Tools + Push-M2Install, the stage loop, an optional
+`-After` block (more jobs in the same VM session), Pull-Run, job logs, Test-RunResult. Invoke-M2Mode (the
+`-Mode` footer) wraps it with the per-mode options and timeouts.
+
+### 11.3 Modes, phases, outputs
+
+All runs write `run.json` (`purge.rig.m2/1`: `stages`, `phases`, `engine.calls` with each command line, env,
+exit and stderr tail, `results`) and `run.log`. Common files: `targets-<tag>.json` (the merged
+`purge.rig.targets/0` handed to `plan from-targets`), `plan-<tag>.json` + `.scan.json`, `select-<tag>.json`,
+`report-<tag>.json`, `exec-<tag>.out`, `undo-<tag>.json`, `sess-<tag>-*` (copies of the session's files),
+`snap-<run>-<tag>.tsv.gz`, `deep-<tag>-{a,b,c}.json`, `execdiff-<tag>.json`, `fidelity-<tag>.json`,
+`<tag>-index.json` / `<tag>-sessions.zip` / `<tag>-quarantine.json` (the store, Save-M2Store).
+
+- **m2-install** (G0, one stage): edge-pause, traps-pre (`m2-traps.ps1 -Stage pre-install`: the attacker's
+  pre-created `C:\ProgramData\Purge`), d-precreate (medium IL: `D:\.purge-q` with a marker file), install
+  (install.ps1, re-run, `-Check`: `install.json`, `install-rerun.json`, `install-check.txt`), traps-build,
+  traps-check-after-install, d-exec (a payload on `D:` quarantined; the user's `D:\.purge-q` must not be adopted),
+  store.
+- **m2-traps** (G1, G5, one stage): edge-pause, traps-pre, install, traps-build, traps-check-after-install,
+  plan-main (group `main`), refusals (wrong `--confirm`, a sidecar with one path changed, the targets planned in
+  reverse order with the main confirm; scoped snaps before/after must not differ: `refuse-diff.json`), snap-a,
+  deep-a, exec-main, snap-b, deep-b, execdiff-main (`--traps m2-traps-manifest.json --group main`, deep A/B),
+  traps-check-after-exec, undo-main (every item but the expiry trap's), deep-c, fidelity-main, expiry
+  (plant-expiry-junction, `quarantine expiring` with the clock override env, `quarantine purge --ids` of the
+  entries naming the expiry item: `expiring.json`, `expiry-*` store), traps-check-after-expiry, race-a / race-b
+  (each its own plan, exec with the manifest's `helper.env` PURGE_FAULT_PAUSE and the swap helper in the
+  background, scoped snaps, deep, `execdiff-race-*.json`), forged-fp (`scan --fp <user-store fp> --mode post`
+  -> `plan-forged.json`; no canary path Safe or preselected), traps-check-final, store.
+- **m2-fidelity** (G2, G6; stages `start`, then `app` per real app): install, fixtures-build, plan-main, snap/deep
+  A, exec-main, snap/deep B, execdiff-main, fixtures-check-after-exec, undo-main, deep-c, fidelity-main,
+  fixtures-check-after-undo, store-main; partial (fresh fixtures, undo `--items` of the first half,
+  `fidelity-partial.json`), undo-conflict (a deleted value recreated with other data before the undo; `kept` and
+  `reported`), backup-tamper (one byte of the first intent's backup file flipped; `fidelity-tamper.json`),
+  restore-point (two execs with `--restore-point always`; restore point count before/after, `restore_point` of
+  each report). Per app (`-Apps`, default npp, 7zip): the M1a engine run `<run>-<id>` (run-app.ps1 installs,
+  uninstalls, scans), then stage `app`: its `plan-purge.json` with the default selection (Safe + preselected),
+  snap/deep A, exec, snap B, execdiff, undo, deep C, fidelity (`*-app-<id>.*`).
+- **m2-crash** (G3; stages `start`, `matrix`..., `after-poweroff`...): `journal fault-points` (`fault-points.out`);
+  iterations = every exec-phase point x {resume, rollback} + every undo-phase point (undo.intent,
+  undo.act.after, regrestore.mid, index.write) x resume; `-BatchSize` per job (default 10), then a reboot
+  continuation. Iteration: fresh fixtures in `C:\cr\work\<run>\<tag>`, plan, deep A, scoped snap A; exec (or exec
+  then undo) with `PURGE_FAULT_AT=<point>`; a crash is exit 0xC0000409; `journal recover` twice with deep after
+  each (the second must change nothing); `journal resume --session` (then scoped snap B, execdiff, undo) or
+  `journal rollback --session`; deep C, fidelity A/C, fixtures check. `crash-<tag>.json` per iteration, all in
+  `crash-matrix.json` (`purge.rig.crashmatrix/1`). A point the plan never reaches is `hit: false` (recorded, not
+  failed). `-HardPowerOff`: for intent.flushed, regdelete.mid, commit.before an exec is started detached with
+  `PURGE_FAULT_PAUSE=<point>:600000`; once its journal is stable for 6 s the stage asks for a `poweroff`
+  continuation; `after-poweroff` checks the boot id changed, recovers twice, resumes, undoes, fidelity. Last, torn
+  journals (`crash-torn.json`): after an act.after crash the journal's last record cut in half (recover must
+  accept it, rollback, fidelity) and, separately, one byte of a middle record changed (recover must refuse and
+  change nothing).
+- **m2-reboot** (G4; stages `start`, `after-reboot`, `after-mismatch`): PFRO before (`pfro-before.json`);
+  scenario U: both locked items held (locker without FILE_SHARE_DELETE), exec, PFRO must gain exactly the admin
+  file's pair and never the user-writable one, undo before any reboot -> PFRO as before; scenario R: locked
+  again, deep A, exec, PFRO check, reboot. after-reboot: recover twice, `journal show`, PFRO back to before,
+  admin file gone; undo, deep C, fidelity; retry: plant-boot-junction, the user-writable item executed again ->
+  Skipped (ReparseMismatch / ChangedSinceScan), traps check; scenario M: admin file locked, exec, the engine's PFRO
+  pair replaced by a decoy pair (the boot move does not happen), reboot. after-mismatch: recover twice, `journal
+  show`, admin file still in place and unchanged, undo, fidelity, PFRO, final traps check.
+
+### 11.4 Engine command lines (M2-CLI)
+
+    plan from-targets <targets.json> -o <plan.json>                  (sidecar <plan>.scan.json: plan_hash, items[].id)
+    exec --plan <plan.json> --confirm <h> --select <ids.json> [--restore-point always] -o <report.json>
+    undo --session <id> [--items <ids.json>] -o <undo.json>
+    journal fault-points | journal recover | journal resume --session <id> | journal rollback --session <id>
+    journal show --session <id>
+    quarantine expiring | quarantine purge --ids <id>... --yes-irreversible
+    scan --fp <fp.json> --mode post --app purgetrapapp -o <plan.json>   (forged fingerprint, m2-traps)
+
+`<h>` = SHA-256 (lower-case hex) of the UTF-8 text `lower(plan_hash) + selection_hash`, `selection_hash` = SHA-256 of
+the selected ids, de-duplicated, sorted ordinally, joined with LF (riglib Get-M2Confirm). `--select` / `--items`
+files are JSON arrays of candidate ids. The session is `report.session`, else the new directory under
+`C:\ProgramData\Purge\sessions`; its `journal.jsonl` and `report.json` are read from there.
+
+### 11.5 Gate report (`truth/m2.sh`)
+
+`bash truth/m2.sh` (env `M2_RUNS`, `M2_PREFIX`, `M2_OUT`, `PYTHON`) reads the five runs and writes
+`results/m2-gate.json` (`purge.rig.m2gate/1`) and `m2-gate.md`: `inputs` (per run: present, finished, stages,
+failed phases), `missing`, `g0_install`, `g1_traps` (guard_escapes, collateral, per-group execdiff, refusals,
+forged fp, trap checks), `g2_fidelity` (rows of the fixture run, required rows missing, deferred rows touched,
+collateral, partial undo, undo conflict, backup tamper, apps), `g3_crash` (rows, hit, failing, not_hit,
+recover idempotence, power-off, torn), `g4_reboot` (undo before reboot, exec PFRO, reconcile, retry, mismatch),
+`g5_expiry`, `g6_restore_point`, `totals` and `pass`. Exit 0 pass, 1 a gate fails, 2 a run is missing.
+
+### 11.6 Self-test
+
+`vm\guest\tests\rig-selftest.ps1` runs every mode end to end on the host: Invoke-M2Mode with the VM calls faked,
+each guest job run in a child powershell.exe against the stub `purge-engine.cmd` (verbs plan, exec, undo,
+journal, quarantine; `PURGE_FAULT_AT` -> exit 0xC0000409) and fakes for rigtool, the locker, PFRO, the boot id and
+every system change; the continuation loop (reboot, power-off, a marker not taken) included. With
+`RIG_SELFTEST_M2_OUT=<dir>` the stub runs are copied there for a dry run of `truth/m2.sh`.
+
+### 11.7 Not settled by the design (the rig's reading; check against M2-CLI)
+
+The confirm byte encoding above; `--select` as the full selection; `plan from-targets` keeping the rig's target
+ids as candidate ids; the session id and where report/journal live; the `journal fault-points` output (JSON or
+one point per line, both parsed); `quarantine purge --ids a b ...` and the ids coming from `quarantine expiring`
+(entries matched by the item path); the expiry clock override env (`PURGE_RIG_NOW_OFFSET_DAYS=400`, overridable
+with opts `expiry_env`); a held item retried by a new exec of that item (not a resume of the old session);
+`journal rollback` after a crash inside undo is not run (undo-phase crashes are resumed only).

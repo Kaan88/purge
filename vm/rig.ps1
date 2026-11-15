@@ -30,6 +30,12 @@
     Invoke-Campaign -Ids npp-userfiles,git-toolsdir -Nulls 0 -RunPrefix x0- -ExtraChecks -Engine .\target\release\purge-engine.exe
     Invoke-Campaign -Ids firefox-tb,vscode,git,npp -Nulls 0 -RunPrefix x0-nb- -ExtraChecks -NoBaselines -Engine .\target\release\purge-engine.exe
 
+  M2 executor runs (RIG.md §11): one mode per call, from a restore of m2-base, with the rig-exec engine
+  (target\rig-exec\release\purge-engine.exe; the release engine is refused) and the reboot-in-job continuations:
+    .\vm\rig.ps1 -Mode m2-traps
+    .\vm\rig.ps1 -Mode m2-crash -HardPowerOff
+    . .\vm\rig.ps1; Invoke-SnapshotJob -Run m2-try -Mode m2-install    # the generic entry
+
   Before a run starts, an existing vm\runs\<run>\ is moved to vm\runs\_old\<run>-<stamp>\, so a run
   directory never mixes files from two runs.
 
@@ -64,7 +70,22 @@ param(
     # Turn the VM's 3D acceleration off after each restore of an offline snapshot (modifyvm --accelerate-3d off;
     # the snapshot keeps its own setting, so the next restore brings it back). Works around guest freezes with
     # VMSVGA 3D (DXVK on the host GPU) on the Linux host (RIG.md §9). Default: on when $env:RIG_VM_NO_3D is 1.
-    [switch] $No3D = ($env:RIG_VM_NO_3D -eq '1')
+    [switch] $No3D = ($env:RIG_VM_NO_3D -eq '1'),
+    # M2 executor runs (RIG.md §11): campaign (default, the M0 / M1a behaviour above) or one M2 mode. The M2 modes
+    # restore -Snapshot (default m2-base) and push the rig-exec engine (-Engine, default
+    # target\rig-exec\release\purge-engine.exe; the release engine target\release\purge-engine.exe is refused).
+    # (checked in the footer, not with ValidateSet: a dot-sourcing script may use $Mode for itself). The M2
+    # parameters carry an M2 prefix for the same reason (apps.ps1 owns $Apps); their command-line names are the
+    # aliases -HardPowerOff, -FaultPoints, -Apps, -BatchSize.
+    [string] $Mode = 'campaign',
+    # m2-crash: also the power-off rounds (the host powers the VM off hard while the engine sits at a pause point).
+    [Alias('HardPowerOff')] [switch] $M2HardPowerOff,
+    # m2-crash: only these fault points (default: every point `journal fault-points` lists).
+    [Alias('FaultPoints')] [string[]] $M2FaultPoints = @(),
+    # m2-fidelity: real-app round trips after the fixture runs (app ids of guest\apps.ps1; 'none' for none).
+    [Alias('Apps')] [string[]] $M2Apps = @(),
+    # m2-crash: matrix iterations per job (then a reboot continuation); 0 = all in one job.
+    [Alias('BatchSize')] [int] $M2BatchSize = -1
 )
 
 # Host platform: Windows (PowerShell 5.1 or 7) or Linux (pwsh 7, RIG.md §9). 5.1 has no $IsWindows.
@@ -634,6 +655,285 @@ function Invoke-Campaign {
     @($results)
 }
 
+# ------------------------------------------------------------------------------ M2 executor runs (§11)
+#
+# One M2 run = one guest script (exec-run.ps1, m2-crash.ps1 or m2-reboot.ps1) started from a fresh restore of
+# -Snapshot (m2-base) with the rig-exec engine pushed. A script may end a stage with a continuation marker
+# C:\cr\out\<run>\continue.json (riglib Request-RigContinuation): kind 'reboot' (the guest restarts itself) or
+# 'poweroff' (the host powers the VM off hard, m2-crash -HardPowerOff only). The host then waits for the new boot
+# and the agent and submits the same script again with __STAGE__ = the marker's `next` (RIG.md §11.2).
+#   .\vm\rig.ps1 -Mode m2-traps
+#   .\vm\rig.ps1 -Mode m2-crash -HardPowerOff -Engine .\target\rig-exec\release\purge-engine.exe
+#   . .\vm\rig.ps1; Invoke-SnapshotJob -Run m2-try -Mode m2-install -Snapshot m2-base
+
+# The only VMs the rig drives.
+$script:RigVms = @('Inbound-Win11-Test', 'Purge-CleanPro')
+
+function Assert-RigVm([string]$Name = $script:VmName) {
+    if ($script:RigVms -cnotcontains $Name) { throw "VM '$Name' is not a rig VM ($($script:RigVms -join ', '))" }
+}
+
+# Pure: the run name of an M2 mode: <prefix><mode> (m2-traps, g1-m2-traps, ...).
+function Get-M2RunName {
+    param([Parameter(Mandatory)][string]$Mode, [string]$RunPrefix = '')
+    if ($Mode -cnotmatch '^m2-[a-z]+$') { throw "bad M2 mode '$Mode'" }
+    $run = "$RunPrefix$Mode"
+    if ($run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$run' (prefix '$RunPrefix': lowercase letters, digits, _, . and -)" }
+    $run
+}
+
+# Pure: the engine an M2 run pushes. Default target\rig-exec\release\purge-engine.exe (the build with fault
+# injection, kept apart so it never replaces the release engine the M1a runs push). target\release\purge-engine.exe
+# itself is refused. The file must exist and be named purge-engine.exe.
+function Get-M2Engine {
+    param([string]$Engine = '', [string]$RepoRoot = $script:RepoRoot)
+    if (-not $Engine) { $Engine = Join-Path $RepoRoot (HostPath 'target\rig-exec\release\purge-engine.exe') } else { $Engine = HostPath $Engine }
+    if (-not (Test-Path -LiteralPath $Engine -PathType Leaf)) { throw "rig-exec engine not found: $Engine (build it into target\rig-exec, RIG.md section 11.1)" }
+    $full = (Resolve-Path -LiteralPath $Engine).ProviderPath
+    if ((Split-Path -Leaf $full) -ne 'purge-engine.exe') { throw "the engine file must be named purge-engine.exe: $full" }
+    $release = Join-Path $RepoRoot (HostPath 'target\release\purge-engine.exe')
+    $releaseFull = $(if (Test-Path -LiteralPath $release) { (Resolve-Path -LiteralPath $release).ProviderPath } else { [IO.Path]::GetFullPath($release) })
+    if ([string]::Equals($full, $releaseFull, [StringComparison]::OrdinalIgnoreCase)) { throw "refusing the release engine $full for an M2 run: give the rig-exec build (-Engine target\rig-exec\release\purge-engine.exe)" }
+    $full
+}
+
+# Pure: the guest script of a mode.
+function Get-M2Template([string]$Mode) {
+    switch ($Mode) {
+        'm2-crash' { 'm2-crash.ps1' }
+        'm2-reboot' { 'm2-reboot.ps1' }
+        { @('m2-traps', 'm2-fidelity', 'm2-install') -contains $_ } { 'exec-run.ps1' }
+        default { throw "no M2 template for mode '$Mode'" }
+    }
+}
+
+# Pure: the job text of one stage. __OPTS__ = base64 of the options as UTF-8 JSON.
+function New-M2JobText {
+    param([Parameter(Mandatory)][string]$Mode, [Parameter(Mandatory)][string]$Run, [string]$Stage = 'start', $Opts = @{}, [string]$Template = '')
+    if ($Run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$Run'" }
+    if ($Stage -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad stage '$Stage'" }
+    if (-not $Template) { $Template = Get-M2Template $Mode }
+    if ($Template -cnotmatch '^[a-z0-9-]+\.ps1$') { throw "bad template '$Template'" }
+    $json = ConvertTo-Json -InputObject $Opts -Depth 6 -Compress
+    $b64 = [Convert]::ToBase64String((New-Object System.Text.UTF8Encoding($false)).GetBytes($json))
+    $tpl = [IO.File]::ReadAllText((Join-Path $script:RigDir (HostPath "guest\$Template")))
+    $tpl.Replace('__RUN__', $Run).Replace('__MODE__', $Mode).Replace('__STAGE__', $Stage).Replace('__OPTS__', $b64)
+}
+
+# install\install.ps1 to C:\cr\install (Push-Tools sends vm\guest\*.ps1 only).
+function Push-M2Install {
+    $src = Join-Path $script:RepoRoot (HostPath 'install\install.ps1')
+    if (-not (Test-Path -LiteralPath $src)) { throw "missing $src" }
+    $null = Invoke-Guest @('mkdir', '--parents', 'C:\cr\install')
+    $null = Invoke-GuestCmd 'del /f /q C:\cr\install\install.ps1'
+    $r = Invoke-Guest @('copyto', '--target-directory', 'C:\cr\install\', $src)
+    if ($r.code -ne 0) { throw "copy install.ps1 failed: $($r.out -join ' ')" }
+    if ((Invoke-Guest @('stat', 'C:\cr\install\install.ps1')).code -ne 0) { throw 'install.ps1 not in the guest after copy' }
+    Write-RigLog '  pushed install\install.ps1 to C:\cr\install'
+}
+
+# The continuation marker a finished stage left (parsed), or $null when the run is complete.
+function Get-GuestContinuation {
+    param([Parameter(Mandatory)][string]$Run)
+    $tmp = Join-Path (Get-HostTemp) ('rigcont-' + [guid]::NewGuid().ToString('N') + '.json')
+    try {
+        $r = Invoke-Guest @('copyfrom', "C:\cr\out\$Run\continue.json", $tmp)
+        if ($r.code -ne 0 -or -not (Test-Path -LiteralPath $tmp)) { return $null }
+        [IO.File]::ReadAllText($tmp) | ConvertFrom-Json
+    } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+# After a 'reboot' continuation: waits until the guest reports a boot time other than $BootBefore, then for the
+# agent. The guest restarts itself delay_sec after the job ended, so the old boot is seen for a while first.
+function Wait-GuestReboot {
+    param([string]$BootBefore = '', [int]$TimeoutSec = 900)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $cmd = 'powershell.exe -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString(''o'')"'
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 10
+        $r = Invoke-GuestCmd $cmd 60
+        $b = @($r.out | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^\d{4}-\d\d-\d\dT' }) | Select-Object -First 1
+        if ($r.code -eq 0 -and $b -and $b -ne $BootBefore) {
+            Write-RigLog "  guest rebooted (boot $b)"
+            Wait-Agent -TimeoutSec ([Math]::Max(120, [int]($deadline - (Get-Date)).TotalSeconds))
+            return $b
+        }
+    }
+    throw "the guest did not reboot within $TimeoutSec s"
+}
+
+# After a 'poweroff' continuation (-HardPowerOff): VBoxManage controlvm poweroff (no shutdown, no flush), then a
+# cold start and the agent.
+function Invoke-HardPowerCycle {
+    param([int]$AgentTimeoutSec = 600)
+    Assert-RigVm
+    Write-RigLog "  hard power-off of $script:VmName"
+    $r = Invoke-VBox @('controlvm', $script:VmName, 'poweroff')
+    if ($r.code -ne 0) { throw "controlvm poweroff failed: $($r.out -join ' ')" }
+    $null = Wait-VmState @('poweroff', 'aborted') 120
+    $r = Invoke-VBox @('startvm', $script:VmName, '--type', 'headless')
+    if ($r.code -ne 0) { throw "startvm failed: $($r.out -join ' ')" }
+    $null = Wait-VmState @('running') 120
+    Wait-Agent -TimeoutSec $AgentTimeoutSec
+}
+
+# Runs the stages of one M2 run in the guest as it is (no restore, no push): stage $Stage, then every stage a
+# continuation marker names. Returns {run, stages[{stage, job, done, seconds, continuation}], logs[], done, error}.
+function Invoke-M2Job {
+    param([Parameter(Mandatory)][string]$Run, [Parameter(Mandatory)][string]$Mode, [string]$Stage = 'start', $Opts = @{}, [string]$Template = '',
+          [int]$TimeoutSec = 14400, [switch]$HardPowerOff, [int]$MaxContinuations = 60)
+    $res = [ordered]@{ run = $Run; stages = (New-Object System.Collections.ArrayList); logs = (New-Object System.Collections.ArrayList); done = $false; error = $null }
+    $lastSeq = 0
+    $tmpDir = Join-Path (Get-HostTemp) 'vmjobs'
+    New-Item -ItemType Directory -Force $tmpDir | Out-Null
+    for ($k = 0; $k -le $MaxContinuations; $k++) {
+        $text = New-M2JobText -Mode $Mode -Run $Run -Stage $Stage -Opts $Opts -Template $Template
+        $log = Join-Path $tmpDir ('{0}-{1:00}-{2}-{3}.log' -f $Run, ($res.stages.Count + 1), $Stage, [guid]::NewGuid().ToString('N').Substring(0, 6))
+        Write-RigLog "  stage $Stage of $Run"
+        $j = Invoke-GuestJob -Text $text -Name "$Run-$Stage" -TimeoutSec $TimeoutSec -LogCopy $log
+        $st = [ordered]@{ stage = $Stage; job = $j.name; done = $j.done; seconds = $j.seconds; continuation = $null }
+        [void]$res.stages.Add($st)
+        [void]$res.logs.Add([pscustomobject]@{ stage = $Stage; n = $res.stages.Count; file = $log })
+        Write-RigLog "  job $($j.name) done=$($j.done) after $($j.seconds) s"
+        if (-not $j.done) { $res.error = "stage $Stage did not finish within $TimeoutSec s"; return [pscustomobject]$res }
+        $m = Get-GuestContinuation -Run $Run
+        if (-not $m) { $res.done = $true; return [pscustomobject]$res }
+        $seq = [int]$m.seq
+        if ($seq -le $lastSeq) { $res.error = "continuation marker $seq seen twice (stage $Stage did not take it)"; return [pscustomobject]$res }
+        $lastSeq = $seq
+        if ("$($m.next)" -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { $res.error = "bad next stage '$($m.next)' in continuation $seq"; return [pscustomobject]$res }
+        $st.continuation = [ordered]@{ seq = $seq; kind = "$($m.kind)"; next = "$($m.next)" }
+        Write-RigLog "  continuation $seq`: $($m.kind), then stage $($m.next)"
+        try {
+            if ($m.kind -eq 'reboot') { $null = Wait-GuestReboot -BootBefore "$($m.boot_before)" }
+            elseif ($m.kind -eq 'poweroff') {
+                if (-not $HardPowerOff) { throw 'the guest asked for a hard power-off but -HardPowerOff is not set' }
+                Invoke-HardPowerCycle
+            } else { throw "unknown continuation kind '$($m.kind)'" }
+        } catch { $res.error = "continuation $seq ($($m.kind)): $($_.Exception.Message)"; return [pscustomobject]$res }
+        $Stage = "$($m.next)"
+    }
+    $res.error = "more than $MaxContinuations continuations"
+    [pscustomobject]$res
+}
+
+# The generic M2 entry: one run from a fresh restore of $Snapshot. Restore, push rigtool + the rig-exec engine +
+# guest scripts + install.ps1, run the stages (Invoke-M2Job), then $After (more jobs in the same VM session, given
+# the record), pull C:\cr\out\<run>\ and the job logs (job-<n>-<stage>.log) and check run.json. Returns the record.
+function Invoke-SnapshotJob {
+    param([Parameter(Mandatory)][string]$Run, [Parameter(Mandatory)][string]$Mode, $Opts = @{}, [string]$Template = '', [string]$Snapshot = 'm2-base',
+          [string]$Engine = '', [switch]$HardPowerOff, [switch]$NoRestore, [int]$TimeoutSec = 14400, [scriptblock]$After = $null,
+          [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'))
+    Assert-RigVm
+    $eng = Get-M2Engine -Engine $Engine
+    if ($Run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$Run'" }
+    $t = Get-Date
+    $rec = [ordered]@{ run = $Run; mode = $Mode; snapshot = $Snapshot; vm = $script:VmName; engine = $eng; ok = $false; error = $null; start = $t.ToString('o'); end = $null
+        seconds = $null; stages = @(); pulled = 0; started = $null; failed_phases = @(); after = $null }
+    $logs = @()
+    try {
+        $null = Move-RunToOld -Run $Run
+        if (-not $NoRestore) { Restore-Base -Snapshot $Snapshot -ExecutionEngine $ExecutionEngine -No3D:$No3D } else { Wait-Agent -TimeoutSec 120 }
+        Push-Tools -Engine $eng
+        Push-M2Install
+        $j = Invoke-M2Job -Run $Run -Mode $Mode -Opts $Opts -Template $Template -TimeoutSec $TimeoutSec -HardPowerOff:$HardPowerOff
+        $rec.stages = @($j.stages); $logs = @($j.logs)
+        if ($j.error) { $rec.error = $j.error }
+        if ($After -and $j.done) { $rec.after = & $After $rec }
+    } catch {
+        $rec.error = $_.Exception.Message
+        Write-RigLog "!! M2 run $Run failed: $($rec.error)"
+    }
+    try { $rec.pulled = @(Pull-Run -Run $Run).Count } catch { if (-not $rec.error) { $rec.error = "pull: $($_.Exception.Message)" } }
+    $dst = Join-Path $script:RunsDir $Run
+    foreach ($l in $logs) {
+        if (Test-Path -LiteralPath $l.file) { Move-Item -LiteralPath $l.file -Destination (Join-Path $dst ('job-{0:00}-{1}.log' -f $l.n, $l.stage)) -Force }
+    }
+    $chk = Test-RunResult -Run $Run -NotBefore $t
+    $rec.started = $chk.started; $rec.failed_phases = @($chk.failed_phases)
+    if (-not $rec.error -and -not $chk.ok) { $rec.error = $chk.error }
+    $rec.ok = (-not $rec.error -and $chk.ok)
+    $rec.end = (Get-Date).ToString('o'); $rec.seconds = [int]((Get-Date) - $t).TotalSeconds
+    Write-RigLog "M2 run $Run`: ok=$($rec.ok) in $($rec.seconds) s$(if ($rec.error) { ' - ' + $rec.error })"
+    [pscustomobject]$rec
+}
+
+# Pure: the options and job timeout of a mode.
+function Get-M2ModeOpts {
+    param([Parameter(Mandatory)][string]$Mode, [string]$Snapshot = 'm2-base', [switch]$HardPowerOff, [string[]]$FaultPoints = @(), [int]$BatchSize = -1)
+    $o = [ordered]@{ mode = $Mode; snapshot = $Snapshot }
+    $to = 14400
+    switch ($Mode) {
+        'm2-install' { $to = 3600 }
+        'm2-reboot' { $to = 5400 }
+        'm2-crash' {
+            $o.batch = $(if ($BatchSize -lt 0) { 10 } else { $BatchSize })
+            $o.hard_poweroff = [bool]$HardPowerOff
+            if (@($FaultPoints | Where-Object { $_ }).Count) { $o.points = @($FaultPoints | Where-Object { $_ }) }
+        }
+    }
+    [pscustomobject]@{ opts = $o; timeout = $to }
+}
+
+# One M2 mode end to end (rig.ps1 -Mode ...): names and engine checked first, then Invoke-SnapshotJob. m2-fidelity
+# adds the real-app round trips (-Apps, default npp, 7zip): per app the M1a engine run <run>-<id> (run-app.ps1,
+# installs, uninstalls, writes plan-purge.json) and then exec-run stage 'app' on its plan, in the same VM session.
+# Writes vm\runs\m2-<run>-<stamp>.log / .json.
+function Invoke-M2Mode {
+    param([Parameter(Mandatory)][string]$Mode, [string]$Snapshot = 'm2-base', [string]$Engine = '', [string]$RunPrefix = '', [switch]$HardPowerOff,
+          [string[]]$FaultPoints = @(), [string[]]$Apps = @(), [int]$BatchSize = -1,
+          [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'))
+    Assert-RigVm
+    $run = Get-M2RunName -Mode $Mode -RunPrefix $RunPrefix
+    $eng = Get-M2Engine -Engine $Engine
+    if ($HardPowerOff -and $Mode -ne 'm2-crash') { throw '-HardPowerOff is for -Mode m2-crash only' }
+    $mo = Get-M2ModeOpts -Mode $Mode -Snapshot $Snapshot -HardPowerOff:$HardPowerOff -FaultPoints $FaultPoints -BatchSize $BatchSize
+    $appIds = @()
+    if ($Mode -eq 'm2-fidelity') {
+        $appIds = @($Apps | Where-Object { $_ })
+        if (-not $appIds.Count) { $appIds = @('npp', '7zip') }
+        if ($appIds -contains 'none') { $appIds = @() }
+        foreach ($a in $appIds) { $null = Get-RunName -Id $a -RunPrefix "$run-" -Engine }
+    }
+    New-Item -ItemType Directory -Force $script:RunsDir | Out-Null
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $script:RigLogFile = Join-Path $script:RunsDir "m2-$run-$stamp.log"
+    Write-RigLog "M2 $Mode as run $run from snapshot $Snapshot on $script:VmName; engine $eng$(if ($appIds.Count) { "; apps $($appIds -join ', ')" })$(if ($HardPowerOff) { '; hard power-off' })"
+    $after = $null
+    if ($appIds.Count) {
+        $after = {
+            param($Rec)
+            $out = @()
+            foreach ($a in $appIds) {
+                $ar = [ordered]@{ app = $a; app_run = "$run-$a"; ok = $false; error = $null }
+                try {
+                    $x = Invoke-Run -Id $a -RunPrefix "$run-" -Engine
+                    $ar.app_run = $x.run
+                    $ok = (Test-RunResult -Run $x.run -NotBefore ([datetime]$Rec.start))
+                    if (-not $ok.ok) { throw "app run $($x.run): $($ok.error)" }
+                    $j = Invoke-M2Job -Run $run -Mode $Mode -Stage 'app' -Opts ([ordered]@{ mode = $Mode; app = $a; app_run = $x.run }) -TimeoutSec 7200
+                    foreach ($l in $j.logs) { Move-Item -LiteralPath $l.file -Destination (Join-Path (Join-Path $script:RunsDir $x.run) "job-m2-app-$($l.n).log") -Force -ErrorAction SilentlyContinue }
+                    if ($j.error) { throw $j.error }
+                    $ar.ok = $true
+                } catch { $ar.error = $_.Exception.Message; Write-RigLog "!! app $a`: $($ar.error)" }
+                $out += [pscustomobject]$ar
+            }
+            $out
+        }   # called by Invoke-SnapshotJob below: $appIds, $run and $Mode resolve in this function's scope
+    }
+    try {
+        $null = Get-PwFile
+        $rec = Invoke-SnapshotJob -Run $run -Mode $Mode -Opts $mo.opts -Snapshot $Snapshot -Engine $eng -HardPowerOff:$HardPowerOff -TimeoutSec $mo.timeout -After $after `
+                                  -ExecutionEngine $ExecutionEngine -No3D:$No3D
+        if ($rec.ok -and @($rec.after | Where-Object { $_ -and -not $_.ok }).Count) { $rec.ok = $false; $rec.error = 'an app round trip failed' }
+        [IO.File]::WriteAllText((Join-Path $script:RunsDir "m2-$run-$stamp.json"), (ConvertTo-Json -InputObject $rec -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    } finally {
+        Remove-PwTemp
+        $script:RigLogFile = $null
+    }
+    $rec
+}
+
 # ------------------------------------------------------------------------------------ building rig-base
 
 # Runs guest\setup-base.ps1 elevated through the agent (after Push-Tools) and prints its log.
@@ -660,7 +960,13 @@ function Save-BaseSnapshot {
     Write-RigLog "snapshot $Name taken"
 }
 
-if ($MyInvocation.InvocationName -ne '.' -and ($Ids.Count -gt 0 -or $Nulls -gt 0)) {
+if ($MyInvocation.InvocationName -ne '.' -and $Mode -ne 'campaign') {
+    $m2Modes = @('m2-traps', 'm2-fidelity', 'm2-crash', 'm2-reboot', 'm2-install')
+    if ($m2Modes -cnotcontains $Mode) { throw "-Mode must be campaign or one of $($m2Modes -join ', ') (got '$Mode')" }
+    $m2Snap = $(if ($PSBoundParameters.ContainsKey('Snapshot')) { $Snapshot } else { 'm2-base' })
+    $null = Invoke-M2Mode -Mode $Mode -Snapshot $m2Snap -Engine $Engine -RunPrefix $RunPrefix -HardPowerOff:$M2HardPowerOff -FaultPoints $M2FaultPoints `
+                          -Apps $M2Apps -BatchSize $M2BatchSize -ExecutionEngine $ExecutionEngine -No3D:$No3D
+} elseif ($MyInvocation.InvocationName -ne '.' -and ($Ids.Count -gt 0 -or $Nulls -gt 0)) {
     Invoke-Campaign -Ids $Ids -Nulls $Nulls -Snapshot $Snapshot -RunPrefix $RunPrefix -Engine $Engine -NullWaitSec $NullWaitSec -NullOrder $NullOrder `
                     -ExtraChecks:$ExtraChecks -NoBaselines:$NoBaselines -ExecutionEngine $ExecutionEngine -No3D:$No3D
 }

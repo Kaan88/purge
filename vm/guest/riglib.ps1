@@ -962,7 +962,9 @@ function Find-InventoryProgramId($Inventory, [string]$Key) {
 # (the vendor uninstaller) may inherit the pipes and hold them open after the engine exits, so the reads
 # get at most $DrainSec more; output_complete says whether they finished. Never throws on a non-zero exit.
 function Invoke-Engine {
-    param([string]$Arguments = '', [int]$TimeoutSec = 1800, [string]$StdoutFile = '', [string]$Exe = $RigEngine, [int]$DrainSec = 30)
+    param([string]$Arguments = '', [int]$TimeoutSec = 1800, [string]$StdoutFile = '', [string]$Exe = $RigEngine, [int]$DrainSec = 30,
+          # Extra environment variables for the engine process only (M2: PURGE_FAULT_AT / PURGE_FAULT_PAUSE).
+          [hashtable]$Environment = @{})
     if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) { throw "missing $Exe (push it with Push-Tools -Engine on the host)" }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Exe
@@ -973,8 +975,10 @@ function Invoke-Engine {
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = $RigUtf8
     $psi.StandardErrorEncoding = $RigUtf8
+    foreach ($k in @($Environment.Keys)) { $psi.EnvironmentVariables[[string]$k] = [string]$Environment[$k] }
     $cmd = '"' + $Exe + '" ' + $Arguments
-    Log "engine: $cmd"
+    $envText = @($Environment.Keys | Sort-Object | ForEach-Object { "$_=$($Environment[$_])" }) -join ' '
+    Log "engine: $(if ($envText) { "[$envText] " })$cmd"
     $t = Get-Date
     $p = [System.Diagnostics.Process]::Start($psi)
     $o = $p.StandardOutput.ReadToEndAsync()
@@ -1002,7 +1006,7 @@ function Invoke-Engine {
     $end = Get-Date
     Log ("  engine exit={0} timed_out={1} ({2:N0} s)" -f $code, (-not $exited), ($end - $t).TotalSeconds)
     [pscustomobject][ordered]@{
-        cmd = $cmd; exit = $code; timed_out = (-not $exited); pid = $p.Id; start = $t; end = $end
+        cmd = $cmd; env = $envText; exit = $code; timed_out = (-not $exited); pid = $p.Id; start = $t; end = $end
         stdout = $stdout; stderr = $stderr; output_complete = $complete
     }
 }
@@ -1022,4 +1026,542 @@ function Invoke-EngineStep {
     if ($r.timed_out) { throw "purge-engine $Step timed out after $TimeoutSec s" }
     if ($r.exit -ne 0) { throw "purge-engine $Step exited $($r.exit)" }
     $r
+}
+
+# ============================================================================== M2 executor runs (RIG.md §11)
+#
+# Helpers of the M2 guest scripts exec-run.ps1, m2-crash.ps1 and m2-reboot.ps1: the engine verbs exec / undo /
+# journal / quarantine / plan from-targets of the rig-exec build (docs\M2_DESIGN.json M2-CLI), the store copies
+# that go into the run output, rigtool deep / snap / execdiff / fidelity, and the continuation marker of the
+# reboot-in-job mechanism. Every path the rig hands to the engine is absolute; every output file name in the run
+# directory matches [\w.-]+ (rig.ps1 Pull-Run copies only such top-level files).
+
+$RigPurgeData       = 'C:\ProgramData\Purge'
+$RigEngineInstalled = 'C:\Program Files\Purge\purge-engine.exe'
+$RigInstallScript   = 'C:\cr\install\install.ps1'
+$RigGuestDir        = 'C:\cr\guest'
+$RigWork            = 'C:\cr\work'
+# std::process::abort of an injected fault: STATUS_STACK_BUFFER_OVERRUN (0xC0000409) as a signed Int32.
+$RigFaultAbortExit  = -1073740791
+$RigPfroKey         = 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager'
+# The second fixed volume of m2-base (G0: X:\.purge-q pre-created by a standard user) and the user-store
+# fingerprint directory a standard user can write (forged-user-fp trap).
+$RigDRoot           = 'D:\'
+$RigUserFpDir       = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Purge\fp' } else { '' })
+
+# The engine M2 runs call: the copy install.ps1 put under Program Files when it is there, else the pushed one.
+function Get-M2EngineExe { if (Test-Path -LiteralPath $RigEngineInstalled -PathType Leaf) { $RigEngineInstalled } else { $RigEngine } }
+
+# ------------------------------------------------------------------ engine command lines (pure; M2-CLI contract)
+
+function New-M2PlanArgs([string]$Targets, [string]$Out) {
+    'plan from-targets ' + (ConvertTo-EngineArg $Targets) + ' -o ' + (ConvertTo-EngineArg $Out)
+}
+
+function New-M2ExecArgs([string]$Plan, [string]$Confirm, [string]$Select = '', [string]$Out = '', [switch]$AllowIrreversible, [string]$RestorePoint = '') {
+    if ($RestorePoint -and @('off', 'high-risk', 'always') -notcontains $RestorePoint) { throw "bad --restore-point '$RestorePoint'" }
+    $a = 'exec --plan ' + (ConvertTo-EngineArg $Plan) + ' --confirm ' + (ConvertTo-EngineArg $Confirm)
+    if ($Select) { $a += ' --select ' + (ConvertTo-EngineArg $Select) }
+    if ($AllowIrreversible) { $a += ' --allow-irreversible' }
+    if ($RestorePoint) { $a += ' --restore-point ' + $RestorePoint }
+    if ($Out) { $a += ' -o ' + (ConvertTo-EngineArg $Out) }
+    $a
+}
+
+function New-M2UndoArgs([string]$Session, [string]$Items = '', [string]$Confirm = '', [string]$Out = '') {
+    if (-not $Session) { throw 'undo needs a session id' }
+    $a = 'undo --session ' + (ConvertTo-EngineArg $Session)
+    if ($Items) { $a += ' --items ' + (ConvertTo-EngineArg $Items) }
+    if ($Confirm) { $a += ' --confirm ' + (ConvertTo-EngineArg $Confirm) }
+    if ($Out) { $a += ' -o ' + (ConvertTo-EngineArg $Out) }
+    $a
+}
+
+function New-M2JournalArgs([string]$Verb, [string]$Session = '') {
+    if (@('recover', 'resume', 'rollback', 'fault-points', 'show') -notcontains $Verb) { throw "bad journal verb '$Verb'" }
+    if ($Verb -eq 'show' -and -not $Session) { throw 'journal show needs a session id' }
+    $a = "journal $Verb"
+    if ($Session) { $a += ' --session ' + (ConvertTo-EngineArg $Session) }
+    $a
+}
+
+# quarantine expiring | quarantine purge --ids <id> [<id>...] --yes-irreversible
+function New-M2QuarantineArgs([string]$Verb, [string[]]$Ids = @()) {
+    if ($Verb -eq 'expiring') { return 'quarantine expiring' }
+    if ($Verb -ne 'purge') { throw "bad quarantine verb '$Verb'" }
+    $ids = @($Ids | Where-Object { "$_" -ne '' })
+    if (-not $ids.Count) { throw 'quarantine purge needs at least one id' }
+    'quarantine purge --ids ' + (@($ids | ForEach-Object { ConvertTo-EngineArg "$_" }) -join ' ') + ' --yes-irreversible'
+}
+
+# --------------------------------------------------------------------------------- plan, selection, confirm
+
+function Get-Sha256Hex([byte[]]$Bytes) {
+    $h = [Security.Cryptography.SHA256]::Create()
+    try { -join @($h.ComputeHash($Bytes) | ForEach-Object { $_.ToString('x2') }) } finally { $h.Dispose() }
+}
+
+# selection_hash = SHA-256 (lower-case hex) of the selected candidate ids, de-duplicated, sorted ordinally and joined
+# with LF (UTF-8). confirm = SHA-256 of the UTF-8 text plan_hash || selection_hash (both lower-case hex).
+# docs\M2_DESIGN.json fixes "confirm = SHA-256(plan_hash || selection_hash)" and "selection_hash = SHA-256 of sorted
+# ids"; the byte encoding (hex text, LF joiner) is the rig's reading of it and must match M2-CLI.
+function Get-M2SelectionHash([string[]]$Ids) {
+    $set = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($i in @($Ids)) { if ("$i" -ne '') { [void]$set.Add("$i") } }
+    $arr = [string[]]@($set)
+    [Array]::Sort($arr, [StringComparer]::Ordinal)
+    Get-Sha256Hex ($RigUtf8.GetBytes(($arr -join "`n")))
+}
+
+function Get-M2Confirm([string]$PlanHash, [string[]]$Ids) {
+    if ($PlanHash -notmatch '^[0-9A-Fa-f]+$') { throw "bad plan hash '$PlanHash'" }
+    Get-Sha256Hex ($RigUtf8.GetBytes($PlanHash.ToLowerInvariant() + (Get-M2SelectionHash $Ids)))
+}
+
+# The engine writes the scan sidecar next to the plan: plan.json -> plan.scan.json.
+function Get-M2Sidecar([string]$Plan) { $Plan -replace '\.json$', '.scan.json' }
+
+function Get-M2PlanHash([string]$Plan) {
+    $sc = Get-M2Sidecar $Plan
+    if (-not (Test-Path -LiteralPath $sc)) { throw "no scan sidecar $sc" }
+    $h = "$(([IO.File]::ReadAllText($sc) | ConvertFrom-Json).plan_hash)"
+    if (-not $h) { throw "no plan_hash in $sc" }
+    $h
+}
+
+# Candidate ids the plan ticks by default (band Safe and preselected): plan items and sidecar items are in the same
+# order (ScanDoc.items = the plan's items in full).
+function Get-M2DefaultSelection([string]$Plan) {
+    $p = [IO.File]::ReadAllText($Plan) | ConvertFrom-Json
+    $s = [IO.File]::ReadAllText((Get-M2Sidecar $Plan)) | ConvertFrom-Json
+    $pi = @(@($p.items) | ForEach-Object { $_ } | Where-Object { $_ }); $si = @(@($s.items) | ForEach-Object { $_ } | Where-Object { $_ })
+    @(for ($i = 0; $i -lt [Math]::Min($pi.Count, $si.Count); $i++) { if ("$($pi[$i].band)" -eq 'Safe' -and $pi[$i].preselected -eq $true -and $si[$i].id) { "$($si[$i].id)" } })
+}
+
+# Merges purge.rig.targets/0 files into one for `plan from-targets`: the targets of group $Group (all groups when
+# empty), optionally only $OnlyIds, optionally in reverse order. Returns the ids written (the candidate ids
+# `plan from-targets` keeps).
+function Write-M2Targets([string[]]$Files, [string]$Group, [string]$Out, [string[]]$OnlyIds = @(), [switch]$Reverse) {
+    $all = New-Object System.Collections.ArrayList
+    foreach ($f in $Files) {
+        $d = [IO.File]::ReadAllText($f) | ConvertFrom-Json
+        if ("$($d.schema)" -ne 'purge.rig.targets/0') { throw "$f is not purge.rig.targets/0 ('$($d.schema)')" }
+        foreach ($t in @(@($d.targets) | ForEach-Object { $_ } | Where-Object { $_ })) {
+            if ($Group -and "$($t.group)" -ne $Group) { continue }
+            if ($OnlyIds.Count -and $OnlyIds -notcontains "$($t.id)") { continue }
+            [void]$all.Add($t)
+        }
+    }
+    $list = @($all)
+    if ($Reverse) { [Array]::Reverse($list) }
+    $doc = [ordered]@{ schema = 'purge.rig.targets/0'; source = 'riglib Write-M2Targets'; origin = 'ManualUser'; group = $Group; targets = $list }
+    [IO.File]::WriteAllText($Out, (ConvertTo-Json -InputObject $doc -Depth 20), $RigUtf8)
+    @($list | ForEach-Object { "$($_.id)" })
+}
+
+# --select / --items file: a JSON array of candidate (item) ids.
+function Write-M2IdFile([string[]]$Ids, [string]$Path) {
+    $arr = @($Ids | Where-Object { "$_" -ne '' } | ForEach-Object { "$_" })
+    $json = $(if ($arr.Count) { ConvertTo-Json -InputObject $arr } else { '[]' })
+    [IO.File]::WriteAllText($Path, $json, $RigUtf8)
+    $Path
+}
+
+# ----------------------------------------------------------------------------------------- engine calls
+
+# One engine call of an M2 run: Invoke-Engine with the M2 engine, recorded in $Calls. Exit codes outside $OkExit
+# (and a timeout) throw unless -NoThrow; an injected abort (0xC0000409) is marked crashed.
+function Invoke-M2Engine {
+    param([Parameter(Mandatory)][string]$Step, [string]$Arguments = '', $Calls = $null, [hashtable]$Environment = @{},
+          [string]$StdoutFile = '', [int]$TimeoutSec = 1800, [int[]]$OkExit = @(0), [switch]$NoThrow)
+    $r = Invoke-Engine -Exe (Get-M2EngineExe) -Arguments $Arguments -TimeoutSec $TimeoutSec -StdoutFile $StdoutFile -Environment $Environment
+    $crashed = ($r.exit -eq $RigFaultAbortExit)
+    $r | Add-Member -NotePropertyName crashed -NotePropertyValue $crashed -Force
+    $r | Add-Member -NotePropertyName step -NotePropertyValue $Step -Force
+    if ($null -ne $Calls) {
+        $tail = @("$($r.stderr)" -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 5)
+        [void]$Calls.Add([ordered]@{
+            step = $Step; cmd = $r.cmd; env = $r.env; exit = $r.exit; crashed = $crashed; timed_out = $r.timed_out; pid = $r.pid
+            start = $r.start.ToString('o'); end = $r.end.ToString('o'); stderr_tail = $tail
+        })
+    }
+    if (-not $NoThrow) {
+        if ($r.timed_out) { throw "purge-engine $Step timed out after $TimeoutSec s" }
+        if ($OkExit -notcontains $r.exit) { throw "purge-engine $Step exited $($r.exit)" }
+    }
+    $r
+}
+
+# `journal fault-points` output -> point names. Accepts a JSON array (strings or objects with name/point) or text
+# lines that start with the point name (every declared point has a dot: intent.flushed, regdelete.mid, ...).
+function ConvertFrom-M2FaultPoints([string]$Text) {
+    $t = "$Text".Trim()
+    if ($t.StartsWith('[') -or $t.StartsWith('{')) {
+        $j = $t | ConvertFrom-Json
+        $items = @(@($j) | ForEach-Object { $_ })
+        if ($j.PSObject -and $j.PSObject.Properties['points']) { $items = @(@($j.points) | ForEach-Object { $_ }) }
+        return @($items | ForEach-Object { if ($_ -is [string]) { $_ } elseif ($_.name) { "$($_.name)" } elseif ($_.point) { "$($_.point)" } } | Where-Object { $_ })
+    }
+    @($t -split "`r?`n" | ForEach-Object { $m = [regex]::Match($_, '^\s*([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)(?=\s|:|$)'); if ($m.Success) { $m.Groups[1].Value } } | Select-Object -Unique)
+}
+
+# Ids under which `quarantine expiring` lists the entries whose JSON mentions $Needle (an item path).
+function Find-M2ExpiryIds([string]$Text, [string]$Needle) {
+    $found = New-Object System.Collections.ArrayList
+    $esc = (ConvertTo-Json -InputObject $Needle -Compress).Trim('"')
+    $walk = $null
+    $walk = {
+        param($o)
+        if ($null -eq $o) { return }
+        if ($o -is [System.Array]) { foreach ($x in $o) { & $walk $x }; return }
+        if ($o -is [System.Management.Automation.PSCustomObject]) {
+            $id = $o.PSObject.Properties['id']
+            $js = ConvertTo-Json -InputObject $o -Depth 20 -Compress
+            if ($id -and ($js.IndexOf($Needle, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $js.IndexOf($esc, [StringComparison]::OrdinalIgnoreCase) -ge 0)) { [void]$found.Add("$($id.Value)"); return }
+            foreach ($p in $o.PSObject.Properties) { & $walk $p.Value }
+        }
+    }
+    try { & $walk ("$Text" | ConvertFrom-Json) } catch { }
+    @($found | Select-Object -Unique)
+}
+
+# ----------------------------------------------------------------------------------- store and sessions
+
+# Session directories under C:\ProgramData\Purge\sessions, oldest first (by creation time, then name).
+function Get-M2Sessions {
+    $d = Join-Path $RigPurgeData 'sessions'
+    if (-not (Test-Path -LiteralPath $d)) { return @() }
+    @(Get-ChildItem -LiteralPath $d -Directory -ErrorAction SilentlyContinue | Sort-Object CreationTimeUtc, Name | ForEach-Object { $_.Name })
+}
+
+# The session a call created: the newest directory not in $Before.
+function Get-M2NewSession([string[]]$Before) {
+    $new = @(Get-M2Sessions | Where-Object { $Before -notcontains $_ })
+    if ($new.Count) { return $new[$new.Count - 1] }
+    $null
+}
+
+function Get-M2SessionDir([string]$Session) { Join-Path (Join-Path $RigPurgeData 'sessions') $Session }
+
+# Copies the top-level files of a session (journal.jsonl, report.json, plan copies, ...) into $Dest as
+# <Tag>-<file>. Returns the copied names.
+function Copy-M2Session([string]$Session, [string]$Dest, [string]$Tag) {
+    $sd = $(if ($Session) { Get-M2SessionDir $Session } else { '' })
+    if (-not $sd -or -not (Test-Path -LiteralPath $sd)) { Log "  !! no session dir for '$Session'"; return @() }
+    $out = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $sd -File -ErrorAction SilentlyContinue)) {
+        $n = "$Tag-" + ($f.Name -replace '[^\w.-]', '_')
+        Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $Dest $n) -Force
+        $out += $n
+    }
+    Log "  session $Session -> $($out.Count) file(s) as $Tag-*"
+    $out
+}
+
+# File-system listing of every quarantine root (C:\ProgramData\Purge\Quarantine and X:\.purge-q of each fixed
+# drive), never descending into a reparse point.
+function Get-M2QuarantineListing([int]$Max = 20000) {
+    $roots = @(Join-Path $RigPurgeData 'Quarantine')
+    foreach ($dr in @([IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' })) { $roots += (Join-Path $dr.RootDirectory.FullName '.purge-q') }
+    $rows = New-Object System.Collections.ArrayList
+    $walk = $null
+    $walk = {
+        param([string]$Dir, [int]$Depth)
+        if ($Depth -gt 64 -or $rows.Count -ge $Max) { return }
+        $di = New-Object IO.DirectoryInfo ('\\?\' + $Dir)
+        $entries = @()
+        try { $entries = @($di.EnumerateFileSystemInfos()) } catch { [void]$rows.Add([ordered]@{ path = $Dir; error = $_.Exception.Message }); return }
+        foreach ($e in $entries) {
+            $p = $e.FullName -replace '^\\\\\?\\', ''
+            $a = [int]$e.Attributes
+            $isDir = (($a -band 0x10) -ne 0); $rp = (($a -band 0x400) -ne 0)
+            [void]$rows.Add([ordered]@{ path = $p; dir = $isDir; reparse = $rp; attrs = ('0x{0:x}' -f $a); size = $(if ($isDir) { $null } else { $e.Length }) })
+            if ($isDir -and -not $rp) { & $walk $p ($Depth + 1) }
+        }
+    }
+    $present = @()
+    foreach ($r in $roots) { if (Test-Path -LiteralPath $r) { $present += $r; & $walk $r 0 } }
+    [ordered]@{ schema = 'purge.rig.quarantine-listing/1'; time = (NowIso); roots = $present; truncated = ($rows.Count -ge $Max); entries = @($rows) }
+}
+
+# The store as it is now, into the run output: sessions\index.json, a zip of the sessions tree and the
+# quarantine listing, named <Tag>-*. Never throws (each part records its own error).
+function Save-M2Store([string]$Dest, [string]$Tag) {
+    $rec = [ordered]@{ tag = $Tag; index = $null; zip = $null; listing = $null; errors = @() }
+    $idx = Join-Path $RigPurgeData 'sessions\index.json'
+    try { if (Test-Path -LiteralPath $idx) { Copy-Item -LiteralPath $idx -Destination (Join-Path $Dest "$Tag-index.json") -Force; $rec.index = "$Tag-index.json" } } catch { $rec.errors += "index: $($_.Exception.Message)" }
+    try {
+        $sd = Join-Path $RigPurgeData 'sessions'
+        if (Test-Path -LiteralPath $sd) {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = Join-Path $Dest "$Tag-sessions.zip"
+            Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+            [IO.Compression.ZipFile]::CreateFromDirectory($sd, $zip)
+            $rec.zip = "$Tag-sessions.zip"
+        }
+    } catch { $rec.errors += "zip: $($_.Exception.Message)" }
+    try { Write-JsonFile (Get-M2QuarantineListing) (Join-Path $Dest "$Tag-quarantine.json") 6; $rec.listing = "$Tag-quarantine.json" } catch { $rec.errors += "listing: $($_.Exception.Message)" }
+    Log "  store saved as $Tag-* ($(if ($rec.errors.Count) { 'errors: ' + ($rec.errors -join ' | ') } else { 'ok' }))"
+    $rec
+}
+
+# ------------------------------------------------------------------------------------- rigtool and scripts
+
+function Invoke-RigTool([string]$Arguments, [int]$TimeoutSec = 3600) {
+    if (-not (Test-Path -LiteralPath $RigTool)) { throw "missing $RigTool (run Push-Tools on the host)" }
+    Log "rigtool $Arguments"
+    $r = Invoke-Native -Exe $RigTool -Arguments $Arguments -TimeoutSec $TimeoutSec
+    foreach ($l in @("$($r.stdout)" -split "`r?`n") + @("$($r.stderr)" -split "`r?`n")) { if ($l.Trim()) { Log "  rigtool: $l" } }
+    $r
+}
+
+# rigtool snap (RIG.md §2) into $Out; $Roots replaces the default roots (each root a path or a registry key).
+function Invoke-M2Snap([string]$Out, [string[]]$Roots = @()) {
+    $a = 'snap'
+    foreach ($x in @($Roots | Where-Object { $_ })) { $a += ' --root ' + (ConvertTo-EngineArg $x) }
+    $r = Invoke-RigTool ($a + ' -o ' + (ConvertTo-EngineArg $Out))
+    if ($r.exit -ne 0 -or -not (Test-Path -LiteralPath $Out)) { throw "rigtool snap failed (exit $($r.exit))" }
+    $Out
+}
+
+# rigtool deep over scope files (purge.rig.targets/0 or an m2 manifest) into $Out.
+function Invoke-M2Deep([string[]]$Scopes, [string]$Out) {
+    $a = 'deep --scope ' + (@($Scopes | ForEach-Object { ConvertTo-EngineArg $_ }) -join ' ') + ' --sid ' + $RigUserSid + ' -o ' + (ConvertTo-EngineArg $Out)
+    $r = Invoke-RigTool $a
+    if ($r.exit -ne 0 -or -not (Test-Path -LiteralPath $Out)) { throw "rigtool deep failed (exit $($r.exit))" }
+    $Out
+}
+
+# A rigtool verdict (execdiff / fidelity): exit 0 = ok, 1 = a failing verdict with its report written; anything
+# else, or no report, throws. Returns {exit, ok, out}.
+function Get-RigVerdict($R, [string]$Out, [string]$What) {
+    if (-not (Test-Path -LiteralPath $Out)) { throw "rigtool $What wrote no $Out (exit $($R.exit))" }
+    if ($R.exit -ne 0 -and $R.exit -ne 1) { throw "rigtool $What exited $($R.exit)" }
+    [pscustomobject]@{ exit = $R.exit; ok = ($R.exit -eq 0); out = $Out }
+}
+
+function Invoke-M2Execdiff {
+    param([string]$Before, [string]$After, [string]$Journal, [string]$Report, [string[]]$Traps = @(), [string[]]$Groups = @(),
+          [string]$DeepBefore = '', [string]$DeepAfter = '', [Parameter(Mandatory)][string]$Out)
+    $a = 'execdiff --before ' + (ConvertTo-EngineArg $Before) + ' --after ' + (ConvertTo-EngineArg $After) + ' --journal ' + (ConvertTo-EngineArg $Journal) + ' --report ' + (ConvertTo-EngineArg $Report)
+    if ($Traps.Count) { $a += ' --traps ' + (@($Traps | ForEach-Object { ConvertTo-EngineArg $_ }) -join ' ') }
+    if ($Groups.Count) { $a += ' --group ' + ($Groups -join ' ') }
+    if ($DeepBefore -and $DeepAfter) { $a += ' --deep-before ' + (ConvertTo-EngineArg $DeepBefore) + ' --deep-after ' + (ConvertTo-EngineArg $DeepAfter) }
+    $a += ' --sid ' + $RigUserSid + ' -o ' + (ConvertTo-EngineArg $Out)
+    Get-RigVerdict (Invoke-RigTool $a) $Out 'execdiff'
+}
+
+function Invoke-M2Fidelity([string]$Before, [string]$After, [string]$Journal, [string]$Out) {
+    $a = 'fidelity --before ' + (ConvertTo-EngineArg $Before) + ' --after ' + (ConvertTo-EngineArg $After) + ' --journal ' + (ConvertTo-EngineArg $Journal) + ' --sid ' + $RigUserSid + ' -o ' + (ConvertTo-EngineArg $Out)
+    Get-RigVerdict (Invoke-RigTool $a) $Out 'fidelity'
+}
+
+# Another script in a child Windows PowerShell (m2-traps.ps1, m2-fixtures.ps1, install.ps1), output logged.
+function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$TimeoutSec = 3600) {
+    if (-not (Test-Path -LiteralPath $Script)) { throw "missing $Script" }
+    $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $a = '-NoProfile -ExecutionPolicy Bypass -File ' + (ConvertTo-EngineArg $Script) + $(if ($Arguments) { ' ' + $Arguments } else { '' })
+    Log "script: $(Split-Path -Leaf $Script) $Arguments"
+    $r = Invoke-Native -Exe $exe -Arguments $a -TimeoutSec $TimeoutSec
+    foreach ($l in @("$($r.stdout)" -split "`r?`n") + @("$($r.stderr)" -split "`r?`n")) { if ($l.Trim()) { Log "  | $l" } }
+    Log "  $(Split-Path -Leaf $Script) exit=$($r.exit)"
+    $r
+}
+
+# Snapshot roots of the objects an m2 manifest describes (its `roots`: paths and keys), plus the store, the
+# Session Manager key (PATH, PendingFileRenameOperations) and the user's Environment key. For the crash loop and
+# the race runs, where a full default snap per iteration would take too long.
+function Get-M2SnapRoots([string[]]$Manifests) {
+    $set = New-Object System.Collections.ArrayList
+    $add = { param($v) $s = "$v"; if ($s -match '^[A-Za-z]:\\' -or $s -match '^HK(LM|U)\\') { if (-not ($set -contains $s)) { [void]$set.Add($s) } } }
+    foreach ($m in $Manifests) {
+        if (-not (Test-Path -LiteralPath $m)) { continue }
+        $d = [IO.File]::ReadAllText($m) | ConvertFrom-Json
+        if ($d.roots) { foreach ($p in $d.roots.PSObject.Properties) { foreach ($v in @($p.Value)) { & $add $v } } }
+    }
+    foreach ($x in @($RigPurgeData, $RigPfroKey, "HKU\$RigUserSid\Environment")) { & $add $x }
+    @($set)
+}
+
+# -------------------------------------------------------------------------- PendingFileRenameOperations (G4)
+
+# The value as a string list ($null when absent): REG_MULTI_SZ pairs (source, destination); an empty destination
+# is a delete.
+function Get-PfroList {
+    $v = Get-RegRaw $RigPfroKey 'PendingFileRenameOperations'
+    if ($null -eq $v) { return $null }
+    , @($v | ForEach-Object { "$_" })
+}
+
+# Writes PendingFileRenameOperations (REG_MULTI_SZ, 64-bit view); an empty list deletes the value. Entries must
+# not be empty strings: .NET writes the list entry by entry, and an empty one would end it for the boot reader.
+function Set-PfroList([string[]]$Entries) {
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+    try {
+        $k = $base.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager', $true)
+        try {
+            if (@($Entries).Count) { $k.SetValue('PendingFileRenameOperations', [string[]]$Entries, [Microsoft.Win32.RegistryValueKind]::MultiString) }
+            else { $k.DeleteValue('PendingFileRenameOperations', $false) }
+        } finally { $k.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+# Writes a REG_SZ through the 64-bit view (an undo-conflict run's recreated value). Returns $true on success.
+function Set-M2RegString([string]$Canon, [string]$Name, [string]$Data) {
+    $k = ConvertTo-CanonKey $Canon
+    $hiveName, $rest = $k -split '\\', 2
+    $hive = $(if ($hiveName -eq 'HKLM') { [Microsoft.Win32.RegistryHive]::LocalMachine } else { [Microsoft.Win32.RegistryHive]::Users })
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, [Microsoft.Win32.RegistryView]::Registry64)
+    try {
+        $sub = $base.OpenSubKey($rest, $true)
+        if (-not $sub) { return $false }
+        try { $sub.SetValue($Name, $Data, [Microsoft.Win32.RegistryValueKind]::String); $true } finally { $sub.Dispose() }
+    } catch { Log "  !! set $Canon|$Name : $($_.Exception.Message)"; $false } finally { $base.Dispose() }
+}
+
+# System Restore points as "<sequence> <description>" (G6).
+function Get-M2RestorePoints { @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue | ForEach-Object { "$($_.SequenceNumber) $($_.Description)" }) }
+
+# Pure: a PFRO entry's path without the '*1' flag and the \??\ prefix.
+function ConvertFrom-PfroPath([string]$Entry) { ("$Entry" -replace '^\*1', '') -replace '^\\\?\?\\', '' }
+
+# Pure: compares two PFRO lists. Pre-existing pairs must be byte-identical and first; the added pairs must name
+# only sources in $ExpectSrc, each once, and never a source in $ForbidSrc (paths compared case-insensitively).
+function Compare-PfroLists($Before, $After, [string[]]$ExpectSrc = @(), [string[]]$ForbidSrc = @()) {
+    $b = @($Before | Where-Object { $null -ne $_ }); $a = @($After | Where-Object { $null -ne $_ })
+    $same = ($a.Count -ge $b.Count)
+    for ($i = 0; $same -and $i -lt $b.Count; $i++) { if (-not [string]::Equals($a[$i], $b[$i], [StringComparison]::Ordinal)) { $same = $false } }
+    $added = @(); $unexpected = @(); $forbidden = @(); $hits = @{}
+    if ($same) {
+        for ($i = $b.Count; $i -lt $a.Count; $i += 2) {
+            $src = ConvertFrom-PfroPath $a[$i]; $dst = $(if ($i + 1 -lt $a.Count) { ConvertFrom-PfroPath $a[$i + 1] } else { $null })
+            $added += [ordered]@{ src = $src; dst = $dst; raw_src = $a[$i] }
+            $key = $src.ToLowerInvariant()
+            if (@($ExpectSrc | Where-Object { $_ -ieq $src }).Count) { $hits[$key] = 1 + [int]$hits[$key] } else { $unexpected += $src }
+            if (@($ForbidSrc | Where-Object { $_ -ieq $src }).Count) { $forbidden += $src }
+        }
+    }
+    $missing = @($ExpectSrc | Where-Object { -not $hits.ContainsKey($_.ToLowerInvariant()) })
+    $dupes = @($hits.Keys | Where-Object { $hits[$_] -gt 1 })
+    [ordered]@{
+        before_entries = $b.Count; after_entries = $a.Count; preexisting_identical = $same; added = $added
+        expected_missing = $missing; unexpected = $unexpected; forbidden = $forbidden; duplicates = $dupes
+        ok = ($same -and -not $missing.Count -and -not $unexpected.Count -and -not $forbidden.Count -and -not $dupes.Count)
+    }
+}
+
+# Holds files open without FILE_SHARE_DELETE in a separate process (the m2-reboot locker) until Stop-M2Locker or
+# the next reboot. Returns {pid, paths, ready, stop_file}.
+function Start-M2Locker([string[]]$Paths, [string]$WorkDir, [int]$TimeoutSec = 60) {
+    New-Item -ItemType Directory -Force $WorkDir | Out-Null
+    $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $script = Join-Path $WorkDir "locker-$tag.ps1"; $list = Join-Path $WorkDir "locker-$tag.txt"
+    $ready = Join-Path $WorkDir "locker-$tag.ready"; $stop = Join-Path $WorkDir "locker-$tag.stop"
+    [IO.File]::WriteAllLines($list, [string[]]@($Paths), $RigUtf8)
+    $body = @'
+param([string]$List, [string]$Ready, [string]$Stop)
+$h = @()
+foreach ($p in [IO.File]::ReadAllLines($List)) { if ($p) { $h += [IO.File]::Open('\\?\' + $p, 'Open', 'Read', 'Read, Write') } }
+[IO.File]::WriteAllText($Ready, "locked $($h.Count)")
+while (-not (Test-Path -LiteralPath $Stop)) { Start-Sleep -Milliseconds 500 }
+foreach ($x in $h) { $x.Dispose() }
+'@
+    [IO.File]::WriteAllText($script, $body, $RigUtf8)
+    $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $p = Start-Native $exe ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' + (ConvertTo-EngineArg $script) + ' -List ' + (ConvertTo-EngineArg $list) + ' -Ready ' + (ConvertTo-EngineArg $ready) + ' -Stop ' + (ConvertTo-EngineArg $stop))
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while (-not (Test-Path -LiteralPath $ready) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    $ok = (Test-Path -LiteralPath $ready)
+    Log "locker pid $($p.Id): $(if ($ok) { [IO.File]::ReadAllText($ready) } else { 'NOT ready' }) ($($Paths -join ', '))"
+    [pscustomobject]@{ pid = $p.Id; paths = @($Paths); ready = $ok; stop_file = $stop }
+}
+
+function Stop-M2Locker($Locker, [int]$WaitSec = 10) {
+    if (-not $Locker) { return }
+    [IO.File]::WriteAllText($Locker.stop_file, 'stop')
+    $deadline = (Get-Date).AddSeconds($WaitSec)
+    while ((Get-Process -Id $Locker.pid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    Stop-Process -Id $Locker.pid -Force -ErrorAction SilentlyContinue
+    Log "locker $($Locker.pid) stopped"
+}
+
+# ------------------------------------------------------------------- run record and continuations (§11.2)
+
+function Get-RigBootId {
+    try { (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToUniversalTime().ToString('o') } catch { $null }
+}
+
+# The run record of an M2 run (run.json, schema purge.rig.m2/1). Stage 'start' begins a new run directory; a
+# continuation stage (after a reboot or a host power-off) reopens it and appends.
+function Open-M2Run([string]$Run, [string]$Mode, [string]$Stage) {
+    if ($Stage -eq 'start') { $dir = New-RunDir $Run } else { $dir = Join-Path $RigOut $Run; New-Item -ItemType Directory -Force $dir | Out-Null }
+    Set-RunLog (Join-Path $dir 'run.log')
+    $f = Join-Path $dir 'run.json'
+    $S = [ordered]@{
+        schema = 'purge.rig.m2/1'; run = $Run; mode = $Mode; computer = $env:COMPUTERNAME; user_sid = $RigUserSid
+        started = (NowIso); finished = $null; stages = (New-Object System.Collections.ArrayList); phases = (New-Object System.Collections.ArrayList)
+        engine = [ordered]@{ exe = $null; calls = (New-Object System.Collections.ArrayList) }; results = [ordered]@{}
+    }
+    if ($Stage -ne 'start' -and (Test-Path -LiteralPath $f)) {
+        $j = [IO.File]::ReadAllText($f) | ConvertFrom-Json
+        $S.started = $j.started
+        foreach ($x in @($j.stages)) { if ($x) { [void]$S.stages.Add($x) } }
+        foreach ($x in @($j.phases)) { if ($x) { [void]$S.phases.Add($x) } }
+        if ($j.engine) { $S.engine.exe = $j.engine.exe; foreach ($x in @($j.engine.calls)) { if ($x) { [void]$S.engine.calls.Add($x) } } }
+        if ($j.results) { foreach ($p in $j.results.PSObject.Properties) { $S.results[$p.Name] = $p.Value } }
+    }
+    [void]$S.stages.Add([ordered]@{ stage = $Stage; start = (NowIso); boot = (Get-RigBootId) })
+    Log "== M2 run $Run, mode $Mode, stage $Stage"
+    [pscustomobject]@{ dir = $dir; file = $f; S = $S }
+}
+
+function Save-M2Run($R, [switch]$Finished) {
+    if ($Finished) { $R.S.finished = NowIso }
+    try { Write-JsonFile $R.S $R.file 12 } catch { Log "!! cannot write run.json: $($_.Exception.Message)" }
+}
+
+function Set-M2Result($R, [string]$Key, $Value) { $R.S.results[$Key] = $Value; Save-M2Run $R }
+
+function Invoke-RigShutdown([int]$DelaySec, [string]$Reason) {
+    $r = Invoke-Native -Exe (Join-Path $env:SystemRoot 'System32\shutdown.exe') -Arguments ('/r /t ' + $DelaySec + ' /d p:4:1 /c ' + (ConvertTo-EngineArg $Reason)) -TimeoutSec 60
+    Log "shutdown /r in $DelaySec s: exit $($r.exit)"
+}
+
+# Ends this stage with a continuation marker C:\cr\out\<run>\continue.json (purge.rig.continue/1). kind 'reboot':
+# the guest restarts itself $DelaySec seconds later (after the job has finished and the host has read the
+# marker); kind 'poweroff': the host powers the VM off hard (VBoxManage controlvm poweroff) and boots it again.
+# The host then waits for the agent and runs the same script with __STAGE__ = $Next.
+function Request-RigContinuation([string]$Run, [string]$Kind, [string]$Next, $Data = $null, [int]$DelaySec = 45) {
+    if (@('reboot', 'poweroff') -notcontains $Kind) { throw "bad continuation kind '$Kind'" }
+    if ($Next -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad continuation stage '$Next'" }
+    $dir = Join-Path $RigOut $Run
+    $seq = @(Get-ChildItem -LiteralPath $dir -Filter 'continue-*.json' -File -ErrorAction SilentlyContinue).Count + 1
+    $m = [ordered]@{ schema = 'purge.rig.continue/1'; run = $Run; seq = $seq; kind = $Kind; next = $Next; data = $Data; boot_before = (Get-RigBootId); written = (NowIso); delay_sec = $DelaySec }
+    Write-JsonFile $m (Join-Path $dir 'continue.json') 8
+    Log "continuation $seq requested: $Kind, then stage $Next"
+    if ($Kind -eq 'reboot') { Invoke-RigShutdown $DelaySec "purge rig: continue $Run at $Next" }
+    $m
+}
+
+# At the start of a continuation stage: the marker that led here (archived as continue-<seq>.json), or $null.
+function Receive-RigContinuation([string]$Run) {
+    $dir = Join-Path $RigOut $Run
+    $f = Join-Path $dir 'continue.json'
+    if (-not (Test-Path -LiteralPath $f)) { return $null }
+    $m = [IO.File]::ReadAllText($f) | ConvertFrom-Json
+    Move-Item -LiteralPath $f -Destination (Join-Path $dir ("continue-{0}.json" -f $m.seq)) -Force
+    $m | Add-Member -NotePropertyName boot_after -NotePropertyValue (Get-RigBootId) -Force
+    $m
+}
+
+# Pure: the options a host passes as __OPTS__ (base64 of UTF-8 JSON); empty or the placeholder -> {}.
+function ConvertFrom-M2Opts([string]$B64) {
+    if (-not $B64 -or $B64 -eq ('__' + 'OPTS__')) { return [pscustomobject]@{} }
+    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($B64)) | ConvertFrom-Json
+}
+
+# Option value with a default (opts come from ConvertFrom-M2Opts).
+function Get-M2Opt($Opts, [string]$Name, $Default) {
+    if ($Opts -and $Opts.PSObject.Properties[$Name] -and $null -ne $Opts.$Name) { return $Opts.$Name }
+    $Default
 }
