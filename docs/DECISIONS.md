@@ -1,0 +1,36 @@
+# Decision log
+
+Decisions taken while driving the milestones without asking, newest last. Each entry: what was decided, why, and
+what would reverse it. Decisions the user made themselves are marked (user).
+
+## M1a gate
+
+| Date | Decision | Why | Reverse if |
+|---|---|---|---|
+| 2026-11-13 | Gates run as scripts under a cheap babysitter; reviews stay on the strongest model (user asked for cheaper gates without quality loss) | The babysitter only starts scripts and relays output; judgement stays in the reviews | A babysitter misreports a result |
+| 2026-11-14 | Windows artefacts are built on Linux with cargo-xwin (msvc, LLD) (user: "use msvc") | The Windows host froze; msvc is the target Windows users get | A behaviour difference between the LLD-linked and the MSVC-linked exe shows up |
+| 2026-11-14 | VirtualBox replaced by the `virtualbox-kvm` build (user installed it) | Stock VirtualBox crashed the Android emulator twice | Long campaigns prove unstable on it |
+| 2026-11-14 | 3D acceleration is turned off on the Inbound VM for every run (`-No3D`) | The guest froze after logon on 3 of 3 boots with it on, 0 of 5 with it off | — |
+| 2026-11-14 | Waiver accepted: a pre-existing empty `.ext` key the installer wrote into directly can be offered as the app's | Telling it apart needs a pre-install snapshot the product never has; the loss is one empty key | A real case is found where the key carries foreign data |
+| 2026-11-14 | Three ambient-noise rules approved for the scorer: TrustedInstaller service start/notification values, `SIH\SLS\{GUID}`, `Windows Error Reporting\TermReason` | All three are written by Windows servicing with no app involved. They lower the count of "missed leftovers", so they raise recall (Firefox 17.5% to 21.9% on the first gate data); the gate reviewers are told this and judge it independently | A reviewer shows one of them can be app-written |
+| 2026-11-14 | No noise rule for Windows' random CLSID+AppID churn | It would need a broader pattern than the evidence supports; costs Git and Notepad++ about one point of recall | The churn is shown to be OS-only on both images |
+| 2026-11-14 | Engine: stop patching one scanner at a time; one central rule ("a value is offered whole only when all of its content is the app's") plus a table test that enumerates every scanner against hostile inputs; policy version m1a.6 | Five consecutive reviews each found the same hole in another scanner | — |
+| 2026-11-14 | The gate campaign runs on the m1a.5 binary; its captures are re-planned offline with m1a.6. Identical plans carry the gate result over; differing runs are repeated live | The reviewer confirmed trial fixes gave byte-identical plans on 74 captures; saves a second multi-hour campaign | Any plan differs |
+| 2026-11-15 | Both campaigns restarted from scratch after the out-of-memory kill, rather than resumed | The null runs are spread across the campaign on purpose, and partial folders are not trustworthy after a kill | — |
+| 2026-11-15 | Builds capped at 8 parallel jobs while VMs run; VMs still run in parallel | 28 parallel compile jobs beside two VMs and the emulator is the likely cause of the kill | Memory stays comfortable at a higher cap |
+| 2026-11-15 | Firefox profile folders (`%APPDATA%\Mozilla\Firefox`, `%LOCALAPPDATA%\Mozilla\Firefox`) must come out Likely (shown, never preselected), not Weak (hidden); fixed in the final m1a.6 edit | The gate text says Likely, and a hidden profile means the user cannot choose to remove it at all. Showing it unticked carries no safety risk | It cannot be done without loosening a rule that protects other apps' data |
+| 2026-11-15 | Deviation recorded: `HKLM\SOFTWARE\Mozilla\MaintenanceService` stays Likely although the gate text says Safe | The Maintenance Service is shared by Mozilla products and has its own uninstaller; under-banding is the safe direction and costs one click | A later milestone gives the co-removed service key first-class evidence |
+| 2026-11-15 | Review findings on pass ten, the token-anchor choice and the profile band go into one final engine edit, then one re-plan of the new captures | Keeps the tree from changing more than once more after review | — |
+| 2026-11-15 | The score script will no longer accept sanity differences on its own; the 11 seen on the gate run are classified in the gate record | A reviewer found they had been accepted without anyone looking (all 11 turned out to be OS noise or a host difference) | — |
+| 2026-11-15 | Dirty-base campaign: the 7 "danger" items are not engine faults and the engine is not changed for them. Criterion on a dirty base is "no dangerous item is offered for removal" (`danger_blocking` 0); items the engine lists read-only as Blocked/kept are counted separately by the scorer | Review found 4 are Blocked and kept (they belong to the still-installed system VS Code), 3 are a shortcut-history slot Windows itself overwrote with the app's record (offering it unticked is desired). None is Safe or preselected | A dirty-base run offers a foreign item in Safe or Likely |
+| 2026-11-15 | Scorer and truth fixes from the dirty review (replaced-value class, Blocked counted apart, bam rule for VLC, dirty-base labels for Thunderbird and system VS Code, no sanity step off rig-base) are done after the running campaigns end | The scorer binary and labels are in use by the running campaigns | — |
+| 2026-11-15 | Deferred to M1b: VS Code user install beside a system install recalls 1.1% (shared `VSCode.<ext>` ProgIDs make the engine refuse 142 per-user keys); attributing them via the installer log | It is a correct refusal, not a fault; needs new attribution work | — |
+| 2026-11-15 | Extended set, Firefox reinstall: the 7 Safe "danger" items are accepted as a scorer artefact, to be fixed in the scorer (a pre-snapshot that already contains the same app's earlier install must not make that app's leftovers foreign) | They are Firefox's own leftovers from the first of two installs; rescored against a snapshot without it danger is 0, and the clean-base run gives the same bands | — |
+| 2026-11-15 | Engine fix added to the final m1a.6 edit: a key matched only by an executable's bare file name is the app's only if its path data points into the app's roots or the installer record covers it; a key with a Blocked child is not offered whole | The extended set showed 7 foreign items offered as Likely (unticked): a portable Notepad++ copy's registration, `App Paths\rg.exe`, another install's `Code.exe`. Unticked is within the gate rule, but the executor in M2 will delete whatever the user ticks | It costs clean-base recall beyond these classes |
+| 2026-11-15 | Profile folders stay hidden or Blocked, not Likely, when a sibling product that uses the same folder is still installed | Reviewer warning: with Firefox ESR installed the shared folder holds the sibling's live profile | — |
+| 2026-11-15 | Permission denials met by a subagent are surfaced to the user, not executed by the main loop (VM power-off between campaigns; the user ran it) | Standing rule against working around the permission system | — |
+
+## Standing
+
+- Local commits on `m1a` are made as needed; nothing is pushed or merged without asking.
+- No sudo; root commands are handed to the user.

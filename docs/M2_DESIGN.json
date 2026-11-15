@@ -1,0 +1,728 @@
+{
+ "summary": "M2 (Executor) implementation design for C:\\Users\\kaank\\Desktop\\uninstall\\purge. Read-only pass: nothing edited, no cargo run. Read ENGINE_PLAN \u00a73.1-3.6, \u00a75.10, \u00a77 (all), \u00a710.1-10.3, \u00a711.1-11.3 and checked the survey against code.\n\nSURVEY CORRECTIONS (verified in code)\n- bins/purge-engine/Cargo.toml ALREADY depends on purge-exec unconditionally (survey said it does not). `rig-exec = []` is empty; exec/undo/journal parse into Command::* and return Exit::NotImplemented (cli.rs ~L526-558, args.rs L62-107, L463-485).\n- The executor input already exists: `purge-engine scan -o plan.json` writes the sidecar `plan.scan.json` = purge_plan::emit::ScanDoc (`purge.scan/0`) with full Candidates (action, blockers, decision, children), `absorbed`, `policy_version`, `mode`, `plan_hash`. No new plan schema is needed; `exec --plan plan.json` reads the sidecar via cli/output.rs::sidecar_path and recomputes purge_plan::hash::plan_hash(items, policy_version, mode).\n- plan_hash covers ALL top-level items (Blocked/Weak included) and has no notion of selection. The executor needs a selection rule (default: band Safe + preselected; rig-exec only: --select ids file) and must journal a selection hash.\n- Candidate has NO scan-time FileId (only purge-source types.rs has file_id). \u00a75.10 \"FileId must equal the scan\" cannot be met from the plan today. M2 design: VALIDATE pass at exec start captures FileId/volume serial/reparse tag/final path per item into the journal; the per-item re-check compares against that. True scan-time binding needs a Candidate field + scanner change = post-M1a integration (package M2-POSTM1A).\n- purge-plan/src/order.rs stages are: registry values, registry keys, file system, then Task, FirewallRule, Service, Package. ENGINE_PLAN \u00a77.1 puts tasks/firewall (3) BEFORE registry and service deletion (8) after files. Consistent for everything M1a can emit (registry, files, AppX last); diverges once M1b emits services/tasks. Executor does not re-sort (order is hash-bound) but verifies the invariant \"nested child before parent\" and refuses otherwise.\n- Action enum = {Quarantine, DeleteKey, DeleteValue, EditSegment, RemoveDirIfEmpty, RemovePackage, ReportOnly}. There is no Action for services/tasks/firewall, default-value change or MRUList edit, and Action is matched exhaustively in purge-plan (decide/order/empty_after) and purge-policy (band/harm), so adding variants touches M1a crates. M2 keeps Action unchanged and introduces an executor-internal ExecOp resolved from (Target, Action).\n- purge-win: no cfg(feature=\"write\") item anywhere; no scm/taskschd/firewall/rm/sr/taskdialog modules exist at all (read or write). Already present and reusable: fs::FileHandle (open with OPEN_REPARSE_POINT, metadata incl. n_links, FileId{volume_serial,id}, final_path, reparse_tag), fs::volume_info/is_fixed, fs::long_path, reg::Key (raw type + raw bytes values, link_target/is_link, security with TI check), reg::current_control_set, sid::is_admin_only_writable(path) (path + every ancestor, reparse point => false; admin set includes TrustedInstaller). sid::file_sd_facts is private.\n- purge-guard is pure (no I/O): deny::DenyList::check(&Target, &Exemptions) and canon::GuardEnv (has purge_dirs; rules fs.purge deny %ProgramData%\\Purge and *:\\.purge-q). Execute-time re-check = a new pure module fed with handle facts, plus deny::check on both the lexical and the final path. GuardEnv is built live in bins/purge-engine (main.rs settings + pipeline.rs).\n- purge-model/lib.rs doc already says journal/inverse types arrive in M2; none exist. tools/xtask/src/check_deps.rs already enforces purge-mcp allowlist {purge-model, purge-rpc} and no purge-win/write.\n- Rig: vm/rig.ps1 pushes target\\release\\purge-engine.exe or -Engine <file> (file must be named purge-engine.exe); rigtool commands snap/diff/truth/ambient/score/convert/baseline/invdiff; no exec phase, traps, deep snapshot or reboot path. install/ has only README.md.\n\nKEY DESIGN DECISIONS\n1. Input and binding: exec loads ScanDoc sidecar; refuses unless recomputed hash == doc.plan_hash == --confirm, plan.json items equal to_plan0 projection order, and every selected item passes resolve(Target, Action) -> ExecOp. Never executes Blocked, hard-blocked, ReportOnly, undecided, or RegValueChanged items. Reversibility::None (RemovePackage) needs an explicit irreversible acknowledgement (rig flag now, broker prompt in M3).\n2. ExecOp (in purge-model exec types): QuarantineMove, RemoveDirIfEmpty, DeleteKeyTree, DeleteKeyIfEmpty, DeleteValue, EditSegment, RemovePackage, plus DeleteService/DeleteTask/DeleteFirewallRule (typed packages, deferrable). Inverse: MoveBack{quarantine_path, original_path, file_id, volume_serial}, RestoreKeyTree{backup, sha256}, RestoreValue{backup, sha256}, ReinsertSegment{index, segment, written_value_hash}, RecreateDir{attrs, sddl}, RecreateKey{backup}, RecreateService/Task/FirewallRule{definition file, sha256}, None.\n3. On-disk layout: C:\\ProgramData\\Purge\\sessions\\<session>\\{journal.jsonl, plan.scan.json, report.json, reg\\<op>.regbackup.json, def\\<op>.json}; sessions\\index.json (Users: read); Quarantine\\<session>\\<op>\\<leaf>; X:\\.purge-q\\<session>\\<op>\\<leaf> on other fixed NTFS/ReFS volumes. Session id = UTC timestamp + 64 random bits.\n4. Journal (purge.journal/1, JSONL): header{session, plan_hash, selection_hash, policy, mode, engine version, volumes} ; validated{item, facts}; intent{op_id, item, exec_op, inverse, backup path + sha256, pre-facts}; done{op_id, outcome: done|vanished|skipped(reason)|held_retry|pending_reboot|failed(code)}; group boundary every <=64 intents with FlushFileBuffers; commit | aborted; later undo_intent/undo_done/undo_conflict, reconcile, expire records. Reader tolerates one torn trailing line only.\n5. Per-item sequence: live gate (G1 handle facts, G2 on lexical+final, G3, G6, G7, G10, G11, G13, ChangedSinceScan => skip) -> backup written, flushed, read back, hashed -> intent flushed -> act on the SAME handle the gate inspected -> verify -> done. Batch never aborts except on backup/journal write failure. Purge never raises its own access (no take-ownership/ACL edits/SeBackup for deletes); access denied => failed(AccessDenied) reported.\n6. Storage roots are a library parameter (StorageRoots), never an env var; a relaxed-integrity constructor exists only under cfg(test)/feature test-support so unit tests run unelevated in temp dirs. Fault injection (PURGE_FAULT_AT=<point>[:n] => abort) only under purge-exec feature fault-inject, enabled by purge-engine's rig-exec.\n7. M1a isolation: M2 packages touch purge-model (new files + one mod line), purge-win (new files), purge-guard (new file), purge-exec, bins/purge-engine (new cli/exec file + small edits to cli.rs/args.rs in one late package), tools/xtask, install/, vm/. They only READ purge-plan (hash, emit::ScanDoc, collapse::nests_in). Everything needing purge-scan/purge-plan/purge-policy edits is collected in M2-POSTM1A.\n\nModel routing per user memory: critical -> Fable medium; high -> Opus high; medium -> Opus medium; trivial -> Sonnet. 26 packages in 9 waves.",
+ "packages": [
+  {
+   "id": "M2-S0",
+   "title": "Scaffolding: manifests, module lists, stub files",
+   "importance": "trivial",
+   "depends_on": [],
+   "est_size": "S",
+   "plan_refs": [
+    "\u00a73.2",
+    "\u00a711.1"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\Cargo.toml",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\Cargo.lock",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\Cargo.toml",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\lib.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\Cargo.toml",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\lib.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-model\\src\\lib.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-model\\src\\exec.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-model\\Cargo.toml",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-guard\\src\\lib.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\bins\\purge-engine\\Cargo.toml",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\rigtool\\src\\main.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\rigtool\\Cargo.toml"
+   ],
+   "scope": "Only manifests and module lists, so later waves never share a file. (a) Workspace Cargo.toml: add base64 (for name_b64) to workspace deps if not hand-rolled. (b) purge-exec/Cargo.toml: add sha2, base64, features `fault-inject` and `test-support`; lib.rs declares modules storage, journal, fault, regbackup, regfile, gate, act_fs, act_reg, act_typed, locked, prepare, plan_in, execute, undo, recover, expiry, report, with one empty stub file each (doc comment only). (c) purge-win/Cargo.toml: add windows-sys features Win32_System_Restore, Win32_System_RestartManager, Win32_System_Services, Win32_System_WindowsProgramming as needed; lib.rs declares `#[cfg(feature=\"write\")] pub mod fs_write; reg_write; sr; rm; scm; taskschd; firewall; appx_write; pub mod secure;` (secure is read-side SD facts) with stub files. (d) purge-model/lib.rs: one line `pub mod exec;`; exec.rs declares `pub mod journal; pub mod regbackup; pub mod session; pub mod op;` with stubs. (e) purge-guard/lib.rs: `pub mod live;` + stub. (f) purge-engine/Cargo.toml: `rig-exec = [\"purge-exec/fault-inject\"]`. (g) rigtool main.rs: mod lines + dispatch arms for `deep`, `fidelity`, `execdiff` calling stub cmd fns. No behaviour.",
+   "acceptance": "cargo build --workspace, cargo build -p purge-win --features write, cargo build -p purge-engine --features rig-exec and cargo build in vm/rigtool all succeed; xtask check-deps still passes; existing tests unchanged and green; no file of purge-scan/plan/harvest/identity/policy touched.",
+   "tests": "Build-only plus existing suite (use a private CARGO_TARGET_DIR). No new tests."
+  },
+  {
+   "id": "M2-MODEL",
+   "title": "purge-model exec types: ExecOp, Inverse, journal records, regbackup/1, session index",
+   "importance": "critical",
+   "depends_on": [
+    "M2-S0"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.4",
+    "\u00a77.8",
+    "\u00a73.3",
+    "\u00a75.2"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-model\\src\\exec\\op.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-model\\src\\exec\\journal.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-model\\src\\exec\\regbackup.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-model\\src\\exec\\session.rs"
+   ],
+   "scope": "Pure serde + JsonSchema types, schema-id newtypes like PlanSchema. op.rs: ExecOp (QuarantineMove, RemoveDirIfEmpty, DeleteKeyTree, DeleteKeyIfEmpty, DeleteValue, EditSegment, RemovePackage, DeleteService, DeleteTask, DeleteFirewallRule), `resolve(&Target, Action) -> Result<ExecOp, Mismatch>` (the only legal pairs; RegValueChanged and ReportOnly never resolve), Inverse (MoveBack, RestoreKeyTree, RestoreValue, ReinsertSegment, RecreateDir, RecreateKey, RecreateService, RecreateTask, RecreateFirewallRule, None), ItemOutcome (Done, Vanished, Skipped{reason}, HeldRetry, PendingReboot, Failed{code}), SkipReason incl. ChangedSinceScan, NoLongerEmpty, GateBlocked{blocker}, NoVerifiedBackup, CapExceeded. journal.rs: `purge.journal/1` Record enum (Header, Validated, Intent, Done, GroupEnd, Commit, Aborted, UndoIntent, UndoDone, UndoConflict, Reconcile, Expire) with FileFacts {final_path, file_id hex, volume_serial, reparse_tag, attributes, n_links, is_dir, size} and RegFacts {subkeys, values, is_link, owner}; backup refs carry path + sha256. regbackup.rs: `purge.regbackup/1` (KeyNode: name_b64, class, sddl owner/group/dacl, last_write_time, link flag, values[{name_b64, type u32, data_b64}], children) plus ValueBackup. session.rs: SessionIndex/SessionSummary for sessions\\index.json (ids, app, times, counts per outcome, backup_bytes, expiry dates per class 30d/180d/1y, pending_reboot, state Open|Committed|Aborted|Undone|PartiallyUndone), ExecReport and UndoReport (CLI JSON output; rigtool reads these).",
+   "acceptance": "Every type round-trips fixed JSON samples byte-for-byte; unknown schema ids are rejected; resolve() table matches the summary and is total over Target x Action in a test; JSON Schemas generate; non-UTF-16-clean names and embedded NULs survive via base64.",
+   "tests": "Unit tests in each file (round-trip, schema-id rejection, resolve table exhaustive, base64 edge cases: empty name, lone surrogate, 16k-byte value)."
+  },
+  {
+   "id": "M2-WIN-FS",
+   "title": "purge-win write: handle-based file ops, boot-time moves, SD facts",
+   "importance": "critical",
+   "depends_on": [
+    "M2-S0"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a77.4",
+    "\u00a77.5",
+    "\u00a77.6",
+    "\u00a77.8"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\fs_write.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\secure.rs"
+   ],
+   "scope": "Thin, policy-free wrappers. fs_write.rs (cfg write): MoveHandle::open(path) = CreateFileW(DELETE|SYNCHRONIZE|FILE_READ_ATTRIBUTES, share R/W/D, OPEN_EXISTING, OPEN_REPARSE_POINT|BACKUP_SEMANTICS) exposing metadata/file_id/final_path/reparse_tag on that same handle; rename_into(&self, dest_dir_handle or absolute dest, replace=false) via SetFileInformationByHandle(FileRenameInfoEx) with fallback FileRenameInfo, never replacing; remove_dir_if_empty_by_handle (FileDispositionInfoEx on a handle opened with OPEN_REPARSE_POINT; maps DIR_NOT_EMPTY); delete_by_handle for files and for reparse points themselves (removes the link, never the target) used only by expiry; create_dir_secure(path, sddl) (CreateDirectoryW with SECURITY_ATTRIBUTES, fails if exists); set_attributes_by_handle (hidden|system|not-content-indexed); flush(handle); move_delay_until_reboot(src, dst) (MoveFileExW MOVEFILE_DELAY_UNTIL_REBOOT, no REPLACE_EXISTING); pending_renames() read of PendingFileRenameOperations(+2) as raw pairs and remove_pending_pairs(&[(src,dst)]) that rewrites only by removing exact own pairs under a compare-before-write check; list_streams(path) (FindFirstStreamW) for ADS. secure.rs (read): dir_security(handle) -> {owner_sid, group, dacl_protected, aces} via GetSecurityInfo on a handle, and sddl string of a handle. Typed error enum distinguishing NotFound, SharingViolation, AccessDenied, DirNotEmpty, NotSameDevice, Other(code). All paths go through fs::long_path (long paths, trailing dots/spaces preserved).",
+   "acceptance": "All functions are cfg(feature=\"write\") except secure.rs; cargo tree for purge-mcp unchanged. A handle opened on a junction/symlink renames or deletes the link itself and leaves the target untouched. Rename never overwrites an existing destination. Cross-volume rename returns NotSameDevice. remove_pending_pairs leaves foreign pairs byte-identical.",
+   "tests": "Unit tests in temp dirs created by the test (unelevated): rename file/dir/junction (reuse the junction helper in fs.rs tests), >260-char path, trailing-dot name, read-only+hidden file, hard-linked file keeps link count, dir-not-empty mapping, secure-dir creation + SD readback, ADS listing. PendingFileRenameOperations logic tested on a pure function over value bytes (no HKLM writes in unit tests); the real registry write is VM-only."
+  },
+  {
+   "id": "M2-WIN-REG",
+   "title": "purge-win write: link-refusing registry write primitives",
+   "importance": "critical",
+   "depends_on": [
+    "M2-S0"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.4",
+    "\u00a77.5",
+    "\u00a77.8",
+    "\u00a75.10"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\reg_write.rs"
+   ],
+   "scope": "cfg(write). WKey::open(root, path, view, access) always with REG_OPTION_OPEN_LINK and explicit KEY_WOW64 view, exposing is_link, info (subkey/value counts, class, last write), raw values, security SDDL (owner/group/dacl), subkey names; delete_subkey(parent, name) = RegDeleteKeyExW(view) (single key, fails if it has subkeys); delete_value; set_value_raw(name, type u32, bytes); create_subkey(parent, name, class, sddl, volatile=false) failing if it exists (REG_CREATED_NEW_KEY required, never REG_OPTION_CREATE_LINK); set_security(sddl) only on keys Purge itself just created during undo; flush_key. No RegDeleteTree, no RegSaveKey, no privilege enabling. Root handles for HKLM and HKU only (no HKCR, no HKCU alias).",
+   "acceptance": "Opening a REG_LINK key returns the link key itself with is_link=true, never its target. delete_subkey on a key with children fails. create_subkey on an existing key fails. Exact raw bytes round-trip for REG_SZ without terminator, odd-length data, REG_NONE with data, type values above 11.",
+   "tests": "Unit tests under HKU\\<current SID>\\Software\\PurgeTest-<random> created and removed by the test (unelevated), including a REG_LINK created by the test helper, both WOW64 views, class strings, and a restricted-DACL key."
+  },
+  {
+   "id": "M2-WIN-SYS",
+   "title": "purge-win: restore point (srclient) and Restart Manager",
+   "importance": "high",
+   "depends_on": [
+    "M2-S0"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.3",
+    "\u00a77.6",
+    "\u00a77.7"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\sr.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\rm.rs"
+   ],
+   "scope": "sr.rs (write): create_restore_point(description) -> SrOutcome {Created{seq}, Throttled{seq}, Disabled, Failed(code)} via SRSetRestorePointW(BEGIN_SYSTEM_CHANGE, APPLICATION_UNINSTALL) + END; throttle detected by comparing the returned sequence number with the latest existing one (read side: latest_sequence()); never touches SystemRestorePointCreationFrequency. rm.rs (write): RmSession::start, register_files(&[paths]) (files only), lockers() -> Vec<{pid, start_time, app_name, service_name, type, restartable}>, end; no RmShutdown/RmRestart in M2 (closing apps needs consent = M3) - expose shutdown() but leave it uncalled by exec unless an explicit allow flag is passed.",
+   "acceptance": "Both modules compile only with write; RM lockers correctly reports a helper process holding a temp file; sr returns Disabled (not an error) when System Protection is off.",
+   "tests": "Unit: RM lockers against a child process spawned by the test holding a file in a temp dir. sr: pure test of throttle decision from (before_seq, returned_seq, status); real creation is VM-only."
+  },
+  {
+   "id": "M2-WIN-TYPED",
+   "title": "purge-win: SCM, Task Scheduler, firewall, AppX removal wrappers",
+   "importance": "high",
+   "depends_on": [
+    "M2-S0"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a77.4",
+    "\u00a77.5",
+    "\u00a77.8",
+    "\u00a75.6 SYS-*"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\scm.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\taskschd.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\firewall.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-win\\src\\appx_write.rs"
+   ],
+   "scope": "DEFERRABLE (see open question 1). Read + write halves per object so a full definition can be captured before deletion and recreated: scm (QueryServiceConfigW/Config2 all info levels, security SDDL, status; stop with timeout; DeleteService; CreateServiceW + ChangeServiceConfig2W + SetServiceObjectSecurity), taskschd (GetTask XML, DeleteTask, RegisterTask(XML) via COM), firewall (get rule by InstanceID, delete by InstanceID only, recreate from stored instance; choose INetFwPolicy2 or MSFT_NetFirewallRule and document), appx_write (RemovePackageAsync for a full name, current user and all-users variants). Write halves cfg(write).",
+   "acceptance": "Definition captured -> delete -> recreate yields an identical definition (minus runtime state) for a test service/task/rule created by the test in the VM. Firewall deletes never match by display name.",
+   "tests": "Pure unit tests for definition (de)serialisation and field mapping. Object-creating tests are #[ignore] and run only in the VM gate (they need admin and change system state)."
+  },
+  {
+   "id": "M2-GUARD-LIVE",
+   "title": "purge-guard live gate: pure execute-time verdicts from handle facts",
+   "importance": "critical",
+   "depends_on": [
+    "M2-S0"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.10",
+    "\u00a77.2",
+    "\u00a77.6",
+    "\u00a77.8"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-guard\\src\\live.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-guard\\src\\live\\tests.rs"
+   ],
+   "scope": "Pure, no I/O, no purge-win dependency; defines its own plain fact structs (the executor fills them). check_path(lexical, PathFacts{final_path, reparse_tag, attributes, file_id, volume_serial, n_links, is_dir, fs_name, drive_fixed, owner_is_ti, has_ti_ace, links_inside_plan}, expected: Option<Validated>, deny: &DenyList, exemptions) -> Result<(), Blocker>: G1 final path must equal the canonical lexical path (separator-aware, case-folded with prefix::fold, \\\\?\\ stripped) else ReparseMismatch; any reparse tag on the item => ReparseMismatch unless the op is 'remove the link itself' in expiry; file id + volume serial must equal `expected` else ChangedSinceScan (soft: skip); G2 deny::check on BOTH lexical and final path as Target::Path; G3 TrustedInstallerOwned; G6 n_links>1 with a link outside the plan => HardLinkOutsidePlan; G7 placeholder attributes RECALL_ON_OPEN/RECALL_ON_DATA_ACCESS/OFFLINE or cloud reparse tags => SyncRoot; G10 not fixed or fs not NTFS/ReFS => CannotBackUp. check_key(canonical key, KeyFacts{is_link, owner_is_ti, subkeys, values}, op) : G11 RegLink for any link on the key or (via caller-supplied ancestor facts) any ancestor other than the two resolved aliases; deny::check + containers::check again; G13 emptiness for *IfEmpty. check_undo_destination(original target, facts of the destination parent chain) for \u00a77.8 (G2/G11 on destination, parent must not have become a reparse point). admin_only_ancestors verdict wrapper for boot-time moves (input: bool per ancestor + reparse flag). quarantine_destination_ok(dest, purge roots, volume serials equal). Own-store exemption: a function that authorises ONLY paths strictly inside the session's own quarantine/session dirs for executor-internal handle ops; everything else in Purge's dirs stays denied.",
+   "acceptance": "Property: for every path form in the existing canon tests, a final path differing from the lexical one in any segment yields ReparseMismatch; a lexical path that is clean but whose final path is deny-listed is blocked with the deny rule id; ChangedSinceScan is soft, all others hard. No std::fs / purge-win use in the module.",
+   "tests": "Table + property tests in live/tests.rs: junction parent inside install dir (final path elsewhere), 8.3 alias, case differences, trailing dot, volume-GUID final path, hard link count cases, placeholder attribute fakes, REG_LINK on leaf and on ancestor, CurrentControlSet and _Classes aliases accepted, HKCR rejected, undo destination under Purge's own dirs rejected."
+  },
+  {
+   "id": "M2-INSTALL",
+   "title": "install/install.ps1 v1 with protected DACLs and pre-created-dir handling",
+   "importance": "high",
+   "depends_on": [],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.4",
+    "\u00a77.9",
+    "\u00a73.2",
+    "\u00a710.2"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\install\\install.ps1",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\install\\README.md",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\install\\tests\\install-selftest.ps1"
+   ],
+   "scope": "Elevated-only script. Copies purge-engine.exe (+ kb) into %ProgramFiles%\\Purge with admin-only ACL. Creates C:\\ProgramData\\Purge\\{sessions,Quarantine,fp,kb}: owner BUILTIN\\Administrators, protected DACL (no inheritance) SYSTEM:F + Administrators:F, and Users:R only on sessions\\index.json (created empty `{}` document) plus traverse-only as required to reach it (decide and document the minimal ACEs on ProgramData\\Purge and sessions for a standard user to open index.json without listing). If ProgramData\\Purge already exists and fails the integrity check (non-admin owner, unprotected DACL, is a reparse point, or contains reparse points at the top two levels): never adopt and never recurse into it; rename it aside to Purge.rejected-<utc> using a non-following rename, then create fresh. Idempotent on a good tree. -Uninstall switch removes only Program Files copy, never data. No downloads, no Defender/SR settings changes, no signing.",
+   "acceptance": "SDDL of each directory equals the documented constant; re-run is a no-op; a user-pre-created directory or planted junction is renamed aside and reported; a medium-IL user cannot create a file or junction anywhere inside and can read only sessions\\index.json. The exact SDDL constants are shared verbatim with M2-X-STORE (single documented source in install/README.md).",
+   "tests": "install-selftest.ps1: parse check + pure functions (SDDL builder, integrity verdict over a fake ACL object) runnable on the host without elevation; the real install checks run in the VM gate (traps: pre-created dir, planted junction, medium-IL attacker via LaunchMedium)."
+  },
+  {
+   "id": "M2-RIG-DEEP",
+   "title": "rigtool: deep snapshot and fidelity compare (\u00a710.3)",
+   "importance": "medium",
+   "depends_on": [
+    "M2-S0"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a710.3",
+    "\u00a71.3"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\rigtool\\src\\deep.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\rigtool\\src\\fidelity.rs"
+   ],
+   "scope": "`rigtool deep --scope scope.json -o deep.json`: for the listed roots/keys/objects only (scope = plan targets + their parents + trap manifest), record per file: content SHA-256, attributes, ADS names+sizes+hashes, hard link count, FileId + volume serial, reparse tag + link target text (never traversed), owner + SDDL; per key: SDDL, class, values (type + data hash), link flag; services/tasks/firewall: full definition minus runtime state (status, PID, last run, next run). `rigtool fidelity --before a.json --after b.json --journal journal.jsonl [--ambient ambient.json] -o fidelity.json`: applies \u00a710.3 comparisons and exclusions (registry LastWriteTime, parent-dir LastWriteTime, 8.3 names, ambient set), requires FileId equality only for items the journal says were renamed, and reports pass/fail per action type (QuarantineMove file, QuarantineMove dir, RemoveDirIfEmpty, DeleteKeyTree, DeleteKeyIfEmpty, DeleteValue, EditSegment, + typed) with every differing field listed.",
+   "acceptance": "Identical snapshots => 100% for every type; each single-field mutation in a fixture (content byte, attribute bit, ADS removed, link count, SDDL ACE, value type, value data, key class) is detected and attributed to the right action type; excluded fields never fail.",
+   "tests": "cargo tests in vm/rigtool with JSON fixtures and temp-dir captures (ADS, hard link, junction created by the test)."
+  },
+  {
+   "id": "M2-RIG-TRAPS",
+   "title": "Guest trap builder and trap manifest",
+   "importance": "medium",
+   "depends_on": [],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a710.2 M2 traps",
+    "\u00a711.2"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\guest\\m2-traps.ps1",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\truth\\m2-traps.json",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\guest\\m2-fixtures.ps1"
+   ],
+   "scope": "m2-traps.ps1 builds, inside a synthetic app root C:\\Program Files\\PurgeTrapApp and its HKLM/HKU keys, each \u00a710.2 trap and writes the manifest of protected objects (what must be byte-identical after exec) and expected executor outcome per trap: junction/dir symlink/file symlink pointing at a canary tree; hard link to a canary file outside the plan; junction PARENT inside the install dir (plan item path traverses it); >260-char path; trailing-dot and trailing-space names; read-only + hidden + system files; REG_LINK key pointing at a canary key (leaf and mid-path); TrustedInstaller-owned folder and key; attribute-faked placeholders (RECALL/OFFLINE attributes, cloud reparse tag if creatable); user-pre-created C:\\ProgramData\\Purge and a planted junction inside Quarantine/sessions (built at medium IL through LaunchMedium); planted junction in a user-writable ancestor for the boot-time-move path; forged user-store fingerprint; swap-after-validate races (a helper that replaces a validated dir with a junction between two engine steps, driven by PURGE_FAULT_AT pause points); expiry-walk junction inside an expired quarantine item. m2-fixtures.ps1 builds the benign per-action-type fidelity fixtures (file with ADS + hard link inside plan, nested dirs, key tree with all value types/odd data/class/custom DACL, PATH segment, multi-sz, the BCU nested-delete sequence) and emits a hand-built purge.scan/0 + plan with a correct plan hash is NOT possible from PowerShell, so it emits a `select` ids file and target list for `purge-engine scan --path` or a rig-only `plan from-targets` helper (see M2-CLI).",
+   "acceptance": "Script parses, is idempotent on a fresh snapshot, and the manifest lists every canary with a content hash. Each trap has a stated expected outcome (blocker name or 'link removed, target intact').",
+   "tests": "Parse + dry-run mode (-WhatIf style plan dump) exercised by vm/guest/tests/rig-selftest.ps1 additions owned by M2-RIG-RUN; real creation only in the VM."
+  },
+  {
+   "id": "M2-X-STORE",
+   "title": "purge-exec storage: layout, integrity checks, quarantine roots, size cap, index",
+   "importance": "critical",
+   "depends_on": [
+    "M2-MODEL",
+    "M2-WIN-FS"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.4",
+    "\u00a77.5",
+    "\u00a77.8",
+    "\u00a73.6"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\storage.rs"
+   ],
+   "scope": "StorageRoots {data_root, policy}. On EVERY use (open_session, quarantine_dir_for(volume), list, expiry): open each of data_root, sessions, Quarantine, the session dir and op dir with OPEN_REPARSE_POINT and require: not a reparse point, owner Administrators or SYSTEM, DACL protected and equal in effect to the install SDDL (no non-admin write/delete-child ACE); on failure refuse AND rename the directory aside (never recurse, never delete). X:\\.purge-q on other fixed NTFS/ReFS volumes: created with create_dir_secure (fails if a user pre-created it => refuse that volume, items become CannotBackUp), same check on every use, hidden+system+not-indexed. Same-volume proof by volume serial of source handle vs quarantine dir handle. Session id generation (UTC + random). Op dirs created by Purge only (create-new semantics). Size cap min(10 GB, 5% of volume) computed from index + planned backup bytes: refuse a run that would exceed, never evict. sessions\\index.json atomic rewrite (temp + rename within the checked dir) keeping Users:R. Test-only relaxed policy under cfg(test)/feature test-support (skips owner check, keeps reparse checks).",
+   "acceptance": "A junction planted at any level (data root, sessions, Quarantine, session, op) is detected before any write and the tree is renamed aside; a pre-created .purge-q is never adopted; cap refusal returns a typed error with numbers; index survives a crash between temp write and rename (old or new, never torn).",
+   "tests": "Temp-dir unit tests with planted junctions at each level, wrong-volume detection (mocked serials through a small facts trait), cap arithmetic, index atomicity (fault point between write and rename)."
+  },
+  {
+   "id": "M2-X-JOURNAL",
+   "title": "purge-exec journal writer/reader, hashing, fault points",
+   "importance": "critical",
+   "depends_on": [
+    "M2-MODEL",
+    "M2-WIN-FS"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.8",
+    "\u00a710.2 crash injection"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\journal.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\fault.rs"
+   ],
+   "scope": "Append-only journal.jsonl: JournalWriter::create (create-new, in a storage-checked session dir), append(record), sync() = FlushFileBuffers; write-ahead contract enforced by API shape: `intent()` returns a token only after the record is durably flushed, `done(token, outcome)` consumes it; groups of <=64 intents closed by GroupEnd + sync; commit()/abort(reason). JournalReader: parse all records, tolerate exactly one torn final line, reject anything else malformed, expose state machine: per op {intent only | done(outcome)}, session state, pending boot moves, undo progress. sha256_file(path) streaming helper used for backups. fault.rs: `fault::point(\"name\")` no-op unless feature fault-inject AND env PURGE_FAULT_AT=name[:nth] matches => std::process::abort(); optional PURGE_FAULT_PAUSE=name:ms for the swap-race traps; exported const list FAULT_POINTS = [journal.header, backup.written, backup.verified, intent.flushed, act.before, act.after, done.before, group.end, commit.before, regdelete.mid, regrestore.mid, undo.intent, undo.act.after, index.write, expiry.mid, bootmove.registered] that the rig enumerates via `purge-engine journal fault-points` (rig-exec).",
+   "acceptance": "No API path lets an action run before its intent is flushed (compile-time token). Reader reconstructs the exact state after truncation at every byte offset of a sample journal (never panics; either valid prefix state or a typed corruption error). Without fault-inject the fault module compiles to nothing.",
+   "tests": "Unit: truncation sweep, duplicate done, done without intent, unknown record kind, >64 group split, hash helper vectors; fault point test via a child process of the test binary with the env var set (cfg(feature fault-inject))."
+  },
+  {
+   "id": "M2-X-REGBACKUP",
+   "title": "purge-exec regbackup/1: link-refusing walk, verified write, restore, .reg generator",
+   "importance": "critical",
+   "depends_on": [
+    "M2-MODEL",
+    "M2-WIN-REG",
+    "M2-WIN-FS"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a77.4",
+    "\u00a77.5",
+    "\u00a77.8",
+    "\u00a710.1 .reg generator"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\regbackup.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\regfile.rs"
+   ],
+   "scope": "capture_tree(root key handle) : own walk opening every subkey with REG_OPTION_OPEN_LINK; ANY link anywhere in the subtree aborts the capture with RegLink (the item is then skipped, nothing deleted); records raw type, raw bytes, name_b64, class, owner/group/DACL SDDL, LastWriteTime, link flag; bounded by blast-radius limit (>50 keys => TooLarge unless the plan item is an absorbing Safe parent with counted children - take limit as parameter). capture_value. write_verified(path): write, flush, close, reopen, read back, deserialize, structural-equality check, SHA-256 => BackupRef; no verified backup => caller must not delete. delete_tree(root, backup): deepest first, single-key RegDeleteKeyExW(view) per key, re-opening each key with OPEN_LINK and refusing if it became a link or gained subkeys/values not in the backup (=> stop, report ChangedSinceScan; already-deleted children are restored from the backup = per-subtree all-or-nothing). restore_tree(backup, verify sha first): all-or-nothing per subtree with rollback of keys created so far on failure; conflict rules: root key already exists => conflict if under Installer\\*, Services or COM (CLSID/Interface/TypeLib/AppID) roots, otherwise merge only if existing key is empty, else conflict (skip + report). restore_value: restore if absent; present with same type+data => already restored; different => conflict. Segment helpers: remove_segment (one read-modify-write, records index, original value hash and written value hash; for ';' lists and REG_MULTI_SZ, preserves type and terminators) and reinsert_segment (only if absent and current value hash == written hash or segment merely missing; reinsert at recorded index clamped). regfile.rs: pure generator regbackup/1 -> .reg (UTF-16LE BOM, `Windows Registry Editor Version 5.00`, escaped key/value names, dword, hex(2)/(7)/(b)/hex(N), line wrapping) on request only.",
+   "acceptance": "Capture -> delete_tree -> restore_tree round-trips key class, SDDL, value types and bytes exactly (LastWriteTime excluded). A REG_LINK anywhere in the tree => nothing deleted, link target untouched. Mid-delete crash + restore yields the original tree. Backup file tamper (one byte) => restore refused on hash mismatch.",
+   "tests": "Unit under HKU\\<SID>\\Software\\PurgeTest-<random>: all value types incl. odd data, deep tree, link at leaf/mid, both views, concurrent-change injection through fault pause, conflict table, segment edit cases (duplicates, index, empty segments, trailing ';', expand_sz, multi_sz). regfile: golden text tests + a small parser in tests to round-trip."
+  },
+  {
+   "id": "M2-X-GATE",
+   "title": "purge-exec gate: live fact collection + guard verdict on the acting handle",
+   "importance": "critical",
+   "depends_on": [
+    "M2-GUARD-LIVE",
+    "M2-WIN-FS",
+    "M2-WIN-REG",
+    "M2-MODEL"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.2",
+    "\u00a75.10",
+    "\u00a77.6"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\gate.rs"
+   ],
+   "scope": "The only place facts are gathered. GateCtx {deny: DenyList, env: GuardEnv, storage roots, validated: map item -> facts, plan path set}. validate_all(items) (the plan-time pass at exec start: records FileFacts/RegFacts per item for the journal `validated` records; items already missing => marked vanished-candidate). open_and_check_path(item) -> CheckedPath {MoveHandle, facts}: opens the MoveHandle FIRST, reads every fact from that handle (final path, file id, serial, tag, attributes, n_links, owner/TI via secure.rs, volume info), calls purge_guard::live::check_path with lexical + final, and returns the SAME handle for the action (no reopen between check and act). For directories moved whole: bounded pre-walk (never traversing reparse points) to enforce blast radius (5,000 files) and to detect hard links whose other names lie outside the plan (G6; conservative: any file with n_links>1 not fully explained by plan paths blocks) and placeholders (G7). check_key(item) likewise on the WKey handle incl. ancestor link probe from hive root down (each ancestor opened with OPEN_LINK; only CurrentControlSet and HKU\\<SID>\\Software\\Classes aliases, already resolved by canon, are allowed). admin_only_ancestors(path) wrapping sid::is_admin_only_writable on the PARENT chain for boot moves. PHCM_EXPOSE_PLACEHOLDERS set once at executor start (RtlSetProcessPlaceholderCompatibilityMode) so G7 sees placeholders. Exemptions derived from the candidate's evidence the same way purge-plan/decide does (read its public helper if exposed; otherwise replicate minimal logic and list it as an integration item).",
+   "acceptance": "For every M2 trap shape built in a temp dir (junction item, junction parent, swap between validate and act, hard link out of plan, attribute-faked placeholder, TI-owned simulated via facts injection), the returned verdict is the expected blocker and no handle capable of mutation escapes. The handle returned is the one inspected.",
+   "tests": "Temp-dir unit tests using real junctions/hard links; facts-injection tests through a small trait for owner/TI and volume type; HKCU-based key tests with links at leaf and ancestor."
+  },
+  {
+   "id": "M2-RIG-EXECDIFF",
+   "title": "rigtool execdiff: executed-effects escape and collateral check",
+   "importance": "medium",
+   "depends_on": [
+    "M2-MODEL",
+    "M2-RIG-DEEP"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a71.3 guard_escapes, collateral",
+    "\u00a710.2"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\rigtool\\src\\execdiff.rs"
+   ],
+   "scope": "`rigtool execdiff --before snapA --after snapB --journal journal.jsonl --report report.json --traps m2-traps.json [--ambient ambient.json] -o execdiff.json`: every removed/changed object in diff(before, after) must be authorised by a journal `done` record whose target covers it (path inside a moved dir, key inside a deleted tree, exact value, exact segment edit) or lie inside Purge's own stores or the ambient set; anything else = collateral. Every protected object in the trap manifest must be unchanged (deep hash) = escapes otherwise. Also asserts the converse: every journal `done(Done)` effect is visible in the diff and every skipped/blocked trap item still exists. Output counts guard_escapes, collateral, unexplained, per-trap verdict table. Reads the journal schema by its own serde structs (rigtool is a separate Cargo project; copy field names from purge-model exec types, with a schema-id check).",
+   "acceptance": "Fixture pairs: clean run => 0/0; a removed canary => 1 escape naming the trap; an extra deleted value => 1 collateral; a journal done with no visible effect => flagged.",
+   "tests": "cargo tests in vm/rigtool with JSON fixtures."
+  },
+  {
+   "id": "M2-X-FS",
+   "title": "purge-exec file actions: quarantine move, remove-dir-if-empty, inverses",
+   "importance": "critical",
+   "depends_on": [
+    "M2-X-GATE",
+    "M2-X-STORE",
+    "M2-X-JOURNAL"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.5",
+    "\u00a77.8",
+    "\u00a710.1 nested-delete"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\act_fs.rs"
+   ],
+   "scope": "quarantine_move(item, CheckedPath, op dir) : rename by handle into Quarantine\\<session>\\<op>\\<leaf> on the same volume (serial compare; else CannotBackUp skip), never replace, records Inverse::MoveBack{original recorded path, quarantine path, file id, serial, attributes}; sharing violation retried 3x at 100/300/1000 ms then hands the item to the locked ladder (returns Locked); not found at open => Vanished (success); whole-directory move allowed only when gate says so (manifest-backed absorbing parent), a reparse-point leaf is never moved as a tree. remove_dir_if_empty: gate + non-recursive handle delete; DIR_NOT_EMPTY => Skipped(NoLongerEmpty); inverse RecreateDir{attributes, sddl} captured before removal. Inverses: move_back = open quarantine item by handle, check FileId + serial equal the journal, check_undo_destination (G2/G11-equivalent, parent chain not reparse, destination absent => else conflict, never overwrite), rename back by handle to the ORIGINAL recorded path, recreating missing parent dirs only if they were removed by this session (RecreateDir inverses run first, in reverse order); recreate_dir. Verify step after each act (source gone, destination has same FileId).",
+   "acceptance": "Round trip preserves content, attributes, ADS, link count and FileId for files and dirs; BCU nested-delete sequence (child item then delete-if-empty parent, and parent-with-unowned-child) behaves: child moved, parent removed only if empty, undo restores both in order. Junction/hard-link/long-path/trailing-dot/read-only cases pass. Destination-exists on undo => conflict, nothing overwritten.",
+   "tests": "Temp-dir unit tests for each case above with a test-support StorageRoots; a locker thread for the retry path; all destructive effects confined to the test's own temp dir."
+  },
+  {
+   "id": "M2-X-REG",
+   "title": "purge-exec registry actions and inverses",
+   "importance": "critical",
+   "depends_on": [
+    "M2-X-GATE",
+    "M2-X-REGBACKUP",
+    "M2-X-JOURNAL"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.5",
+    "\u00a77.8",
+    "\u00a75.10 derived containers"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\act_reg.rs"
+   ],
+   "scope": "Glue from ExecOp to regbackup primitives with the journal contract: delete_key_tree (gate, capture, write_verified, intent with BackupRef, delete_tree, verify gone, done), delete_key_if_empty (RegQueryInfoKey 0 values and 0 subkeys on the open handle, else Skipped(NoLongerEmpty); backup still written for class + SDDL), delete_value (backup of type+bytes; absent => Vanished), edit_segment (one read-modify-write; value changed since validate with the segment still present is fine; segment absent => Vanished). Refuses any key that purge_guard::containers::check or deny flags at execute time even if the plan carried it. View handling from TypedTarget (explicit 32/64). Inverses: restore_key_tree / restore_value / reinsert_segment / recreate_key with conflict reporting (UndoConflict records). Missing key at open => Vanished.",
+   "acceptance": "Round trip exact (type, bytes, class, SDDL) for every op; structural container passed as DeleteKey is refused; REG_LINK cases skip with RegLink and leave the link target intact; undo conflict table of \u00a77.8 honoured.",
+   "tests": "Unit under HKU\\<SID>\\Software\\PurgeTest-<random>, per op: do, verify, undo, compare captured-before vs captured-after structurally; conflict cases; both views."
+  },
+  {
+   "id": "M2-X-LOCK",
+   "title": "purge-exec locked-file ladder, boot-time moves, reconcile",
+   "importance": "critical",
+   "depends_on": [
+    "M2-X-GATE",
+    "M2-X-STORE",
+    "M2-X-JOURNAL",
+    "M2-WIN-SYS"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.6",
+    "\u00a710.2 lock + reboot",
+    "\u00a711.2"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\locked.rs"
+   ],
+   "scope": "Ladder for an item that stayed locked after retries: (2) Restart Manager query to name the lockers in the report (no shutdown without an explicit allow flag; closing apps/stopping services/restarting Explorer needs consent = M3, API takes a consent callback that the rig path leaves as 'deny' by default); (4) boot-time move into quarantine ONLY if gate.admin_only_ancestors(source parent chain) is true AND the quarantine destination is storage-checked; journal PendingReboot with recorded FileId, serial, exact (src,dst) pair strings; otherwise HeldRetry ('retry at next Purge run', re-validated by the handle-based gate then); (5) boot-time delete (Reversibility None) is never chosen automatically - returns NeedsIrreversibleConsent. reconcile(session) at next start: for each PendingReboot op, if the pair is still pending => still pending; else open the quarantine destination by handle and compare FileId + serial with the journal: match => Done; mismatch => move it back immediately (handle rename, undo-destination check) and write a Reconcile alert record; source still present and pair gone => failed. undo of a not-yet-rebooted boot move removes only our own exact pairs via fs_write::remove_pending_pairs. retry_held(session) re-runs gate + move for HeldRetry items.",
+   "acceptance": "A source with any non-admin-writable ancestor never gets a PendingFileRenameOperations entry (verified with an injected ancestor verdict and with a real user-writable temp dir). Foreign PFRO pairs are untouched by register/undo. Reconcile mismatch path moves back and alerts.",
+   "tests": "Unit with an injected PFRO store trait (no HKLM writes) and injected ancestor verdicts; real lock via a thread holding a file without FILE_SHARE_DELETE in a temp dir; reconcile state table. Real reboot only in the VM gate."
+  },
+  {
+   "id": "M2-X-PREPARE",
+   "title": "purge-exec prepare: restore-point policy and RM registration",
+   "importance": "high",
+   "depends_on": [
+    "M2-WIN-SYS",
+    "M2-MODEL",
+    "M2-X-JOURNAL"
+   ],
+   "est_size": "S",
+   "plan_refs": [
+    "\u00a77.3",
+    "\u00a77.7",
+    "\u00a79.4 S5"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\prepare.rs"
+   ],
+   "scope": "RestorePointSetting {Off, HighRiskOnly (default), Always}; is_high_risk(selected items, mode): any Service/driver target, >500 keys under Classes, or ScanMode::Forced. run: create restore point on a helper thread in parallel with RM registration, never blocks the batch on failure (Disabled/Throttled/Failed recorded in journal header extension + report as a warning), never changes SystemRestorePointCreationFrequency. RM: register file items only, collect lockers for the report (`needs` list).",
+   "acceptance": "Policy table test; exec proceeds with a warning when SR is disabled or throttled; restore point never replaces quarantine (no code path skips a backup because a restore point exists).",
+   "tests": "Unit: policy table, outcome mapping with a fake sr backend."
+  },
+  {
+   "id": "M2-X-TYPED",
+   "title": "purge-exec typed actions: AppX removal, service/task/firewall delete + recreate",
+   "importance": "high",
+   "depends_on": [
+    "M2-WIN-TYPED",
+    "M2-X-JOURNAL",
+    "M2-X-STORE",
+    "M2-MODEL"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.4",
+    "\u00a77.5",
+    "\u00a77.8",
+    "\u00a75.6 SYS-APPX"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\act_typed.rs"
+   ],
+   "scope": "DEFERRABLE except RemovePackage (see open question 1). RemovePackage: Inverse::None, executes only with the irreversible acknowledgement; backup = full package definition JSON for the record. Service: capture full definition (config, config2, SDDL, status) to def\\<op>.json (verified + hashed), stop (bounded), DeleteService; inverse CreateServiceW + ChangeServiceConfig2W + SDDL, refusing if ImagePath does not lie inside the original recorded root. Task: store XML, delete; inverse RegisterTask(XML) (Reversibility Partial when credentials are lost). Firewall: store instance, delete by InstanceID only; inverse recreate from stored instance.",
+   "acceptance": "Per type: definition-before == definition-after-undo minus runtime state; ImagePath-outside-root restore is refused; AppX removal without acknowledgement is Skipped(GateBlocked ReversibilityNone).",
+   "tests": "Pure unit tests with a fake backend trait; real objects only as #[ignore] tests run in the VM."
+  },
+  {
+   "id": "M2-X-EXEC",
+   "title": "purge-exec execute orchestration: plan binding, selection, pipeline, report",
+   "importance": "critical",
+   "depends_on": [
+    "M2-X-FS",
+    "M2-X-REG",
+    "M2-X-LOCK",
+    "M2-X-PREPARE",
+    "M2-X-TYPED"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a77 intro",
+    "\u00a77.1",
+    "\u00a77.2",
+    "\u00a77.5",
+    "\u00a73.4",
+    "\u00a73.1"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\plan_in.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\execute.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\report.rs"
+   ],
+   "scope": "plan_in.rs: ExecRequest {scan: ScanDoc, confirm_hash, selection: Preselected | Ids(Vec<CandidateId>), allow_irreversible, settings}. Bind: recompute purge_plan::hash::plan_hash(items, policy_version, mode) == scan.plan_hash == confirm (constant-time-insensitive but exact, lower-case hex); selection_hash = SHA-256 of sorted ids. Selection rules: Preselected = band Safe && preselected; Ids may add Likely/Weak items but never Blocked, hard-blocked, undecided, ReportOnly or unresolvable (Target, Action). Absorbed children ride with their parent (verify every `children` id exists in `absorbed` and nests in the parent via purge_plan::collapse::nests_in). Order check: for any two selected items where one nests in the other, the inner one must come first; else refuse the plan. execute.rs: integrity-checked session open, cap check, copy scan doc into the session, journal header, validate_all (journal `validated`), prepare (restore point, RM), then per item in plan order: gate -> backup -> intent -> act -> verify -> done, groups of 64, already-gone = Vanished success, per-item failures never abort; abort only on backup/journal write failure (journal `aborted`, remaining items untouched); final prune is whatever RemoveDirIfEmpty items the plan carries (no implicit pruning in M2); SHChangeNotify(SHCNE_ASSOCCHANGED) if any association/shell item ran; commit; index.json update; ExecReport (per item outcome + reason, lockers, pending reboot, held, backup_bytes, restore point outcome, warnings). Consent-agnostic: takes a `Consent` trait object for irreversible/close-app prompts; rig passes a scripted one, M3 passes the TaskDialog. progress callback for exec.progress. Also sets PHCM_EXPOSE_PLACEHOLDERS via gate at start.",
+   "acceptance": "Wrong/missing confirm hash, tampered item (any hashed field), reordered items, or tampered child list => refused before any side effect. A mixed plan in a temp tree + HKCU test hive executes with exact expected outcomes per item, journal state machine consistent, report totals equal journal. Abort on injected backup write failure leaves later items untouched and earlier ones undoable.",
+   "tests": "Integration tests in crates/purge-exec/tests/ are NOT added here (owned files only); unit tests inside the three files build ScanDocs programmatically with purge_plan::hash and run against temp dirs + HKCU test keys using test-support storage."
+  },
+  {
+   "id": "M2-X-EXPIRY",
+   "title": "purge-exec expiry: propose-only listing and non-traversing purge walk",
+   "importance": "critical",
+   "depends_on": [
+    "M2-X-STORE",
+    "M2-X-JOURNAL",
+    "M2-WIN-FS",
+    "M2-X-GATE"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a77.8 expiry/retention/cap",
+    "\u00a73.1 irreversible verbs",
+    "\u00a711.1 exit"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\expiry.rs"
+   ],
+   "scope": "expiring(now) -> list from index/journals using retention 30 d (file quarantine), 180 d (registry/service/task backups), 1 y (journal); proposes only. purge(ids, consent) (irreversible: requires a consent token naming every item; UserData-category items excluded unless individually confirmed): for each quarantined item, open by handle from the storage-checked op dir, re-check volume serial + FileId against the journal (mismatch => refuse that item, alert), then delete with a handle-based post-order walk that opens every entry with OPEN_REPARSE_POINT and, for any reparse point (junction, symlink, mount point, any tag), deletes the link itself and NEVER descends; never follows a path string twice (child opened relative to the verified parent where possible, else final-path equality re-check per directory); clears read-only via handle attributes only on items inside its own quarantine; writes Expire records; updates the index. No automatic eviction anywhere.",
+   "acceptance": "With a junction, dir symlink, file symlink and mount-point-style reparse planted at several depths inside an expired quarantine item, the canary targets are byte-identical after purge and the links are gone. FileId mismatch refuses. Nothing outside the op dir is ever opened for delete (asserted through an operation log in tests).",
+   "tests": "Temp-dir unit tests with planted links (incl. a link swapped in between enumeration and open via fault pause), retention date table, UserData exemption."
+  },
+  {
+   "id": "M2-X-UNDO",
+   "title": "purge-exec undo and crash recovery (resume / rollback)",
+   "importance": "critical",
+   "depends_on": [
+    "M2-X-EXEC",
+    "M2-X-EXPIRY"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a77.8",
+    "\u00a73.3 undo.run, journal.*",
+    "\u00a710.2 crash injection"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\undo.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\recover.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\tests\\roundtrip.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\tests\\crash.rs"
+   ],
+   "scope": "undo.rs: undo(session, item_ids: Option<..>, confirm) - integrity-check storage, read journal, verify every backup SHA-256 before use (mismatch => that item UndoConflict(BackupTampered), others proceed), apply inverses in exact reverse order of done records (partial item_ids allowed; an item whose restore depends on a not-selected RecreateDir/parent gets that dependency pulled in), each as undo_intent -> flush -> act -> undo_done, conflicts reported never forced, unregisters own pending boot pairs, updates index state Undone/PartiallyUndone, emits false-positive label records (learning signal) into the session dir. recover.rs: pending() lists sessions with no commit/aborted; probe(op) decides real state for an intent without done (move: source present with recorded FileId => not done; quarantine dest present with that FileId => done; both/neither => needs attention; key tree: compare live against backup => not started / partial / done; value/segment similar); resume = write the missing done records, finish a partial key delete, continue remaining items through execute's per-item function; rollback = complete partial ops' inverse (restore partial key tree) then undo everything done; also resumes an interrupted undo. Runs lock reconcile first. tests/: per-action-type round-trip fidelity tests and an in-process crash matrix (child process of the test binary with PURGE_FAULT_AT for every FAULT_POINT x {resume, rollback}) on temp dirs + HKCU test hive.",
+   "acceptance": "For every action type: do -> undo -> deep-equal (content hash, attributes, ADS, link count, FileId for renames; value type/bytes, class, SDDL). For every fault point: after resume the end state equals an uninterrupted run; after rollback it equals the pre-run state; running recover twice is idempotent. Tampered backup is refused.",
+   "tests": "The two integration test files above (need feature fault-inject + test-support; run unelevated; all effects inside test-created temp dirs and a test-created HKCU subtree)."
+  },
+  {
+   "id": "M2-RIG-RUN",
+   "title": "Rig glue: exec-run guest script, host driver modes, crash/reboot drivers, m2.sh",
+   "importance": "medium",
+   "depends_on": [
+    "M2-RIG-TRAPS",
+    "M2-RIG-EXECDIFF",
+    "M2-INSTALL"
+   ],
+   "est_size": "L",
+   "plan_refs": [
+    "\u00a710.2",
+    "\u00a710.3",
+    "\u00a71.3"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\guest\\exec-run.ps1",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\guest\\m2-crash.ps1",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\guest\\m2-reboot.ps1",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\guest\\setup-m2.ps1",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\guest\\riglib.ps1",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\rig.ps1",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\guest\\tests\\rig-selftest.ps1",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\truth\\m2.sh",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\RIG.md"
+   ],
+   "scope": "Written against the CLI contract fixed in M2-CLI's scope (stub purge-engine.cmd in the self-test, as today). rig.ps1: new -Mode m2-traps|m2-fidelity|m2-crash|m2-reboot|m2-install and -Snapshot, a generic 'run job from snapshot' entry, pushing a rig-exec engine from a SEPARATE output dir (target\\rig-exec\\release\\purge-engine.exe via -Engine; the release engine used by M1a runs is never replaced), a reboot-in-job mechanism (job writes a continuation marker; host waits for VM down, Wait-Agent, runs the continuation job), and for m2-crash optional host hard power-off (controlvm poweroff) mid-exec followed by start + recover. riglib.ps1: Invoke-Engine verbs exec/undo/journal + helpers to copy C:\\ProgramData\\Purge\\sessions (journals, reports, index) and a quarantine listing into the run output. exec-run.ps1: install.ps1 -> build fixtures/traps -> scan (or plan from-targets) -> deep snap A + value snap -> exec --confirm -> snap B -> execdiff -> undo -> deep snap C -> fidelity(A,C). m2-crash.ps1: loop over `journal fault-points` x {resume, rollback}, batched per boot (each iteration on a fresh fixture root, not a fresh snapshot) with fidelity/equality check. m2-reboot.ps1: locker helper (holds a file without FILE_SHARE_DELETE; a locked DLL in an admin-only dir and one in a user-writable dir), exec, assert PFRO contains only expected pairs, reboot, reconcile, undo, fidelity; plus the planted-junction mismatch scenario. setup-m2.ps1: Enable-ComputerRestore on C: and SystemRestorePointCreationFrequency=0 FOR THE TEST SNAPSHOT ONLY (the rig sets it; Purge never does), saved as a new child snapshot (e.g. m2-base) so rig-base baselines stay clean. m2.sh: aggregates execdiff/fidelity/crash/reboot JSON into a gate report (guard_escapes, collateral, undo_fidelity per action type, crash matrix, reconcile). RIG.md section for M2. Rig rules respected: official downloads only, no clone/UT access or strings.",
+   "acceptance": "rig-selftest passes on the host with stubs for every new mode (parse + stubbed phases + run-name logic); a dry campaign against the stub engine produces a complete gate report skeleton. No change to existing M0/M1a modes' behaviour (existing self-test still green).",
+   "tests": "vm/guest/tests/rig-selftest.ps1 extensions (no VM). NOTE: riglib.ps1, rig.ps1, RIG.md and rig-selftest.ps1 are modified-uncommitted M1a files; confirm no other agent is editing them before starting."
+  },
+  {
+   "id": "M2-CLI",
+   "title": "purge-engine exec / undo / journal verbs behind rig-exec; xtask rule",
+   "importance": "high",
+   "depends_on": [
+    "M2-X-UNDO"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a73.4",
+    "\u00a73.3",
+    "\u00a73.1",
+    "\u00a73.2"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\bins\\purge-engine\\src\\cli\\exec.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\bins\\purge-engine\\src\\cli.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\bins\\purge-engine\\src\\cli\\args.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\bins\\purge-engine\\tests\\exec_cli.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\tools\\xtask\\src\\check_deps.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\tools\\xtask\\src\\main.rs"
+   ],
+   "scope": "CLI contract (also what M2-RIG-RUN codes against): `exec --plan plan.json --confirm <hash> [--select ids.json] [--allow-irreversible] [--restore-point off|high-risk|always] [-o report.json]` (reads sidecar plan.scan.json; requires elevation; prints session id + ExecReport JSON); `undo --session <id> [--items ids.json] [--confirm <plan hash>] [-o undo.json]`; `journal recover` (list pending + probe result), `journal resume [--session]`, `journal rollback [--session]`; rig-exec only extras: `journal fault-points`, `journal show --session`, `quarantine expiring`, `quarantine purge --ids ... --yes-irreversible`, `plan from-targets targets.json -o plan.json` (builds a ScanDoc with ManualUser-origin Safe candidates for rig fixtures; rig-exec only, clearly marked test tool), `--data-root` never exposed. Without feature rig-exec every one of these verbs returns a distinct exit ('needs the consent dialog (M3)'), and the code path to purge_exec::execute is not compiled (cfg). Minimal edits in cli.rs (dispatch + exit-code table + update the NotImplemented test at ~L526-558) and args.rs (argument structs; tests at ~L463-485). GuardEnv/DenyList construction reuses the existing live setup (read pipeline.rs; do not edit it). xtask: check-deps gains (a) purge-exec appears only in purge-engine's tree, (b) a build of purge-engine without features contains no reference to the headless path (compile-time cfg test) ; xtask ci runs purge-exec tests with features fault-inject,test-support.",
+   "acceptance": "Default build: exec/undo/journal exit with the 'consent dialog' code and perform no I/O beyond argument parsing (test). rig-exec build: end-to-end exec -> undo on a temp fixture through the binary's lib entry (bins/purge-engine/tests). Exit codes documented in the cli.rs table. check-deps green; purge-mcp tree unchanged.",
+   "tests": "bins/purge-engine/tests/exec_cli.rs (cfg(feature=\"rig-exec\") end-to-end in temp dirs with test-support storage; default-feature refusal test). COORDINATION: cli.rs and args.rs are uncommitted M1a files; land this only after confirming the M1a fix agents are not touching bins/purge-engine."
+  },
+  {
+   "id": "M2-POSTM1A",
+   "title": "Post-M1a integration: scan-time FileId, order stages, exemptions helper, docs",
+   "importance": "high",
+   "depends_on": [
+    "M2-CLI"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a75.10 G1",
+    "\u00a77.1 order",
+    "\u00a711.5 item 4",
+    "\u00a75.2"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-model\\src\\candidate.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-scan\\src\\framework.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-plan\\src\\order.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-plan\\src\\hash.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-plan\\src\\decide.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\crates\\purge-exec\\src\\gate.rs",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\docs\\ENGINE_PLAN.md",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\PARITY.md"
+   ],
+   "scope": "ONLY after M1a has landed and its agents are done (this is the single package allowed to touch M1a crates). (1) Optional `Candidate.item_fp {file_id, volume_serial}` (serde default, skipped when None so existing plans/hashes stay identical unless present) filled by the scan framework for Path candidates from FileSystemSource entries; gate prefers it over the exec-start validate pass (true \u00a75.10 'FileId must equal the scan'). Decide whether it enters the plan hash (recommended: yes, behind a planhash schema bump) - user decision. (2) Align purge-plan order stages with \u00a77.1 for tasks/firewall (before registry) and service delete (after files) OR amend \u00a77.1; needed before M1b emits those targets. (3) Expose the deny Exemptions derivation from purge-plan/decide as a public fn and make gate.rs call it (removes the replicated logic). (4) Action variants or a documented (Target, Action) convention for Service/Task/Firewall, default-value change and MRUList edit (needed by M1b scanners; executor inverses for the last two are specified in \u00a77.8 but have no producer today). (5) Docs: ENGINE_PLAN review-log entry for M2 deviations (ScanDoc as exec input, selection hash, validate-pass FileId), PARITY.md backup description per \u00a711.5 item 4, update purge-model/lib.rs doc table (owned by this package at that point).",
+   "acceptance": "Existing M1a golden plans and plan hashes unchanged when item_fp is absent; M1a rig scores unchanged (re-run vm/truth/m1a.sh); executor tests green with scan-time ids; xtask ci green.",
+   "tests": "Golden/hash stability tests in purge-plan; gate tests for scan-time id mismatch => ChangedSinceScan."
+  },
+  {
+   "id": "M2-GATE",
+   "title": "VM gate run and M2 exit report",
+   "importance": "medium",
+   "depends_on": [
+    "M2-RIG-RUN",
+    "M2-CLI",
+    "M2-POSTM1A"
+   ],
+   "est_size": "M",
+   "plan_refs": [
+    "\u00a711.1 M2 exit",
+    "\u00a71.3",
+    "\u00a710.2",
+    "\u00a710.3"
+   ],
+   "crates_files": [
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\results\\m2-gate.md",
+    "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\results\\m2-gate.json"
+   ],
+   "scope": "Execute the gate procedure (see gate_procedure) on the LTSC VM (rig-base/dirty-base + new m2-base child snapshot) and once on Purge-CleanPro; triage every non-zero number to a package; write the gate report. May run before M2-POSTM1A as a preliminary gate if M1a is still open (then re-run after). No engine code changes in this package; fixes go back to the owning package.",
+   "acceptance": "guard_escapes 0 and collateral 0 over the whole trap corpus; undo_fidelity 100% per action type; crash matrix all-green for resume and rollback; lock + reboot reconcile incl. the mismatch scenario; nested-delete sequence; expiry walk never crosses a junction; install.ps1 hardening checks. Report committed only on user request.",
+   "tests": "The gate itself. VM tests need no approval per the rig rules; never touch the clone/UT folders."
+  }
+ ],
+ "waves": [
+  [
+   "M2-S0"
+  ],
+  [
+   "M2-MODEL",
+   "M2-WIN-FS",
+   "M2-WIN-REG",
+   "M2-WIN-SYS",
+   "M2-WIN-TYPED",
+   "M2-GUARD-LIVE",
+   "M2-INSTALL",
+   "M2-RIG-DEEP",
+   "M2-RIG-TRAPS"
+  ],
+  [
+   "M2-X-STORE",
+   "M2-X-JOURNAL",
+   "M2-X-REGBACKUP",
+   "M2-X-GATE",
+   "M2-RIG-EXECDIFF"
+  ],
+  [
+   "M2-X-FS",
+   "M2-X-REG",
+   "M2-X-LOCK",
+   "M2-X-PREPARE",
+   "M2-X-TYPED"
+  ],
+  [
+   "M2-X-EXEC",
+   "M2-X-EXPIRY"
+  ],
+  [
+   "M2-X-UNDO",
+   "M2-RIG-RUN"
+  ],
+  [
+   "M2-CLI"
+  ],
+  [
+   "M2-POSTM1A"
+  ],
+  [
+   "M2-GATE"
+  ]
+ ],
+ "gate_procedure": "Per-wave code gate (host, no VM): with a private target dir (CARGO_TARGET_DIR=...\\target\\m2-<pkg>) run cargo fmt --check, cargo clippy -p <crate> (purge-win also with --features write; purge-exec with --features fault-inject,test-support; purge-engine with and without --features rig-exec), cargo test for the touched crates, cargo xtask check-deps, cargo test in vm/rigtool, and vm/guest/tests/rig-selftest.ps1. Unit tests may be destructive only inside temp dirs and an HKU\\<SID>\\Software\\PurgeTest-<random> subtree that the test itself creates and removes; nothing touches HKLM, ProgramData or PendingFileRenameOperations on the host. A critical package is reviewed by a second critical-tier pass before the next wave starts.\n\nVM gate (M2-GATE). Build: cargo build --release -p purge-engine --features rig-exec into a separate target dir (target\\rig-exec) and pass it with -Engine; rigtool release build. VMs: Inbound-Win11-Test (LTSC) for the full matrix; Purge-CleanPro once for traps + fidelity (TrustedInstaller/Defender/Pro specifics). Always restore from the powered-off snapshot. One-time: restore rig-base, run setup-m2.ps1 (enable System Restore on C:, test-only frequency override), power off, save child snapshot m2-base.\n\nG0 install hardening (m2-install): (a) fresh install.ps1 -> SDDL of ProgramData\\Purge, sessions, Quarantine, fp, kb, index.json and Program Files\\Purge equal the documented constants; re-run is a no-op. (b) Medium-IL attacker (LaunchMedium) pre-creates C:\\ProgramData\\Purge, and separately plants a junction at Quarantine and at sessions\\<x>; install.ps1 and then `exec` must rename aside and refuse/recreate; canary targets unchanged. (c) Medium-IL user cannot create a file or junction inside, can read only sessions\\index.json. (d) Pre-created D:\\.purge-q (second volume if present) is never adopted.\n\nG1 traps, 0 escapes (m2-traps): restore m2-base -> install.ps1 -> m2-traps.ps1 (builds traps + manifest with canary hashes) -> plan (scan --path / plan from-targets) with a selection that deliberately includes every trap item -> rigtool snap A + deep A -> exec --plan --confirm <hash> --select -> snap B -> rigtool execdiff (journal, report, traps manifest, ambient) -> expect guard_escapes = 0, collateral = 0, and each trap's outcome equal to the manifest's expected blocker (ReparseMismatch, RegLink, TrustedInstallerOwned, HardLinkOutsidePlan, SyncRoot, CannotBackUp, ChangedSinceScan for the swap-after-validate races driven by PURGE_FAULT_PAUSE). Also: exec with a wrong --confirm, a tampered sidecar and a reordered plan must refuse with zero filesystem/registry changes (snap A == snap B). Forged user-store fingerprint trap: scan must not produce executable items from it (plan-side check, recorded in the report). Scripted adversarial run: a medium-IL loop that keeps swapping dirs for junctions under a user-writable app root during exec; canaries must stay intact.\n\nG2 round-trip fidelity, 100% per action type (m2-fidelity): restore -> install.ps1 -> m2-fixtures.ps1 -> deep A -> exec -> execdiff (collateral 0) -> undo --session -> deep C -> rigtool fidelity(A, C, journal). Required rows: QuarantineMove file (with ADS, read-only/hidden, long path, trailing dot), QuarantineMove directory tree, hard-linked file with all links inside the plan, RemoveDirIfEmpty, DeleteKeyTree (all value types, class, custom DACL, both views), DeleteKeyIfEmpty, DeleteValue, EditSegment (PATH ';' list and REG_MULTI_SZ), nested-delete sequence (child Safe + parent delete-if-empty; parent with an unowned child stays), plus Service/Task/Firewall if the typed packages are in scope; RemovePackage is recorded as Inverse None. Then two real apps end to end for realism (Notepad++ and 7-Zip or Git from apps.ps1): install, vendor uninstall, scan, exec preselected, execdiff, undo, fidelity. Partial undo (--items) on one run. Undo-conflict run: recreate a deleted value with different data before undo -> conflict reported, nothing overwritten. Backup tamper run: flip one byte in a regbackup file -> undo of that item refused, others restored.\n\nG3 crash injection (m2-crash): enumerate `purge-engine journal fault-points`; for each point x {resume, rollback}: fresh fixture root (batched per boot), deep A, run exec with PURGE_FAULT_AT=<point> (process aborts), `journal recover` must list the session with a probe verdict, then resume -> end state equals an uninterrupted exec (execdiff clean) and a following undo gives fidelity 100%; or rollback -> deep equals A. Repeat the matrix for faults during undo. Three host hard power-offs (VBoxManage controlvm poweroff) at intent.flushed, regdelete.mid and commit.before, then boot, Wait-Agent, recover. Recover run twice must be idempotent. Journal truncated by the rig at a random byte -> recover handles a torn tail and refuses real corruption without acting.\n\nG4 lock + reboot reconcile (m2-reboot): locker helper holds (i) a DLL under C:\\Program Files\\PurgeTrapApp (admin-only ancestors) and (ii) a file under a user-writable root. exec -> (i) PendingReboot with exactly our (src,dst) pair appended to PendingFileRenameOperations and all pre-existing pairs byte-identical; (ii) HeldRetry and NO PFRO entry (admin-only-ancestor rule). Guest reboot (Fast Startup already off) -> continuation job -> `journal recover`/reconcile: moved item FileId + volume serial match -> Done; undo restores; fidelity 100%. Mismatch scenario: before reboot the attacker replaces a user-influenced component so a different object lands in quarantine -> reconcile moves it back immediately and writes an alert. Undo before reboot removes only our pairs. Held item retried at the next run after the locker exits, through the handle-based gate.\n\nG5 expiry walk (inside m2-traps): create a committed session, plant junction/dir symlink/file symlink at several depths inside its quarantine item (elevated planter, simulating a compromised store) and a top-level junction swap by a medium-IL user (must be impossible by DACL; verify), advance retention via a rig-exec-only clock override, `quarantine expiring` lists it, `quarantine purge --ids --yes-irreversible` -> links deleted, every canary target byte-identical, FileId-mismatch item refused. Size-cap refusal run with a tiny test cap.\n\nG6 restore point: on m2-base, exec of a high-risk plan (forced mode or a service item) -> a restore point of type APPLICATION_UNINSTALL appears (Get-ComputerRestorePoint), second run within the throttle reports Throttled, and on rig-base (System Protection off) exec proceeds with a warning; SystemRestorePointCreationFrequency unchanged by Purge.\n\nExit: vm/truth/m2.sh aggregates into vm/results/m2-gate.{json,md}: guard_escapes 0, collateral 0, undo_fidelity 100% per row, crash matrix all pass, reconcile pass incl. mismatch, nested-delete pass, expiry never crosses a junction, install hardening pass. Any non-zero goes back to the owning package; the gate is re-run from the snapshot.",
+ "risks_and_questions": [
+  "USER QUESTION 1 (scope): M1a/M1b produce no Service/Task/FirewallRule candidates yet and Action has no variant for them. Include service/task/firewall execute+undo in M2 now (packages M2-WIN-TYPED + M2-X-TYPED, tested with hand-built plans; about 2 L-size packages) or defer them to land with M1b's SYS-* scanners and gate M2 on files + registry + AppX(None) only? Recommendation: defer service/task/firewall, keep RemovePackage; M2 exit 'per action type' then means the types the engine can currently emit.",
+  "USER QUESTION 2: The plan hash covers all top-level items and there is no selection concept. Proposed: default selection = Safe + preselected; rig-exec `--select ids.json` may add Likely/Weak; journal stores a selection hash; M3's consent dialog shows plan hash + selection. Accept, or should `--confirm` bind the selection too (confirm = SHA-256(plan_hash || selection_hash))?",
+  "USER QUESTION 3: Scan-time FileId (\u00a75.10) needs a new optional Candidate field filled by purge-scan (M1a crate) and possibly a planhash schema bump. Until M1a lands, M2 binds identity at exec start (validate pass) instead of at scan. OK as an interim, with the real binding in M2-POSTM1A? Should item fingerprints enter the plan hash?",
+  "USER QUESTION 4: ENGINE_PLAN \u00a77.1 order (tasks/firewall before registry, service delete after files) differs from purge-plan/src/order.rs (API objects last: Task, FirewallRule, Service, Package). Fix order.rs after M1a, or amend \u00a77.1? No effect on what M1a can emit today.",
+  "USER QUESTION 5: Closing apps / stopping services / restarting Explorer (\u00a77.3, ladder step 3) needs consent, which is the M3 broker dialog. Proposed for M2: implement Restart Manager query only (report lockers), no shutdown unless an explicit rig flag; locked items go to boot-time move or held-retry. OK?",
+  "USER QUESTION 6: Where do the gates run? Proposed: full matrix on the LTSC VM with a new child snapshot m2-base (System Restore enabled, test-only frequency override set by the rig, never by Purge), plus traps + fidelity once on Purge-CleanPro. A second data volume in the VM is needed to test X:\\.purge-q; add a small D: disk to the LTSC VM (new offline snapshot) or skip cross-volume in M2?",
+  "USER QUESTION 7: install.ps1 Users:R on sessions\\index.json requires traverse (not list) ACEs for Users on ProgramData\\Purge and sessions. Accept traverse-only ACEs on those two directories, or move index.json elsewhere? Also confirm signing stays out of M2 (open decision \u00a711.3 item 4).",
+  "USER QUESTION 8: `plan from-targets` (rig-exec-only verb that builds a ScanDoc from a target list for synthetic trap/fidelity fixtures) is a test tool that fabricates Safe candidates; it never exists in release builds. Accept, or should fixtures only go through real scans (`scan --path`), which limits trap coverage for registry items?",
+  "Concurrency risk: bins/purge-engine (cli.rs, args.rs), purge-model, purge-guard, purge-win, vm/rig.ps1, vm/guest/riglib.ps1, rig-selftest.ps1 and RIG.md are all modified-but-uncommitted M1a files even though they are not on the 'being edited' list. M2 mostly adds new files there (one mod line per lib.rs in M2-S0), but M2-CLI and M2-RIG-RUN edit existing files; confirm no M1a fix agent is in them, and ideally get M1a committed before wave 0 so M2 work can be diffed and reverted cleanly. A separate git worktree is not usable while M1a is uncommitted (the worktree would lack it).",
+  "Build interference: several agents building the same workspace must each use a private CARGO_TARGET_DIR; M2-S0 changes Cargo.lock (new deps/features), which M1a agents will see on their next build. Do M2-S0 at a quiet moment and keep the dependency additions minimal (sha2 is already a workspace dep; base64 can be hand-rolled to avoid any new crate).",
+  "Trust of the on-disk ScanDoc: in rig-exec the plan comes from a file, so the executor must not rely on stored bands for safety. Mitigation in the design: executor re-runs deny + containers + live gates itself on every item and refuses Blocked/hard-blocked items, but it cannot re-run the evidence policy. The 'broker executes only plans it built from its own scans' rule (\u00a73.1) is therefore only fully met in M3 (in-memory plan_id); state this in the review log.",
+  "Deny-list self-exemption: fs.purge rules deny %ProgramData%\\Purge and *:\\.purge-q. Executor-internal operations on its own quarantine must bypass deny only through the narrow own-store authorisation in purge-guard::live (strictly inside the current session's op dir, storage-integrity-checked); undo destinations get the normal deny check. A mistake here is the most likely source of an escape; M2-GUARD-LIVE and M2-X-STORE need the strictest review.",
+  "TOCTOU residue: FileRenameInfoEx by handle closes the source race, but the destination path and parent-chain checks are still path-based at some points (quarantine dir, undo destination). Mitigated by admin-only DACLs on quarantine and by re-checking the destination parent handle's final path; undo into a user-writable original location cannot be made race-free against a same-user attacker (consistent with the plan's honest trust statement). Hard-link G6 check on whole-directory moves is conservative and may over-block (files with n_links>1 whose other names are not in the plan), costing recall, not safety.",
+  "No-raise-access rule vs. traps: TrustedInstaller-owned or ACL-denied items will fail with AccessDenied or be blocked by G3; this is by design (no take-ownership, no SeBackup/SeRestore). Registry SDDL restore on undo sets security only on keys Purge itself recreates; restoring an owner other than the caller may need SeRestorePrivilege, which the plan forbids for deletes but does not address for undo. Proposed: restore DACL always, owner/group best-effort without enabling privileges, report a Partial fidelity note if the owner differs; this could fail 'key SDDL' in \u00a710.3 for non-admin-owned keys. Needs a decision or a \u00a710.3 clarification.",
+  "Restore-point test needs System Restore enabled and the creation-frequency override in the test snapshot; the rig sets that key, the product never does. System Restore inside a VirtualBox guest with small disks can be flaky (shadow storage); treat G6 as must-pass on LTSC only.",
+  "PendingFileRenameOperations edits are racy with other installers by nature; MoveFileExW appends atomically, but removing our own pairs is a read-modify-write of the value. Design uses compare-before-write and removes exact pairs only; a concurrent foreign append between read and write could be lost. Keep the window minimal and document; consider leaving stale pairs harmlessly (source no longer exists) instead of rewriting when another writer is detected.",
+  "Crash matrix cost: restoring a snapshot per fault point is too slow (16+ points x 2 modes x exec/undo). The procedure batches per boot with a fresh fixture root per iteration and only 3 hard power-offs; the in-process crash matrix in crates/purge-exec/tests/crash.rs is the primary proof, the VM matrix the confirmation.",
+  "Host/guest build mismatch (host 26300.9974 vs Clean-Pro 26340.9882) does not affect the executor path, but real-app end-to-end runs in G2 depend on M1a scan quality and baselines; use LTSC rig-base apps already scored in M1a so a fidelity failure is not confused with a scan problem.",
+  "Not covered by any M2 package (no producer today): default-value-change and MRUList-edit inverses of \u00a77.8, SYS-DRIVER, boot-time delete (Reversibility None) beyond returning NeedsIrreversibleConsent, .reg export UI, history.* RPC methods (purge-rpc is M3). They are listed in M2-POSTM1A item 4 / left to M1b-M3."
+ ],
+ "decisions": [
+  "USER 2026-11-12 Q1: service/task/firewall execute+undo DEFERRED to M1b. M2-WIN-TYPED and M2-X-TYPED keep only AppX removal (RemovePackage, Reversibility None path) ; M2 gates on files + registry + AppX.",
+  "USER Q2: --confirm binds plan + selection: confirm = SHA-256(plan_hash || selection_hash). Default selection = Safe + preselected; rig-exec --select ids.json may add Likely/Weak; journal stores both hashes.",
+  "USER Q6: the rig may add a small D: data disk to the LTSC VM (VDI under E:\\purge-vm) in a new offline child snapshot m2-base with System Restore enabled (test-only frequency override set by the rig, never by Purge). Full matrix on LTSC; traps + fidelity once on Purge-CleanPro.",
+  "USER: commit M1a on a branch before M2-S0 starts writing code.",
+  "DEFAULT Q3: interim identity binding at exec start; real scan-time FileId binding in M2-POSTM1A; item fingerprints not in plan hash until then.",
+  "DEFAULT Q4: fix purge-plan order.rs to match ENGINE_PLAN \u00a77.1 in M2-POSTM1A.",
+  "DEFAULT Q5: Restart Manager query only (report lockers); no app close/service stop without explicit rig flag; locked items -> boot-time move or held-retry.",
+  "DEFAULT Q7: traverse-only ACEs for Users on ProgramData\\Purge and sessions; signing stays out of M2.",
+  "DEFAULT Q8: `plan from-targets` allowed only in rig-exec builds, never in release."
+ ],
+ "cross_package_notes": [
+  "M2-INSTALL: M2-MODEL / M2-X-STORE: index.json starts as the 2-byte document {}, so the SessionIndex reader must accept an empty object (serde defaults on every field).",
+  "M2-INSTALL: M2-X-STORE: create the temp file for the atomic rewrite of index.json with the Index descriptor at creation. Otherwise Users lose read access, because a new file in sessions inherits only the SYSTEM and Administrators ACEs. Session and op dirs, and X:\\.purge-q, should use the Store constant. Its on-use check accepts a SYSTEM owner while install.ps1 does not; decide whether to align them.",
+  "M2-INSTALL: M2-RIG-RUN: Push-Tools copies only guest\\*.ps1, so the rig must also copy install\\install.ps1 into the guest. Run it elevated as `install.ps1 -Engine C:\\cr\\bin\\purge-engine.exe -ReportPath <out>\\install.json`; it picks up kb from <engine dir>\\kb automatically. G0 should assert from report.json: renamed_aside entries, changed=false on a re-run, and `-Check` exiting 0.",
+  "M2-INSTALL: Possible later hardening, not in the spec: set the not-content-indexed attribute on ProgramData\\Purge\\Quarantine, as section 7.5 does for X:\\.purge-q.",
+  "M2-INSTALL: VM gate G0 is still to run: a fresh install with the SDDL constants matched and a re-run that changes nothing; a medium-IL user who pre-creates the tree or plants a junction, which must be renamed aside with canaries intact; a medium-IL user unable to create files or junctions or list directories, but able to read sessions\\index.json.",
+  "M2-RIG-TRAPS: M2-RIG-RUN (rig-selftest owner): add to vm/guest/tests/rig-selftest.ps1 a parse check of both scripts, plus `m2-traps.ps1 -DryRun -OutDir <tmp>` and `m2-fixtures.ps1 -DryRun -OutDir <tmp>` (exit 0, four files each). Also assert the trap dry-run manifest is JSON-equal to vm/truth/m2-traps.json. The dry run compiles the C# helper, so this also catches compile errors.",
+  "M2-RIG-TRAPS: M2-RIG-RUN exec-run order: `m2-traps.ps1 -Stage pre-install` -> install\\install.ps1 -> `m2-traps.ps1` (post-install) -> `m2-fixtures.ps1`. Then plan from-targets for group 'main' from m2-traps-targets.json + m2-fixtures-targets.json, and exec. Then `m2-traps.ps1 -Action check -Label after-exec` and `m2-fixtures.ps1 -Action check -Phase after-exec`. Then undo, then `-Action check -Label after-undo` and `m2-fixtures.ps1 -Action check -Phase after-undo` (that last one also compares every fidelity field). Groups race-a and race-b each need their own exec, with helper.env (PURGE_FAULT_PAUSE=name:ms) and `m2-traps.ps1 -Action swap -TrapId <id>` started in the background first. Group 'locked' belongs to m2-reboot, with `-Action plant-boot-junction` after the reboot. The expiry trap needs `-Action plant-expiry-junction` before `quarantine purge`. Default output dirs are C:\\cr\\out\\m2-traps and C:\\cr\\out\\m2-fixtures; pass -OutDir to put them in the run dir.",
+  "M2-RIG-TRAPS: M2-CLI: `plan from-targets` should read purge.rig.targets/0: {schema, source, origin:'ManualUser', targets:[{id, trap, group, target:<purge-model Target JSON>, action:<purge-model Action name: Quarantine|DeleteKey|DeleteValue|EditSegment|RemoveDirIfEmpty>}]}. The consumer filters by group. Paths may end in '.' or ' ' or exceed 260 characters on purpose.",
+  "M2-RIG-TRAPS: M2-X-JOURNAL / M2-X-EXEC contract assumptions:\n- PURGE_FAULT_PAUSE uses the format name:ms. The race traps use intent.flushed:8000 and act.before:8000.\n- The swap helper triggers on any journal.jsonl line that contains the JSON-escaped item path and the substring \"intent\" (case-insensitive). If the journal's record encoding differs, adjust the trigger in m2-traps.ps1 (swap action).",
+  "M2-RIG-TRAPS: M2-INSTALL: the pd-plant-denied trap expects a medium-IL user to be unable to create files or junctions in C:\\ProgramData\\Purge, Quarantine or sessions, and unable to list Quarantine, but able to read sessions\\index.json. The pd-precreated trap expects the user-created tree to be renamed to C:\\ProgramData\\Purge.rejected-* (post-check looks for purge-trap-precreated.txt inside it).",
+  "M2-RIG-TRAPS: First VM run: verify the registry half of the native helper on a fresh LTSC snapshot: REG_LINK create/NtDeleteKey, the SetKeySddl two-step fallback for TrustedInstaller-owned keys, and reglink-user (marked optional). Then run build twice to confirm idempotency and run `-Action reset` once."
+ ]
+}

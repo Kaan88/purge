@@ -1,0 +1,323 @@
+== f0-firefox before {'Blocked': 1, 'Likely': 7, 'Safe': 14, 'Weak': 5} after {'Blocked': 1, 'Likely': 9, 'Safe': 14, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== f0-firefox-tb before {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 5} after {'Blocked': 1, 'Likely': 5, 'Safe': 12, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== f0-git before {'Likely': 2, 'Safe': 4} after {'Likely': 2, 'Safe': 4} identical
+== f0-npp before {'Likely': 2} after {'Likely': 2} identical
+== f0-vscode before {'Likely': 3, 'Safe': 246} after {'Likely': 3, 'Safe': 246} identical
+== f0-vscode-user before {'Blocked': 1, 'Likely': 3, 'Safe': 271} after {'Blocked': 1, 'Likely': 3, 'Safe': 271} identical
+== f0d-firefox before {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 5} after {'Blocked': 1, 'Likely': 5, 'Safe': 12, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== f0d-git before {'Likely': 3, 'Safe': 4} after {'Likely': 3, 'Safe': 4} identical
+== f0d-npp before {'Likely': 3} after {'Likely': 3} identical
+== f0d-vlc before {'Likely': 6, 'Safe': 1} after {'Likely': 6, 'Safe': 1} identical
+== f0d-vscode-user before {'Blocked': 6, 'Likely': 2} after {'Blocked': 7, 'Likely': 1} 
+   Likely  -> Blocked RegKey HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\vscode
+        blockers [] -> ['{"app": "Microsoft Visual Studio Code", "kind": "ContainsOtherApp"}']
+== f1d-firefox before {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 5} after {'Blocked': 1, 'Likely': 5, 'Safe': 12, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== f1d-git before {'Likely': 3, 'Safe': 4} after {'Likely': 3, 'Safe': 4} identical
+== f1d-npp before {'Likely': 3} after {'Likely': 3} identical
+== f1d-vlc before {'Likely': 6, 'Safe': 1} after {'Likely': 6, 'Safe': 1} identical
+== f1d-vscode-user before {'Blocked': 6, 'Likely': 2} after {'Blocked': 7, 'Likely': 1} 
+   Likely  -> Blocked RegKey HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\vscode
+        blockers [] -> ['{"app": "Microsoft Visual Studio Code", "kind": "ContainsOtherApp"}']
+== lx0t-npp-userfiles before {'Likely': 6} after {'Likely': 3} 
+   Likely  -> (gone)  RegKey HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\Applications\notepad++.exe   ['ChainedRef B/5', 'ExactFullName B/4', 'NameTokenExact C/3']
+   Likely  -> (gone)  RegMultiSzSegment HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.log\OpenWithList | MRUList [a]   ['ChainedRef B/5']
+   Likely  -> (gone)  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.log\OpenWithList | a   ['ChainedRef B/5']
+== r0-7zip before {} after {} identical
+== r0-firefox before {'Blocked': 1, 'Likely': 7, 'Safe': 14, 'Weak': 5} after {'Blocked': 1, 'Likely': 9, 'Safe': 14, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== r0-firefox-tb before {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 5} after {'Blocked': 1, 'Likely': 5, 'Safe': 12, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== r0-git before {'Likely': 2, 'Safe': 4} after {'Likely': 2, 'Safe': 4} identical
+== r0-npp before {'Likely': 2} after {'Likely': 2} identical
+== r0-vscode before {'Likely': 3, 'Safe': 241} after {'Likely': 3, 'Safe': 241} identical
+== r0-vscode-user before {'Blocked': 1, 'Likely': 3, 'Safe': 285} after {'Blocked': 1, 'Likely': 3, 'Safe': 285} identical
+== r1-7zip before {} after {} identical
+== r1-firefox before {'Blocked': 1, 'Likely': 7, 'Safe': 14, 'Weak': 5} after {'Blocked': 1, 'Likely': 9, 'Safe': 14, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== r1-firefox-tb before {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 5} after {'Blocked': 1, 'Likely': 5, 'Safe': 12, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== r1-git before {'Likely': 2, 'Safe': 4} after {'Likely': 2, 'Safe': 4} identical
+== r1-npp before {'Likely': 2} after {'Likely': 2} identical
+== r1-vscode before {'Likely': 3, 'Safe': 241} after {'Likely': 3, 'Safe': 241} identical
+== r1-vscode-user before {'Blocked': 1, 'Likely': 3, 'Safe': 285} after {'Blocked': 1, 'Likely': 3, 'Safe': 285} identical
+== x0-ff-devedition before {'Blocked': 10, 'Likely': 3, 'Safe': 4, 'Weak': 4} after {'Blocked': 12, 'Likely': 3, 'Safe': 4} 
+   Weak    -> (gone)  Path C:\Users\tester\AppData\Local\Mozilla   ['VendorContainer C/2']
+   Weak    -> Blocked Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+        blockers ['kind(UserData)'] -> ['kind(UserData)', '{"app": "Firefox Developer Edition (x64 en-US)", "kind": "ReferencedByOtherApp"}']
+   Weak    -> (gone)  Path C:\Users\tester\AppData\Roaming\Mozilla   ['VendorContainer C/2']
+   Weak    -> Blocked Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+        blockers ['kind(UserData)'] -> ['kind(UserData)', '{"app": "Firefox Developer Edition (x64 en-US)", "kind": "ReferencedByOtherApp"}']
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x0-ff-esr before {'Blocked': 11, 'Likely': 3, 'Safe': 4, 'Weak': 4} after {'Blocked': 13, 'Likely': 3, 'Safe': 4} 
+   Weak    -> (gone)  Path C:\Users\tester\AppData\Local\Mozilla   ['VendorContainer C/2']
+   Weak    -> Blocked Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+        blockers ['kind(UserData)'] -> ['kind(UserData)', '{"app": "Mozilla Firefox ESR (x64 en-US)", "kind": "ReferencedByOtherApp"}']
+   Weak    -> (gone)  Path C:\Users\tester\AppData\Roaming\Mozilla   ['VendorContainer C/2']
+   Weak    -> Blocked Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+        blockers ['kind(UserData)'] -> ['kind(UserData)', '{"app": "Mozilla Firefox ESR (x64 en-US)", "kind": "ReferencedByOtherApp"}']
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x0-ff-reinstall before {'Likely': 5, 'Safe': 16, 'Weak': 5} after {'Likely': 7, 'Safe': 16, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB;PrivateBrowsingAUMID
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x0-ff-tbafter before {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 3} after {'Blocked': 1, 'Likely': 5, 'Safe': 12, 'Weak': 1} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x0-git-toolsdir before {'Likely': 4, 'Safe': 4} after {'Likely': 3, 'Safe': 4} 
+   Likely  -> (gone)  RegKey HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\App Paths\rg.exe   ['ChainedRef B/5']
+== x0-git-upgrade before {'Likely': 5, 'Safe': 4} after {'Likely': 5, 'Safe': 4} identical
+== x0-git-userstate before {'Likely': 8, 'Safe': 4} after {'Likely': 8, 'Safe': 4} identical
+== x0-nb-firefox-tb before {'Blocked': 1, 'Likely': 3, 'Safe': 11, 'Weak': 5} after {'Blocked': 1, 'Likely': 5, 'Safe': 11, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x0-nb-git before {'Likely': 4} after {'Likely': 4} identical
+== x0-nb-npp before {'Likely': 3} after {'Likely': 3} identical
+== x0-nb-vscode before {'Likely': 138, 'Safe': 1} after {'Likely': 138, 'Safe': 1} identical
+== x0-nb-vscode-user before {'Likely': 137, 'Safe': 1} after {'Likely': 137, 'Safe': 1} identical
+== x0-npp-userfiles before {'Likely': 6} after {'Likely': 3} 
+   Likely  -> (gone)  RegKey HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\Applications\notepad++.exe   ['ChainedRef B/5', 'ExactFullName B/4', 'NameTokenExact C/3']
+   Likely  -> (gone)  RegMultiSzSegment HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.log\OpenWithList | MRUList [a]   ['ChainedRef B/5']
+   Likely  -> (gone)  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.log\OpenWithList | a   ['ChainedRef B/5']
+== x0-thunderbird before {'Likely': 11, 'Safe': 14, 'Weak': 3} after {'Likely': 12, 'Safe': 14, 'Weak': 2} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Thunderbird
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | D78BF5DD33499EC2
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | D78BF5DD33499EC2
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x0-vlc before {'Likely': 5, 'Safe': 1} after {'Likely': 5, 'Safe': 1} identical
+== x0-vscode-insiders-pair before {'Likely': 3, 'Safe': 1} after {'Likely': 3, 'Safe': 1} identical
+== x0-vscode-upgrade before {'Likely': 3, 'Safe': 241} after {'Likely': 3, 'Safe': 241} identical
+== x0-vscode-userstate before {'Likely': 5, 'Safe': 238} after {'Likely': 4, 'Safe': 238} 
+   Likely  -> (gone)  RegKey HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\Applications\Code.exe   ['ChainedRef B/5']
+== x0-vscode-with-user before {'Blocked': 2, 'Likely': 2} after {'Blocked': 3, 'Likely': 1} 
+   Likely  -> Blocked RegKey HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\vscode
+        blockers [] -> ['{"app": "Microsoft Visual Studio Code (User)", "kind": "ContainsOtherApp"}']
+== x0-vscode-zipcopy before {'Blocked': 1, 'Likely': 3, 'Safe': 285} after {'Blocked': 1, 'Likely': 3, 'Safe': 285} identical
+== x0-winmerge before {} after {} identical
+== x0t-npp-userfiles before {'Likely': 6} after {'Likely': 3} 
+   Likely  -> (gone)  RegKey HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\Applications\notepad++.exe   ['ChainedRef B/5', 'ExactFullName B/4', 'NameTokenExact C/3']
+   Likely  -> (gone)  RegMultiSzSegment HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.log\OpenWithList | MRUList [a]   ['ChainedRef B/5']
+   Likely  -> (gone)  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.log\OpenWithList | a   ['ChainedRef B/5']
+== x1-ff-devedition before {'Blocked': 10, 'Likely': 3, 'Safe': 4, 'Weak': 4} after {'Blocked': 12, 'Likely': 3, 'Safe': 4} 
+   Weak    -> (gone)  Path C:\Users\tester\AppData\Local\Mozilla   ['VendorContainer C/2']
+   Weak    -> Blocked Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+        blockers ['kind(UserData)'] -> ['kind(UserData)', '{"app": "Firefox Developer Edition (x64 en-US)", "kind": "ReferencedByOtherApp"}']
+   Weak    -> (gone)  Path C:\Users\tester\AppData\Roaming\Mozilla   ['VendorContainer C/2']
+   Weak    -> Blocked Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+        blockers ['kind(UserData)'] -> ['kind(UserData)', '{"app": "Firefox Developer Edition (x64 en-US)", "kind": "ReferencedByOtherApp"}']
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x1-ff-esr before {'Blocked': 11, 'Likely': 3, 'Safe': 4, 'Weak': 4} after {'Blocked': 13, 'Likely': 3, 'Safe': 4} 
+   Weak    -> (gone)  Path C:\Users\tester\AppData\Local\Mozilla   ['VendorContainer C/2']
+   Weak    -> Blocked Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+        blockers ['kind(UserData)'] -> ['kind(UserData)', '{"app": "Mozilla Firefox ESR (x64 en-US)", "kind": "ReferencedByOtherApp"}']
+   Weak    -> (gone)  Path C:\Users\tester\AppData\Roaming\Mozilla   ['VendorContainer C/2']
+   Weak    -> Blocked Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+        blockers ['kind(UserData)'] -> ['kind(UserData)', '{"app": "Mozilla Firefox ESR (x64 en-US)", "kind": "ReferencedByOtherApp"}']
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x1-ff-reinstall before {'Likely': 5, 'Safe': 16, 'Weak': 5} after {'Likely': 7, 'Safe': 16, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB;PrivateBrowsingAUMID
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x1-ff-tbafter before {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 3} after {'Blocked': 1, 'Likely': 5, 'Safe': 12, 'Weak': 1} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x1-git-toolsdir before {'Likely': 7, 'Safe': 4} after {'Likely': 6, 'Safe': 4} 
+   Likely  -> (gone)  RegKey HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\App Paths\rg.exe   ['ChainedRef B/5']
+== x1-git-upgrade before {'Likely': 5, 'Safe': 4} after {'Likely': 5, 'Safe': 4} identical
+== x1-git-userstate before {'Likely': 8, 'Safe': 4} after {'Likely': 8, 'Safe': 4} identical
+== x1-nb-firefox-tb before {'Blocked': 1, 'Likely': 3, 'Safe': 11, 'Weak': 5} after {'Blocked': 1, 'Likely': 5, 'Safe': 11, 'Weak': 3} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Local\Mozilla\Firefox
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Firefox
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x1-nb-git before {'Likely': 4} after {'Likely': 4} identical
+== x1-nb-npp before {'Likely': 3} after {'Likely': 3} identical
+== x1-nb-vscode before {'Likely': 138, 'Safe': 1} after {'Likely': 138, 'Safe': 1} identical
+== x1-nb-vscode-user before {'Likely': 137, 'Safe': 1} after {'Likely': 137, 'Safe': 1} identical
+== x1-npp-userfiles before {'Likely': 6} after {'Likely': 3} 
+   Likely  -> (gone)  RegKey HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\Applications\notepad++.exe   ['ChainedRef B/5', 'ExactFullName B/4', 'NameTokenExact C/3']
+   Likely  -> (gone)  RegMultiSzSegment HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.log\OpenWithList | MRUList [a]   ['ChainedRef B/5']
+   Likely  -> (gone)  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.log\OpenWithList | a   ['ChainedRef B/5']
+== x1-thunderbird before {'Likely': 11, 'Safe': 14, 'Weak': 3} after {'Likely': 12, 'Safe': 14, 'Weak': 2} 
+   Weak    -> Likely  Path C:\Users\tester\AppData\Roaming\Mozilla\Thunderbird
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | D78BF5DD33499EC2
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | D78BF5DD33499EC2
+        - InPreUninstallRefSnapshot A/8
+        + InPreUninstallRefSnapshot B/8
+== x1-vlc before {'Likely': 5, 'Safe': 1} after {'Likely': 5, 'Safe': 1} identical
+== x1-vscode-insiders-pair before {'Likely': 3, 'Safe': 1} after {'Likely': 3, 'Safe': 1} identical
+== x1-vscode-upgrade before {'Likely': 3, 'Safe': 246} after {'Likely': 3, 'Safe': 246} identical
+== x1-vscode-userstate before {'Likely': 5, 'Safe': 243} after {'Likely': 4, 'Safe': 243} 
+   Likely  -> (gone)  RegKey HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\Applications\Code.exe   ['ChainedRef B/5']
+== x1-vscode-with-user before {'Blocked': 2, 'Likely': 2} after {'Blocked': 3, 'Likely': 1} 
+   Likely  -> Blocked RegKey HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\vscode
+        blockers [] -> ['{"app": "Microsoft Visual Studio Code (User)", "kind": "ContainsOtherApp"}']
+== x1-vscode-zipcopy before {'Blocked': 1, 'Likely': 3, 'Safe': 271} after {'Blocked': 1, 'Likely': 3, 'Safe': 271} identical
+== x1-winmerge before {} after {} identical
+TOTAL {('Likely', 'Blocked', 'band'): 4, ('Likely', 'gone', 'row'): 16, ('Safe', 'Safe', 'evidence'): 42, ('Weak', 'Blocked', 'band'): 8, ('Weak', 'Likely', 'band'): 30, ('Weak', 'gone', 'row'): 8}
+BAND UP / NEW SAFE: 30
+   ('f0-firefox', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('f0-firefox', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('f0-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('f0-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('f0d-firefox', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('f0d-firefox', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('f1d-firefox', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('f1d-firefox', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('r0-firefox', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('r0-firefox', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('r0-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('r0-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('r1-firefox', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('r1-firefox', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('r1-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('r1-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x0-ff-reinstall', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x0-ff-reinstall', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x0-ff-tbafter', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x0-ff-tbafter', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x0-nb-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x0-nb-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x0-thunderbird', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Thunderbird', ('Weak', False), ('Likely', False))
+   ('x1-ff-reinstall', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x1-ff-reinstall', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x1-ff-tbafter', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x1-ff-tbafter', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x1-nb-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x1-nb-firefox-tb', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Likely', False))
+   ('x1-thunderbird', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Thunderbird', ('Weak', False), ('Likely', False))
+BLOCKED ROWS TOUCHED: 12
+   ('f0d-vscode-user', 'RegKey HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode', ('Likely', False), ('Blocked', False))
+   ('f1d-vscode-user', 'RegKey HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode', ('Likely', False), ('Blocked', False))
+   ('x0-ff-devedition', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Blocked', False))
+   ('x0-ff-devedition', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Blocked', False))
+   ('x0-ff-esr', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Blocked', False))
+   ('x0-ff-esr', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Blocked', False))
+   ('x0-vscode-with-user', 'RegKey HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode', ('Likely', False), ('Blocked', False))
+   ('x1-ff-devedition', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Blocked', False))
+   ('x1-ff-devedition', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Blocked', False))
+   ('x1-ff-esr', 'Path C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox', ('Weak', False), ('Blocked', False))
+   ('x1-ff-esr', 'Path C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox', ('Weak', False), ('Blocked', False))
+   ('x1-vscode-with-user', 'RegKey HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\vscode', ('Likely', False), ('Blocked', False))

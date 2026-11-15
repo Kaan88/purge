@@ -1,0 +1,366 @@
+== f2d-firefox before {'Blocked': 1, 'Likely': 1, 'Safe': 15, 'Weak': 4} after {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 5} 
+   Safe    -> Weak    Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates
+        - EmptyAfterPlan A/8
+   Safe    -> Likely  Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\308046B0AF4A39CB
+        - TimeWindow C/1
+   Safe    -> Likely  RegValue HKLM\SOFTWARE\WOW6432Node\Mozilla\Firefox\TaskBarIDs | C:\Program Files\Mozilla Firefox
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKLM\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules | {09DBF326-5D4C-4681-A597-51FB48D5CBDF}
+        - DanglingRef B/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\DllPrefetchExperiment | C:\Program Files\Mozilla Firefox\firefox.exe
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\Launcher | C:\Program Files\Mozilla Firefox\firefox.exe|Blocklist
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Enabled
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Progress
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Theme
+        - DanglingRef A/7
+== f2d-git before {'Likely': 3, 'Safe': 4} after {'Likely': 3, 'Safe': 4} 
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 15
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 16
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 17
+        - DanglingRef B/7
+== f2d-npp before {'Likely': 3} after {'Likely': 3} identical
+== f2d-vlc before {'Likely': 6, 'Safe': 1} after {'Likely': 6, 'Safe': 1} 
+   Likely  -> Likely  RegValue HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayBlurayOnArrival | DefaultIcon
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 15
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 16
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 17
+        - DanglingRef B/7
+== f2d-vscode-user before {'Blocked': 6, 'Likely': 2} after {'Blocked': 6, 'Likely': 2} 
+   Blocked -> Blocked RegValue HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModel\StateRepository\Cache\Application\Data\56 | ApplicationUserModelId
+        blockers ['kind(TrustedInstallerOwned)', '{"kind": "DenyListed", "rule": "kb.package-store-state-repository"}'] -> ['{"kind": "DenyListed", "rule": "kb.package-store-state-repository"}']
+   Blocked -> Blocked RegValue HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModel\StateRepository\Cache\Application\Data\56 | PackageRelativeApplicationId
+        blockers ['kind(TrustedInstallerOwned)', '{"kind": "DenyListed", "rule": "kb.package-store-state-repository"}'] -> ['{"kind": "DenyListed", "rule": "kb.package-store-state-repository"}']
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\vscode\shell\open\command | (default)
+        - DanglingRef A/7
+== r2-7zip before {} after {} identical
+== r2-firefox before {'Blocked': 1, 'Likely': 5, 'Safe': 17, 'Weak': 4} after {'Blocked': 1, 'Likely': 7, 'Safe': 14, 'Weak': 5} 
+   Safe    -> Weak    Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates
+        - EmptyAfterPlan A/8
+   Safe    -> Likely  Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\308046B0AF4A39CB
+        - TimeWindow C/1
+   Safe    -> Safe    RegValue HKLM\SOFTWARE\Classes\CLSID\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\InProcServer32 | (default)
+        - DanglingRef A/7
+   Safe    -> Likely  RegValue HKLM\SOFTWARE\WOW6432Node\Mozilla\Firefox\TaskBarIDs | C:\Program Files\Mozilla Firefox
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKLM\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules | {6459BB81-8108-4536-81B4-59D35544E623}
+        - DanglingRef B/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\DllPrefetchExperiment | C:\Program Files\Mozilla Firefox\firefox.exe
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\Launcher | C:\Program Files\Mozilla Firefox\firefox.exe|Blocklist
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Enabled
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Progress
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Theme
+        - DanglingRef A/7
+== r2-firefox-tb before {'Blocked': 1, 'Likely': 1, 'Safe': 15, 'Weak': 4} after {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 5} 
+   Safe    -> Weak    Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates
+        - EmptyAfterPlan A/8
+   Safe    -> Likely  Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\308046B0AF4A39CB
+        - TimeWindow C/1
+   Safe    -> Likely  RegValue HKLM\SOFTWARE\WOW6432Node\Mozilla\Firefox\TaskBarIDs | C:\Program Files\Mozilla Firefox
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKLM\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules | {BB0E49BD-B6AE-44EF-B1B7-589066BC6EB0}
+        - DanglingRef B/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\DllPrefetchExperiment | C:\Program Files\Mozilla Firefox\firefox.exe
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\Launcher | C:\Program Files\Mozilla Firefox\firefox.exe|Blocklist
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Enabled
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Progress
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Theme
+        - DanglingRef A/7
+== r2-git before {'Likely': 2, 'Safe': 4} after {'Likely': 2, 'Safe': 4} 
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 1
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 2
+        - DanglingRef B/7
+== r2-npp before {'Likely': 2} after {'Likely': 2} identical
+== r2-vscode before {'Likely': 3, 'Safe': 241} after {'Likely': 3, 'Safe': 241} 
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\vscode\shell\open\command | (default)
+        - DanglingRef A/7
+== r2-vscode-user before {'Blocked': 1, 'Likely': 3, 'Safe': 285} after {'Blocked': 1, 'Likely': 3, 'Safe': 285} 
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\vscode\shell\open\command | (default)
+        - DanglingRef A/7
+== x2-ff-devedition before {'Blocked': 10, 'Likely': 2, 'Safe': 6, 'Weak': 4} after {'Blocked': 10, 'Likely': 3, 'Safe': 4, 'Weak': 4} 
+   Safe    -> Likely  Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\308046B0AF4A39CB
+        - TimeWindow C/1
+   Likely  -> (gone)  RegKey HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\Applications\updater.exe   ['ChainedRef B/5']
+   Safe    -> Likely  RegValue HKLM\SOFTWARE\WOW6432Node\Mozilla\Firefox\TaskBarIDs | C:\Program Files\Mozilla Firefox
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKLM\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules | {EDA8FB1E-FF6A-42F0-AB0C-21B8E9FEA9EB}
+        - DanglingRef B/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\DllPrefetchExperiment | C:\Program Files\Mozilla Firefox\firefox.exe
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\Launcher | C:\Program Files\Mozilla Firefox\firefox.exe|Blocklist
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Enabled
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Progress
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Theme
+        - DanglingRef A/7
+== x2-ff-esr before {'Blocked': 11, 'Likely': 1, 'Safe': 6, 'Weak': 4} after {'Blocked': 11, 'Likely': 3, 'Safe': 4, 'Weak': 4} 
+   Safe    -> Likely  Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\308046B0AF4A39CB
+        - TimeWindow C/1
+   Safe    -> Likely  RegValue HKLM\SOFTWARE\WOW6432Node\Mozilla\Firefox\TaskBarIDs | C:\Program Files\Mozilla Firefox
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKLM\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules | {E048E05A-9BD3-4826-A032-91493037CD77}
+        - DanglingRef B/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\DllPrefetchExperiment | C:\Program Files\Mozilla Firefox\firefox.exe
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\Launcher | C:\Program Files\Mozilla Firefox\firefox.exe|Blocklist
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Enabled
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Progress
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Theme
+        - DanglingRef A/7
+== x2-ff-reinstall before {'Likely': 1, 'Safe': 16, 'Weak': 4} after {'Likely': 5, 'Safe': 16, 'Weak': 5} 
+   Safe    -> Weak    Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates
+        - EmptyAfterPlan A/8
+   Safe    -> Likely  Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\308046B0AF4A39CB
+        - TimeWindow C/1
+   Safe    -> Safe    RegKey HKLM\SOFTWARE\Mozilla\Firefox
+        + ProvenOwnedSkeleton A/8
+   (new)   -> Safe    RegKey HKLM\SOFTWARE\Mozilla\Firefox\TaskBarIDs   ['ProvenOwnedSkeleton A/8'] []
+   (new)   -> Safe    RegValue HKLM\SOFTWARE\Classes\CLSID\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\InProcServer32 | (default)   ['InPreUninstallRefSnapshot A/8', 'PointsIntoInstallRoot A/6'] []
+   (new)   -> Likely  RegValue HKLM\SOFTWARE\Classes\Interface\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}\ProxyStubClsid32 | (default)   ['InPreUninstallRefSnapshot B/8'] []
+   (new)   -> Likely  RegValue HKLM\SOFTWARE\Classes\Interface\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\ProxyStubClsid32 | (default)   ['InPreUninstallRefSnapshot B/8'] []
+   (new)   -> Likely  RegValue HKLM\SOFTWARE\Classes\Interface\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}\ProxyStubClsid32 | (default)   ['InPreUninstallRefSnapshot B/8'] []
+   Safe    -> Safe    RegValue HKLM\SOFTWARE\WOW6432Node\Mozilla\Firefox\TaskBarIDs | C:\Program Files\Mozilla Firefox
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB;PrivateBrowsingAUMID
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\DllPrefetchExperiment | C:\Program Files\Mozilla Firefox\firefox.exe
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\Launcher | C:\Program Files\Mozilla Firefox\firefox.exe|Blocklist
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Enabled
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Progress
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Theme
+        - DanglingRef A/7
+== x2-ff-tbafter before {'Blocked': 1, 'Likely': 1, 'Safe': 14, 'Weak': 3} after {'Blocked': 1, 'Likely': 3, 'Safe': 12, 'Weak': 3} 
+   Safe    -> Likely  Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\308046B0AF4A39CB
+        - TimeWindow C/1
+   Safe    -> Likely  RegValue HKLM\SOFTWARE\WOW6432Node\Mozilla\Firefox\TaskBarIDs | C:\Program Files\Mozilla Firefox
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKLM\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules | {7AFCF168-2CAA-43DF-8E48-3B5F40775121}
+        - DanglingRef B/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\DllPrefetchExperiment | C:\Program Files\Mozilla Firefox\firefox.exe
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\Launcher | C:\Program Files\Mozilla Firefox\firefox.exe|Blocklist
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Enabled
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Progress
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Theme
+        - DanglingRef A/7
+== x2-git-toolsdir before {'Likely': 4, 'Safe': 4} after {'Likely': 7, 'Safe': 4} 
+   (new)   -> Likely  Path C:\Users\tester\Tools   ['InsideInstallRoot A/9'] ['kind(UserData)', '{"kind": "UnmatchedChildren", "n": 15}']
+   Safe    -> Safe    RegKey HKLM\SOFTWARE\Classes\sh_auto_file
+        - InstallerManifest(Inno) A/8
+   (new)   -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\App Paths\rg.exe | (default)   ['InPreUninstallRefSnapshot B/8', 'PointsIntoInstallRoot B/6'] []
+   (new)   -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Run | Backup   ['InPreUninstallRefSnapshot B/8', 'PointsIntoInstallRoot B/6'] []
+== x2-git-upgrade before {'Likely': 5, 'Safe': 4} after {'Likely': 5, 'Safe': 4} 
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 3
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 4
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 5
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 6
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 7
+        - DanglingRef B/7
+== x2-git-userstate before {'Likely': 8, 'Safe': 4} after {'Likely': 8, 'Safe': 4} 
+   Likely  -> Likely  RegMultiSzSegment HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Environment | Path [C:\Program Files\Git\cmd]
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Environment | GIT_SSH
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\ContosoTools\Settings | GitExecutable
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Run | GitAutoFetch
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 11
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 12
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 13
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\TortoiseGit | MSysGit
+        - DanglingRef B/7
+== x2-nb-firefox-tb before {'Blocked': 1, 'Likely': 1, 'Safe': 14, 'Weak': 4} after {'Blocked': 1, 'Likely': 3, 'Safe': 11, 'Weak': 5} 
+   Safe    -> Weak    Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates
+        - EmptyAfterPlan A/8
+   Safe    -> Likely  Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\308046B0AF4A39CB
+        - TimeWindow C/1
+   Safe    -> Likely  RegValue HKLM\SOFTWARE\WOW6432Node\Mozilla\Firefox\TaskBarIDs | C:\Program Files\Mozilla Firefox
+        - DanglingRef A/7
+   Blocked -> Blocked RegValue HKLM\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules | {4B35A7A8-5BC9-4AFE-9A2C-7C5C8ACD65FE}
+        - DanglingRef B/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | 308046B0AF4A39CB
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\DllPrefetchExperiment | C:\Program Files\Mozilla Firefox\firefox.exe
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\Launcher | C:\Program Files\Mozilla Firefox\firefox.exe|Blocklist
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Enabled
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Progress
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Firefox\PreXULSkeletonUISettings | C:\Program Files\Mozilla Firefox\firefox.exe|Theme
+        - DanglingRef A/7
+== x2-npp-userfiles before {'Likely': 6} after {'Likely': 6} identical
+== x2-thunderbird before {'Likely': 9, 'Safe': 17, 'Weak': 2} after {'Likely': 11, 'Safe': 14, 'Weak': 3} 
+   Safe    -> Weak    Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates
+        - EmptyAfterPlan A/8
+   Safe    -> Likely  Path C:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\updates\D78BF5DD33499EC2
+        - TimeWindow C/1
+   Safe    -> Safe    RegValue HKLM\SOFTWARE\Classes\CLSID\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\InProcServer32 | (default)
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKLM\SOFTWARE\Classes\CLSID\{29F458BE-8866-11D5-A3DD-00B0D0F3BAA7}\LocalServer32 | (default)
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKLM\SOFTWARE\Classes\CLSID\{6EDCD38E-8861-11D5-A3DD-00B0D0F3BAA7}\InProcServer32 | (default)
+        - DanglingRef A/7
+   Safe    -> Likely  RegValue HKLM\SOFTWARE\WOW6432Node\Mozilla\Thunderbird\TaskBarIDs | C:\Program Files\Mozilla Thunderbird
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated | D78BF5DD33499EC2
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData | D78BF5DD33499EC2
+        - InPreUninstallRefSnapshot B/8
+        + InPreUninstallRefSnapshot A/8
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Thunderbird\DllPrefetchExperiment | C:\Program Files\Mozilla Thunderbird\thunderbird.exe
+        - DanglingRef A/7
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Mozilla\Thunderbird\Launcher | C:\Program Files\Mozilla Thunderbird\thunderbird.exe|Telemetry
+        - DanglingRef A/7
+== x2-vlc before {'Likely': 5, 'Safe': 1} after {'Likely': 5, 'Safe': 1} 
+   Likely  -> Likely  RegValue HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayBlurayOnArrival | DefaultIcon
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 3
+        - DanglingRef B/7
+   Likely  -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000\Software\Microsoft\Windows\CurrentVersion\UFH\SHC | 4
+        - DanglingRef B/7
+== x2-vscode-insiders-pair before {'Likely': 3, 'Safe': 1} after {'Likely': 3, 'Safe': 1} 
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\vscode\shell\open\command | (default)
+        - DanglingRef A/7
+== x2-vscode-upgrade before {'Likely': 3, 'Safe': 246} after {'Likely': 3, 'Safe': 246} 
+   Safe    -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\vscode\shell\open\command | (default)
+        - DanglingRef A/7
+== x2-vscode-userstate before {'Likely': 5, 'Safe': 239} after {'Likely': 5, 'Safe': 243} 
+   (new)   -> Safe    RegKey HKLM\SOFTWARE\Classes\.edn   ['ProvenOwnedSkeleton A/8', 'ProvenOwnedSkeleton A/8'] []
+   (new)   -> Safe    RegKey HKLM\SOFTWARE\Classes\.edn\OpenWithProgids   ['ProvenOwnedSkeleton A/8'] []
+   (new)   -> Safe    RegKey HKLM\SOFTWARE\Classes\.gemspec   ['ProvenOwnedSkeleton A/8', 'ProvenOwnedSkeleton A/8'] []
+   (new)   -> Safe    RegKey HKLM\SOFTWARE\Classes\.gemspec\OpenWithProgids   ['ProvenOwnedSkeleton A/8'] []
+== x2-vscode-with-user before {'Blocked': 2, 'Likely': 1} after {'Blocked': 2, 'Likely': 2} 
+   (new)   -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\vscode | (default)   ['InPreUninstallRefSnapshot B/8'] []
+   Blocked -> Blocked RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\vscode\shell\open\command | (default)
+        - DanglingRef B/7
+        - InPreUninstallRefSnapshot B/8
+        - PointsIntoInstallRoot B/6
+        + InPreUninstallRefSnapshot A/8
+        + PointsIntoInstallRoot A/6
+== x2-vscode-zipcopy before {'Blocked': 1, 'Likely': 3, 'Safe': 268} after {'Blocked': 1, 'Likely': 3, 'Safe': 269} 
+   (new)   -> Likely  RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\vscode | (default)   ['InPreUninstallRefSnapshot B/8'] []
+   Likely  -> Safe    RegValue HKU\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\vscode\shell\open\command | (default)
+        - DanglingRef B/7
+        - InPreUninstallRefSnapshot B/8
+        - PointsIntoInstallRoot B/6
+        + InPreUninstallRefSnapshot A/8
+        + PointsIntoInstallRoot A/6
+== x2-winmerge before {} after {} identical
+TOTAL {('Blocked', 'Blocked', 'evidence'): 21, ('Likely', 'Likely', 'evidence'): 25, ('Likely', 'Safe', 'band'): 1, ('Likely', 'gone', 'row'): 1, ('Safe', 'Likely', 'band'): 17, ('Safe', 'Safe', 'evidence'): 62, ('Safe', 'Weak', 'band'): 6, ('new', 'Likely', 'row'): 8, ('new', 'Safe', 'row'): 6}
+BAND UP / NEW SAFE: 7
+   ('x2-ff-reinstall', 'RegKey HKLM\\SOFTWARE\\Mozilla\\Firefox\\TaskBarIDs', None, ('Safe', True))
+   ('x2-ff-reinstall', 'RegValue HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\InProcServer32 | (default)', None, ('Safe', True))
+   ('x2-vscode-userstate', 'RegKey HKLM\\SOFTWARE\\Classes\\.edn', None, ('Safe', True))
+   ('x2-vscode-userstate', 'RegKey HKLM\\SOFTWARE\\Classes\\.edn\\OpenWithProgids', None, ('Safe', True))
+   ('x2-vscode-userstate', 'RegKey HKLM\\SOFTWARE\\Classes\\.gemspec', None, ('Safe', True))
+   ('x2-vscode-userstate', 'RegKey HKLM\\SOFTWARE\\Classes\\.gemspec\\OpenWithProgids', None, ('Safe', True))
+   ('x2-vscode-zipcopy', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\vscode\\shell\\open\\command | (default)', ('Likely', False), ('Safe', True))
+BLOCKED ROWS TOUCHED: 21
+   ('f2d-firefox', 'RegValue HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules | {09DBF326-5D4C-4681-A597-51FB48D5CBDF}', ('Blocked', False), ('Blocked', False))
+   ('f2d-vscode-user', 'RegValue HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Data\\56 | ApplicationUserModelId', ('Blocked', False), ('Blocked', False))
+   ('f2d-vscode-user', 'RegValue HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StateRepository\\Cache\\Application\\Data\\56 | PackageRelativeApplicationId', ('Blocked', False), ('Blocked', False))
+   ('f2d-vscode-user', 'RegValue HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode\\shell\\open\\command | (default)', ('Blocked', False), ('Blocked', False))
+   ('r2-firefox', 'RegValue HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules | {6459BB81-8108-4536-81B4-59D35544E623}', ('Blocked', False), ('Blocked', False))
+   ('r2-firefox-tb', 'RegValue HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules | {BB0E49BD-B6AE-44EF-B1B7-589066BC6EB0}', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-devedition', 'RegValue HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules | {EDA8FB1E-FF6A-42F0-AB0C-21B8E9FEA9EB}', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-devedition', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\DllPrefetchExperiment | C:\\Program Files\\Mozilla Firefox\\firefox.exe', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-devedition', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\Launcher | C:\\Program Files\\Mozilla Firefox\\firefox.exe|Blocklist', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-devedition', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings | C:\\Program Files\\Mozilla Firefox\\firefox.exe|Enabled', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-devedition', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings | C:\\Program Files\\Mozilla Firefox\\firefox.exe|Progress', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-devedition', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings | C:\\Program Files\\Mozilla Firefox\\firefox.exe|Theme', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-esr', 'RegValue HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules | {E048E05A-9BD3-4826-A032-91493037CD77}', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-esr', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\DllPrefetchExperiment | C:\\Program Files\\Mozilla Firefox\\firefox.exe', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-esr', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\Launcher | C:\\Program Files\\Mozilla Firefox\\firefox.exe|Blocklist', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-esr', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings | C:\\Program Files\\Mozilla Firefox\\firefox.exe|Enabled', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-esr', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings | C:\\Program Files\\Mozilla Firefox\\firefox.exe|Progress', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-esr', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings | C:\\Program Files\\Mozilla Firefox\\firefox.exe|Theme', ('Blocked', False), ('Blocked', False))
+   ('x2-ff-tbafter', 'RegValue HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules | {7AFCF168-2CAA-43DF-8E48-3B5F40775121}', ('Blocked', False), ('Blocked', False))
+   ('x2-nb-firefox-tb', 'RegValue HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules | {4B35A7A8-5BC9-4AFE-9A2C-7C5C8ACD65FE}', ('Blocked', False), ('Blocked', False))
+   ('x2-vscode-with-user', 'RegValue HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\vscode\\shell\\open\\command | (default)', ('Blocked', False), ('Blocked', False))

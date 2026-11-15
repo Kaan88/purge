@@ -1,0 +1,244 @@
+--- /mnt/C/Users/kaank/Desktop/uninstall/purge/crates/purge-scan/tests/reg/hostile.rs	2026-11-15 04:11:19.101684700 +0300
++++ ws/crates/purge-scan/tests/reg/hostile.rs	2026-11-15 04:51:56.123066622 +0300
+@@ -784,3 +784,241 @@
+         }
+     }
+ }
++
++// ---------------------------------------------------------------------------------------------
++// rev10 probes (review scratch only)
++// ---------------------------------------------------------------------------------------------
++
++fn rev10_show(tag: &str, world: &World, place: &Place) {
++    let found: Vec<_> = decided(world)
++        .into_iter()
++        .filter(|(c, ..)| touches(c, place))
++        .collect();
++    if found.is_empty() {
++        println!("PROBE {tag}: nothing offered");
++    }
++    for (c, band, ticked) in found {
++        let tiers: Vec<String> = c
++            .evidence
++            .iter()
++            .map(|e| format!("{:?}:{:?}", e.kind, e.tier))
++            .collect();
++        println!(
++            "PROBE {tag}: {} {:?} {:?} -> {band:?} ticked={ticked} [{}]",
++            c.scanner,
++            c.action,
++            c.target,
++            tiers.join(", ")
++        );
++    }
++}
++
++fn rev10_place(what: &str, name: &str) -> Place {
++    places()
++        .into_iter()
++        .find(|p| p.what == what && p.name == name)
++        .unwrap()
++}
++
++#[test]
++fn rev10_probe_text_after_path() {
++    let app = app_dir();
++    let exe = format!(r"{FIREFOX}\firefox.exe");
++    let foreign = rev10_place("foreign key", "SearchPath");
++    for text in [
++        format!(r"{app}\x.exe|user text"),
++        format!(r"{app}|user text"),
++        format!(r"{app}\x.exe?a=b"),
++        format!(r"{app}\x.exe*user"),
++        format!(r"{app}\x.exe<user>"),
++        format!(r"{app}\x.exe=user"),
++        format!(r"{app}\x.exe|\Users\tester\tool.exe"),
++        format!(r"{exe}|{}", r"Users\tester\tool.exe"),
++        format!(r"{app}\cmd user text"),
++        format!(r"{app}\readme.txt user text"),
++        format!("{app}\u{a0}user text"),
++    ] {
++        for record in [Record::Value, Record::Snapshot] {
++            let w = world(&foreign, &Data::Sz(text.clone()), record);
++            rev10_show(&format!("after-path {text:?} {record:?}"), &w, &foreign);
++        }
++    }
++    let env = rev10_place("environment, machine", "FX_HOME");
++    for text in [format!(r"{app}\x.exe|user text"), format!(r"{app}|user text")] {
++        let w = world(&env, &Data::Sz(text.clone()), Record::Value);
++        rev10_show(&format!("env {text:?}"), &w, &env);
++    }
++}
++
++#[test]
++fn rev10_probe_command_slash() {
++    let exe = format!(r"{FIREFOX}\firefox.exe");
++    for what in ["Run", "Run, user", "shell verb"] {
++        let name = if what == "shell verb" { "" } else { "Agent" };
++        let run = rev10_place(what, name);
++        for text in [
++            format!(r"{exe}/../../../Users/tester/tool.exe --x"),
++            format!(r"{FIREFOX}\run.cmd/../../Users/tester/tool.exe"),
++            format!(r#""{exe}/../../../Users/tester/tool.exe" --x"#),
++            format!(r#"{exe}"{TOOL}""#),
++        ] {
++            let w = world(&run, &Data::Sz(text.clone()), Record::Value);
++            rev10_show(&format!("cmd {what} {text:?}"), &w, &run);
++        }
++    }
++}
++
++#[test]
++fn rev10_probe_nul_and_binary() {
++    use purge_source::types::{REG_BINARY, REG_NONE, REG_SZ, RegData};
++    let app = app_dir();
++    let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
++    let foreign = rev10_place("foreign key", "SearchPath");
++    // REG_SZ whose bytes hold a second string after a NUL.
++    let mut w = world(&foreign, &Data::Sz(app.clone()), Record::Value);
++    w.fixture.set_value(
++        &foreign.key,
++        foreign.name,
++        RegData::new(REG_SZ, utf16(&format!("{app}\0{TOOLS}\0"))),
++    );
++    rev10_show("REG_SZ with NUL then foreign", &w, &foreign);
++    // Binary / none data holding foreign text, value named by a bare exe name / plain name.
++    for ty in [REG_BINARY, REG_NONE] {
++        for name in ["firefox.exe", "SearchPath"] {
++            let place = Place {
++                what: "foreign key",
++                key: foreign.key.clone(),
++                plan_key: foreign.plan_key.clone(),
++                name: if name == "firefox.exe" { "firefox.exe" } else { "SearchPath" },
++            };
++            let mut w = world(&place, &Data::Sz(app.clone()), Record::Value);
++            w.fixture.set_value(
++                &place.key,
++                place.name,
++                RegData::new(ty, utf16(&format!("\"{TOOL}\" --with \"{app}\\x.exe\"\0"))),
++            );
++            rev10_show(&format!("type {ty} name {name}"), &w, &place);
++        }
++    }
++}
++
++#[test]
++fn rev10_probe_named_after_app() {
++    let app = app_dir();
++    let exe = format!(r"{FIREFOX}\firefox.exe");
++    let hostile = format!(r#""{TOOL}" --with "{app}\x.exe""#);
++    let names: Vec<String> = vec![
++        exe.clone(),
++        format!("{exe} user text"),
++        format!("{exe};{TOOLS}"),
++        format!(r"{TOOLS}\{HASH}\notes.txt"),
++        format!("my {HASH} thing"),
++        "firefox.exe".to_owned(),
++        format!(r"{TOOLS}\firefox.exe"),
++    ];
++    for name in names {
++        let leaked: &'static str = Box::leak(name.clone().into_boxed_str());
++        for (what, key) in [
++            ("foreign key", r"HKLM\SOFTWARE\Other Vendor\Tool".to_owned()),
++            ("Run", format!(r"HKLM\SOFTWARE\{CV}\Run")),
++        ] {
++            let place = Place {
++                what,
++                key: key.clone(),
++                plan_key: key,
++                name: leaked,
++            };
++            for record in [Record::Value, Record::None] {
++                let w = world(&place, &Data::Sz(hostile.clone()), record);
++                rev10_show(&format!("name {name:?} in {what} {record:?}"), &w, &place);
++            }
++        }
++    }
++}
++
++#[test]
++fn rev10_probe_co_removed_through_run() {
++    use purge_model::Tier;
++    use purge_scan::framework::AppIdentityView;
++    let key = r"HKLM\SOFTWARE\Other Vendor\Tool";
++    let svc = format!(r"{MAINTENANCE}\maintenanceservice.exe");
++    let target = value(key, "Updater");
++    let mut fp = firefox();
++    {
++        let co = fp.co_removed[0].fingerprint.as_mut().unwrap();
++        co.inno.push(inno(InnoRecordKind::RegDeleteValue, target.clone()));
++        co.ref_snapshot.push(snap(
++            target.clone(),
++            RefCarrier::Data,
++            purge_model::AnchorKind::Root,
++            MAINTENANCE,
++        ));
++    }
++    let world = World::new(machine().sz(key, "Updater", &svc), fp);
++    let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
++    for scanner in catalog::all_scanners() {
++        let direct = scanner.scan(&world.ctx(), &app);
++        let driven = world.ctx().run(scanner.as_ref(), &app);
++        for (d, r) in direct.iter().zip(&driven) {
++            if d.target != target {
++                continue;
++            }
++            let a = |c: &Candidate| c.evidence.iter().filter(|e| e.tier == Tier::A).count();
++            println!(
++                "PROBE co-removed {}: owner {:?} scan tierA={} run tierA={} run-evidence={:?}",
++                d.scanner,
++                d.owner.display_name,
++                a(d),
++                a(r),
++                r.evidence
++                    .iter()
++                    .map(|e| (e.tier, e.detail.get("unproven").map(|s| s.to_string())))
++                    .collect::<Vec<_>>()
++            );
++        }
++    }
++}
++
++#[test]
++fn rev10_probe_who_offers() {
++    use std::collections::BTreeMap;
++    let mut per: BTreeMap<String, usize> = BTreeMap::new();
++    let mut per_place: BTreeMap<&'static str, usize> = BTreeMap::new();
++    for place in places() {
++        for data in hostile() {
++            for record in RECORDS {
++                if own_by_record(&place, record)
++                    || (place.commands() && matches!(data, Data::NotACommand(_)))
++                {
++                    continue;
++                }
++                for (c, ..) in decided(&world(&place, &data, record)) {
++                    if touches(&c, &place) {
++                        *per.entry(c.scanner.clone()).or_default() += 1;
++                        *per_place.entry(place.what).or_default() += 1;
++                    }
++                }
++            }
++        }
++    }
++    println!("PROBE offering per scanner: {per:?}");
++    println!("PROBE offering per place: {per_place:?}");
++}
++
++#[test]
++fn rev10_probe_recall() {
++    let exe = format!(r"{FIREFOX}\firefox.exe");
++    let foreign = rev10_place("foreign key", "SearchPath");
++    let run = rev10_place("Run", "Agent");
++    let env = rev10_place("environment, machine", "FX_HOME");
++    for (place, text) in [
++        (&foreign, format!(r#""{exe}" /setup"#)),
++        (&foreign, format!(r#""{exe}""#)),
++        (&env, format!(r#""{exe}" -multiInst"#)),
++        (&run, format!(r#"rundll32.exe "{FIREFOX}\x.dll",Start"#)),
++        (&run, format!(r#"cmd.exe /c start "" "{exe}""#)),
++    ] {
++        let w = world(place, &Data::Sz(text.clone()), Record::Value);
++        rev10_show(&format!("recall {} {text:?}", place.what), &w, place);
++    }
++}
