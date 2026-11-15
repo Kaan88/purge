@@ -38,7 +38,7 @@ mod target;
 
 pub use appref::AppRef;
 pub use blocker::Blocker;
-pub use candidate::{Action, Candidate, Decision, Harm, Origin, Reversibility};
+pub use candidate::{Action, Candidate, Decision, Harm, ItemFp, Origin, Reversibility};
 pub use evidence::{Evidence, EvidenceKind, Facts, ManifestKind, Tier};
 pub use fingerprint::{
     AnchorKind, AnchorRef, Anchors, AppFileOutsideRoot, CoRemovedProduct, ExeFile, ExtJournalEntry,

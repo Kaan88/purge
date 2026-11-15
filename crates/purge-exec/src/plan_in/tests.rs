@@ -59,6 +59,7 @@ pub(crate) fn candidate(
         children: Vec::new(),
         size_bytes: None,
         child_count: None,
+        item_fp: None,
         decision: Some(Decision {
             band,
             preselected,
