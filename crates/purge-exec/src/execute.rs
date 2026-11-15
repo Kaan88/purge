@@ -24,7 +24,7 @@
 //! | 4 | create the session directory | | | [`ExecError::Store`] |
 //! | 5 | write the scan copy `plan.scan.json`, flushed with its directory | | | [`ExecError::ScanCopy`]; no journal exists, the session directory is removed |
 //! | 6 | journal header, then the run's settings | `header`, `settings` (flushed) | `journal.header` | [`ExecError::Journal`]; no item was looked at. Before the header the session directory is removed ([`SessionDir::remove_unstarted`]) |
-//! | 7 | validate every selected item, read-only | one `validated` per item (an item that did not pass: `Refused` or `Absent` facts), flushed after the last | | abort `JournalWriteFailed` |
+//! | 7 | validate every selected item, read-only; a path item whose candidate carries a scan-time identity (`item_fp`) must still be that object | one `validated` per item (an item that did not pass: `Refused` or `Absent` facts), flushed after the last | | abort `JournalWriteFailed` |
 //! | 8 | prepare: restore point (per setting), Restart Manager query | | | never: warnings |
 //! | 9 | every item in plan order ([`Run::run_item`]) | see below | see below | see "Aborts" |
 //! | 10 | commit | `group_end` (`group.end`), `commit` | `commit.before` | abort `JournalWriteFailed` |
@@ -94,7 +94,7 @@ use purge_model::exec::journal::{
 };
 use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::session::{ExecReport, SessionId, SessionIndex, SessionState, VolumeUsage};
-use purge_model::{CandidateId, FileTime};
+use purge_model::{Candidate, CandidateId, FileTime};
 use purge_plan::emit::ScanDoc;
 
 use crate::act_fs::{self, FsActed, FsPrepared, Retry, act_fs, prepare_fs};
@@ -937,28 +937,45 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// The plan-time exemptions of op `op`'s item, derived as `purge_plan::decide` derived them. The
-    /// act is gated with the journalled copy of these, never with this value.
-    fn exemptions(&self, op: OpId) -> Exemptions {
-        let candidate = self
-            .plan
+    /// The plan's candidate of op `op`.
+    fn op_candidate(&self, op: OpId) -> Option<&Candidate> {
+        self.plan
             .item(op)
-            .and_then(|item| self.plan.candidate(item));
-        candidate.map_or_else(Exemptions::default, |candidate| {
-            gate::exemptions_for(
-                candidate,
-                self.env.deny,
-                self.plan.scan().mode,
-                self.settings.user_sid.as_deref(),
-                self.settings.long_names_resolved,
-            )
-        })
+            .and_then(|item| self.plan.candidate(item))
+    }
+
+    /// The plan-time exemptions of op `op`'s item: `purge_plan::decide::deny_exemptions`, the
+    /// derivation the plan's decide step uses, with the machine layout of the deny-list and the run's
+    /// `user_sid` and `long_names_resolved`. The act is gated with the journalled copy of these, never
+    /// with this value.
+    fn exemptions(&self, op: OpId) -> Exemptions {
+        self.op_candidate(op)
+            .map_or_else(Exemptions::default, |candidate| {
+                purge_plan::decide::deny_exemptions(
+                    candidate,
+                    self.env.deny.env(),
+                    self.settings.user_sid.as_deref(),
+                    self.settings.long_names_resolved,
+                )
+            })
+    }
+
+    /// The gate's view of op `op` (`exec_op`) at validation: its exemptions ([`Run::exemptions`]) and
+    /// the scan-time identity its candidate carries (`Candidate::item_fp`), which the validate pass
+    /// compares with the identity it reads.
+    fn gate_item<'e>(&self, op: OpId, exec_op: &'e ExecOp) -> GateItem<'e> {
+        let scan_identity = self
+            .op_candidate(op)
+            .and_then(|candidate| candidate.item_fp);
+        GateItem::new(exec_op, self.exemptions(op)).with_scan_identity(scan_identity)
     }
 
     /// Step 7: validates every selected item read-only, writes one `validated` record per item and
     /// hands each written record to the gate context. An item that is gone is recorded with
     /// [`ItemFacts::Absent`]; one that did not pass otherwise with [`ItemFacts::Refused`] and why
     /// ([`refused_facts`]). Neither binds anything in the gate, so nothing can act on such an item.
+    /// A path item that is not the object its candidate's scan-time identity names is refused
+    /// (`gate.scan-identity`, changed since the scan) and so later skipped as `ChangedSinceScan`.
     fn validate(&mut self) -> Result<Vec<Validated>, Abort> {
         let exemptions: BTreeMap<OpId, Exemptions> = self
             .plan
@@ -966,15 +983,11 @@ impl<'a> Run<'a> {
             .iter()
             .map(|item| (item.op, self.exemptions(item.op)))
             .collect();
-        let gate_item = |op: OpId, exec_op| {
-            let granted = exemptions.get(&op).copied().unwrap_or_default();
-            GateItem::new(exec_op, granted)
-        };
         let outcomes: BTreeMap<OpId, GateOutcome<gate::Validation>> = gate::validate_all(
             &self.ctx,
             self.plan.items().iter().filter_map(|item| {
                 let exec_op = item.exec_op.as_ref()?;
-                Some((item.op, gate_item(item.op, exec_op)))
+                Some((item.op, self.gate_item(item.op, exec_op)))
             }),
         )
         .into_iter()
@@ -1008,7 +1021,7 @@ impl<'a> Run<'a> {
                 .validated(record.clone())
                 .map_err(Abort::journal)?;
             if let Some(exec_op) = &item.exec_op {
-                let max_files = gate_item(item.op, exec_op).max_files;
+                let max_files = GateItem::new(exec_op, Exemptions::default()).max_files;
                 if let Err(refusal) = self.ctx.record(exec_op, &record, max_files) {
                     self.ledger.notes.details.insert(
                         item.op,
@@ -1117,8 +1130,9 @@ impl<'a> Run<'a> {
                     .unwrap_or_else(|| "the gate holds no record of its validation".into()),
             ),
             Some(exec_op) => {
-                let granted = self.exemptions(op);
-                let look = gate::validate(&self.ctx, &GateItem::new(&exec_op, granted));
+                // The same view as the validate pass, scan-time identity included, so an item refused
+                // for its identity is reported as such again.
+                let look = gate::validate(&self.ctx, &self.gate_item(op, &exec_op));
                 match act_fs::gate_result(&look) {
                     Some(result) => (result.outcome, result.detail),
                     None => (

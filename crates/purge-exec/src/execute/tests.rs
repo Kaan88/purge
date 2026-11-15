@@ -2170,3 +2170,298 @@ fn a_chain_resumed_in_the_middle_completes() {
         before
     );
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Scan-time identity (`Candidate::item_fp`) and the plan's exemptions
+// ---------------------------------------------------------------------------------------------------
+
+/// The identity of the file or directory at `p` as a scan records it (`Candidate::item_fp`).
+fn scan_identity_of(p: &str) -> purge_model::ItemFp {
+    let id = FileHandle::open(&ext(p)).unwrap().file_id().unwrap();
+    purge_model::ItemFp {
+        file_id: purge_model::exec::op::FileIdHex(id.id),
+        volume_serial: id.volume_serial,
+    }
+}
+
+/// `fp` with one byte of its file id changed.
+fn other_file_id(fp: purge_model::ItemFp) -> purge_model::ItemFp {
+    let mut file_id = fp.file_id;
+    file_id.0[0] ^= 0x5a;
+    purge_model::ItemFp { file_id, ..fp }
+}
+
+/// Asserts that op `n` was refused at validation for its scan-time identity, never had an intent and was
+/// skipped as changed since the scan.
+#[track_caller]
+fn assert_refused_for_scan_identity(read: &JournalRead, n: u32) {
+    let op = read.state.op(OpId(n)).unwrap();
+    assert_eq!(
+        op.facts,
+        ItemFacts::Refused {
+            blocker: Some(Blocker::ChangedSinceScan),
+            reason: gate::reason::SCAN_IDENTITY.into(),
+            os_error: None,
+        },
+        "op {n}"
+    );
+    assert!(op.intent.is_none(), "op {n} has an intent");
+    assert_eq!(
+        op.outcome,
+        Some(ItemOutcome::Skipped {
+            reason: SkipReason::ChangedSinceScan
+        }),
+        "op {n}"
+    );
+}
+
+#[test]
+fn a_path_item_runs_only_when_it_is_the_object_the_scan_read() {
+    let mut rig = Rig::new("scan-id");
+    let same = rig.s.file(r"app\same.txt", b"same");
+    let bad_id = rig.s.file(r"app\bad-id.txt", b"id");
+    let bad_serial = rig.s.file(r"app\bad-serial.txt", b"serial");
+    let zero_serial = rig.s.file(r"app\zero-serial.txt", b"zero");
+    let tree = rig.s.dir(r"app\tree");
+    rig.s.file(r"app\tree\inside.bin", b"in");
+    let other_tree = rig.s.dir(r"app\other-tree");
+    let other_inside = rig.s.file(r"app\other-tree\inside.bin", b"in");
+    let empty = rig.s.dir(r"app\empty");
+    let none = rig.s.file(r"app\none.txt", b"none");
+
+    let with_fp = |mut c: Candidate, fp| {
+        c.item_fp = Some(fp);
+        c
+    };
+    let fp = scan_identity_of(&bad_serial);
+    let serial_changed = purge_model::ItemFp {
+        volume_serial: fp.volume_serial ^ 1,
+        ..fp
+    };
+    let serial_zero = purge_model::ItemFp {
+        volume_serial: 0,
+        ..scan_identity_of(&zero_serial)
+    };
+    let items = vec![
+        with_fp(quarantine("c-same", &same), scan_identity_of(&same)),
+        with_fp(
+            quarantine("c-bad-id", &bad_id),
+            other_file_id(scan_identity_of(&bad_id)),
+        ),
+        with_fp(quarantine("c-bad-serial", &bad_serial), serial_changed),
+        with_fp(quarantine("c-zero-serial", &zero_serial), serial_zero),
+        with_fp(quarantine("c-tree", &tree), scan_identity_of(&tree)),
+        with_fp(
+            quarantine("c-other-tree", &other_tree),
+            other_file_id(scan_identity_of(&other_tree)),
+        ),
+        with_fp(
+            safe("c-empty", path(&empty), Action::RemoveDirIfEmpty),
+            other_file_id(scan_identity_of(&empty)),
+        ),
+        quarantine("c-none", &none),
+    ];
+    let output = rig.run(preselected(items, Vec::new()));
+    assert_eq!(output.report.state, SessionState::Committed);
+    let read = rig.journal(&output.session);
+    assert_report_is_the_journal(&output.report, &read);
+
+    let done = Some(ItemOutcome::Done);
+    let changed = Some(ItemOutcome::Skipped {
+        reason: SkipReason::ChangedSinceScan,
+    });
+    assert_eq!(
+        outcomes(&read),
+        [
+            done.clone(),
+            changed.clone(),
+            changed.clone(),
+            changed.clone(),
+            done.clone(),
+            changed.clone(),
+            changed,
+            done,
+        ]
+    );
+    for n in [2, 3, 4, 6, 7] {
+        assert_refused_for_scan_identity(&read, n);
+    }
+    // The matching items and the item without a scan-time identity were moved; nothing refused was
+    // touched.
+    assert!(!exists(&same) && !exists(&tree) && !exists(&none));
+    assert_eq!(std::fs::read(ext(&bad_id)).unwrap(), b"id");
+    assert_eq!(std::fs::read(ext(&bad_serial)).unwrap(), b"serial");
+    assert_eq!(std::fs::read(ext(&zero_serial)).unwrap(), b"zero");
+    assert_eq!(std::fs::read(ext(&other_inside)).unwrap(), b"in");
+    assert!(exists(&empty));
+    assert_eq!(
+        read.records.iter().filter(|r| r.name() == "intent").count(),
+        3
+    );
+}
+
+#[test]
+fn a_file_replaced_between_scan_and_run_is_caught_by_its_scan_time_identity() {
+    let mut rig = Rig::new("scan-id-replaced");
+    let f = rig.s.file(r"app\settings.ini", b"scanned");
+    let mut item = quarantine("c-ini", &f);
+    item.item_fp = Some(scan_identity_of(&f));
+    // After the scan, the file is deleted and another one is created under the same name: at the start
+    // of the run the path, its final path and its handle agree, only the object is another.
+    std::fs::remove_file(ext(&f)).unwrap();
+    std::fs::write(ext(&f), b"replaced").unwrap();
+    assert_ne!(Some(scan_identity_of(&f)), item.item_fp);
+    let request = preselected(vec![item], Vec::new());
+
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    // The start-of-run facts alone pass: the same item without its scan-time identity validates.
+    let exec_op = run.plan.items()[0].exec_op.clone().unwrap();
+    let look = gate::validate(&run.ctx, &GateItem::new(&exec_op, run.exemptions(OpId(1))));
+    assert!(matches!(look, GateOutcome::Pass(_)), "{look:?}");
+    // With it, the item is refused at validation and never acted on, also when the run is resumed.
+    let validated = run.validate().unwrap();
+    assert_eq!(
+        validated[0].facts,
+        ItemFacts::Refused {
+            blocker: Some(Blocker::ChangedSinceScan),
+            reason: gate::reason::SCAN_IDENTITY.into(),
+            os_error: None,
+        }
+    );
+    assert_eq!(run.ctx.stamp(OpId(1)), None);
+    let id = run.session().id().clone();
+    drop(run);
+    let session = rig.session(&id);
+    let copy = read_scan_copy(&session).unwrap();
+    let mut run = Run::resume(rig.env(None), session, &copy).unwrap();
+    assert_eq!(
+        run.run_item(OpId(1)).unwrap(),
+        ItemStep::Finished(ItemOutcome::Skipped {
+            reason: SkipReason::ChangedSinceScan
+        })
+    );
+    let output = run.finish();
+    assert_eq!(output.report.state, SessionState::Committed);
+    let read = rig.journal(&id);
+    assert_refused_for_scan_identity(&read, 1);
+    assert!(read.records.iter().all(|r| r.name() != "intent"));
+    assert_eq!(std::fs::read(ext(&f)).unwrap(), b"replaced");
+}
+
+#[test]
+fn the_journalled_exemptions_are_those_the_plan_derives() {
+    use purge_model::{Evidence, EvidenceKind, Scope, SourceTrust};
+    let evidence = |kind, scope, trust| Evidence::new(kind, scope, trust, "test").unwrap();
+    let with = |mut c: Candidate, e: Vec<Evidence>| {
+        c.evidence = e;
+        c
+    };
+    let mut rig = Rig::new("exemptions");
+    let sid = current_user_sid().unwrap();
+    // Registry items below a key that does not exist: validation finds them gone, which journals the
+    // exemptions all the same, and nothing in the registry is written.
+    let base = format!(r"HKU\{sid}\Software\{}", unique("PurgeTestAbsent"));
+    let lnk = rig.s.file(r"menu\Vendor App.lnk", b"lnk");
+    let user_lnk = rig.s.file(r"menu\User App.lnk", b"lnk");
+    let emptied = rig.s.dir(r"menu\Vendor");
+    let plain = rig.s.file(r"app\plain.txt", b"p");
+    let items = vec![
+        with(
+            safe("c-skel", key(&format!(r"{base}\shell")), Action::DeleteKey),
+            vec![evidence(
+                EvidenceKind::ProvenOwnedSkeleton,
+                Scope::Key,
+                SourceTrust::AdminOnly,
+            )],
+        ),
+        safe(
+            "c-seg",
+            Target::RegMultiSzSegment {
+                path: format!(r"{base}\Env"),
+                name: "Path".into(),
+                segment: r"C:\Vendor\bin".into(),
+                index: None,
+            },
+            Action::EditSegment,
+        ),
+        with(
+            quarantine("c-lnk", &lnk),
+            vec![evidence(
+                EvidenceKind::InsideInstallRoot,
+                Scope::Path,
+                SourceTrust::AdminOnly,
+            )],
+        ),
+        // User-writable evidence earns the exemption only on a per-user target (Rule T), which depends
+        // on the run's user.
+        with(
+            quarantine("c-user-lnk", &user_lnk),
+            vec![evidence(
+                EvidenceKind::InsideInstallRoot,
+                Scope::Path,
+                SourceTrust::UserWritable,
+            )],
+        ),
+        with(
+            safe("c-emptied", path(&emptied), Action::RemoveDirIfEmpty),
+            vec![evidence(
+                EvidenceKind::EmptyAfterPlan,
+                Scope::Path,
+                SourceTrust::AdminOnly,
+            )],
+        ),
+        quarantine("c-plain", &plain),
+    ];
+
+    let deny = rig.deny.clone();
+    let mut seen = Exemptions::default();
+    for (user_sid, long_names_resolved) in [
+        (None, false),
+        (Some(sid.clone()), false),
+        (None, true),
+        (Some(sid.clone()), true),
+    ] {
+        let mut request = preselected(items.clone(), Vec::new());
+        request.settings.user_sid = user_sid.clone();
+        request.settings.long_names_resolved = long_names_resolved;
+        let mut run = Run::start(request, rig.env(None)).unwrap();
+        let validated = run.validate().unwrap();
+        assert_eq!(validated.len(), items.len());
+        for (record, candidate) in validated.iter().zip(&items) {
+            assert_eq!(record.item, candidate.id);
+            let derived = purge_plan::decide::deny_exemptions(
+                candidate,
+                deny.env(),
+                user_sid.as_deref(),
+                long_names_resolved,
+            );
+            assert_eq!(
+                record.exemptions,
+                gate::exemptions_to_journal(&derived),
+                "{} (user {user_sid:?}, long names {long_names_resolved})",
+                candidate.id.0
+            );
+            assert_eq!(
+                run.state().op(record.op).unwrap().exemptions,
+                record.exemptions
+            );
+            seen.proven_owned_skeleton |= derived.proven_owned_skeleton;
+            seen.environment_segment_edit |= derived.environment_segment_edit;
+            seen.tier_a_start_menu_entry |= derived.tier_a_start_menu_entry;
+            seen.long_names_resolved |= derived.long_names_resolved;
+        }
+        drop(run);
+    }
+    // Every exemption was granted somewhere, so each is pinned.
+    assert_eq!(
+        seen,
+        Exemptions {
+            proven_owned_skeleton: true,
+            environment_segment_edit: true,
+            tier_a_start_menu_entry: true,
+            long_names_resolved: true,
+        }
+    );
+    // Nothing was acted on.
+    assert!(exists(&lnk) && exists(&user_lnk) && exists(&emptied) && exists(&plain));
+}

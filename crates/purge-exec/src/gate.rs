@@ -10,7 +10,10 @@
 //! - **Validate** ([`validate`], [`validate_all`]) at the start of a run: each item is opened through a
 //!   read-only handle, its facts are read, the guard decides with [`Binding::Capture`], and the result is a
 //!   [`Stamp`] (what the act will be bound to) plus the [`ItemFacts`] for the journal's `validated`
-//!   record. No handle that could change anything is opened.
+//!   record. No handle that could change anything is opened. A file or directory whose candidate
+//!   carries a scan-time identity ([`GateItem::scan_identity`]) passes only when the file id and volume
+//!   serial read from that handle equal it (§5.10 "the file id must equal the scan"); otherwise it is
+//!   refused with [`reason::SCAN_IDENTITY`] and nothing binds it.
 //! - **Record**: the journal's `validated` record of each op is handed to [`GateCtx::record`] once it is
 //!   written (and, for a resumed run, once it is read back). That record is the only source of the
 //!   act's stamp and exemptions: the act-time functions take an op id and nothing else, so an act can
@@ -72,7 +75,7 @@ use purge_model::exec::journal::{
     FileFacts, GateExemptions, Intent, ItemFacts, RegFacts, Validated, ValueFacts,
 };
 use purge_model::exec::op::{ExecOp, FileIdHex, Inverse, ItemOutcome, OpId, Sha256Hex};
-use purge_model::{Blocker, Candidate, CandidateId, FileTime, ScanMode, Target, VerifyGone, View};
+use purge_model::{Blocker, Candidate, CandidateId, FileTime, ItemFp, ScanMode, Target, View};
 use purge_win::fs::{FileHandle, FileMeta, volume_info};
 use purge_win::fs_write::{DestDir, FsError, MoveHandle, extended_path};
 use purge_win::os::Win32Error;
@@ -118,6 +121,10 @@ pub mod reason {
     /// The destination directory opened by path is not the store's op directory (other volume serial or
     /// file id).
     pub const QUARANTINE_DIR_DIFFERS: &str = "gate.quarantine-dir-differs";
+    /// The file or directory at the path is not the one the scan read: its file id or volume serial
+    /// differs from the candidate's scan-time identity ([`purge_model::Candidate::item_fp`]), or either
+    /// volume serial is 0. Soft: changed since the scan.
+    pub const SCAN_IDENTITY: &str = "gate.scan-identity";
 }
 
 /// A refusal for which no dedicated blocker exists: reported as a deny rule named after the reason, as
@@ -440,10 +447,13 @@ struct Recorded {
 impl Recorded {
     /// The item as the gate functions take it, with the recorded exemptions and limit.
     fn item(&self) -> GateItem<'_> {
+        // The act is bound to the recorded stamp, which the validate pass already compared with the
+        // scan-time identity; the act-time gate does not compare again.
         GateItem {
             op: &self.op,
             exemptions: self.exemptions,
             max_files: self.max_files,
+            scan_identity: None,
         }
     }
 }
@@ -732,21 +742,18 @@ impl GateCtx {
     }
 }
 
-/// The plan-time exemptions of a candidate, derived exactly as `purge_plan::decide` derives them
-/// (its public `exemptions`). `user_sid` and `long_names_resolved` must be the values of the scan that
-/// produced the plan. The verify-gone result and the limits are not consulted by that derivation.
+/// The plan-time exemptions of a candidate: [`purge_plan::decide::deny_exemptions`], the derivation the
+/// plan's decide step uses, with the machine layout of `deny` (`DenyList::env`). `user_sid` and
+/// `long_names_resolved` must be the values of the scan that produced the plan. `mode` is not consulted
+/// (the derivation does not depend on the scan mode); it stays for source compatibility.
 pub fn exemptions_for(
     candidate: &Candidate,
     deny: &DenyList,
-    mode: ScanMode,
+    _mode: ScanMode,
     user_sid: Option<&str>,
     long_names_resolved: bool,
 ) -> Exemptions {
-    let mut ctx =
-        purge_plan::decide::DecideCtx::new(deny, mode, VerifyGone::new(false, false, false));
-    ctx.user_sid = user_sid;
-    ctx.long_names_resolved = long_names_resolved;
-    purge_plan::decide::exemptions(candidate, &ctx)
+    purge_plan::decide::deny_exemptions(candidate, deny.env(), user_sid, long_names_resolved)
 }
 
 /// The journal form of the exemptions a verdict was given ([`Validation::exemptions`]), for the
@@ -804,17 +811,52 @@ pub struct GateItem<'a> {
     /// hold; more is refused with [`Blocker::TooLarge`]. The plan's limit: 5,000, or 50,000 for a
     /// manifest-backed install root.
     pub max_files: u32,
+    /// The identity the scan read for the item (the candidate's `item_fp`), when it has one. For a
+    /// file-system op the validate pass compares it with the file id and volume serial read from the
+    /// handle its facts come from; any difference, or a volume serial of 0 on either side, is refused
+    /// with [`reason::SCAN_IDENTITY`] (soft: changed since the scan). `None`: no comparison, the validate
+    /// pass alone applies. Not consulted for any other op, and not by the act-time gate, which is bound
+    /// to the validated stamp.
+    pub scan_identity: Option<ItemFp>,
 }
 
 impl<'a> GateItem<'a> {
-    /// An item with the default blast-radius limit (`purge_plan::decide::Limits::default().max_files`).
+    /// An item with the default blast-radius limit (`purge_plan::decide::Limits::default().max_files`)
+    /// and no scan-time identity.
     pub fn new(op: &'a ExecOp, exemptions: Exemptions) -> GateItem<'a> {
         GateItem {
             op,
             exemptions,
             max_files: purge_plan::decide::Limits::default().max_files,
+            scan_identity: None,
         }
     }
+
+    /// The item with the scan-time identity `scan_identity` ([`GateItem::scan_identity`]).
+    #[must_use]
+    pub fn with_scan_identity(self, scan_identity: Option<ItemFp>) -> GateItem<'a> {
+        GateItem {
+            scan_identity,
+            ..self
+        }
+    }
+}
+
+/// The refusal of a file-system item whose identity, read from the validated handle, is not the one the
+/// scan recorded (`expected`). `None` when there is no scan-time identity, or when both the file id and
+/// the volume serial are equal and neither serial is 0. An identity that could not be read is refused
+/// too (the guard refuses such facts first).
+fn scan_identity_refusal(expected: Option<&ItemFp>, read: Option<FileIdentity>) -> Option<Refusal> {
+    let expected = expected?;
+    let same = read.is_some_and(|read| {
+        expected.volume_serial != 0
+            && read.volume_serial != 0
+            && expected.matches(&FileIdHex(read.file_id), read.volume_serial)
+    });
+    (!same).then_some(Refusal {
+        blocker: Blocker::ChangedSinceScan,
+        reason: reason::SCAN_IDENTITY,
+    })
 }
 
 /// What the validate pass binds an item to, and the act re-checks.
@@ -1307,6 +1349,11 @@ fn validate_path(
         exemptions: item.exemptions,
     };
     if let Err(refusal) = live::check_path(&check, &seen.facts, &ctx.deny) {
+        return GateOutcome::Refused(refusal);
+    }
+    // The scan-time identity is compared with the identity read from the same handle the facts above
+    // come from; it can only narrow what passes (ENGINE_PLAN.md Appendix B, M2-3).
+    if let Some(refusal) = scan_identity_refusal(item.scan_identity.as_ref(), seen.facts.identity) {
         return GateOutcome::Refused(refusal);
     }
     match (seen.facts.stamp(), file_facts(&seen)) {

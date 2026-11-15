@@ -390,6 +390,128 @@ fn swap_between_validate_and_act_is_changed_since_scan() {
     );
 }
 
+// ---- Scan-time identity -----------------------------------------------------------------------------
+
+/// The identity of the object at `path` as the scan records it (`Candidate::item_fp`).
+fn scan_fp(path: &str) -> ItemFp {
+    let id = FileHandle::open(Path::new(path))
+        .unwrap()
+        .file_id()
+        .unwrap();
+    ItemFp {
+        file_id: FileIdHex(id.id),
+        volume_serial: id.volume_serial,
+    }
+}
+
+#[track_caller]
+fn assert_scan_identity_refused<T: fmt::Debug>(outcome: &GateOutcome<T>) {
+    assert_refused(outcome, Blocker::ChangedSinceScan, reason::SCAN_IDENTITY);
+    assert!(!outcome.refusal().unwrap().is_hard());
+}
+
+#[test]
+fn the_validate_pass_compares_the_scan_time_identity() {
+    let s = Scratch::new("scan-id");
+    let f = s.file("app.dll", b"one");
+    let d = s.dir("cache");
+    s.file(r"cache\a.txt", b"a");
+    let e = s.dir("empty");
+    let (file_op, dir_op, empty_op) = (mv(&f), mv(&d), rmdir(&e));
+    let ctx = ctx(&[file_op.clone(), dir_op.clone()]);
+    let item = |op, fp| GateItem::new(op, long()).with_scan_identity(fp);
+
+    // Equal identity: the item passes, with the same facts as without one.
+    for (op, at) in [(&file_op, &f), (&dir_op, &d), (&empty_op, &e)] {
+        let fp = scan_fp(at);
+        let with = validate(&ctx, &item(op, Some(fp)));
+        assert_eq!(
+            path_stamp(&with),
+            path_stamp(&validate(&ctx, &item(op, None)))
+        );
+        let Some(ItemFacts::File(facts)) = with.item_facts() else {
+            panic!("{with:?}");
+        };
+        assert!(fp.matches(&facts.file_id, facts.volume_serial));
+    }
+
+    // Another file id, another volume serial, or a serial of 0: refused, soft.
+    let fp = scan_fp(&f);
+    let mut other_id = fp;
+    other_id.file_id.0[15] ^= 1;
+    let other_serial = ItemFp {
+        volume_serial: fp.volume_serial.wrapping_add(1),
+        ..fp
+    };
+    let zero_serial = ItemFp {
+        volume_serial: 0,
+        ..fp
+    };
+    for wrong in [other_id, other_serial, zero_serial] {
+        assert_scan_identity_refused(&validate(&ctx, &item(&file_op, Some(wrong))));
+    }
+    // The directory's own identity counts for a directory moved whole and for one removed if empty: the
+    // identity of something inside it is another object.
+    let inner = scan_fp(&s.path(r"cache\a.txt"));
+    assert_scan_identity_refused(&validate(&ctx, &item(&dir_op, Some(inner))));
+    assert_scan_identity_refused(&validate(&ctx, &item(&empty_op, Some(scan_fp(&d)))));
+
+    // A file deleted and created again under its name after the scan: the facts at the start of the run
+    // agree with each other and pass without the scan-time identity; with it, the item is refused.
+    let scanned = scan_fp(&f);
+    std::fs::remove_file(&f).unwrap();
+    std::fs::write(&f, b"one").unwrap();
+    assert!(validate(&ctx, &item(&file_op, None)).pass().is_some());
+    let replaced = validate(&ctx, &item(&file_op, Some(scanned)));
+    assert_scan_identity_refused(&replaced);
+    assert_eq!(replaced.item_facts(), None, "nothing to journal as facts");
+
+    // A vanished item stays vanished; a key op does not consult the identity.
+    std::fs::remove_file(&f).unwrap();
+    assert!(validate(&ctx, &item(&file_op, Some(scanned))).is_vanished());
+    let key_op = ExecOp::DeleteKeyTree {
+        key: format!(
+            r"HKU\{}\Software\{}",
+            current_user_sid().unwrap(),
+            unique("PurgeTestAbsent")
+        ),
+    };
+    assert!(validate(&ctx, &item(&key_op, Some(scanned))).is_vanished());
+}
+
+#[test]
+fn scan_identity_refusal_rules() {
+    let fp = ItemFp {
+        file_id: FileIdHex([7; 16]),
+        volume_serial: 42,
+    };
+    let read = |file_id, volume_serial| {
+        Some(FileIdentity {
+            volume_serial,
+            file_id,
+        })
+    };
+    assert_eq!(scan_identity_refusal(None, read([1; 16], 0)), None);
+    assert_eq!(scan_identity_refusal(None, None), None);
+    assert_eq!(scan_identity_refusal(Some(&fp), read([7; 16], 42)), None);
+    let refused = Some(Refusal {
+        blocker: Blocker::ChangedSinceScan,
+        reason: reason::SCAN_IDENTITY,
+    });
+    for (id, serial) in [([7; 16], 41), ([6; 16], 42), ([7; 16], 0)] {
+        assert_eq!(scan_identity_refusal(Some(&fp), read(id, serial)), refused);
+    }
+    let zero = ItemFp {
+        volume_serial: 0,
+        ..fp
+    };
+    assert_eq!(
+        scan_identity_refusal(Some(&zero), read([7; 16], 0)),
+        refused
+    );
+    assert_eq!(scan_identity_refusal(Some(&fp), None), refused);
+}
+
 #[test]
 fn junction_as_the_item_is_refused_and_its_target_untouched() {
     let s = Scratch::new("jitem");
