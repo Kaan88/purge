@@ -8,13 +8,22 @@
 //! index. Registry trees can be several hundred keys deep, deeper than a JSON reader's nesting limit, so
 //! the document must not nest once per key. The flat list also gives the two walks the executor needs for
 //! free: restore goes front to back, delete goes back to front (deepest first).
+//!
+//! Unlike the journal, a backup refuses members it does not know: undo restores exactly what the file
+//! says, so a field this reader would drop must not read at all. [`FileTime`]s are 64-bit JSON integers
+//! that can exceed 2^53; a reader must not keep them as doubles.
+//!
+//! A reader calls [`RegBackup::validate_for`] with the op the backup belongs to before it restores
+//! anything.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fmt;
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use super::op::ExecOp;
 use crate::FileTime;
 use crate::ids::schema_id;
 
@@ -243,6 +252,7 @@ impl JsonSchema for WideB64 {
 
 /// One registry value: its name, raw type and raw data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ValueBackup {
     /// The value name; empty for the default value.
     pub name_b64: WideB64,
@@ -255,6 +265,7 @@ pub struct ValueBackup {
 
 /// One key of a backed-up tree.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct KeyNode {
     /// Index of the parent key in [`RegTree::keys`]; `None` for the root, which is always first.
     pub parent: Option<u32>,
@@ -263,14 +274,21 @@ pub struct KeyNode {
     pub name_b64: WideB64,
     /// The key's class string, when it has one.
     pub class_b64: Option<WideB64>,
-    /// Owner, group and DACL of the key as one SDDL string (`O:…G:…D:…`).
+    /// Owner, group and DACL of the key as one SDDL string (`O:…G:…D:…`). When the capture read the
+    /// key's mandatory integrity label, the string carries it as an `S:(ML;…)` part.
     pub sddl: String,
     /// The key's last write time when it was captured. Restoring a key cannot set it; it is kept for the
     /// record.
     pub last_write_time: FileTime,
     /// Whether the key is a registry link. The capture walk refuses links, so a backup written by Purge
-    /// always holds `false`; a reader refuses to restore from a tree that says otherwise.
+    /// always holds `false`; [`RegTree::validate`] refuses a tree that says otherwise.
     pub link: bool,
+    /// Whether the key is volatile (lives in memory only and is gone after a restart). A restore creates
+    /// the key volatile exactly when this is true. Every key below a volatile key is volatile too, and
+    /// [`RegTree::validate`] refuses a tree that says otherwise. A document written before the field
+    /// existed reads as `false`.
+    #[serde(default)]
+    pub volatile: bool,
     /// The key's values, in enumeration order.
     pub values: Vec<ValueBackup>,
 }
@@ -284,8 +302,19 @@ pub enum RegTreeError {
     RootHasParent,
     /// The key at this index has no parent, or a parent that does not come before it.
     BadParent(usize),
-    /// The key at this index (not the root) has an empty name or a name with a `\`.
+    /// The key at this index has a name with a `\` or a NUL character, or (when it is not the root) an
+    /// empty name.
     BadName(usize),
+    /// The key at this index has the same name as an earlier key with the same parent, ignoring case.
+    DuplicateName(usize),
+    /// The key at this index holds two values whose names are equal, ignoring case.
+    DuplicateValue(usize),
+    /// The key at this index is flagged as a registry link.
+    Link(usize),
+    /// The key at this index has an empty SDDL string.
+    EmptySddl(usize),
+    /// The key at this index is not volatile, but its parent is.
+    PersistentUnderVolatile(usize),
 }
 
 impl fmt::Display for RegTreeError {
@@ -294,36 +323,103 @@ impl fmt::Display for RegTreeError {
             Self::Empty => f.write_str("the tree has no keys"),
             Self::RootHasParent => f.write_str("the root key names a parent"),
             Self::BadParent(i) => write!(f, "key {i} does not name an earlier key as its parent"),
-            Self::BadName(i) => write!(f, "key {i} has an empty name or a name with a backslash"),
+            Self::BadName(i) => write!(
+                f,
+                "key {i} has an empty name or a name with a backslash or NUL"
+            ),
+            Self::DuplicateName(i) => write!(f, "key {i} has the name of an earlier sibling"),
+            Self::DuplicateValue(i) => write!(f, "key {i} holds two values with the same name"),
+            Self::Link(i) => write!(f, "key {i} is a registry link"),
+            Self::EmptySddl(i) => write!(f, "key {i} has no security descriptor"),
+            Self::PersistentUnderVolatile(i) => {
+                write!(f, "key {i} is not volatile but its parent is")
+            }
         }
     }
 }
 
 impl std::error::Error for RegTreeError {}
 
+/// A registry name folded for a case-insensitive comparison: each UTF-16 unit that is a character with a
+/// single-character upper case in the Basic Multilingual Plane is replaced by it; every other unit (a
+/// surrogate, a character without such an upper case) stays. The registry also compares names unit by
+/// unit through its own upper-case table; the two agree for ASCII and the common letters, which is what
+/// the duplicate checks need.
+fn fold_name(name: &[u16]) -> Vec<u16> {
+    name.iter()
+        .map(|&unit| {
+            let Some(c) = char::from_u32(u32::from(unit)) else {
+                return unit;
+            };
+            let mut upper = c.to_uppercase();
+            match (upper.next(), upper.next()) {
+                (Some(u), None) => u16::try_from(u32::from(u)).unwrap_or(unit),
+                _ => unit,
+            }
+        })
+        .collect()
+}
+
 /// A key with everything under it, stored flat and parent-first.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RegTree {
     /// The keys. The root is first; every other key comes after its parent.
     pub keys: Vec<KeyNode>,
 }
 
 impl RegTree {
-    /// Checks the shape: a root without a parent comes first, every other key names an earlier key as its
-    /// parent and has a usable name. Call it after reading a backup and before acting on it; the other
-    /// methods assume it passed.
+    /// Checks that the tree can be restored as it stands. Call it after reading a backup and before
+    /// acting on it; the other methods assume it passed. It refuses:
+    ///
+    /// - an empty tree, or a first key that names a parent;
+    /// - a key that does not name an earlier key as its parent;
+    /// - a key name with a `\` or a NUL character (the Win32 calls a restore uses would cut the name at
+    ///   the NUL and create another key), and an empty name below the root;
+    /// - two sibling keys, or two values of one key, whose names are equal ignoring case: the registry
+    ///   holds only one of them, so the backup cannot be what was there;
+    /// - a key flagged as a registry link (the capture walk refuses links);
+    /// - an empty SDDL string;
+    /// - a key that is not volatile below a volatile key (Windows refuses to create it).
     pub fn validate(&self) -> Result<(), RegTreeError> {
         let root = self.keys.first().ok_or(RegTreeError::Empty)?;
         if root.parent.is_some() {
             return Err(RegTreeError::RootHasParent);
         }
-        for (i, key) in self.keys.iter().enumerate().skip(1) {
-            match key.parent {
-                Some(parent) if (parent as usize) < i => {}
-                _ => return Err(RegTreeError::BadParent(i)),
+        let bad_unit = |unit: &u16| *unit == u16::from(b'\\') || *unit == 0;
+        let mut siblings = HashSet::new();
+        for (i, key) in self.keys.iter().enumerate() {
+            if i > 0 {
+                let parent = match key.parent {
+                    Some(parent) if (parent as usize) < i => parent,
+                    _ => return Err(RegTreeError::BadParent(i)),
+                };
+                if key.name_b64.0.is_empty() {
+                    return Err(RegTreeError::BadName(i));
+                }
+                if !siblings.insert((parent, fold_name(&key.name_b64.0))) {
+                    return Err(RegTreeError::DuplicateName(i));
+                }
+                if !key.volatile && self.keys[parent as usize].volatile {
+                    return Err(RegTreeError::PersistentUnderVolatile(i));
+                }
             }
-            if key.name_b64.0.is_empty() || key.name_b64.0.contains(&u16::from(b'\\')) {
+            if key.name_b64.0.iter().any(bad_unit) {
                 return Err(RegTreeError::BadName(i));
+            }
+            if key.link {
+                return Err(RegTreeError::Link(i));
+            }
+            if key.sddl.is_empty() {
+                return Err(RegTreeError::EmptySddl(i));
+            }
+            let mut names = HashSet::new();
+            if !key
+                .values
+                .iter()
+                .all(|value| names.insert(fold_name(&value.name_b64.0)))
+            {
+                return Err(RegTreeError::DuplicateValue(i));
             }
         }
         Ok(())
@@ -378,7 +474,7 @@ impl RegTree {
 
 /// What a backup holds. Serialised as an object tagged by `"kind"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", deny_unknown_fields)]
 pub enum RegBackupBody {
     /// A key with its subtree (also a single empty key, for a delete-if-empty).
     Tree(RegTree),
@@ -386,8 +482,54 @@ pub enum RegBackupBody {
     Value(ValueBackup),
 }
 
+/// Why a [`RegBackup`] does not belong to the op it is read for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegBackupError {
+    /// The op has no registry backup (a path or package op).
+    NotARegistryOp,
+    /// [`RegBackup::key`] is not the op's key.
+    WrongKey,
+    /// The body is a tree where the op needs a value, or the other way round.
+    WrongBody,
+    /// The root key's name is not the leaf name of [`RegBackup::key`] (ignoring case).
+    WrongRootName,
+    /// The value's name is not the op's value name.
+    WrongValueName,
+    /// A delete-if-empty backup holds more than one key, or a key with values.
+    NotEmpty,
+    /// The tree is not well-formed.
+    Tree(RegTreeError),
+}
+
+impl fmt::Display for RegBackupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotARegistryOp => f.write_str("the op has no registry backup"),
+            Self::WrongKey => f.write_str("the backup belongs to another key"),
+            Self::WrongBody => {
+                f.write_str("the backup holds a tree where a value is needed, or the reverse")
+            }
+            Self::WrongRootName => {
+                f.write_str("the root key's name is not the leaf of the backup's key")
+            }
+            Self::WrongValueName => f.write_str("the backup holds another value"),
+            Self::NotEmpty => f.write_str("the backup of an empty key holds subkeys or values"),
+            Self::Tree(e) => write!(f, "the backed-up tree is malformed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for RegBackupError {}
+
+impl From<RegTreeError> for RegBackupError {
+    fn from(e: RegTreeError) -> Self {
+        Self::Tree(e)
+    }
+}
+
 /// A registry backup document, `purge.regbackup/1`: one file per op.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RegBackup {
     /// Always `purge.regbackup/1`.
     pub schema: RegBackupSchema,
@@ -414,6 +556,52 @@ impl RegBackup {
         match &self.body {
             RegBackupBody::Value(value) => Some(value),
             RegBackupBody::Tree(_) => None,
+        }
+    }
+
+    /// Checks that the backup is the one `op` (the journal's op of the intent that names the backup)
+    /// needs, before anything is restored from it:
+    ///
+    /// - [`RegBackup::key`] is the op's key, byte for byte (both are written from the same op);
+    /// - [`ExecOp::DeleteKeyTree`]: the body is a tree that passes [`RegTree::validate`], whose root name
+    ///   is the leaf of `key` ignoring case;
+    /// - [`ExecOp::DeleteKeyIfEmpty`]: the same, and the tree is one key without values;
+    /// - [`ExecOp::DeleteValue`] and [`ExecOp::EditSegment`]: the body is a value with the op's name.
+    pub fn validate_for(&self, op: &ExecOp) -> Result<(), RegBackupError> {
+        let (key, value_name, empty_key) = match op {
+            ExecOp::DeleteKeyTree { key } => (key, None, false),
+            ExecOp::DeleteKeyIfEmpty { key } => (key, None, true),
+            ExecOp::DeleteValue { key, name } | ExecOp::EditSegment { key, name, .. } => {
+                (key, Some(name), false)
+            }
+            ExecOp::QuarantineMove { .. }
+            | ExecOp::RemoveDirIfEmpty { .. }
+            | ExecOp::RemovePackage { .. } => return Err(RegBackupError::NotARegistryOp),
+        };
+        if &self.key != key {
+            return Err(RegBackupError::WrongKey);
+        }
+        match (&self.body, value_name) {
+            (RegBackupBody::Tree(tree), None) => {
+                tree.validate()?;
+                let leaf = key.rsplit('\\').next().unwrap_or(key);
+                let leaf: Vec<u16> = leaf.encode_utf16().collect();
+                if fold_name(&tree.keys[0].name_b64.0) != fold_name(&leaf) {
+                    return Err(RegBackupError::WrongRootName);
+                }
+                if empty_key && (tree.keys.len() != 1 || !tree.keys[0].values.is_empty()) {
+                    return Err(RegBackupError::NotEmpty);
+                }
+                Ok(())
+            }
+            (RegBackupBody::Value(value), Some(name)) => {
+                if value.name_b64 == WideB64::from(name.as_str()) {
+                    Ok(())
+                } else {
+                    Err(RegBackupError::WrongValueName)
+                }
+            }
+            _ => Err(RegBackupError::WrongBody),
         }
     }
 }
@@ -554,19 +742,20 @@ mod tests {
     }
 
     /// A tree backup as written to disk: `Vendor` with a default value and a `REG_DWORD`, one subkey with
-    /// a class and a `REG_MULTI_SZ`, and below that a key whose name holds a NUL.
+    /// a class and a `REG_MULTI_SZ`, below that a key whose name holds a lone surrogate, and a volatile
+    /// key `Empty`.
     const TREE: &str = concat!(
         r#"{"schema":"purge.regbackup/1","key":"HKLM\\SOFTWARE\\WOW6432Node\\Vendor","captured":134078121020000000,"#,
         r#""body":{"kind":"Tree","keys":["#,
         r#"{"parent":null,"name_b64":"VgBlAG4AZABvAHIA","class_b64":null,"sddl":"O:BAG:SYD:AI(A;CIID;KA;;;BA)(A;CIID;KR;;;BU)","#,
-        r#""last_write_time":134078000000000000,"link":false,"values":["#,
+        r#""last_write_time":134078000000000000,"link":false,"volatile":false,"values":["#,
         r#"{"name_b64":"","type":1,"data_b64":"aABpAAAA"},"#,
         r#"{"name_b64":"RgBsAGEAZwBzAA==","type":4,"data_b64":"AQAAAA=="}]},"#,
         r#"{"parent":0,"name_b64":"UwBlAHQAdABpAG4AZwBzAA==","class_b64":"QwBsAHMA","sddl":"O:BAG:SYD:AI(A;CIID;KA;;;BA)","#,
-        r#""last_write_time":134078000000000001,"link":false,"values":["#,
+        r#""last_write_time":134078000000000001,"link":false,"volatile":false,"values":["#,
         r#"{"name_b64":"TABpAHMAdAA=","type":7,"data_b64":"YQAAAGIAAAAAAA=="}]},"#,
-        r#"{"parent":1,"name_b64":"QQAAAEIA","class_b64":null,"sddl":"O:BAG:SYD:","last_write_time":0,"link":false,"values":[]},"#,
-        r#"{"parent":0,"name_b64":"RQBtAHAAdAB5AA==","class_b64":null,"sddl":"O:BAG:SYD:","last_write_time":5,"link":false,"values":[]}"#,
+        r#"{"parent":1,"name_b64":"QQAA2EIA","class_b64":null,"sddl":"O:BAG:SYD:","last_write_time":0,"link":false,"volatile":false,"values":[]},"#,
+        r#"{"parent":0,"name_b64":"RQBtAHAAdAB5AA==","class_b64":null,"sddl":"O:BAG:SYD:","last_write_time":5,"link":false,"volatile":true,"values":[]}"#,
         r#"]}}"#
     );
 
@@ -594,13 +783,17 @@ mod tests {
             (4, &[1, 0, 0, 0][..])
         );
         assert_eq!(tree.keys[1].class_b64, Some(wide("Cls")));
-        assert_eq!(tree.keys[2].name_b64.units(), [0x41, 0, 0x42]);
+        assert_eq!(tree.keys[2].name_b64.units(), [0x41, 0xd800, 0x42]);
+        assert_eq!(
+            tree.keys.iter().map(|k| k.volatile).collect::<Vec<_>>(),
+            [false, false, false, true]
+        );
 
         assert_eq!(tree.rel_path(0).unwrap(), Vec::<&WideB64>::new());
         assert_eq!(tree.rel_path(1).unwrap(), [&wide("Settings")]);
         assert_eq!(
             tree.rel_path(2).unwrap(),
-            [&wide("Settings"), &WideB64(vec![0x41, 0, 0x42])]
+            [&wide("Settings"), &WideB64(vec![0x41, 0xd800, 0x42])]
         );
         assert!(tree.rel_path(4).is_none());
         assert_eq!(tree.children(0).collect::<Vec<_>>(), [1, 3]);
@@ -701,12 +894,275 @@ mod tests {
         assert_eq!(t.validate(), Err(RegTreeError::BadName(3)));
         assert!(!RegTreeError::BadName(3).to_string().is_empty());
 
-        // The root's name is not judged (a hive root has none), and a link flag is reported, not hidden.
+        // An empty root name passes the tree check (a hive root has none); `validate_for` compares it
+        // with the backup's key.
         let mut t = tree();
         t.keys[0].name_b64 = wide("");
-        t.keys[1].link = true;
         assert_eq!(t.validate(), Ok(()));
-        assert!(t.has_link());
+    }
+
+    /// The checks the review found missing (M2): links, NUL and separators in names, duplicate siblings
+    /// and values, an empty SDDL.
+    #[test]
+    fn trees_that_cannot_be_restored_as_stored_are_refused() {
+        let tree = || -> RegTree {
+            serde_json::from_str::<RegBackup>(TREE)
+                .unwrap()
+                .tree()
+                .unwrap()
+                .clone()
+        };
+        tree().validate().unwrap();
+
+        for i in [0, 1, 3] {
+            let mut t = tree();
+            t.keys[i].link = true;
+            assert!(t.has_link());
+            assert_eq!(t.validate(), Err(RegTreeError::Link(i)));
+        }
+
+        for (i, name) in [
+            (2, vec![0x41, 0, 0x42]),
+            (3, vec![0x41, 0]),
+            (0, vec![0x56, 0]),
+            (0, wide(r"SOFTWARE\Vendor").0),
+        ] {
+            let mut t = tree();
+            t.keys[i].name_b64 = WideB64(name.clone());
+            assert_eq!(t.validate(), Err(RegTreeError::BadName(i)), "{name:x?}");
+        }
+
+        // `Settings` and `SETTINGS` below the same parent; the same name under another parent is fine.
+        let mut t = tree();
+        t.keys[3].name_b64 = wide("SETTINGS");
+        assert_eq!(t.validate(), Err(RegTreeError::DuplicateName(3)));
+        let mut t = tree();
+        t.keys[3].name_b64 = wide("settings");
+        assert_eq!(t.validate(), Err(RegTreeError::DuplicateName(3)));
+        let mut t = tree();
+        t.keys[2].name_b64 = wide("Settings");
+        assert_eq!(t.validate(), Ok(()));
+        let mut t = tree();
+        t.keys[3].name_b64 = wide("\u{e9}mpty");
+        let mut twin = t.keys[3].clone();
+        twin.name_b64 = wide("\u{c9}MPTY");
+        t.keys.push(twin);
+        assert_eq!(t.validate(), Err(RegTreeError::DuplicateName(4)));
+
+        // `v` and `V` in one key; the default value only once.
+        let mut t = tree();
+        let mut copy = t.keys[0].values[1].clone();
+        copy.name_b64 = wide("FLAGS");
+        t.keys[0].values.push(copy);
+        assert_eq!(t.validate(), Err(RegTreeError::DuplicateValue(0)));
+        let mut t = tree();
+        let default = t.keys[0].values[0].clone();
+        t.keys[1].values.push(default.clone());
+        assert_eq!(t.validate(), Ok(()));
+        t.keys[1].values.push(default);
+        assert_eq!(t.validate(), Err(RegTreeError::DuplicateValue(1)));
+
+        let mut t = tree();
+        t.keys[1].sddl.clear();
+        assert_eq!(t.validate(), Err(RegTreeError::EmptySddl(1)));
+
+        for e in [
+            RegTreeError::DuplicateName(1),
+            RegTreeError::DuplicateValue(1),
+            RegTreeError::Link(1),
+            RegTreeError::EmptySddl(1),
+            RegTreeError::PersistentUnderVolatile(1),
+        ] {
+            assert!(!e.to_string().is_empty());
+        }
+    }
+
+    /// A volatile key's subtree is volatile; old documents without the flag read as persistent keys
+    /// (review S3).
+    #[test]
+    fn volatile_keys_are_recorded_and_checked() {
+        let tree = || -> RegTree {
+            serde_json::from_str::<RegBackup>(TREE)
+                .unwrap()
+                .tree()
+                .unwrap()
+                .clone()
+        };
+        // A volatile key below a persistent one is fine, and so is a volatile chain.
+        let mut t = tree();
+        t.keys[1].volatile = true;
+        t.keys[2].volatile = true;
+        assert_eq!(t.validate(), Ok(()));
+        // A persistent key below a volatile one cannot be created.
+        let mut t = tree();
+        t.keys[1].volatile = true;
+        assert_eq!(t.validate(), Err(RegTreeError::PersistentUnderVolatile(2)));
+        let mut t = tree();
+        t.keys[0].volatile = true;
+        assert_eq!(t.validate(), Err(RegTreeError::PersistentUnderVolatile(1)));
+
+        // Without the member a key reads as not volatile.
+        let old = TREE
+            .replace(r#""volatile":false,"#, "")
+            .replace(r#""volatile":true,"#, "");
+        assert!(!old.contains("volatile"));
+        let backup: RegBackup = serde_json::from_str(&old).unwrap();
+        let t = backup.tree().unwrap();
+        assert!(t.keys.iter().all(|k| !k.volatile));
+        t.validate().unwrap();
+        // Written back, every key states the flag.
+        let text = serde_json::to_string(&backup).unwrap();
+        assert_eq!(text.matches(r#""volatile":false"#).count(), 4);
+        assert!(
+            serde_json::from_str::<RegBackup>(
+                &TREE.replace(r#""volatile":true"#, r#""volatile":1"#)
+            )
+            .is_err()
+        );
+    }
+
+    /// Unlike the journal, a backup does not read with members it does not know (review M4).
+    #[test]
+    fn unknown_members_are_refused() {
+        assert!(serde_json::from_str::<RegBackup>(TREE).is_ok());
+        assert!(serde_json::from_str::<RegBackup>(VALUE).is_ok());
+        for (sample, from, to) in [
+            (TREE, r#""captured":"#, r#""surprise":1,"captured":"#),
+            (TREE, r#""kind":"Tree","#, r#""kind":"Tree","surprise":1,"#),
+            (
+                TREE,
+                r#""link":false,"volatile":true"#,
+                r#""link":false,"volatile":true,"label":"S:(ML;;NW;;;LW)""#,
+            ),
+            (TREE, r#""type":4,"#, r#""type":4,"surprise":1,"#),
+            (
+                VALUE,
+                r#""kind":"Value","#,
+                r#""kind":"Value","surprise":1,"#,
+            ),
+        ] {
+            let changed = sample.replacen(from, to, 1);
+            assert_ne!(changed, sample, "{from}");
+            assert!(serde_json::from_str::<RegBackup>(&changed).is_err(), "{to}");
+        }
+    }
+
+    /// A backup is restored only for the op it was taken for (review M2).
+    #[test]
+    fn backups_are_checked_against_their_op() {
+        let tree: RegBackup = serde_json::from_str(TREE).unwrap();
+        let value: RegBackup = serde_json::from_str(VALUE).unwrap();
+        let tree_key = r"HKLM\SOFTWARE\WOW6432Node\Vendor".to_owned();
+        let value_key =
+            r"HKU\S-1-5-21-1-2-3-1001\Software\Microsoft\Windows\CurrentVersion\Run".to_owned();
+
+        assert_eq!(
+            tree.validate_for(&ExecOp::DeleteKeyTree {
+                key: tree_key.clone()
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            tree.validate_for(&ExecOp::DeleteKeyTree {
+                key: r"HKLM\SOFTWARE\Vendor".into()
+            }),
+            Err(RegBackupError::WrongKey)
+        );
+        // A backup of a tree with content is not the backup of an empty key.
+        assert_eq!(
+            tree.validate_for(&ExecOp::DeleteKeyIfEmpty {
+                key: tree_key.clone()
+            }),
+            Err(RegBackupError::NotEmpty)
+        );
+        let mut empty = tree.clone();
+        if let RegBackupBody::Tree(t) = &mut empty.body {
+            t.keys.truncate(1);
+            t.keys[0].values.clear();
+        }
+        assert_eq!(
+            empty.validate_for(&ExecOp::DeleteKeyIfEmpty {
+                key: tree_key.clone()
+            }),
+            Ok(())
+        );
+        // The root name is the leaf of the key, ignoring case.
+        let mut renamed = tree.clone();
+        if let RegBackupBody::Tree(t) = &mut renamed.body {
+            t.keys[0].name_b64 = wide("VENDOR");
+        }
+        assert_eq!(
+            renamed.validate_for(&ExecOp::DeleteKeyTree {
+                key: tree_key.clone()
+            }),
+            Ok(())
+        );
+        for name in ["Other", ""] {
+            if let RegBackupBody::Tree(t) = &mut renamed.body {
+                t.keys[0].name_b64 = wide(name);
+            }
+            assert_eq!(
+                renamed.validate_for(&ExecOp::DeleteKeyTree {
+                    key: tree_key.clone()
+                }),
+                Err(RegBackupError::WrongRootName),
+                "{name}"
+            );
+        }
+        // A malformed tree is reported as such.
+        let mut linked = tree.clone();
+        if let RegBackupBody::Tree(t) = &mut linked.body {
+            t.keys[1].link = true;
+        }
+        assert_eq!(
+            linked.validate_for(&ExecOp::DeleteKeyTree {
+                key: tree_key.clone()
+            }),
+            Err(RegBackupError::Tree(RegTreeError::Link(1)))
+        );
+
+        let delete_value = |name: &str| ExecOp::DeleteValue {
+            key: value_key.clone(),
+            name: name.into(),
+        };
+        assert_eq!(value.validate_for(&delete_value("Vendor")), Ok(()));
+        assert_eq!(
+            value.validate_for(&delete_value("Other")),
+            Err(RegBackupError::WrongValueName)
+        );
+        assert_eq!(
+            value.validate_for(&ExecOp::EditSegment {
+                key: value_key.clone(),
+                name: "Vendor".into(),
+                segment: "x".into(),
+                index: None,
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            value.validate_for(&ExecOp::DeleteKeyTree {
+                key: value_key.clone()
+            }),
+            Err(RegBackupError::WrongBody)
+        );
+        assert_eq!(
+            tree.validate_for(&ExecOp::DeleteValue {
+                key: tree_key,
+                name: String::new()
+            }),
+            Err(RegBackupError::WrongBody)
+        );
+        assert_eq!(
+            value.validate_for(&ExecOp::QuarantineMove {
+                path: r"C:\x".into()
+            }),
+            Err(RegBackupError::NotARegistryOp)
+        );
+        assert!(
+            !RegBackupError::Tree(RegTreeError::Empty)
+                .to_string()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -721,6 +1177,7 @@ mod tests {
                 sddl: "O:BAG:SYD:".into(),
                 last_write_time: FileTime(u64::from(i)),
                 link: false,
+                volatile: false,
                 values: Vec::new(),
             })
             .collect();
@@ -754,6 +1211,7 @@ mod tests {
             "BytesB64",
             "\"type\"",
             "\"link\"",
+            "\"volatile\"",
         ] {
             assert!(text.contains(name), "schema lacks {name}");
         }

@@ -11,9 +11,13 @@
 //!
 //! This module only defines the records. Writing, flushing and reading them back, with the rule for a
 //! torn last line, is `purge-exec`'s job.
+//!
+//! Records do not refuse unknown members: the journal writer appends a `chain` member to every line. An
+//! addition that a reader must not ignore needs a new schema id. Volume serials, [`FileTime`]s and byte
+//! counts are 64-bit JSON integers that can exceed 2^53; a reader must not keep them as doubles.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::op::{
     BackupRef, ExecOp, FailCode, FileIdHex, Inverse, ItemOutcome, OpId, OutcomeCounts, Sha256Hex,
@@ -146,6 +150,20 @@ pub struct Header {
     pub volumes: Vec<VolumeRecord>,
 }
 
+/// The deny-list exemptions an item was judged with (ENGINE_PLAN.md §5.10). The same four inputs as the
+/// guard's `Exemptions`, recorded so that undo needs no second derivation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct GateExemptions {
+    /// The key carries `ProvenOwnedSkeleton` evidence (the `shell` / `shellex` roots under Classes).
+    pub proven_owned_skeleton: bool,
+    /// The action is a segment edit of a value under `Session Manager\Environment`.
+    pub environment_segment_edit: bool,
+    /// The candidate has Tier A evidence for an item below the all-users `Start Menu\Programs` folder.
+    pub tier_a_start_menu_entry: bool,
+    /// The path had its 8.3 names resolved.
+    pub long_names_resolved: bool,
+}
+
 /// The state of one selected item when the run started. The per-item re-check compares against this.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Validated {
@@ -157,6 +175,10 @@ pub struct Validated {
     pub target: Target,
     /// What the item looked like.
     pub facts: ItemFacts,
+    /// The exemptions the gate applied to the item when it was validated. Undo passes exactly these to
+    /// the gate for the item's original path or key (`UndoPathCheck.exemptions`, `check_undo_key`); it
+    /// never derives them again from the scan, whose rules may have changed since.
+    pub exemptions: GateExemptions,
 }
 
 /// The write-ahead record of one op: everything needed to finish or undo it. It is flushed before the
@@ -185,10 +207,42 @@ impl Intent {
         self.inverse.backup().into_iter().chain(&self.definition)
     }
 
-    /// Whether the record hangs together: the inverse is the kind that undoes the op, and every backup
-    /// path stays inside the session directory. A reader refuses a journal with an intent that fails this.
+    /// Whether the record hangs together. A reader refuses a journal with an intent that fails this:
+    ///
+    /// - the inverse is the kind that undoes the op and addresses the same item ([`Inverse::undoes`]);
+    /// - `pre` is the kind of facts the op acts on: [`ItemFacts::File`] for the path ops (a directory for
+    ///   [`ExecOp::RemoveDirIfEmpty`]), [`ItemFacts::Key`] for the key ops, [`ItemFacts::Value`] for the
+    ///   value and segment ops, [`ItemFacts::Package`] for a package. An intent is only written for an item
+    ///   that is there, so `Absent` never fits;
+    /// - for [`Inverse::MoveBack`], the recorded file id and volume serial are those of `pre`, the handle
+    ///   the move uses;
+    /// - every backup path stays inside the session directory ([`BackupRef::is_session_relative`]).
     pub fn is_consistent(&self) -> bool {
-        self.inverse.fits(&self.exec_op) && self.backups().all(BackupRef::is_session_relative)
+        let pre_fits = match (&self.exec_op, &self.pre) {
+            (ExecOp::QuarantineMove { .. }, ItemFacts::File(_)) => true,
+            (ExecOp::RemoveDirIfEmpty { .. }, ItemFacts::File(facts)) => facts.is_dir,
+            (ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. }, ItemFacts::Key(_)) => {
+                true
+            }
+            (ExecOp::DeleteValue { .. } | ExecOp::EditSegment { .. }, ItemFacts::Value(_)) => true,
+            (ExecOp::RemovePackage { .. }, ItemFacts::Package) => true,
+            _ => false,
+        };
+        let same_file = match (&self.inverse, &self.pre) {
+            (
+                Inverse::MoveBack {
+                    file_id,
+                    volume_serial,
+                    ..
+                },
+                ItemFacts::File(facts),
+            ) => *file_id == facts.file_id && *volume_serial == facts.volume_serial,
+            _ => true,
+        };
+        pre_fits
+            && same_file
+            && self.inverse.undoes(&self.exec_op)
+            && self.backups().all(BackupRef::is_session_relative)
     }
 }
 
@@ -204,13 +258,40 @@ pub struct Done {
 }
 
 /// The end of a group of intents; the journal is flushed after it.
+///
+/// Reading a group number of 0, or a count outside 1 to [`MAX_GROUP_INTENTS`], fails. That the numbers
+/// match the journal is checked where the journal is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct GroupEnd {
     /// Number of the group, counted from 1.
+    #[serde(deserialize_with = "group_number")]
+    #[schemars(range(min = 1))]
     pub group: u32,
     /// How many intent records the group holds: 1 to [`MAX_GROUP_INTENTS`]. The field is not called
     /// `intents` so that only the two intent records spell that word in a journal line.
+    #[serde(deserialize_with = "group_count")]
+    #[schemars(range(min = 1, max = 64))]
     pub ops: u32,
+}
+
+/// Reads a group number: at least 1.
+fn group_number<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    match u32::deserialize(deserializer)? {
+        0 => Err(serde::de::Error::custom("group numbers count from 1")),
+        n => Ok(n),
+    }
+}
+
+/// Reads the intent count of a group: 1 to [`MAX_GROUP_INTENTS`].
+fn group_count<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let n = u32::deserialize(deserializer)?;
+    if (1..=MAX_GROUP_INTENTS).contains(&n) {
+        Ok(n)
+    } else {
+        Err(serde::de::Error::custom(format_args!(
+            "a group holds 1 to {MAX_GROUP_INTENTS} intents, not {n}"
+        )))
+    }
 }
 
 /// The run finished: every selected item has a `done` record.
@@ -466,20 +547,24 @@ mod tests {
     /// would write them.
     fn sample_journal() -> Vec<String> {
         let file_facts = r#"{"kind":"File","final_path":"C:\\Program Files\\Vendor App\\app.exe","file_id":"000102030405060708090a0b0c0d0e0f","volume_serial":13902625541364831864,"reparse_tag":0,"attributes":32,"n_links":1,"is_dir":false,"size":1048576}"#;
+        let none = r#""exemptions":{"proven_owned_skeleton":false,"environment_segment_edit":false,"tier_a_start_menu_entry":false,"long_names_resolved":false}"#;
+        let long = r#""exemptions":{"proven_owned_skeleton":false,"environment_segment_edit":false,"tier_a_start_menu_entry":false,"long_names_resolved":true}"#;
         vec![
             format!(
                 r#"{{"rec":"header","schema":"purge.journal/1","session":"{ID}","created":134078121020000000,"engine_version":"0.1.0","app":"vendor-app","plan_hash":"{HASH_A}","selection_hash":"{HASH_B}","policy_version":"m1a.6","mode":"post","items":3,"allow_irreversible":false,"volumes":[{{"root":"C:\\","serial":13902625541364831864,"file_system":"NTFS","quarantine":"C:\\ProgramData\\Purge\\Quarantine\\{ID}"}}]}}"#
             ),
             format!(
-                r#"{{"rec":"validated","op":1,"item":"c-01","target":{{"type":"Path","path":"C:\\Program Files\\Vendor App\\app.exe"}},"facts":{file_facts}}}"#
+                r#"{{"rec":"validated","op":1,"item":"c-01","target":{{"type":"Path","path":"C:\\Program Files\\Vendor App\\app.exe"}},"facts":{file_facts},{long}}}"#
             ),
-            r#"{"rec":"validated","op":2,"item":"c-02","target":{"type":"RegKey","path":"HKLM\\SOFTWARE\\Vendor"},"facts":{"kind":"Key","subkeys":2,"values":5,"is_link":false,"owner":"S-1-5-32-544","last_write_time":134078000000000000}}"#.to_owned(),
+            r#"{"rec":"validated","op":2,"item":"c-02","target":{"type":"RegKey","path":"HKLM\\SOFTWARE\\Vendor"},"facts":{"kind":"Key","subkeys":2,"values":5,"is_link":false,"owner":"S-1-5-32-544","last_write_time":134078000000000000},"exemptions":{"proven_owned_skeleton":true,"environment_segment_edit":false,"tier_a_start_menu_entry":false,"long_names_resolved":false}}"#.to_owned(),
             format!(
-                r#"{{"rec":"validated","op":3,"item":"c-03","target":{{"type":"RegValue","path":"HKLM\\SOFTWARE\\Other","name":""}},"facts":{{"kind":"Value","type":2,"size":38,"data_sha256":"{HASH_B}"}}}}"#
+                r#"{{"rec":"validated","op":3,"item":"c-03","target":{{"type":"RegValue","path":"HKLM\\SOFTWARE\\Other","name":""}},"facts":{{"kind":"Value","type":2,"size":38,"data_sha256":"{HASH_B}"}},{none}}}"#
             ),
-            r#"{"rec":"validated","op":4,"item":"c-04","target":{"type":"Path","path":"C:\\Program Files\\Vendor App"},"facts":{"kind":"File","final_path":"C:\\Program Files\\Vendor App","file_id":"ffffffffffffffffffffffffffffffff","volume_serial":1,"reparse_tag":0,"attributes":16,"n_links":1,"is_dir":true,"size":0,"tree_entries":12,"tree_bytes":4096}}"#.to_owned(),
-            r#"{"rec":"validated","op":5,"item":"c-05","target":{"type":"AppxPackage","full_name":"Vendor.App_1.0.0.0_x64__abc"},"facts":{"kind":"Package"}}"#.to_owned(),
-            r#"{"rec":"validated","op":6,"item":"c-06","target":{"type":"RegKey","path":"HKLM\\SOFTWARE\\Gone"},"facts":{"kind":"Absent"}}"#.to_owned(),
+            r#"{"rec":"validated","op":4,"item":"c-04","target":{"type":"Path","path":"C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Vendor App"},"facts":{"kind":"File","final_path":"C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Vendor App","file_id":"ffffffffffffffffffffffffffffffff","volume_serial":1,"reparse_tag":0,"attributes":16,"n_links":1,"is_dir":true,"size":0,"tree_entries":12,"tree_bytes":4096},"exemptions":{"proven_owned_skeleton":false,"environment_segment_edit":false,"tier_a_start_menu_entry":true,"long_names_resolved":true}}"#.to_owned(),
+            format!(
+                r#"{{"rec":"validated","op":5,"item":"c-05","target":{{"type":"AppxPackage","full_name":"Vendor.App_1.0.0.0_x64__abc"}},"facts":{{"kind":"Package"}},{none}}}"#
+            ),
+            r#"{"rec":"validated","op":6,"item":"c-06","target":{"type":"RegMultiSzSegment","path":"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment","name":"Path","segment":"C:\\Vendor\\bin"},"facts":{"kind":"Absent"},"exemptions":{"proven_owned_skeleton":false,"environment_segment_edit":true,"tier_a_start_menu_entry":false,"long_names_resolved":false}}"#.to_owned(),
             format!(
                 r#"{{"rec":"intent","op":1,"item":"c-01","exec_op":{{"kind":"QuarantineMove","path":"C:\\Program Files\\Vendor App\\app.exe"}},"inverse":{{"kind":"MoveBack","quarantine_path":"C:\\ProgramData\\Purge\\Quarantine\\{ID}\\000001\\app.exe","original_path":"C:\\Program Files\\Vendor App\\app.exe","file_id":"000102030405060708090a0b0c0d0e0f","volume_serial":13902625541364831864}},"pre":{file_facts}}}"#
             ),
@@ -689,6 +774,255 @@ mod tests {
         let mut absolute = intents[2].clone();
         absolute.definition.as_mut().unwrap().path = r"C:\def\000005.json".into();
         assert!(!absolute.is_consistent());
+    }
+
+    /// The reviewer's two counter-examples (review S6), and `pre` facts of the wrong kind.
+    #[test]
+    fn intent_halves_must_address_the_same_item() {
+        let hash: Sha256Hex = HASH_A.parse().unwrap();
+        let file = |is_dir: bool| {
+            ItemFacts::File(FileFacts {
+                final_path: r"C:\Users\me\AppData\Local\App".into(),
+                file_id: FileIdHex([3; 16]),
+                volume_serial: 9,
+                reparse_tag: 0,
+                attributes: if is_dir { 16 } else { 32 },
+                n_links: 1,
+                is_dir,
+                size: 0,
+                tree_entries: None,
+                tree_bytes: None,
+            })
+        };
+        let move_intent = |original: &str, quarantine: &str, pre: ItemFacts| Intent {
+            op: OpId(1),
+            item: CandidateId("c-01".into()),
+            exec_op: ExecOp::QuarantineMove {
+                path: r"C:\Users\me\AppData\Local\App".into(),
+            },
+            inverse: Inverse::MoveBack {
+                quarantine_path: quarantine.into(),
+                original_path: original.into(),
+                file_id: FileIdHex([3; 16]),
+                volume_serial: 9,
+            },
+            definition: None,
+            pre,
+        };
+        let q = r"C:\ProgramData\Purge\Quarantine\s\000001\App";
+        assert!(move_intent(r"C:\Users\me\AppData\Local\App", q, file(true)).is_consistent());
+        // Counter-example 1: the inverse moves something else back, and `pre` says nothing exists.
+        let evil = move_intent(
+            r"C:\Windows\System32\evil",
+            r"C:\Windows\System32\drivers\etc",
+            ItemFacts::Absent,
+        );
+        assert!(evil.inverse.fits(&evil.exec_op));
+        assert!(!evil.is_consistent());
+        assert!(!move_intent(r"C:\Windows\System32\evil", q, file(true)).is_consistent());
+        assert!(
+            !move_intent(r"C:\Users\me\AppData\Local\App", q, ItemFacts::Absent).is_consistent()
+        );
+        // The moved item must be the one the handle showed.
+        let mut other_file = move_intent(r"C:\Users\me\AppData\Local\App", q, file(false));
+        assert!(other_file.is_consistent());
+        if let Inverse::MoveBack { file_id, .. } = &mut other_file.inverse {
+            *file_id = FileIdHex([4; 16]);
+        }
+        assert!(!other_file.is_consistent());
+        let mut other_volume = move_intent(r"C:\Users\me\AppData\Local\App", q, file(false));
+        if let Inverse::MoveBack { volume_serial, .. } = &mut other_volume.inverse {
+            *volume_serial = 10;
+        }
+        assert!(!other_volume.is_consistent());
+
+        // Counter-example 2: a segment edit of `A`/`Path` whose inverse re-inserts into `B`/`Other`.
+        let value = ItemFacts::Value(ValueFacts {
+            value_type: 2,
+            size: 10,
+            data_sha256: hash,
+        });
+        let edit_intent = |key: &str, name: &str, segment: &str, pre: ItemFacts| Intent {
+            op: OpId(2),
+            item: CandidateId("c-02".into()),
+            exec_op: ExecOp::EditSegment {
+                key: r"HKLM\SOFTWARE\A".into(),
+                name: "Path".into(),
+                segment: r"C:\A\bin".into(),
+                index: None,
+            },
+            inverse: Inverse::ReinsertSegment {
+                key: key.into(),
+                name: name.into(),
+                index: 0,
+                segment: segment.into(),
+                original_value_hash: hash,
+                written_value_hash: hash,
+                backup: None,
+            },
+            definition: None,
+            pre,
+        };
+        assert!(
+            edit_intent(r"HKLM\SOFTWARE\A", "Path", r"C:\A\bin", value.clone()).is_consistent()
+        );
+        let swapped = edit_intent(r"HKLM\SOFTWARE\B", "Other", r"C:\B\bin", value.clone());
+        assert!(swapped.inverse.fits(&swapped.exec_op));
+        assert!(!swapped.is_consistent());
+        for pre in [ItemFacts::Absent, ItemFacts::Package, file(false)] {
+            assert!(!edit_intent(r"HKLM\SOFTWARE\A", "Path", r"C:\A\bin", pre).is_consistent());
+        }
+
+        // The other ops need their own facts kind too.
+        let key_facts = ItemFacts::Key(RegFacts {
+            subkeys: 0,
+            values: 0,
+            is_link: false,
+            owner: "S-1-5-32-544".into(),
+            last_write_time: FileTime(1),
+        });
+        let backup = BackupRef {
+            path: r"reg\000003.regbackup.json".into(),
+            sha256: hash,
+            bytes: 10,
+        };
+        let with = |exec_op: ExecOp, inverse: Inverse, pre: ItemFacts| Intent {
+            op: OpId(3),
+            item: CandidateId("c-03".into()),
+            exec_op,
+            inverse,
+            definition: None,
+            pre,
+        };
+        let key = || r"HKLM\SOFTWARE\K".to_owned();
+        let tree = || Inverse::RestoreKeyTree {
+            backup: backup.clone(),
+        };
+        assert!(
+            with(
+                ExecOp::DeleteKeyTree { key: key() },
+                tree(),
+                key_facts.clone()
+            )
+            .is_consistent()
+        );
+        assert!(!with(ExecOp::DeleteKeyTree { key: key() }, tree(), value.clone()).is_consistent());
+        let recreate_key = || Inverse::RecreateKey {
+            backup: backup.clone(),
+        };
+        assert!(
+            with(
+                ExecOp::DeleteKeyIfEmpty { key: key() },
+                recreate_key(),
+                key_facts.clone()
+            )
+            .is_consistent()
+        );
+        assert!(
+            !with(
+                ExecOp::DeleteKeyIfEmpty { key: key() },
+                recreate_key(),
+                ItemFacts::Absent
+            )
+            .is_consistent()
+        );
+        let delete_value = || ExecOp::DeleteValue {
+            key: key(),
+            name: "v".into(),
+        };
+        let restore_value = || Inverse::RestoreValue {
+            backup: backup.clone(),
+        };
+        assert!(with(delete_value(), restore_value(), value.clone()).is_consistent());
+        assert!(!with(delete_value(), restore_value(), key_facts.clone()).is_consistent());
+        let package = || ExecOp::RemovePackage {
+            full_name: "V.A_1.0.0.0_x64__abc".into(),
+        };
+        assert!(with(package(), Inverse::None, ItemFacts::Package).is_consistent());
+        assert!(!with(package(), Inverse::None, ItemFacts::Absent).is_consistent());
+        // Removing a directory if empty needs facts of a directory, at the same path.
+        let rmdir = || ExecOp::RemoveDirIfEmpty {
+            path: r"C:\Users\me\AppData\Local\App".into(),
+        };
+        let recreate_dir = |path: &str| Inverse::RecreateDir {
+            path: path.into(),
+            attributes: 16,
+            sddl: "O:BAG:SYD:".into(),
+            creation_time: None,
+            last_write_time: None,
+        };
+        assert!(
+            with(
+                rmdir(),
+                recreate_dir(r"C:\Users\me\AppData\Local\App"),
+                file(true)
+            )
+            .is_consistent()
+        );
+        assert!(
+            !with(
+                rmdir(),
+                recreate_dir(r"C:\Users\me\AppData\Local\App"),
+                file(false)
+            )
+            .is_consistent()
+        );
+        assert!(!with(rmdir(), recreate_dir(r"C:\Windows"), file(true)).is_consistent());
+    }
+
+    /// Undo reads the exemptions back from the `validated` record (review S4); a record without them
+    /// does not read.
+    #[test]
+    fn validated_records_carry_the_exemptions() {
+        let lines = sample_journal();
+        let exemptions: Vec<GateExemptions> = lines
+            .iter()
+            .filter_map(|line| match serde_json::from_str::<Record>(line).unwrap() {
+                Record::Validated(v) => Some(v.exemptions),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(exemptions.len(), 6);
+        assert!(exemptions[0].long_names_resolved && !exemptions[0].tier_a_start_menu_entry);
+        assert!(exemptions[1].proven_owned_skeleton);
+        assert_eq!(exemptions[2], GateExemptions::default());
+        assert!(exemptions[3].tier_a_start_menu_entry && exemptions[3].long_names_resolved);
+        assert!(exemptions[5].environment_segment_edit);
+
+        let first = &lines[1];
+        let start = first.find(r#","exemptions":"#).unwrap();
+        let without = format!("{}}}", &first[..start]);
+        assert!(
+            serde_json::from_str::<Record>(&without).is_err(),
+            "{without}"
+        );
+        let partial = first.replace(r#""long_names_resolved":true"#, "");
+        assert!(serde_json::from_str::<Record>(&partial).is_err());
+    }
+
+    /// Group numbers count from 1 and a group holds 1 to 64 intents (review M4).
+    #[test]
+    fn group_end_counters_are_in_range() {
+        for good in [
+            r#"{"rec":"group_end","group":1,"ops":1}"#,
+            r#"{"rec":"group_end","group":4294967295,"ops":64}"#,
+        ] {
+            let record: Record = serde_json::from_str(good).unwrap();
+            assert_eq!(serde_json::to_string(&record).unwrap(), good);
+        }
+        for bad in [
+            r#"{"rec":"group_end","group":0,"ops":9999}"#,
+            r#"{"rec":"group_end","group":0,"ops":1}"#,
+            r#"{"rec":"group_end","group":1,"ops":0}"#,
+            r#"{"rec":"group_end","group":1,"ops":65}"#,
+            r#"{"rec":"group_end","group":1,"ops":-1}"#,
+            r#"{"rec":"done","op":0,"item":"c-01","outcome":{"kind":"Done"}}"#,
+            r#"{"rec":"undo_intent","op":0}"#,
+        ] {
+            assert!(serde_json::from_str::<Record>(bad).is_err(), "{bad}");
+        }
+        let schema = serde_json::to_string(&schemars::schema_for!(GroupEnd)).unwrap();
+        assert!(schema.contains(r#""maximum":64"#), "{schema}");
     }
 
     #[test]

@@ -4,11 +4,12 @@
 use std::path::PathBuf;
 
 use purge_model::exec::journal::{
-    AbortReason, Expire, Header, Intent, ItemFacts, JournalSchema, Reconcile, ReconcileResult,
-    Record, UndoConflict, UndoOutcome, Validated,
+    AbortReason, Expire, FileFacts, GateExemptions, Header, Intent, ItemFacts, JournalSchema,
+    Reconcile, ReconcileResult, Record, UndoConflict, UndoOutcome, Validated,
 };
 use purge_model::exec::op::{
-    BackupRef, ExecOp, FailCode, FileIdHex, Inverse, ItemOutcome, OpId, OutcomeCounts, SkipReason,
+    BackupRef, BootMovePair, ExecOp, FailCode, FileIdHex, Inverse, ItemOutcome, OpId,
+    OutcomeCounts, SkipReason,
 };
 use purge_model::exec::session::{RetentionClass, SessionId};
 use purge_model::{CandidateId, FileTime, ScanMode, Target};
@@ -82,6 +83,7 @@ fn validated(n: u32) -> Validated {
         item: item(n),
         target: Target::Path { path: path_of(n) },
         facts: ItemFacts::Absent,
+        exemptions: GateExemptions::default(),
     }
 }
 
@@ -97,7 +99,29 @@ fn intent(n: u32) -> Intent {
             volume_serial: 7,
         },
         definition: None,
-        pre: ItemFacts::Absent,
+        pre: ItemFacts::File(FileFacts {
+            final_path: path_of(n),
+            file_id: FileIdHex([n as u8; 16]),
+            volume_serial: 7,
+            reparse_tag: 0,
+            attributes: 32,
+            n_links: 1,
+            is_dir: false,
+            size: 0,
+            tree_entries: None,
+            tree_bytes: None,
+        }),
+    }
+}
+
+/// A registered boot-time move of op `n`'s file.
+fn pending_reboot(n: u32) -> ItemOutcome {
+    ItemOutcome::PendingReboot {
+        pair: BootMovePair {
+            src: format!(r"\??\{}", path_of(n)),
+            dst: format!(r"\??\C:\ProgramData\Purge\Quarantine\s\{n:06}\file {n}.dat"),
+        },
+        confirmed: true,
     }
 }
 
@@ -126,7 +150,7 @@ fn sample_journal(dir: &TempDir) -> Vec<u8> {
     w.done_without_intent(OpId(2), ItemOutcome::Vanished)
         .unwrap();
     let t3 = w.intent(intent(3)).unwrap();
-    w.done(t3, ItemOutcome::PendingReboot).unwrap();
+    w.done(t3, pending_reboot(3)).unwrap();
     let t4 = w.intent(intent(4)).unwrap();
     w.done(t4, failed()).unwrap();
     w.commit(FileTime(134_078_121_950_000_000), 4096).unwrap();
@@ -389,7 +413,7 @@ fn writer_refuses_rule_breaks_and_writes_nothing() {
         Violation::DoneWithoutIntent(OpId(1))
     );
     assert_eq!(
-        refused(w.done_without_intent(OpId(1), ItemOutcome::PendingReboot)),
+        refused(w.done_without_intent(OpId(1), pending_reboot(1))),
         Violation::DoneWithoutIntent(OpId(1))
     );
     let mut wrong = intent(1);
@@ -499,7 +523,7 @@ fn undo_and_reconcile_rules() {
     let t1 = w.intent(intent(1)).unwrap();
     w.done(t1, ItemOutcome::Done).unwrap();
     let t2 = w.intent(intent(2)).unwrap();
-    w.done(t2, ItemOutcome::PendingReboot).unwrap();
+    w.done(t2, pending_reboot(2)).unwrap();
     let t3 = w.intent(intent(3)).unwrap();
     w.done(t3, ItemOutcome::HeldRetry).unwrap();
     w.commit(FileTime(1), 0).unwrap();
@@ -578,7 +602,7 @@ fn undo_and_reconcile_rules() {
     w.reconcile(rec(
         3,
         ReconcileResult::Retried {
-            outcome: ItemOutcome::PendingReboot,
+            outcome: pending_reboot(3),
         },
     ))
     .unwrap();
@@ -736,9 +760,14 @@ fn reader_refuses_rule_breaks() {
         (4, Corruption::Rule(Violation::GroupMismatch { .. }))
     ));
     assert_eq!(
-        corrupt(parse(&chained(&[hdr(1), v(1), ge(1, 0)]))),
+        corrupt(parse(&chained(&[hdr(1), v(1), ge(1, 1)]))),
         (3, Corruption::Rule(Violation::EmptyGroup))
     );
+    // A count of 0 is not a group end at all.
+    assert!(matches!(
+        corrupt(parse(&chained(&[hdr(1), v(1), ge(1, 0)]))),
+        (3, Corruption::Json(_))
+    ));
     // A commit with an open group or wrong counts.
     let commit = |counts| {
         body(Record::Commit(purge_model::exec::journal::Commit {

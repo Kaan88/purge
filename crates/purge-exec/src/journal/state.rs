@@ -249,7 +249,7 @@ impl OpState {
 /// The pending kind an outcome stands for.
 fn pending_of(outcome: &ItemOutcome) -> Option<Pending> {
     match outcome {
-        ItemOutcome::PendingReboot => Some(Pending::Reboot),
+        ItemOutcome::PendingReboot { .. } => Some(Pending::Reboot),
         ItemOutcome::HeldRetry => Some(Pending::Held),
         _ => None,
     }

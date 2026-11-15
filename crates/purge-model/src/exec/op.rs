@@ -10,6 +10,15 @@
 //!
 //! The small scalars the executor documents share live here too: [`OpId`], [`Sha256Hex`], [`FileIdHex`]
 //! and [`BackupRef`].
+//!
+//! Two rules of the wire format hold for every executor document (journal, session index, reports):
+//!
+//! - Unsigned 64-bit fields (volume serials, every [`FileTime`], byte counts) are written as plain JSON
+//!   integers and can exceed 2^53. A reader must parse them as 64-bit integers; one that keeps JSON
+//!   numbers as doubles (PowerShell, JavaScript) silently rounds them.
+//! - Readers ignore members they do not know, because the journal writer adds a `chain` member to every
+//!   line and the session index must stay readable for newer writers. A change that an older reader must
+//!   not ignore therefore needs a new schema id. Only the registry backup refuses unknown members.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -152,12 +161,20 @@ hex_value!(
 /// The number of one op within a session, counted from 1 in plan order.
 ///
 /// Every selected plan item gets an op id, whether or not it ends up acted on. The id also names the op's
-/// directory and backup files, through [`OpId::file_stem`].
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
+/// directory and backup files, through [`OpId::file_stem`]. Reading `0` fails: no op has that id. That
+/// an id is at most the header's item count is checked where the journal is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[serde(transparent)]
-pub struct OpId(pub u32);
+pub struct OpId(#[schemars(range(min = 1))] pub u32);
+
+impl<'de> Deserialize<'de> for OpId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match u32::deserialize(deserializer)? {
+            0 => Err(serde::de::Error::custom("op ids count from 1")),
+            n => Ok(Self(n)),
+        }
+    }
+}
 
 impl OpId {
     /// The name used for the op's quarantine directory and backup files: six digits, zero-padded
@@ -188,16 +205,47 @@ pub struct BackupRef {
 }
 
 impl BackupRef {
-    /// Whether `path` stays inside the session directory: not empty, no drive or stream (`:`), no `/`, no
-    /// leading `\`, and no empty, `.` or `..` component. A reader must refuse a reference that fails this
-    /// before joining it to the session directory.
+    /// Whether `path` stays inside the session directory and names a plain file there: not empty, no
+    /// leading `\`, and every `\`-separated component is a plain Win32 file name. That rules out drives and streams (`:`), `/`, empty, `.` and `..`
+    /// components, wildcards, control characters, a trailing dot or space (Win32 strips those, so the name
+    /// would address another file) and DOS device names (`NUL`, `CON.json`). A reader must refuse a
+    /// reference that fails this before joining it to the session directory.
     pub fn is_session_relative(&self) -> bool {
-        !self.path.is_empty()
-            && !self.path.contains([':', '/'])
-            && self
-                .path
-                .split('\\')
-                .all(|part| !part.is_empty() && part != "." && part != "..")
+        !self.path.is_empty() && self.path.split('\\').all(is_plain_file_name)
+    }
+}
+
+/// Whether `name` is one path component that Win32 opens as exactly that file, without the `\\?\` form:
+/// not empty, no leading space, no trailing dot or space, no control character, none of
+/// `< > : " / \ | ? *`, and not a DOS device name with or without an extension (`CON`, `PRN`, `AUX`,
+/// `NUL`, `CONIN$`, `CONOUT$`, `COM0`-`COM9`, `LPT0`-`LPT9`, also with a superscript digit).
+fn is_plain_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(' ')
+        && !name.ends_with(['.', ' '])
+        && !name.chars().any(|c| {
+            c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+        })
+        && !is_dos_device_name(name)
+}
+
+/// Whether the part of `name` before its first `.`, without trailing spaces, is a DOS device name.
+fn is_dos_device_name(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or("").trim_end_matches(' ');
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|device| base.eq_ignore_ascii_case(device))
+    {
+        return true;
+    }
+    let mut chars = base.chars();
+    let stem: String = chars.by_ref().take(3).collect();
+    match (chars.next(), chars.next()) {
+        (Some(digit), None) => {
+            (stem.eq_ignore_ascii_case("COM") || stem.eq_ignore_ascii_case("LPT"))
+                && (digit.is_ascii_digit() || matches!(digit, '\u{b9}' | '\u{b2}' | '\u{b3}'))
+        }
+        _ => false,
     }
 }
 
@@ -506,8 +554,53 @@ impl Inverse {
         }
     }
 
-    /// Whether this inverse is the kind that undoes `op`. The journal reader uses it to refuse an intent
-    /// whose inverse does not fit its op.
+    /// Whether this inverse is the kind that undoes `op` and addresses the same item. Undo acts on the
+    /// inverse's copy of the addressing fields, so they must equal the op's, byte for byte:
+    ///
+    /// - [`Inverse::MoveBack`]: `original_path` is the op's `path`.
+    /// - [`Inverse::RecreateDir`]: `path` is the op's `path`.
+    /// - [`Inverse::ReinsertSegment`]: `key`, `name` and `segment` are the op's; when the op names an
+    ///   index, the inverse's `index` is that index.
+    ///
+    /// The inverses that read a registry backup carry their key inside the backup file; the reader checks
+    /// it there with [`RegBackup::validate_for`](super::regbackup::RegBackup::validate_for).
+    pub fn undoes(&self, op: &ExecOp) -> bool {
+        if !self.fits(op) {
+            return false;
+        }
+        match (op, self) {
+            (ExecOp::QuarantineMove { path }, Inverse::MoveBack { original_path, .. }) => {
+                original_path == path
+            }
+            (ExecOp::RemoveDirIfEmpty { path: op_path }, Inverse::RecreateDir { path, .. }) => {
+                path == op_path
+            }
+            (
+                ExecOp::EditSegment {
+                    key: op_key,
+                    name: op_name,
+                    segment: op_segment,
+                    index: op_index,
+                },
+                Inverse::ReinsertSegment {
+                    key,
+                    name,
+                    segment,
+                    index,
+                    ..
+                },
+            ) => {
+                key == op_key
+                    && name == op_name
+                    && segment == op_segment
+                    && op_index.is_none_or(|at| at == *index)
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether this inverse is the kind that undoes `op`, judged by the kinds alone. See
+    /// [`Inverse::undoes`] for the full check.
     pub fn fits(&self, op: &ExecOp) -> bool {
         matches!(
             (op, self),
@@ -542,6 +635,17 @@ pub enum SkipReason {
     CapExceeded,
     /// The run was aborted before the item's turn came.
     NotAttempted,
+}
+
+/// One entry of the boot-time move list (`PendingFileRenameOperations`), as the strings stand in the
+/// value: the session manager renames `src` to `dst` at the next boot.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct BootMovePair {
+    /// The source in NT form (`\??\C:\dir\name`), unit for unit as stored, including a leading
+    /// `*<digits>` marker when Windows wrote one.
+    pub src: String,
+    /// The destination in NT form, unit for unit as stored.
+    pub dst: String,
 }
 
 /// What kind of failure ended an item.
@@ -580,7 +684,15 @@ pub enum ItemOutcome {
     /// Purge run.
     HeldRetry,
     /// A boot-time move into quarantine is registered; the item goes at the next restart.
-    PendingReboot,
+    PendingReboot {
+        /// The entry of the boot-time move list, as it was written. Reconcile and undo remove or look
+        /// for exactly this pair; they never rebuild it from the paths.
+        pair: BootMovePair,
+        /// Whether `pair` was found in the list right after the registration. When it is true, `pair` is
+        /// the spelling read back from the list; when false, it is the spelling the executor expected,
+        /// and a reader must look the pair up in the list before removing it.
+        confirmed: bool,
+    },
     /// The action failed. The item is in its original state unless `code` is
     /// [`FailCode::VerifyFailed`].
     Failed {
@@ -604,7 +716,15 @@ impl ItemOutcome {
     /// Whether the system was changed, so undo has something to do: [`ItemOutcome::Done`], or
     /// [`ItemOutcome::PendingReboot`] (a registered boot-time move).
     pub fn changed_system(&self) -> bool {
-        matches!(self, ItemOutcome::Done | ItemOutcome::PendingReboot)
+        matches!(self, ItemOutcome::Done | ItemOutcome::PendingReboot { .. })
+    }
+
+    /// The boot-time move pair, when the outcome is [`ItemOutcome::PendingReboot`].
+    pub fn boot_move(&self) -> Option<&BootMovePair> {
+        match self {
+            ItemOutcome::PendingReboot { pair, .. } => Some(pair),
+            _ => None,
+        }
     }
 
     /// Whether the outcome may be journalled without an intent record before it. Only outcomes that are
@@ -644,7 +764,7 @@ impl OutcomeCounts {
             ItemOutcome::Vanished => &mut self.vanished,
             ItemOutcome::Skipped { .. } => &mut self.skipped,
             ItemOutcome::HeldRetry => &mut self.held_retry,
-            ItemOutcome::PendingReboot => &mut self.pending_reboot,
+            ItemOutcome::PendingReboot { .. } => &mut self.pending_reboot,
             ItemOutcome::Failed { .. } => &mut self.failed,
         };
         *slot = slot.saturating_add(1);
@@ -988,6 +1108,60 @@ mod tests {
         }
     }
 
+    /// Names Win32 does not open as the plain file they spell: devices, a trailing dot or space,
+    /// wildcards and control characters (review M1).
+    #[test]
+    fn backup_ref_refuses_names_win32_does_not_treat_as_plain_files() {
+        let hash: Sha256Hex = HASH_A.parse().unwrap();
+        let at = |path: &str| BackupRef {
+            path: path.into(),
+            sha256: hash,
+            bytes: 1,
+        };
+        for bad in [
+            r"reg\NUL",
+            r"reg\nul.json",
+            r"reg\CON.json",
+            r"reg\con .json",
+            r"reg\AUX",
+            r"reg\PRN.x.y",
+            r"reg\COM1",
+            r"reg\lpt9.json",
+            "reg\\COM\u{b9}.json",
+            r"reg\CONIN$",
+            r"CONOUT$\x.json",
+            r"reg\a.",
+            r"reg\a ",
+            r"reg.\a",
+            r"reg\...",
+            "reg\\a\tb.json",
+            "reg\\a\0.json",
+            "reg\\a\u{1f}.json",
+            r"reg\a*",
+            r"reg\a?.json",
+            r"reg\a<b",
+            r"reg\a>b",
+            r#"reg\a"b"#,
+            r"reg\a|b",
+            r" reg\x",
+            r"reg\ x.json",
+        ] {
+            assert!(!at(bad).is_session_relative(), "{bad:?}");
+        }
+        // Names that merely start like a device, or hold a device name later on, are plain files.
+        for good in [
+            r"reg\console.json",
+            r"reg\nul_x.json",
+            r"reg\COM10.json",
+            r"reg\LPT.json",
+            r"reg\x.NUL",
+            r"reg\a b.json",
+            r"reg\.hidden",
+        ] {
+            assert!(at(good).is_session_relative(), "{good:?}");
+        }
+    }
+
     #[test]
     fn op_id_names_sort_in_op_order() {
         assert_eq!(OpId(42).file_stem(), "000042");
@@ -996,6 +1170,123 @@ mod tests {
         assert_eq!(OpId(1_234_567).file_stem(), "1234567");
         let id: OpId = round_trip("7");
         assert_eq!(id, OpId(7));
+        let id: OpId = round_trip("4294967295");
+        assert_eq!(id, OpId(u32::MAX));
+    }
+
+    /// Op ids count from 1; `0`, negative and out-of-range numbers do not read (review M4).
+    #[test]
+    fn op_id_zero_and_out_of_range_are_refused() {
+        for bad in ["0", "-1", "4294967296", "1.0", "\"1\""] {
+            assert!(serde_json::from_str::<OpId>(bad).is_err(), "{bad}");
+        }
+        let schema = serde_json::to_string(&schemars::schema_for!(OpId)).unwrap();
+        assert!(schema.contains(r#""minimum":1"#), "{schema}");
+    }
+
+    /// A registered boot-time move keeps the pair exactly as written, marker included, so reconcile and
+    /// undo can remove it unit for unit (review S5).
+    #[test]
+    fn pending_reboot_keeps_the_pair_as_written() {
+        let text = r#"{"kind":"PendingReboot","pair":{"src":"*1\\??\\C:\\Program Files\\Vendor\\a.dll","dst":"\\??\\C:\\ProgramData\\Purge\\Quarantine\\s\\000003\\a.dll"},"confirmed":true}"#;
+        let outcome: ItemOutcome = round_trip(text);
+        let pair = outcome.boot_move().unwrap();
+        assert_eq!(pair.src, r"*1\??\C:\Program Files\Vendor\a.dll");
+        assert_eq!(
+            pair.dst,
+            r"\??\C:\ProgramData\Purge\Quarantine\s\000003\a.dll"
+        );
+        assert!(matches!(
+            outcome,
+            ItemOutcome::PendingReboot {
+                confirmed: true,
+                ..
+            }
+        ));
+        assert!(outcome.changed_system() && !outcome.allowed_without_intent());
+        assert!(ItemOutcome::Done.boot_move().is_none());
+        // Without the pair there is nothing to reconcile or undo by: such a record does not read.
+        for bad in [
+            r#"{"kind":"PendingReboot"}"#,
+            r#"{"kind":"PendingReboot","confirmed":true}"#,
+            r#"{"kind":"PendingReboot","pair":{"src":"\\??\\C:\\a"},"confirmed":false}"#,
+        ] {
+            assert!(serde_json::from_str::<ItemOutcome>(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// The reviewer's counter-examples: an inverse of the right kind that addresses another item.
+    #[test]
+    fn inverse_must_address_the_item_of_its_op() {
+        let hash: Sha256Hex = HASH_A.parse().unwrap();
+        let op = ExecOp::QuarantineMove {
+            path: r"C:\Users\me\AppData\Local\App".into(),
+        };
+        let move_back = |original: &str| Inverse::MoveBack {
+            quarantine_path: r"C:\ProgramData\Purge\Quarantine\s\000001\App".into(),
+            original_path: original.into(),
+            file_id: FileIdHex([1; 16]),
+            volume_serial: 7,
+        };
+        assert!(move_back(r"C:\Users\me\AppData\Local\App").undoes(&op));
+        for other in [
+            r"C:\Windows\System32\evil",
+            r"C:\Users\me\AppData\Local\app",
+            r"C:\Users\me\AppData\Local\App\",
+        ] {
+            let inverse = move_back(other);
+            assert!(inverse.fits(&op) && !inverse.undoes(&op), "{other}");
+        }
+
+        let edit = ExecOp::EditSegment {
+            key: r"HKLM\SOFTWARE\A".into(),
+            name: "Path".into(),
+            segment: r"C:\A\bin".into(),
+            index: Some(2),
+        };
+        let reinsert =
+            |key: &str, name: &str, segment: &str, index: u32| Inverse::ReinsertSegment {
+                key: key.into(),
+                name: name.into(),
+                index,
+                segment: segment.into(),
+                original_value_hash: hash,
+                written_value_hash: hash,
+                backup: None,
+            };
+        assert!(reinsert(r"HKLM\SOFTWARE\A", "Path", r"C:\A\bin", 2).undoes(&edit));
+        for inverse in [
+            reinsert(r"HKLM\SOFTWARE\B", "Other", r"C:\B\bin", 2),
+            reinsert(r"HKLM\SOFTWARE\B", "Path", r"C:\A\bin", 2),
+            reinsert(r"HKLM\SOFTWARE\A", "Other", r"C:\A\bin", 2),
+            reinsert(r"HKLM\SOFTWARE\A", "Path", r"C:\B\bin", 2),
+            reinsert(r"HKLM\SOFTWARE\A", "Path", r"C:\A\bin", 3),
+        ] {
+            assert!(inverse.fits(&edit) && !inverse.undoes(&edit), "{inverse:?}");
+        }
+        // Without a planned index, any recorded position fits.
+        let first_match = ExecOp::EditSegment {
+            key: r"HKLM\SOFTWARE\A".into(),
+            name: "Path".into(),
+            segment: r"C:\A\bin".into(),
+            index: None,
+        };
+        assert!(reinsert(r"HKLM\SOFTWARE\A", "Path", r"C:\A\bin", 5).undoes(&first_match));
+
+        let rmdir = ExecOp::RemoveDirIfEmpty {
+            path: r"C:\ProgramData\Vendor".into(),
+        };
+        let recreate = |path: &str| Inverse::RecreateDir {
+            path: path.into(),
+            attributes: 16,
+            sddl: "O:BAG:SYD:".into(),
+            creation_time: None,
+            last_write_time: None,
+        };
+        assert!(recreate(r"C:\ProgramData\Vendor").undoes(&rmdir));
+        assert!(!recreate(r"C:\ProgramData\Other").undoes(&rmdir));
+        // A wrong kind never undoes.
+        assert!(!Inverse::None.undoes(&rmdir));
     }
 
     #[test]
@@ -1012,7 +1303,7 @@ mod tests {
             r#"{"kind":"Skipped","reason":{"kind":"CapExceeded"}}"#,
             r#"{"kind":"Skipped","reason":{"kind":"NotAttempted"}}"#,
             r#"{"kind":"HeldRetry"}"#,
-            r#"{"kind":"PendingReboot"}"#,
+            r#"{"kind":"PendingReboot","pair":{"src":"\\??\\C:\\a","dst":"\\??\\C:\\q\\a"},"confirmed":false}"#,
             r#"{"kind":"Failed","code":"AccessDenied","os_error":5}"#,
             r#"{"kind":"Failed","code":"Os","os_error":1392,"detail":"the file is corrupt"}"#,
             r#"{"kind":"Failed","code":"VerifyFailed"}"#,

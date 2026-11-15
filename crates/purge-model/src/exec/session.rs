@@ -10,6 +10,11 @@
 //! The index is the one file standard users may read: the UI shows history and "N items expire soon" from
 //! it without elevation. The installer creates it as the empty object `{}`, so every field of
 //! [`SessionIndex`] has a default.
+//!
+//! None of these documents refuses members it does not know, so an older reader keeps reading what a
+//! newer writer adds; an addition that a reader must not ignore needs a new schema id. Volume serials,
+//! [`FileTime`]s and byte counts are 64-bit JSON integers that can exceed 2^53; a reader (the UI included)
+//! must not keep them as doubles.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -751,6 +756,25 @@ mod tests {
         );
         assert_eq!(index.bytes_on_volume(0xC0FF_EE00_1234_5678), 52_428_800);
         assert_eq!(index.bytes_on_volume(1), 0);
+    }
+
+    /// The wire rules the module documents (review M4, M7): unknown members are ignored, and 64-bit
+    /// integers above 2^53 come back exactly.
+    #[test]
+    fn index_ignores_unknown_members_and_keeps_64_bit_integers() {
+        let index: SessionIndex = serde_json::from_str(
+            r#"{"schema":"purge.sessions/1","sessions":[],"written_by":"0.9"}"#,
+        )
+        .unwrap();
+        assert_eq!(index, SessionIndex::default());
+        let serial = (1u64 << 53) + 1;
+        let text = format!(
+            r#"{{"schema":"purge.sessions/1","sessions":[{}]}}"#,
+            summary_json(ID, "Committed", serial, u64::MAX)
+        );
+        let index: SessionIndex = round_trip(&text);
+        assert_eq!(index.bytes_on_volume(serial), u64::MAX);
+        assert_eq!(index.bytes_on_volume(serial - 1), 0);
     }
 
     #[test]
