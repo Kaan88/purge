@@ -75,9 +75,28 @@
 //!   by the gate ([`gate::check_undo_path`]), and the item renamed by handle into that checked directory
 //!   under its original leaf. Nothing is overwritten: an occupied original path is
 //!   `UndoConflict::DestinationExists`. No directory is created here; a missing parent is a conflict.
-//! - **Recreate dir**: the directory is created with the recorded owner, group and DACL, then its
-//!   recorded attributes are set through a handle on it. An existing plain directory is `AlreadyRestored`.
-//!   Creation and last-write times are recorded in the inverse but cannot be set back (no API for it).
+//! - **Recreate dir**: the original path's parent is checked by the gate ([`gate::check_undo_path`]) and
+//!   the directory is created **relative to that checked parent handle** (`DestDir::create_dir`; nothing
+//!   existing is adopted). Through the new directory's own handle the recorded security descriptor is
+//!   then stored exactly (owner, group, DACL with its `P`/`AI` flags and ACEs; creation alone would merge
+//!   the parent's inheritable ACEs), the recorded attributes set, and the recorded creation and
+//!   last-write times set last. An owner or group the token cannot assign is left to the token's
+//!   defaults with the recorded DACL, `Restored` with a note; Purge never takes ownership or enables a
+//!   privilege. If anything after the creation fails, the new (empty) directory is removed again
+//!   through its handle and the undo is `Failed`. An existing plain directory is `AlreadyRestored`. A
+//!   later move back of a child into the directory updates its last-write time (the file system's doing).
+//!
+//! # Quarantine op directories
+//!
+//! A move creates its op directory before the intent. When the op is then decided without an intent
+//! after all (a refused destination, an intent that does not hang together), when the rename is refused
+//! without a change, and when a directory is found locked at the act (the ladder never moves a directory
+//! at boot), the op directory this call created is removed again through a handle whose identity is the
+//! store's, and only while it is empty. A file locked at the act keeps it: the ladder may register a
+//! boot-time move into it.
+//! An empty op directory of the same session and op left by a crash between its creation and the intent
+//! is adopted by [`create_op_dir_for`]: removed through such a handle while empty, and created anew
+//! through the store's checks.
 
 use std::fmt;
 use std::path::Path;
@@ -92,15 +111,13 @@ use purge_model::exec::journal::{FileFacts, Intent, ItemFacts, UndoConflict, Und
 use purge_model::exec::op::{ExecOp, FailCode, FileIdHex, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::{Blocker, CandidateId, FileTime};
 use purge_win::fs::FileHandle;
-use purge_win::fs_write::{
-    CHANGEABLE_ATTRIBUTES, FsError, MoveHandle, create_dir_secure, extended_path,
-};
+use purge_win::fs_write::{CHANGEABLE_ATTRIBUTES, FsError, MoveHandle, extended_path};
 use purge_win::os::Win32Error;
 
 use crate::fault;
 use crate::gate::{self, CheckedDest, CheckedPath, GateCtx, GateOutcome, LockedPath, Stamp};
 use crate::journal::{IntentToken, UndoToken};
-use crate::storage::{SessionDir, StorageError};
+use crate::storage::{QuarantineDir, SessionDir, StorageError};
 
 #[cfg(test)]
 mod tests;
@@ -350,7 +367,12 @@ pub struct FsAction {
 
 #[derive(Debug)]
 enum ActKind {
-    Move { dest: CheckedDest },
+    /// `op_dir` is the op directory this prepare created (removed again while empty if the move does
+    /// not happen), `dest` the checked destination inside it.
+    Move {
+        dest: CheckedDest,
+        op_dir: Box<QuarantineDir>,
+    },
     RemoveDir,
 }
 
@@ -365,7 +387,7 @@ impl FsAction {
     /// For a quarantine move: the path the item will have in quarantine.
     pub fn quarantine_path(&self) -> Option<&str> {
         match &self.kind {
-            ActKind::Move { dest } => Some(dest.path()),
+            ActKind::Move { dest, .. } => Some(dest.path()),
             ActKind::RemoveDir => None,
         }
     }
@@ -573,6 +595,10 @@ pub fn prepare_fs(
         pre: ItemFacts::File(checked.file_facts().clone()),
     };
     if !intent.is_consistent() {
+        if let ActKind::Move { op_dir, dest } = kind {
+            drop(dest);
+            remove_empty_op_dir(*op_dir);
+        }
         return decided(FsResult::internal(format!(
             "the intent built for {path} does not hang together; nothing done"
         )));
@@ -600,8 +626,8 @@ fn quarantine_destination(
             "{path} has no leaf name to quarantine under; nothing done"
         ))));
     };
-    let quarantine = match session.create_op_dir(Path::new(path), stamp.identity.volume_serial, op)
-    {
+    let serial = stamp.identity.volume_serial;
+    let quarantine = match create_op_dir_for(session, Path::new(path), serial, op) {
         Ok(dir) => dir,
         Err(StorageError::CannotBackUp { reason, .. }) => {
             return Ok(Err(FsResult::blocked(
@@ -611,20 +637,91 @@ fn quarantine_destination(
         }
         Err(e) => return Err(e),
     };
-    if let Err(result) = same_volume(stamp.identity.volume_serial, quarantine.volume_serial()) {
+    // From here on every refusal takes the op directory just created away again.
+    if let Err(result) = same_volume(serial, quarantine.volume_serial()) {
+        remove_empty_op_dir(quarantine);
         return Ok(Err(result));
     }
     let dest = match gate::check_quarantine_destination(ctx, checked, &quarantine, leaf) {
         Ok(dest) => dest,
-        Err(refusal) => return Ok(Err(refusal_to_result(&refusal, false))),
+        Err(refusal) => {
+            remove_empty_op_dir(quarantine);
+            return Ok(Err(refusal_to_result(&refusal, false)));
+        }
     };
     let inverse = Inverse::MoveBack {
         quarantine_path: dest.path().to_owned(),
         original_path: path.to_owned(),
         file_id: FileIdHex(stamp.identity.file_id),
-        volume_serial: stamp.identity.volume_serial,
+        volume_serial: serial,
     };
-    Ok(Ok((inverse, ActKind::Move { dest })))
+    Ok(Ok((
+        inverse,
+        ActKind::Move {
+            dest,
+            op_dir: Box::new(quarantine),
+        },
+    )))
+}
+
+/// Creates op `op`'s quarantine directory for an item at `source` on the volume with serial
+/// `source_serial` (`SessionDir::create_op_dir`), adopting an **empty** op directory of the same session
+/// and op that a crash left between its creation and the op's intent.
+///
+/// The store creates op directories create-new, so a leftover makes `create_op_dir` fail with
+/// [`StorageError::OpDirExists`]. Then the leftover is opened through the store's checks
+/// (`SessionDir::open_op_dir`: this session, this op, this volume), removed through a handle whose
+/// volume serial and file id are the store's handle's, non-recursively, so only while it is empty, and
+/// created anew through the store's checks. A leftover with anything in it, or one that does not pass
+/// the checks, stays as it is and the original [`StorageError::OpDirExists`] is returned (a store
+/// integrity failure met on the way is returned as such).
+///
+/// [`prepare_fs`] uses it; the executor can use it for the op directory of a locked item it hands to the
+/// ladder, and for the retry of a held directory whose empty op directory was removed at the act.
+// `StorageError` as the store returns it, like `SessionDir::create_op_dir`.
+#[allow(clippy::result_large_err)]
+pub fn create_op_dir_for(
+    session: &SessionDir,
+    source: &Path,
+    source_serial: u64,
+    op: OpId,
+) -> Result<QuarantineDir, StorageError> {
+    let existing = match session.create_op_dir(source, source_serial, op) {
+        Err(StorageError::OpDirExists(existing)) => existing,
+        other => return other,
+    };
+    // `open_op_dir` takes an item path inside the op directory; the leaf is not looked at.
+    let adopted = match session.open_op_dir(&existing.join("item"), op, source_serial) {
+        Ok((dir, _)) => remove_empty_op_dir(dir),
+        Err(e @ StorageError::Integrity { .. }) => return Err(e),
+        Err(_) => false,
+    };
+    if !adopted {
+        return Err(StorageError::OpDirExists(existing));
+    }
+    session.create_op_dir(source, source_serial, op)
+}
+
+/// Removes `dir`, an op directory of this session, through a handle on it whose volume serial and file id
+/// are those of the store's checked handle, and only while it is empty (`remove_dir_if_empty`, never
+/// recursive). The store's handle is closed afterwards. Whether it was removed; anything else leaves it
+/// for expiry.
+fn remove_empty_op_dir(dir: QuarantineDir) -> bool {
+    let Ok(p) = extended_path(dir.path()) else {
+        return false;
+    };
+    let Ok(handle) = MoveHandle::open(&p) else {
+        return false;
+    };
+    let store_id = dir.dir().file_id();
+    let same = handle
+        .file_id()
+        .is_ok_and(|id| id.volume_serial == store_id.volume_serial && id.id == store_id.id);
+    let removed = same && handle.remove_dir_if_empty().is_ok();
+    // Without POSIX delete semantics the name goes when the last handle closes.
+    drop(handle);
+    drop(dir);
+    removed
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -697,7 +794,7 @@ pub fn act_fs(action: Box<FsAction>, token: &IntentToken, retry: &Retry) -> FsAc
     let stamp = checked.stamp();
     let is_dir = stamp.is_dir;
     match kind {
-        ActKind::Move { dest } => {
+        ActKind::Move { dest, op_dir } => {
             let (result, attempts) =
                 retry.run(
                     || match checked.handle().rename_into(dest.dir(), dest.leaf()) {
@@ -707,8 +804,20 @@ pub fn act_fs(action: Box<FsAction>, token: &IntentToken, retry: &Retry) -> FsAc
                 );
             match result {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => return FsActed::Finished(rename_failure(e, &path)),
+                Ok(Err(e)) => {
+                    // Refused without a change: nothing will land in the op directory.
+                    drop(dest);
+                    remove_empty_op_dir(*op_dir);
+                    return FsActed::Finished(rename_failure(e, &path));
+                }
                 Err(e) => {
+                    let quarantine_path = dest.path().to_owned();
+                    if is_dir {
+                        // The ladder never moves a directory at boot: nothing will land in the op
+                        // directory before a retry, which creates it again (`create_op_dir_for`).
+                        drop(dest);
+                        remove_empty_op_dir(*op_dir);
+                    }
                     return FsActed::Locked(Box::new(LockedItem {
                         op: intent.op,
                         item: intent.item.clone(),
@@ -721,7 +830,7 @@ pub fn act_fs(action: Box<FsAction>, token: &IntentToken, retry: &Retry) -> FsAc
                         },
                         attempts,
                         stage: LockedStage::Act,
-                        quarantine_path: Some(dest.path().to_owned()),
+                        quarantine_path: Some(quarantine_path),
                     }));
                 }
             }
@@ -913,8 +1022,17 @@ enum UndoKind {
         path: String,
         attributes: u32,
         sddl: String,
+        times: RecordedTimes,
         volume_serial: u64,
     },
+}
+
+/// The creation and last-write times a `RecreateDir` inverse recorded (FILETIME ticks; `None` when not
+/// recorded).
+#[derive(Debug, Clone, Copy)]
+struct RecordedTimes {
+    creation: Option<u64>,
+    last_write: Option<u64>,
 }
 
 impl FsUndoJob {
@@ -1021,7 +1139,8 @@ pub fn plan_undo_fs(intent: &Intent, done: Option<&ItemOutcome>) -> Option<FsUnd
                 path,
                 attributes,
                 sddl,
-                ..
+                creation_time,
+                last_write_time,
             },
             false,
         ) => {
@@ -1032,6 +1151,10 @@ pub fn plan_undo_fs(intent: &Intent, done: Option<&ItemOutcome>) -> Option<FsUnd
                 path: path.clone(),
                 attributes: *attributes,
                 sddl: sddl.clone(),
+                times: RecordedTimes {
+                    creation: creation_time.map(|t| t.0),
+                    last_write: last_write_time.map(|t| t.0),
+                },
                 volume_serial: pre.volume_serial,
             }
         }
@@ -1095,12 +1218,16 @@ pub fn undo_fs(
             path,
             attributes,
             sddl,
+            times,
             volume_serial,
         } => Ok(recreate_dir(
             ctx,
             &path,
-            attributes,
-            &sddl,
+            Recorded {
+                attributes,
+                sddl: &sddl,
+                times,
+            },
             volume_serial,
             exemptions,
         )),
@@ -1363,12 +1490,29 @@ fn without_owner_and_group(sddl: &str) -> String {
     out
 }
 
-/// Recreates a removed directory (the inverse of remove-dir-if-empty).
+/// What a `RecreateDir` inverse recorded about the removed directory.
+#[derive(Debug, Clone, Copy)]
+struct Recorded<'a> {
+    attributes: u32,
+    sddl: &'a str,
+    times: RecordedTimes,
+}
+
+/// Whether a security write failed because the token may not assign the recorded owner or group.
+fn owner_not_assignable(e: FsError) -> bool {
+    matches!(
+        e,
+        FsError::Other(ERROR_INVALID_OWNER | ERROR_INVALID_PRIMARY_GROUP)
+    )
+}
+
+/// Recreates a removed directory (the inverse of remove-dir-if-empty): created relative to the
+/// gate-checked parent handle, then the recorded descriptor, attributes and times are put on the new
+/// directory's own handle.
 fn recreate_dir(
     ctx: &GateCtx,
     path: &str,
-    attributes: u32,
-    sddl: &str,
+    recorded: Recorded<'_>,
     volume_serial: u64,
     exemptions: Exemptions,
 ) -> FsUndo {
@@ -1403,28 +1547,29 @@ fn recreate_dir(
         Ok(dest) => dest,
         Err(refusal) => return undo_refusal(&refusal, path),
     };
-    let Ok(p) = extended_path(Path::new(path)) else {
-        return FsUndo::failed(
-            FailCode::Internal,
-            None,
-            format!("{path} has no \\\\?\\ form"),
-        );
+    let sddl = recorded.sddl;
+    let mut notes = Vec::new();
+    let owner_note = |code: u32| {
+        format!(
+            "the recorded owner or group cannot be assigned (Win32 error {code}); the directory has the \
+             default owner and group and the recorded DACL"
+        )
     };
-    let mut note = String::new();
-    let created = match create_dir_secure(&p, sddl) {
-        Err(FsError::Other(code @ (ERROR_INVALID_OWNER | ERROR_INVALID_PRIMARY_GROUP))) => {
+    // Created relative to the parent handle the gate checked: it lands in that directory whatever
+    // happens to its path, and nothing existing is ever opened or adopted.
+    let mut applied = sddl.to_owned();
+    let created = match dest.dir().create_dir(dest.leaf(), sddl) {
+        Err(e) if owner_not_assignable(e) => {
             // The token cannot assign the recorded owner or group, and Purge never raises its access:
             // the directory gets the token's defaults and the recorded DACL.
-            note = format!(
-                "the recorded owner or group cannot be assigned (Win32 error {code}); the directory has \
-                 the default owner and group"
-            );
-            create_dir_secure(&p, &without_owner_and_group(sddl))
+            notes.push(owner_note(e.code()));
+            applied = without_owner_and_group(sddl);
+            dest.dir().create_dir(dest.leaf(), &applied)
         }
         other => other,
     };
-    match created {
-        Ok(()) => {}
+    let handle = match created {
+        Ok(handle) => handle,
         Err(FsError::AlreadyExists) => {
             return FsUndo::conflict(
                 UndoConflict::DestinationExists,
@@ -1438,61 +1583,78 @@ fn recreate_dir(
                 format!("recreating {path} failed: {e}"),
             );
         }
-    }
-    fault::point(fault::UNDO_ACT_AFTER);
-
-    // The creation went by path: check that it landed in the directory the gate checked.
-    let handle = match MoveHandle::open_with_attribute_write(&p) {
-        Ok(handle) => handle,
-        Err(e) => {
-            return FsUndo::failed(
-                FailCode::VerifyFailed,
-                Some(e.code()),
-                format!("{path} was created but cannot be opened again: {e}"),
-            );
-        }
     };
-    let parent_now = dest.dir().as_file().final_path().ok();
-    let expected = parent_now.as_deref().map(|parent| {
+    // Anything that fails from here on takes Purge's own new, empty directory away again.
+    let undo_creation = |handle: MoveHandle, what: String| {
+        let removed = handle.remove_dir_if_empty().is_ok();
         format!(
-            r"{}\{}",
-            strip_verbatim(parent).trim_end_matches('\\'),
-            dest.leaf()
+            "{what}; the new directory {}",
+            if removed {
+                "was removed again"
+            } else {
+                "could not be removed again"
+            }
         )
-    });
-    let landed = handle.final_path().ok();
+    };
+
     let plain = handle
         .metadata()
         .is_ok_and(|m| m.is_dir && m.reparse_tag == 0);
-    let in_place = matches!(
-        (&landed, &expected),
-        (Some(landed), Some(expected)) if prefix::is_same(strip_verbatim(landed), expected)
-            && prefix::is_same(expected, path)
-    );
+    let landed = handle.final_path().ok();
+    let in_place = landed
+        .as_deref()
+        .is_some_and(|at| prefix::is_same(strip_verbatim(at), path));
     if !(plain && in_place) {
-        // Purge's own new, empty directory in the wrong place: take it away again.
-        let removed = handle.remove_dir_if_empty().is_ok();
-        return FsUndo::blocked(
-            Blocker::ReparseMismatch,
-            format!(
-                "{path} was created at {landed:?}, not in the checked parent directory; {}",
-                if removed {
-                    "it was removed again"
-                } else {
-                    "it could not be removed again"
-                }
-            ),
+        let detail = undo_creation(
+            handle,
+            format!("{path} was created at {landed:?}, not at the checked place"),
         );
+        return FsUndo::blocked(Blocker::ReparseMismatch, detail);
     }
-    let wanted = attributes & CHANGEABLE_ATTRIBUTES;
+
+    // The descriptor exactly as recorded: creation merged the parent's inheritable ACEs and dropped
+    // the DACL's auto-inherited flag.
+    let secured = match handle.set_security(&applied) {
+        Err(e) if owner_not_assignable(e) && applied == sddl => {
+            notes.push(owner_note(e.code()));
+            applied = without_owner_and_group(sddl);
+            handle.set_security(&applied)
+        }
+        other => other,
+    };
+    if let Err(e) = secured {
+        let detail = undo_creation(
+            handle,
+            format!("the recorded security descriptor could not be set on {path}: {e}"),
+        );
+        return FsUndo::failed(fail_code(e.code()), Some(e.code()), detail);
+    }
+    let wanted = recorded.attributes & CHANGEABLE_ATTRIBUTES;
     if wanted != 0 {
         if let Err(e) = handle.set_attributes(wanted, 0) {
-            return FsUndo::failed(
-                fail_code(e.code()),
-                Some(e.code()),
-                format!("{path} was recreated, but its attributes could not be set: {e}"),
+            let detail = undo_creation(
+                handle,
+                format!("the recorded attributes could not be set on {path}: {e}"),
             );
+            return FsUndo::failed(fail_code(e.code()), Some(e.code()), detail);
         }
     }
-    FsUndo::done(UndoOutcome::Restored, note)
+    // Times last: nothing after this touches the directory through Purge.
+    match recorded.times {
+        RecordedTimes {
+            creation: Some(creation),
+            last_write: Some(last_write),
+        } if creation != 0 && last_write != 0 => {
+            if let Err(e) = handle.set_times(creation, last_write) {
+                let detail = undo_creation(
+                    handle,
+                    format!("the recorded times could not be set on {path}: {e}"),
+                );
+                return FsUndo::failed(fail_code(e.code()), Some(e.code()), detail);
+            }
+        }
+        _ => notes.push("the journal recorded no creation and last-write time".to_owned()),
+    }
+    fault::point(fault::UNDO_ACT_AFTER);
+    FsUndo::done(UndoOutcome::Restored, notes.join("; "))
 }

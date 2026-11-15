@@ -229,10 +229,15 @@ impl Env {
     }
 
     fn with_roots(s: Scratch, roots: StorageRoots, ops: Vec<ExecOp>) -> Env {
+        let data_root = roots.data_root().to_str().unwrap().to_owned();
+        Env::with_guard(s, roots, ops, live_env(&data_root))
+    }
+
+    /// [`Env::with_roots`] with the deny-list compiled from `guard`.
+    fn with_guard(s: Scratch, roots: StorageRoots, ops: Vec<ExecOp>, guard: GuardEnv) -> Env {
         let session = roots.create_session().unwrap();
         let scope = roots.store_scope::<&Path>(session.id(), &[]).unwrap();
-        let data_root = roots.data_root().to_str().unwrap().to_owned();
-        let mut ctx = GateCtx::new(DenyList::compile(&live_env(&data_root)), &ops, scope).unwrap();
+        let mut ctx = GateCtx::new(DenyList::compile(&guard), &ops, scope).unwrap();
         let validations: Vec<_> = validate_all(
             &ctx,
             ops.iter()
@@ -706,30 +711,61 @@ fn nested_delete_child_then_empty_parent_and_undo_parent_first() {
     assert_restored(&env.undo(2));
     assert_restored(&env.undo(1));
     let parent_after = snap_one(&p);
-    // Owner, group and every ACE come back. The DACL's auto-inherited control flag (`AI`) does not: the
-    // directory is created with the recorded descriptor and purge-win has no call to set a file's
-    // security afterwards (reported as a gap).
+    // Attributes, creation time and the whole descriptor (owner, group, the DACL's control flags
+    // including `AI`, every ACE) come back. The last-write time is the recorded one until the child is
+    // moved back in, which changes it again (the round trip below without a child compares it too).
     assert_eq!(
         (
             parent_after.attributes,
-            without_dacl_flags(&parent_after.sddl)
+            parent_after.creation_time,
+            parent_after.sddl.as_str()
         ),
         (
             parent_before.attributes,
-            without_dacl_flags(&parent_before.sddl)
+            parent_before.creation_time,
+            parent_before.sddl.as_str()
         )
+    );
+    assert!(
+        parent_before.sddl.contains("D:AI"),
+        "{}",
+        parent_before.sddl
     );
     assert_eq!(snap_one(&c), child_before);
 }
 
-/// `sddl` with the DACL's control flags (`P`, `AI`, `AR`) removed: owner, group and ACEs only.
-fn without_dacl_flags(sddl: &str) -> String {
-    let Some(at) = sddl.find("D:") else {
-        return sddl.to_owned();
+#[test]
+fn a_recreated_directory_has_its_recorded_times_attributes_and_whole_descriptor() {
+    let s = Scratch::new("rmdirtimes");
+    let p = s.dir(r"src\Empty");
+    attrib(&["+H", "+R"], &p);
+    let before = snap_one(&p);
+    let mut env = Env::new(s, vec![rmdir(&p)]);
+    assert_done(&env.run(1));
+    assert!(!exists(&p));
+    let undo = env.undo(1);
+    assert_restored(&undo);
+    let FsUndo::Done { detail, .. } = &undo else {
+        panic!()
     };
-    let (head, dacl) = sddl.split_at(at + 2);
-    let aces = dacl.trim_start_matches(|c: char| c.is_ascii_uppercase());
-    format!("{head}{aces}")
+    assert!(detail.is_empty(), "{detail}");
+    let after = snap_one(&p);
+    assert_ne!(after.identity, before.identity, "a new directory");
+    assert_eq!(
+        (
+            after.attributes,
+            after.creation_time,
+            after.last_write_time,
+            after.sddl.as_str()
+        ),
+        (
+            before.attributes,
+            before.creation_time,
+            before.last_write_time,
+            before.sddl.as_str()
+        )
+    );
+    assert!(before.sddl.contains("D:AI"), "{}", before.sddl);
 }
 
 #[test]
@@ -853,7 +889,7 @@ fn a_file_replaced_after_validation_is_changed_since_scan_and_a_missing_one_vani
 }
 
 #[test]
-fn hard_links_outside_the_plan_are_refused_and_the_second_name_of_a_pair_after_the_first() {
+fn both_names_of_a_hard_link_pair_move_and_come_back_and_an_outside_link_is_refused() {
     let s = Scratch::new("links");
     let a = s.file(r"src\a.dll", b"shared");
     let outside = s.path(r"elsewhere\a-link.dll");
@@ -864,24 +900,33 @@ fn hard_links_outside_the_plan_are_refused_and_the_second_name_of_a_pair_after_t
     std::fs::hard_link(&b, &c).unwrap();
 
     let mut env = Env::new(s, vec![mv(&a), mv(&b), mv(&c)]);
+    // A link whose other name is truly outside the plan is refused and stays.
     let refusal = env.validations[0].refusal().unwrap();
     assert_eq!(refusal.blocker, Blocker::HardLinkOutsidePlan);
+    assert!(exists(&a) && exists(&outside));
     // Both names of the pair are in the plan, so the first one moves; the file keeps both links.
-    let before = snap_one(&b);
-    assert_eq!(before.n_links, 2);
+    let before_b = snap_one(&b);
+    let before_c = snap_one(&c);
+    assert_eq!(before_b.n_links, 2);
     assert_done(&env.run(2));
     assert_eq!(snap_one(&env.quarantine_path(2)).n_links, 2);
-    // The second name now has its other link in this session's quarantine, which the gate does not count
-    // as inside the plan (reported as a gap): it is refused and stays.
-    assert_skipped(
-        &env.run(3),
-        SkipReason::GateBlocked {
-            blocker: Blocker::HardLinkOutsidePlan,
-        },
-    );
-    assert!(exists(&c));
+    // The second name now has its other link in this session's quarantine, the same file: it counts as
+    // inside the plan and moves too.
+    assert_done(&env.run(3));
+    assert!(!exists(&b) && !exists(&c));
+    let q3 = snap_one(&env.quarantine_path(3));
+    assert_eq!((q3.n_links, q3.identity), (2, before_b.identity));
+
+    // Undo in reverse order: both names come back as the one file, with its content.
+    assert_restored(&env.undo(3));
     assert_restored(&env.undo(2));
-    assert_eq!(snap_one(&b), before);
+    let after_b = snap_one(&b);
+    let after_c = snap_one(&c);
+    assert_eq!(after_b, before_b);
+    assert_eq!(after_c, before_c);
+    assert_eq!(after_b.identity, after_c.identity);
+    assert_eq!(after_b.n_links, 2);
+    assert_eq!(std::fs::read(&c).unwrap(), b"pair");
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1018,7 +1063,18 @@ fn a_recorded_owner_the_token_cannot_assign_falls_back_to_the_default_owner() {
         detail.contains("1307") || detail.contains("1308"),
         "{detail}"
     );
-    assert!(snap_one(&p).is_dir);
+    let after = snap_one(&p);
+    assert!(after.is_dir);
+    // The token's default owner, the recorded DACL with its control flags (`AI`) and every ACE; Purge
+    // took no ownership.
+    let after_dacl = &after.sddl[after.sddl.find("D:").unwrap()..];
+    assert_eq!(after_dacl, dacl, "{}", after.sddl);
+    let me = current_user_sid().unwrap();
+    assert!(
+        after.sddl.starts_with(&format!("O:{me}")) || after.sddl.starts_with("O:BA"),
+        "{}",
+        after.sddl
+    );
 }
 
 #[test]
@@ -1158,6 +1214,8 @@ fn a_directory_with_an_open_file_below_is_locked_at_the_rename() {
     );
     assert!(exists(&d));
     assert_eq!(std::fs::read(&inner).unwrap(), b"open");
+    // A directory is never moved at boot: the empty op directory this call made is gone again.
+    assert!(!env.op_dir(1).exists());
     // Journalled as failed: nothing to undo.
     assert!(matches!(
         env.undo(1),
@@ -1166,6 +1224,71 @@ fn a_directory_with_an_open_file_below_is_locked_at_the_rename() {
             ..
         }
     ));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Op directories
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn a_refusal_after_the_op_directory_was_made_removes_it_again() {
+    let s = Scratch::new("overlap");
+    let roots = store(&s);
+    let data_root = roots.data_root().to_str().unwrap().to_owned();
+    let stray = s.file(r"data\stray.txt", b"stray");
+    // A deny-list that does not name the store's data root, so only the destination check sees that the
+    // item lies in the store.
+    let guard = GuardEnv {
+        purge_dirs: vec![format!(r"{}\Purge", env_var("ProgramData"))],
+        ..live_env(&data_root)
+    };
+    let mut env = Env::with_guard(s, roots, vec![mv(&stray)], guard);
+    let result = env.run(1);
+    assert!(
+        matches!(&result.outcome, ItemOutcome::Skipped { .. })
+            && result
+                .detail
+                .contains(purge_guard::live::reason::QUARANTINE_OVERLAP),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read(&stray).unwrap(), b"stray");
+    assert!(!env.op_dir(1).exists());
+}
+
+#[test]
+fn an_empty_op_directory_left_by_a_crash_is_adopted_and_a_full_one_is_kept() {
+    let s = Scratch::new("adopt");
+    let f = s.file(r"src\a.txt", b"a");
+    let g = s.file(r"src\b.txt", b"b");
+    let mut env = Env::new(s, vec![mv(&f), mv(&g)]);
+    let serial = match env.validation(1).stamp {
+        Stamp::Path(stamp) => stamp.identity.volume_serial,
+        _ => panic!(),
+    };
+    // A crash between the op directory's creation and the intent left it empty.
+    for (n, path) in [(1, &f), (2, &g)] {
+        drop(
+            env.session
+                .create_op_dir(Path::new(path), serial, OpId(n))
+                .unwrap(),
+        );
+        assert!(env.op_dir(n).is_dir());
+    }
+    assert_done(&env.run(1));
+    assert_eq!(std::fs::read(env.quarantine_path(1)).unwrap(), b"a");
+    assert_restored(&env.undo(1));
+    assert_eq!(std::fs::read(&f).unwrap(), b"a");
+
+    // One with anything in it is never adopted: the store failure stands and nothing changes.
+    let kept = env.op_dir(2).join("keep.txt");
+    std::fs::write(&kept, b"keep").unwrap();
+    let prepared = prepare_fs(&env.ctx, &env.session, OpId(2), &no_wait());
+    assert!(
+        matches!(&prepared, Err(StorageError::OpDirExists(_))),
+        "{prepared:?}"
+    );
+    assert_eq!(std::fs::read(&kept).unwrap(), b"keep");
+    assert_eq!(std::fs::read(&g).unwrap(), b"b");
 }
 
 // ---------------------------------------------------------------------------------------------------

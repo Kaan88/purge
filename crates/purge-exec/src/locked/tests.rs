@@ -713,6 +713,68 @@ fn an_occupied_destination_and_one_outside_the_session_hold_the_item() {
     assert!(store.bytes().is_empty());
 }
 
+/// [`StoreLadder`] with the ancestor verdict injected (a temp directory is user-writable).
+struct StoreEnv<'a>(StoreLadder<'a>);
+
+impl LadderEnv for StoreEnv<'_> {
+    fn ancestors(&self, _: &str) -> BootMove {
+        BootMove::Allowed
+    }
+
+    fn destination(&self, destination: &str) -> DestinationFacts {
+        self.0.destination(destination)
+    }
+
+    fn look(&self, path: &str) -> SourceState {
+        self.0.look(path)
+    }
+
+    fn check_destination(
+        &self,
+        scope: &StoreScope,
+        item: &LockedItem,
+        source: &str,
+    ) -> Result<DestinationFacts, Refusal> {
+        self.0.check_destination(scope, item, source)
+    }
+}
+
+/// The boot move's destination is checked against the op directory the store opens and checks
+/// (`SessionDir::open_op_dir` and the gate's comparison of file ids), not by its path alone: an op
+/// directory replaced by an ordinary directory is never the target of a pair.
+#[test]
+fn the_boot_move_destination_is_the_op_directory_the_store_checked() {
+    let fx = Fx::new("storedest", 2);
+    let env = StoreEnv(StoreLadder::new(&fx.ctx, &fx.session));
+    let rm = FakeRm::default();
+    let l = ladder(&fx, &env, &rm, &DenyAll);
+    let mut store = MemoryPendingRenames::default();
+    let (pair, confirmed) = pending(&fx.run(&l, 1, &mut store));
+    assert!(confirmed);
+    assert_eq!(pair, model_pair(&nt_pair(&fx, 1)));
+    assert_eq!(store.registers, 1);
+
+    // Op 2's directory renamed away and a plain directory, with nothing the guard's path facts could
+    // tell apart, put in its place.
+    let q2 = Path::new(&fx.it(2).quarantine).parent().unwrap().to_owned();
+    std::fs::rename(&q2, q2.with_extension("moved")).unwrap();
+    std::fs::create_dir(&q2).unwrap();
+    let plain = LiveLadder.destination(&fx.it(2).quarantine);
+    assert_eq!(
+        (
+            plain.parent_is_dir,
+            plain.parent_reparse_tag,
+            plain.occupied
+        ),
+        (Some(true), Some(0), Some(false))
+    );
+    let result = fx.run(&l, 2, &mut store);
+    assert_eq!(result.outcome, ItemOutcome::HeldRetry, "{}", result.detail);
+    assert_eq!(result.code, Some(reason::QUARANTINE_DIR), "{result:?}");
+    assert_eq!(store.registers, 1, "no second pair");
+    assert!(Path::new(&fx.it(2).source).exists());
+}
+
 #[test]
 fn serial_zero_and_cross_volume_are_held() {
     // The item's own serial recorded as 0 (the look agrees, so it is still "the same object"): a forged
@@ -1280,6 +1342,94 @@ fn undo_refuses_a_pair_listed_twice_and_removes_nothing() {
     assert_eq!(code, FailCode::Internal);
     assert_eq!(store.bytes(), before.as_slice());
     assert_eq!(store.removals, 0);
+}
+
+/// Lists each pair once whatever the stored value holds: the value gained a second copy of a pair
+/// between the undo's list and its removal.
+struct ListsOnce(MemoryPendingRenames);
+
+impl PendingRenames for ListsOnce {
+    fn list(&self) -> Result<Vec<PendingPair>, FsError> {
+        let mut once: Vec<PendingPair> = Vec::new();
+        for pair in self.0.list()? {
+            if !once.contains(&pair) {
+                once.push(pair);
+            }
+        }
+        Ok(once)
+    }
+    fn register(&mut self, src: &Path, dst: &Path) -> Result<fs_write::BootMove, FsError> {
+        self.0.register(src, dst)
+    }
+    fn remove_exact(&mut self, pair: &PendingPair) -> Result<usize, FsError> {
+        self.0.remove_exact(pair)
+    }
+    fn remove_counted(&mut self, pair: &PendingPair, expected: usize) -> Result<usize, FsError> {
+        self.0.remove_counted(pair, expected)
+    }
+}
+
+/// The removal counts the pair in the same read-modify-write that cuts it: a copy that appeared after
+/// the undo listed the pairs is found there, and nothing is cut.
+#[test]
+fn a_pair_doubled_after_the_list_is_found_by_the_removal_and_nothing_is_cut() {
+    let fx = Fx::new("undorace", 1);
+    let (env, rm) = (Env::admin_only(), FakeRm::default());
+    let mut first = MemoryPendingRenames::default();
+    let (pair, _) = pending(&fx.run(&ladder(&fx, &env, &rm, &DenyAll), 1, &mut first));
+    let mut store = ListsOnce(store_of(&[
+        (pair.src.clone(), pair.dst.clone()),
+        (r"\??\C:\Other\a".into(), r"\??\C:\Other\b".into()),
+        (pair.src.clone(), pair.dst.clone()),
+    ]));
+    let before = store.0.bytes().to_vec();
+    let Some(LockUndo::RemovePair(removal)) = undo_locked(&fx.op(1), &store) else {
+        panic!("the list shows the pair once: a removal is planned");
+    };
+    let token = fx.journal.borrow_mut().undo_intent(OpId(1)).unwrap();
+    let outcome = remove_boot_move(removal, &token, &mut store);
+    fx.journal
+        .borrow_mut()
+        .undo_done(token, outcome.clone())
+        .unwrap();
+    assert!(
+        matches!(
+            &outcome,
+            UndoOutcome::Failed {
+                code: FailCode::Internal,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(store.0.bytes(), before.as_slice(), "nothing was cut");
+    assert_eq!(store.0.removals, 1);
+}
+
+#[test]
+fn the_memory_list_removes_a_pair_only_at_the_expected_count() {
+    let ours = PendingPair {
+        src: r"\??\C:\App\f.dll".into(),
+        dst: r"!\??\C:\Q\f.dll".into(),
+    };
+    let other = (r"\??\C:\Other\a".to_owned(), r"\??\C:\Other\b".to_owned());
+    let mut store = store_of(&[
+        (ours.src.clone(), ours.dst.clone()),
+        other.clone(),
+        (ours.src.clone(), ours.dst.clone()),
+    ]);
+    let before = store.bytes().to_vec();
+    assert_eq!(
+        store.remove_counted(&ours, 1),
+        Err(FsError::PendingCountMismatch { found: 2 })
+    );
+    assert_eq!(store.bytes(), before.as_slice());
+    assert_eq!(store.remove_counted(&ours, 2), Ok(2));
+    assert_eq!(store.bytes(), store_of(&[other]).bytes());
+    assert_eq!(
+        store.remove_counted(&ours, 1),
+        Err(FsError::PendingCountMismatch { found: 0 })
+    );
 }
 
 #[test]

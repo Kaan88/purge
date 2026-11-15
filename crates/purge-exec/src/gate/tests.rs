@@ -488,6 +488,68 @@ fn hard_link_outside_the_plan_blocks_file_and_tree() {
     assert!(matches!(outcome, GateOutcome::Pass(_)), "{outcome:?}");
 }
 
+/// The other name of a hard link that lies in this session's quarantine (the first name of a pair, moved
+/// earlier in the run) counts as inside the plan; one anywhere else in the store does not.
+#[test]
+fn a_hard_link_in_this_sessions_quarantine_counts_as_inside_the_plan() {
+    let s = Scratch::new("hlinkq");
+    let (session, scope) = relaxed_session(&s);
+    let f = s.file(r"app\pair.dll", b"x");
+    let g = s.file(r"app\journal-link.dll", b"y");
+    let op_f = mv(&f);
+    let op_g = mv(&g);
+    let selected = [op_f.clone(), op_g.clone()];
+    let mut ctx = ctx_with(&selected, scope, Box::new(LiveHost));
+    let serial = path_stamp(&validate(&ctx, &GateItem::new(&op_f, long())))
+        .identity
+        .volume_serial;
+
+    // `f`'s other name is in this session's quarantine: it passes, at validation and at the act.
+    let q = session
+        .create_op_dir(Path::new(&f), serial, OpId(1))
+        .unwrap();
+    std::fs::hard_link(&f, q.item_path("pair.dll")).unwrap();
+    let outcome = validate_then_act(&mut ctx, &op_f);
+    assert!(matches!(outcome, GateOutcome::Pass(_)), "{outcome:?}");
+    drop(outcome);
+
+    // `g`'s other name is in the session's own directory, not its quarantine: refused.
+    std::fs::hard_link(&g, session.path().join("journal-link.dll")).unwrap();
+    assert_refused(
+        &validate(&ctx, &GateItem::new(&op_g, long())),
+        Blocker::HardLinkOutsidePlan,
+        live_reason::LINK_OUTSIDE_PLAN,
+    );
+    // The same for the tree walk below a directory moved whole.
+    let dir_op = mv(&s.path("app"));
+    let tree_ctx = ctx_with(
+        std::slice::from_ref(&dir_op),
+        relaxed_scope_of(&session),
+        Box::new(LiveHost),
+    );
+    assert_refused(
+        &validate(&tree_ctx, &GateItem::new(&dir_op, long())),
+        Blocker::HardLinkOutsidePlan,
+        live_reason::LINK_OUTSIDE_PLAN_IN_TREE,
+    );
+    std::fs::remove_file(session.path().join("journal-link.dll")).unwrap();
+    let tree_ctx = ctx_with(
+        std::slice::from_ref(&dir_op),
+        relaxed_scope_of(&session),
+        Box::new(LiveHost),
+    );
+    let outcome = validate(&tree_ctx, &GateItem::new(&dir_op, long()));
+    assert!(matches!(outcome, GateOutcome::Pass(_)), "{outcome:?}");
+}
+
+/// The scope of `session` in its store.
+fn relaxed_scope_of(session: &crate::storage::SessionDir) -> StoreScope {
+    session
+        .roots()
+        .store_scope::<&Path>(session.id(), &[])
+        .unwrap()
+}
+
 #[test]
 fn tree_walk_does_not_traverse_a_junction_and_enforces_the_blast_radius() {
     let s = Scratch::new("tree");
@@ -941,6 +1003,74 @@ fn a_quarantine_dir_replaced_after_the_store_checked_it_is_refused() {
     );
     // Nothing was moved anywhere.
     assert_eq!(std::fs::read(&f).unwrap(), b"cfg");
+}
+
+/// The destination check of a locked item (no checked handle on the source, only its path and the
+/// volume serial of its stamp): the same rules and the same comparison with the store's op directory.
+#[test]
+fn the_destination_check_by_source_path_compares_with_the_store_too() {
+    let s = Scratch::new("destfor");
+    let (session, scope) = relaxed_session(&s);
+    let f = s.file(r"src\held.dll", b"held");
+    let op = mv(&f);
+    let ctx = ctx_with(std::slice::from_ref(&op), scope, Box::new(LiveHost));
+    let serial = path_stamp(&validate(&ctx, &GateItem::new(&op, long())))
+        .identity
+        .volume_serial;
+
+    let q1 = session
+        .create_op_dir(Path::new(&f), serial, OpId(1))
+        .unwrap();
+    let dest = check_quarantine_destination_for(&ctx, &f, serial, &q1, "held.dll").unwrap();
+    assert_eq!(
+        dest.path(),
+        q1.item_path("held.dll").to_str().unwrap(),
+        "{dest:?}"
+    );
+    assert_eq!(dest.facts().parent_volume_serial, Some(serial));
+    // Another volume serial than the parent's: refused.
+    assert_refused(
+        &verdict(check_quarantine_destination_for(
+            &ctx,
+            &f,
+            serial ^ 1,
+            &q1,
+            "held.dll",
+        )),
+        Blocker::CannotBackUp,
+        live_reason::QUARANTINE_OTHER_VOLUME,
+    );
+    // A source in the store: refused.
+    let in_store = q1.item_path("other.dll");
+    assert_refused(
+        &verdict(check_quarantine_destination_for(
+            &ctx,
+            in_store.to_str().unwrap(),
+            serial,
+            &q1,
+            "held.dll",
+        )),
+        Blocker::DenyListed {
+            rule: live_reason::QUARANTINE_OVERLAP.into(),
+        },
+        live_reason::QUARANTINE_OVERLAP,
+    );
+
+    // The op directory replaced after the store checked it.
+    let q2 = session
+        .create_op_dir(Path::new(&f), serial, OpId(2))
+        .unwrap();
+    let q2_path = q2.path().to_str().unwrap().to_owned();
+    std::fs::rename(&q2_path, format!("{q2_path}-moved")).unwrap();
+    std::fs::create_dir(&q2_path).unwrap();
+    assert_refused(
+        &verdict(check_quarantine_destination_for(
+            &ctx, &f, serial, &q2, "held.dll",
+        )),
+        Blocker::CannotBackUp,
+        reason::QUARANTINE_DIR_DIFFERS,
+    );
+    assert_eq!(std::fs::read(&f).unwrap(), b"held");
 }
 
 /// A destination check as an outcome, for [`assert_refused`].

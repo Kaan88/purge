@@ -712,6 +712,53 @@ fn link_names(path: &str) -> Option<Vec<String>> {
     )
 }
 
+/// Whether every name of the file at `path` (plain form, `n_links` names, the object `identity`) lies
+/// inside the plan (G6): a path this run removes whole or below one, or a name strictly inside one of
+/// this session's quarantine directories ([`StoreScope::quarantine_dirs`]) where an earlier op of the
+/// session moved the file's other name. Such a quarantine name counts only when it opens, without
+/// following a final reparse point, to a file with `identity` whose final path is that name: the path
+/// prefix alone proves nothing. `None` when the names cannot be listed.
+fn links_inside(ctx: &GateCtx, path: &str, n_links: u32, identity: FileIdentity) -> Option<bool> {
+    let names = link_names(path)?;
+    let quarantined: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| quarantined_link(ctx, name, identity))
+        .collect();
+    let inside: Vec<&str> = ctx
+        .removed_whole
+        .iter()
+        .map(String::as_str)
+        .chain(quarantined)
+        .collect();
+    Some(live::links_inside_plan(&names, n_links, &inside))
+}
+
+/// Whether `name` lies strictly inside one of this session's quarantine directories and is the file
+/// `identity` (a plain file, its final path `name`).
+fn quarantined_link(ctx: &GateCtx, name: &str, identity: FileIdentity) -> bool {
+    let in_quarantine = ctx
+        .scope
+        .quarantine_dirs()
+        .iter()
+        .any(|dir| prefix::is_inside(name, dir));
+    in_quarantine
+        && ext(name)
+            .and_then(|p| FileHandle::open(&p).ok())
+            .is_some_and(|handle| {
+                let same_file = handle.metadata().is_ok_and(|m| {
+                    !m.is_dir
+                        && m.reparse_tag == 0
+                        && m.file_id.volume_serial == identity.volume_serial
+                        && m.file_id.id == identity.file_id
+                });
+                same_file
+                    && handle
+                        .final_path()
+                        .is_ok_and(|at| prefix::is_same(strip_verbatim(&at), name))
+            })
+}
+
 /// What a walk below a directory moved whole found.
 #[derive(Debug, Clone, Default)]
 struct Walk {
@@ -798,16 +845,20 @@ fn walk_tree(ctx: &GateCtx, root: &str, identity: FileIdentity, max: u32) -> Res
             if files > max {
                 return Err(too_large());
             }
-            let n_links = ext(&child)
+            let links = ext(&child)
                 .and_then(|p| FileHandle::open(&p).ok())
                 .and_then(|h| h.metadata().ok())
-                .map(|m| m.n_links);
-            match n_links {
+                .map(|m| {
+                    let identity = FileIdentity {
+                        volume_serial: m.file_id.volume_serial,
+                        file_id: m.file_id.id,
+                    };
+                    (m.n_links, identity)
+                });
+            match links {
                 None => walk.facts.complete = false,
-                Some(n) if n > 1 => {
-                    let inside = link_names(&child).is_some_and(|names| {
-                        live::links_inside_plan(&names, n, &ctx.removed_whole)
-                    });
+                Some((n, identity)) if n > 1 => {
+                    let inside = links_inside(ctx, &child, n, identity) == Some(true);
                     if !inside {
                         walk.facts.hard_links_outside_plan += 1;
                     }
@@ -850,12 +901,13 @@ fn collect_path(
     let security = ctx.host.file_security(security);
     let n_links = meta.as_ref().map(|m| m.n_links);
     let is_dir = meta.as_ref().map(|m| m.is_dir);
-    let links_inside_plan = match (n_links, is_dir, final_path.as_deref()) {
-        (Some(n), Some(false), Some(path)) if n > 1 => link_names(strip_verbatim(path))
-            .map(|names| live::links_inside_plan(&names, n, &ctx.removed_whole)),
-        (Some(n), _, _) if n > 1 => None,
-        (Some(_), _, _) => Some(true),
-        (None, _, _) => None,
+    let links_inside_plan = match (n_links, is_dir, final_path.as_deref(), identity) {
+        (Some(n), Some(false), Some(path), Some(id)) if n > 1 => {
+            links_inside(ctx, strip_verbatim(path), n, id)
+        }
+        (Some(n), ..) if n > 1 => None,
+        (Some(_), ..) => Some(true),
+        (None, ..) => None,
     };
 
     // The walk runs only below the plain directory the plan names; anything else is refused before the
@@ -1226,6 +1278,15 @@ fn open_destination(destination: &str) -> (DestinationFacts, Option<(DestDir, St
     }
 }
 
+/// The [`DestinationFacts`] of `destination`, read as the destination checks read them (a no-follow
+/// handle on its parent, the leaf probed while that handle's final path stays the same); unknown facts
+/// stay `None`, which the guard refuses. For callers that judge a destination they do not rename into
+/// by handle (the locked-file ladder's facts by path). Nothing is compared with the store's op
+/// directory: [`check_quarantine_destination_for`] does that.
+pub fn destination_facts_at(destination: &str) -> DestinationFacts {
+    open_destination(destination).0
+}
+
 /// Whether `source` may be moved to `<op_dir>\<leaf>` in this session's quarantine
 /// ([`live::check_quarantine_destination`]): `<quarantine dir>\<op>\<leaf>`, same volume, parent the plain
 /// directory its path names, nothing there yet.
@@ -1240,12 +1301,27 @@ pub fn check_quarantine_destination(
     op_dir: &QuarantineDir,
     leaf: &str,
 ) -> Result<CheckedDest, Refusal> {
+    let serial = source.stamp().identity.volume_serial;
+    check_quarantine_destination_for(ctx, source.path(), serial, op_dir, leaf)
+}
+
+/// [`check_quarantine_destination`] for an item that has no [`CheckedPath`] because no acting handle
+/// could be opened on it (the locked-file ladder's boot-time move): `source` is the item's recorded
+/// path and `source_serial` the volume serial its validation recorded (`0` is unknown and refused).
+/// The same checks, the same comparison of the opened directory with the store's `op_dir`.
+pub fn check_quarantine_destination_for(
+    ctx: &GateCtx,
+    source: &str,
+    source_serial: u64,
+    op_dir: &QuarantineDir,
+    leaf: &str,
+) -> Result<CheckedDest, Refusal> {
     let item_path = op_dir.item_path(leaf);
     let destination = item_path.to_str().ok_or_else(|| rule(reason::PATH_FORM))?;
     let (facts, parent) = open_destination(destination);
     let check = QuarantineCheck {
-        source: source.path(),
-        source_volume_serial: Some(source.stamp().identity.volume_serial),
+        source,
+        source_volume_serial: Some(source_serial),
         destination,
     };
     live::check_quarantine_destination(&check, &facts, &ctx.scope)?;

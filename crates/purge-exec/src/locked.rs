@@ -85,13 +85,21 @@
 //! Every access goes through [`PendingRenames`]: [`SystemPendingRenames`] over `purge_win::fs_write`, and
 //! `MemoryPendingRenames` (tests and `test-support`) over a byte buffer with the same cutting code. Pairs
 //! of other programs are never touched or reordered: registering appends, removing cuts the exact byte
-//! range of our pair and only after the list showed it exactly once.
+//! range of our pair, and only when one compared read-modify-write finds it exactly once
+//! ([`PendingRenames::remove_counted`]).
+//!
+//! # The boot move's destination
+//!
+//! Row d is asked through [`LadderEnv::check_destination`]. With [`StoreLadder`] ([`Ladder::in_store`])
+//! the op directory is opened through the store's checks and the directory the destination facts are read
+//! from must be that very directory ([`gate::check_quarantine_destination_for`]); [`LiveLadder`]
+//! ([`Ladder::live`]) reads the same facts by path without that comparison.
 
 use std::path::{Path, PathBuf};
 
 use purge_guard::deny::Exemptions;
 use purge_guard::live::{
-    self, BootMove, DestinationFacts, FileIdentity, PathStamp, QuarantineCheck, StoreScope,
+    self, BootMove, DestinationFacts, FileIdentity, PathStamp, QuarantineCheck, Refusal, StoreScope,
 };
 use purge_model::exec::journal::{
     FileFacts, Intent, ItemFacts, Reconcile, ReconcileResult, UndoOutcome,
@@ -102,7 +110,7 @@ use purge_model::exec::op::{
 use purge_model::exec::session::Locker;
 use purge_model::{Blocker, CandidateId, FileTime};
 use purge_win::fs::FileHandle;
-use purge_win::fs_write::{self, DestDir, FsError, MoveHandle, PendingPair, extended_path};
+use purge_win::fs_write::{self, FsError, MoveHandle, PendingPair, extended_path, strip_marker};
 use purge_win::os::Win32Error;
 use purge_win::rm::RebootReasons;
 
@@ -146,6 +154,9 @@ pub mod reason {
     pub const FOREIGN_TOKEN: &str = "lock.foreign-token";
     /// A boot-time delete was asked for: it is never chosen without its own consent prompt.
     pub const BOOT_DELETE: &str = "lock.boot-delete-needs-consent";
+    /// The op directory of the boot move's destination did not pass the store's checks (missing,
+    /// another op, session or volume, or a failed integrity check).
+    pub const QUARANTINE_DIR: &str = "lock.quarantine-dir-unchecked";
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -283,8 +294,8 @@ pub enum SourceState {
     Unreadable(u32),
 }
 
-/// The live facts the ladder needs. [`LiveLadder`] reads them from the system; tests inject verdicts a
-/// test machine cannot produce unelevated (an admin-only ancestor chain).
+/// The live facts the ladder needs. [`LiveLadder`] and [`StoreLadder`] read them from the system; tests
+/// inject verdicts a test machine cannot produce unelevated (an admin-only ancestor chain).
 pub trait LadderEnv {
     /// The boot-move verdict on the item and its ancestors ([`gate::admin_only_ancestors`]).
     fn ancestors(&self, source: &str) -> BootMove;
@@ -292,9 +303,31 @@ pub trait LadderEnv {
     fn destination(&self, destination: &str) -> DestinationFacts;
     /// A read-only, no-follow look at `path`.
     fn look(&self, path: &str) -> SourceState;
+    /// Row d of the boot-move rung: the verdict on `item`'s quarantine destination
+    /// ([`LockedItem::quarantine_path`]) for a move from `source` within `scope`, and the facts it was
+    /// given. By default [`live::check_quarantine_destination`] over [`LadderEnv::destination`];
+    /// [`StoreLadder`] also requires the directory read to be the store's checked op directory.
+    fn check_destination(
+        &self,
+        scope: &StoreScope,
+        item: &LockedItem,
+        source: &str,
+    ) -> Result<DestinationFacts, Refusal> {
+        let destination = item.quarantine_path();
+        let facts = self.destination(destination);
+        let check = QuarantineCheck {
+            source,
+            source_volume_serial: Some(item.validated.volume_serial),
+            destination,
+        };
+        live::check_quarantine_destination(&check, &facts, scope)?;
+        Ok(facts)
+    }
 }
 
-/// The facts as the system gives them.
+/// The facts as the system gives them, the destination read by path ([`gate::destination_facts_at`]): the
+/// directory read is not compared with the store's op directory. Prefer [`StoreLadder`] where the session
+/// is at hand ([`Ladder::in_store`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LiveLadder;
 
@@ -304,11 +337,65 @@ impl LadderEnv for LiveLadder {
     }
 
     fn destination(&self, destination: &str) -> DestinationFacts {
-        live_destination(destination)
+        gate::destination_facts_at(destination)
     }
 
     fn look(&self, path: &str) -> SourceState {
         look(path)
+    }
+}
+
+/// The facts as the system gives them, with the boot move's destination checked against this session's
+/// store (wave 2 review M3): the op directory is opened through the store's checks
+/// (`SessionDir::open_op_dir`, which also requires the recorded op and session in its path and the
+/// recorded volume), and the directory the gate reads the destination facts from must be that very
+/// directory ([`gate::check_quarantine_destination_for`]: equal volume serial and file id).
+#[derive(Debug, Clone, Copy)]
+pub struct StoreLadder<'a> {
+    ctx: &'a GateCtx,
+    session: &'a SessionDir,
+}
+
+impl<'a> StoreLadder<'a> {
+    /// The facts of the run with gate context `ctx` in session `session`.
+    pub fn new(ctx: &'a GateCtx, session: &'a SessionDir) -> StoreLadder<'a> {
+        StoreLadder { ctx, session }
+    }
+}
+
+impl LadderEnv for StoreLadder<'_> {
+    fn ancestors(&self, source: &str) -> BootMove {
+        gate::admin_only_ancestors(source)
+    }
+
+    fn destination(&self, destination: &str) -> DestinationFacts {
+        gate::destination_facts_at(destination)
+    }
+
+    fn look(&self, path: &str) -> SourceState {
+        look(path)
+    }
+
+    /// Opens the op directory of `item.quarantine_path()` through the store (op, session and volume as
+    /// recorded) and asks [`gate::check_quarantine_destination_for`] with it. `scope` is not used: the
+    /// gate context's own scope (this session's) decides.
+    fn check_destination(
+        &self,
+        _scope: &StoreScope,
+        item: &LockedItem,
+        source: &str,
+    ) -> Result<DestinationFacts, Refusal> {
+        let serial = item.validated.volume_serial;
+        let (op_dir, leaf) = self
+            .session
+            .open_op_dir(Path::new(item.quarantine_path()), item.op, serial)
+            .map_err(|_| Refusal {
+                blocker: Blocker::CannotBackUp,
+                reason: reason::QUARANTINE_DIR,
+            })?;
+        let dest =
+            gate::check_quarantine_destination_for(self.ctx, source, serial, &op_dir, &leaf)?;
+        Ok(dest.facts().clone())
     }
 }
 
@@ -335,35 +422,6 @@ fn look(path: &str) -> SourceState {
     }
 }
 
-/// The [`DestinationFacts`] of `destination`, from a no-follow handle on its parent (the same reading as
-/// the gate's for an acting handle). Whether the leaf is taken counts only while the parent handle's final
-/// path is the same before and after the probe. Unknown facts stay `None`, which the guard refuses.
-fn live_destination(destination: &str) -> DestinationFacts {
-    let mut facts = DestinationFacts::default();
-    let target = Path::new(destination);
-    let Some(parent) = target.parent().and_then(|p| extended_path(p).ok()) else {
-        return facts;
-    };
-    let Ok(dir) = DestDir::open(&parent) else {
-        return facts;
-    };
-    let Ok(dir_facts) = dir.facts() else {
-        return facts;
-    };
-    facts.parent_reparse_tag = Some(dir_facts.reparse_tag);
-    facts.parent_is_dir = Some(dir_facts.is_dir);
-    facts.parent_volume_serial = Some(dir_facts.volume_serial());
-    let occupied = match ext(destination).map(|p| FileHandle::open(&p)) {
-        Some(Ok(_)) => Some(true),
-        Some(Err(e)) if e.is_not_found() => Some(false),
-        _ => None,
-    };
-    let unchanged = dir.as_file().final_path().ok().as_deref() == Some(&dir_facts.final_path);
-    facts.parent_final_path = Some(dir_facts.final_path);
-    facts.occupied = occupied.filter(|_| unchanged);
-    facts
-}
-
 // ---------------------------------------------------------------------------------------------------
 // The boot-time move list
 // ---------------------------------------------------------------------------------------------------
@@ -375,17 +433,42 @@ pub trait PendingRenames {
     /// Appends a rename of `src` to `dst` (both absolute) for the next boot, without
     /// `MOVEFILE_REPLACE_EXISTING`, and reports the pair as stored.
     fn register(&mut self, src: &Path, dst: &Path) -> Result<fs_write::BootMove, FsError>;
-    /// Cuts every occurrence of exactly `pair` (unit for unit) and returns how many were cut. Callers
-    /// count first: [`remove_boot_move`] calls it only after the list showed the pair exactly once.
+    /// Cuts every occurrence of exactly `pair` (unit for unit) and returns how many were cut, whatever
+    /// their number. [`remove_boot_move`] does not use it: it uses [`PendingRenames::remove_counted`].
     fn remove_exact(&mut self, pair: &PendingPair) -> Result<usize, FsError>;
+    /// Cuts the occurrences of exactly `pair` (unit for unit, marker included) only if the list holds
+    /// exactly `expected` of them, and returns that count; any other count is
+    /// [`FsError::PendingCountMismatch`] with the number found, and nothing is changed. Count and cut
+    /// are one compared read-modify-write (`purge_win::fs_write::remove_pending_pairs_exactly`), so a
+    /// copy added between a count and a cut cannot be cut with ours (up to the registry's own two-call
+    /// window, see there).
+    ///
+    /// The default, for implementations without a compared write, counts with
+    /// [`PendingRenames::list`], then calls [`PendingRenames::remove_exact`] and fails with
+    /// [`FsError::PendingCountMismatch`] if that cut another number than counted (it may then have
+    /// changed the list); [`SystemPendingRenames`] and `MemoryPendingRenames` override it.
+    fn remove_counted(&mut self, pair: &PendingPair, expected: usize) -> Result<usize, FsError> {
+        let found = self.list()?.iter().filter(|p| *p == pair).count();
+        if found != expected {
+            return Err(FsError::PendingCountMismatch { found });
+        }
+        if expected == 0 {
+            return Ok(0);
+        }
+        let removed = self.remove_exact(pair)?;
+        if removed != expected {
+            return Err(FsError::PendingCountMismatch { found: removed });
+        }
+        Ok(removed)
+    }
 }
 
 /// The real list in `HKLM\SYSTEM\<current control set>\Control\Session Manager`. Registering and
 /// removing need administrative rights; reading does not.
 ///
-/// The registry has no compare-and-swap: between the count [`remove_boot_move`] takes and the removal a
-/// writer could add the same pair (only Purge writes pairs into its own quarantine), and
-/// `remove_pending_pairs` itself has a two-call window (see its docs).
+/// [`PendingRenames::remove_counted`] is `remove_pending_pairs_exactly`: count and cut in one compared
+/// read-modify-write of `PendingFileRenameOperations`. The registry has no compare-and-swap, so that call
+/// still has a two-call window (see its docs).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemPendingRenames;
 
@@ -401,10 +484,16 @@ impl PendingRenames for SystemPendingRenames {
     fn remove_exact(&mut self, pair: &PendingPair) -> Result<usize, FsError> {
         fs_write::remove_pending_pairs(std::slice::from_ref(pair))
     }
+
+    fn remove_counted(&mut self, pair: &PendingPair, expected: usize) -> Result<usize, FsError> {
+        fs_write::remove_pending_pairs_exactly(pair, expected)
+    }
 }
 
 /// An in-memory `PendingFileRenameOperations` value (raw `REG_MULTI_SZ` bytes) for tests. Removal uses
-/// `purge_win::fs_write::remove_pairs_from_value`, the cutting code of the real removal.
+/// the cutting code of the real removal: `purge_win::fs_write::remove_pairs_from_value` for
+/// [`PendingRenames::remove_exact`], `remove_pair_exactly_from_value` (count and cut in one step,
+/// nothing changed on another count) for [`PendingRenames::remove_counted`].
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemoryPendingRenames {
@@ -412,7 +501,8 @@ pub struct MemoryPendingRenames {
     marker: String,
     /// How many times [`PendingRenames::register`] was called.
     pub registers: usize,
-    /// How many times [`PendingRenames::remove_exact`] was called.
+    /// How many times [`PendingRenames::remove_exact`] or [`PendingRenames::remove_counted`] was
+    /// called.
     pub removals: usize,
     /// Makes every call fail with this error.
     pub fail: Option<FsError>,
@@ -506,13 +596,15 @@ impl PendingRenames for MemoryPendingRenames {
         }
         Ok(edit.removed)
     }
-}
 
-/// An entry without the leading `*<digits>` marker newer Windows builds may write.
-fn strip_marker(entry: &str) -> &str {
-    match entry.strip_prefix('*') {
-        Some(rest) => rest.trim_start_matches(|c: char| c.is_ascii_digit()),
-        None => entry,
+    fn remove_counted(&mut self, pair: &PendingPair, expected: usize) -> Result<usize, FsError> {
+        self.check()?;
+        self.removals += 1;
+        let edit = fs_write::remove_pair_exactly_from_value(&self.value, pair, expected)?;
+        if edit.removed > 0 {
+            self.value = edit.value.unwrap_or_default();
+        }
+        Ok(edit.removed)
     }
 }
 
@@ -788,6 +880,17 @@ impl<'a> Ladder<'a> {
         }
     }
 
+    /// The ladder with the facts of `env` (live, the destination checked against the session's store),
+    /// the scope of `env`'s gate context and the default consent answer ([`DenyAll`]).
+    pub fn in_store(env: &'a StoreLadder<'a>, lockers: &'a dyn LockerQuery) -> Ladder<'a> {
+        Ladder {
+            env,
+            scope: env.ctx.scope(),
+            lockers,
+            consent: &DenyAll,
+        }
+    }
+
     /// Climbs the ladder for `item` up to the decision (see the module docs). Changes nothing.
     ///
     /// `journalled` is the op's intent when the file action already wrote one (a lock met by the rename
@@ -966,18 +1069,15 @@ impl<'a> Ladder<'a> {
             );
         }
         let destination = item.quarantine_path.as_str();
-        let facts = self.env.destination(destination);
-        let check = QuarantineCheck {
-            source,
-            source_volume_serial: Some(serial),
-            destination,
+        let facts = match self.env.check_destination(self.scope, item, source) {
+            Ok(facts) => facts,
+            Err(refusal) => {
+                return hold(
+                    refusal.reason,
+                    format!("the quarantine destination {destination} was refused ({refusal})"),
+                );
+            }
         };
-        if let Err(refusal) = live::check_quarantine_destination(&check, &facts, self.scope) {
-            return hold(
-                refusal.reason,
-                format!("the quarantine destination {destination} was refused ({refusal})"),
-            );
-        }
         if facts.parent_volume_serial != Some(serial) {
             return hold(
                 reason::OTHER_VOLUME,
@@ -1280,16 +1380,16 @@ pub fn undo_locked(op: &OpState, store: &dyn PendingRenames) -> Option<LockUndo>
 }
 
 /// Cancels a pending boot move under the undo intent `token`: removes our pair, and only ours, only
-/// when it stands in the list exactly once (the marker aside), cutting exactly the stored spelling. Hits
-/// `undo.act.after` after the removal. Foreign pairs stay byte-identical.
+/// when it stands in the list exactly once (the marker aside), cutting exactly the stored spelling with
+/// [`PendingRenames::remove_counted`] (count and cut in one compared read-modify-write, expected count
+/// 1). Hits `undo.act.after` after the removal. Foreign pairs stay byte-identical.
 ///
 /// | Listed | Result |
 /// |---|---|
 /// | once, one cut | `Restored` |
-/// | not at all | `AlreadyRestored` |
-/// | more than once | `Failed{Internal}`, nothing removed |
+/// | not at all (in the list, or at the removal) | `AlreadyRestored` |
+/// | more than once (in the list, or at the removal) | `Failed{Internal}`, nothing removed |
 /// | list unreadable, removal failed | `Failed{..}` with the error |
-/// | once, but the cut removed another count | `Failed{VerifyFailed}` |
 pub fn remove_boot_move(
     removal: PairRemoval,
     token: &UndoToken,
@@ -1336,11 +1436,21 @@ pub fn remove_boot_move(
             );
         }
     };
-    let removed = store.remove_exact(&stored);
+    // Count and cut in one compared read-modify-write: a copy that appeared since the list above is
+    // never cut with ours.
+    let removed = store.remove_counted(&stored, 1);
     fault::point(fault::UNDO_ACT_AFTER);
     match removed {
         Ok(1) => UndoOutcome::Restored,
-        Ok(0) => UndoOutcome::AlreadyRestored,
+        Ok(0) | Err(FsError::PendingCountMismatch { found: 0 }) => UndoOutcome::AlreadyRestored,
+        Err(FsError::PendingCountMismatch { found }) => failed(
+            FailCode::Internal,
+            None,
+            format!(
+                "the boot-time move stands {found} times in the list at the removal; Purge added it \
+                 once, so nothing was removed"
+            ),
+        ),
         Ok(n) => failed(
             FailCode::VerifyFailed,
             None,
@@ -1455,14 +1565,18 @@ impl Reconciled {
 enum Destination {
     Empty,
     Ours,
-    Other(FileIdentity, PathBuf),
+    /// Another object: its identity, and the handle that identity was read from when it could be
+    /// opened for a rename (the move back acts on that very handle).
+    Other(FileIdentity, Option<MoveHandle>),
     Unknown(String),
 }
 
 /// Reconciles every op of `state` whose boot-time move is pending ([`JournalState::pending_reboot`]); see
-/// [`ReconcileVerdict`] for the table. The list is read once. A mismatch is moved back at once, by
-/// handle, into the parent of the source path after [`gate::check_undo_path`], and never over anything;
-/// the move happens before the caller journals it.
+/// [`ReconcileVerdict`] for the table. The list is read once. The quarantine destination is reached
+/// through the store-checked op directory (`SessionDir::open_op_dir`) and its handle's final path, and a
+/// mismatch is moved back at once with the very handle its identity was read from, into the parent of the
+/// source path after [`gate::check_undo_path`], never over anything; the move happens before the caller
+/// journals it.
 ///
 /// The undo-destination check takes the exemptions of the op's journal `validated` record, which the
 /// caller handed to `ctx` (`GateCtx::record`, read with `GateCtx::exemptions`). An op without a record
@@ -1532,7 +1646,7 @@ pub fn reconcile(
                 ),
                 Destination::Other(identity, item) => {
                     let ex = ctx.exemptions(op.op).unwrap_or_default();
-                    let moved = move_back(ctx, &item, identity, original_path, *volume_serial, ex);
+                    let moved = move_back(ctx, item, identity, original_path, *volume_serial, ex);
                     let alert = ReconcileAlert {
                         op: op.op,
                         original_path: original_path.clone(),
@@ -1588,7 +1702,23 @@ pub fn reconcile(
         .collect()
 }
 
+/// `path` without a `\\?\` prefix in front of a drive path.
+fn strip_verbatim(path: &str) -> &str {
+    match path.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest,
+        _ => path,
+    }
+}
+
 /// Looks at the op's quarantine destination through the store-checked op directory.
+///
+/// The item is reached through that directory's handle: its name is joined to the final path the store's
+/// handle reports now (not to the journal's spelling), it is opened without following a reparse point,
+/// and it counts only while its own final path is that directory's (read from the store's handle again
+/// after the open) plus the leaf. `purge-win` has no open relative to a directory handle, so this is a
+/// path open checked on both handles. The identity is read from the handle a mismatch is then moved back
+/// with ([`Destination::Other`]); only when that handle cannot be had (in use) is a read-only handle used
+/// for the identity, and nothing is moved.
 fn destination_state(
     session: &SessionDir,
     op: OpId,
@@ -1600,21 +1730,39 @@ fn destination_state(
             Ok(opened) => opened,
             Err(e) => return Destination::Unknown(e.to_string()),
         };
-    let item = dir.item_path(&leaf);
-    let Some(p) = item.to_str().and_then(ext) else {
+    let dir_now = || dir.dir().handle().final_path().ok();
+    let Some(before) = dir_now() else {
+        return Destination::Unknown("the op directory's path cannot be read".to_owned());
+    };
+    let inside = format!(r"{}\{leaf}", before.trim_end_matches('\\'));
+    let Some(p) = ext(strip_verbatim(&inside)) else {
         return Destination::Unknown("the path has no extended form".to_owned());
     };
-    let handle = match FileHandle::open(&p) {
-        Ok(handle) => handle,
-        Err(e) if e.is_not_found() => return Destination::Empty,
-        Err(e) => return Destination::Unknown(format!("Win32 error {}", e.0)),
+    let mover = match MoveHandle::open(&p) {
+        Ok(mover) => Some(mover),
+        Err(FsError::NotFound) => return Destination::Empty,
+        Err(_) => None,
+    };
+    let read_only;
+    let handle: &FileHandle = match &mover {
+        Some(mover) => mover.as_file(),
+        None => match FileHandle::open(&p) {
+            Ok(opened) => {
+                read_only = opened;
+                &read_only
+            }
+            Err(e) if e.is_not_found() => return Destination::Empty,
+            Err(e) => return Destination::Unknown(format!("Win32 error {}", e.0)),
+        },
     };
     let (Ok(meta), Ok(final_path)) = (handle.metadata(), handle.final_path()) else {
         return Destination::Unknown("its facts cannot be read".to_owned());
     };
-    let inside = format!(r"{}\{leaf}", dir.dir().final_path().trim_end_matches('\\'));
     if !final_path.eq_ignore_ascii_case(&inside) {
         return Destination::Unknown(format!("its final path is {final_path}"));
+    }
+    if dir_now().as_deref() != Some(before.as_str()) {
+        return Destination::Unknown("the op directory moved while it was looked at".to_owned());
     }
     let identity = FileIdentity {
         volume_serial: meta.file_id.volume_serial,
@@ -1623,21 +1771,23 @@ fn destination_state(
     if identity == expected && meta.reparse_tag == 0 && !meta.is_dir {
         Destination::Ours
     } else {
-        Destination::Other(identity, p)
+        Destination::Other(identity, mover)
     }
 }
 
-/// Moves the object at `item` (inside the op directory, with identity `found`) back to `original`, by
-/// handle into the parent [`gate::check_undo_path`] checked. A rename never replaces anything.
+/// Moves the object in quarantine whose identity `found` was read from `handle` back to `original`,
+/// renaming that very handle into the parent [`gate::check_undo_path`] checked. A rename never replaces
+/// anything. Without a handle (the object could not be opened for a rename) nothing is moved.
 fn move_back(
     ctx: &GateCtx,
-    item: &Path,
+    handle: Option<MoveHandle>,
     found: FileIdentity,
     original: &str,
     volume_serial: u64,
     exemptions: Exemptions,
 ) -> Result<(), String> {
-    let handle = MoveHandle::open(item).map_err(|e| e.to_string())?;
+    let handle =
+        handle.ok_or_else(|| "it cannot be opened for a rename (in use or denied)".to_owned())?;
     let now = handle.file_id().map_err(|e| e.to_string())?;
     if now.volume_serial != found.volume_serial || now.id != found.file_id {
         return Err("the object changed while it was looked at".to_owned());
@@ -1675,8 +1825,10 @@ pub enum RetryAttempt {
 
 /// The move of a held item, supplied by the executor (it belongs to the file action): validate the item
 /// again through the handle-based gate against the op's validated stamp and the journalled exemptions,
-/// then move it by handle to the intent's `MoveBack::quarantine_path` (the op directory already exists:
-/// `SessionDir::open_op_dir`). A retry never registers a boot-time move.
+/// then move it by handle to the intent's `MoveBack::quarantine_path`. For a file locked at the act the
+/// op directory still exists (`SessionDir::open_op_dir`); for a directory, or a rename that failed, the
+/// act removed its empty op directory again, and the retry makes it anew with
+/// [`crate::act_fs::create_op_dir_for`]. A retry never registers a boot-time move.
 pub trait RetryMove {
     /// Tries op `op` once more; `intent` is its journalled intent.
     fn retry(&mut self, op: &OpState, intent: &Intent) -> RetryAttempt;

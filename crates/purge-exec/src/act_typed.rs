@@ -70,6 +70,7 @@ use purge_win::appx_write::{self, DeploymentError, RemovalScope, RemoveOutcome};
 use serde::{Deserialize, Serialize};
 
 use crate::fault;
+use crate::gate::GateCtx;
 use crate::journal::{IntentToken, sha256_bytes};
 use crate::storage::{BackupKind, SessionDir, StorageError, StoreFile, backup_rel};
 
@@ -724,8 +725,51 @@ impl PackageRemoval {
     }
 }
 
+/// [`prepare_remove_package`] for op `op` as journalled: the plan item and the op are taken from the op's
+/// `validated` record that the executor wrote and handed to the gate context (`GateCtx::record`), so
+/// they cannot differ from what the journal holds. This is the form the executor uses.
+///
+/// An op with no such record (never validated, refused at validation, or a package recorded as
+/// [`ItemFacts::Absent`], which `GateCtx::record` keeps no record of) and a record of another kind (not
+/// an [`ExecOp::RemovePackage`] with [`ItemFacts::Package`]) are [`Prepared::Decided`]
+/// `Failed{Internal}`, before any system call.
+// The error type of `prepare_remove_package`, unchanged.
+#[allow(clippy::result_large_err)]
+pub fn prepare_remove_package_recorded(
+    backend: &dyn PackageBackend,
+    ctx: &GateCtx,
+    session: &SessionDir,
+    op: OpId,
+    ack: IrreversibleAck,
+) -> Result<Prepared, DefinitionError> {
+    let Some((exec_op, record)) = ctx.journalled(op) else {
+        return Ok(Prepared::Decided(TypedResult::failed(
+            FailCode::Internal,
+            None,
+            format!("op {op} has no journalled validated record in this run; nothing done"),
+        )));
+    };
+    let is_package = matches!(exec_op, ExecOp::RemovePackage { .. })
+        && matches!(record.facts, ItemFacts::Package);
+    if !is_package {
+        return Ok(Prepared::Decided(TypedResult::failed(
+            FailCode::Internal,
+            None,
+            format!(
+                "the validated record of op {op} is a {} record, not a package removal; nothing done",
+                exec_op.name()
+            ),
+        )));
+    }
+    prepare_remove_package(backend, session, op, &record.item, exec_op, ack)
+}
+
 /// Decides whether op `op` (plan item `item`, `exec_op` an [`ExecOp::RemovePackage`]) may remove its
 /// package, and if so writes the package's definition file into `session`. Never removes anything.
+///
+/// The lower-level form: the caller vouches that `item` and `exec_op` are those of the op's journalled
+/// `validated` record. The executor uses [`prepare_remove_package_recorded`], which takes them from
+/// that record.
 ///
 /// Returns [`Prepared::Decided`] for: a missing acknowledgement (`Skipped{GateBlocked{ReversibilityNone}}`,
 /// before any system call), an op that is not a package removal or a full name that is not valid

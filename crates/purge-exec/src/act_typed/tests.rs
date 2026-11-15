@@ -433,6 +433,124 @@ fn an_op_that_is_not_typed_is_refused() {
     assert_eq!(fake.lists.get(), 0);
 }
 
+/// A gate context of `s`'s session holding `records` as `GateCtx::record` accepts them.
+fn gate_ctx(s: &Session, records: &[(ExecOp, Validated)]) -> GateCtx {
+    let scope = s
+        .session
+        .roots()
+        .store_scope::<&std::path::Path>(s.session.id(), &[])
+        .unwrap();
+    let ops: Vec<ExecOp> = records.iter().map(|(op, _)| op.clone()).collect();
+    let deny = purge_guard::deny::DenyList::compile(&purge_guard::canon::GuardEnv::default());
+    let mut ctx = GateCtx::new(deny, &ops, scope).unwrap();
+    for (op, record) in records {
+        ctx.record(op, record, 5_000).unwrap();
+    }
+    ctx
+}
+
+fn package_record(n: u32, name: &str, facts: ItemFacts) -> (ExecOp, Validated) {
+    let op = remove_op(name);
+    let record = Validated {
+        op: OpId(n),
+        item: item(n),
+        target: op.target(),
+        facts,
+        exemptions: GateExemptions::default(),
+    };
+    (op, record)
+}
+
+#[test]
+fn the_recorded_form_takes_item_and_op_from_the_journalled_record() {
+    let mut s = Session::new("recorded", &[NAME, OTHER_VERSION]);
+    let file_op = ExecOp::QuarantineMove {
+        path: r"C:\Vendor\App\x.dll".into(),
+    };
+    let file_record = Validated {
+        op: OpId(3),
+        item: item(3),
+        target: file_op.target(),
+        facts: ItemFacts::File(purge_model::exec::journal::FileFacts {
+            final_path: r"C:\Vendor\App\x.dll".into(),
+            file_id: purge_model::exec::op::FileIdHex([7; 16]),
+            volume_serial: 0x1234,
+            reparse_tag: 0,
+            attributes: 0x20,
+            n_links: 1,
+            is_dir: false,
+            size: 1,
+            tree_entries: None,
+            tree_bytes: None,
+        }),
+        exemptions: GateExemptions::default(),
+    };
+    let ctx = gate_ctx(
+        &s,
+        &[
+            package_record(1, NAME, ItemFacts::Package),
+            // A package that was absent at validation: `GateCtx::record` keeps nothing for it.
+            package_record(2, OTHER_VERSION, ItemFacts::Absent),
+            (file_op, file_record),
+        ],
+    );
+    let fake = Fake::new(vec![info(NAME), info(OTHER_VERSION)]);
+    let failed_internal = |p: Prepared| {
+        let r = decided(p);
+        assert!(
+            matches!(
+                r.outcome,
+                ItemOutcome::Failed {
+                    code: FailCode::Internal,
+                    ..
+                }
+            ),
+            "{r:?}"
+        );
+    };
+
+    // Op 2 has no record in the context, op 3 one of another kind, op 9 none at all: nothing is
+    // looked at.
+    for n in [2, 3, 9] {
+        failed_internal(
+            prepare_remove_package_recorded(
+                &fake,
+                &ctx,
+                &s.session,
+                OpId(n),
+                IrreversibleAck::Acknowledged,
+            )
+            .unwrap(),
+        );
+    }
+    assert_eq!(fake.lists.get(), 0);
+
+    // Op 1: the plan item and the op of the record.
+    let removal = ready(
+        prepare_remove_package_recorded(
+            &fake,
+            &ctx,
+            &s.session,
+            OpId(1),
+            IrreversibleAck::Acknowledged,
+        )
+        .unwrap(),
+    );
+    let intent = removal.intent().clone();
+    assert_eq!(
+        (intent.op, &intent.item, &intent.exec_op),
+        (OpId(1), &item(1), &remove_op(NAME))
+    );
+    let token = s.journal.intent(intent).unwrap();
+    let result = remove_package(&fake, removal, &token);
+    s.journal.done(token, result.outcome.clone()).unwrap();
+    assert_eq!(result.outcome, ItemOutcome::Done);
+    assert_eq!(
+        *fake.removed.borrow(),
+        [(NAME.to_owned(), RemovalScope::CurrentUser)]
+    );
+}
+
 #[test]
 fn a_failed_listing_fails_the_item_untouched() {
     let mut s = Session::new("listfail", &[NAME]);
