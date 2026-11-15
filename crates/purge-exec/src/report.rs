@@ -153,10 +153,21 @@ fn finished(state: &JournalState) -> Option<FileTime> {
 ///
 /// The outcome is the one the op stands at after its `reconcile` records (a retried move that
 /// succeeded counts, a boot-time move that was cancelled does not); for a run that has not been
-/// reconciled that is its `done` outcome.
+/// reconciled that is its `done` outcome. A move whose verification failed counts too: its item may be
+/// in quarantine, and undo treats it as changed (`stands_changed`).
 fn quarantined(op: &OpState) -> Option<(u64, u64)> {
     let intent = op.intent.as_ref()?;
-    let moved = stands_changed(op) && effective_outcome(op).is_some_and(|o| o.changed_system());
+    let moved = stands_changed(op)
+        && effective_outcome(op).is_some_and(|o| {
+            o.changed_system()
+                || matches!(
+                    o,
+                    ItemOutcome::Failed {
+                        code: FailCode::VerifyFailed,
+                        ..
+                    }
+                )
+        });
     match (&intent.inverse, &intent.pre) {
         (Inverse::MoveBack { volume_serial, .. }, ItemFacts::File(facts)) if moved => {
             Some((*volume_serial, facts.tree_bytes.unwrap_or(facts.size)))

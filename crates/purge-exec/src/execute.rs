@@ -23,7 +23,7 @@
 //! | 3 | check the store; read the index; size cap over the plan's sizes | | | [`ExecError::Store`]; an unavailable index is a warning and the cap is then not checked |
 //! | 4 | create the session directory | | | [`ExecError::Store`] |
 //! | 5 | write the scan copy `plan.scan.json`, flushed with its directory | | | [`ExecError::ScanCopy`]; no journal exists, the session directory is removed |
-//! | 6 | journal header, then the run's settings | `header`, `settings` (flushed) | `journal.header` | [`ExecError::Journal`]; no item was looked at. Before the header the session directory is removed ([`SessionDir::remove_unstarted`]) |
+//! | 6 | journal header, then the run's settings and its selected ids | `header`, `settings` (flushed) | `journal.header` | [`ExecError::Journal`]; no item was looked at. Before the header the session directory is removed ([`SessionDir::remove_unstarted`]) |
 //! | 7 | validate every selected item, read-only; a path item whose candidate carries a scan-time identity (`item_fp`) must still be that object | one `validated` per item (an item that did not pass: `Refused` or `Absent` facts), flushed after the last | | abort `JournalWriteFailed` |
 //! | 8 | prepare: restore point (per setting), Restart Manager query | | | never: warnings |
 //! | 9 | every item in plan order ([`Run::run_item`]) | see below | see below | see "Aborts" |
@@ -311,6 +311,9 @@ pub struct ExecOutput {
     pub session: SessionId,
     /// The report, built from the journal.
     pub report: ExecReport,
+    /// Whether the journal holds the run's end (`commit` or `aborted`); `false` when the `aborted`
+    /// record could not be written, so the session still waits for recovery.
+    pub closed: bool,
     /// Whether `report.json` was written into the session.
     pub report_written: bool,
     /// Whether the session's entry in the index was written.
@@ -722,6 +725,28 @@ fn run_ops(plan: &BoundPlan) -> Vec<(OpId, ExecOp)> {
         .collect()
 }
 
+/// The risk view of the selected items and their absorbed children (`prepare::risk_reasons`). A key
+/// item whose validation (`facts_of` its op) read the key counts its direct subkeys and itself
+/// (`RiskItem::with_subtree_keys`; review M2 M24): a lower bound of its tree, since deeper levels are
+/// not counted before the act. Without validated facts a key counts as one.
+fn risk_items<'p>(
+    plan: &'p BoundPlan,
+    facts_of: impl Fn(OpId) -> Option<ItemFacts>,
+) -> Vec<RiskItem<'p>> {
+    let mut items = Vec::new();
+    for item in plan.items() {
+        if let Some(candidate) = plan.candidate(item) {
+            let risk = RiskItem::from_candidate(candidate);
+            items.push(match facts_of(item.op) {
+                Some(ItemFacts::Key(key)) => risk.with_subtree_keys(u64::from(key.subkeys) + 1),
+                _ => risk,
+            });
+            items.extend(plan.children(candidate).map(RiskItem::from_candidate));
+        }
+    }
+    items
+}
+
 impl<'a> Run<'a> {
     /// Steps 2 to 6 of the run: the store, the session, the scan copy, the journal header and the
     /// run's settings. A failure before the header removes the session directory again
@@ -765,11 +790,16 @@ impl<'a> Run<'a> {
                 allow_irreversible: plan.allow_irreversible(),
                 volumes: volume_records(env.roots, session.id(), &volumes),
             };
-            let journal = JournalWriter::create_with_settings(
-                &session,
-                header,
-                request.settings.to_journal(),
-            )?;
+            // The selected ids in op order go into the settings record, so that a run stopped in its
+            // validation is bound to its selection again without a search (`rebind_interrupted`).
+            let mut settings = request.settings.to_journal();
+            settings.selected = plan
+                .items()
+                .iter()
+                .filter_map(|item| plan.candidate(item))
+                .map(|candidate| candidate.id.clone())
+                .collect();
+            let journal = JournalWriter::create_with_settings(&session, header, settings)?;
             Ok((ctx, journal))
         })();
         let (ctx, journal) = match opened {
@@ -808,7 +838,8 @@ impl<'a> Run<'a> {
     ///
     /// A run that stopped before every item was validated (a crash at the header or in the validate
     /// pass) acted on nothing; it is continued as if it had not stopped. The plan is bound again with
-    /// the rest of its selection found from the header ([`plan_in::rebind_interrupted`]), the items
+    /// the selection the settings record holds (in an older journal: the rest of it found from the
+    /// header; [`plan_in::rebind_interrupted`]), the items
     /// without a `validated` record are validated now (step 7, for those items only: a journalled
     /// record is never written or validated again) and their records journalled and handed to the gate
     /// context. Step 8 is not repeated: no restore point is asked for (the report says so when the
@@ -1063,13 +1094,10 @@ impl<'a> Run<'a> {
 
     /// Why the plan is high-risk, from its selected items and their absorbed children.
     fn risk_reasons(&self) -> Vec<prepare::RiskReason> {
-        let mut risk_items = Vec::new();
-        for item in self.plan.items() {
-            if let Some(candidate) = self.plan.candidate(item) {
-                risk_items.push(RiskItem::from_candidate(candidate));
-                risk_items.extend(self.plan.children(candidate).map(RiskItem::from_candidate));
-            }
-        }
+        let state = self.ledger.journal.state();
+        let risk_items = risk_items(&self.plan, |op| {
+            state.op(op).map(|journalled| journalled.validated().facts)
+        });
         prepare::risk_reasons(&risk_items, self.plan.scan().mode)
     }
 
@@ -1334,7 +1362,9 @@ impl<'a> Run<'a> {
             .map(|name| name.to_string_lossy().into_owned())
             .ok_or_else(|| StorageError::InvalidPath(locked.path.clone()))?;
         let serial = locked.locked.stamp.identity.volume_serial;
-        let dir = self.session.create_op_dir(source, serial, locked.op)?;
+        // An empty op directory left by a run that stopped before this op's intent is adopted, as the
+        // file action adopts one (review M2 M5); a directory that holds something still refuses.
+        let dir = act_fs::create_op_dir_for(&self.session, source, serial, locked.op)?;
         Ok(dir.item_path(&leaf).to_string_lossy().into_owned())
     }
 
@@ -1628,6 +1658,7 @@ fn close(
     ExecOutput {
         session: session.id().clone(),
         report,
+        closed: durable,
         report_written,
         index_updated,
     }

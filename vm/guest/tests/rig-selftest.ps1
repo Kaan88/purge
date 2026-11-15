@@ -324,7 +324,12 @@ if defined OUT >"%OUT%" echo {"schema":"purge.undo/1","session":"%SESS%","items"
 exit /b 0
 :m2journal
 if "%SUB%"=="fault-points" goto m2fp
+if "%SUB%"=="resume" goto m2recovered
+if "%SUB%"=="rollback" goto m2recovered
 echo journal %SUB% %SESS%: ok
+exit /b 0
+:m2recovered
+echo {"schema":"purge.cli.recovered/1","mode":"%SUB%","sessions":[{"session":"%SESS%","state":"Undone"}]}
 exit /b 0
 :m2fp
 echo journal.header	before the header record
@@ -1173,7 +1178,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm2-crash: start (4 iterations) -> reboot continuation -> matrix (3 + torn); run ok' ($rec.ok -and (@($rec.stages | ForEach-Object { $_.stage }) -join ',') -eq 'start,matrix' -and $rec.stages[0].continuation.kind -eq 'reboot' -and ($script:M2Guest -contains 'reboot from boot-1') -and -not (Failed $j)) "error=$($rec.error) $(Failed $j) stages=$(($rec.stages | ConvertTo-Json -Compress -Depth 4))"
     Check 'm2-crash: matrix rows: exec points x {resume, rollback} + undo points x resume' ($rows.Count -eq 7 -and @($rows | Where-Object { $_.phase -eq 'undo' -and $_.point -eq 'undo.intent' }).Count -eq 1 -and @($rows | Where-Object { $_.point -eq 'act.after' -and $_.after -eq 'rollback' }).Count -eq 1) ($rows | ForEach-Object { "$($_.point)/$($_.phase)/$($_.after)" })
     Check 'm2-crash: every point crashed with 0xC0000409, recovered twice idempotently, passed' (@($rows | Where-Object { $_.hit -and $_.crashed -and $_.recover_idempotent -and $_.pass }).Count -eq 7) (($rows | ForEach-Object { "$($_.tag) hit=$($_.hit) pass=$($_.pass) err=$($_.error)" }) -join ' | ')
-    Check 'm2-crash: an undo-phase row is resumed, then undone again (resume finishes only the undo ops in progress)' (@($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit -and $_.undo_exit -eq 0 }).Count -eq @($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit }).Count -and @($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit }).Count -ge 1) (($rows | Where-Object { $_.phase -eq 'undo' } | ForEach-Object { "$($_.tag) undo_exit=$($_.undo_exit)" }) -join ' | ')
+    Check 'm2-crash: an undo-phase row is resumed to Undone and not undone again (resume finishes the undo)' (@($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit -and $_.undone_by_recovery -eq $true -and $null -eq $_.undo_exit }).Count -eq @($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit }).Count -and @($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit }).Count -ge 1) (($rows | Where-Object { $_.phase -eq 'undo' } | ForEach-Object { "$($_.tag) undone_by_recovery=$($_.undone_by_recovery) undo_exit=$($_.undo_exit)" }) -join ' | ')
     Check 'm2-crash: fault injected through PURGE_FAULT_AT, recover, resume and rollback issued' (@($j.engine.calls | Where-Object { $_.env -eq 'PURGE_FAULT_AT=act.after' }).Count -ge 2 -and @($j.engine.calls | Where-Object { $_.cmd -match ' journal rollback --session s\d+$' }).Count -ge 3 -and @($j.engine.calls | Where-Object { $_.cmd -match ' journal resume --session s\d+$' }).Count -ge 4 -and @($j.engine.calls | Where-Object { $_.cmd -match ' journal recover$' }).Count -ge 14)
     Check 'm2-crash: torn tail and torn middle variants recorded' ($j.results.torn.tail.crashed -and $j.results.torn.middle.crashed -and $null -ne $j.results.torn.middle.recover_exit -and (Test-Path (Join-Path $script:RunsDir 'm2-crash\crash-torn.json')))
     Check 'm2-crash: the continuation marker was archived as continue-1.json' ((Test-Path (Join-Path $script:RunsDir 'm2-crash\continue-1.json')) -and -not (Test-Path (Join-Path $script:RunsDir 'm2-crash\continue.json')))

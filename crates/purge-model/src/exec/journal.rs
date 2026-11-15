@@ -211,6 +211,11 @@ pub struct RunSettings {
     pub key_limit: u64,
     /// When the run asks for a restore point.
     pub restore_point: RestorePointPolicy,
+    /// The selected candidate ids in op order (op 1 first), so that a run interrupted before every
+    /// item was validated is bound to its selection again without searching for it (review M2 M3).
+    /// Empty in journals written before the field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected: Vec<CandidateId>,
 }
 
 /// The deny-list exemptions an item was judged with (ENGINE_PLAN.md §5.10). The same four inputs as the

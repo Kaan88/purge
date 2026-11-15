@@ -770,15 +770,20 @@ per target, e.g. `UserData`); the session id and where report/journal live; the 
 coming from `quarantine expiring` (entries matched by the item path, `original_path`); a user-data item is
 purged only when `--confirm-user-data <id>...` names it too; the expiry clock override env
 (`PURGE_RIG_NOW_OFFSET_DAYS=400`, overridable with opts `expiry_env`; read by rig-exec builds only); a held item
-retried by a new exec of that item (not a resume of the old session); `journal rollback` after a crash inside
-undo is not run (undo-phase crashes are resumed, which finishes only the undo ops in progress, and then the
-session is undone with `undo --session`).
+retried with `journal retry-held --session <id>` (elevated; each held item of the finished session moved now
+unless still in use, `purge.cli.retried/1` with one `{op, outcome}` per item, exit 10 while one stays held; a
+session that waits for recovery is refused with 8); `journal rollback` after a crash inside undo is not run
+(undo-phase crashes are resumed, which finishes the interrupted undo itself: the ops in progress and the rest
+of its `undo_plan`, so the session ends `Undone` without a second `undo --session`).
 
 `exec` prints the `purge.exec/1` report on stdout (and writes it to `-o`), progress and `session <id> <dir>` on
 stderr; `undo` the `purge.undo/1` report. `journal recover` lists the sessions that need recovery
-(`purge.cli.recover/1`, a probe per open intent) and changes nothing; `journal resume` / `rollback` without
+(`purge.cli.recover/1`, a probe per open intent) and changes no session (the store's integrity check, which
+every verb runs, may rename a rejected session directory aside); `journal resume` / `rollback` without
 `--session` recover every pending session. A new `exec` is refused while a session waits for recovery. Output
-files are never written through a link at the path. There is no `--data-root`: the engine always uses the
+files are never written through a link anywhere on the path: each directory is opened by handle below the
+previous one, a junction or symbolic link on the path is refused, and the file is renamed into place relative
+to the verified directory. There is no `--data-root`: the engine always uses the
 installed store. A build without `rig-exec` refuses every one of these verbs with exit code 5 and touches
 nothing. Exit codes (also in `purge-engine --help`):
 
@@ -796,7 +801,11 @@ nothing. Exit codes (also in `purge-engine --help`):
 | 9 | store or journal integrity failure |
 | 10 | partial: not every item ended done (the document is still written) |
 | 11 | undo ended with conflicts or failures (the document is still written) |
+| 12 | session not closed, or its report or index entry not written (the document is still written) |
 
 An item "ended done" when it is `Done`, `Vanished` or `Skipped(NoLongerEmpty)` (a remove-if-empty whose object
 holds something). So the fixture runs exit 0 and the trap runs exit 10 (deferred and blocked items); the rig
-gates neither on 10. A refusal is any exit other than 0 with no report; the engine refuses with 6.
+gates neither on 10. A refusal is any exit other than 0 with no report; the engine refuses with 6. Exit 0 of
+`exec`, `undo`, `journal resume` / `rollback` and `journal retry-held` also means the session is closed and its
+`report.json` and index entry are written; otherwise the exit is 12 (the document is still printed), and
+`journal resume` completes the record.

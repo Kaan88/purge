@@ -94,9 +94,11 @@ impl Default for ExecSettings {
 
 impl ExecSettings {
     /// The journal form of the settings, for the run's `settings` record (written right after the
-    /// header). [`ExecSettings::from_journal`] is the exact inverse.
+    /// header). [`ExecSettings::from_journal`] is the exact inverse. The selected ids are not settings:
+    /// the run fills them in.
     pub fn to_journal(&self) -> RunSettings {
         RunSettings {
+            selected: Vec::new(),
             user_sid: self.user_sid.clone(),
             long_names_resolved: self.long_names_resolved,
             key_limit: u64::try_from(self.key_limit).unwrap_or(u64::MAX),
@@ -421,12 +423,17 @@ pub const MAX_SELECTION_TRIES: u64 = 1 << 16;
 /// at the journal header or in the validate pass), for resuming it: as [`rebind`] when every item has
 /// its `validated` record.
 ///
-/// The journal holds the header's item count and selection hash, and the `validated` records written
-/// so far, which are the first selected items in plan order. The rest of the selection is found
-/// again: the items that complete it are selectable top-level items after the last validated one,
-/// and the selection is the one, of that count, whose ids hash to the header's selection hash. At
-/// most [`MAX_SELECTION_TRIES`] selections are hashed, in plan order; a selection not found among
-/// them refuses the resume ([`PlanRefusal::JournalMismatch`]), and nothing is guessed.
+/// The journal's `settings` record holds the selected ids in op order (`RunSettings::selected`): the
+/// selection is bound from them as [`bind`] binds one, and they must be the header's number of items,
+/// hash to the header's selection hash, and begin with the journalled ops (same ids and targets).
+///
+/// A journal written before the settings record held the ids is read as before: the header's item
+/// count and selection hash, and the `validated` records written so far, which are the first
+/// selected items in plan order. The rest of the selection is found again: the items that complete
+/// it are selectable top-level items after the last validated one, and the selection is the one, of
+/// that count, whose ids hash to the header's selection hash. At most [`MAX_SELECTION_TRIES`]
+/// selections are hashed, in plan order; a selection not found among them refuses the resume
+/// ([`PlanRefusal::JournalMismatch`]), and nothing is guessed.
 pub fn rebind_interrupted(scan: &ScanDoc, state: &JournalState) -> Result<BoundPlan, PlanRefusal> {
     let header = state.header();
     if state.validated_count() == header.items {
@@ -441,6 +448,13 @@ pub fn rebind_interrupted(scan: &ScanDoc, state: &JournalState) -> Result<BoundP
         )));
     }
     check_structure(scan)?;
+    if let Some(selected) = state
+        .settings()
+        .map(|settings| settings.selected.as_slice())
+        .filter(|selected| !selected.is_empty())
+    {
+        return rebind_selected(scan, state, plan_hash, selected);
+    }
     let known: Vec<CandidateId> = state.ops().map(|op| op.item.clone()).collect();
     let total = usize::try_from(header.items).map_err(|_| mismatch("too many items"))?;
     let missing = total
@@ -485,6 +499,54 @@ pub fn rebind_interrupted(scan: &ScanDoc, state: &JournalState) -> Result<BoundP
     prefix.extend(chosen);
     let items = bind_items(scan, &prefix)?;
     check_order(scan, &items)?;
+    Ok(BoundPlan {
+        scan: scan.clone(),
+        plan_hash,
+        selection_hash: header.selection_hash,
+        items,
+        allow_irreversible: header.allow_irreversible,
+    })
+}
+
+/// [`rebind_interrupted`] of a journal whose settings record holds the selected ids in op order.
+fn rebind_selected(
+    scan: &ScanDoc,
+    state: &JournalState,
+    plan_hash: Sha256Hex,
+    selected: &[CandidateId],
+) -> Result<BoundPlan, PlanRefusal> {
+    let mismatch = |text: String| PlanRefusal::JournalMismatch(text);
+    let header = state.header();
+    let chosen = select(scan, &Selection::Ids(selected.to_vec()))?;
+    let items = bind_items(scan, &chosen)?;
+    check_order(scan, &items)?;
+    let ids: Vec<&CandidateId> = items
+        .iter()
+        .filter_map(|item| scan.items.get(item.index).map(|c| &c.id))
+        .collect();
+    if !ids.iter().copied().eq(selected) || u32::try_from(ids.len()).ok() != Some(header.items) {
+        return Err(mismatch(
+            "the journalled selection is not the header's items in plan order".into(),
+        ));
+    }
+    if selection_hash(selected) != header.selection_hash {
+        return Err(mismatch(
+            "the journalled selection does not hash to the header's selection hash".into(),
+        ));
+    }
+    for op in state.ops() {
+        let item = usize::try_from(op.op.0)
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|position| items.get(position))
+            .and_then(|item| scan.items.get(item.index));
+        if !item.is_some_and(|c| c.id == op.item && c.target == op.target) {
+            return Err(mismatch(format!(
+                "op {} is not item {} of the document",
+                op.op, op.item.0
+            )));
+        }
+    }
     Ok(BoundPlan {
         scan: scan.clone(),
         plan_hash,

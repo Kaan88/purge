@@ -46,14 +46,16 @@ a normal build refuses them with exit code 5):
   journal rollback [--session <id>]
   journal show --session <id>
   journal fault-points
+  journal retry-held --session <id>
   quarantine expiring
   quarantine purge --ids <session/op>... --yes-irreversible [--confirm-user-data <session/op>...]
   plan from-targets <targets.json> -o <plan.json>      test tool of the VM rig
 
   exec reads the sidecar <plan>.scan.json; <hash> is the confirm hash of the plan and the selection.
   <ids.json> is a JSON array of candidate ids (or {\"ids\": [...]}); without --select the plan's
-  preselected items run. Elevation is needed by exec, undo, journal resume / rollback and
-  quarantine purge. A user-data item is purged only when --confirm-user-data names it too.
+  preselected items run. Elevation is needed by exec, undo, journal resume / rollback / retry-held
+  and quarantine purge. A user-data item is purged only when --confirm-user-data names it too.
+  journal retry-held tries the held (in-use) items of a finished session again.
 
 exit codes:
    0  ok
@@ -68,6 +70,7 @@ exit codes:
    9  store or journal integrity failure
   10  partial: not every item ended done (the document is still written)
   11  undo ended with conflicts or failures (the document is still written)
+  12  session not closed, or its report or index entry not written (the document is still written)
 
   --version, -V                             print the version
   --help, -h                                print this help
@@ -104,6 +107,8 @@ pub enum Command {
     JournalShow,
     /// `journal fault-points`.
     JournalFaultPoints,
+    /// `journal retry-held`.
+    JournalRetryHeld,
     /// `quarantine expiring`.
     QuarantineExpiring,
     /// `quarantine purge`.
@@ -132,6 +137,7 @@ impl Command {
             Command::JournalRollback => "journal rollback",
             Command::JournalShow => "journal show",
             Command::JournalFaultPoints => "journal fault-points",
+            Command::JournalRetryHeld => "journal retry-held",
             Command::QuarantineExpiring => "quarantine expiring",
             Command::QuarantinePurge => "quarantine purge",
             Command::PlanFromTargets => "plan from-targets",
@@ -154,6 +160,7 @@ impl Command {
             | Command::JournalRollback
             | Command::JournalShow
             | Command::JournalFaultPoints
+            | Command::JournalRetryHeld
             | Command::QuarantineExpiring
             | Command::QuarantinePurge
             | Command::PlanFromTargets => "M2",
@@ -249,6 +256,8 @@ pub enum ExecVerb {
     JournalShow(String),
     /// `journal fault-points`.
     JournalFaultPoints,
+    /// `journal retry-held --session <id>`.
+    JournalRetryHeld(String),
     /// `quarantine expiring`.
     QuarantineExpiring,
     /// `quarantine purge`.
@@ -267,6 +276,7 @@ impl ExecVerb {
             ExecVerb::JournalRollback(_) => Command::JournalRollback,
             ExecVerb::JournalShow(_) => Command::JournalShow,
             ExecVerb::JournalFaultPoints => Command::JournalFaultPoints,
+            ExecVerb::JournalRetryHeld(_) => Command::JournalRetryHeld,
             ExecVerb::QuarantineExpiring => Command::QuarantineExpiring,
             ExecVerb::QuarantinePurge(_) => Command::QuarantinePurge,
         }
@@ -393,6 +403,10 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
             .map(Invocation::Executor),
         Command::JournalFaultPoints => no_arguments("journal fault-points", &rest)
             .map(|()| Invocation::Executor(ExecVerb::JournalFaultPoints)),
+        Command::JournalRetryHeld => optional_session("journal retry-held", &rest)?
+            .ok_or_else(|| "journal retry-held: needs --session <id>".to_owned())
+            .map(ExecVerb::JournalRetryHeld)
+            .map(Invocation::Executor),
         Command::QuarantineExpiring => no_arguments("quarantine expiring", &rest)
             .map(|()| Invocation::Executor(ExecVerb::QuarantineExpiring)),
         Command::QuarantinePurge => quarantine_purge(&rest)
@@ -457,6 +471,7 @@ fn verb(args: &[String]) -> Result<Verb, String> {
                     ("rollback", Command::JournalRollback),
                     ("show", Command::JournalShow),
                     ("fault-points", Command::JournalFaultPoints),
+                    ("retry-held", Command::JournalRetryHeld),
                 ],
             );
         }
@@ -906,6 +921,10 @@ mod tests {
             ExecVerb::JournalFaultPoints
         );
         assert_eq!(
+            exec_verb("journal retry-held --session s1"),
+            ExecVerb::JournalRetryHeld("s1".into())
+        );
+        assert_eq!(
             exec_verb("quarantine expiring"),
             ExecVerb::QuarantineExpiring
         );
@@ -948,6 +967,8 @@ mod tests {
         assert!(err("undo --session s --data-root d").contains("unknown option"));
         assert!(err("journal recover --session s").contains("unknown option"));
         assert!(err("journal show").contains("--session"));
+        assert!(err("journal retry-held").contains("--session"));
+        assert!(err("journal retry-held --session s --all").contains("unknown option"));
         assert!(err("journal fault-points x").contains("unexpected argument"));
         assert!(err("journal delete").contains("unknown 'journal' sub-verb"));
         assert!(err("quarantine").contains("needs a sub-verb"));

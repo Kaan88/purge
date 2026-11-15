@@ -19,11 +19,12 @@
 //! | 4 | `UninstallFailed` | the uninstaller failed, was cancelled or timed out (`run.json` is still written) |
 //! | 5 | `NeedsConsent` | an executor verb (`exec`, `undo`, `journal`, `quarantine`, `plan from-targets`) in a build without `rig-exec`: it needs the consent dialog of a later version |
 //! | 6 | `PlanRefused` | the plan was refused before a session existed: plan hash, sidecar, selection, order or confirmation; an undo of items the session does not hold or under another plan hash |
-//! | 7 | `NeedsElevation` | `exec`, `undo`, `journal resume` / `rollback`, `quarantine purge` run unelevated |
+//! | 7 | `NeedsElevation` | `exec`, `undo`, `journal resume` / `rollback` / `retry-held`, `quarantine purge` run unelevated |
 //! | 8 | `NeedsRecovery` | an interrupted session must be resumed or rolled back first |
 //! | 9 | `StoreIntegrity` | the store or a journal failed its integrity check |
 //! | 10 | `Partial` | the run did not commit, or an item did not end done; a purge item was not deleted (the document is written) |
 //! | 11 | `UndoConflicts` | an undo (or a rollback) ended with conflicts or failures (the document is written) |
+//! | 12 | `Unrecorded` | the session was not closed (a later recovery finishes it), or its report or index entry could not be written (the document is written) |
 //!
 //! Being unelevated is never an error for the M1a verbs: `harvest` and `scan` warn and go on with what
 //! they can read.
@@ -81,11 +82,13 @@ pub enum Exit {
     Partial,
     /// 11: the undo ended with conflicts or failures.
     UndoConflicts,
+    /// 12: the session was not closed, or its report or index entry was not written.
+    Unrecorded,
 }
 
 impl Exit {
     /// Every exit code, in numeric order.
-    pub const ALL: [Exit; 12] = [
+    pub const ALL: [Exit; 13] = [
         Exit::Ok,
         Exit::NotImplemented,
         Exit::Usage,
@@ -98,6 +101,7 @@ impl Exit {
         Exit::StoreIntegrity,
         Exit::Partial,
         Exit::UndoConflicts,
+        Exit::Unrecorded,
     ];
 
     /// The numeric exit code.
@@ -115,6 +119,7 @@ impl Exit {
             Exit::StoreIntegrity => 9,
             Exit::Partial => 10,
             Exit::UndoConflicts => 11,
+            Exit::Unrecorded => 12,
         }
     }
 
@@ -138,6 +143,9 @@ impl Exit {
             Exit::Partial => "partial: not every item ended done (the document is still written)",
             Exit::UndoConflicts => {
                 "undo ended with conflicts or failures (the document is still written)"
+            }
+            Exit::Unrecorded => {
+                "session not closed, or its report or index entry not written (the document is still written)"
             }
         }
     }
@@ -649,7 +657,7 @@ mod tests {
     #[test]
     fn exit_codes_are_the_documented_numbers() {
         let codes: Vec<u8> = Exit::ALL.iter().map(|e| e.code()).collect();
-        assert_eq!(codes, (0..=11).collect::<Vec<u8>>());
+        assert_eq!(codes, (0..=12).collect::<Vec<u8>>());
         // The help prints the same table, one code per line.
         for exit in Exit::ALL {
             let line = format!("{:>4}  {}\n", exit.code(), exit.meaning());
@@ -690,6 +698,7 @@ mod tests {
             "journal resume",
             "journal rollback --session s1",
             "journal show --session s1",
+            "journal retry-held --session s1",
             "quarantine expiring",
             "quarantine purge --ids s/1 --yes-irreversible",
         ] {

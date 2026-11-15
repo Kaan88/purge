@@ -1644,6 +1644,7 @@ fn run_settings() -> RunSettings {
         long_names_resolved: true,
         key_limit: 10_000,
         restore_point: RestorePointPolicy::HighRiskOnly,
+        selected: Vec::new(),
     }
 }
 

@@ -8,22 +8,23 @@
 //!
 //! [`run_live`] works on the installed store (`%ProgramData%\Purge`, `StorageRoots::installed`, the strict
 //! integrity policy) and the live backends. Nothing selects another store: there is no `--data-root`
-//! and no variable for it. `exec`, `undo`, `journal resume` / `rollback` and `quarantine purge` refuse an
-//! unelevated process with exit code 7 before they read anything. The tests drive the same verbs
+//! and no variable for it. `exec`, `undo`, `journal resume` / `rollback` / `retry-held` and `quarantine
+//! purge` refuse an unelevated process with exit code 7 before they read anything. The tests drive the same verbs
 //! through [`run`] with an [`ExecHost`] of their own (a relaxed store in a temp directory, which only the
 //! `test-support` feature of `purge-exec` can create, and stand-in backends).
 //!
 //! # Outputs
 //!
 //! Every document goes to stdout, and to the `-o` file when one is given, written with
-//! [`output::write_atomic_no_follow`] (never through a link at the path). Progress and warnings go to
+//! [`output::write_atomic_no_follow`] (never through a link anywhere on the path). Progress and warnings go to
 //! stderr. Documents of the model keep their schema: `exec` prints the `purge.exec/1` report, `undo` the
 //! `purge.undo/1` report. The listings that have no model type are this CLI's own:
 //!
 //! | Verb | Schema | Content |
 //! |---|---|---|
-//! | `journal recover` | `purge.cli.recover/1` | the sessions that need recovery, with a probe of each open intent; nothing is changed |
+//! | `journal recover` | `purge.cli.recover/1` | the sessions that need recovery, with a probe of each open intent; no session is changed (the store's integrity check may rename a rejected session directory aside, as every verb's does) |
 //! | `journal resume` / `rollback` | `purge.cli.recovered/1` | per session what recovery settled, undid and reported |
+//! | `journal retry-held` | `purge.cli.retried/1` | each held item tried again, with its outcome |
 //! | `journal show` | `purge.cli.journal/1` | the header, the state, the ops and every record of a journal |
 //! | `quarantine expiring` | `purge.cli.expiring/1` | items and backup files due at the (offset) clock, `id` = `session/op` |
 //! | `quarantine purge` | `purge.cli.purge/1` | one result per requested id |
@@ -43,7 +44,10 @@
 //! See [`crate::cli`]. `exec` and `journal resume` end with [`Exit::Partial`] when the run did not commit
 //! or an item did not end done (`Done`, `Vanished`, or `Skipped(NoLongerEmpty)`: a remove-if-empty whose
 //! directory or key holds something counts as carried out); `undo` and recovery that undid ops end with
-//! [`Exit::UndoConflicts`] when an op ended in a conflict or failed. The document is written either way.
+//! [`Exit::UndoConflicts`] when an op ended in a conflict or failed. Exit 0 also needs the session's
+//! record complete: a run or recovery that left the session open, or could not write its report or
+//! index entry, and an undo or retry that could not update the index entry, end with
+//! [`Exit::Unrecorded`] (review M2 M21). The document is written either way.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -66,7 +70,9 @@ use purge_exec::prepare::{
 };
 use purge_exec::recover::{
     self, PendingKind, PendingList, Probe, RecoverEnv, RecoverError, RecoverMode, RecoverOutput,
+    RetryOutput,
 };
+use purge_exec::report;
 use purge_exec::storage::{StorageError, StorageRoots};
 use purge_exec::undo::{self, UndoEnv, UndoError, UndoRequest, UndoSelection};
 use purge_guard::canon::OtherAppRoot;
@@ -89,8 +95,9 @@ use super::args::{ExecArgs, ExecVerb, FromTargetsArgs, PurgeArgs, RestorePointAr
 use super::{Env, Exit, output};
 use crate::pipeline;
 
-/// Printed by `--version` of a `rig-exec` build, and found in no other build: the marker a strings check
-/// of the release binary looks for.
+/// Printed by `--version` of a `rig-exec` build, and found in no other build: one of the markers the
+/// strings check of the built binary looks for (`tests/exec_cli.rs`,
+/// `the_binary_holds_the_executor_strings_only_in_a_rig_exec_build`).
 pub const BUILD_MARKER: &str =
     "rig-exec build: executor verbs run headless, without the consent dialog (VM rig only)";
 
@@ -183,7 +190,9 @@ pub fn offset_days(value: Option<&OsStr>) -> Result<i64, String> {
     Ok(days)
 }
 
-/// Whether a verb changes the system or the store and so needs an elevated process.
+/// Whether a verb changes the system or a session and so needs an elevated process. The others change
+/// no session; the store's integrity check, which every verb runs, may still rename a rejected session
+/// directory aside (review M2 M24).
 fn needs_elevation(verb: &ExecVerb) -> bool {
     matches!(
         verb,
@@ -191,6 +200,7 @@ fn needs_elevation(verb: &ExecVerb) -> bool {
             | ExecVerb::Undo(_)
             | ExecVerb::JournalResume(_)
             | ExecVerb::JournalRollback(_)
+            | ExecVerb::JournalRetryHeld(_)
             | ExecVerb::QuarantinePurge(_)
     )
 }
@@ -227,6 +237,7 @@ pub fn run<R: RestorePointBackend + Clone>(
         }
         ExecVerb::JournalShow(session) => journal_show(&session, env, host),
         ExecVerb::JournalFaultPoints => fault_points(env),
+        ExecVerb::JournalRetryHeld(session) => journal_retry_held(&session, env, host),
         ExecVerb::QuarantineExpiring => quarantine_expiring(env, host),
         ExecVerb::QuarantinePurge(a) => quarantine_purge(&a, env, host),
     }
@@ -744,12 +755,7 @@ fn exec<R: RestorePointBackend + Clone>(
             return exec_error_exit(&e);
         }
     };
-    if !out.report_written {
-        env.warnings(&["the session's report.json was not written".to_owned()]);
-    }
-    if !out.index_updated {
-        env.warnings(&["the session index was not updated".to_owned()]);
-    }
+    let recorded = exec_recorded(env, out.closed, out.report_written, out.index_updated);
     let report = &out.report;
     env.note(&format!(
         "session {}: {:?}, {} item(s), pending reboot {}",
@@ -759,7 +765,31 @@ fn exec<R: RestorePointBackend + Clone>(
         report.pending_reboot
     ));
     let written = emit_doc(env, a.out.as_deref(), &output::json_text(report), "report");
-    worse(written, report_exit(report))
+    worse(worse(written, report_exit(report)), recorded)
+}
+
+/// [`Exit::Unrecorded`], with a warning for each part missing, unless the run's session is closed
+/// (its `commit` or `aborted` record durable) and its report and index entry are written.
+fn exec_recorded(env: &mut Env<'_>, closed: bool, report: bool, index: bool) -> Exit {
+    let mut missing = Vec::new();
+    if !closed {
+        missing.push(
+            "the session was not closed (its journal could not be finished); journal resume finishes it"
+                .to_owned(),
+        );
+    }
+    if !report {
+        missing.push("the session's report.json was not written".to_owned());
+    }
+    if !index {
+        missing.push("the session index was not updated".to_owned());
+    }
+    env.warnings(&missing);
+    if missing.is_empty() {
+        Exit::Ok
+    } else {
+        Exit::Unrecorded
+    }
 }
 
 /// Refuses a new run while an interrupted session waits for recovery, or a journal is damaged.
@@ -886,9 +916,7 @@ fn undo_verb<R>(a: &UndoArgs, env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> 
             op_list(&out.already_undone)
         ));
     }
-    if !out.index_updated {
-        env.warnings(&["the session index was not updated".to_owned()]);
-    }
+    let recorded = exec_recorded(env, true, true, out.index_updated);
     let mut exit = emit_doc(
         env,
         a.out.as_deref(),
@@ -899,7 +927,7 @@ fn undo_verb<R>(a: &UndoArgs, env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> 
         env.error(&format!("undo stopped early: {stopped}"));
         exit = worse(exit, Exit::Partial);
     }
-    worse(exit, undo_exit(&counts))
+    worse(worse(exit, undo_exit(&counts)), recorded)
 }
 
 /// [`Exit::UndoConflicts`] when an op ended in a conflict or failed.
@@ -944,7 +972,8 @@ fn probe_json(probe: &Probe) -> Value {
     }
 }
 
-/// The sessions that need recovery, with a probe of every open intent. Changes nothing.
+/// The sessions that need recovery, with a probe of every open intent. Changes no session (the
+/// store's integrity check may rename a rejected directory aside).
 fn journal_recover<R>(env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> Exit {
     let roots = match roots_of(env, host, "journal recover") {
         Ok(r) => r,
@@ -1069,8 +1098,24 @@ fn recovered_json(out: &RecoverOutput) -> Value {
     })
 }
 
-/// The exit code of one finished recovery.
-fn recovered_exit(out: &RecoverOutput) -> Exit {
+/// The exit code of one finished recovery; `report_present` is whether the session holds its
+/// `report.json` now. A session recovery did not remove must end closed, with its report and a
+/// current index entry, or the code is [`Exit::Unrecorded`].
+fn recovered_exit(out: &RecoverOutput, report_present: bool) -> Exit {
+    let recorded = out.removed
+        || (!matches!(out.state, None | Some(SessionState::Open))
+            && report_present
+            && out.index_updated);
+    let exit = recovered_items_exit(out);
+    if recorded {
+        exit
+    } else {
+        worse(exit, Exit::Unrecorded)
+    }
+}
+
+/// The exit code of what one recovery did to the items.
+fn recovered_items_exit(out: &RecoverOutput) -> Exit {
     let mut counts = UndoCounts::default();
     for item in &out.undone {
         counts.record(&item.result);
@@ -1172,7 +1217,18 @@ fn journal_recover_run<R>(
                     out.undone.len()
                 ));
                 env.warnings(&out.warnings);
-                exit = worse(exit, recovered_exit(&out));
+                let report_present = out.removed
+                    || roots
+                        .open_session(id)
+                        .and_then(|dir| report::has_report(&dir))
+                        .unwrap_or(false);
+                let code = recovered_exit(&out, report_present);
+                if code == Exit::Unrecorded {
+                    env.warnings(&[format!(
+                        "{verb} {id}: the session is not closed, or its report or index entry is missing"
+                    )]);
+                }
+                exit = worse(exit, code);
                 results.push(recovered_json(&out));
             }
             Err(e) => {
@@ -1291,6 +1347,97 @@ fn fault_points(env: &mut Env<'_>) -> Exit {
         text.push('\n');
     }
     emit_doc(env, None, &text, "fault points")
+}
+
+/// `journal retry-held --session <id>`: the held items of a finished session tried again
+/// (`recover::retry_held`). A session that waits for recovery is refused first.
+fn journal_retry_held<R>(session: &str, env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> Exit {
+    let verb = "journal retry-held";
+    let id = match session_id(env, verb, session) {
+        Ok(id) => id,
+        Err(exit) => return exit,
+    };
+    let roots = match roots_of(env, host, verb) {
+        Ok(r) => r,
+        Err(exit) => return exit,
+    };
+    let pending = match recover::pending(&roots) {
+        Ok(list) => list,
+        Err(e) => {
+            env.error(&format!("{verb}: {e}"));
+            return storage_exit(&e);
+        }
+    };
+    if let Some(s) = pending.sessions.iter().find(|s| s.session == id) {
+        let (code, why) = match s.kind {
+            PendingKind::Damaged => (Exit::StoreIntegrity, "its journal is damaged"),
+            PendingKind::Run | PendingKind::Undo | PendingKind::Retry => (
+                Exit::NeedsRecovery,
+                "it was interrupted; run journal resume or journal rollback first",
+            ),
+            PendingKind::Unindexed | PendingKind::Unstarted => (Exit::Ok, ""),
+        };
+        if code != Exit::Ok {
+            env.error(&format!("{verb} {id}: {why}; nothing was done"));
+            return code;
+        }
+    }
+    let owners = session_owners(&roots, std::slice::from_ref(&id));
+    let deny = match deny_list(env, &roots, &owners) {
+        Ok(d) => d,
+        Err(exit) => return exit,
+    };
+    let recover_env = RecoverEnv::new(
+        &roots,
+        &deny,
+        host.packages,
+        host.lockers,
+        &mut *host.pending_renames,
+    );
+    let out = match recover::retry_held(&id, recover_env) {
+        Ok(out) => out,
+        Err(e) => {
+            env.error(&format!("{verb} {id}: {e}"));
+            return recover_error_exit(&e);
+        }
+    };
+    env.warnings(&out.warnings);
+    env.note(&format!(
+        "{verb} {id}: {} held item(s) tried again, {} done",
+        out.retried.len(),
+        out.retried.iter().filter(|r| complete(&r.outcome)).count()
+    ));
+    let doc = json!({
+        "schema": "purge.cli.retried/1",
+        "session": out.session,
+        "retried": out.retried.iter().map(|r| json!({
+            "op": r.op,
+            "outcome": to_json(&r.outcome),
+        })).collect::<Vec<_>>(),
+        "index_updated": out.index_updated,
+        "warnings": out.warnings,
+    });
+    let recorded = if out.retried.is_empty() {
+        Exit::Ok
+    } else {
+        exec_recorded(env, true, true, out.index_updated)
+    };
+    worse(
+        worse(
+            emit_doc(env, None, &output::json_text(&doc), "retry result"),
+            retried_exit(&out),
+        ),
+        recorded,
+    )
+}
+
+/// [`Exit::Partial`] when a retried item did not end done (it is still held, or failed).
+fn retried_exit(out: &RetryOutput) -> Exit {
+    if out.retried.iter().all(|r| complete(&r.outcome)) {
+        Exit::Ok
+    } else {
+        Exit::Partial
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1575,6 +1722,77 @@ mod tests {
             worse(Exit::UndoConflicts, Exit::Partial),
             Exit::UndoConflicts
         );
+    }
+
+    /// Review M2 M21: exit 0 of a recovery means the session is closed with its report and a current
+    /// index entry (or its directory was removed).
+    #[test]
+    fn a_recovery_exits_zero_only_when_the_session_is_recorded() {
+        let recovered =
+            |state: Option<SessionState>, removed: bool, index_updated: bool| RecoverOutput {
+                session: "20260101T000000Z-0000000000000001".parse().unwrap(),
+                mode: RecoverMode::Resume,
+                state,
+                removed,
+                settled: Vec::new(),
+                report: None,
+                report_written: false,
+                undone: Vec::new(),
+                retries: Vec::new(),
+                index_updated,
+                warnings: Vec::new(),
+            };
+        let committed = Some(SessionState::Committed);
+        assert_eq!(
+            recovered_exit(&recovered(committed, false, true), true),
+            Exit::Ok
+        );
+        assert_eq!(
+            recovered_exit(&recovered(None, true, false), false),
+            Exit::Ok
+        );
+        for (out, report) in [
+            (recovered(Some(SessionState::Open), false, true), true),
+            (recovered(committed, false, false), true),
+            (recovered(committed, false, true), false),
+            (recovered(Some(SessionState::Undone), false, false), true),
+        ] {
+            assert_eq!(recovered_exit(&out, report), Exit::Unrecorded, "{out:?}");
+        }
+    }
+
+    /// Review M2 M21: exit 0 of a run means it closed and wrote its report and index entry.
+    #[test]
+    fn a_run_exits_zero_only_when_the_session_is_recorded() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut host = purge_inventory::runner::LiveHost::new();
+        let live = purge_source::live::Live::new();
+        let mut env = Env {
+            sources: pipeline::Sources {
+                reg: &live.registry,
+                fs: &live.fs,
+                sys: &live.system,
+            },
+            host: &mut host,
+            settings: pipeline::Settings::default(),
+            run_options: purge_inventory::runner::RunOptions::default(),
+            stdout: &mut out,
+            stderr: &mut err,
+        };
+        assert_eq!(exec_recorded(&mut env, true, true, true), Exit::Ok);
+        for (closed, report, index) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            assert_eq!(
+                exec_recorded(&mut env, closed, report, index),
+                Exit::Unrecorded
+            );
+        }
+        let err = String::from_utf8(err).unwrap();
+        assert!(err.contains("not closed") && err.contains("report.json") && err.contains("index"));
     }
 
     #[test]
