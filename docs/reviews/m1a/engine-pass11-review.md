@@ -153,3 +153,19 @@ exemption). The reviewer did not mutation-test the new tests.
 | Residual of 7 (danger, very low, reproduced) | `\u{10400}pp` and `\u{10428}pp` compared equal; Georgian and Cherokee pairs too, not checked on a volume by the reviewer | Checked on this host for every pair below U+10000: 194 letters are kept apart by NTFS and by the registry alike. `fold_char` folds nothing above U+FFFF and none of `WINDOWS_KEEPS_APART`. Pinned by `prefix::tests::letters_windows_does_not_fold_stay_apart` |
 | Low | `is_start_place` does not ask for `Microsoft\Windows` above `CurrentVersion`; `Winlogon`, `Active Setup`, `Image File Execution Options` are not start places | Left: caution only, and fixed value names are judged by the list rule. In `docs/DECISIONS.md` as known limits |
 | Checked, right | The id-shaped name rule and the start-place rule withhold nothing real that was found; `fold_char` on multi-character mappings | |
+
+## Mutation run on Windows
+
+`pass11/mutwin.py`, 94 mutations: the 66 of `mut11.py` that still apply, brought up to the current source, and
+V1 to V28 for the fixes above and the test gaps the review named.
+
+- Full run of 90 (all but V25 to V28) on the tree with the first review's fixes: 86 killed, none hung. B8b,
+  which never ended on the pass-eleven tree, is killed.
+- The 4 survivors were review fixes with no test of their own. Each got one: V10 (an unreadable value in a
+  command place is not excused by its name), V13 (a key read in part with an own path), V16 (data read in
+  part names a path), V17 (a bare-name key read in part).
+- Rerun on the final tree of those 4, of the 8 whose code the follow-up fixes or the `outlived` change touched
+  (B4b, V6, V7, V8, V12, V18, V23, V24) and of the new V25 to V28: 16 of 16 killed.
+
+So every mutation of the table is killed, 78 on the earlier tree (their code and tests did not change
+afterwards) and 16 on the final one. Not covered by any mutation: the vendor-word filter of `other_app_named`.
