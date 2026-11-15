@@ -75,7 +75,9 @@ pub fn derive(s0: &Snap, s2: &Snap) -> Vec<Item> {
             if !r2.seen || r2.nv.is_none() {
                 continue;
             }
-            let Some(r0) = s0.key(k.as_str()) else { continue };
+            let Some(r0) = s0.key(k.as_str()) else {
+                continue;
+            };
             if r0.nv.is_none() {
                 continue; // s0 could not read this key: values unknown
             }
@@ -121,7 +123,8 @@ pub fn sort_items(v: &mut [Item]) {
 // Rig exclusions (RIG.md §1)
 // ---------------------------------------------------------------------------------------------
 
-const RIG_TASKS: &str = r"PurgeRigAgent|PurgeRigLaunch|PurgeRigInstall|agentstart|elev[^\\|]*|crshot[^\\|]*|utrun|PurgeSetup";
+const RIG_TASKS: &str =
+    r"PurgeRigAgent|PurgeRigLaunch|PurgeRigInstall|agentstart|elev[^\\|]*|crshot[^\\|]*|utrun|PurgeSetup";
 
 pub struct RigRules {
     rules: Vec<(Regex, String)>,
@@ -148,7 +151,10 @@ impl RigRules {
             ),
             (ci(r"^P:[A-Z]:\\Windows\\Prefetch\\RIGTOOL\.EXE-[0-9A-F]+\.pf$"), "rig:rigtool prefetch".to_string()),
             // M1a engine runs (RIG.md section 4a): the engine is the measuring tool here, not the app.
-            (ci(r"^P:[A-Z]:\\Windows\\Prefetch\\PURGE-ENGINE\.EXE-[0-9A-F]+\.pf$"), "rig:purge-engine prefetch".to_string()),
+            (
+                ci(r"^P:[A-Z]:\\Windows\\Prefetch\\PURGE-ENGINE\.EXE-[0-9A-F]+\.pf$"),
+                "rig:purge-engine prefetch".to_string(),
+            ),
         ];
         let guids = rig_task_guids(snaps);
         if !guids.is_empty() {
@@ -257,7 +263,9 @@ mod tests {
         assert!(r.check("P:C:\\Windows\\System32\\Tasks\\elevate2").is_some());
         assert!(r.check("P:C:\\Windows\\System32\\Tasks\\Mozilla").is_none());
         assert!(r.check(&format!("K:{TASKCACHE}\\Tree\\PurgeRigAgent")).is_some());
-        assert!(r.check(&format!("C:{TASKCACHE}\\Tasks\\{{11111111-2222-3333-4444-555555555555}}|DynamicInfo")).is_some());
+        assert!(
+            r.check(&format!("C:{TASKCACHE}\\Tasks\\{{11111111-2222-3333-4444-555555555555}}|DynamicInfo")).is_some()
+        );
         assert!(r.check(&format!("K:{TASKCACHE}\\Tasks\\{{99999999-2222-3333-4444-555555555555}}")).is_none());
         assert!(
             r.check("V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\CompatibilityAdapter\\Signatures|\\PurgeRigAgent.fp")

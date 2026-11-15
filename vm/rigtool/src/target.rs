@@ -54,7 +54,8 @@ pub enum Target {
 pub const SERVICES: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Services";
 pub const TASKS_DIR: &str = "C:\\Windows\\System32\\Tasks";
 pub const TASKCACHE: &str = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache";
-pub const FW_RULES: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules";
+pub const FW_RULES: &str =
+    "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules";
 pub const WINDOWSAPPS: &str = "C:\\Program Files\\WindowsApps";
 
 impl Target {
@@ -104,9 +105,9 @@ impl Target {
 
     pub fn value_name(&self) -> Option<&str> {
         match self {
-            Target::RegValue { name, .. } | Target::RegValueChanged { name, .. } | Target::RegMultiSzSegment { name, .. } => {
-                Some(name)
-            }
+            Target::RegValue { name, .. }
+            | Target::RegValueChanged { name, .. }
+            | Target::RegMultiSzSegment { name, .. } => Some(name),
             _ => None,
         }
     }
@@ -134,7 +135,11 @@ impl Target {
         match self {
             Target::Path { path } => {
                 // A plan may put a registry key in a Path by mistake; keep it as written but canonical.
-                if canon::looks_like_reg(path) { Target::RegKey { path: r(path) } } else { Target::Path { path: p(path) } }
+                if canon::looks_like_reg(path) {
+                    Target::RegKey { path: r(path) }
+                } else {
+                    Target::Path { path: p(path) }
+                }
             }
             Target::RegKey { path } => Target::RegKey { path: r(path) },
             Target::RegValue { path, name } => Target::RegValue { path: r(path), name: name.clone() },

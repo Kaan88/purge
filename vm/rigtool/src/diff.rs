@@ -218,7 +218,15 @@ mod tests {
         let d = diff(&a, &b);
         let s: Vec<String> = d
             .iter()
-            .map(|c| format!("{}{} {}{}", c.op, c.rec, c.path, c.name.as_deref().map(|n| format!("|{n}")).unwrap_or_default()))
+            .map(|c| {
+                format!(
+                    "{}{} {}{}",
+                    c.op,
+                    c.rec,
+                    c.path,
+                    c.name.as_deref().map(|n| format!("|{n}")).unwrap_or_default()
+                )
+            })
             .collect();
         assert_eq!(
             s,

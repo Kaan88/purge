@@ -40,12 +40,16 @@ impl Deny {
         };
         let mut rules = Vec::new();
         for e in list {
-            let ci = |s: &str| RegexBuilder::new(s).case_insensitive(true).build().with_context(|| format!("deny regex {s:?}"));
+            let ci = |s: &str| {
+                RegexBuilder::new(s).case_insensitive(true).build().with_context(|| format!("deny regex {s:?}"))
+            };
             match &e {
                 Value::String(s) => rules.push(Rule::Re(ci(s)?, s.clone())),
                 Value::Object(o) => {
                     let why = o.get("why").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    if let Some(s) = ["match", "regex", "pattern"].iter().find_map(|k| o.get(*k).and_then(|x| x.as_str())) {
+                    if let Some(s) =
+                        ["match", "regex", "pattern"].iter().find_map(|k| o.get(*k).and_then(|x| x.as_str()))
+                    {
                         let w = if why.is_empty() { s.to_string() } else { why };
                         rules.push(Rule::Re(ci(s)?, w));
                     } else if let Some(t) = o.get("target") {
@@ -79,7 +83,8 @@ impl Deny {
                 Rule::Target(d, why) => {
                     let same_kind_tree = matches!(
                         (t, d),
-                        (Target::Path { .. }, Target::Path { .. }) | (Target::RegKey { .. }, Target::RegKey { .. })
+                        (Target::Path { .. }, Target::Path { .. })
+                            | (Target::RegKey { .. }, Target::RegKey { .. })
                             | (Target::RegKey { .. }, Target::RegValue { .. })
                     );
                     let hit = if same_kind_tree {

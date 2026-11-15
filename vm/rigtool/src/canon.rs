@@ -55,10 +55,7 @@ pub fn ci_eq(a: &str, b: &str) -> bool {
 
 pub fn ci_cmp(a: &str, b: &str) -> Ordering {
     if a.is_ascii() && b.is_ascii() {
-        return a
-            .bytes()
-            .map(|c| c.to_ascii_lowercase())
-            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()));
+        return a.bytes().map(|c| c.to_ascii_lowercase()).cmp(b.bytes().map(|c| c.to_ascii_lowercase()));
     }
     a.chars().flat_map(char::to_lowercase).cmp(b.chars().flat_map(char::to_lowercase))
 }
@@ -289,7 +286,13 @@ pub fn canon_reg(s: &str, sid: Option<&str>) -> String {
     let mut segs: Vec<&str> = norm.split('\\').collect();
     // \REGISTRY\MACHINE\... and \REGISTRY\USER\...
     if segs.len() >= 3 && segs[0].is_empty() && segs[1].eq_ignore_ascii_case("REGISTRY") {
-        let head = if segs[2].eq_ignore_ascii_case("MACHINE") { "HKLM" } else if segs[2].eq_ignore_ascii_case("USER") { "HKU" } else { segs[2] };
+        let head = if segs[2].eq_ignore_ascii_case("MACHINE") {
+            "HKLM"
+        } else if segs[2].eq_ignore_ascii_case("USER") {
+            "HKU"
+        } else {
+            segs[2]
+        };
         let mut v = vec![head];
         v.extend_from_slice(&segs[3..]);
         segs = v;
@@ -316,7 +319,10 @@ pub fn canon_reg(s: &str, sid: Option<&str>) -> String {
     let mut out: Vec<String> = mapped.split('\\').map(str::to_string).collect();
     out.extend(segs[1..].iter().map(|s| s.to_string()));
     // HKU\S-1-5-18 is a registry link to HKU\.DEFAULT (the capture records the link, never follows it).
-    if out.len() >= 2 && out[0] == "HKU" && (out[1].eq_ignore_ascii_case("S-1-5-18") || out[1].eq_ignore_ascii_case(".DEFAULT")) {
+    if out.len() >= 2
+        && out[0] == "HKU"
+        && (out[1].eq_ignore_ascii_case("S-1-5-18") || out[1].eq_ignore_ascii_case(".DEFAULT"))
+    {
         out[1] = ".DEFAULT".to_string();
     }
     // HKU\<user sid>\Software\Classes -> HKU\<user sid>_Classes (a link to the classes hive). Only user
@@ -410,7 +416,9 @@ impl LinkMap {
         let mut cur = key.to_string();
         for _ in 0..8 {
             let f = fold(&cur);
-            let Some((_, n, dst)) = self.v.iter().find(|(s, _, _)| is_under_or_eq_folded(&f, s)) else { break };
+            let Some((_, n, dst)) = self.v.iter().find(|(s, _, _)| is_under_or_eq_folded(&f, s)) else {
+                break;
+            };
             let mut next = dst.clone();
             for seg in cur.split('\\').skip(*n) {
                 next.push('\\');
@@ -475,7 +483,10 @@ mod tests {
     fn reg_roots() {
         assert_eq!(canon_reg("HKEY_LOCAL_MACHINE\\SOFTWARE\\Mozilla\\", None), "HKLM\\SOFTWARE\\Mozilla");
         assert_eq!(canon_reg("HKLM:\\Software\\X", None), "HKLM\\SOFTWARE\\X");
-        assert_eq!(canon_reg("HKEY_CURRENT_USER\\Software\\Mozilla", Some(SID)), format!("HKU\\{SID}\\Software\\Mozilla"));
+        assert_eq!(
+            canon_reg("HKEY_CURRENT_USER\\Software\\Mozilla", Some(SID)),
+            format!("HKU\\{SID}\\Software\\Mozilla")
+        );
         assert_eq!(canon_reg("HKCU\\Software\\Mozilla", Some(SID)), format!("HKU\\{SID}\\Software\\Mozilla"));
         assert_eq!(canon_reg("HKCU\\Software\\Mozilla", None), "HKCU\\Software\\Mozilla");
         assert_eq!(canon_reg("HKEY_CLASSES_ROOT\\.txt", None), "HKLM\\SOFTWARE\\Classes\\.txt");
@@ -483,7 +494,10 @@ mod tests {
         assert_eq!(canon_reg("HKEY_USERS\\.DEFAULT\\Software", None), "HKU\\.DEFAULT\\Software");
         assert_eq!(canon_reg("Registry::HKEY_USERS\\S-1\\X", None), "HKU\\S-1\\X");
         assert_eq!(canon_reg("\\REGISTRY\\MACHINE\\SOFTWARE\\A", None), "HKLM\\SOFTWARE\\A");
-        assert_eq!(canon_reg("HKLM\\SYSTEM\\ControlSet001\\Services\\X", None), "HKLM\\SYSTEM\\CurrentControlSet\\Services\\X");
+        assert_eq!(
+            canon_reg("HKLM\\SYSTEM\\ControlSet001\\Services\\X", None),
+            "HKLM\\SYSTEM\\CurrentControlSet\\Services\\X"
+        );
         assert_eq!(canon_reg("HKLM\\\\SOFTWARE\\\\A\\\\", None), "HKLM\\SOFTWARE\\A");
     }
 
@@ -503,10 +517,16 @@ mod tests {
     #[test]
     fn default_hive_classes_is_a_real_key() {
         // HKU\.DEFAULT\Software\Classes is an ordinary key: no `_Classes` rewrite.
-        assert_eq!(canon_reg("HKU\\.DEFAULT\\Software\\Classes\\Foo", Some(SID)), "HKU\\.DEFAULT\\Software\\Classes\\Foo");
+        assert_eq!(
+            canon_reg("HKU\\.DEFAULT\\Software\\Classes\\Foo", Some(SID)),
+            "HKU\\.DEFAULT\\Software\\Classes\\Foo"
+        );
         assert_eq!(canon_reg("HKEY_USERS\\.default\\Software\\Classes", None), "HKU\\.DEFAULT\\Software\\Classes");
         // S-1-5-18 is a link to .DEFAULT
-        assert_eq!(canon_reg("HKEY_USERS\\S-1-5-18\\Software\\Classes\\Foo", Some(SID)), "HKU\\.DEFAULT\\Software\\Classes\\Foo");
+        assert_eq!(
+            canon_reg("HKEY_USERS\\S-1-5-18\\Software\\Classes\\Foo", Some(SID)),
+            "HKU\\.DEFAULT\\Software\\Classes\\Foo"
+        );
         assert_eq!(canon_reg("HKU\\S-1-5-18", None), "HKU\\.DEFAULT");
         // service hives have no _Classes hive
         assert_eq!(canon_reg("HKU\\S-1-5-19\\Software\\Classes\\X", Some(SID)), "HKU\\S-1-5-19\\Software\\Classes\\X");
@@ -517,19 +537,31 @@ mod tests {
     fn wow64_link_aliases() {
         // Entries from the old UT data (firefox-ut-removed.json, 7zip-bcu-removed.json).
         assert_eq!(
-            canon_reg("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Classes\\AppID\\{56932DBC-A2C3-452E-B42D-7FD6CCAC6FCE}", None),
+            canon_reg(
+                "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Classes\\AppID\\{56932DBC-A2C3-452E-B42D-7FD6CCAC6FCE}",
+                None
+            ),
             "HKLM\\SOFTWARE\\Classes\\Wow6432Node\\AppID\\{56932DBC-A2C3-452E-B42D-7FD6CCAC6FCE}"
         );
         assert_eq!(
-            canon_reg("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Clients\\StartMenuInternet\\Firefox-308046B0AF4A39CB", None),
+            canon_reg(
+                "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Clients\\StartMenuInternet\\Firefox-308046B0AF4A39CB",
+                None
+            ),
             "HKLM\\SOFTWARE\\Clients\\StartMenuInternet\\Firefox-308046B0AF4A39CB"
         );
         assert_eq!(
-            canon_reg("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}", None),
+            canon_reg(
+                "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}",
+                None
+            ),
             "HKLM\\SOFTWARE\\Classes\\Wow6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}"
         );
         assert_eq!(canon_reg("hklm\\software\\wow6432node\\policies\\x", None), "HKLM\\SOFTWARE\\policies\\x");
-        assert_eq!(canon_reg("HKLM\\SOFTWARE\\WOW6432Node\\RegisteredApplications", None), "HKLM\\SOFTWARE\\RegisteredApplications");
+        assert_eq!(
+            canon_reg("HKLM\\SOFTWARE\\WOW6432Node\\RegisteredApplications", None),
+            "HKLM\\SOFTWARE\\RegisteredApplications"
+        );
         // the link keys' parent and other WOW6432Node keys are real keys
         assert_eq!(canon_reg("HKLM\\SOFTWARE\\WOW6432Node", None), "HKLM\\SOFTWARE\\WOW6432Node");
         assert_eq!(canon_reg("HKLM\\SOFTWARE\\WOW6432Node\\Mozilla", None), "HKLM\\SOFTWARE\\WOW6432Node\\Mozilla");

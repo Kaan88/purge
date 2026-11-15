@@ -63,7 +63,9 @@ fn kind_key(kind: &str) -> &str {
 /// The parent of each GUID in a canonical target string: kind plus the text before the GUID, with hex runs and
 /// long numbers (always wildcards) normalised and earlier GUIDs kept literal. Returns (parent key, folded GUID).
 fn guid_slots(cs: &str) -> Vec<(String, String)> {
-    let Some((kind, body)) = cs.split_once(':') else { return Vec::new() };
+    let Some((kind, body)) = cs.split_once(':') else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     let mut key = format!("{}:", kind_key(kind));
     let mut last = 0;
@@ -249,11 +251,7 @@ impl AmbientSet {
 /// Canonical strings of the churn in one null run (rig items dropped).
 pub fn run_items(s0: &Snap, s2: &Snap) -> Vec<String> {
     let rig = RigRules::new(&[s0, s2]);
-    items::derive(s0, s2)
-        .into_iter()
-        .map(|i| i.target.canon_string())
-        .filter(|cs| rig.check(cs).is_none())
-        .collect()
+    items::derive(s0, s2).into_iter().map(|i| i.target.canon_string()).filter(|cs| rig.check(cs).is_none()).collect()
 }
 
 /// One run's ambient entries; `var` comes from all null runs of the campaign (`GuidVariation::from_items`).
@@ -280,8 +278,10 @@ pub fn union(runs: Vec<AmbientRunJson>) -> AmbientJson {
 pub fn cmd_ambient(dirs: &[PathBuf], out: &Path) -> Result<()> {
     let mut items = Vec::new();
     for d in dirs {
-        let f0 = snap::find_phase_file(d, "snap", "0", ".tsv.gz").with_context(|| format!("no snap-0 in {}", d.display()))?;
-        let f2 = snap::find_phase_file(d, "snap", "2", ".tsv.gz").with_context(|| format!("no snap-2 in {}", d.display()))?;
+        let f0 = snap::find_phase_file(d, "snap", "0", ".tsv.gz")
+            .with_context(|| format!("no snap-0 in {}", d.display()))?;
+        let f2 = snap::find_phase_file(d, "snap", "2", ".tsv.gz")
+            .with_context(|| format!("no snap-2 in {}", d.display()))?;
         let s0 = Snap::load(&f0, LoadOpts::default())?;
         let s2 = Snap::load(&f2, LoadOpts::default())?;
         items.push((d, run_items(&s0, &s2)));
@@ -314,7 +314,10 @@ mod tests {
         let m = Matcher::new("x", &[], &[g]).unwrap();
         let t = |p: &str| Target::Path { path: p.into() };
         assert!(m.matches(&t("C:\\Users\\t\\AppData\\Local\\Temp\\{99999999-AAAA-bbbb-2222-333344445555}")).is_some());
-        assert!(m.matches(&t("C:\\Users\\t\\AppData\\Local\\Temp\\{99999999-AAAA-bbbb-2222-333344445555}\\x.tmp")).is_some());
+        assert!(
+            m.matches(&t("C:\\Users\\t\\AppData\\Local\\Temp\\{99999999-AAAA-bbbb-2222-333344445555}\\x.tmp"))
+                .is_some()
+        );
         assert!(m.matches(&t("C:\\Users\\t\\AppData\\Local\\Temp\\notaguid")).is_none());
 
         let h = generalize("K:HKLM\\SOFTWARE\\X\\cache-0123456789abcdef01", &var).unwrap();
@@ -324,7 +327,10 @@ mod tests {
 
         let n = generalize("V:HKU\\S\\Software\\Y|LastRun_20261111", &var).unwrap();
         let m = Matcher::new("x", &[], &[n]).unwrap();
-        assert!(m.matches(&Target::RegValue { path: "HKU\\S\\Software\\Y".into(), name: "LastRun_20270101".into() }).is_some());
+        assert!(
+            m.matches(&Target::RegValue { path: "HKU\\S\\Software\\Y".into(), name: "LastRun_20270101".into() })
+                .is_some()
+        );
         assert!(
             m.matches(&Target::RegValueChanged {
                 path: "HKU\\S\\Software\\Y".into(),
@@ -334,7 +340,9 @@ mod tests {
             })
             .is_some()
         );
-        assert!(m.matches(&Target::RegValue { path: "HKU\\S\\Software\\Y".into(), name: "LastRun_2027".into() }).is_none());
+        assert!(
+            m.matches(&Target::RegValue { path: "HKU\\S\\Software\\Y".into(), name: "LastRun_2027".into() }).is_none()
+        );
         assert!(generalize("P:C:\\Program Files\\App\\app.exe", &var).is_none());
     }
 
@@ -368,15 +376,18 @@ mod tests {
         // One GUID seen once under a parent: literal (only the long number stays a wildcard).
         let one = "K:HKLM\\SOFTWARE\\Vendor\\{0A1B2C3D-0000-1111-2222-333344445555}\\T1234567".to_string();
         let var = GuidVariation::from_items([&one]);
-        let r = run_matcher(&[one.clone()], &var);
+        let r = run_matcher(std::slice::from_ref(&one), &var);
         assert!(r.matches(&k("HKLM\\SOFTWARE\\Vendor\\{0A1B2C3D-0000-1111-2222-333344445555}\\T7654321")).is_some());
         assert!(r.matches(&k("HKLM\\SOFTWARE\\Vendor\\{9A1B2C3D-0000-1111-2222-333344445555}\\T7654321")).is_none());
         // Varying GUIDs under a specific parent (different runs): wildcard, with the parent and kind fixed.
         let s1 = "K:HKLM\\SOFTWARE\\Microsoft\\Sched\\Tasks\\{0A1B2C3D-0000-1111-2222-333344445555}".to_string();
         let s2 = "K:HKLM\\SOFTWARE\\Microsoft\\Sched\\Tasks\\{0B1B2C3D-0000-1111-2222-333344445555}".to_string();
         let var = GuidVariation::from_items([&s1, &s2]);
-        let r = run_matcher(&[s1.clone()], &var);
-        assert!(r.matches(&k("HKLM\\SOFTWARE\\Microsoft\\Sched\\Tasks\\{0C1B2C3D-0000-1111-2222-333344445555}\\Sub")).is_some());
+        let r = run_matcher(std::slice::from_ref(&s1), &var);
+        assert!(
+            r.matches(&k("HKLM\\SOFTWARE\\Microsoft\\Sched\\Tasks\\{0C1B2C3D-0000-1111-2222-333344445555}\\Sub"))
+                .is_some()
+        );
         assert!(r.matches(&k("HKLM\\SOFTWARE\\Other\\Tasks\\{0C1B2C3D-0000-1111-2222-333344445555}")).is_none());
     }
 
@@ -389,7 +400,11 @@ mod tests {
     fn exact_and_descendants() {
         let m = Matcher::new(
             "n1",
-            &["P:C:\\Windows\\Prefetch\\X.pf".into(), "K:HKLM\\SOFTWARE\\Churn".into(), "C:HKLM\\SOFTWARE\\A|Counter".into()],
+            &[
+                "P:C:\\Windows\\Prefetch\\X.pf".into(),
+                "K:HKLM\\SOFTWARE\\Churn".into(),
+                "C:HKLM\\SOFTWARE\\A|Counter".into(),
+            ],
             &[],
         )
         .unwrap();

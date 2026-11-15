@@ -164,7 +164,10 @@ impl TruthIdx {
             Target::RegMultiSzSegment { path, name, .. } => {
                 let mut v = self.k.ancestors_or_eq(path);
                 v.extend(
-                    self.values(path, name).iter().copied().filter(|&i| matches!(self.items[i].target, Target::RegValue { .. })),
+                    self.values(path, name)
+                        .iter()
+                        .copied()
+                        .filter(|&i| matches!(self.items[i].target, Target::RegValue { .. })),
                 );
                 v
             }
@@ -312,7 +315,10 @@ fn danger_class(cx: &Ctx, o: &Target, reasons: &[String], band: Band, preselecte
         match o {
             Target::RegValue { path, name } => {
                 if let (Some(a), Some(b)) = (cx.s0.value(path, name), cx.s2.value(path, name)) {
-                    if a.hash == b.hash && matches!(a.typ, 1 | 2 | 7) && data_path(&a.preview).is_some_and(|p| dangles(cx.s2, &p)) {
+                    if a.hash == b.hash
+                        && matches!(a.typ, 1 | 2 | 7)
+                        && data_path(&a.preview).is_some_and(|p| dangles(cx.s2, &p))
+                    {
                         return "preexisting_value_ref";
                     }
                     if a.hash != b.hash && band != Band::Safe && !preselected {
@@ -330,15 +336,15 @@ fn danger_class(cx: &Ctx, o: &Target, reasons: &[String], band: Band, preselecte
             }
             Target::RegKey { path } => {
                 let f = canon::fold(path);
-                let ext = regex::Regex::new(r"(?i)^(hklm\\software\\classes|hku\\[^\\]+_classes)\\\.[^\\]+(\\(openwithprogids|openwithlist))?$")
-                    .expect("ext regex");
+                let ext = regex::Regex::new(
+                    r"(?i)^(hklm\\software\\classes|hku\\[^\\]+_classes)\\\.[^\\]+(\\(openwithprogids|openwithlist))?$",
+                )
+                .expect("ext regex");
                 if ext.is_match(&f)
                     && cx.s0.has_key(path)
-                    && !cx
-                        .s0
-                        .keys
-                        .iter()
-                        .any(|(k, r)| canon::is_under_or_eq_folded(&canon::fold(k.as_str()), &f) && !r.values.is_empty())
+                    && !cx.s0.keys.iter().any(|(k, r)| {
+                        canon::is_under_or_eq_folded(&canon::fold(k.as_str()), &f) && !r.values.is_empty()
+                    })
                 {
                     return "old_empty_ext_key";
                 }
@@ -465,7 +471,7 @@ pub struct PreBase {
 
 impl PreBase {
     /// Did primitive `p` (present in `s0`, this run's snap0) come from the earlier install of the same product?
-    fn from_earlier_install(&self, s0: &Snap, p: &Target) -> bool {
+    fn is_from_earlier_install(&self, s0: &Snap, p: &Target) -> bool {
         if exists(&self.s0, p).0 {
             return false;
         }
@@ -579,7 +585,9 @@ pub fn package_family(full_name: &str) -> Option<String> {
 /// AppRepository files, `%LOCALAPPDATA%\Packages\<family>`, AppIso firewall rules) and the package's
 /// AppContainer SID mapping (`AppContainer\Mappings\<S-1-15-2-...>`, whose `Moniker` is the family name).
 pub fn package_covers(t: &TruthIdx, full_name: &str, s2: &Snap) -> Vec<usize> {
-    let Some(family) = package_family(full_name) else { return Vec::new() };
+    let Some(family) = package_family(full_name) else {
+        return Vec::new();
+    };
     let full = canon::fold(full_name);
     let fam = canon::fold(&family);
     let mut out = Vec::new();
@@ -766,7 +774,7 @@ fn eval_item(cx: &Ctx, it: &PlanItem) -> Eval {
     let mut excused = Vec::new();
     for p in prims.iter().filter(|_| !all_gone) {
         if exists(cx.s0, p).0 {
-            if cx.pre_base.is_some_and(|b| b.from_earlier_install(cx.s0, p)) {
+            if cx.pre_base.is_some_and(|b| b.is_from_earlier_install(cx.s0, p)) {
                 excused.push(p.canon_string());
             } else {
                 reasons.push(format!("existed in snap0: {}", p.canon_string()));
@@ -1179,16 +1187,28 @@ fn md_escape(s: &str) -> String {
 pub fn render_md(apps: &[AppScore], macros: &[MacroScore]) -> String {
     let mut m = String::new();
     let _ = writeln!(m, "# Rig score\n");
-    let _ = writeln!(m, "Truth recall denominator = `leftover` + `user_data`. Outcomes per offered item: gone (absent from snap2: a no-op) first, then danger > hit > ambient > other.");
+    let _ = writeln!(
+        m,
+        "Truth recall denominator = `leftover` + `user_data`. Outcomes per offered item: gone (absent from snap2: a no-op) first, then danger > hit > ambient > other."
+    );
     let _ = writeln!(m, "`*_nd` recall counts only coverage by offered items that are not `danger`.");
-    let _ = writeln!(m, "Danger counts: `danger` = danger items offered for removal (any band but Blocked); `danger_kept` = danger items the engine lists read-only as Blocked; `danger_listed` = both (the number reported as danger before 2026-11-15); `danger_blocking` = danger offered Safe or preselected (RIG.md §7 class (1); the gate criterion).");
-    let _ = writeln!(m, "A delete-if-empty item (`RemoveDirIfEmpty`) that still holds something once the plan's other non-danger removals ran is a no-op: outcome `noop_if_nonempty`, no coverage, out of precision; `noop_danger` counts those a plain delete would have made danger (listed below the danger items).\n");
+    let _ = writeln!(
+        m,
+        "Danger counts: `danger` = danger items offered for removal (any band but Blocked); `danger_kept` = danger items the engine lists read-only as Blocked; `danger_listed` = both (the number reported as danger before 2026-11-15); `danger_blocking` = danger offered Safe or preselected (RIG.md §7 class (1); the gate criterion)."
+    );
+    let _ = writeln!(
+        m,
+        "A delete-if-empty item (`RemoveDirIfEmpty`) that still holds something once the plan's other non-danger removals ran is a no-op: outcome `noop_if_nonempty`, no coverage, out of precision; `noop_danger` counts those a plain delete would have made danger (listed below the danger items).\n"
+    );
     let _ = writeln!(m, "## Macro (mean over apps per tool)\n");
     let _ = writeln!(
         m,
         "| tool | apps | truth_n | recall_listed | recall_visible | recall_safe | listed_nd | visible_nd | safe_nd | precision_safe | partial_n | danger | danger_kept | danger_listed | danger_blocking | danger_presel | userdata_presel | noop_ifempty | noop_danger | Path | RegKey | RegValue | RegValueChanged |"
     );
-    let _ = writeln!(m, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    let _ = writeln!(
+        m,
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
     for x in macros {
         let pk = |k: &str| pct(x.per_kind_recall.get(k).copied().flatten());
         let _ = writeln!(
@@ -1224,7 +1244,10 @@ pub fn render_md(apps: &[AppScore], macros: &[MacroScore]) -> String {
         m,
         "| app | tool | offered | truth_n | recall_listed | recall_visible | recall_safe | listed_nd | visible_nd | safe_nd | precision_safe | partial_n | danger | danger_kept | danger_listed | danger_blocking | danger_presel | userdata_presel | noop_danger | hit | danger_outcome | ambient | gone | noop_ifempty | other |"
     );
-    let _ = writeln!(m, "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    let _ = writeln!(
+        m,
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
     for a in apps {
         for t in &a.tools {
             let o = |k: &str| t.outcomes.get(k).copied().unwrap_or(0);
@@ -1312,7 +1335,10 @@ pub fn render_md(apps: &[AppScore], macros: &[MacroScore]) -> String {
         let _ = writeln!(m, "None.");
     }
     let _ = writeln!(m, "\n## Delete-if-empty items that stay (noop_if_nonempty)\n");
-    let _ = writeln!(m, "Not danger and no coverage: the target still holds something after the plan's other non-danger removals, so `RemoveDirIfEmpty` leaves it. **would be danger** = a plain delete of the same target would have scored danger; review these by hand.\n");
+    let _ = writeln!(
+        m,
+        "Not danger and no coverage: the target still holds something after the plan's other non-danger removals, so `RemoveDirIfEmpty` leaves it. **would be danger** = a plain delete of the same target would have scored danger; review these by hand.\n"
+    );
     let mut any = false;
     for a in apps {
         for t in &a.tools {
@@ -1337,7 +1363,10 @@ pub fn render_md(apps: &[AppScore], macros: &[MacroScore]) -> String {
     }
     if apps.iter().any(|a| a.tools.iter().any(|t| t.pre_same_app_base.is_some())) {
         let _ = writeln!(m, "\n## Earlier install of the same product in snap0\n");
-        let _ = writeln!(m, "The run installed and removed the same product before snap0 (run.json `pre`, same ARP key). Offered targets that exist in this snap0 only through that earlier install (absent from the clean run's snap0 / lists-0, last written after it started) are not danger.\n");
+        let _ = writeln!(
+            m,
+            "The run installed and removed the same product before snap0 (run.json `pre`, same ARP key). Offered targets that exist in this snap0 only through that earlier install (absent from the clean run's snap0 / lists-0, last written after it started) are not danger.\n"
+        );
         for a in apps {
             for t in a.tools.iter().filter(|t| t.pre_same_app_base.is_some()) {
                 let _ = writeln!(
@@ -1394,7 +1423,10 @@ fn render_classes_md(m: &mut String, apps: &[AppScore]) {
          e.g. `UFH\\SHC|<n>`), offered unticked (Safe or preselected it is blocking). \
          Class (3) items show their band and preselection. `ud_safe` = Safe items over user data, preselected or not.\n"
     );
-    let _ = writeln!(m, "| app | tool | danger_blocking | userdata_blocking | danger_unticked | userdata_unticked | preexisting_value_ref | old_empty_ext_key | replaced_value | ud_safe |");
+    let _ = writeln!(
+        m,
+        "| app | tool | danger_blocking | userdata_blocking | danger_unticked | userdata_unticked | preexisting_value_ref | old_empty_ext_key | replaced_value | ud_safe |"
+    );
     let _ = writeln!(m, "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|");
     for a in apps {
         for t in &a.tools {
@@ -1520,7 +1552,13 @@ fn pick_pre_base<'a>(me: &AppInput, all: &'a [AppInput]) -> Option<&'a AppInput>
             })
         })
         .min_by_key(|o| {
-            let ot = o.run.as_ref().and_then(|r| r.get("started")).and_then(|s| s.as_str()).and_then(iso_filetime).unwrap_or(0);
+            let ot = o
+                .run
+                .as_ref()
+                .and_then(|r| r.get("started"))
+                .and_then(|s| s.as_str())
+                .and_then(iso_filetime)
+                .unwrap_or(0);
             ot.abs_diff(t)
         })
 }
@@ -1554,7 +1592,11 @@ fn app_from_dir(d: &Path, deny: &Option<PathBuf>) -> Result<AppInput> {
         plans,
         deny,
         lists0: snap::find_phase_file(d, "lists", "0", ".json"),
-        run: d.join("run.json").is_file().then(|| jsonio::read::<serde_json::Value>(&d.join("run.json")).ok()).flatten(),
+        run: d
+            .join("run.json")
+            .is_file()
+            .then(|| jsonio::read::<serde_json::Value>(&d.join("run.json")).ok())
+            .flatten(),
     })
 }
 
@@ -1580,7 +1622,10 @@ fn score_app(a: &AppInput, sid_arg: Option<&str>, classes: bool, all: &[AppInput
     if let Some(start) = a.run.as_ref().and_then(pre_same_app_start) {
         match (pick_pre_base(a, all), iso_filetime(&start)) {
             (Some(b), Some(ft)) => {
-                eprintln!("score: {id}: snap0 holds an earlier install of the same product (started {start}); clean reference {}", b.dir);
+                eprintln!(
+                    "score: {id}: snap0 holds an earlier install of the same product (started {start}); clean reference {}",
+                    b.dir
+                );
                 pre_base = Some(PreBase {
                     run: b.dir.clone(),
                     s0: Snap::load(&b.s0, LoadOpts::default())?,
@@ -1743,14 +1788,24 @@ mod tests {
     }
 
     fn item(t: Target, band: &str, pre: bool) -> PlanItem {
-        PlanItem { target: t, band: band.into(), preselected: pre, scanner: Some("S".into()), category: None, action: None }
+        PlanItem {
+            target: t,
+            band: band.into(),
+            preselected: pre,
+            scanner: Some("S".into()),
+            category: None,
+            action: None,
+        }
     }
 
     #[test]
     fn package_offer_covers_its_deployment_state() {
         let pkg = "App_1.0.0.0_neutral__abc123";
-        let roots = ["HKLM\\SOFTWARE", &format!("HKU\\{SID}_Classes"), "C:\\Program Files\\WindowsApps", "C:\\ProgramData"];
-        let mapping = format!("HKU\\{SID}_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Mappings\\S-1-15-2-9");
+        let roots =
+            ["HKLM\\SOFTWARE", &format!("HKU\\{SID}_Classes"), "C:\\Program Files\\WindowsApps", "C:\\ProgramData"];
+        let mapping = format!(
+            "HKU\\{SID}_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppContainer\\Mappings\\S-1-15-2-9"
+        );
         let s0 = snap_with_roots(&roots, |t| {
             write_k(t, "HKLM\\SOFTWARE", 1, Some(0), Some(0));
             write_d(t, "C:\\Program Files\\WindowsApps", 0x10, 1, 0);
@@ -1758,25 +1813,51 @@ mod tests {
         });
         let s2 = snap_with_roots(&roots, |t| {
             write_k(t, "HKLM\\SOFTWARE", 1, Some(0), Some(1));
-            write_k(t, "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StagingInfo\\App_1.0.0.0_neutral__abc123", 2, Some(0), Some(0));
+            write_k(
+                t,
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StagingInfo\\App_1.0.0.0_neutral__abc123",
+                2,
+                Some(0),
+                Some(0),
+            );
             write_d(t, "C:\\Program Files\\WindowsApps", 0x10, 1, 0);
             write_d(t, "C:\\Program Files\\WindowsApps\\App_1.0.0.0_neutral__abc123", 0x10, 2, 0);
             write_d(t, "C:\\ProgramData", 0x10, 1, 0);
             write_d(t, "C:\\ProgramData\\Packages\\App_abc123", 0x10, 2, 0);
             write_k(t, &mapping, 2, Some(1), Some(0));
             write_v(t, &mapping, "Moniker", 1, 26, 9, "app_abc123");
-            write_k(t, "HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{E6950302-61F0-4FEB-97DB-855E30D4A991}", 2, Some(0), Some(1));
-            write_k(t, "HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{E6950302-61F0-4FEB-97DB-855E30D4A991}\\App_1.0.0.0_neutral__abc123", 3, Some(0), Some(0));
+            write_k(
+                t,
+                "HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{E6950302-61F0-4FEB-97DB-855E30D4A991}",
+                2,
+                Some(0),
+                Some(1),
+            );
+            write_k(
+                t,
+                "HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{E6950302-61F0-4FEB-97DB-855E30D4A991}\\App_1.0.0.0_neutral__abc123",
+                3,
+                Some(0),
+                Some(0),
+            );
         });
         let k = |p: &str| Target::RegKey { path: p.into() };
         let p = |x: &str| Target::Path { path: x.into() };
         let idx = TruthIdx::new(
             vec![
-                ti(k("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StagingInfo\\App_1.0.0.0_neutral__abc123"), "leftover"),
+                ti(
+                    k(
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\StagingInfo\\App_1.0.0.0_neutral__abc123",
+                    ),
+                    "leftover",
+                ),
                 ti(p("C:\\Program Files\\WindowsApps\\App_1.0.0.0_neutral__abc123"), "leftover"),
                 ti(p("C:\\ProgramData\\Packages\\App_abc123"), "leftover"),
                 ti(k(&mapping), "leftover"),
-                ti(k("HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{E6950302-61F0-4FEB-97DB-855E30D4A991}"), "leftover"),
+                ti(
+                    k("HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex\\{E6950302-61F0-4FEB-97DB-855E30D4A991}"),
+                    "leftover",
+                ),
                 ti(p("C:\\ProgramData\\Other"), "leftover"),
             ],
             Some(SID),
@@ -1784,7 +1865,17 @@ mod tests {
         // deny protects the deployment stores from raw deletes, not from the package API
         let deny = Deny::from_value(&json!(["^[PK]:.*(WindowsApps|StagingInfo|\\\\Packages\\\\)"]), Some(SID)).unwrap();
         let links = LinkMap::default();
-        let cx = Ctx { truth: &idx, s0: &s0, s2: &s2, deny: &deny, sid: Some(SID), links: &links, lists0: None, classes: false, pre_base: None };
+        let cx = Ctx {
+            truth: &idx,
+            s0: &s0,
+            s2: &s2,
+            deny: &deny,
+            sid: Some(SID),
+            links: &links,
+            lists0: None,
+            classes: false,
+            pre_base: None,
+        };
         let plan = Plan {
             tool: "purge".into(),
             mode: "post".into(),
@@ -1837,7 +1928,17 @@ mod tests {
         let (s0, s2, idx) = fixture();
         let deny = Deny::from_value(&json!(["Notepad\\.lnk$", "Launcher"]), Some(SID)).unwrap();
         let links = LinkMap::default();
-        let cx = Ctx { truth: &idx, s0: &s0, s2: &s2, deny: &deny, sid: Some(SID), links: &links, lists0: None, classes: false, pre_base: None };
+        let cx = Ctx {
+            truth: &idx,
+            s0: &s0,
+            s2: &s2,
+            deny: &deny,
+            sid: Some(SID),
+            links: &links,
+            lists0: None,
+            classes: false,
+            pre_base: None,
+        };
         let k = |p: &str| Target::RegKey { path: p.into() };
         let plan = Plan {
             tool: "old".into(),
@@ -1861,7 +1962,17 @@ mod tests {
         let (s0, s2, idx) = fixture();
         let deny = Deny::from_value(&json!(["Notepad\\.lnk$"]), Some(SID)).unwrap();
         let links = LinkMap::default();
-        let cx = Ctx { truth: &idx, s0: &s0, s2: &s2, deny: &deny, sid: Some(SID), links: &links, lists0: None, classes: false, pre_base: None };
+        let cx = Ctx {
+            truth: &idx,
+            s0: &s0,
+            s2: &s2,
+            deny: &deny,
+            sid: Some(SID),
+            links: &links,
+            lists0: None,
+            classes: false,
+            pre_base: None,
+        };
         let k = |p: &str| Target::RegKey { path: p.into() };
         let p = |x: &str| Target::Path { path: x.into() };
         let plan = Plan {
@@ -1912,8 +2023,8 @@ mod tests {
         assert_eq!(
             oc,
             vec![
-                "hit", "hit", "hit", "danger", "hit", "danger", "hit", "danger", "ambient", "gone", "danger", "other", "gone",
-                "hit"
+                "hit", "hit", "hit", "danger", "hit", "danger", "hit", "danger", "ambient", "gone", "danger", "other",
+                "gone", "hit"
             ]
         );
         assert!(s.items[3].reasons[0].starts_with("existed in snap0: K:HKLM\\SOFTWARE\\Clients"));
@@ -1941,11 +2052,19 @@ mod tests {
         assert_eq!(s.missed.len(), 1);
         assert!(s.missed[0].partial);
 
-        let apps = vec![AppScore { id: "firefox".into(), tools: vec![s.clone()], ..Default::default() }, AppScore {
-            id: "b".into(),
-            tools: vec![ToolScore { tool: "purge".into(), truth_n: 1, recall_listed: Some(0.0), ..Default::default() }],
-            ..Default::default()
-        }];
+        let apps = vec![
+            AppScore { id: "firefox".into(), tools: vec![s.clone()], ..Default::default() },
+            AppScore {
+                id: "b".into(),
+                tools: vec![ToolScore {
+                    tool: "purge".into(),
+                    truth_n: 1,
+                    recall_listed: Some(0.0),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
         let m = macro_scores(&apps);
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].apps, 2);
@@ -1960,7 +2079,17 @@ mod tests {
         let idx = TruthIdx::new(truth, Some(SID));
         let deny = Deny::default();
         let links = LinkMap::new(s0.reg_links().into_iter().chain(s2.reg_links()));
-        let cx = Ctx { truth: &idx, s0, s2, deny: &deny, sid: Some(SID), links: &links, lists0: None, classes: false, pre_base: None };
+        let cx = Ctx {
+            truth: &idx,
+            s0,
+            s2,
+            deny: &deny,
+            sid: Some(SID),
+            links: &links,
+            lists0: None,
+            classes: false,
+            pre_base: None,
+        };
         score_plan(&cx, "app", &Plan { tool: "t".into(), items: offered, ..Default::default() }, "p.json")
     }
 
@@ -1969,7 +2098,15 @@ mod tests {
         const CLSID: &str = "{AAAAAAAA-0000-0000-0000-000000000001}";
         let link = |t: &mut String| {
             write_k(t, "HKLM\\SOFTWARE\\WOW6432Node\\Classes", 1, Some(1), Some(0));
-            write_v(t, "HKLM\\SOFTWARE\\WOW6432Node\\Classes", "SymbolicLinkValue", 6, 92, 1, "\\REGISTRY\\MACHINE\\SOFTWARE\\Classes\\Wow6432Node");
+            write_v(
+                t,
+                "HKLM\\SOFTWARE\\WOW6432Node\\Classes",
+                "SymbolicLinkValue",
+                6,
+                92,
+                1,
+                "\\REGISTRY\\MACHINE\\SOFTWARE\\Classes\\Wow6432Node",
+            );
             // a link that canon_reg does not know: resolved through the snap's own link records
             write_k(t, "HKLM\\SOFTWARE\\OddLink", 1, Some(1), Some(0));
             write_v(t, "HKLM\\SOFTWARE\\OddLink", "SymbolicLinkValue", 6, 40, 2, "\\REGISTRY\\MACHINE\\SOFTWARE\\Real");
@@ -1985,7 +2122,10 @@ mod tests {
             write_k(t, "HKLM\\SOFTWARE\\Real\\Pre", 1, Some(0), Some(0));
             write_k(t, "HKLM\\SOFTWARE\\Clients\\StartMenuInternet\\Firefox-1", 2, Some(0), Some(0));
         });
-        let truth = vec![ti(Target::RegKey { path: "HKLM\\SOFTWARE\\Clients\\StartMenuInternet\\Firefox-1".into() }, "leftover")];
+        let truth = vec![ti(
+            Target::RegKey { path: "HKLM\\SOFTWARE\\Clients\\StartMenuInternet\\Firefox-1".into() },
+            "leftover",
+        )];
         let k = |p: &str| Target::RegKey { path: p.into() };
         let s = score_one(
             &s0,
@@ -1993,7 +2133,11 @@ mod tests {
             truth,
             vec![
                 item(k(&format!("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{CLSID}")), "Safe", true),
-                item(k("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Clients\\StartMenuInternet\\Firefox-1"), "Safe", true),
+                item(
+                    k("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Clients\\StartMenuInternet\\Firefox-1"),
+                    "Safe",
+                    true,
+                ),
                 item(k("HKLM\\SOFTWARE\\OddLink\\Pre"), "Safe", true),
             ],
         );
@@ -2305,14 +2449,35 @@ mod tests {
         .unwrap();
         assert!(is_if_empty(p.items[0].action.as_deref()));
         assert!(!is_if_empty(p.items[1].action.as_deref()));
-        assert!(removes(None) && removes(Some("Quarantine")) && !removes(Some("EditSegment")) && !removes(Some("ReportOnly")));
+        assert!(
+            removes(None)
+                && removes(Some("Quarantine"))
+                && !removes(Some("EditSegment"))
+                && !removes(Some("ReportOnly"))
+        );
     }
 
-    fn score_cx(s0: &Snap, s2: &Snap, truth: Vec<TruthItem>, offered: Vec<PlanItem>, lists0: Option<&ListIdx>) -> ToolScore {
+    fn score_cx(
+        s0: &Snap,
+        s2: &Snap,
+        truth: Vec<TruthItem>,
+        offered: Vec<PlanItem>,
+        lists0: Option<&ListIdx>,
+    ) -> ToolScore {
         let idx = TruthIdx::new(truth, Some(SID));
         let deny = Deny::default();
         let links = LinkMap::new(s0.reg_links().into_iter().chain(s2.reg_links()));
-        let cx = Ctx { truth: &idx, s0, s2, deny: &deny, sid: Some(SID), links: &links, lists0, classes: true, pre_base: None };
+        let cx = Ctx {
+            truth: &idx,
+            s0,
+            s2,
+            deny: &deny,
+            sid: Some(SID),
+            links: &links,
+            lists0,
+            classes: true,
+            pre_base: None,
+        };
         score_plan(&cx, "app", &Plan { tool: "t".into(), items: offered, ..Default::default() }, "p.json")
     }
 
@@ -2328,7 +2493,11 @@ mod tests {
             "firewall": [{"id": "{ABC}"}]
         }));
         let offered = vec![
-            item(Target::AppxPackage { full_name: "Microsoft.VisualStudioCode_1.0.0.0_neutral__8wekyb3d8bbwe".into() }, "Likely", false),
+            item(
+                Target::AppxPackage { full_name: "Microsoft.VisualStudioCode_1.0.0.0_neutral__8wekyb3d8bbwe".into() },
+                "Likely",
+                false,
+            ),
             item(Target::AppxPackage { full_name: "Other_1.0.0.0_neutral__x".into() }, "Likely", false),
             item(Target::Task { path: "Mozilla\\Firefox Default Browser Agent 308046B0AF4A39CB".into() }, "Safe", true),
             item(Target::Service { name: "mozillamaintenance".into() }, "Weak", false),
@@ -2337,7 +2506,11 @@ mod tests {
         let s = score_cx(&s0, &s2, vec![], offered.clone(), Some(&l0));
         let oc: Vec<&str> = s.items.iter().map(|i| i.outcome.as_str()).collect();
         assert_eq!(oc, vec!["danger", "other", "danger", "danger", "danger"]);
-        assert!(s.items[0].reasons[0].starts_with("existed in lists-0: A:Microsoft.VisualStudioCode"), "{:?}", s.items[0].reasons);
+        assert!(
+            s.items[0].reasons[0].starts_with("existed in lists-0: A:Microsoft.VisualStudioCode"),
+            "{:?}",
+            s.items[0].reasons
+        );
         assert_eq!((s.danger_listed, s.danger_preselected), (4, 1));
         // Without lists-0 nothing changes (older runs, M0).
         let s = score_cx(&s0, &s2, vec![], offered, None);
@@ -2355,7 +2528,15 @@ mod tests {
             // a dangling reference another product wrote before the install
             write_v(t, &format!("{u}\\Software\\TortoiseGit"), "MSysGit", 1, 10, 7, "C:\\Program Files\\Git\\bin");
             // a reference to something that still exists (a portable copy): not dangling
-            write_v(t, &format!("{u}\\Software\\TortoiseGit"), "Portable", 1, 10, 8, "\"C:\\Users\\t\\Tools\\npp\\notepad++.exe\" \"%1\"");
+            write_v(
+                t,
+                &format!("{u}\\Software\\TortoiseGit"),
+                "Portable",
+                1,
+                10,
+                8,
+                "\"C:\\Users\\t\\Tools\\npp\\notepad++.exe\" \"%1\"",
+            );
             write_k(t, "HKLM\\SOFTWARE", 1, Some(0), Some(1));
             write_k(t, "HKLM\\SOFTWARE\\Classes", 1, Some(0), Some(3));
             write_k(t, "HKLM\\SOFTWARE\\Classes\\.sh", 1, Some(0), Some(1));
@@ -2414,7 +2595,10 @@ mod tests {
         assert_eq!((c.danger_blocking, c.danger_unticked, c.preexisting_value_ref, c.old_empty_ext_key), (2, 1, 1, 1));
         assert_eq!((c.userdata_blocking, c.userdata_unticked, c.userdata_safe), (1, 1, 1));
         // Every danger item is in exactly one danger class.
-        assert_eq!(c.danger_blocking + c.danger_unticked + c.preexisting_value_ref + c.old_empty_ext_key + c.replaced_value, s.danger_listed);
+        assert_eq!(
+            c.danger_blocking + c.danger_unticked + c.preexisting_value_ref + c.old_empty_ext_key + c.replaced_value,
+            s.danger_listed
+        );
         assert_eq!(s.danger_blocking, c.danger_blocking);
         let md = render_md(&[AppScore { id: "a".into(), tools: vec![s], ..Default::default() }], &[]);
         assert!(md.contains("## Reporting classes") && md.contains("### (3) old_empty_ext_key"));
@@ -2461,11 +2645,18 @@ mod tests {
         let cl: Vec<&str> = s.items.iter().map(|i| i.class.as_deref().unwrap_or("")).collect();
         assert_eq!(cl, vec!["replaced_value", "unticked", "blocking"]);
         assert_eq!((s.danger_listed, s.danger_offered, s.danger_kept, s.danger_blocking), (3, 2, 1, 1));
-        assert!(s.items[0].reasons.iter().any(|r| r.contains("before `C:\\Old.lnk`, after `C:\\App.lnk`")), "{:?}", s.items[0].reasons);
+        assert!(
+            s.items[0].reasons.iter().any(|r| r.contains("before `C:\\Old.lnk`, after `C:\\App.lnk`")),
+            "{:?}",
+            s.items[0].reasons
+        );
         let c = s.classes.as_ref().unwrap();
         assert_eq!(c.replaced_value, 1);
         let md = render_md(&[AppScore { id: "a".into(), tools: vec![s], ..Default::default() }], &[]);
-        assert!(md.contains("### (3) replaced_value") && md.contains("| danger | danger_kept | danger_listed | danger_blocking |"));
+        assert!(
+            md.contains("### (3) replaced_value")
+                && md.contains("| danger | danger_kept | danger_listed | danger_blocking |")
+        );
     }
 
     #[test]
@@ -2506,7 +2697,17 @@ mod tests {
         let idx = TruthIdx::new(vec![], Some(SID));
         let deny = Deny::default();
         let links = LinkMap::default();
-        let cx = Ctx { truth: &idx, s0: &s0, s2: &s2, deny: &deny, sid: Some(SID), links: &links, lists0: Some(&l0), classes: false, pre_base: Some(&pb) };
+        let cx = Ctx {
+            truth: &idx,
+            s0: &s0,
+            s2: &s2,
+            deny: &deny,
+            sid: Some(SID),
+            links: &links,
+            lists0: Some(&l0),
+            classes: false,
+            pre_base: Some(&pb),
+        };
         let s = score_plan(&cx, "app", &Plan { tool: "t".into(), items: offered, ..Default::default() }, "p.json");
         let oc: Vec<&str> = s.items.iter().map(|i| i.outcome.as_str()).collect();
         assert_eq!(oc, vec!["other", "other", "other", "danger", "danger"]);
@@ -2515,7 +2716,16 @@ mod tests {
         assert_eq!(s.pre_same_app_base.as_deref(), Some("runs/clean"));
         // without the reference the same plan is danger throughout
         let cx2 = Ctx { pre_base: None, ..cx };
-        let s = score_plan(&cx2, "app", &Plan { tool: "t".into(), items: vec![item(k("HKLM\\SOFTWARE\\Vendor\\App"), "Safe", true)], ..Default::default() }, "p.json");
+        let s = score_plan(
+            &cx2,
+            "app",
+            &Plan {
+                tool: "t".into(),
+                items: vec![item(k("HKLM\\SOFTWARE\\Vendor\\App"), "Safe", true)],
+                ..Default::default()
+            },
+            "p.json",
+        );
         assert_eq!((s.danger_blocking, s.danger_preselected), (1, 1));
     }
 

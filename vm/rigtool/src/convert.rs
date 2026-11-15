@@ -28,7 +28,9 @@ pub fn from_clone(v: &Value, app: &str) -> Result<Plan> {
     let left = v.get("leftovers").and_then(|x| x.as_array()).context("clone file: no leftovers[] array")?;
     let mut items = Vec::new();
     for l in left {
-        let Some(p) = l.get("path").and_then(|x| x.as_str()) else { continue };
+        let Some(p) = l.get("path").and_then(|x| x.as_str()) else {
+            continue;
+        };
         let checked = l.get("checked").and_then(|x| x.as_bool()).unwrap_or(false);
         items.push(PlanItem {
             target: target_of(p),
@@ -63,7 +65,13 @@ pub fn from_removed(v: &Value, tool: &str, app: &str) -> Result<Plan> {
     Ok(Plan { schema: "purge.plan/0".into(), app: app.into(), tool: tool.into(), mode: "post".into(), items })
 }
 
-pub fn cmd_convert(clone: Option<&Path>, removed: Option<&Path>, tool: Option<&str>, app: &str, out: &Path) -> Result<()> {
+pub fn cmd_convert(
+    clone: Option<&Path>,
+    removed: Option<&Path>,
+    tool: Option<&str>,
+    app: &str,
+    out: &Path,
+) -> Result<()> {
     let plan = match (clone, removed) {
         (Some(c), None) => from_clone(&jsonio::read(c)?, app)?,
         (None, Some(r)) => {
@@ -96,7 +104,10 @@ mod tests {
             Target::Path { path: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Notepad.lnk".into() }
         );
         assert!(p.items[0].preselected);
-        assert_eq!(p.items[1].target, Target::RegKey { path: "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Notepad++".into() });
+        assert_eq!(
+            p.items[1].target,
+            Target::RegKey { path: "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Notepad++".into() }
+        );
         assert_eq!((p.items[1].band.as_str(), p.items[1].preselected), ("Likely", false));
 
         let r = json!(["C:\\Program Files\\Mozilla Firefox", "HKEY_CURRENT_USER\\Software\\Mozilla\\Firefox"]);

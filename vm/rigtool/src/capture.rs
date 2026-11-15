@@ -57,11 +57,7 @@ fn ft(f: FILETIME) -> u64 {
 
 /// `\\?\` form of an absolute path for Win32 calls.
 fn long_path(p: &str) -> String {
-    if let Some(r) = p.strip_prefix("\\\\") {
-        format!("\\\\?\\UNC\\{r}")
-    } else {
-        format!("\\\\?\\{p}")
-    }
+    if let Some(r) = p.strip_prefix("\\\\") { format!("\\\\?\\UNC\\{r}") } else { format!("\\\\?\\{p}") }
 }
 
 fn join(parent: &str, name: &str) -> String {
@@ -271,7 +267,13 @@ fn link_value(h: HKEY) -> Option<Val> {
         return None;
     }
     let d = &data[..l2 as usize];
-    Some(Val { name: "SymbolicLinkValue".into(), typ, len: l2, hash: snap::data_hash(d), preview: snap::preview(typ, d) })
+    Some(Val {
+        name: "SymbolicLinkValue".into(),
+        typ,
+        len: l2,
+        hash: snap::data_hash(d),
+        preview: snap::preview(typ, d),
+    })
 }
 
 fn reg_query_string(k: &str, name: &str) -> Option<String> {
@@ -473,7 +475,9 @@ fn walk_key(ctx: &Ctx, parent: HKEY, name: &str, path: &str, enum_lwt: u64, recu
         }
     };
     // Depth-1 children (recurse == false) are recorded as keys only.
-    let Some(info) = emit_key(ctx, key.0, path, recurse, out) else { return };
+    let Some(info) = emit_key(ctx, key.0, path, recurse, out) else {
+        return;
+    };
     if !recurse || info.nsub == 0 {
         return;
     }
@@ -610,8 +614,7 @@ fn list_dir(path: &str) -> std::result::Result<Vec<Entry>, u32> {
         let n = data.cFileName.iter().position(|&c| c == 0).unwrap_or(data.cFileName.len());
         let name = String::from_utf16_lossy(&data.cFileName[..n]);
         if name != "." && name != ".." {
-            let reparse =
-                if data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 { data.dwReserved0 } else { 0 };
+            let reparse = if data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 { data.dwReserved0 } else { 0 };
             out.push(Entry {
                 name,
                 attrs: data.dwFileAttributes,
@@ -711,7 +714,14 @@ fn emit_root_dir(path: &str, emit: bool, out: &mut Out) -> bool {
     a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 && a.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0
 }
 
-fn plan_fs(ctx: &Ctx, root: &RootSpec, listed_elsewhere: bool, split: u32, units: &mut Vec<Unit>, tasks: &mut Vec<Task>) {
+fn plan_fs(
+    ctx: &Ctx,
+    root: &RootSpec,
+    listed_elsewhere: bool,
+    split: u32,
+    units: &mut Vec<Unit>,
+    tasks: &mut Vec<Task>,
+) {
     let mut out = Out::default();
     if !emit_root_dir(&root.path, !listed_elsewhere, &mut out) {
         units.push(Unit::Ready(out));

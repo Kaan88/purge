@@ -107,7 +107,9 @@ fn load_label_rules_depth(path: &Path, depth: usize) -> Result<Vec<LabelRule>> {
     let mut out = Vec::new();
     for inc in &j.include {
         let p = path.parent().unwrap_or(Path::new(".")).join(inc);
-        out.extend(load_label_rules_depth(&p, depth + 1).with_context(|| format!("{}: include {inc:?}", path.display()))?);
+        out.extend(
+            load_label_rules_depth(&p, depth + 1).with_context(|| format!("{}: include {inc:?}", path.display()))?,
+        );
     }
     for r in j.rules {
         if !LABELS.contains(&r.label.as_str()) {
@@ -254,19 +256,28 @@ pub fn store_updates(lists0: &Value, lists2: &Value) -> Vec<(String, String)> {
     if lists0.is_null() || lists2.is_null() {
         return Vec::new();
     }
-    let names = |a: &[Value]| -> HashSet<String> { a.iter().filter_map(|e| s(e, "full_name")).map(|n| canon::fold(&n)).collect() };
+    let names = |a: &[Value]| -> HashSet<String> {
+        a.iter().filter_map(|e| s(e, "full_name")).map(|n| canon::fold(&n)).collect()
+    };
     let (n0, n2) = (names(&a0), names(&a2));
     let mut out: Vec<(String, String)> = Vec::new();
     for e in a0.iter().chain(a2.iter()) {
-        let Some(full) = s(e, "full_name") else { continue };
+        let Some(full) = s(e, "full_name") else {
+            continue;
+        };
         let f = canon::fold(&full);
         if n0.contains(&f) == n2.contains(&f) {
             continue;
         }
         let sparse = e.get("sparse").and_then(|x| x.as_bool()).unwrap_or(true);
         let loc = s(e, "install_location").map(|l| canon::fold(&l)).unwrap_or_default();
-        let Some(family) = crate::score::package_family(&full) else { continue };
-        if sparse || !loc.starts_with(&canon::fold("C:\\Program Files\\WindowsApps\\")) || !canon::fold(&family).ends_with("_8wekyb3d8bbwe") {
+        let Some(family) = crate::score::package_family(&full) else {
+            continue;
+        };
+        if sparse
+            || !loc.starts_with(&canon::fold("C:\\Program Files\\WindowsApps\\"))
+            || !canon::fold(&family).ends_with("_8wekyb3d8bbwe")
+        {
             continue;
         }
         for n in [f, canon::fold(&family)] {
@@ -289,7 +300,9 @@ pub fn relabel_store_updates(items: &mut [TruthItem], upd: &[(String, String)]) 
         let cs = canon::fold(&i.target.canon_string());
         if let Some((_, fam)) = upd.iter().find(|(x, _)| cs.contains(x.as_str())) {
             i.label = "ambient".into();
-            i.rule = format!("built-in: Microsoft Store self-update of {fam} (full name differs between lists-0 and lists-2)");
+            i.rule = format!(
+                "built-in: Microsoft Store self-update of {fam} (full name differs between lists-0 and lists-2)"
+            );
             n += 1;
         }
     }
@@ -324,11 +337,15 @@ impl KeptAnchors {
                 let mut ks = vec![
                     format!("HKLM\\SOFTWARE\\Classes\\Installer\\Products\\{pk}"),
                     format!("HKLM\\SOFTWARE\\Classes\\Installer\\Features\\{pk}"),
-                    format!("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\{pk}"),
+                    format!(
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\{pk}"
+                    ),
                     format!("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{}", g.trim()),
                 ];
                 if let Some(sid) = sid {
-                    ks.push(format!("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\{sid}\\Products\\{pk}"));
+                    ks.push(format!(
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\{sid}\\Products\\{pk}"
+                    ));
                     ks.push(format!("HKU\\{sid}\\Software\\Microsoft\\Installer\\Products\\{pk}"));
                     ks.push(format!("HKU\\{sid}\\Software\\Microsoft\\Installer\\Features\\{pk}"));
                 }
@@ -365,9 +382,10 @@ pub struct Labeler {
 
 impl Labeler {
     fn rule_for(&self, label: &str, cs: &str) -> Option<String> {
-        self.rules.iter().find(|r| r.label == label && r.re.is_match(cs)).map(|r| {
-            if r.why.is_empty() { format!("labels: {}", r.re.as_str()) } else { format!("labels: {}", r.why) }
-        })
+        self.rules
+            .iter()
+            .find(|r| r.label == label && r.re.is_match(cs))
+            .map(|r| if r.why.is_empty() { format!("labels: {}", r.re.as_str()) } else { format!("labels: {}", r.why) })
     }
 
     /// (label, rule). First match wins: rig, ambient set, ambient rules, kept_owner rules,
@@ -381,7 +399,8 @@ impl Labeler {
             return ("rig".into(), r);
         }
         if let Some(r) = self.rules.iter().find(|r| r.first && r.re.is_match(&cs)) {
-            let why = if r.why.is_empty() { format!("labels: {}", r.re.as_str()) } else { format!("labels: {}", r.why) };
+            let why =
+                if r.why.is_empty() { format!("labels: {}", r.re.as_str()) } else { format!("labels: {}", r.why) };
             return (r.label.clone(), why);
         }
         if let Target::RegValueChanged { before, after, .. } = t
@@ -422,10 +441,9 @@ impl Labeler {
             return false;
         }
         let cs = t.canon_string();
-        self.rules
-            .iter()
-            .find(|r| r.label == "ambient" && r.re.is_match(&cs))
-            .is_some_and(|r| r.split && why == format!("labels: {}", if r.why.is_empty() { r.re.as_str() } else { r.why.as_str() }))
+        self.rules.iter().find(|r| r.label == "ambient" && r.re.is_match(&cs)).is_some_and(|r| {
+            r.split && why == format!("labels: {}", if r.why.is_empty() { r.re.as_str() } else { r.why.as_str() })
+        })
     }
 
     /// Would `t` belong to a still-installed product (a kept_owner rule or an entries_left anchor)?
@@ -483,7 +501,12 @@ pub fn split_containers(items: Vec<Item>, s2: &Snap, lab: &Labeler) -> (Vec<Item
                 }
                 for (k, r) in &s2.keys {
                     if r.seen && is_child(k.as_str()) {
-                        work.push(Item { target: Target::RegKey { path: k.0.clone() }, size: None, lwt: Some(r.lwt), dir: None });
+                        work.push(Item {
+                            target: Target::RegKey { path: k.0.clone() },
+                            size: None,
+                            lwt: Some(r.lwt),
+                            dir: None,
+                        });
                     }
                 }
             } else {
@@ -500,7 +523,12 @@ pub fn split_containers(items: Vec<Item>, s2: &Snap, lab: &Labeler) -> (Vec<Item
                     } else {
                         r.size
                     };
-                    work.push(Item { target: Target::Path { path: p.0.clone() }, size: Some(size), lwt: Some(r.mtime), dir: Some(r.dir) });
+                    work.push(Item {
+                        target: Target::Path { path: p.0.clone() },
+                        size: Some(size),
+                        lwt: Some(r.mtime),
+                        dir: Some(r.dir),
+                    });
                 }
             }
         }
@@ -591,7 +619,9 @@ pub fn split_kept(items: Vec<Item>, s0: &Snap, s2: &Snap, lab: &Labeler) -> (Vec
     for (&i, d) in &desc {
         let top = items[i].target.path().to_string();
         let is_key = matches!(items[i].target, Target::RegKey { .. });
-        let mk = |p: &str| if is_key { Target::RegKey { path: p.to_string() } } else { Target::Path { path: p.to_string() } };
+        let mk = |p: &str| {
+            if is_key { Target::RegKey { path: p.to_string() } } else { Target::Path { path: p.to_string() } }
+        };
         // Kept entries (and, below a leftover top, user_data entries) below the top, reduced to the top-most ones.
         let user_split = top_leftover.contains(&i);
         let marked: HashSet<String> = d
@@ -608,8 +638,12 @@ pub fn split_kept(items: Vec<Item>, s0: &Snap, s2: &Snap, lab: &Labeler) -> (Vec
         if marked.is_empty() {
             continue;
         }
-        let minimal: Vec<&String> =
-            d.iter().filter(|p| marked.contains(&canon::fold(p)) && !canon::ancestors(p).any(|a| marked.contains(&canon::fold(a)))).collect();
+        let minimal: Vec<&String> = d
+            .iter()
+            .filter(|p| {
+                marked.contains(&canon::fold(p)) && !canon::ancestors(p).any(|a| marked.contains(&canon::fold(a)))
+            })
+            .collect();
         // Containers: the top and every ancestor of a kept entry below it (folded -> original case).
         let ftop = canon::fold(&top);
         let mut cont: HashMap<String, String> = HashMap::new();
@@ -630,7 +664,9 @@ pub fn split_kept(items: Vec<Item>, s0: &Snap, s2: &Snap, lab: &Labeler) -> (Vec
             if cont.contains_key(&fp) {
                 continue;
             }
-            let Some(parent) = canon::parent(p) else { continue };
+            let Some(parent) = canon::parent(p) else {
+                continue;
+            };
             if !cont.contains_key(&canon::fold(parent)) {
                 continue;
             }
@@ -664,7 +700,9 @@ pub fn split_kept(items: Vec<Item>, s0: &Snap, s2: &Snap, lab: &Labeler) -> (Vec
         } else {
             // Sizes of the emitted dirs.
             for p in d {
-                let Some(r) = s2.path(p).filter(|r| !r.dir) else { continue };
+                let Some(r) = s2.path(p).filter(|r| !r.dir) else {
+                    continue;
+                };
                 if let Some(&j) = canon::ancestors(p).find_map(|a| emitted.get(&canon::fold(a)))
                     && let Some(s) = out[j].size.as_mut()
                 {
@@ -852,7 +890,11 @@ pub fn cmd_truth(a: &TruthArgs) -> Result<()> {
         eprintln!("truth: warning: leftover matches deny: {h}");
     }
     if tf.deny_hits.len() > 10 {
-        eprintln!("truth: warning: {} more leftover item(s) match the deny list (deny_hits in {})", tf.deny_hits.len() - 10, a.out.display());
+        eprintln!(
+            "truth: warning: {} more leftover item(s) match the deny list (deny_hits in {})",
+            tf.deny_hits.len() - 10,
+            a.out.display()
+        );
     }
     Ok(())
 }
@@ -913,7 +955,10 @@ mod tests {
         assert_eq!(lab.label(&k("HKLM\\SOFTWARE\\Python\\PyLauncher")).0, "kept_owner");
         assert_eq!(lab.label(&p("C:\\Windows\\py.exe")).0, "kept_owner");
         assert_eq!(lab.label(&p("C:\\Program Files\\PyLauncher\\x.dll")).0, "kept_owner");
-        assert_eq!(lab.label(&k("HKLM\\SOFTWARE\\Classes\\Installer\\Products\\AAAAAAAABBBBCCCCDDDDEEEEEEEEEEEE")).0, "kept_owner");
+        assert_eq!(
+            lab.label(&k("HKLM\\SOFTWARE\\Classes\\Installer\\Products\\AAAAAAAABBBBCCCCDDDDEEEEEEEEEEEE")).0,
+            "kept_owner"
+        );
         assert_eq!(lab.label(&p("C:\\Users\\t\\AppData\\Roaming\\App\\Profiles\\p1")).0, "user_data");
         let (l, r) = lab.label(&p("C:\\Program Files\\App"));
         assert_eq!((l.as_str(), r.as_str()), ("leftover", "default"));
@@ -921,7 +966,8 @@ mod tests {
 
     #[test]
     fn entries_left_and_lists() {
-        let run = json!({"entries_left": ["HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\A"]});
+        let run =
+            json!({"entries_left": ["HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\A"]});
         let l0 = json!({"uninstall": [{"key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Old"}]});
         let l2 = json!({"uninstall": [
             {"key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Old"},
@@ -965,10 +1011,8 @@ mod tests {
         };
         let (items, n) = split_kept(items::derive(&s0, &s2), &s0, &s2, &lab);
         assert_eq!(n, 1);
-        let got: Vec<(String, Option<u64>, String)> = label_items(items, &lab, None)
-            .into_iter()
-            .map(|i| (i.target.canon_string(), i.size, i.label))
-            .collect();
+        let got: Vec<(String, Option<u64>, String)> =
+            label_items(items, &lab, None).into_iter().map(|i| (i.target.canon_string(), i.size, i.label)).collect();
         assert_eq!(
             got,
             vec![
@@ -1068,7 +1112,13 @@ mod tests {
             write_v(t, "HKLM\\SOFTWARE\\Classes\\PackagedCom", "MaxInstallOrder", 4, 4, 3, "1");
             write_k(t, "HKLM\\SOFTWARE\\Classes\\PackagedCom\\Package", 2, Some(0), Some(1));
             write_k(t, "HKLM\\SOFTWARE\\Classes\\PackagedCom\\Package\\App_1.0.0.0_neutral__abc", 2, Some(0), Some(1));
-            write_k(t, "HKLM\\SOFTWARE\\Classes\\PackagedCom\\Package\\App_1.0.0.0_neutral__abc\\Class", 2, Some(0), Some(0));
+            write_k(
+                t,
+                "HKLM\\SOFTWARE\\Classes\\PackagedCom\\Package\\App_1.0.0.0_neutral__abc\\Class",
+                2,
+                Some(0),
+                Some(0),
+            );
             write_k(t, "HKLM\\SOFTWARE\\Classes\\PackagedCom\\ClassIndex", 2, Some(0), Some(0));
             write_d(t, "C:\\Users\\u\\AppData\\Local\\Microsoft\\Windows\\Caches", 0x10, 1, 0);
             write_f(t, "C:\\Users\\u\\AppData\\Local\\Microsoft\\Windows\\Caches\\x.db", 3, 0x20, 1, 0);
@@ -1103,13 +1153,20 @@ mod tests {
         let want: Vec<(String, String)> = want.into_iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
         assert_eq!(got, want);
         // the Caches dir is ambient as a collapsed item (no split rule), but a `first` rule beats ambient
-        assert_eq!(lab.label(&Target::Path { path: "C:\\Users\\u\\AppData\\Local\\Microsoft\\Windows\\Caches\\x.db".into() }).0, "leftover");
+        assert_eq!(
+            lab.label(&Target::Path { path: "C:\\Users\\u\\AppData\\Local\\Microsoft\\Windows\\Caches\\x.db".into() })
+                .0,
+            "leftover"
+        );
     }
 
     #[test]
     fn same_segments_only_for_complete_lists() {
         assert!(same_segments("C:\\A;C:\\B\\", "c:\\a;;C:\\B;"));
-        assert!(same_segments("%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;", "%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps"));
+        assert!(same_segments(
+            "%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;",
+            "%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps"
+        ));
         assert!(!same_segments("C:\\A", "C:\\B"));
         assert!(!same_segments("C:\\A;C:\\B", "C:\\A;C:\\B;C:\\App\\bin"));
         assert!(!same_segments("#0123456789abcdef", "#0123456789abcdef"));
@@ -1143,7 +1200,8 @@ mod tests {
             write_v(t, "HKLM\\SOFTWARE\\Classes", "AppVal", 1, 2, 9, "v");
             write_k(t, "HKLM\\SOFTWARE\\App", 2, Some(0), Some(0));
         });
-        let lab = Labeler { rig: RigRules::new(&[&s0, &s2]), ambient: None, rules: vec![], kept: KeptAnchors::default() };
+        let lab =
+            Labeler { rig: RigRules::new(&[&s0, &s2]), ambient: None, rules: vec![], kept: KeptAnchors::default() };
         let items = label_items(items::derive(&s0, &s2), &lab, None);
         let got: Vec<(String, String)> = items.iter().map(|i| (i.target.canon_string(), i.label.clone())).collect();
         assert_eq!(
@@ -1174,8 +1232,19 @@ mod tests {
         ]});
         let upd = store_updates(&l0, &l2);
         let fams: BTreeSet<&str> = upd.iter().map(|(_, f)| f.as_str()).collect();
-        assert_eq!(fams.into_iter().collect::<Vec<_>>(), vec!["Microsoft.VCLibs.140.00_8wekyb3d8bbwe", "Microsoft.Windows.Photos_8wekyb3d8bbwe"]);
-        let it = |t: Target, l: &str| TruthItem { target: t, label: l.into(), rule: String::new(), size: None, lwt: None, dir: None, in_s1: None };
+        assert_eq!(
+            fams.into_iter().collect::<Vec<_>>(),
+            vec!["Microsoft.VCLibs.140.00_8wekyb3d8bbwe", "Microsoft.Windows.Photos_8wekyb3d8bbwe"]
+        );
+        let it = |t: Target, l: &str| TruthItem {
+            target: t,
+            label: l.into(),
+            rule: String::new(),
+            size: None,
+            lwt: None,
+            dir: None,
+            in_s1: None,
+        };
         let mut items = vec![
             it(Target::Path { path: "C:\\Program Files\\WindowsApps\\Microsoft.Windows.Photos_2026.1.0.0_x64__8wekyb3d8bbwe\\a.dll".into() }, "leftover"),
             it(Target::RegKey { path: "HKLM\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\Microsoft.Windows.Photos_8wekyb3d8bbwe".into() }, "leftover"),

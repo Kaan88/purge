@@ -459,7 +459,9 @@ impl OpT<'_> {
 
     /// Does this op's target cover diff record `c` (see the module comment)?
     fn covers(&self, c: &Change) -> bool {
-        let (Some(kind), Some(t)) = (self.kind.as_deref(), self.target.as_ref()) else { return false };
+        let (Some(kind), Some(t)) = (self.kind.as_deref(), self.target.as_ref()) else {
+            return false;
+        };
         if c.op == '+' {
             return false;
         }
@@ -550,7 +552,9 @@ fn canary_snap(c: &Canary, a: &Snap, b: &Snap) -> Src {
                     "snap: not captured by the before snapshot".into()
                 });
             };
-            let Some(rb) = b.path(&c.path) else { return Src::Missing("snap: absent after".into()) };
+            let Some(rb) = b.path(&c.path) else {
+                return Src::Missing("snap: absent after".into());
+            };
             let mut d = Vec::new();
             if ra.dir != rb.dir {
                 d.push(format!("snap: kind {}->{}", if ra.dir { "D" } else { "F" }, if rb.dir { "D" } else { "F" }));
@@ -580,7 +584,9 @@ fn canary_snap(c: &Canary, a: &Snap, b: &Snap) -> Src {
             if !a.values_known(&c.path) {
                 return Src::Unverified("snap: values not listed in the before snapshot".into());
             }
-            let Some(kb) = b.key(&c.path) else { return Src::Missing("snap: key absent after".into()) };
+            let Some(kb) = b.key(&c.path) else {
+                return Src::Missing("snap: key absent after".into());
+            };
             if !b.values_known(&c.path) {
                 return Src::Unverified("snap: values not listed in the after snapshot".into());
             }
@@ -608,7 +614,9 @@ fn canary_snap(c: &Canary, a: &Snap, b: &Snap) -> Src {
                     "snap: not captured by the before snapshot".into()
                 });
             };
-            let Some(vb) = b.value(&c.path, name) else { return Src::Missing("snap: value absent after".into()) };
+            let Some(vb) = b.value(&c.path, name) else {
+                return Src::Missing("snap: value absent after".into());
+            };
             if (va.typ, va.hash) == (vb.typ, vb.hash) {
                 Src::Intact
             } else {
@@ -1462,7 +1470,9 @@ mod tests {
             "QuarantineMove" | "RemoveDirIfEmpty" => json!({"type": "Path", "path": a}),
             "DeleteKeyTree" | "DeleteKeyIfEmpty" => json!({"type": "RegKey", "path": a}),
             "DeleteValue" => json!({"type": "RegValue", "path": a, "name": b}),
-            "EditSegment" => json!({"type": "RegMultiSzSegment", "path": a, "name": b, "segment": c}),
+            "EditSegment" => {
+                json!({"type": "RegMultiSzSegment", "path": a, "name": b, "segment": c})
+            }
             _ => json!({"type": "AppxPackage", "full_name": a}),
         }
     }

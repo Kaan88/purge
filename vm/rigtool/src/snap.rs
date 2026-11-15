@@ -1,8 +1,8 @@
 //! Snapshot format (RIG.md §2): records, streaming reader, in-memory index, writer helpers.
 
 use crate::canon::{self, CiStr, CiString};
-use crate::escape::{escape_into, unescape};
 use crate::err::{Context, Result, bail};
+use crate::escape::{escape_into, unescape};
 use flate2::read::MultiGzDecoder;
 use std::collections::HashMap;
 use std::fs::File;
@@ -120,10 +120,7 @@ pub struct KeyRec {
 
 impl KeyRec {
     pub fn value(&self, name: &str) -> Option<&ValRec> {
-        self.values
-            .binary_search_by(|v| canon::ci_cmp(&v.name, name))
-            .ok()
-            .map(|i| &self.values[i])
+        self.values.binary_search_by(|v| canon::ci_cmp(&v.name, name)).ok().map(|i| &self.values[i])
     }
 }
 
@@ -305,9 +302,7 @@ impl Snap {
                         self.error_paths = p.split('|').filter(|s| !s.is_empty()).map(str::to_string).collect();
                     }
                 }
-                "roots" => {
-                    self.roots = f.iter().filter(|s| !s.is_empty()).map(|s| RootSpec::parse(s, None)).collect()
-                }
+                "roots" => self.roots = f.iter().filter(|s| !s.is_empty()).map(|s| RootSpec::parse(s, None)).collect(),
                 "exclude" => self.excludes = f.iter().filter(|s| !s.is_empty()).cloned().collect(),
                 "denied" => {
                     if let Some(p) = f.first().filter(|s| !s.is_empty()) {
@@ -413,7 +408,8 @@ impl Snap {
         }
         let readable = |a: &str| !self.is_denied(a) && self.key(a).is_none_or(|r| r.nv.is_some());
         if self.roots.is_empty() {
-            return self.keys.contains_key(CiStr::new(k)) || canon::parent(k).is_some_and(|q| self.has_key(q) && readable(q));
+            return self.keys.contains_key(CiStr::new(k))
+                || canon::parent(k).is_some_and(|q| self.has_key(q) && readable(q));
         }
         let Some(root) = self.roots.iter().filter(|r| r.reg && r.captures(k)).max_by_key(|r| r.path.len()) else {
             return false;
@@ -467,7 +463,9 @@ impl Snap {
     pub fn guess_user_sid(&self) -> Option<String> {
         let mut all = std::collections::BTreeSet::new();
         for k in self.keys.keys() {
-            let Some(rest) = k.as_str().strip_prefix("HKU\\") else { continue };
+            let Some(rest) = k.as_str().strip_prefix("HKU\\") else {
+                continue;
+            };
             let s = rest.split('\\').next().unwrap_or("");
             if s.starts_with("S-1-5-21-") && !s.to_ascii_lowercase().ends_with("_classes") {
                 all.insert(s.to_string());
@@ -679,7 +677,15 @@ mod tests {
         let mut t = header_line(&Header::default());
         t.push_str(&meta_line("roots", &["HKLM\\SOFTWARE".into(), "C:\\ProgramData".into(), "HKU\\S-1-5-18".into()]));
         write_k(&mut t, "HKLM\\SOFTWARE\\WOW6432Node\\Clients", 1, Some(1), Some(0));
-        write_v(&mut t, "HKLM\\SOFTWARE\\WOW6432Node\\Clients", "SymbolicLinkValue", REG_LINK, 68, 1, "\\REGISTRY\\MACHINE\\SOFTWARE\\Clients");
+        write_v(
+            &mut t,
+            "HKLM\\SOFTWARE\\WOW6432Node\\Clients",
+            "SymbolicLinkValue",
+            REG_LINK,
+            68,
+            1,
+            "\\REGISTRY\\MACHINE\\SOFTWARE\\Clients",
+        );
         write_d(&mut t, "C:\\ProgramData\\Denied", 0x10, 1, 0);
         t.push_str(&meta_line("denied", &["C:\\ProgramData\\Denied".into()]));
         write_k(&mut t, "HKU\\S-1-5-18", 1, Some(1), Some(0));
@@ -687,7 +693,10 @@ mod tests {
         let s = Snap::from_text(&t).unwrap();
         assert!(s.is_denied("c:\\programdata\\DENIED"));
         assert!(!s.captures_path("C:\\ProgramData\\Denied\\x"));
-        assert_eq!(s.reg_links(), vec![("HKLM\\SOFTWARE\\WOW6432Node\\Clients".to_string(), "HKLM\\SOFTWARE\\Clients".to_string())]);
+        assert_eq!(
+            s.reg_links(),
+            vec![("HKLM\\SOFTWARE\\WOW6432Node\\Clients".to_string(), "HKLM\\SOFTWARE\\Clients".to_string())]
+        );
         // the link key itself stays, a followed copy below it is dropped
         assert!(s.has_key("HKU\\S-1-5-18"));
         assert!(!s.has_key("HKU\\S-1-5-18\\Software"));
