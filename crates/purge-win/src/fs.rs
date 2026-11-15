@@ -245,7 +245,7 @@ impl FileMeta {
 /// A handle opened on the path itself, never through a reparse point at its final component
 /// (`FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`, attribute-read access, full sharing).
 #[derive(Debug)]
-pub struct FileHandle(OwnedHandle);
+pub struct FileHandle(pub(crate) OwnedHandle);
 
 impl FileHandle {
     /// Opens `path` for attribute reads without following a final reparse point.
