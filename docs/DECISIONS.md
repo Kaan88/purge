@@ -50,7 +50,7 @@ what would reverse it. Decisions the user made themselves are marked (user).
 
 ## M2
 
-| Date | Decision | Why | Revisit |
+| Date | Decision | Why | Reverse if |
 |---|---|---|---|
 | 2026-11-15 | M2 executes file, registry and AppX items only. Service, scheduled-task and firewall execute and undo are deferred to M1b; such an item, if selected, is journalled as skipped "not supported in this version" | User decision in the M2 design. No scanner emits those targets yet | M1b |
 | 2026-11-15 | `--confirm` = SHA-256(plan hash, selection hash); default selection is Safe and preselected; `--select` and `plan from-targets` exist only in `rig-exec` builds. The release engine contains no path into the executor | User decision. The consent dialog that guards deletion is M3 | M3 |
