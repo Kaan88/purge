@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use crate::filesystem::FileSystemSource;
 use crate::registry::{KeyWalker, RegistrySource};
+use crate::sysobj::{MsiTables, TaskInfo};
 use crate::system::SystemSource;
 use crate::types::{
     DirEntry, ExistsState, FileMeta, FileTime, KeyInfo, KnownFolder, MsiContextState, MsiProduct,
@@ -60,13 +61,17 @@ pub enum Op {
     FsReadShortcut,
     /// [`FileSystemSource::is_admin_only_writable`].
     FsAdminOnly,
-    /// Every [`SystemSource`] call.
+    /// Every [`SystemSource`] call not counted under a kind of its own.
     System,
+    /// [`SystemSource::msi_tables`]; items are rows over all tables.
+    SysMsiTables,
+    /// [`SystemSource::tasks`]; items are tasks.
+    SysTasks,
 }
 
 impl Op {
     /// Every kind, in report order.
-    pub const ALL: [Op; 16] = [
+    pub const ALL: [Op; 18] = [
         Op::RegKeyInfo,
         Op::RegSubkeys,
         Op::RegValues,
@@ -83,6 +88,8 @@ impl Op {
         Op::FsReadShortcut,
         Op::FsAdminOnly,
         Op::System,
+        Op::SysMsiTables,
+        Op::SysTasks,
     ];
 
     /// The short name used in reports.
@@ -104,6 +111,8 @@ impl Op {
             Op::FsReadShortcut => "fs.read_shortcut",
             Op::FsAdminOnly => "fs.admin_only",
             Op::System => "sys",
+            Op::SysMsiTables => "sys.msi_tables",
+            Op::SysTasks => "sys.tasks",
         }
     }
 
@@ -247,6 +256,10 @@ fn len<T, E>(r: &Result<Vec<T>, E>) -> u64 {
 
 fn none<T>(_: &T) -> u64 {
     0
+}
+
+fn rows<E>(r: &Result<MsiTables, E>) -> u64 {
+    r.as_ref().map_or(0, |t| t.row_count() as u64)
 }
 
 /// A [`RegistrySource`] that counts the calls it passes on.
@@ -454,6 +467,16 @@ impl SystemSource for MeteredSystem<'_> {
         self.meter.time(Op::System, none, || self.inner.packages())
     }
 
+    fn msi_tables(&self, local_package: &str) -> SourceResult<MsiTables> {
+        self.meter.time(Op::SysMsiTables, rows, || {
+            self.inner.msi_tables(local_package)
+        })
+    }
+
+    fn tasks(&self) -> SourceResult<Vec<TaskInfo>> {
+        self.meter.time(Op::SysTasks, len, || self.inner.tasks())
+    }
+
     fn now(&self) -> FileTime {
         self.meter.time(Op::System, none, || self.inner.now())
     }
@@ -495,5 +518,70 @@ mod tests {
         assert!(summary.starts_with("reg.values 1/1 "), "{summary}");
         assert!(!summary.contains("reg.subkeys"), "{summary}");
         assert_eq!(MeterSnapshot::default().summary(), "");
+    }
+
+    #[test]
+    fn metered_forwards_and_counts_msi_tables_and_tasks() {
+        use crate::sysobj::MsiComponentRow;
+        use crate::types::SourceError;
+        use purge_model::object::{TaskAction, TaskIdentity};
+
+        let pkg = r"C:\Windows\Installer\1a2b3c.msi";
+        let tables = MsiTables {
+            properties: vec![("ProductName".into(), "App".into())],
+            components: vec![MsiComponentRow {
+                component: "Main".into(),
+                component_id: None,
+                attributes: 0,
+                key_path: None,
+            }],
+            progids: vec!["App.Doc".into()],
+            ..MsiTables::default()
+        };
+        let task = TaskInfo {
+            identity: TaskIdentity {
+                path: r"\Vendor\Update".into(),
+                actions: vec![TaskAction::Exec {
+                    path: r"C:\Program Files\App\update.exe".into(),
+                    arguments: None,
+                    working_dir: None,
+                }],
+            },
+            enabled: true,
+            ..TaskInfo::default()
+        };
+        let mut f = Fixture::new();
+        f.set_msi_tables(pkg, tables.clone());
+        f.add_task(task.clone());
+        f.add_task(TaskInfo::default());
+
+        let meter = Meter::new();
+        let sys = MeteredSystem::new(&f, &meter);
+        assert_eq!(sys.msi_tables(pkg), Ok(tables));
+        assert_eq!(
+            sys.msi_tables(r"C:\Windows\Installer\other.msi"),
+            Err(SourceError::NotFound)
+        );
+        assert_eq!(sys.tasks(), Ok(vec![task, TaskInfo::default()]));
+        let snap = meter.snapshot();
+        assert_eq!(snap.get(Op::SysMsiTables).calls, 2);
+        assert_eq!(snap.get(Op::SysMsiTables).items, 3);
+        assert_eq!(snap.get(Op::SysTasks).calls, 1);
+        assert_eq!(snap.get(Op::SysTasks).items, 2);
+        assert_eq!(snap.get(Op::System).calls, 0);
+        let summary = snap.summary();
+        assert!(summary.starts_with("sys.msi_tables 2/3 "), "{summary}");
+        assert!(summary.contains("; sys.tasks 1/2 "), "{summary}");
+
+        // Errors pass through unchanged and still count as calls.
+        let empty = Fixture::new();
+        let meter = Meter::new();
+        let sys = MeteredSystem::new(&empty, &meter);
+        assert_eq!(sys.msi_tables(pkg), Err(SourceError::NotCaptured));
+        assert_eq!(sys.tasks(), Err(SourceError::NotCaptured));
+        let snap = meter.snapshot();
+        assert_eq!(snap.get(Op::SysMsiTables).calls, 1);
+        assert_eq!(snap.get(Op::SysTasks).calls, 1);
+        assert_eq!(snap.get(Op::SysTasks).items, 0);
     }
 }

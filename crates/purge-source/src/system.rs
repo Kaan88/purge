@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::sysobj::{MsiTables, TaskInfo};
 use crate::types::{
     FileTime, KnownFolder, MsiContextState, MsiProduct, OsInfo, PackageInfo, ProcessInfo,
     ProfileInfo, SourceResult,
@@ -45,6 +46,16 @@ pub trait SystemSource: Send + Sync {
 
     /// The registered AppX/MSIX packages (APPX-MIN).
     fn packages(&self) -> SourceResult<Vec<PackageInfo>>;
+
+    /// The tables of one cached MSI package, by its `LocalPackage` path (compared case-insensitively).
+    /// Within the [`crate::sysobj`] limits: a cut or dropped row sets [`MsiTables::truncated`]. A package
+    /// that does not exist is [`SourceError::NotFound`](crate::types::SourceError::NotFound); a source
+    /// that holds no tables is `NotCaptured`.
+    fn msi_tables(&self, local_package: &str) -> SourceResult<MsiTables>;
+
+    /// Every scheduled task the source can see; more than [`MAX_TASKS`](crate::sysobj::MAX_TASKS) is an
+    /// error. A task the scanning user cannot read keeps an empty action list.
+    fn tasks(&self) -> SourceResult<Vec<TaskInfo>>;
 
     /// The current time.
     fn now(&self) -> FileTime;

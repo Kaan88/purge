@@ -24,6 +24,8 @@
 //!   (`purge-win` feature `appx`): machine-wide with the registered users' SIDs when the engine is
 //!   elevated, otherwise the engine account's own packages, recorded for that account's SID. A package
 //!   with an `EffectiveExternalPath` is sparse and that path is its external location ([`to_package_info`]).
+//! - MSI tables and scheduled tasks ([`SystemSource::msi_tables`], [`SystemSource::tasks`]) are not read
+//!   yet: both answer `NotCaptured` (unknown), never an empty result.
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,10 +37,11 @@ use super::errors::{map_io, map_win32};
 use super::registry::LiveRegistry;
 use crate::fixture::expand_env;
 use crate::registry::{RegistrySource, control_set_name};
+use crate::sysobj::{MsiTables, TaskInfo};
 use crate::system::SystemSource;
 use crate::types::{
     KnownFolder, MsiContextState, MsiProduct, MsiProductState, PackageInfo, PackageSignatureKind,
-    ProcessInfo, ProfileInfo, REG_EXPAND_SZ, REG_SZ, SourceResult,
+    ProcessInfo, ProfileInfo, REG_EXPAND_SZ, REG_SZ, SourceError, SourceResult,
 };
 
 const NT_CV: &str = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion";
@@ -527,6 +530,16 @@ impl SystemSource for LiveSystem {
             .into_iter()
             .map(|p| to_package_info(p, listed_for.as_deref()))
             .collect())
+    }
+
+    fn msi_tables(&self, _local_package: &str) -> SourceResult<MsiTables> {
+        // Not read yet (M1B-SOURCE-IMPL): unknown, never an empty table set.
+        Err(SourceError::NotCaptured)
+    }
+
+    fn tasks(&self) -> SourceResult<Vec<TaskInfo>> {
+        // Not read yet (M1B-SOURCE-IMPL): unknown, never an empty list.
+        Err(SourceError::NotCaptured)
     }
 
     fn now(&self) -> FileTime {
