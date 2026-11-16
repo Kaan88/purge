@@ -1,4 +1,4 @@
-<#
+﻿<#
   Purge rig v2: host driver (vm\RIG.md §1, §4). Windows PowerShell 5.1 compatible.
 
   Dot-source and call functions, or run a campaign directly:
@@ -85,7 +85,11 @@ param(
     # m2-fidelity: real-app round trips after the fixture runs (app ids of guest\apps.ps1; 'none' for none).
     [Alias('Apps')] [string[]] $M2Apps = @(),
     # m2-crash: matrix iterations per job (then a reboot continuation); 0 = all in one job.
-    [Alias('BatchSize')] [int] $M2BatchSize = -1
+    [Alias('BatchSize')] [int] $M2BatchSize = -1,
+    # m2-traps / m2-fidelity: a null run (exec replaced by an idle wait, nothing after snap B; RIG.md section 11.8).
+    [Alias('Null')] [switch] $M2Null,
+    # m2-fidelity app stage: the plan bands whose items are selected (default Safe, Likely, Weak; never Blocked).
+    [Alias('AppBands')] [string[]] $M2AppBands = @()
 )
 
 # Host platform: Windows (PowerShell 5.1 or 7) or Linux (pwsh 7, RIG.md §9). 5.1 has no $IsWindows.
@@ -348,6 +352,8 @@ function Get-CachedRunFiles {
 function Push-Tools {
     param([string]$RigTool = '', [string]$Engine = '', [switch]$NoBaselines, [string[]]$Installers = @())
     # The guest's rigtool is always the Windows build (rigtool.exe), on a Linux host too.
+    # $env:RIG_RIGTOOL overrides the default build (e.g. a CARGO_TARGET_DIR outside the repo).
+    if (-not $RigTool -and $env:RIG_RIGTOOL) { $RigTool = $env:RIG_RIGTOOL }
     if (-not $RigTool) { $RigTool = Join-Path $script:RigDir (HostPath 'rigtool\target\release\rigtool.exe') }
     if (-not (Test-Path -LiteralPath $RigTool)) { throw "rigtool not built: $RigTool (cargo build --release in vm\rigtool)" }
     $ep = Get-EnginePush -Engine $Engine
@@ -732,6 +738,19 @@ function Push-M2Install {
     Write-RigLog '  pushed install\install.ps1 to C:\cr\install'
 }
 
+# vm\truth\m2-ambient.json (RIG.md section 11.8) to C:\cr\bin\m2-ambient.json, where riglib Invoke-M2Execdiff passes
+# it as --ambient. -None (null runs) or no file: the guest copy is deleted, so execdiff runs without one.
+function Push-M2Ambient {
+    param([switch]$None)
+    $src = Join-Path $script:RigDir (HostPath 'truth\m2-ambient.json')
+    $null = Invoke-GuestCmd 'del /f /q C:\cr\bin\m2-ambient.json'
+    if ($None -or -not (Test-Path -LiteralPath $src)) { Write-RigLog "  no M2 ambient set pushed$(if (-not $None) { " ($src missing)" })"; return $false }
+    $r = Invoke-Guest @('copyto', '--target-directory', 'C:\cr\bin\', $src)
+    if ($r.code -ne 0) { throw "copy m2-ambient.json failed: $($r.out -join ' ')" }
+    Write-RigLog '  pushed truth\m2-ambient.json to C:\cr\bin'
+    $true
+}
+
 # The continuation marker a finished stage left (parsed), or $null when the run is complete.
 function Get-GuestContinuation {
     param([Parameter(Mandatory)][string]$Run)
@@ -836,6 +855,8 @@ function Invoke-SnapshotJob {
         if (-not $NoRestore) { Restore-Base -Snapshot $Snapshot -ExecutionEngine $ExecutionEngine -No3D:$No3D } else { Wait-Agent -TimeoutSec 120 }
         Push-Tools -Engine $eng
         Push-M2Install
+        $isNull = $(if ($Opts -is [System.Collections.IDictionary]) { [bool]$Opts['null'] } else { [bool]$Opts.null })
+        $null = Push-M2Ambient -None:$isNull
         $j = Invoke-M2Job -Run $Run -Mode $Mode -Opts $Opts -Template $Template -TimeoutSec $TimeoutSec -HardPowerOff:$HardPowerOff
         $rec.stages = @($j.stages); $logs = @($j.logs)
         if ($j.error) { $rec.error = $j.error }
@@ -860,8 +881,13 @@ function Invoke-SnapshotJob {
 
 # Pure: the options and job timeout of a mode.
 function Get-M2ModeOpts {
-    param([Parameter(Mandatory)][string]$Mode, [string]$Snapshot = 'm2-base', [switch]$HardPowerOff, [string[]]$FaultPoints = @(), [int]$BatchSize = -1)
+    param([Parameter(Mandatory)][string]$Mode, [string]$Snapshot = 'm2-base', [switch]$HardPowerOff, [string[]]$FaultPoints = @(), [int]$BatchSize = -1,
+          [Alias('Null')][switch]$NullRun, [int]$NullWaitSec = 3)
     $o = [ordered]@{ mode = $Mode; snapshot = $Snapshot }
+    if ($NullRun) {
+        if (@('m2-traps', 'm2-fidelity') -notcontains $Mode) { throw "-Null is for m2-traps / m2-fidelity only (got $Mode)" }
+        $o.null = $true; $o.null_wait = $NullWaitSec
+    }
     $to = 14400
     switch ($Mode) {
         'm2-install' { $to = 3600 }
@@ -883,15 +909,16 @@ function Get-M2ModeOpts {
 # Writes vm\runs\m2-<run>-<stamp>.log / .json.
 function Invoke-M2Mode {
     param([Parameter(Mandatory)][string]$Mode, [string]$Snapshot = 'm2-base', [string]$Engine = '', [string]$RunPrefix = '', [switch]$HardPowerOff,
-          [string[]]$FaultPoints = @(), [string[]]$Apps = @(), [int]$BatchSize = -1,
+          [string[]]$FaultPoints = @(), [string[]]$Apps = @(), [int]$BatchSize = -1, [Alias('Null')][switch]$NullRun, [string[]]$AppBands = @(),
           [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'))
     Assert-RigVm
     $run = Get-M2RunName -Mode $Mode -RunPrefix $RunPrefix
     $eng = Get-M2Engine -Engine $Engine
     if ($HardPowerOff -and $Mode -ne 'm2-crash') { throw '-HardPowerOff is for -Mode m2-crash only' }
-    $mo = Get-M2ModeOpts -Mode $Mode -Snapshot $Snapshot -HardPowerOff:$HardPowerOff -FaultPoints $FaultPoints -BatchSize $BatchSize
+    $mo = Get-M2ModeOpts -Mode $Mode -Snapshot $Snapshot -HardPowerOff:$HardPowerOff -FaultPoints $FaultPoints -BatchSize $BatchSize -NullRun:$NullRun
     $appIds = @()
-    if ($Mode -eq 'm2-fidelity') {
+    $bands = @($AppBands | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($Mode -eq 'm2-fidelity' -and -not $NullRun) {
         $appIds = @($Apps | Where-Object { $_ })
         if (-not $appIds.Count) { $appIds = @('npp', '7zip') }
         if ($appIds -contains 'none') { $appIds = @() }
@@ -913,7 +940,7 @@ function Invoke-M2Mode {
                     $ar.app_run = $x.run
                     $ok = (Test-RunResult -Run $x.run -NotBefore ([datetime]$Rec.start))
                     if (-not $ok.ok) { throw "app run $($x.run): $($ok.error)" }
-                    $j = Invoke-M2Job -Run $run -Mode $Mode -Stage 'app' -Opts ([ordered]@{ mode = $Mode; app = $a; app_run = $x.run }) -TimeoutSec 7200
+                    $j = Invoke-M2Job -Run $run -Mode $Mode -Stage 'app' -Opts ($(if ($bands.Count) { [ordered]@{ mode = $Mode; app = $a; app_run = $x.run; app_bands = $bands } } else { [ordered]@{ mode = $Mode; app = $a; app_run = $x.run } })) -TimeoutSec 7200
                     foreach ($l in $j.logs) { Move-Item -LiteralPath $l.file -Destination (Join-Path (Join-Path $script:RunsDir $x.run) "job-m2-app-$($l.n).log") -Force -ErrorAction SilentlyContinue }
                     if ($j.error) { throw $j.error }
                     $ar.ok = $true
@@ -934,6 +961,139 @@ function Invoke-M2Mode {
         $script:RigLogFile = $null
     }
     $rec
+}
+
+# The M2 ambient set (RIG.md section 11.8): -Count null runs of each of -Modes (run names n<k>-<mode>, each from a
+# fresh restore of -Snapshot with the same phases as the real mode up to snap A, an idle wait instead of exec, snap
+# B), then the host's rigtool `ambient --m2` over them -> vm\truth\m2-ambient.json. Returns the run records.
+#   . .\vm\rig.ps1; Invoke-M2NullCampaign -Count 6 -Engine <rig-exec purge-engine.exe>
+function Invoke-M2NullCampaign {
+    param([int]$Count = 6, [string[]]$Modes = @('m2-traps', 'm2-fidelity'), [string]$Snapshot = 'm2-base', [string]$Engine = '',
+          [string]$RigTool = $env:RIG_RIGTOOL, [string]$Out = (Join-Path $script:RigDir (HostPath 'truth\m2-ambient.json')))
+    if ($Count -lt 1) { throw '-Count must be at least 1' }
+    if (-not $RigTool) { $RigTool = Join-Path $script:RigDir (HostPath 'rigtool\target\release\rigtool.exe') }
+    if (-not (Test-Path -LiteralPath $RigTool)) { throw "rigtool not built: $RigTool" }
+    $recs = @(); $dirs = @()
+    foreach ($k in 1..$Count) {
+        foreach ($m in $Modes) {
+            $r = Invoke-M2Mode -Mode $m -Snapshot $Snapshot -Engine $Engine -RunPrefix "n$k-" -Null
+            $recs += $r
+            $d = Join-Path $script:RunsDir $r.run
+            if ($r.ok -and (Test-Path -LiteralPath (Join-Path $d "snap-$($r.run)-b.tsv.gz"))) { $dirs += $d } else { Write-RigLog "!! null run $($r.run) failed: $($r.error)" }
+        }
+    }
+    if ($dirs.Count -lt $Count) { throw "only $($dirs.Count) null run(s) usable; not writing $Out" }
+    $a = @('ambient', '--m2', '--null') + $dirs + @('-o', $Out)
+    & $RigTool @a
+    if ($LASTEXITCODE -ne 0) { throw "rigtool ambient --m2 exited $LASTEXITCODE" }
+    $recs
+}
+
+# Elevated engine tests (RIG.md section 11.9): #[ignore]d cargo tests that need an elevated token (they take or
+# restore SYSTEM ownership), run in the guest as admin through the agent. The guest has no Rust toolchain, so the
+# host builds the test binaries (`cargo test -p <crate> --features <f> --release --no-run`), finds the binary that
+# lists each test (`<exe> --list --ignored`), copies it to C:\cr\tests and the agent runs
+# `<exe> --ignored --exact <full name> --test-threads=1 --nocapture`. Writes vm\runs\<run>\elevated-tests.json
+# (schema purge.rig.m2elevated/1), which truth\m2.sh reads as gate g7_elevated_tests. Default run name m2-elevated.
+#   . .\vm\rig.ps1; Invoke-M2ElevatedTests
+function Get-M2ElevatedTestSpecs {
+    @(
+        [pscustomobject]@{ crate = 'purge-win'; features = 'write'; name = 'elevated_set_security_assigns_system_owner' }
+        [pscustomobject]@{ crate = 'purge-exec'; features = 'test-support'; name = 'elevated_restore_puts_back_a_system_owner' }
+    )
+}
+# Pure: the full test path of $Name in `--list --format terse` output ('a::b::name: test'), or $null.
+function Find-TestInList([string[]]$Lines, [string]$Name) {
+    foreach ($l in $Lines) {
+        $m = [regex]::Match("$l", '^(\S+): test$')
+        if ($m.Success -and ($m.Groups[1].Value -ceq $Name -or $m.Groups[1].Value.EndsWith("::$Name", [StringComparison]::Ordinal))) { return $m.Groups[1].Value }
+    }
+    $null
+}
+function Invoke-M2ElevatedTests {
+    param($Tests = (Get-M2ElevatedTestSpecs), [string]$Snapshot = 'm2-base', [string]$RunPrefix = '',
+          [string]$CargoTargetDir = $(if ($env:RIG_TEST_TARGET) { $env:RIG_TEST_TARGET } else { Join-Path $script:RepoRoot (HostPath 'target\rig-elevated') }),
+          [switch]$NoRestore, [int]$TimeoutSec = 900)
+    Assert-RigVm
+    $run = "$RunPrefix" + 'm2-elevated'
+    if ($run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$run'" }
+    New-Item -ItemType Directory -Force $script:RunsDir | Out-Null
+    $null = Move-RunToOld -Run $run
+    $dst = Join-Path $script:RunsDir $run
+    New-Item -ItemType Directory -Force $dst | Out-Null
+    $script:RigLogFile = Join-Path $dst 'rig.log'
+    $t = Get-Date
+    $doc = [ordered]@{ schema = 'purge.rig.m2elevated/1'; run = $run; snapshot = $Snapshot; vm = $script:VmName; start = $t.ToString('o'); end = $null
+        method = 'host cargo test --no-run, binaries copied to the guest and run by the elevated agent'; admin = $false; tests = @(); error = $null; pass = $false }
+    $rows = @()
+    try {
+        $null = Get-PwFile
+        # Host build, one cargo call per (crate, features).
+        $exes = @{}
+        foreach ($g in @($Tests | Group-Object { "$($_.crate)|$($_.features)" })) {
+            $c, $f = $g.Name -split '\|', 2
+            Write-RigLog "build tests of $c (features $f) into $CargoTargetDir"
+            $old = $env:CARGO_TARGET_DIR; $env:CARGO_TARGET_DIR = $CargoTargetDir
+            Push-Location $script:RepoRoot
+            try { $out = @(& cargo test -p $c --features $f --release --no-run --message-format=json 2>$null) } finally { Pop-Location; $env:CARGO_TARGET_DIR = $old }
+            if ($LASTEXITCODE -ne 0) { throw "cargo test --no-run -p $c --features $f exited $LASTEXITCODE" }
+            $exes[$g.Name] = @($out | Where-Object { $_ -match '"reason":"compiler-artifact"' } | ForEach-Object { $_ | ConvertFrom-Json } |
+                Where-Object { $_.profile.test -and $_.executable } | ForEach-Object { "$($_.executable)" } | Select-Object -Unique)
+        }
+        foreach ($s in $Tests) {
+            $row = [ordered]@{ crate = $s.crate; features = $s.features; name = $s.name; full_name = $null; exe = $null; exit = $null; passed = $false; error = $null }
+            foreach ($e in $exes["$($s.crate)|$($s.features)"]) {
+                $fn = Find-TestInList @(& $e --list --ignored --format terse 2>$null) $s.name
+                if ($fn) { $row.full_name = $fn; $row.exe = $e; break }
+            }
+            if (-not $row.exe) { $row.error = "no test binary of $($s.crate) (features $($s.features)) lists an ignored test $($s.name)" }
+            $rows += $row
+        }
+        # Guest run.
+        if ($NoRestore) { Wait-Agent -TimeoutSec 120 } else { Restore-Base -Snapshot $Snapshot }
+        $null = Invoke-Guest @('mkdir', '--parents', 'C:\cr\tests')
+        $lines = @()
+        foreach ($row in @($rows | Where-Object { $_.exe })) {
+            $leaf = '{0}-{1}' -f $row.crate, (Split-Path -Leaf $row.exe)
+            $tmp = Join-Path (Get-HostTemp) 'm2elevated'
+            New-Item -ItemType Directory -Force $tmp | Out-Null
+            Copy-Item -LiteralPath $row.exe -Destination (Join-Path $tmp $leaf) -Force
+            $r = Invoke-Guest @('copyto', '--target-directory', 'C:\cr\tests\', (Join-Path $tmp $leaf))
+            if ($r.code -ne 0) { $row.error = "copy to the guest failed: $($r.out -join ' ')"; continue }
+            $row.guest_exe = "C:\cr\tests\$leaf"
+            $lines += "`$o = & '$($row.guest_exe)' --ignored --exact '$($row.full_name)' --test-threads=1 --nocapture 2>&1; `$x = `$LASTEXITCODE"
+            $lines += "`$o | ForEach-Object { 'out|$($row.name)|' + `$_ }"
+            $lines += "'RIGTEST|$($row.name)|' + `$x"
+        }
+        if ($lines.Count) {
+            $text = "`$ErrorActionPreference = 'Continue'`r`n'admin=' + ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)`r`n" + ($lines -join "`r`n")
+            $j = Invoke-GuestJob -Text $text -Name "$run-tests" -TimeoutSec $TimeoutSec -LogCopy (Join-Path $dst 'job-tests.log')
+            if (-not $j.done) { throw "test job did not finish within $TimeoutSec s" }
+            $log = @("$($j.log)" -split "`r?`n")
+            $doc.admin = [bool](@($log | Where-Object { $_ -match '^admin=True' }).Count)
+            foreach ($row in $rows) {
+                $m = @($log | Where-Object { $_ -like "RIGTEST|$($row.name)|*" }) | Select-Object -Last 1
+                if (-not $m) { if (-not $row.error) { $row.error = 'no result line in the job log' }; continue }
+                $row.exit = [int](($m -split '\|')[2])
+                $row.output_tail = @($log | Where-Object { $_ -like "out|$($row.name)|*" } | ForEach-Object { $_.Substring("out|$($row.name)|".Length) } | Select-Object -Last 30)
+                # libtest prints 'running 1 test' and 'test result: ok. 1 passed'; exit 0 with 0 tests run is not a pass.
+                $row.passed = ($row.exit -eq 0 -and @($row.output_tail | Where-Object { $_ -match 'test result: ok\. 1 passed' }).Count -gt 0)
+                if (-not $row.passed -and -not $row.error) { $row.error = "exit $($row.exit)" }
+            }
+        }
+    } catch {
+        $doc.error = $_.Exception.Message
+        Write-RigLog "!! elevated tests: $($doc.error)"
+    } finally {
+        $doc.tests = @($rows | ForEach-Object { [pscustomobject]$_ })
+        $doc.end = (Get-Date).ToString('o')
+        $doc.pass = (-not $doc.error -and $doc.admin -and $rows.Count -gt 0 -and -not @($rows | Where-Object { -not $_.passed }).Count)
+        [IO.File]::WriteAllText((Join-Path $dst 'elevated-tests.json'), (ConvertTo-Json -InputObject $doc -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+        Write-RigLog "elevated tests $run`: pass=$($doc.pass)$(if ($doc.error) { ' - ' + $doc.error })"
+        Remove-PwTemp
+        $script:RigLogFile = $null
+    }
+    [pscustomobject]$doc
 }
 
 # ------------------------------------------------------------------------------------ building rig-base
@@ -963,11 +1123,12 @@ function Save-BaseSnapshot {
 }
 
 if ($MyInvocation.InvocationName -ne '.' -and $Mode -ne 'campaign') {
-    $m2Modes = @('m2-traps', 'm2-fidelity', 'm2-crash', 'm2-reboot', 'm2-install')
+    $m2Modes = @('m2-traps', 'm2-fidelity', 'm2-crash', 'm2-reboot', 'm2-install', 'm2-elevated')
     if ($m2Modes -cnotcontains $Mode) { throw "-Mode must be campaign or one of $($m2Modes -join ', ') (got '$Mode')" }
     $m2Snap = $(if ($PSBoundParameters.ContainsKey('Snapshot')) { $Snapshot } else { 'm2-base' })
+    if ($Mode -eq 'm2-elevated') { $null = Invoke-M2ElevatedTests -Snapshot $m2Snap -RunPrefix $RunPrefix; return }
     $null = Invoke-M2Mode -Mode $Mode -Snapshot $m2Snap -Engine $Engine -RunPrefix $RunPrefix -HardPowerOff:$M2HardPowerOff -FaultPoints $M2FaultPoints `
-                          -Apps $M2Apps -BatchSize $M2BatchSize -ExecutionEngine $ExecutionEngine -No3D:$No3D
+                          -Apps $M2Apps -BatchSize $M2BatchSize -Null:$M2Null -AppBands $M2AppBands -ExecutionEngine $ExecutionEngine -No3D:$No3D
 } elseif ($MyInvocation.InvocationName -ne '.' -and ($Ids.Count -gt 0 -or $Nulls -gt 0)) {
     Invoke-Campaign -Ids $Ids -Nulls $Nulls -Snapshot $Snapshot -RunPrefix $RunPrefix -Engine $Engine -NullWaitSec $NullWaitSec -NullOrder $NullOrder `
                     -ExtraChecks:$ExtraChecks -NoBaselines:$NoBaselines -ExecutionEngine $ExecutionEngine -No3D:$No3D

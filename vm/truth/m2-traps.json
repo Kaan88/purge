@@ -832,10 +832,10 @@
           "action": "Quarantine",
           "group": "main",
           "expect": {
-            "outcome": "Done",
-            "reason": null,
-            "blocker": null,
-            "summary": "moved and restored under its exact name; sibling 'name' intact"
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "DenyListed",
+            "summary": "blocked: DenyListed"
           },
           "accept": [],
           "condition": null
@@ -849,10 +849,10 @@
           "action": "Quarantine",
           "group": "main",
           "expect": {
-            "outcome": "Done",
-            "reason": null,
-            "blocker": null,
-            "summary": "moved and restored under its exact name; sibling 'name' intact"
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "DenyListed",
+            "summary": "blocked: DenyListed"
           },
           "accept": [],
           "condition": null
@@ -866,10 +866,10 @@
           "action": "Quarantine",
           "group": "main",
           "expect": {
-            "outcome": "Done",
-            "reason": null,
-            "blocker": null,
-            "summary": "moved and restored under its exact name; sibling 'dir' intact"
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "DenyListed",
+            "summary": "blocked: DenyListed"
           },
           "accept": [],
           "condition": null

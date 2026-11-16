@@ -324,15 +324,22 @@ switch ($Action) {
         $diff = @()
         if ($Phase -eq 'after-undo') {
             $now = @(Measure-M2FixtureObjects $Table)
+            # Directories a RemoveDirIfEmpty item removed: undo recreates them, a new directory with a new FileId by
+            # design (docs\M2_DESIGN.json: RecreateDir); every other field is still compared.
+            $recreated = @(foreach ($t in $Table) { foreach ($i in @($t.items)) { if ($i.action -eq 'RemoveDirIfEmpty' -and $i.target.type -eq 'Path') { "$($i.target.path)" } } })
             $diff = @(foreach ($a in @($doc.fidelity)) {
                     $b = @($now | Where-Object { $_.kind -eq $a.kind -and $_.path -eq $a.path }) | Select-Object -First 1
+                    $skip = @('fixture', 'kind', 'path', 'error')
+                    if ($a.kind -eq 'path' -and $a.is_dir -and @($recreated | Where-Object { $_ -ieq $a.path }).Count) { $skip += 'file_id' }
+                    $vals = [ordered]@{}
                     $fields = @(foreach ($p in $a.PSObject.Properties) {
-                            if ($p.Name -in @('fixture', 'kind', 'path', 'error')) { continue }
+                            if ($p.Name -in $skip) { continue }
                             # (Not $( ): it unrolls a one-element array, e.g. streams, to a scalar.)
                             $bv = $null; if ($b -and $b.Contains($p.Name)) { $bv = $b[$p.Name] }
-                            if ((ConvertTo-Json -InputObject $p.Value -Compress) -ne (ConvertTo-Json -InputObject $bv -Compress)) { $p.Name }
+                            $ja = ConvertTo-Json -InputObject $p.Value -Compress; $jb = ConvertTo-Json -InputObject $bv -Compress
+                            if ($ja -ne $jb) { $vals[$p.Name] = [ordered]@{ build = $ja; now = $jb }; $p.Name }
                         })
-                    if ($fields.Count) { [ordered]@{ fixture = $a.fixture; kind = $a.kind; path = $a.path; fields = $fields } }
+                    if ($fields.Count) { [ordered]@{ fixture = $a.fixture; kind = $a.kind; path = $a.path; fields = $fields; values = $vals } }
                 })
         }
         $r.fidelity_mismatches = $diff

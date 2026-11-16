@@ -10,6 +10,7 @@
 #   <p>m2-fidelity  run.json, execdiff-*.json, fidelity-*.json, m2-fixtures-check-*.json (G2, G6)
 #   <p>m2-crash     run.json, crash-matrix.json, crash-torn.json (G3)
 #   <p>m2-reboot    run.json (G4)
+#   <p>m2-elevated  elevated-tests.json (G7; rig.ps1 Invoke-M2ElevatedTests)
 # Each gate is pass / fail from the rigtool verdicts and the run records; nothing is re-measured here.
 #
 # Exit codes: 0 every gate passes; 1 a gate fails; 2 an input run is missing (the report is still written, the
@@ -103,6 +104,9 @@ def execdiffs(mode):
             "unexplained": c.get("unexplained"), "missing_effects": c.get("missing_effects"),
             "trap_mismatches": c.get("trap_mismatches"), "changed_not_done": c.get("changed_not_done"),
             "traps_failing": [t.get("id") for t in d.get("traps") or [] if t and t.get("verdict") not in (None, "pass")],
+            "ambient": (d.get("inputs") or {}).get("ambient"),
+            "collateral_rows": ["%s %s%s" % (r.get("change"), r.get("path"), "|" + r["name"] if r.get("name") is not None else "")
+                                for r in (d.get("collateral") or [])[:40] if r],
         }
     return out
 
@@ -144,7 +148,12 @@ if run is not None:
         "trap_checks": checks("m2-install", "m2-traps-check-*.json", "m2-traps-check-"),
         "d_volume": dv,
     })
-    d_ok = (not dv.get("present")) or (dv.get("adopted") is False and dv.get("user_marker_intact") is True)
+    # D: queue (needs engine ceb5999 or later, which accepts a NETWORK SERVICE-owned volume root): the exec moves
+    # the payload into the engine's own D:\.purge-q\<session>\000001\, the user's pre-created D:\.purge-q is
+    # renamed aside with user-marker.txt intact, never adopted.
+    d_ok = (not dv.get("present")) or (dv.get("exec_exit") == 0 and dv.get("payload_gone") is True and dv.get("renamed_aside") is True
+                                       and dv.get("user_marker_intact") is True and dv.get("adopted") is False
+                                       and bool(dv.get("payload_in_queue")))
     g0["pass"] = bool(run_ok("m2-install") and inst.get("exit") == 0 and g0["rerun_unchanged"] and inst.get("check_exit") == 0
                       and g0["traps_after_install_ok"] and all(g0["trap_checks"].values()) and d_ok)
 else:
@@ -225,11 +234,17 @@ if run is not None:
     second = rp.get("second") or {}
     created = isinstance(rp.get("before"), int) and isinstance(rp.get("after"), int) and rp["after"] > rp["before"]
     throttled = "throttled" in json.dumps(second.get("restore_point")).lower()
+    off = res(run, "restore_point_off") or {}
+    # Exec exit 0 or 10 (partial: an unrelated fixture item not done) with a report: G6 judges the restore point
+    # outcome; the fixture items are G2's (RIG.md 11.5).
+    ran = lambda x: x.get("exit") in (0, 10) and x.get("restore_point") is not None
+    off_ok = bool(off.get("disabled") and ran(off) and "disabled" in json.dumps(off.get("restore_point")).lower()
+                  and (off.get("done") or 0) > 0 and off.get("reenabled"))
     g6.update({"snapshot": rp.get("snapshot"), "before": rp.get("before"), "after": rp.get("after"), "after_second": rp.get("after_second"),
                "first": first, "second": second, "created": created, "second_throttled": throttled,
-               "frequency_value": rp.get("frequency_value"),
-               "note": "the rig-base leg (System Protection off: exec proceeds with a warning) is a separate m2-fidelity run with -Snapshot rig-base"})
-    g6["pass"] = bool(first.get("exit") == 0 and second.get("exit") == 0 and created and throttled)
+               "frequency_before": rp.get("frequency_before"), "frequency_value": rp.get("frequency_value"),
+               "protection_off": off, "protection_off_ok": off_ok})
+    g6["pass"] = bool(ran(first) and ran(second) and created and throttled and off_ok)
 else:
     g2["pass"] = g6["pass"] = False
 
@@ -293,7 +308,23 @@ if run is not None:
 else:
     g4["pass"] = False
 
-gates = {"g0_install": g0, "g1_traps": g1, "g2_fidelity": g2, "g3_crash": g3, "g4_reboot": g4, "g5_expiry": g5, "g6_restore_point": g6}
+# G7: the #[ignore]d elevated engine tests, run in the guest as admin (rig.ps1 Invoke-M2ElevatedTests, RIG.md 11.9).
+ev = load(os.path.join(rdir("m2-elevated"), "elevated-tests.json"))
+g7 = {"present": ev is not None}
+if ev is None:
+    missing.append(prefix + "m2-elevated")
+    inputs["m2-elevated"] = {"run": prefix + "m2-elevated", "present": False}
+    g7["pass"] = False
+else:
+    inputs["m2-elevated"] = {"run": prefix + "m2-elevated", "present": True}
+    tests = [t for t in ev.get("tests") or [] if t]
+    g7.update({"admin": ev.get("admin") is True, "error": ev.get("error"),
+               "tests": [{"crate": t.get("crate"), "name": t.get("name"), "exit": t.get("exit"), "passed": t.get("passed") is True,
+                          "error": t.get("error")} for t in tests]})
+    g7["pass"] = bool(ev.get("pass") is True and g7["admin"] and tests and all(t.get("passed") is True for t in tests))
+
+gates = {"g0_install": g0, "g1_traps": g1, "g2_fidelity": g2, "g3_crash": g3, "g4_reboot": g4, "g5_expiry": g5, "g6_restore_point": g6,
+         "g7_elevated_tests": g7}
 totals = {
     "guard_escapes": int(g1.get("guard_escapes") or 0) + int(g2.get("guard_escapes") or 0),
     "collateral": int(g1.get("collateral") or 0) + int(g2.get("collateral") or 0),
@@ -324,8 +355,9 @@ md = ["# M2 gate", "", "Generated %s from `%s` (prefix `%s`). Schema purge.rig.m
 if missing:
     md += ["**Missing runs:** " + ", ".join(missing), ""]
 md += ["| Gate | Result | Key figures |", "|---|---|---|"]
-md.append("| G0 install hardening | %s | install exit %s, re-run unchanged %s, check exit %s, D: queue adopted %s |" % (
-    yn(g0["pass"]), g0.get("install_exit"), g0.get("rerun_unchanged"), g0.get("check_exit"), (g0.get("d_volume") or {}).get("adopted")))
+md.append("| G0 install hardening | %s | install exit %s, re-run unchanged %s, check exit %s, D: exec %s, renamed aside %s, marker intact %s, adopted %s, payload in queue %s |" % (
+    yn(g0["pass"]), g0.get("install_exit"), g0.get("rerun_unchanged"), g0.get("check_exit"),
+    *[(g0.get("d_volume") or {}).get(k) for k in ("exec_exit", "renamed_aside", "user_marker_intact", "adopted", "payload_in_queue")]))
 md.append("| G1 traps | %s | guard_escapes %s, collateral %s, refusals %s, forged fp ok %s |" % (
     yn(g1["pass"]), g1.get("guard_escapes"), g1.get("collateral"), g1.get("refusals"), g1.get("forged_fp_ok")))
 md.append("| G2 fidelity | %s | failing rows %s, required rows missing %s, collateral %s, apps %s |" % (
@@ -336,12 +368,23 @@ md.append("| G4 reboot | %s | reconcile %s, mismatch %s, retry skipped %s |" % (
     yn(g4["pass"]), g4.get("reconcile_pass"), g4.get("mismatch_pass"), (g4.get("retry") or {}).get("skipped")))
 md.append("| G5 expiry | %s | listed %s, ids %s, purge exit %s, check after expiry %s |" % (
     yn(g5["pass"]), g5.get("listed"), g5.get("ids"), g5.get("purge_exit"), g5.get("check_after_expiry_ok")))
-md.append("| G6 restore point | %s | created %s, second throttled %s |" % (yn(g6["pass"]), g6.get("created"), g6.get("second_throttled")))
+md.append("| G6 restore point | %s | created %s, second throttled %s, protection off ok %s |" % (
+    yn(g6["pass"]), g6.get("created"), g6.get("second_throttled"), g6.get("protection_off_ok")))
+md.append("| G7 elevated tests | %s | admin %s, %s |" % (
+    yn(g7["pass"]), g7.get("admin"), ", ".join("%s %s" % (t["name"], "pass" if t["passed"] else "FAIL (%s)" % t.get("error")) for t in g7.get("tests") or []) or g7.get("error")))
 md += ["", "Totals: " + json.dumps(totals), "", "Overall: **%s**" % ("PASS" if report["pass"] else "FAIL"), ""]
 if g2.get("rows"):
     md += ["## G2 rows (fixture run)", "", "| Action | ops | objects | identical | differing | % | pass |", "|---|---|---|---|---|---|---|"]
     for a, r in g2["rows"].items():
         md.append("| %s | %s | %s | %s | %s | %s | %s |" % (a, r.get("ops"), r.get("objects"), r.get("identical"), r.get("differing"), r.get("percent"), r.get("pass")))
+    md.append("")
+coll = [(m, g, v) for m, gd in (("m2-traps", g1.get("groups") or {}), ("m2-fidelity", g2.get("execdiff") or {}))
+        for g, v in gd.items() if v.get("collateral")]
+if coll:
+    md += ["## Collateral (first 40 records per execdiff)", ""]
+    for m, g, v in coll:
+        md.append("- %s execdiff-%s (%s, ambient %s):" % (m, g, v.get("collateral"), v.get("ambient")))
+        md += ["  - `%s`" % r for r in v.get("collateral_rows") or []]
     md.append("")
 with open(os.path.join(out_dir, "m2-gate.md"), "w", encoding="utf-8", newline="\n") as f:
     f.write("\n".join(md))

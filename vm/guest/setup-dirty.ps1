@@ -1,4 +1,4 @@
-# Purge rig v2: builds the dirty-baseline state (ENGINE_PLAN §10.2) on top of rig-base. Run once as an
+﻿# Purge rig v2: builds the dirty-baseline state (ENGINE_PLAN §10.2) on top of rig-base. Run once as an
 # agent job, then the host shuts the guest down and takes the offline snapshot 'dirty-base'.
 # Official vendor URLs only. Every step is wrapped: a failed install is recorded and the rest still run.
 # Outputs in C:\cr\out\dirty-base\: run.log, dirty.json (what was installed / planted / skipped),

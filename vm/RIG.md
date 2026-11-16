@@ -631,6 +631,11 @@ fixture plants one, the expected outcome is "untouched" (fidelity rows `DeleteSe
     .\vm\rig.ps1 -Mode m2-crash -HardPowerOff [-FaultPoints act.after,intent.flushed] [-BatchSize 10]
     .\vm\rig.ps1 -Mode m2-reboot
     bash truth/m2.sh                       # from vm/: results/m2-gate.json + .md
+    # the M2 ambient set (§11.8), once per m2-base: 6 null runs of m2-traps and m2-fidelity -> truth\m2-ambient.json
+    . .\vm\rig.ps1; Invoke-M2NullCampaign -Count 6 -Engine <rig-exec purge-engine.exe>
+
+`$env:RIG_RIGTOOL` names the rigtool.exe to push when it is not built in `vm\rigtool\target\release` (e.g. a
+`CARGO_TARGET_DIR` on another drive). `-AppBands Safe,Likely` narrows the m2-fidelity app selection (§11.3).
 
 Run names are `<RunPrefix><mode>` (`m2-traps`, or `g1-m2-traps` with `-RunPrefix g1-`); outputs go to
 `vm\runs\<run>\` as usual (Pull-Run, Test-RunResult), plus `job-<n>-<stage>.log` per guest job and
@@ -682,10 +687,18 @@ exit and stderr tail, `results`) and `run.log`. Common files: `targets-<tag>.jso
 `<tag>-index.json` / `<tag>-sessions.zip` / `<tag>-quarantine.json` (the store, Save-M2Store).
 
 - **m2-install** (G0, one stage): edge-pause, traps-pre (`m2-traps.ps1 -Stage pre-install`: the attacker's
-  pre-created `C:\ProgramData\Purge`), d-precreate (medium IL: `D:\.purge-q` with a marker file), install
+  pre-created `C:\ProgramData\Purge`), d-precreate (medium IL: `D:\.purge-q` with a marker file; the step waits for
+  the marker, at most 30 s, not for the short-lived cmd.exe process), install
   (install.ps1, re-run, `-Check`: `install.json`, `install-rerun.json`, `install-check.txt`), traps-build,
-  traps-check-after-install, d-exec (a payload on `D:` quarantined; the user's `D:\.purge-q` must not be adopted),
-  store.
+  traps-check-after-install, d-exec (a payload on `D:` quarantined), store. d-exec expects (`results.d_volume`):
+  `exec_exit` 0, `payload_gone`, the user's `D:\.purge-q` renamed aside to `D:\.purge-q.rejected-<utc>` still
+  holding `user-marker.txt` (`renamed_aside`, `user_marker_intact`; `adopted` false) and the payload at
+  `payload_in_queue` = `D:\.purge-q\<session>\000001\payload.txt`. This needs engine ceb5999 or later: `D:\` is
+  owned by NETWORK SERVICE after Format-Volume, and an older engine did not accept that owner for a volume root and
+  skipped the item (G0 then fails on the D: part).
+
+Per-item rows of the execdiff reports carry `detail`, the journal `done` record's optional free text for a skipped
+item (engine ceb5999 on; absent with older engines).
 - **m2-traps** (G1, G5, one stage): edge-pause, traps-pre, install, traps-build, traps-check-after-install,
   plan-main (group `main`), refusals (wrong `--confirm`, a sidecar with one path changed, the targets planned in
   reverse order with the main confirm; scoped snaps before/after must not differ: `refuse-diff.json`), snap-a,
@@ -701,10 +714,20 @@ exit and stderr tail, `results`) and `run.log`. Common files: `targets-<tag>.jso
   fixtures-check-after-undo, store-main; partial (fresh fixtures, undo `--items` of the first half,
   `fidelity-partial.json`), undo-conflict (a deleted value recreated with other data before the undo; `kept` and
   `reported`), backup-tamper (one byte of the first intent's backup file flipped; `fidelity-tamper.json`),
-  restore-point (two execs with `--restore-point always`; restore point count before/after, `restore_point` of
-  each report). Per app (`-Apps`, default npp, 7zip): the M1a engine run `<run>-<id>` (run-app.ps1 installs,
-  uninstalls, scans), then stage `app`: its `plan-purge.json` with the default selection (Safe + preselected),
-  snap/deep A, exec, snap B, execdiff, undo, deep C, fidelity (`*-app-<id>.*`).
+  restore-point (G6: rp1 with `--restore-point always` under m2-base's `SystemRestorePointCreationFrequency` 0 must
+  be Created; then the rig sets the value to `rp_frequency` minutes, default 1440 = Windows' default, and rp2 must
+  report Throttled; the engine never touches the value), restore-point-off (G6 "System Protection off": protection
+  on C: disabled, an exec with `--restore-point always` must report the restore point Disabled and still execute
+  the plan, per docs\M2_DESIGN.json "never blocks the batch on failure"; undone, protection enabled again:
+  `results.restore_point_off`). Per app (`-Apps`, default npp, 7zip): the M1a engine run `<run>-<id>` (run-app.ps1
+  installs, uninstalls, scans), then stage `app`: its `plan-purge.json` with every item the plan offers for removal
+  selected (bands `app_bands`, default Safe, Likely and Weak, preselected or not; Blocked never), so real leftovers
+  go through exec and undo even when the scan ticks nothing; snap/deep A, exec, snap B, execdiff, undo, deep C,
+  fidelity (`*-app-<id>.*`). A plan with no such item is recorded as skipped (7-Zip's post scan was empty on
+  m2-base in the smoke run).
+- **null runs** (`-Null`, m2-traps / m2-fidelity, stage `start` only; §11.8): the mode's phases up to snap A /
+  deep A, then `null-wait` (opts `null_wait`, default 3 s, where exec would run), snap B, deep B, store; no exec,
+  undo, execdiff, refusals or app stage, no ambient set pushed.
 - **m2-crash** (G3; stages `start`, `matrix`..., `after-poweroff`...): `journal fault-points` (`fault-points.out`);
   iterations = every exec-phase point x {resume, rollback} + every undo-phase point (undo.intent,
   undo.act.after, regrestore.mid, index.write) x resume; `-BatchSize` per job (default 10), then a reboot
@@ -726,7 +749,16 @@ exit and stderr tail, `results`) and `run.log`. Common files: `targets-<tag>.jso
   admin file gone; undo, deep C, fidelity; retry: plant-boot-junction, the user-writable item executed again ->
   Skipped (ReparseMismatch / ChangedSinceScan), traps check; scenario M: admin file locked, exec, the engine's PFRO
   pair replaced by a decoy pair (the boot move does not happen), reboot. after-mismatch: recover twice, `journal
-  show`, admin file still in place and unchanged, undo, fidelity, PFRO, final traps check.
+  show`, admin file still in place and unchanged, undo, fidelity, PFRO, final traps check. The traps are built with
+  `-RebootSafe`: `ph\cloud-tag.txt` carries the OFFLINE placeholder attribute instead of the cloud reparse tag
+  0x9000101A, which does not survive a reboot without a sync root (the file reads as ERROR_FILE_CORRUPT 1392
+  afterwards and every deep A/C comparison over the manifest scope fails though the file is outside the plan). The
+  other modes keep the reparse tag.
+
+Trap expectations settled by the smoke run (2026-11-16): `odd-names.*` (`name.`, `name `, `dir.`) expect
+`Skipped/GateBlocked/DenyListed` (engine rule `canon.trailing-dot-or-space`): refusing a name Win32 would normalise
+onto a sibling is the safe direction for M2. Fixture after-undo check: a directory a RemoveDirIfEmpty item removed
+is recreated by undo with a new FileId by design, so `file_id` is not compared for it (every other field is).
 
 ### 11.4 Engine command lines (M2-CLI)
 
@@ -751,7 +783,10 @@ failed phases), `missing`, `g0_install`, `g1_traps` (guard_escapes, collateral, 
 forged fp, trap checks), `g2_fidelity` (rows of the fixture run, required rows missing, deferred rows touched,
 collateral, partial undo, undo conflict, backup tamper, apps), `g3_crash` (rows, hit, failing, not_hit,
 recover idempotence, power-off, torn), `g4_reboot` (undo before reboot, exec PFRO, reconcile, retry, mismatch),
-`g5_expiry`, `g6_restore_point`, `totals` and `pass`. Exit 0 pass, 1 a gate fails, 2 a run is missing.
+`g5_expiry`, `g6_restore_point` (rp1 Created, rp2 Throttled, protection-off leg Disabled with items done and
+protection re-enabled; exec exit 0 or 10 with a report, the fixture items being G2's), `g7_elevated_tests`
+(§11.9), `totals` and `pass`. Exit 0
+pass, 1 a gate fails, 2 a run is missing.
 
 ### 11.6 Self-test
 
@@ -809,3 +844,77 @@ gates neither on 10. A refusal is any exit other than 0 with no report; the engi
 `exec`, `undo`, `journal resume` / `rollback` and `journal retry-held` also means the session is closed and its
 `report.json` and index entry are written; otherwise the exit is 12 (the document is still printed), and
 `journal resume` completes the record.
+
+### 11.8 Collateral: the M2 ambient set and the engine's own side effects
+
+`execdiff` compares full-machine snapshots (the default `rigtool snap` roots, §2) taken right before and right after
+the exec; every removed (`-`) or changed (`~`) record that no rule authorises is collateral and fails G1 / G2. The
+smoke run showed 20 and 120 such records that were Windows churn of the exec window (Defender signatures and
+servicing, WMI tracing providers, Explorer, TaskCache, ProfileService, prefetch) plus the engine's Restart Manager
+key. Two rules cover them without narrowing the snapshots:
+
+- **engine-rm** (allowed side effect, not ambient): keys and values at or under
+  `HKU\<sid>\Software\Microsoft\RestartManager`, which `RmStartSession` writes during the engine's lock query. The
+  parent rule then accepts `HKU\<sid>\Software\Microsoft` changing only its LastWriteTime / subkey count.
+- **telemetry pause**: every exec-run job (m2-install, m2-traps, m2-fidelity, their null runs) stops the DiagTrack
+  service and sets it to Disabled right after the Edge updater pause, before snap A (riglib `Suspend-M2Telemetry`,
+  run.json `telemetry_pause`). Its occasional upload rewrote `HKLM\...\Diagnostics\DiagTrack` (LastSuccessful*
+  UploadTime) inside an exec window while none of 12 null runs saw it; the source is removed rather than given a
+  hand-written ambient entry. The snapshot restore undoes the pause.
+- **engine-rp** (allowed side effect): keys and values at or under
+  `HKLM\SYSTEM\<CurrentControlSet|ControlSetNNN>\Services\VSS\Diag` that changed or were added, which the Volume
+  Shadow Copy service writes when the engine creates its restore point in the exec window. A removal there is
+  never covered. Null runs create no restore point, so the ambient set cannot hold these (the validation run of
+  2026-11-16 left exactly this one record, `~K ...\Services\VSS\Diag`, as m2-fidelity collateral).
+- **M2 ambient set** `vm\truth\m2-ambient.json` (`purge.rig.m2ambient/1`, committed like `truth\ambient.json`):
+  `Invoke-M2NullCampaign` runs N null runs (default 6; 3 missed telemetry churn in the 2026-11-16 validation) of m2-traps and m2-fidelity on m2-base (same phases and timing up
+  to snap A, an idle wait instead of exec, snap B) and `rigtool ambient --m2 --null <run dirs>` records every
+  removed or changed record of `diff(snap A, snap B)` as a key `<op><kind>:<path>[|<value>]`, plus a pattern where
+  the key holds a random token (a GUID seen varying, a hex run of 16+, a number of 6+ digits). rig.ps1 pushes it to
+  `C:\cr\bin\m2-ambient.json`; riglib passes it to every execdiff as `--ambient`.
+
+Why a real collateral delete still fails the gate: the snapshots stay machine-wide, so any delete or change the
+engine makes outside its ops shows as a record. An M2 ambient entry matches one record only: the same op, the same
+kind and the same path (and value name), exactly or with only the random tokens wildcarded. It never matches a
+descendant (unlike the M0 / M1a set, whose entries cover subtrees), and a `~` entry (metadata seen changing) never
+authorises a `-` record (a removal) of the same object or of anything under it. So an object outside the plan is
+hidden only if Windows itself removed or changed that very object in a null run's exec window; the canaries of the
+trap and fixture manifests are in addition verified by content hash (deep snapshots), which no ambient rule
+touches. Records added (`+`) never fail the gate and are not part of the set.
+
+The set is tied to m2-base and the rig's timing; regenerate it when m2-base is rebuilt. Collateral that remains
+after it is either churn the null runs did not see (add null runs) or a real finding: the execdiff report lists
+each record.
+
+### 11.9 Elevated engine tests (G7)
+
+Two engine tests need an elevated token (they set or restore SYSTEM ownership) and are `#[ignore]`d in a normal
+`cargo test`: `elevated_set_security_assigns_system_owner` (crate purge-win, features `write`) and
+`elevated_restore_puts_back_a_system_owner` (crate purge-exec, features `test-support`). The guest has no Rust
+toolchain, so the rig builds on the host and runs in the guest:
+
+    . .\vm\rig.ps1; Invoke-M2ElevatedTests          # or: .\vm\rig.ps1 -Mode m2-elevated
+
+1. host: `cargo test -p <crate> --features <f> --release --no-run --message-format=json` (CARGO_TARGET_DIR
+   `$env:RIG_TEST_TARGET`, default `target\rig-elevated`); the test binary is the one whose
+   `--list --ignored --format terse` lists the test (exact name, full module path taken from the list);
+2. guest: fresh restore of m2-base, the binary copied to `C:\cr\tests\<crate>-<exe>`, run by the elevated agent as
+   `<exe> --ignored --exact <full name> --test-threads=1 --nocapture`;
+3. `vm\runs\<prefix>m2-elevated\elevated-tests.json` (`purge.rig.m2elevated/1`): per test the exit code, the
+   last 30 output lines and `passed` (exit 0 and libtest's `test result: ok. 1 passed`, so a filter that runs no
+   test is not a pass); `admin` (the job's token was elevated) and `pass`.
+
+`truth/m2.sh` reads it as gate `g7_elevated_tests` (missing run: exit 2). The test list is
+`Get-M2ElevatedTestSpecs` in rig.ps1. The tests exist on the m2 branch from commit e0c52f8 on; on an older base
+the build or the list step reports the test as not found and G7 fails.
+
+### 11.10 PATH segment fixtures
+
+`path-segment-*` fixtures (m2-traps.ps1 `Invoke-M2PathSegment`) append the segment to the raw value: the original
+body is kept byte for byte (empty elements and a trailing `;` included) and the new data is
+`<body>;<segment><original NULs>` (just `<segment>` for an empty body); the item's index is the original element
+count. Removing the segment with its one adjacent separator, as the engine's EditSegment does, therefore yields
+the original value, which is the after-exec expectation (`phase_values[].after_exec_b64` = the before data). So a
+user PATH ending in `...WindowsApps;` becomes `...WindowsApps;;<segment>`. (Until 2026-11-16 the build dropped
+empty elements, `...WindowsApps;` became `...WindowsApps;<segment>`, and the engine's correct result
+`...WindowsApps` could not match the expected `...WindowsApps;`.)

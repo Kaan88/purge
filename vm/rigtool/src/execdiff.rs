@@ -13,7 +13,11 @@
 //!   `DeleteValue` value (removed) and the exact `EditSegment` value (changed); (store) Purge's own stores:
 //!   `C:\ProgramData\Purge`, the header's per-volume quarantine directories and any `X:\.purge-q`; (rig) the rig's
 //!   own files (`items::RigRules`); (pending-rename) `Session Manager|PendingFileRenameOperations` when an op was
-//!   left `PendingReboot` or reconciled; (ambient) the ambient set; (parent) a directory whose only change is
+//!   left `PendingReboot` or reconciled; (engine-rm) the engine's own Restart Manager session state, keys and
+//!   values at or under `HKU\<sid>\Software\Microsoft\RestartManager` (the lock query's documented side effect,
+//!   RIG.md §11.8); (engine-rp) the VSS diagnostics the engine's restore point writes, keys and values at or
+//!   under `HKLM\SYSTEM\<control set>\Services\VSS\Diag`, changed or added, never removed; (ambient) the ambient set: with an M2 set (`purge.rig.m2ambient/1`) only the exact op and
+//!   record seen in the null runs, or its token pattern, never a subtree; (parent) a directory whose only change is
 //!   its LastWriteTime, or a key whose only changes are LastWriteTime / value count / subkey count, when an
 //!   authorised record was added or removed directly inside it.
 //! - **unexplained**: an added (`+`) record that is not authorised. Reported, never failing on its own.
@@ -383,6 +387,9 @@ pub struct ItemRow {
     /// The op's effect verdict (see `effects`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effect: Option<String>,
+    /// The journal `done` record's `detail` (why the engine skipped the item), when it gives one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -513,6 +520,43 @@ fn is_purge_q(p: &str) -> bool {
     }
     let rest = &p[3..];
     rest.len() >= 8 && rest[..8].eq_ignore_ascii_case(".purge-q") && (rest.len() == 8 || rest.as_bytes()[8] == b'\\')
+}
+
+/// The engine's Restart Manager session state: a key or value at or under
+/// `HKU\<sid>\Software\Microsoft\RestartManager` (any user hive). `RmStartSession` writes it during the lock
+/// query; it is an allowed side effect of the engine, not ambient churn (RIG.md §11.8).
+fn is_engine_rm(c: &Change) -> bool {
+    if !matches!(c.rec, 'K' | 'V') {
+        return false;
+    }
+    let s: Vec<&str> = c.path.split('\\').collect();
+    s.len() >= 5
+        && (s[0].eq_ignore_ascii_case("HKU") || s[0].eq_ignore_ascii_case("HKEY_USERS"))
+        && !s[1].is_empty()
+        && s[2].eq_ignore_ascii_case("Software")
+        && s[3].eq_ignore_ascii_case("Microsoft")
+        && s[4].eq_ignore_ascii_case("RestartManager")
+}
+
+/// The Volume Shadow Copy service's diagnostics, written when the engine creates its restore point during the
+/// exec: a key or value at or under `HKLM\SYSTEM\<CurrentControlSet|ControlSetNNN>\Services\VSS\Diag` that was
+/// changed (`~`) or added. A removal (`-`) is never covered. No null run creates a restore point, so this cannot
+/// come from the ambient set (RIG.md §11.8).
+fn is_engine_rp(c: &Change) -> bool {
+    if !matches!(c.rec, 'K' | 'V') || c.op == '-' {
+        return false;
+    }
+    let s: Vec<&str> = c.path.split('\\').collect();
+    s.len() >= 6
+        && (s[0].eq_ignore_ascii_case("HKLM") || s[0].eq_ignore_ascii_case("HKEY_LOCAL_MACHINE"))
+        && s[1].eq_ignore_ascii_case("SYSTEM")
+        && (s[2].eq_ignore_ascii_case("CurrentControlSet")
+            || (s[2].len() == 13
+                && s[2][..10].eq_ignore_ascii_case("ControlSet")
+                && s[2][10..].bytes().all(|b| b.is_ascii_digit())))
+        && s[3].eq_ignore_ascii_case("Services")
+        && s[4].eq_ignore_ascii_case("VSS")
+        && s[5].eq_ignore_ascii_case("Diag")
 }
 
 fn row_of(c: &Change) -> DiffRow {
@@ -756,7 +800,9 @@ fn condition_status(t: &Trap, it: &TrapItem) -> Option<&'static str> {
         let rel: Vec<&BuildObj> = t
             .build_objects
             .iter()
-            .filter(|o| matches!(o.k.as_str(), "attrs" | "cloud-tag") && canon::is_under_or_eq(&o.path, it.target.path()))
+            .filter(|o| {
+                matches!(o.k.as_str(), "attrs" | "cloud-tag") && canon::is_under_or_eq(&o.path, it.target.path())
+            })
             .collect();
         if rel.is_empty() {
             "unknown"
@@ -1042,7 +1088,11 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
             && canon::ci_eq(c.name.as_deref().unwrap_or(""), PFRO)
         {
             Some("pending-rename")
-        } else if cx.ambient.and_then(|m| m.union.matches(&t)).is_some() {
+        } else if is_engine_rm(c) {
+            Some("engine-rm")
+        } else if is_engine_rp(c) {
+            Some("engine-rp")
+        } else if cx.ambient.and_then(|m| m.matches_change(c, &t)).is_some() {
             Some("ambient")
         } else if stale_dir_time(c, before_ft) {
             Some("stale-dir-time")
@@ -1254,6 +1304,7 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
                     verdict: verdict.to_string(),
                     condition: it.condition.as_ref().map(|c| format!("{} ({c})", cond.unwrap_or("unknown"))),
                     effect: ri.and_then(|r| eff_by_op.get(&r.op)).map(|e| format!("{}: {}", e.verdict, e.detail)),
+                    detail: jo.and_then(|o| o.done_detail.clone()),
                 });
             }
             let mine: Vec<&CanaryRow> = canaries.iter().filter(|c| c.trap == t.id).collect();
@@ -1636,7 +1687,35 @@ mod tests {
             union: crate::ambient::Matcher::new("u", &["P:C:\\ProgramData\\Microsoft\\churn.log".to_string()], &[])
                 .unwrap(),
             runs: Vec::new(),
+            records: None,
         }
+    }
+
+    fn chg(op: char, rec: char, path: &str) -> Change {
+        Change { op, rec, path: path.into(), name: None, changes: Vec::new() }
+    }
+
+    #[test]
+    fn engine_rm_is_the_restart_manager_subtree_only() {
+        assert!(is_engine_rm(&chg('+', 'K', "HKU\\S-1-5-21-1\\Software\\Microsoft\\RestartManager")));
+        assert!(is_engine_rm(&chg('-', 'K', "HKU\\S-1-5-21-1\\Software\\Microsoft\\RestartManager\\Session0000")));
+        assert!(is_engine_rm(&chg('+', 'V', "HKU\\S-1-5-21-1\\Software\\Microsoft\\RestartManager\\Session0000")));
+        assert!(!is_engine_rm(&chg('~', 'K', "HKU\\S-1-5-21-1\\Software\\Microsoft")));
+        assert!(!is_engine_rm(&chg('-', 'K', "HKU\\S-1-5-21-1\\Software\\Microsoft\\RestartManagerX")));
+        assert!(!is_engine_rm(&chg('-', 'K', "HKLM\\SOFTWARE\\Microsoft\\RestartManager")));
+        assert!(!is_engine_rm(&chg('-', 'F', "C:\\HKU\\x\\Software\\Microsoft\\RestartManager")));
+    }
+
+    #[test]
+    fn engine_rp_is_a_vss_diag_change_never_a_removal() {
+        assert!(is_engine_rp(&chg('~', 'K', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\VSS\\Diag")));
+        assert!(is_engine_rp(&chg('~', 'V', "HKLM\\SYSTEM\\ControlSet001\\Services\\VSS\\Diag\\SystemRestore")));
+        assert!(is_engine_rp(&chg('+', 'K', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\VSS\\Diag\\X")));
+        assert!(!is_engine_rp(&chg('-', 'K', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\VSS\\Diag")));
+        assert!(!is_engine_rp(&chg('-', 'V', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\VSS\\Diag\\X")));
+        assert!(!is_engine_rp(&chg('~', 'K', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\VSS")));
+        assert!(!is_engine_rp(&chg('~', 'K', "HKLM\\SYSTEM\\ControlSetX01\\Services\\VSS\\Diag")));
+        assert!(!is_engine_rp(&chg('~', 'F', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\VSS\\Diag")));
     }
 
     struct Case {

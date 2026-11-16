@@ -1,6 +1,7 @@
 //! Ambient set (RIG.md §6): Windows churn seen in null runs, exact and generalized.
 
 use crate::canon::{self};
+use crate::diff::{self, Change};
 use crate::err::{Context, Result};
 use crate::items::{self, RigRules};
 use crate::jsonio;
@@ -114,6 +115,21 @@ impl GuidVariation {
 /// patterns match `V:` and `C:` alike.
 pub fn generalize(cs: &str, var: &GuidVariation) -> Option<String> {
     let (kind, body) = cs.split_once(':')?;
+    let out = generalize_body(kind, body, var)?;
+    let prefix = match kind {
+        "V" | "C" => "[VC]:".to_string(),
+        k => format!("{}:", regex::escape(k)),
+    };
+    let tail = match kind {
+        "P" | "K" => r"(?:\\.*)?",
+        _ => "",
+    };
+    Some(format!("^{prefix}{out}{tail}$"))
+}
+
+/// The escaped body of a canonical target string (after `kind:`) with its random tokens as wildcards (see
+/// `generalize`), or None if nothing was random.
+fn generalize_body(kind: &str, body: &str, var: &GuidVariation) -> Option<String> {
     let re = token_re();
     let mut out = String::new();
     let mut key = format!("{}:", kind_key(kind));
@@ -145,15 +161,7 @@ pub fn generalize(cs: &str, var: &GuidVariation) -> Option<String> {
         return None;
     }
     out.push_str(&regex::escape(&body[last..]));
-    let prefix = match kind {
-        "V" | "C" => "[VC]:".to_string(),
-        k => format!("{}:", regex::escape(k)),
-    };
-    let tail = match kind {
-        "P" | "K" => r"(?:\\.*)?",
-        _ => "",
-    };
-    Some(format!("^{prefix}{out}{tail}$"))
+    Some(out)
 }
 
 /// One compiled ambient source (a run, or the union).
@@ -237,15 +245,208 @@ impl Matcher {
 pub struct AmbientSet {
     pub union: Matcher,
     pub runs: Vec<Matcher>,
+    /// An M2 ambient set (`purge.rig.m2ambient/1`, RIG.md §11.8): matched record by record (execdiff only).
+    pub records: Option<RecordMatcher>,
 }
 
 impl AmbientSet {
     pub fn load(path: &Path) -> Result<AmbientSet> {
-        let j: AmbientJson = jsonio::read(path)?;
+        let v: serde_json::Value = jsonio::read(path)?;
+        if v.get("schema").and_then(serde_json::Value::as_str) == Some(M2_SCHEMA) {
+            let j: M2AmbientJson =
+                serde_json::from_value(v).with_context(|| format!("m2 ambient {}", path.display()))?;
+            return Ok(AmbientSet {
+                union: Matcher::new("union", &[], &[])?,
+                runs: Vec::new(),
+                records: Some(RecordMatcher::new(&j.records, &j.patterns)?),
+            });
+        }
+        let j: AmbientJson = serde_json::from_value(v).with_context(|| format!("ambient {}", path.display()))?;
         let union = Matcher::new("union", &j.exact, &j.patterns)?;
         let runs = j.runs.iter().map(|r| Matcher::new(&r.id, &r.exact, &r.patterns)).collect::<Result<Vec<_>>>()?;
-        Ok(AmbientSet { union, runs })
+        Ok(AmbientSet { union, runs, records: None })
     }
+
+    /// Is diff record `c` (as target `t`) ambient? An M2 set matches the record itself; an M0 / M1a set the target.
+    pub fn matches_change(&self, c: &Change, t: &Target) -> Option<String> {
+        match &self.records {
+            Some(r) => r.matches(c),
+            None => self.union.matches(t),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// M2 ambient set (RIG.md §11.8): diff records of the null runs' exec windows
+// ---------------------------------------------------------------------------------------------
+
+pub const M2_SCHEMA: &str = "purge.rig.m2ambient/1";
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct M2AmbientRun {
+    pub id: String,
+    #[serde(default)]
+    pub dir: String,
+    /// The snapshot pair, `snap-<run>-a.tsv.gz` -> `snap-<run>-b.tsv.gz`.
+    #[serde(default)]
+    pub pair: Vec<String>,
+    pub records: Vec<String>,
+    #[serde(default)]
+    pub patterns: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct M2AmbientJson {
+    pub schema: String,
+    #[serde(default)]
+    pub note: String,
+    pub runs: Vec<M2AmbientRun>,
+    /// Record keys `<op><rec>:<path>[|<value name>]` (op `-` or `~`), matched exactly (case-insensitive).
+    pub records: Vec<String>,
+    /// Anchored regexes over record keys: only GUID / hex / long-number tokens are wildcards, never a subtree.
+    pub patterns: Vec<String>,
+}
+
+/// The record key of a diff record: `-F:C:\x`, `~K:HKLM\y`, `~V:HKLM\y|name`.
+pub fn change_key(c: &Change) -> String {
+    match c.rec {
+        'V' => format!("{}V:{}|{}", c.op, c.path, c.name.as_deref().unwrap_or("")),
+        r => format!("{}{}:{}", c.op, r, c.path),
+    }
+}
+
+/// The target kind letter a record key's body generalises as (P for files and directories).
+fn record_kind(rec: char) -> &'static str {
+    match rec {
+        'D' | 'F' => "P",
+        'K' => "K",
+        _ => "V",
+    }
+}
+
+/// A record key as a canonical target string (`P:`, `K:`, `V:`), for the GUID variation.
+fn record_as_target(key: &str) -> Option<String> {
+    let mut ch = key.chars();
+    let (_op, rec) = (ch.next()?, ch.next()?);
+    let body = key.get(3..)?;
+    Some(format!("{}:{body}", record_kind(rec)))
+}
+
+/// A record key with its random tokens as wildcards (`generalize` rules), anchored, matching that one record only:
+/// no descendant tail, the op and record kind fixed. None if nothing was random.
+pub fn generalize_record(key: &str, var: &GuidVariation) -> Option<String> {
+    let mut ch = key.chars();
+    let (op, rec) = (ch.next()?, ch.next()?);
+    if key.get(2..3) != Some(":") {
+        return None;
+    }
+    let body = generalize_body(record_kind(rec), key.get(3..)?, var)?;
+    Some(format!("^{}{}:{body}$", regex::escape(&op.to_string()), regex::escape(&rec.to_string())))
+}
+
+pub struct RecordMatcher {
+    exact: HashSet<String>,
+    set: Option<RegexSet>,
+    patterns: Vec<String>,
+}
+
+impl RecordMatcher {
+    pub fn new(records: &[String], patterns: &[String]) -> Result<RecordMatcher> {
+        let set = if patterns.is_empty() {
+            None
+        } else {
+            Some(
+                RegexSetBuilder::new(patterns)
+                    .case_insensitive(true)
+                    .size_limit(1 << 28)
+                    .dfa_size_limit(1 << 28)
+                    .build()
+                    .context("compile m2 ambient patterns")?,
+            )
+        };
+        Ok(RecordMatcher { exact: records.iter().map(|s| canon::fold(s)).collect(), set, patterns: patterns.to_vec() })
+    }
+
+    pub fn matches(&self, c: &Change) -> Option<String> {
+        let k = change_key(c);
+        if self.exact.contains(&canon::fold(&k)) {
+            return Some("m2-ambient:exact".into());
+        }
+        let i = self.set.as_ref()?.matches(&k).into_iter().next()?;
+        Some(format!("m2-ambient:pattern {}", self.patterns[i]))
+    }
+}
+
+/// The removed and changed records of one null run's exec window (rig records dropped). Added records are left out:
+/// execdiff never fails on them (they are `unexplained`).
+pub fn m2_run_records(a: &Snap, b: &Snap) -> Vec<String> {
+    let rig = RigRules::new(&[a, b]);
+    let mut out: Vec<String> = diff::diff(a, b)
+        .iter()
+        .filter(|c| c.op != '+')
+        .filter(|c| {
+            let k = change_key(c);
+            record_as_target(&k).is_some_and(|t| rig.check(&t).is_none())
+        })
+        .map(change_key)
+        .collect();
+    out.sort_by(|x, y| canon::ci_cmp(x, y));
+    out.dedup_by(|x, y| canon::ci_eq(x, y));
+    out
+}
+
+/// `rigtool ambient --m2 --null DIR...`: each DIR a null run of an M2 mode (exec-run.ps1 with opts null), holding
+/// `snap-<DIR name>-a.tsv.gz` and `-b.tsv.gz`.
+pub fn cmd_ambient_m2(dirs: &[PathBuf], out: &Path) -> Result<()> {
+    let mut items = Vec::new();
+    for d in dirs {
+        let id = d.file_name().and_then(|n| n.to_str()).unwrap_or("null").to_string();
+        let fa = d.join(format!("snap-{id}-a.tsv.gz"));
+        let fb = d.join(format!("snap-{id}-b.tsv.gz"));
+        if !fa.is_file() || !fb.is_file() {
+            crate::err::bail!(
+                "{}: no snap-{id}-a.tsv.gz / snap-{id}-b.tsv.gz (a null run of an M2 mode?)",
+                d.display()
+            );
+        }
+        let a = Snap::load(&fa, LoadOpts::default())?;
+        let b = Snap::load(&fb, LoadOpts::default())?;
+        let recs = m2_run_records(&a, &b);
+        items.push((id, d.display().to_string(), vec![fa.display().to_string(), fb.display().to_string()], recs));
+    }
+    let targets: Vec<String> =
+        items.iter().flat_map(|(_, _, _, r)| r.iter().filter_map(|k| record_as_target(k))).collect();
+    let var = GuidVariation::from_items(targets.iter());
+    let mut runs = Vec::new();
+    for (id, dir, pair, records) in items {
+        let pats: BTreeSet<String> = records.iter().filter_map(|k| generalize_record(k, &var)).collect();
+        eprintln!("ambient --m2: {id}: {} records, {} patterns", records.len(), pats.len());
+        runs.push(M2AmbientRun { id, dir, pair, records, patterns: pats.into_iter().collect() });
+    }
+    let mut seen = HashSet::new();
+    let mut records = Vec::new();
+    for r in &runs {
+        for k in &r.records {
+            if seen.insert(canon::fold(k)) {
+                records.push(k.clone());
+            }
+        }
+    }
+    records.sort_by(|a, b| canon::ci_cmp(a, b));
+    let patterns: BTreeSet<String> = runs.iter().flat_map(|r| r.patterns.iter().cloned()).collect();
+    let j = M2AmbientJson {
+        schema: M2_SCHEMA.into(),
+        note:
+            "removed (-) and changed (~) records of diff(snap A, snap B) in null runs of the M2 modes (exec replaced \
+               by an idle wait); a record is ambient only when it matches a key exactly or a token-generalised \
+               pattern, never by a parent (vm/RIG.md section 11.8)"
+                .into(),
+        runs,
+        records,
+        patterns: patterns.into_iter().collect(),
+    };
+    eprintln!("ambient --m2: union {} records, {} patterns", j.records.len(), j.patterns.len());
+    jsonio::write(out, &j)
 }
 
 /// Canonical strings of the churn in one null run (rig items dropped).
@@ -394,6 +595,88 @@ mod tests {
     fn run_matcher(cs: &[String], var: &GuidVariation) -> Matcher {
         let pats: Vec<String> = cs.iter().filter_map(|c| generalize(c, var)).collect();
         Matcher::new("n", cs, &pats).unwrap()
+    }
+
+    fn ch(op: char, rec: char, path: &str, name: Option<&str>) -> Change {
+        Change { op, rec, path: path.into(), name: name.map(str::to_string), changes: Vec::new() }
+    }
+
+    #[test]
+    fn m2_records_match_one_record_never_a_subtree() {
+        let recs = vec![
+            "~K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft".to_string(),
+            "~F:C:\\Windows\\Prefetch\\SVCHOST.EXE-8BDB97E5.pf".to_string(),
+            "-V:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\X|134388838903517771".to_string(),
+        ];
+        let targets: Vec<String> = recs.iter().filter_map(|k| record_as_target(k)).collect();
+        let var = GuidVariation::from_items(targets.iter());
+        let pats: Vec<String> = recs.iter().filter_map(|k| generalize_record(k, &var)).collect();
+        // The SID's long numbers and the value name's number are tokens; the prefetch name has none.
+        assert_eq!(pats.len(), 2, "{pats:?}");
+        let m = RecordMatcher::new(&recs, &pats).unwrap();
+        // The key's own metadata change is ambient, in any user's hive ...
+        assert!(
+            m.matches(&ch('~', 'K', "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft", None))
+                .is_some()
+        );
+        assert!(
+            m.matches(&ch('~', 'K', "HKU\\S-1-5-21-2222222222-333333333-4444444444-1000\\Software\\Microsoft", None))
+                .is_some()
+        );
+        // ... but never its removal, nor anything under it.
+        assert!(
+            m.matches(&ch('-', 'K', "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft", None))
+                .is_none()
+        );
+        assert!(
+            m.matches(&ch(
+                '-',
+                'K',
+                "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Office",
+                None
+            ))
+            .is_none()
+        );
+        assert!(
+            m.matches(&ch(
+                '~',
+                'V',
+                "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft",
+                Some("x")
+            ))
+            .is_none()
+        );
+        // A changed prefetch file: exact (case-insensitive); a removed one or a sibling is not.
+        assert!(m.matches(&ch('~', 'F', "c:\\windows\\prefetch\\svchost.exe-8bdb97e5.PF", None)).is_some());
+        assert!(m.matches(&ch('-', 'F', "C:\\Windows\\Prefetch\\SVCHOST.EXE-8BDB97E5.pf", None)).is_none());
+        assert!(m.matches(&ch('~', 'F', "C:\\Windows\\Prefetch\\OTHER.EXE-8BDB97E5.pf", None)).is_none());
+        // The removed value with another timestamp name: pattern; the key itself removed: not ambient.
+        let k = "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\X";
+        assert!(m.matches(&ch('-', 'V', k, Some("134392558165883938"))).is_some());
+        assert!(m.matches(&ch('-', 'K', k, None)).is_none());
+        assert!(m.matches(&ch('-', 'V', k, Some("Other"))).is_none());
+    }
+
+    #[test]
+    fn m2_set_loads_by_schema() {
+        let dir = std::env::temp_dir().join(format!("rigtool-m2amb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("m2-ambient.json");
+        let j = M2AmbientJson {
+            schema: M2_SCHEMA.into(),
+            note: String::new(),
+            runs: Vec::new(),
+            records: vec!["~F:C:\\ProgramData\\Microsoft\\churn.log".into()],
+            patterns: Vec::new(),
+        };
+        jsonio::write(&p, &j).unwrap();
+        let s = AmbientSet::load(&p).unwrap();
+        let c = ch('~', 'F', "C:\\ProgramData\\Microsoft\\churn.log", None);
+        let t = Target::Path { path: c.path.clone() };
+        assert!(s.matches_change(&c, &t).is_some());
+        let d = ch('-', 'F', "C:\\ProgramData\\Microsoft\\churn.log", None);
+        assert!(s.matches_change(&d, &t).is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

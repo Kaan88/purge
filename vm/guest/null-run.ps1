@@ -1,4 +1,4 @@
-# Purge rig v2: null run (vm\RIG.md §4, §6). Template: the host replaces the run placeholder with null1..null3
+﻿# Purge rig v2: null run (vm\RIG.md §4, §6). Template: the host replaces the run placeholder with null1..null3
 # (or <prefix>null<n>, e.g. r0-null1 in an engine campaign) and the wait placeholder with the idle seconds.
 # Same captures as an app run, with no install, launch or uninstall, so diff(snap-0, snap-2) is pure Windows
 # churn for the ambient set. Outputs in C:\cr\out\<run>\ as for run-app.ps1.
