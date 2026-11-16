@@ -324,8 +324,16 @@ fn baseline_for(
     };
     step.say(&format!("loading the baseline {}", os.baseline_name()));
     let baseline = load_baseline(settings.baseline_dir.as_deref(), &os, warnings);
-    if baseline.is_some() {
-        step.done(&format!("baseline {} loaded", os.baseline_name()));
+    if let Some(b) = &baseline {
+        let n = b.counts();
+        step.done(&format!(
+            "baseline {} loaded: {} keys, {} values, {} dirs, {} files",
+            os.baseline_name(),
+            n.keys,
+            n.values,
+            n.dirs,
+            n.files
+        ));
     }
     baseline
 }

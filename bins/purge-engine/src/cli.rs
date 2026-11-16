@@ -42,12 +42,14 @@ pub mod show;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
 use purge_identity::kbdata::Kb;
 use purge_inventory::runner::{ProcessHost, RunOptions};
 use purge_model::{Fingerprint, InventoryDoc, Plan};
 use purge_plan::emit::ScanDoc;
+use purge_source::metered::{Meter, MeterSnapshot};
 
 use crate::pipeline::{self, PipelineError, Scanned, Settings, Sources};
 use args::{
@@ -228,9 +230,32 @@ impl Env<'_> {
     }
 }
 
-/// Writes progress lines to a stream, each with the seconds since `started`.
+/// Writes progress lines to a stream, each with the seconds since `started`. When a source meter is
+/// installed (`PURGE_TIMING`, see `main.rs`), each line is followed by a `timing:` line with the source
+/// calls made since the line before.
 fn progress_line(stderr: &mut dyn Write, started: Instant, line: &str) {
     let _ = writeln!(stderr, "[{:7.3}s] {line}", started.elapsed().as_secs_f64());
+    if let Some(meter) = purge_source::metered::installed() {
+        timing_line(stderr, meter);
+    }
+}
+
+/// The meter's counters at the last [`timing_line`].
+static LAST_TIMING: Mutex<Option<MeterSnapshot>> = Mutex::new(None);
+
+/// Writes the source calls made since the previous call (nothing when there were none).
+fn timing_line(stderr: &mut dyn Write, meter: &Meter) {
+    let now = meter.snapshot();
+    let mut last = LAST_TIMING.lock().unwrap_or_else(PoisonError::into_inner);
+    let delta = match last.as_ref() {
+        Some(before) => now.since(before),
+        None => now.clone(),
+    };
+    *last = Some(now);
+    let summary = delta.summary();
+    if !summary.is_empty() {
+        let _ = writeln!(stderr, "timing:   {summary}");
+    }
 }
 
 /// Runs one command line (without the program name) and returns its exit code. In a `rig-exec` build

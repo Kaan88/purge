@@ -358,15 +358,23 @@ impl Key {
         let mut current: Option<Key> = None;
         while let Some(comp) = comps.next() {
             let parent = current.as_ref().unwrap_or(self);
-            parent.ensure_not_link()?;
-            let access = if comps.peek().is_none() {
-                KEY_READ
-            } else {
-                KEY_QUERY_VALUE
-            };
-            current = Some(parent.open_one(comp, access)?);
+            current = Some(parent.open_component(comp, comps.peek().is_none())?);
         }
-        Ok(current.expect("at least one component"))
+        current.ok_or(Win32Error::INVALID_PARAMETER)
+    }
+
+    /// One step of [`Key::open_subkey`]: refuses to descend when this key is a link
+    /// ([`Win32Error::LINK_ON_PATH`]), then opens the direct subkey `name` with `REG_OPTION_OPEN_LINK`
+    /// in this key's view, for reading when it is the `last` component of a path and for
+    /// `KEY_QUERY_VALUE` (enough to descend further) otherwise.
+    ///
+    /// A caller that keeps the keys of a path open and opens further paths below them step by step
+    /// (`purge-source`'s registry walker) opens exactly what [`Key::open`] of the whole path opens.
+    /// Whether this key is a link is read once per handle.
+    pub fn open_component(&self, name: &str, last: bool) -> Result<Key, Win32Error> {
+        self.ensure_not_link()?;
+        let access = if last { KEY_READ } else { KEY_QUERY_VALUE };
+        self.open_one(name, access)
     }
 
     /// Refuses to descend below a link key (predefined roots are never links).
@@ -473,6 +481,16 @@ impl Key {
     /// Direct subkey names.
     pub fn subkey_names(&self) -> Result<Vec<String>, Win32Error> {
         Ok(self.subkeys()?.into_iter().map(|e| e.name).collect())
+    }
+
+    /// [`Key::subkey_names`] for a caller that already holds this key's [`Key::info`]: `info` gives the
+    /// size of the name buffer, which grows if a longer name turns up, so the names are the same.
+    pub fn subkey_names_after(&self, info: &KeyInfo) -> Result<Vec<String>, Win32Error> {
+        Ok(self
+            .subkeys_with_capacity(info.max_subkey_name_len as usize + 1)?
+            .into_iter()
+            .map(|e| e.name)
+            .collect())
     }
 
     /// Enumeration with an explicit starting name buffer (in UTF-16 units); grows on `ERROR_MORE_DATA`.
@@ -720,6 +738,19 @@ impl Key {
     /// `SymbolicLinkValue` (an NT path such as `\REGISTRY\USER\S-1-5-21-..._Classes`). The link is
     /// never followed.
     pub fn link_target(&self) -> Result<Option<String>, Win32Error> {
+        let target = self.read_link_target();
+        // Remembered as what `is_link` answers for this handle, so that descending below the key does
+        // not ask again. (Never from inside `ensure_not_link`'s initialisation, which reads through
+        // `is_link` and `read_link_target`.)
+        if self.owned {
+            let _ = self
+                .link
+                .set(target.as_ref().map(Option::is_some).map_err(|e| *e));
+        }
+        target
+    }
+
+    fn read_link_target(&self) -> Result<Option<String>, Win32Error> {
         Ok(self
             .value(SYMBOLIC_LINK_VALUE)?
             .filter(|v| v.ty == REG_LINK)
@@ -728,7 +759,15 @@ impl Key {
 
     /// Whether this key is a registry symbolic link.
     pub fn is_link(&self) -> Result<bool, Win32Error> {
-        Ok(self.link_target()?.is_some())
+        Ok(self.read_link_target()?.is_some())
+    }
+
+    /// Records that this key is not a link, known from its having no values (a link's target is its
+    /// `SymbolicLinkValue`), so that descending below it does not ask.
+    pub fn note_no_values(&self) {
+        if self.owned {
+            let _ = self.link.set(Ok(false));
+        }
     }
 
     /// Owner SID and TrustedInstaller DACL flag (`RegGetKeySecurity`).

@@ -8,7 +8,6 @@
 //! [`KeyInfo::is_link`] and never followed.
 
 use crate::types::{ExistsState, KeyInfo, RegData, RegValue, SourceError, SourceResult};
-
 /// Read-only registry access. Object safe; implementations are shared across scanner threads.
 pub trait RegistrySource: Send + Sync {
     /// Metadata of a key. [`SourceError::NotFound`] when the key does not exist.
@@ -40,6 +39,57 @@ pub trait RegistrySource: Send + Sync {
             Err(SourceError::NotFound) => ExistsState::Absent,
             Err(_) => ExistsState::Unknown,
         }
+    }
+
+    /// A [`KeyWalker`] over this source, for one walk on one thread. The default reads through
+    /// [`RegistrySource::key_info`], [`RegistrySource::values`] and [`RegistrySource::subkeys`];
+    /// a source may answer with one that reads the same thing more cheaply.
+    fn walker(&self) -> Box<dyn KeyWalker + '_> {
+        Box::new(PlainWalker {
+            source: self,
+            key: String::new(),
+        })
+    }
+}
+
+/// Reads key after key of a registry walk: [`KeyWalker::enter`] a key, then read its values and subkey
+/// names. Gives exactly what [`RegistrySource::key_info`], [`RegistrySource::values`] and
+/// [`RegistrySource::subkeys`] give for the key, except that [`KeyInfo::ti_owned`] may be left `None`
+/// (a walk does not ask for it).
+///
+/// A walker may keep the keys above the last one it entered open and open the next key below them,
+/// instead of opening every key from its hive root; a source makes sure that this reads the same
+/// keys as a fresh open (see `live::LiveRegistry`). It lives for one walk on one thread and is
+/// dropped with it.
+pub trait KeyWalker {
+    /// Opens `key` and reads its metadata, as [`RegistrySource::key_info`].
+    fn enter(&mut self, key: &str) -> SourceResult<KeyInfo>;
+
+    /// The values of the key last entered, as [`RegistrySource::values`].
+    fn values(&mut self) -> SourceResult<Vec<RegValue>>;
+
+    /// The subkey names of the key last entered, as [`RegistrySource::subkeys`].
+    fn subkeys(&mut self) -> SourceResult<Vec<String>>;
+}
+
+/// The default [`KeyWalker`]: every call goes to the source by path.
+struct PlainWalker<'a, R: RegistrySource + ?Sized> {
+    source: &'a R,
+    key: String,
+}
+
+impl<R: RegistrySource + ?Sized> KeyWalker for PlainWalker<'_, R> {
+    fn enter(&mut self, key: &str) -> SourceResult<KeyInfo> {
+        key.clone_into(&mut self.key);
+        self.source.key_info(key)
+    }
+
+    fn values(&mut self) -> SourceResult<Vec<RegValue>> {
+        self.source.values(&self.key)
+    }
+
+    fn subkeys(&mut self) -> SourceResult<Vec<String>> {
+        self.source.subkeys(&self.key)
     }
 }
 

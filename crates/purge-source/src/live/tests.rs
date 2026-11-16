@@ -175,6 +175,156 @@ fn links_are_reported_and_only_g1_links_resolved() {
     ));
 }
 
+/// `KeyInfo` without the field a walker leaves out.
+fn walk_facts(info: &crate::types::KeyInfo) -> (u64, u32, u32, bool, Option<String>) {
+    (
+        info.lwt.0,
+        info.n_values,
+        info.n_subkeys,
+        info.is_link,
+        info.link_target.clone(),
+    )
+}
+
+/// Enters `key` with the walker and reads it by path: both must agree.
+fn agree(
+    live: &LiveRegistry,
+    walker: &mut dyn crate::registry::KeyWalker,
+    key: &str,
+) -> Vec<String> {
+    let walked = walker.enter(key);
+    let by_path = live.key_info(key);
+    assert_eq!(
+        walked.as_ref().map(walk_facts),
+        by_path.as_ref().map(walk_facts),
+        "{key}"
+    );
+    let Ok(info) = walked else {
+        return Vec::new();
+    };
+    if info.is_link {
+        return Vec::new();
+    }
+    assert_eq!(walker.values(), live.values(key), "{key}");
+    let names = walker.subkeys();
+    assert_eq!(names, live.subkeys(key), "{key}");
+    names.unwrap_or_default()
+}
+
+/// The walker reads exactly what the path calls read, along depth-first walks and across jumps
+/// between hives, views, the control set alias, links and missing keys.
+#[test]
+fn walker_reads_what_path_calls_read() {
+    let live = LiveRegistry::new();
+    let sid = me();
+    let mut walker = live.walker();
+    let roots = [
+        r"HKLM\SOFTWARE\Classes\CLSID".to_string(),
+        r"HKLM\SOFTWARE\WOW6432Node\Classes\CLSID".to_string(),
+        r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts".to_string(),
+        r"HKLM\SYSTEM\CurrentControlSet\Control\Nls".to_string(),
+        format!(r"HKU\{sid}_Classes"),
+        format!(r"HKU\{sid}\Software\Classes"),
+        r"HKLM\SOFTWARE\WOW6432Node".to_string(),
+    ];
+    for root in &roots {
+        let mut stack = vec![root.clone()];
+        let mut entered = 0;
+        while let Some(key) = stack.pop() {
+            entered += 1;
+            if entered > 600 {
+                break;
+            }
+            let children = agree(&live, walker.as_mut(), &key);
+            stack.extend(children.iter().rev().map(|c| format!(r"{key}\{c}")));
+        }
+    }
+    // Jumps: a missing key below a deep one, its parent again, a path through a link, the root of a
+    // hive, a non-canonical root, and back into a deep key of the other view.
+    for key in [
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Purge walker test that does not exist"
+            .to_string(),
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion".to_string(),
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall".to_string(),
+        format!(r"HKU\{sid}\Software\Classes\CLSID"),
+        format!(r"HKU\{sid}\Software\Classes"),
+        format!(r"HKU\{sid}"),
+        "HKU".to_string(),
+        r"HKCU\Software".to_string(),
+        r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall".to_string(),
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall".to_string(),
+        r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18"
+            .to_string(),
+    ] {
+        agree(&live, walker.as_mut(), &key);
+    }
+}
+
+/// Runs `reg.exe` with `args` and requires success.
+fn reg_exe(args: &[&str]) {
+    let out = Command::new("reg")
+        .args(args)
+        .output()
+        .expect("run reg.exe");
+    assert!(out.status.success(), "reg {args:?}: {out:?}");
+}
+
+/// A scratch key under the current user's `Software`, deleted on drop.
+struct ScratchKey(String);
+
+impl Drop for ScratchKey {
+    fn drop(&mut self) {
+        let _ = Command::new("reg").args(["delete", &self.0, "/f"]).output();
+    }
+}
+
+/// A key the walker kept open as an ancestor is deleted and made again under the same name: the next
+/// key below it reads as a fresh open reads it, never through the deleted key. (Writes and removes a
+/// scratch key under `HKCU\Software`.)
+#[test]
+fn walker_reads_through_a_deleted_and_recreated_ancestor_as_a_fresh_open() {
+    let name = format!("Purge walker test {}", std::process::id());
+    let hkcu = format!(r"HKCU\Software\{name}");
+    let _scratch = ScratchKey(hkcu.clone());
+    reg_exe(&[
+        "add",
+        &format!(r"{hkcu}\A\B\C"),
+        "/v",
+        "x",
+        "/d",
+        "old",
+        "/f",
+    ]);
+    let live = LiveRegistry::new();
+    let base = format!(r"HKU\{}\Software\{name}", me());
+    let mut walker = live.walker();
+    agree(&live, walker.as_mut(), &format!(r"{base}\A\B\C"));
+
+    reg_exe(&["delete", &format!(r"{hkcu}\A"), "/f"]);
+    reg_exe(&[
+        "add",
+        &format!(r"{hkcu}\A\B\D"),
+        "/v",
+        "y",
+        "/d",
+        "new",
+        "/f",
+    ]);
+    // `A` and `B` are kept from the walk to `C`, but they are other keys now.
+    let names = agree(&live, walker.as_mut(), &format!(r"{base}\A\B\D"));
+    assert!(names.is_empty());
+    assert_eq!(
+        walker.values().unwrap().first().map(|v| v.name.clone()),
+        Some("y".to_string())
+    );
+    assert_eq!(
+        walker.enter(&format!(r"{base}\A\B\C")),
+        Err(SourceError::NotFound)
+    );
+    agree(&live, walker.as_mut(), &format!(r"{base}\A\B"));
+    agree(&live, walker.as_mut(), &format!(r"{base}\A\B\D"));
+}
+
 // -----------------------------------------------------------------------------------------------------
 // Filesystem
 // -----------------------------------------------------------------------------------------------------

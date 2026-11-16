@@ -47,6 +47,14 @@
 //! and for one value the name is reported before the data. Two scans of the same registry give the same
 //! hits in the same order whatever order the source lists things in.
 //!
+//! # Speed
+//!
+//! Keys are read through the source's [`KeyWalker`] (on the live registry: one open per key, below
+//! the keys of the previous path still open). A scan without progress reports and without a key
+//! budget reads on up to eight threads: the scope is split into subtrees in walk order, the subtrees
+//! are walked at once, and the pieces are put together in walk order, so the hits, their order and
+//! the statistics are exactly those of the one-thread walk.
+//!
 //! A scan never fails as a whole. Keys that could not be read are listed in
 //! [`RefScanStats::unreadable`]; [`RefScan::is_complete`] says whether the hits cover the whole scope. A
 //! consumer that concludes "nothing references this anchor" must check it.
@@ -54,10 +62,10 @@
 use std::ops::ControlFlow;
 
 use purge_model::{AnchorKind, AnchorRef, RefCarrier};
-use purge_source::registry::RegistrySource;
+use purge_source::registry::{KeyWalker, RegistrySource};
 use purge_source::types::{
-    BINARY_UTF16_SCAN_MAX, REG_DWORD, REG_DWORD_BIG_ENDIAN, REG_EXPAND_SZ, REG_LINK, REG_MULTI_SZ,
-    REG_QWORD, REG_SZ, RegValue, SourceError, SourceResult,
+    BINARY_UTF16_SCAN_MAX, KeyInfo, REG_DWORD, REG_DWORD_BIG_ENDIAN, REG_EXPAND_SZ, REG_LINK,
+    REG_MULTI_SZ, REG_QWORD, REG_SZ, RegValue, SourceError, SourceResult,
 };
 
 use crate::matcher::{MIN_BINARY_RUN, MatchHow, RefMatch, RefMatcher, utf16_runs};
@@ -642,148 +650,409 @@ pub(crate) fn sort_names(names: &mut [String]) {
 // The walk
 // ---------------------------------------------------------------------------------------------------------
 
-struct Walk<'a, 'p> {
-    reg: &'a dyn RegistrySource,
-    matcher: &'a RefMatcher,
-    scope: &'a Scope,
-    options: &'a RefScanOptions,
-    progress: Option<&'a mut ProgressFn<'p>>,
-    out: RefScan,
+/// What a walk adds up. `raw_unreadable`, when set, records every unreadable key as it comes instead of
+/// applying the listing rules ([`Tally::unreadable`]): a part of a parallel scan keeps the events, and the
+/// merge replays them in walk order, so the listing and its cap come out as one sequential walk makes
+/// them.
+#[derive(Default)]
+struct Tally {
+    scan: RefScan,
+    raw_unreadable: Option<Vec<Unreadable>>,
 }
 
-impl Walk<'_, '_> {
-    fn unreadable(&mut self, key: &str, error: SourceError) {
-        let stats = &mut self.out.stats;
-        if stats.unreadable.last().is_some_and(|u| u.key == key) {
-            return;
-        }
-        stats.unreadable_total += 1;
-        if stats.unreadable.len() < MAX_UNREADABLE_LISTED {
-            stats.unreadable.push(Unreadable {
-                key: key.to_string(),
-                error,
-            });
+impl Tally {
+    fn for_part() -> Self {
+        Self {
+            scan: RefScan::default(),
+            raw_unreadable: Some(Vec::new()),
         }
     }
 
+    fn unreadable(&mut self, key: &str, error: SourceError) {
+        match &mut self.raw_unreadable {
+            Some(raw) => raw.push(Unreadable {
+                key: key.to_string(),
+                error,
+            }),
+            None => list_unreadable(&mut self.scan.stats, key, error),
+        }
+    }
+
+    /// Adds a later part of the same walk (see [`Tally`]).
+    fn absorb(&mut self, part: Tally) {
+        let Tally {
+            scan,
+            raw_unreadable,
+        } = part;
+        let (stats, from) = (&mut self.scan.stats, scan.stats);
+        self.scan.hits.extend(scan.hits);
+        stats.keys_visited += from.keys_visited;
+        stats.values_tested += from.values_tested;
+        stats.incomplete_values += from.incomplete_values;
+        stats.cut_edge_hits += from.cut_edge_hits;
+        stats.pruned += from.pruned;
+        stats.links_skipped += from.links_skipped;
+        stats.roots_missing.extend(from.roots_missing);
+        for u in raw_unreadable.unwrap_or_default() {
+            list_unreadable(stats, &u.key, u.error);
+        }
+        // A part's own listing (when it kept none raw) follows the same rules.
+        for u in from.unreadable {
+            list_unreadable(stats, &u.key, u.error);
+        }
+    }
+}
+
+/// Counts an unreadable key and lists it, once per key in a row and at most
+/// [`MAX_UNREADABLE_LISTED`] in all.
+fn list_unreadable(stats: &mut RefScanStats, key: &str, error: SourceError) {
+    if stats.unreadable.last().is_some_and(|u| u.key == key) {
+        return;
+    }
+    stats.unreadable_total += 1;
+    if stats.unreadable.len() < MAX_UNREADABLE_LISTED {
+        stats.unreadable.push(Unreadable {
+            key: key.to_string(),
+            error,
+        });
+    }
+}
+
+/// How one key is read: the scope, the matcher and the options of the scan.
+#[derive(Clone, Copy)]
+struct Visit<'a> {
+    matcher: &'a RefMatcher,
+    scope: &'a Scope,
+    options: &'a RefScanOptions,
+}
+
+impl Visit<'_> {
+    /// Opens `key`. `None` when there is nothing to read: the key is missing (a missing scope root is
+    /// listed), unreadable (listed) or a link (counted).
+    fn enter(
+        &self,
+        walker: &mut dyn KeyWalker,
+        key: &str,
+        at_root: bool,
+        out: &mut Tally,
+    ) -> Option<KeyInfo> {
+        let info = match walker.enter(key) {
+            Ok(info) => info,
+            Err(SourceError::NotFound) => {
+                if at_root {
+                    out.scan.stats.roots_missing.push(key.to_string());
+                }
+                return None;
+            }
+            Err(error) => {
+                out.unreadable(key, error);
+                return None;
+            }
+        };
+        if info.is_link {
+            out.scan.stats.links_skipped += 1;
+            return None;
+        }
+        Some(info)
+    }
+
+    /// Reads the values of the key [`Visit::enter`] opened and tests them, then lists its subkeys:
+    /// `children` gets those to walk, in walk order (first name first); pruned ones are counted.
+    fn read(
+        &self,
+        walker: &mut dyn KeyWalker,
+        key: &str,
+        info: &KeyInfo,
+        out: &mut Tally,
+        children: &mut Vec<String>,
+    ) {
+        out.scan.stats.keys_visited += 1;
+        if info.n_values > 0 {
+            match walker.values() {
+                Ok(mut values) => {
+                    sort_values(&mut values);
+                    for value in &values {
+                        out.scan.stats.values_tested += 1;
+                        if !value.data.is_complete() {
+                            out.scan.stats.incomplete_values += 1;
+                        }
+                        let hits = value_hits(
+                            self.matcher,
+                            key,
+                            value,
+                            info.n_values,
+                            info.n_subkeys,
+                            self.options,
+                        );
+                        out.scan.stats.cut_edge_hits +=
+                            hits.iter().filter(|h| h.cut_edge).count() as u64;
+                        out.scan.hits.extend(hits);
+                    }
+                }
+                // The key went away under the scan: nothing below it either.
+                Err(SourceError::NotFound) => return,
+                Err(error) => out.unreadable(key, error),
+            }
+        }
+        if info.n_subkeys > 0 {
+            match walker.subkeys() {
+                Ok(mut names) => {
+                    sort_names(&mut names);
+                    let mut folded = fold_segments(key);
+                    for name in &names {
+                        folded.push(name.to_lowercase());
+                        if self.scope.is_pruned_folded(&folded) {
+                            out.scan.stats.pruned += 1;
+                        } else {
+                            children.push(format!("{key}\\{name}"));
+                        }
+                        folded.pop();
+                    }
+                }
+                Err(SourceError::NotFound) => {}
+                Err(error) => out.unreadable(key, error),
+            }
+        }
+    }
+
+    /// Walks the subtree of `key` depth first, without progress reports or a key budget.
+    fn subtree(&self, walker: &mut dyn KeyWalker, key: String, at_root: bool, out: &mut Tally) {
+        let mut stack = vec![(key, at_root)];
+        let mut children = Vec::new();
+        while let Some((key, at_root)) = stack.pop() {
+            let Some(info) = self.enter(walker, &key, at_root, out) else {
+                continue;
+            };
+            children.clear();
+            self.read(walker, &key, &info, out, &mut children);
+            // Reversed, so that the first name is popped first.
+            stack.extend(children.drain(..).rev().map(|child| (child, false)));
+        }
+    }
+}
+
+struct Walk<'a, 'p> {
+    reg: &'a dyn RegistrySource,
+    visit: Visit<'a>,
+    progress: Option<&'a mut ProgressFn<'p>>,
+    out: Tally,
+}
+
+impl Walk<'_, '_> {
     fn report(&mut self, root: &str, root_index: usize, key: &str) -> ControlFlow<()> {
         let Some(progress) = self.progress.as_mut() else {
             return ControlFlow::Continue(());
         };
+        let stats = &self.out.scan.stats;
         let flow = progress(&RefScanProgress {
             root,
             root_index,
-            root_count: self.scope.roots.len(),
+            root_count: self.visit.scope.roots.len(),
             key,
-            keys_visited: self.out.stats.keys_visited,
-            values_tested: self.out.stats.values_tested,
-            hits: self.out.hits.len(),
+            keys_visited: stats.keys_visited,
+            values_tested: stats.values_tested,
+            hits: self.out.scan.hits.len(),
         });
         if flow.is_break() {
-            self.out.stats.cancelled = true;
+            self.out.scan.stats.cancelled = true;
         }
         flow
     }
 
     /// Walks one root. `Break` when the scan must stop (cancelled or out of budget).
     fn root(&mut self, root_index: usize) -> ControlFlow<()> {
-        let scope = self.scope;
-        let root = scope.roots[root_index].as_str();
+        let visit = self.visit;
+        let root = visit.scope.roots[root_index].as_str();
         self.report(root, root_index, root)?;
-        if scope.is_pruned(root) {
-            self.out.stats.pruned += 1;
+        if visit.scope.is_pruned(root) {
+            self.out.scan.stats.pruned += 1;
             return ControlFlow::Continue(());
         }
-        let every = u64::from(self.options.progress_every.max(1));
+        let every = u64::from(visit.options.progress_every.max(1));
+        let mut walker = self.reg.walker();
         let mut stack: Vec<String> = vec![root.to_string()];
+        let mut children = Vec::new();
         let mut is_root = true;
         while let Some(key) = stack.pop() {
             let at_root = std::mem::replace(&mut is_root, false);
-            let info = match self.reg.key_info(&key) {
-                Ok(info) => info,
-                Err(SourceError::NotFound) => {
-                    if at_root {
-                        self.out.stats.roots_missing.push(key);
-                    }
-                    continue;
-                }
-                Err(error) => {
-                    self.unreadable(&key, error);
-                    continue;
-                }
-            };
-            if info.is_link {
-                self.out.stats.links_skipped += 1;
+            let Some(info) = visit.enter(walker.as_mut(), &key, at_root, &mut self.out) else {
                 continue;
-            }
-            if self
-                .options
-                .max_keys
-                .is_some_and(|max| self.out.stats.keys_visited >= max)
-            {
-                self.out.stats.truncated = true;
+            };
+            let visited = self.out.scan.stats.keys_visited;
+            if visit.options.max_keys.is_some_and(|max| visited >= max) {
+                self.out.scan.stats.truncated = true;
                 return ControlFlow::Break(());
             }
-            if self.out.stats.keys_visited > 0 && self.out.stats.keys_visited % every == 0 {
+            if visited > 0 && visited % every == 0 {
                 self.report(root, root_index, &key)?;
             }
-            self.out.stats.keys_visited += 1;
-
-            if info.n_values > 0 {
-                match self.reg.values(&key) {
-                    Ok(mut values) => {
-                        sort_values(&mut values);
-                        for value in &values {
-                            self.out.stats.values_tested += 1;
-                            if !value.data.is_complete() {
-                                self.out.stats.incomplete_values += 1;
-                            }
-                            let hits = value_hits(
-                                self.matcher,
-                                &key,
-                                value,
-                                info.n_values,
-                                info.n_subkeys,
-                                self.options,
-                            );
-                            self.out.stats.cut_edge_hits +=
-                                hits.iter().filter(|h| h.cut_edge).count() as u64;
-                            self.out.hits.extend(hits);
-                        }
-                    }
-                    Err(SourceError::NotFound) => continue,
-                    Err(error) => self.unreadable(&key, error),
-                }
-            }
-            if info.n_subkeys > 0 {
-                match self.reg.subkeys(&key) {
-                    Ok(mut names) => {
-                        sort_names(&mut names);
-                        let mut folded = fold_segments(&key);
-                        // Reversed, so that the first name is popped first.
-                        for name in names.iter().rev() {
-                            folded.push(name.to_lowercase());
-                            if self.scope.is_pruned_folded(&folded) {
-                                self.out.stats.pruned += 1;
-                            } else {
-                                stack.push(format!("{key}\\{name}"));
-                            }
-                            folded.pop();
-                        }
-                    }
-                    Err(SourceError::NotFound) => {}
-                    Err(error) => self.unreadable(&key, error),
-                }
-            }
+            children.clear();
+            visit.read(walker.as_mut(), &key, &info, &mut self.out, &mut children);
+            // Reversed, so that the first name is popped first.
+            stack.extend(children.drain(..).rev());
         }
         ControlFlow::Continue(())
     }
 }
 
+/// The most threads a scan reads the registry with.
+const MAX_THREADS: usize = 8;
+
+/// A parallel scan splits the scope into subtrees until it has this many per thread (or
+/// [`MAX_SPLIT_ROUNDS`] levels), so that the threads stay busy to the end.
+const SUBTREES_PER_THREAD: usize = 64;
+
+/// The deepest a parallel scan splits the scope, in levels below the roots.
+const MAX_SPLIT_ROUNDS: usize = 4;
+
+/// Fewer pieces than this are read on the calling thread.
+const MIN_PARALLEL_ITEMS: usize = 32;
+
+/// The number of threads a scan without progress reports and key budget uses.
+fn default_threads() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .clamp(1, MAX_THREADS)
+}
+
+/// `f` over `items` on at most `threads` threads, each with its own `W` from `init`; the results in the
+/// order of `items`.
+fn parallel_map<T, W, R>(
+    items: Vec<T>,
+    threads: usize,
+    init: impl Fn() -> W + Sync,
+    f: impl Fn(&mut W, T) -> R + Sync,
+) -> Vec<R>
+where
+    T: Send,
+    R: Send,
+{
+    let threads = threads.clamp(1, items.len().max(1));
+    // A short list is not worth starting threads for.
+    if threads == 1 || items.len() < MIN_PARALLEL_ITEMS {
+        let mut w = init();
+        return items.into_iter().map(|item| f(&mut w, item)).collect();
+    }
+    let n = items.len();
+    let queue: Vec<std::sync::Mutex<Option<T>>> = items
+        .into_iter()
+        .map(|item| std::sync::Mutex::new(Some(item)))
+        .collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut done: Vec<(usize, R)> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut w = init();
+                    let mut out = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(slot) = queue.get(i) else {
+                            break;
+                        };
+                        let item = slot
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take();
+                        if let Some(item) = item {
+                            out.push((i, f(&mut w, item)));
+                        }
+                    }
+                    out
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| match w.join() {
+                Ok(out) => out,
+                Err(panic) => std::panic::resume_unwind(panic),
+            })
+            .collect()
+    });
+    done.sort_by_key(|(i, _)| *i);
+    debug_assert_eq!(done.len(), n);
+    done.into_iter().map(|(_, r)| r).collect()
+}
+
+/// One piece of a parallel scan, in walk order: what is already read, or a subtree still to walk.
+enum Part {
+    Done(Tally),
+    Subtree { key: String, at_root: bool },
+}
+
+/// [`scan`] without progress reports or key budget, on `threads` threads. Gives exactly the hits and
+/// statistics of the sequential walk: the scope is split into subtrees in walk order (reading the keys
+/// above them, level by level), the subtrees are walked in parallel, and the pieces are put together in
+/// walk order.
+fn scan_parallel(reg: &dyn RegistrySource, visit: Visit<'_>, threads: usize) -> RefScan {
+    let scope = visit.scope;
+    let mut parts: Vec<Part> = scope
+        .roots
+        .iter()
+        .map(|root| {
+            if scope.is_pruned(root) {
+                let mut t = Tally::for_part();
+                t.scan.stats.pruned += 1;
+                Part::Done(t)
+            } else {
+                Part::Subtree {
+                    key: root.clone(),
+                    at_root: true,
+                }
+            }
+        })
+        .collect();
+    let walker = || reg.walker();
+    for _ in 0..MAX_SPLIT_ROUNDS {
+        let open = parts
+            .iter()
+            .filter(|p| matches!(p, Part::Subtree { .. }))
+            .count();
+        if open == 0 || open >= threads * SUBTREES_PER_THREAD {
+            break;
+        }
+        // One level: each subtree becomes its top key, read, followed by the subtrees of its children.
+        parts = parallel_map(parts, threads, walker, |w, part| match part {
+            Part::Done(t) => vec![Part::Done(t)],
+            Part::Subtree { key, at_root } => {
+                let mut t = Tally::for_part();
+                let mut children = Vec::new();
+                if let Some(info) = visit.enter(w.as_mut(), &key, at_root, &mut t) {
+                    visit.read(w.as_mut(), &key, &info, &mut t, &mut children);
+                }
+                let mut out = vec![Part::Done(t)];
+                out.extend(children.into_iter().map(|key| Part::Subtree {
+                    key,
+                    at_root: false,
+                }));
+                out
+            }
+        })
+        .into_iter()
+        .flatten()
+        .collect();
+    }
+    let tallies = parallel_map(parts, threads, walker, |w, part| match part {
+        Part::Done(t) => t,
+        Part::Subtree { key, at_root } => {
+            let mut t = Tally::for_part();
+            visit.subtree(w.as_mut(), key, at_root, &mut t);
+            t
+        }
+    });
+    let mut total = Tally::default();
+    for t in tallies {
+        total.absorb(t);
+    }
+    total.scan
+}
+
 /// Runs a reference scan over `scope` and reports every value that refers to an anchor of `matcher`.
 ///
 /// See the module documentation for what is tested, the order of the hits and what an incomplete scan
-/// means. `progress` may be `None`.
+/// means. `progress` may be `None`; without it and without a key budget the scan reads the registry on
+/// several threads, with the same result.
 pub fn scan(
     reg: &dyn RegistrySource,
     matcher: &RefMatcher,
@@ -791,20 +1060,44 @@ pub fn scan(
     options: &RefScanOptions,
     progress: Option<&mut ProgressFn<'_>>,
 ) -> RefScan {
-    let mut walk = Walk {
-        reg,
+    let threads = if progress.is_none() && options.max_keys.is_none() {
+        default_threads()
+    } else {
+        1
+    };
+    scan_with_threads(reg, matcher, scope, options, progress, threads)
+}
+
+/// [`scan`] on at most `threads` threads (1: the sequential walk, which progress reports and a key
+/// budget need).
+fn scan_with_threads(
+    reg: &dyn RegistrySource,
+    matcher: &RefMatcher,
+    scope: &Scope,
+    options: &RefScanOptions,
+    progress: Option<&mut ProgressFn<'_>>,
+    threads: usize,
+) -> RefScan {
+    let visit = Visit {
         matcher,
         scope,
         options,
+    };
+    if threads > 1 && progress.is_none() && options.max_keys.is_none() {
+        return scan_parallel(reg, visit, threads);
+    }
+    let mut walk = Walk {
+        reg,
+        visit,
         progress,
-        out: RefScan::default(),
+        out: Tally::default(),
     };
     for index in 0..scope.roots.len() {
         if walk.root(index).is_break() {
             break;
         }
     }
-    walk.out
+    walk.out.scan
 }
 
 /// [`scan`] over [`Scope::standard`] with default options and no progress callback. Fails only when the
@@ -1756,5 +2049,171 @@ mod tests {
         );
         let again = scan(&f, &m, &scope, &RefScanOptions::default(), None);
         assert_eq!(again.hits, result.hits);
+    }
+
+    /// A source over a fixture whose keys named `flaky…` can be opened but neither their values nor
+    /// their subkeys listed: two unreadable reports for one key.
+    struct Flaky<'a>(&'a Fixture);
+
+    impl Flaky<'_> {
+        fn flaky(key: &str) -> bool {
+            key.rsplit('\\')
+                .next()
+                .is_some_and(|leaf| leaf.starts_with("flaky"))
+        }
+    }
+
+    impl RegistrySource for Flaky<'_> {
+        fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+            self.0.key_info(key)
+        }
+        fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+            if Self::flaky(key) {
+                return Err(SourceError::AccessDenied);
+            }
+            self.0.subkeys(key)
+        }
+        fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+            if Self::flaky(key) {
+                return Err(SourceError::AccessDenied);
+            }
+            self.0.values(key)
+        }
+        fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+            self.0.value(key, name)
+        }
+        fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+            self.0.loaded_user_sids()
+        }
+        fn current_control_set(&self) -> SourceResult<u32> {
+            self.0.current_control_set()
+        }
+    }
+
+    /// A tree of a few thousand keys, five levels deep, with hits, decoys, a pruned store, a link,
+    /// denied keys and `flaky` keys (more than [`MAX_UNREADABLE_LISTED`] of them when `flaky` is large).
+    fn big_tree(flaky: usize) -> Fixture {
+        let hit = format!(r"{FF}\firefox.exe");
+        let mut b = base()
+            .sz(r"HKLM\SOFTWARE\Classes\Installer\P\Q", "a", &hit)
+            .link(
+                &hku(r"Software\Classes"),
+                &format!(r"\REGISTRY\USER\{SID}_Classes"),
+            )
+            .sz(
+                &format!(r"HKU\{SID}_Classes\FirefoxURL-{TOKEN}\shell\open\command"),
+                "",
+                &hit,
+            );
+        for v in 0..12 {
+            for p in 0..9 {
+                let product = format!(r"HKLM\SOFTWARE\Vendor{v:02}\Product{p}");
+                b = b.sz(&product, "InstallDir", &format!(r"{FF}\v{v}\p{p}"));
+                for d in 0..4 {
+                    let deep = format!(r"{product}\L1-{d}\L2\L3\L4");
+                    b = b
+                        .sz(&deep, "Path", &format!(r"C:\Other\{v}{p}{d}"))
+                        .sz(&deep, &format!("{TOKEN}-{d}"), "named after the token")
+                        .dword(&format!(r"{product}\L1-{d}"), "n", d);
+                }
+                if (v + p) % 7 == 0 {
+                    b = b
+                        .sz(&format!(r"{product}\Locked\Inner"), "a", &hit)
+                        .denied(&format!(r"{product}\Locked"));
+                }
+            }
+        }
+        for i in 0..flaky {
+            let key = format!(r"HKLM\SOFTWARE\Flakes\G{:02}\flaky{i:04}", i % 13);
+            b = b
+                .sz(&key, "a", &hit)
+                .sz(&format!(r"{key}\Below"), "b", &hit);
+        }
+        b.build()
+    }
+
+    /// The parallel scan gives exactly the hits and statistics of the sequential walk, in the same
+    /// order, whatever the number of threads, with more unreadable keys than are listed.
+    #[test]
+    fn parallel_scans_equal_the_sequential_walk() {
+        for flaky in [0, 40, MAX_UNREADABLE_LISTED + 77] {
+            let f = big_tree(flaky);
+            let source = Flaky(&f);
+            let m = matcher();
+            let scope = Scope::standard(&f).unwrap();
+            for options in [
+                RefScanOptions::default(),
+                RefScanOptions {
+                    all_anchors: true,
+                    ..RefScanOptions::default()
+                },
+            ] {
+                let one = scan_with_threads(&source, &m, &scope, &options, None, 1);
+                assert!(one.hits.len() > 100, "{}", one.hits.len());
+                assert!(one.stats.pruned > 0 && one.stats.links_skipped > 0);
+                if flaky > MAX_UNREADABLE_LISTED {
+                    assert_eq!(one.stats.unreadable.len(), MAX_UNREADABLE_LISTED);
+                    assert!(one.stats.unreadable_total > MAX_UNREADABLE_LISTED as u64);
+                }
+                for threads in [2, 3, 8, 32] {
+                    let many = scan_with_threads(&source, &m, &scope, &options, None, threads);
+                    assert_eq!(many.hits, one.hits, "{threads} threads, {flaky} flaky");
+                    assert_eq!(many.stats, one.stats, "{threads} threads, {flaky} flaky");
+                }
+            }
+        }
+    }
+
+    /// Roots that are pruned, missing or links, in any position, come out of a parallel scan as out
+    /// of the sequential one.
+    #[test]
+    fn parallel_scans_keep_root_order_and_root_facts() {
+        let f = big_tree(5);
+        let link = hku(r"Software\Classes");
+        let scope = Scope::custom(
+            [
+                r"HKLM\SOFTWARE\Missing".to_string(),
+                r"HKLM\SOFTWARE\Vendor03".to_string(),
+                link,
+                r"HKLM\SOFTWARE\Nothing\Here".to_string(),
+                r"HKLM\SOFTWARE\Classes\Installer".to_string(),
+                r"HKLM\SOFTWARE\Flakes".to_string(),
+            ],
+            default_prune(),
+        );
+        let source = Flaky(&f);
+        let options = RefScanOptions::default();
+        let one = scan_with_threads(&source, &matcher(), &scope, &options, None, 1);
+        assert_eq!(
+            one.stats.roots_missing,
+            [r"HKLM\SOFTWARE\Missing", r"HKLM\SOFTWARE\Nothing\Here"]
+        );
+        assert_eq!((one.stats.pruned, one.stats.links_skipped), (1, 1));
+        for threads in [2, 4, 16] {
+            let many = scan_with_threads(&source, &matcher(), &scope, &options, None, threads);
+            assert_eq!(many.hits, one.hits);
+            assert_eq!(many.stats, one.stats);
+        }
+        // The public entry point picks its own number of threads and agrees too.
+        let auto = scan(&source, &matcher(), &scope, &options, None);
+        assert_eq!((auto.hits, auto.stats), (one.hits, one.stats));
+    }
+
+    #[test]
+    fn parallel_map_keeps_order_and_bounds_threads() {
+        let seen = std::sync::Mutex::new(std::collections::HashSet::new());
+        let out = parallel_map(
+            (0..500u32).collect(),
+            4,
+            || std::thread::current().id(),
+            |id, i| {
+                seen.lock().unwrap().insert(*id);
+                i * 2
+            },
+        );
+        assert_eq!(out, (0..500u32).map(|i| i * 2).collect::<Vec<_>>());
+        let threads = seen.lock().unwrap().len();
+        assert!((1..=4).contains(&threads), "{threads}");
+        assert!(parallel_map(Vec::<u32>::new(), 4, || (), |(), i| i).is_empty());
     }
 }
