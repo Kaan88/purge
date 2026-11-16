@@ -845,6 +845,7 @@ pub fn safe(id: &str, target: Target, action: Action) -> Candidate {
         size_bytes: None,
         child_count: None,
         item_fp: None,
+        object_fp: None,
         decision: Some(Decision {
             band: Band::Safe,
             preselected: true,

@@ -5,8 +5,10 @@
 //! refuses every other pair, so the executor never has to guess what an item means. Each executed op is
 //! journalled with its [`Inverse`], and ends in one [`ItemOutcome`].
 //!
-//! Service, task and firewall ops are not part of this vocabulary yet: their execution is deferred to M1b,
-//! and [`resolve`] refuses those targets with [`Mismatch::NoExecutor`].
+//! Service, task and firewall-rule items resolve to their own ops ([`ExecOp::DeleteService`],
+//! [`ExecOp::DeleteTask`], [`ExecOp::DeleteFirewallRule`], M1b) only together with the scan-time object
+//! digest of the candidate ([`ObjectFp`]); without one, [`resolve`] refuses them with
+//! [`Mismatch::NoObjectFp`].
 //!
 //! The small scalars the executor documents share live here too: [`OpId`], [`Sha256Hex`], [`FileIdHex`]
 //! and [`BackupRef`].
@@ -27,6 +29,7 @@ use std::str::FromStr;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::object::{ObjectFp, ObjectKind};
 use crate::{Action, Blocker, FileTime, Target};
 
 /// Why a string is not a fixed-length lower-case hex value ([`Sha256Hex`], [`FileIdHex`]).
@@ -297,6 +300,24 @@ pub enum ExecOp {
         /// Package full name.
         full_name: String,
     },
+    /// Delete a service through the SCM (`DeleteService`), after its definition and key tree were
+    /// stored (M1b). Undone by [`Inverse::RecreateService`].
+    DeleteService {
+        /// Service name, as [`Target::Service`] spells it.
+        name: String,
+    },
+    /// Delete a scheduled task (`ITaskFolder::DeleteTask`), after its XML was stored (M1b). Undone by
+    /// [`Inverse::RecreateTask`].
+    DeleteTask {
+        /// Task path, starting with `\`, as [`Target::Task`] spells it.
+        path: String,
+    },
+    /// Delete a firewall rule by its id (WMI `InstanceID`), after its rule string was stored (M1b).
+    /// Undone by [`Inverse::RecreateFirewallRule`].
+    DeleteFirewallRule {
+        /// The rule's id, as [`Target::FirewallRule`] spells it.
+        id: String,
+    },
 }
 
 impl ExecOp {
@@ -310,7 +331,31 @@ impl ExecOp {
             ExecOp::DeleteValue { .. } => "DeleteValue",
             ExecOp::EditSegment { .. } => "EditSegment",
             ExecOp::RemovePackage { .. } => "RemovePackage",
+            ExecOp::DeleteService { .. } => "DeleteService",
+            ExecOp::DeleteTask { .. } => "DeleteTask",
+            ExecOp::DeleteFirewallRule { .. } => "DeleteFirewallRule",
         }
+    }
+
+    /// The kind of system object the op deletes; `None` for the file, registry and package ops.
+    pub fn object_kind(&self) -> Option<ObjectKind> {
+        match self {
+            ExecOp::DeleteService { .. } => Some(ObjectKind::Service),
+            ExecOp::DeleteTask { .. } => Some(ObjectKind::Task),
+            ExecOp::DeleteFirewallRule { .. } => Some(ObjectKind::FirewallRule),
+            ExecOp::QuarantineMove { .. }
+            | ExecOp::RemoveDirIfEmpty { .. }
+            | ExecOp::DeleteKeyTree { .. }
+            | ExecOp::DeleteKeyIfEmpty { .. }
+            | ExecOp::DeleteValue { .. }
+            | ExecOp::EditSegment { .. }
+            | ExecOp::RemovePackage { .. } => None,
+        }
+    }
+
+    /// Whether the op deletes a service, task or firewall rule.
+    pub fn is_object(&self) -> bool {
+        self.object_kind().is_some()
     }
 
     /// The target the op acts on. `resolve(&op.target(), op.action())` gives the op back.
@@ -335,6 +380,9 @@ impl ExecOp {
                 index,
             },
             ExecOp::RemovePackage { full_name } => Target::AppxPackage { full_name },
+            ExecOp::DeleteService { name } => Target::Service { name },
+            ExecOp::DeleteTask { path } => Target::Task { path },
+            ExecOp::DeleteFirewallRule { id } => Target::FirewallRule { id },
         }
     }
 
@@ -345,7 +393,10 @@ impl ExecOp {
             ExecOp::RemoveDirIfEmpty { .. } | ExecOp::DeleteKeyIfEmpty { .. } => {
                 Action::RemoveDirIfEmpty
             }
-            ExecOp::DeleteKeyTree { .. } => Action::DeleteKey,
+            ExecOp::DeleteKeyTree { .. }
+            | ExecOp::DeleteService { .. }
+            | ExecOp::DeleteTask { .. }
+            | ExecOp::DeleteFirewallRule { .. } => Action::DeleteKey,
             ExecOp::DeleteValue { .. } => Action::DeleteValue,
             ExecOp::EditSegment { .. } => Action::EditSegment,
             ExecOp::RemovePackage { .. } => Action::RemovePackage,
@@ -377,8 +428,10 @@ pub enum Mismatch {
     /// The target is [`Target::RegValueChanged`], which exists in rig truth only. The fix for a changed
     /// value is a segment edit, never a removal.
     TruthOnlyTarget,
-    /// The target is a service, task or firewall rule. Executing those is deferred to M1b.
-    NoExecutor,
+    /// The target is a service, task or firewall rule and the item carries no object digest of the
+    /// scan, or one of another kind or in another spelling ([`ObjectFp::is_well_formed`]). Nothing would
+    /// bind the act to the object the scan saw (decision D3 of the M1b design).
+    NoObjectFp,
     /// The action does not apply to this kind of target (for example `DeleteKey` on a file).
     WrongAction,
 }
@@ -388,7 +441,7 @@ impl fmt::Display for Mismatch {
         f.write_str(match self {
             Self::ReportOnly => "the item is report-only",
             Self::TruthOnlyTarget => "a changed value is never removed",
-            Self::NoExecutor => "services, tasks and firewall rules are not executed yet",
+            Self::NoObjectFp => "the item carries no scan-time digest of the object it names",
             Self::WrongAction => "the action does not apply to this kind of target",
         })
     }
@@ -407,12 +460,32 @@ impl std::error::Error for Mismatch {}
 /// | `RegValue` | `DeleteValue` | [`ExecOp::DeleteValue`] |
 /// | `RegMultiSzSegment` | `EditSegment` | [`ExecOp::EditSegment`] |
 /// | `AppxPackage` | `RemovePackage` | [`ExecOp::RemovePackage`] |
+/// | `Service` | `DeleteKey` | [`ExecOp::DeleteService`] |
+/// | `Task` | `DeleteKey` | [`ExecOp::DeleteTask`] |
+/// | `FirewallRule` | `DeleteKey` | [`ExecOp::DeleteFirewallRule`] |
+///
+/// `object_fp` is the candidate's [`Candidate::object_fp`](crate::Candidate::object_fp). The three
+/// object pairs resolve only when it is present, well formed and of the target's kind; otherwise they are
+/// [`Mismatch::NoObjectFp`]. Every other pair ignores it and resolves exactly as in M2.
 ///
 /// Every other pair is a [`Mismatch`]. [`Action::ReportOnly`] and [`Target::RegValueChanged`] never
-/// resolve; `ReportOnly` is reported first when both apply.
-pub fn resolve(target: &Target, action: Action) -> Result<ExecOp, Mismatch> {
+/// resolve; `ReportOnly` is reported first when both apply, and a wrong action on an object target before
+/// a missing digest.
+pub fn resolve(
+    target: &Target,
+    action: Action,
+    object_fp: Option<&ObjectFp>,
+) -> Result<ExecOp, Mismatch> {
     if action == Action::ReportOnly {
         return Err(Mismatch::ReportOnly);
+    }
+    if let Some(kind) = ObjectKind::of(target) {
+        if action != Action::DeleteKey {
+            return Err(Mismatch::WrongAction);
+        }
+        if !object_fp.is_some_and(|fp| fp.kind == kind && fp.is_well_formed()) {
+            return Err(Mismatch::NoObjectFp);
+        }
     }
     match target {
         Target::Path { path } => match action {
@@ -447,9 +520,10 @@ pub fn resolve(target: &Target, action: Action) -> Result<ExecOp, Mismatch> {
             }),
             _ => Err(Mismatch::WrongAction),
         },
-        Target::Service { .. } | Target::Task { .. } | Target::FirewallRule { .. } => {
-            Err(Mismatch::NoExecutor)
-        }
+        // The action and the digest were checked above.
+        Target::Service { name } => Ok(ExecOp::DeleteService { name: name.clone() }),
+        Target::Task { path } => Ok(ExecOp::DeleteTask { path: path.clone() }),
+        Target::FirewallRule { id } => Ok(ExecOp::DeleteFirewallRule { id: id.clone() }),
         Target::AppxPackage { full_name } => match action {
             Action::RemovePackage => Ok(ExecOp::RemovePackage {
                 full_name: full_name.clone(),
@@ -541,6 +615,29 @@ pub enum Inverse {
     },
     /// The op cannot be undone ([`ExecOp::RemovePackage`]).
     None,
+    /// Create the service again from its stored definition (`purge.svcdef/1`, which names its own key
+    /// backup). Inverse of [`ExecOp::DeleteService`]. The spike's exact procedure: `CreateServiceW` with
+    /// the raw `ImagePath` of the key backup, config2 items only where the backup holds the value, the
+    /// DACL only (not owner and group) and only when the backup has a `Security` key, then every
+    /// backed-up value or key that is absent or different written back.
+    RecreateService {
+        /// The definition file.
+        definition: BackupRef,
+    },
+    /// Register the task again from its stored XML alone (`purge.taskdef/1`; no security descriptor
+    /// argument, `TASK_CREATE`, so an existing task is never overwritten). Inverse of
+    /// [`ExecOp::DeleteTask`].
+    RecreateTask {
+        /// The definition file.
+        definition: BackupRef,
+    },
+    /// Create the rule again under its own id from its stored definition (`purge.fwdef/1`; create-only,
+    /// so an existing rule is never overwritten). Inverse of [`ExecOp::DeleteFirewallRule`]. The spike
+    /// found this exact ([`FIREWALL_RESTORE_EXACT`](crate::object::FIREWALL_RESTORE_EXACT)).
+    RecreateFirewallRule {
+        /// The definition file.
+        definition: BackupRef,
+    },
 }
 
 impl Inverse {
@@ -554,15 +651,21 @@ impl Inverse {
             Inverse::RecreateDir { .. } => "RecreateDir",
             Inverse::RecreateKey { .. } => "RecreateKey",
             Inverse::None => "None",
+            Inverse::RecreateService { .. } => "RecreateService",
+            Inverse::RecreateTask { .. } => "RecreateTask",
+            Inverse::RecreateFirewallRule { .. } => "RecreateFirewallRule",
         }
     }
 
-    /// The backup file the inverse reads, if it reads one.
+    /// The backup or definition file the inverse reads, if it reads one.
     pub fn backup(&self) -> Option<&BackupRef> {
         match self {
             Inverse::RestoreKeyTree { backup }
             | Inverse::RestoreValue { backup }
             | Inverse::RecreateKey { backup } => Some(backup),
+            Inverse::RecreateService { definition }
+            | Inverse::RecreateTask { definition }
+            | Inverse::RecreateFirewallRule { definition } => Some(definition),
             Inverse::ReinsertSegment { backup, .. } => backup.as_ref(),
             Inverse::MoveBack { .. } | Inverse::RecreateDir { .. } | Inverse::None => None,
         }
@@ -577,7 +680,9 @@ impl Inverse {
     ///   index, the inverse's `index` is that index.
     ///
     /// The inverses that read a registry backup carry their key inside the backup file; the reader checks
-    /// it there with [`RegBackup::validate_for`](super::regbackup::RegBackup::validate_for).
+    /// it there with [`RegBackup::validate_for`](super::regbackup::RegBackup::validate_for). The object
+    /// inverses carry the name, path or id inside their definition file, which the reader checks against
+    /// the op the same way.
     pub fn undoes(&self, op: &ExecOp) -> bool {
         if !self.fits(op) {
             return false;
@@ -625,6 +730,15 @@ impl Inverse {
                 | (ExecOp::DeleteValue { .. }, Inverse::RestoreValue { .. })
                 | (ExecOp::EditSegment { .. }, Inverse::ReinsertSegment { .. })
                 | (ExecOp::RemovePackage { .. }, Inverse::None)
+                | (
+                    ExecOp::DeleteService { .. },
+                    Inverse::RecreateService { .. }
+                )
+                | (ExecOp::DeleteTask { .. }, Inverse::RecreateTask { .. })
+                | (
+                    ExecOp::DeleteFirewallRule { .. },
+                    Inverse::RecreateFirewallRule { .. }
+                )
         )
     }
 }
@@ -675,6 +789,8 @@ pub enum FailCode {
     VerifyFailed,
     /// The package API refused or failed.
     PackageApi,
+    /// An SCM, Task Scheduler or WMI call failed (M1b); `os_error` holds the HRESULT or Win32 code.
+    ObjectApi,
     /// Any other operating-system error; `os_error` holds the code.
     Os,
     /// An unexpected state inside the executor.
@@ -707,6 +823,11 @@ pub enum ItemOutcome {
         /// and a reader must look the pair up in the list before removing it.
         confirmed: bool,
     },
+    /// `DeleteService` succeeded but the service is only marked for deletion (M1b): another handle to
+    /// it is open, so its key stays with `DeleteFlag = 1` and the SCM removes it when the last handle
+    /// closes, at the latest at restart. Until then a re-create fails with 1072. Counted with the
+    /// pending reboots in [`OutcomeCounts`].
+    PendingDelete,
     /// The action failed. The item is in its original state unless `code` is
     /// [`FailCode::VerifyFailed`].
     Failed {
@@ -727,10 +848,14 @@ impl ItemOutcome {
         matches!(self, ItemOutcome::Done | ItemOutcome::Vanished)
     }
 
-    /// Whether the system was changed, so undo has something to do: [`ItemOutcome::Done`], or
-    /// [`ItemOutcome::PendingReboot`] (a registered boot-time move).
+    /// Whether the system was changed, so undo has something to do: [`ItemOutcome::Done`],
+    /// [`ItemOutcome::PendingReboot`] (a registered boot-time move) or [`ItemOutcome::PendingDelete`] (a
+    /// service marked for deletion).
     pub fn changed_system(&self) -> bool {
-        matches!(self, ItemOutcome::Done | ItemOutcome::PendingReboot { .. })
+        matches!(
+            self,
+            ItemOutcome::Done | ItemOutcome::PendingReboot { .. } | ItemOutcome::PendingDelete
+        )
     }
 
     /// The boot-time move pair, when the outcome is [`ItemOutcome::PendingReboot`].
@@ -743,7 +868,8 @@ impl ItemOutcome {
 
     /// Whether the outcome may be journalled without an intent record before it. Only outcomes that are
     /// decided before any backup is taken qualify: [`ItemOutcome::Vanished`], [`ItemOutcome::Skipped`] and
-    /// [`ItemOutcome::Failed`]. `Done`, `HeldRetry` and `PendingReboot` always follow an intent.
+    /// [`ItemOutcome::Failed`]. `Done`, `HeldRetry`, `PendingReboot` and `PendingDelete` always follow an
+    /// intent.
     pub fn allowed_without_intent(&self) -> bool {
         matches!(
             self,
@@ -764,7 +890,7 @@ pub struct OutcomeCounts {
     pub skipped: u32,
     /// Items with [`ItemOutcome::HeldRetry`].
     pub held_retry: u32,
-    /// Items with [`ItemOutcome::PendingReboot`].
+    /// Items with [`ItemOutcome::PendingReboot`] or [`ItemOutcome::PendingDelete`].
     pub pending_reboot: u32,
     /// Items with [`ItemOutcome::Failed`].
     pub failed: u32,
@@ -778,7 +904,9 @@ impl OutcomeCounts {
             ItemOutcome::Vanished => &mut self.vanished,
             ItemOutcome::Skipped { .. } => &mut self.skipped,
             ItemOutcome::HeldRetry => &mut self.held_retry,
-            ItemOutcome::PendingReboot { .. } => &mut self.pending_reboot,
+            ItemOutcome::PendingReboot { .. } | ItemOutcome::PendingDelete => {
+                &mut self.pending_reboot
+            }
             ItemOutcome::Failed { .. } => &mut self.failed,
         };
         *slot = slot.saturating_add(1);
@@ -890,9 +1018,9 @@ mod tests {
         actions
     }
 
-    /// The expected result for one pair, written out independently of `resolve`: the op name for the seven
-    /// legal pairs, the mismatch otherwise.
-    fn expected(target: &Target, action: Action) -> Result<&'static str, Mismatch> {
+    /// The M2 table, written out independently of `resolve`: the op name for the seven legal pairs, the
+    /// mismatch otherwise. Defined for the targets that are not system objects.
+    fn expected_m2(target: &Target, action: Action) -> Result<&'static str, Mismatch> {
         use Action as A;
         if action == A::ReportOnly {
             return Err(Mismatch::ReportOnly);
@@ -906,11 +1034,35 @@ mod tests {
             (Target::RegMultiSzSegment { .. }, A::EditSegment) => Ok("EditSegment"),
             (Target::AppxPackage { .. }, A::RemovePackage) => Ok("RemovePackage"),
             (Target::RegValueChanged { .. }, _) => Err(Mismatch::TruthOnlyTarget),
-            (Target::Service { .. } | Target::Task { .. } | Target::FirewallRule { .. }, _) => {
-                Err(Mismatch::NoExecutor)
-            }
             _ => Err(Mismatch::WrongAction),
         }
+    }
+
+    /// The whole table with a matching digest: M2's seven pairs plus the three object pairs.
+    fn expected(target: &Target, action: Action) -> Result<&'static str, Mismatch> {
+        match (target, action) {
+            (_, Action::ReportOnly) => Err(Mismatch::ReportOnly),
+            (Target::Service { .. }, Action::DeleteKey) => Ok("DeleteService"),
+            (Target::Task { .. }, Action::DeleteKey) => Ok("DeleteTask"),
+            (Target::FirewallRule { .. }, Action::DeleteKey) => Ok("DeleteFirewallRule"),
+            (Target::Service { .. } | Target::Task { .. } | Target::FirewallRule { .. }, _) => {
+                Err(Mismatch::WrongAction)
+            }
+            _ => expected_m2(target, action),
+        }
+    }
+
+    /// A well-formed digest of `kind`.
+    fn fp(kind: ObjectKind) -> ObjectFp {
+        ObjectFp {
+            kind,
+            sha256: HASH_A.into(),
+        }
+    }
+
+    /// The digest a target's candidate would carry: one of its kind for an object, none otherwise.
+    fn fp_for(target: &Target) -> Option<ObjectFp> {
+        ObjectKind::of(target).map(fp)
     }
 
     #[test]
@@ -919,8 +1071,9 @@ mod tests {
         let actions = all_actions();
         let mut legal = 0;
         for target in &targets {
+            let fp = fp_for(target);
             for &action in &actions {
-                let got = resolve(target, action);
+                let got = resolve(target, action, fp.as_ref());
                 assert_eq!(
                     got.as_ref().map(ExecOp::name).map_err(|m| *m),
                     expected(target, action),
@@ -931,19 +1084,146 @@ mod tests {
                     // The op carries the whole target, and maps back to the same pair.
                     assert_eq!(&op.target(), target);
                     assert_eq!(op.action(), action);
-                    assert_eq!(resolve(&op.target(), op.action()), Ok(op));
+                    assert_eq!(op.object_kind(), ObjectKind::of(target));
+                    assert_eq!(resolve(&op.target(), op.action(), fp.as_ref()), Ok(op));
                 }
             }
         }
         assert_eq!(targets.len() * actions.len(), 63);
-        assert_eq!(legal, 7);
+        assert_eq!(legal, 10);
+    }
+
+    /// Every pair of a target that is not a system object resolves exactly as in M2, whatever digest
+    /// is passed along.
+    #[test]
+    fn resolve_all_m1a_pairs_unchanged() {
+        let digests: Vec<Option<ObjectFp>> = std::iter::once(None)
+            .chain(ObjectKind::ALL.map(|kind| Some(fp(kind))))
+            .chain([Some(ObjectFp {
+                kind: ObjectKind::Service,
+                sha256: "x".into(),
+            })])
+            .collect();
+        let mut pairs = 0;
+        for target in all_targets().iter().filter(|t| ObjectKind::of(t).is_none()) {
+            for action in all_actions() {
+                pairs += 1;
+                for digest in &digests {
+                    assert_eq!(
+                        resolve(target, action, digest.as_ref())
+                            .as_ref()
+                            .map(ExecOp::name)
+                            .map_err(|m| *m),
+                        expected_m2(target, action),
+                        "{target:?} x {action:?} with {digest:?}"
+                    );
+                }
+            }
+        }
+        assert_eq!(pairs, 6 * 7);
+    }
+
+    #[test]
+    fn resolve_typed_targets() {
+        let service = Target::Service {
+            name: "VendorSvc".into(),
+        };
+        let task = Target::Task {
+            path: r"\Vendor\Update".into(),
+        };
+        let rule = Target::FirewallRule {
+            id: "{dee51bba-69c3-4c90-9f22-faf95c857815}".into(),
+        };
+        assert_eq!(
+            resolve(&service, Action::DeleteKey, Some(&fp(ObjectKind::Service))),
+            Ok(ExecOp::DeleteService {
+                name: "VendorSvc".into()
+            })
+        );
+        assert_eq!(
+            resolve(&task, Action::DeleteKey, Some(&fp(ObjectKind::Task))),
+            Ok(ExecOp::DeleteTask {
+                path: r"\Vendor\Update".into()
+            })
+        );
+        assert_eq!(
+            resolve(
+                &rule,
+                Action::DeleteKey,
+                Some(&fp(ObjectKind::FirewallRule))
+            ),
+            Ok(ExecOp::DeleteFirewallRule {
+                id: "{dee51bba-69c3-4c90-9f22-faf95c857815}".into()
+            })
+        );
+        // A real digest of the identity works the same way.
+        let identity = crate::object::ServiceIdentity {
+            name: "VendorSvc".into(),
+            ..Default::default()
+        };
+        assert!(resolve(&service, Action::DeleteKey, Some(&identity.fp())).is_ok());
+        // Other actions on an object are wrong, digest or not; report-only stays report-only.
+        for target in [&service, &task, &rule] {
+            let fp = fp_for(target);
+            for action in all_actions() {
+                let got = resolve(target, action, fp.as_ref());
+                match action {
+                    Action::DeleteKey => assert!(got.is_ok()),
+                    Action::ReportOnly => assert_eq!(got, Err(Mismatch::ReportOnly)),
+                    _ => assert_eq!(got, Err(Mismatch::WrongAction), "{action:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_typed_without_object_fp_is_no_object_fp() {
+        for target in all_targets().iter().filter(|t| ObjectKind::of(t).is_some()) {
+            assert_eq!(
+                resolve(target, Action::DeleteKey, None),
+                Err(Mismatch::NoObjectFp),
+                "{target:?}"
+            );
+            // A digest that is not 64 lower-case hex digits is no digest.
+            let kind = ObjectKind::of(target).unwrap();
+            for bad in ["", "abc", &HASH_A.to_uppercase(), &format!("{HASH_A}0")] {
+                let fp = ObjectFp {
+                    kind,
+                    sha256: bad.to_owned(),
+                };
+                assert_eq!(
+                    resolve(target, Action::DeleteKey, Some(&fp)),
+                    Err(Mismatch::NoObjectFp),
+                    "{target:?} {bad}"
+                );
+            }
+            assert_eq!(
+                resolve(target, Action::ReportOnly, None),
+                Err(Mismatch::ReportOnly)
+            );
+        }
+        assert!(!Mismatch::NoObjectFp.to_string().is_empty());
+    }
+
+    #[test]
+    fn resolve_kind_mismatch_is_no_object_fp() {
+        for target in all_targets().iter().filter(|t| ObjectKind::of(t).is_some()) {
+            let own = ObjectKind::of(target).unwrap();
+            for other in ObjectKind::ALL.into_iter().filter(|k| *k != own) {
+                assert_eq!(
+                    resolve(target, Action::DeleteKey, Some(&fp(other))),
+                    Err(Mismatch::NoObjectFp),
+                    "{target:?} with a {other:?} digest"
+                );
+            }
+        }
     }
 
     #[test]
     fn report_only_and_changed_values_never_resolve() {
         for target in all_targets() {
             assert_eq!(
-                resolve(&target, Action::ReportOnly),
+                resolve(&target, Action::ReportOnly, fp_for(&target).as_ref()),
                 Err(Mismatch::ReportOnly)
             );
         }
@@ -954,9 +1234,50 @@ mod tests {
             after: String::new(),
         };
         for action in all_actions() {
-            assert!(resolve(&changed, action).is_err(), "{action:?}");
+            assert!(resolve(&changed, action, None).is_err(), "{action:?}");
         }
-        assert!(!Mismatch::NoExecutor.to_string().is_empty());
+    }
+
+    #[test]
+    fn execop_typed_json_shapes() {
+        let samples = [
+            (
+                r#"{"kind":"DeleteService","name":"X"}"#,
+                ExecOp::DeleteService { name: "X".into() },
+            ),
+            (
+                r#"{"kind":"DeleteTask","path":"\\Vendor\\X"}"#,
+                ExecOp::DeleteTask {
+                    path: r"\Vendor\X".into(),
+                },
+            ),
+            (
+                r#"{"kind":"DeleteFirewallRule","id":"{GUID}"}"#,
+                ExecOp::DeleteFirewallRule {
+                    id: "{GUID}".into(),
+                },
+            ),
+        ];
+        for (text, op) in samples {
+            assert_eq!(round_trip::<ExecOp>(text), op);
+            assert!(op.is_object() && !op.is_registry() && !op.is_irreversible());
+            assert_eq!(op.action(), Action::DeleteKey);
+        }
+    }
+
+    #[test]
+    fn execop_delete_service_without_name_rejected() {
+        for bad in [
+            r#"{"kind":"DeleteService"}"#,
+            r#"{"kind":"DeleteService","path":"x"}"#,
+            r#"{"kind":"DeleteService","name":null}"#,
+            r#"{"kind":"DeleteTask"}"#,
+            r#"{"kind":"DeleteTask","name":"x"}"#,
+            r#"{"kind":"DeleteFirewallRule"}"#,
+            r#"{"kind":"DeleteFirewallRule","name":"x"}"#,
+        ] {
+            assert!(serde_json::from_str::<ExecOp>(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -970,6 +1291,9 @@ mod tests {
             r#"{"kind":"EditSegment","key":"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment","name":"Path","segment":"C:\\Vendor\\bin"}"#,
             r#"{"kind":"EditSegment","key":"HKLM\\X","name":"Path","segment":"s","index":2}"#,
             r#"{"kind":"RemovePackage","full_name":"Vendor.App_1.0.0.0_x64__abcdefghijklm"}"#,
+            r#"{"kind":"DeleteService","name":"VendorSvc"}"#,
+            r#"{"kind":"DeleteTask","path":"\\Vendor\\Update"}"#,
+            r#"{"kind":"DeleteFirewallRule","id":"{dee51bba-69c3-4c90-9f22-faf95c857815}"}"#,
         ];
         let mut names = Vec::new();
         for text in samples {
@@ -980,9 +1304,9 @@ mod tests {
             assert_eq!(op.is_registry(), op.target().is_registry());
         }
         names.dedup();
-        assert_eq!(names.len(), 7);
-        assert!(serde_json::from_str::<ExecOp>(r#"{"kind":"DeleteService","name":"x"}"#).is_err());
+        assert_eq!(names.len(), 10);
         assert!(serde_json::from_str::<ExecOp>(r#"{"kind":"QuarantineMove"}"#).is_err());
+        assert!(serde_json::from_str::<ExecOp>(r#"{"kind":"StopService","name":"x"}"#).is_err());
     }
 
     fn inverse_samples() -> Vec<String> {
@@ -1007,6 +1331,15 @@ mod tests {
                 r#"{{"kind":"RecreateKey","backup":{{"path":"reg\\000005.regbackup.json","sha256":"{HASH_A}","bytes":150}}}}"#
             ),
             r#"{"kind":"None"}"#.to_owned(),
+            format!(
+                r#"{{"kind":"RecreateService","definition":{{"path":"def\\000006.json","sha256":"{HASH_A}","bytes":2048}}}}"#
+            ),
+            format!(
+                r#"{{"kind":"RecreateTask","definition":{{"path":"def\\000007.json","sha256":"{HASH_B}","bytes":4100}}}}"#
+            ),
+            format!(
+                r#"{{"kind":"RecreateFirewallRule","definition":{{"path":"def\\000008.json","sha256":"{HASH_A}","bytes":512}}}}"#
+            ),
         ]
     }
 
@@ -1018,7 +1351,7 @@ mod tests {
             assert!(text.contains(&format!(r#""kind":"{}""#, inverse.name())));
             assert_eq!(
                 inverse.backup().is_some(),
-                text.contains("regbackup.json"),
+                text.contains("regbackup.json") || text.contains(r#""definition""#),
                 "{text}"
             );
             if let Some(backup) = inverse.backup() {
@@ -1027,7 +1360,13 @@ mod tests {
             names.push(inverse.name());
         }
         names.dedup();
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 10);
+        for bad in [
+            r#"{"kind":"RecreateService"}"#,
+            r#"{"kind":"RecreateTask","backup":{"path":"def\\1.json","sha256":"00","bytes":1}}"#,
+        ] {
+            assert!(serde_json::from_str::<Inverse>(bad).is_err(), "{bad}");
+        }
         assert!(
             serde_json::from_str::<Inverse>(r#"{"kind":"RecreateService","definition":"x"}"#)
                 .is_err()
@@ -1042,7 +1381,7 @@ mod tests {
             .collect();
         for target in all_targets() {
             for action in all_actions() {
-                let Ok(op) = resolve(&target, action) else {
+                let Ok(op) = resolve(&target, action, fp_for(&target).as_ref()) else {
                     continue;
                 };
                 let mut fitting: Vec<&str> = inverses
@@ -1322,6 +1661,8 @@ mod tests {
             r#"{"kind":"Failed","code":"AccessDenied","os_error":5}"#,
             r#"{"kind":"Failed","code":"Os","os_error":1392,"detail":"the file is corrupt"}"#,
             r#"{"kind":"Failed","code":"VerifyFailed"}"#,
+            r#"{"kind":"PendingDelete"}"#,
+            r#"{"kind":"Failed","code":"ObjectApi","os_error":2147943726}"#,
         ];
         let mut counts = OutcomeCounts::default();
         for text in samples {
@@ -1340,17 +1681,22 @@ mod tests {
                 vanished: 1,
                 skipped: 8,
                 held_retry: 1,
-                pending_reboot: 1,
-                failed: 3,
+                pending_reboot: 2,
+                failed: 4,
             }
         );
-        assert_eq!(counts.total(), 15);
+        assert_eq!(counts.total(), 17);
+        // A service left marked for deletion changed the system, needs an intent and has no boot move.
+        let marked = ItemOutcome::PendingDelete;
+        assert!(marked.changed_system() && !marked.allowed_without_intent());
+        assert!(!marked.is_success() && marked.boot_move().is_none());
         for code in [
             "AccessDenied",
             "InUse",
             "ControlledFolderAccess",
             "VerifyFailed",
             "PackageApi",
+            "ObjectApi",
             "Os",
             "Internal",
         ] {
@@ -1398,6 +1744,11 @@ mod tests {
             "ControlledFolderAccess",
             "pending_reboot",
             "BackupRef",
+            "DeleteService",
+            "DeleteFirewallRule",
+            "RecreateTask",
+            "PendingDelete",
+            "ObjectApi",
         ] {
             assert!(text.contains(name), "schema lacks {name}");
         }

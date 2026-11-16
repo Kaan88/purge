@@ -83,6 +83,7 @@ fn cand(target: Target, action: Action, category: Category, evidence: Vec<Eviden
         child_count: None,
         decision: None,
         item_fp: None,
+        object_fp: None,
     }
 }
 

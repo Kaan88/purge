@@ -6,11 +6,13 @@
 //! purpose: after the uninstall the registry and the install directory can no longer be asked.
 //!
 //! The M1a fingerprint holds what the M1a harvesters produce. MSI rows, Burn children, services, tasks and
-//! firewall rules join it with their milestones; fields added later default to empty when absent.
+//! firewall rules join it with M1b (`msi`, `burn`, `sys`, see `fingerprint_m1b`); fields added later
+//! default to empty when absent and are not written when empty, so the schema id stays `purge.fp/0`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::fingerprint_m1b::{BurnFacts, MsiFacts, SysObjects};
 use crate::ids::schema_id;
 use crate::{AppRef, FileTime, ProgramId, Root, SourceId, Target, VerifyGone, View};
 
@@ -394,6 +396,16 @@ pub struct Fingerprint {
     /// Things the harvest could not do (an unreadable log, an unknown log version…), for the report.
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// The app's MSI products (M1b). Absent, and left out when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub msi: Vec<MsiFacts>,
+    /// The app's Burn bundle (M1b). Absent, and left out when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burn: Option<BurnFacts>,
+    /// The services, tasks and firewall rules the harvest recorded as the app's (M1b). Absent, and left
+    /// out when empty.
+    #[serde(default, skip_serializing_if = "SysObjects::is_empty")]
+    pub sys: SysObjects,
 }
 
 impl Fingerprint {
@@ -562,6 +574,109 @@ mod tests {
             "user_sid": SID
         });
         assert_eq!(serde_json::from_value::<Fingerprint>(sparse).unwrap(), fp);
+    }
+
+    /// A fingerprint the M1a gate harvest wrote (7-Zip, `m1a-rerun` run `r4-7zip`) reads, has the M1b
+    /// fields at their defaults, and writes back byte for byte: the M1b fields add nothing to it.
+    #[test]
+    fn fingerprint_m1a_document_round_trips_byte_equal() {
+        let text = include_str!("../testdata/m1a-7zip.fp.json").replace("\r\n", "\n");
+        let fp: Fingerprint = serde_json::from_str(&text).unwrap();
+        assert!(fp.msi.is_empty() && fp.burn.is_none() && fp.sys.is_empty());
+        assert_eq!(fp.sys, SysObjects::default());
+        let written = serde_json::to_string_pretty(&fp).unwrap();
+        assert_eq!(written, text.trim_end());
+        for name in ["\"msi\"", "\"burn\"", "\"sys\""] {
+            assert!(!written.contains(name), "{name}");
+        }
+        // The in-memory samples too, compact and pretty.
+        let v = sample();
+        let fp: Fingerprint = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&fp).unwrap(), v);
+    }
+
+    /// Every M1b field populated: reads, writes back unchanged, and a sparse document still defaults.
+    #[test]
+    fn fingerprint_m1b_fields_round_trip() {
+        let mut v = minimal("HKLM|64|{11111111-2222-3333-4444-555555555555}");
+        v["msi"] = json!([{
+            "product_code": "{11111111-2222-3333-4444-555555555555}",
+            "packed_code": "11111111222233334444555555555555",
+            "upgrade_code": null, "context": "Machine", "user_sid": null,
+            "local_package": "C:\\Windows\\Installer\\1a2b3c.msi", "package_readable": true,
+            "components": [
+                {"component_id": "{AAAAAAAA-0000-0000-0000-000000000001}",
+                 "key_path": {"kind": "file", "path": "C:\\Program Files\\Vendor\\app.exe"},
+                 "other_clients": [], "shared_dll": false},
+                {"component_id": "{AAAAAAAA-0000-0000-0000-000000000002}",
+                 "key_path": {"kind": "registry", "key": "HKU\\*\\Software\\Vendor", "name": null},
+                 "other_clients": ["00000000000000000000000000000000"], "shared_dll": true},
+                {"component_id": "{AAAAAAAA-0000-0000-0000-000000000003}",
+                 "key_path": {"kind": "none"}, "other_clients": [], "shared_dll": false}
+            ],
+            "registry_rows": [{"key": "HKLM\\SOFTWARE\\Vendor", "name": null, "whole_key": true,
+                               "component": "Main", "row": "reg1"}],
+            "services": [{"name": "VendorSvc", "component": "Svc"}],
+            "source_dirs": ["C:\\Program Files\\Vendor"],
+            "custom_actions": 3, "unresolved_rows": 1
+        }]);
+        v["burn"] = json!({
+            "bundle_id": "{BBBBBBBB-0000-0000-0000-000000000001}",
+            "provider_key": "Vendor.Bundle", "cache_path": null,
+            "packages": [{"provider_key": "Vendor.Pkg", "product_code": null, "cache_dir": null,
+                          "other_dependents": ["Other.Bundle"]}],
+            "dependents_at_harvest": []
+        });
+        v["sys"] = json!({
+            "services": [{"identity": {"name": "VendorSvc", "image_path": "\"C:\\x\\svc.exe\"",
+                                       "service_dll": null, "service_type": 16, "start": 2,
+                                       "object_name": "LocalSystem"},
+                          "program": "C:\\x\\svc.exe", "why": "msi_service_row"}],
+            "tasks": [{"identity": {"path": "\\Vendor\\Update",
+                                    "actions": [{"kind": "exec", "path": "C:\\x\\up.exe",
+                                                 "arguments": null, "working_dir": null}]},
+                       "program": "C:\\x\\up.exe", "why": "program_in_root"}],
+            "firewall_rules": [{"identity": {"id": "{CCCCCCCC-0000-0000-0000-000000000001}",
+                                             "rule": "v2.33|Action=Allow|App=C:\\x\\a.exe|Name=X|"},
+                                "program": null, "why": "program_is_app_exe"}]
+        });
+        let fp: Fingerprint = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(fp.msi[0].components.len(), 3);
+        assert_eq!(
+            fp.msi[0].components[2].key_path,
+            crate::fingerprint_m1b::MsiKeyPath::None
+        );
+        assert_eq!(fp.sys.services[0].identity.service_type, 16);
+        assert_eq!(serde_json::to_value(&fp).unwrap(), v);
+        let text = serde_json::to_string_pretty(&fp).unwrap();
+        assert_eq!(serde_json::from_str::<Fingerprint>(&text).unwrap(), fp);
+
+        // One list of `sys` alone reads; the others default.
+        let mut sparse = minimal("HKLM|64|Other");
+        sparse["sys"] = json!({"tasks": []});
+        let fp: Fingerprint = serde_json::from_value(sparse).unwrap();
+        assert!(fp.sys.is_empty());
+        assert!(!serde_json::to_string(&fp).unwrap().contains("\"sys\""));
+        // An unknown key path or reason does not read.
+        let mut bad = v.clone();
+        bad["msi"][0]["components"][0]["key_path"]["kind"] = json!("folder");
+        assert!(serde_json::from_value::<Fingerprint>(bad).is_err());
+        let mut bad = v;
+        bad["sys"]["tasks"][0]["why"] = json!("NameMatch");
+        assert!(serde_json::from_value::<Fingerprint>(bad).is_err());
+
+        let schema = serde_json::to_string(&schemars::schema_for!(Fingerprint)).unwrap();
+        for name in [
+            "packed_code",
+            "other_clients",
+            "whole_key",
+            "dependents_at_harvest",
+            "firewall_rules",
+            "msi_service_row",
+            "other_kind",
+        ] {
+            assert!(schema.contains(name), "schema lacks {name}");
+        }
     }
 
     #[test]

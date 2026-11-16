@@ -30,6 +30,7 @@ use super::op::{
 };
 use super::session::{RetentionClass, SessionId};
 use crate::ids::schema_id;
+use crate::object::ObjectKind;
 use crate::{Blocker, CandidateId, FileTime, ScanMode, Target};
 
 schema_id!(
@@ -118,6 +119,19 @@ pub enum ItemFacts {
     Package,
     /// The item does not exist.
     Absent,
+    /// A service, scheduled task or firewall rule (M1b).
+    Object {
+        /// Which kind of object. Serialised as `object_kind`: the tag already uses `kind`.
+        #[serde(rename = "object_kind")]
+        kind: ObjectKind,
+        /// The object's identity digest as read ([`ObjectFp::sha256`](crate::object::ObjectFp)), 64
+        /// lower-case hex digits. A digest other than the candidate's `object_fp` is
+        /// `SkipReason::ChangedSinceScan`.
+        sha256: String,
+        /// Whether the object is running: true only for a service whose state is not
+        /// `SERVICE_STOPPED`. A running service is skipped with the `InUse` blocker; nothing is stopped.
+        running: bool,
+    },
     /// The item did not pass validation: a gate refused it, or it could not be opened or read. Nothing
     /// acts on it in the run (the act-time gate keeps no record of it), exactly as for
     /// [`ItemFacts::Absent`], but the journal says why.
@@ -280,8 +294,9 @@ impl Intent {
     /// - the inverse is the kind that undoes the op and addresses the same item ([`Inverse::undoes`]);
     /// - `pre` is the kind of facts the op acts on: [`ItemFacts::File`] for the path ops (a directory for
     ///   [`ExecOp::RemoveDirIfEmpty`]), [`ItemFacts::Key`] for the key ops, [`ItemFacts::Value`] for the
-    ///   value and segment ops, [`ItemFacts::Package`] for a package. An intent is only written for an item
-    ///   that is there, so `Absent` never fits;
+    ///   value and segment ops, [`ItemFacts::Package`] for a package, [`ItemFacts::Object`] of the op's
+    ///   kind for the object ops. An intent is only written for an item that is there, so `Absent` never
+    ///   fits;
     /// - for [`Inverse::MoveBack`], the recorded file id and volume serial are those of `pre`, the handle
     ///   the move uses;
     /// - every backup path stays inside the session directory ([`BackupRef::is_session_relative`]).
@@ -294,6 +309,12 @@ impl Intent {
             }
             (ExecOp::DeleteValue { .. } | ExecOp::EditSegment { .. }, ItemFacts::Value(_)) => true,
             (ExecOp::RemovePackage { .. }, ItemFacts::Package) => true,
+            (
+                ExecOp::DeleteService { .. }
+                | ExecOp::DeleteTask { .. }
+                | ExecOp::DeleteFirewallRule { .. },
+                ItemFacts::Object { kind, .. },
+            ) => self.exec_op.object_kind() == Some(*kind),
             _ => false,
         };
         let same_file = match (&self.inverse, &self.pre) {
@@ -475,6 +496,20 @@ pub enum UndoConflict {
     /// of the same session (a `RecreateDir` or `RestoreKeyTree` that must run first); nothing was created
     /// for this op.
     ParentMissing,
+    /// A service, task or firewall rule with the backed-up name, path or id exists again and differs
+    /// from the backup (M1b). The re-create is create-only and never overwrites it.
+    ObjectExists,
+    /// The service is still marked for deletion (`DeleteFlag = 1`; a create fails with 1072) because a
+    /// handle to it is open (M1b). Undo can run again once the SCM has removed it.
+    PendingDelete,
+    /// The backed-up service `ImagePath` or task exec path is not under a root recorded in the journal
+    /// header (M1b).
+    ProgramOutsideRoot,
+    /// The task was registered with a stored password (logon type `Password`); Task Scheduler refuses to
+    /// register it again without that password (`0x8007052E`, measured by the M1b spike), and Purge never
+    /// holds one. A service with a stored password is not this conflict: it re-creates without the
+    /// password, which the scan states as `Reversibility::Partial` up front.
+    PasswordNeeded,
 }
 
 /// An inverse ran to an end.
@@ -955,6 +990,10 @@ mod tests {
             r#"{"kind":"GateBlocked","blocker":{"kind":"ReparseMismatch"}}"#,
             r#"{"kind":"Irreversible"}"#,
             r#"{"kind":"ParentMissing"}"#,
+            r#"{"kind":"ObjectExists"}"#,
+            r#"{"kind":"PendingDelete"}"#,
+            r#"{"kind":"ProgramOutsideRoot"}"#,
+            r#"{"kind":"PasswordNeeded"}"#,
         ]);
         all::<ReconcileResult>(&[
             r#"{"kind":"Completed"}"#,
@@ -971,7 +1010,145 @@ mod tests {
             r#"{"kind":"Absent"}"#,
             r#"{"kind":"Refused","reason":"exec.unsupported"}"#,
             r#"{"kind":"Refused","blocker":{"kind":"CannotBackUp"},"reason":"exec.unsupported"}"#,
+            r#"{"kind":"Object","object_kind":"service","sha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","running":false}"#,
+            r#"{"kind":"Object","object_kind":"firewall_rule","sha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","running":true}"#,
         ]);
+    }
+
+    /// A journal the M2 executor wrote on the gate VM (cleanpro run `cp2-m2-fidelity`, session
+    /// `conflict`: validated, intent, done, group_end, commit, undo records and one undo conflict) reads
+    /// line by line with the M1b types and writes every record back unchanged (apart from the `chain`
+    /// member the writer adds, which records do not carry).
+    #[test]
+    fn journal_m2_document_still_parses() {
+        let text = include_str!("../../testdata/m2-conflict.journal.jsonl");
+        let mut kinds = Vec::new();
+        let mut lines = 0;
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            lines += 1;
+            let record: Record =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("{line}: {e}"));
+            let mut original: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert!(original.as_object_mut().unwrap().remove("chain").is_some());
+            assert_eq!(serde_json::to_value(&record).unwrap(), original, "{line}");
+            if let Record::Intent(intent) = &record {
+                assert!(intent.is_consistent(), "{line}");
+                assert!(!intent.exec_op.is_object());
+            }
+            if !kinds.contains(&record.name()) {
+                kinds.push(record.name());
+            }
+        }
+        assert_eq!(lines, 127);
+        for kind in [
+            "header",
+            "settings",
+            "validated",
+            "intent",
+            "done",
+            "group_end",
+            "commit",
+            "undo_plan",
+            "undo_intent",
+            "undo_done",
+            "undo_conflict",
+        ] {
+            assert!(kinds.contains(&kind), "the fixture lacks {kind}");
+        }
+    }
+
+    /// The object ops: an intent hangs together only with object facts of the op's kind and the
+    /// matching re-create inverse, whose definition file is listed with its backups.
+    #[test]
+    fn object_intents_check_kind_and_inverse() {
+        let hash: Sha256Hex = HASH_A.parse().unwrap();
+        let definition = BackupRef {
+            path: r"def\000009.json".into(),
+            sha256: hash,
+            bytes: 300,
+        };
+        let facts = |kind: ObjectKind| ItemFacts::Object {
+            kind,
+            sha256: HASH_A.into(),
+            running: false,
+        };
+        let intent = |exec_op: ExecOp, inverse: Inverse, pre: ItemFacts| Intent {
+            op: OpId(9),
+            item: CandidateId("c-09".into()),
+            exec_op,
+            inverse,
+            definition: None,
+            pre,
+        };
+        let service = || ExecOp::DeleteService {
+            name: "VendorSvc".into(),
+        };
+        let task = || ExecOp::DeleteTask {
+            path: r"\Vendor\Update".into(),
+        };
+        let rule = || ExecOp::DeleteFirewallRule { id: "{1}".into() };
+        let recreate_service = Inverse::RecreateService {
+            definition: definition.clone(),
+        };
+        let recreate_task = Inverse::RecreateTask {
+            definition: definition.clone(),
+        };
+        let recreate_rule = Inverse::RecreateFirewallRule {
+            definition: definition.clone(),
+        };
+        let good = [
+            intent(
+                service(),
+                recreate_service.clone(),
+                facts(ObjectKind::Service),
+            ),
+            intent(task(), recreate_task.clone(), facts(ObjectKind::Task)),
+            intent(
+                rule(),
+                recreate_rule.clone(),
+                facts(ObjectKind::FirewallRule),
+            ),
+        ];
+        for i in &good {
+            assert!(i.is_consistent(), "{i:?}");
+            assert_eq!(
+                i.backups().map(|b| b.path.as_str()).collect::<Vec<_>>(),
+                [r"def\000009.json"]
+            );
+            let line = serde_json::to_string(&Record::Intent(i.clone())).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Record>(&line).unwrap(),
+                Record::Intent(i.clone())
+            );
+        }
+        // Facts of another kind, or of no object.
+        assert!(
+            !intent(service(), recreate_service.clone(), facts(ObjectKind::Task)).is_consistent()
+        );
+        assert!(!intent(rule(), recreate_rule.clone(), ItemFacts::Absent).is_consistent());
+        assert!(!intent(task(), recreate_task.clone(), ItemFacts::Package).is_consistent());
+        // The re-create of another kind.
+        assert!(!intent(service(), recreate_task, facts(ObjectKind::Service)).is_consistent());
+        assert!(!intent(task(), Inverse::None, facts(ObjectKind::Task)).is_consistent());
+        // A definition outside the session.
+        let outside = Inverse::RecreateService {
+            definition: BackupRef {
+                path: r"..\x.json".into(),
+                ..definition
+            },
+        };
+        assert!(!intent(service(), outside, facts(ObjectKind::Service)).is_consistent());
+        // The tag and the object kind do not collide; a facts record without its kind does not read.
+        assert!(
+            serde_json::from_str::<ItemFacts>(r#"{"kind":"Object","sha256":"00","running":false}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<ItemFacts>(
+                r#"{"kind":"Object","object_kind":"driver","sha256":"00","running":false}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

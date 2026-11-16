@@ -1,0 +1,1602 @@
+{
+  "schema": "purge.scan/0",
+  "app": "firefox",
+  "tool": "purge",
+  "mode": "post",
+  "policy_version": "m1a.6",
+  "plan_hash": "8b453b4bebe666d33c954ae78a86a9defa6574d3aa990cffeb5829cffd1dae1f",
+  "items": [
+    {
+      "id": "c-05bbceaa8e41abb9",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated",
+        "name": "308046B0AF4A39CB"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated|308046B0AF4A39CB",
+          "detail": {
+            "anchor": "308046B0AF4A39CB",
+            "anchor_kind": "id"
+          }
+        },
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "token:progid:FirefoxHTML-308046B0AF4A39CB",
+          "detail": {
+            "token": "308046B0AF4A39CB"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 15,
+        "explanation": "Pointed to 308046B0AF4A39CB before uninstall · Carries Mozilla Firefox (x64 en-US)'s identifier 308046B0AF4A39CB"
+      }
+    },
+    {
+      "id": "c-51a34d56b27f6006",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules",
+        "name": "{E943ED23-4F49-4790-988F-428CC1C396F4}"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "System",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{E943ED23-4F49-4790-988F-428CC1C396F4}",
+          "detail": {
+            "anchor": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+            "place": "shared"
+          }
+        },
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "B",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "place": "shared",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "B",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "place": "shared",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "DenyListed",
+          "rule": "reg.hklm.system"
+        }
+      ],
+      "harm": "Critical",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 21,
+        "explanation": "Kept: protected location (rule reg.hklm.system)"
+      }
+    },
+    {
+      "id": "c-4be20798d4a26d42",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData",
+        "name": "308046B0AF4A39CB"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData|308046B0AF4A39CB",
+          "detail": {
+            "anchor": "308046B0AF4A39CB",
+            "anchor_kind": "id"
+          }
+        },
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "token:progid:FirefoxHTML-308046B0AF4A39CB",
+          "detail": {
+            "token": "308046B0AF4A39CB"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 15,
+        "explanation": "Pointed to 308046B0AF4A39CB before uninstall · Carries Mozilla Firefox (x64 en-US)'s identifier 308046B0AF4A39CB"
+      }
+    },
+    {
+      "id": "c-2641cff1f00e50cd",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData",
+        "name": "308046B0AF4A39CB;PrivateBrowsingAUMID"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "token:progid:FirefoxHTML-308046B0AF4A39CB",
+          "detail": {
+            "token": "308046B0AF4A39CB"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 7,
+        "explanation": "Carries Mozilla Firefox (x64 en-US)'s identifier 308046B0AF4A39CB"
+      }
+    },
+    {
+      "id": "c-87bc71b1f1923b6f",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\InProcServer32",
+        "name": ""
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\InProcServer32|",
+          "detail": {
+            "anchor": "C:\\Program Files\\Mozilla Firefox\\AccessibleMarshal.dll"
+          }
+        },
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "A",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\mozilla firefox\\accessiblemarshal.dll",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\accessiblemarshal.dll",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\mozilla firefox\\accessiblemarshal.dll",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\accessiblemarshal.dll",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 21,
+        "explanation": "Pointed to C:\\Program Files\\Mozilla Firefox\\AccessibleMarshal.dll before uninstall · Points to c:\\program files\\mozilla firefox\\accessiblemarshal.dll, which no longer exists · Points to c:\\program files\\mozilla firefox\\accessiblemarshal.dll in Mozilla Firefox (x64 en-US)'s install folder"
+      }
+    },
+    {
+      "id": "c-6a4c66dd3e8462e0",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}\\ProxyStubClsid32",
+        "name": ""
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}\\ProxyStubClsid32|",
+          "detail": {
+            "anchor": "{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+            "anchor_kind": "id"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 8,
+        "explanation": "Pointed to {1814CEEB-49E2-407F-AF99-FA755A7D2607} before uninstall"
+      }
+    },
+    {
+      "id": "c-1a357af9a041fc7a",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\ProxyStubClsid32",
+        "name": ""
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\ProxyStubClsid32|",
+          "detail": {
+            "anchor": "{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+            "anchor_kind": "id"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 8,
+        "explanation": "Pointed to {1814CEEB-49E2-407F-AF99-FA755A7D2607} before uninstall"
+      }
+    },
+    {
+      "id": "c-5aa42b34e2ffd36e",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}\\ProxyStubClsid32",
+        "name": ""
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}\\ProxyStubClsid32|",
+          "detail": {
+            "anchor": "{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+            "anchor_kind": "id"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 8,
+        "explanation": "Pointed to {1814CEEB-49E2-407F-AF99-FA755A7D2607} before uninstall"
+      }
+    },
+    {
+      "id": "c-6bbf5eb769924981",
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox"
+      },
+      "action": "DeleteKey",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "AppNamedKeyWithRootRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "software-key:HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "ExactFullName",
+          "tier": "B",
+          "weight": 4,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "ProductSubfolderOfVendor",
+          "tier": "B",
+          "weight": 3,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "NameTokenExact",
+          "tier": "C",
+          "weight": 3,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "window",
+          "detail": {}
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [
+        "c-ef49da969221a769"
+      ],
+      "size_bytes": null,
+      "child_count": 2,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 18,
+        "explanation": "Named after Mozilla Firefox (x64 en-US) and refers to its install folder · Named exactly like Mozilla Firefox (x64 en-US) · Mozilla Firefox (x64 en-US)'s product name under its vendor's name · Name matches Mozilla Firefox (x64 en-US) · Created or changed while Mozilla Firefox (x64 en-US) was being installed or removed"
+      }
+    },
+    {
+      "id": "c-7d2f72208816385e",
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox"
+      },
+      "action": "DeleteKey",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "AppNamedKeyWithRootRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "software-key:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "ExactFullName",
+          "tier": "B",
+          "weight": 4,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "ProductSubfolderOfVendor",
+          "tier": "B",
+          "weight": 3,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "NameTokenExact",
+          "tier": "C",
+          "weight": 3,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "window",
+          "detail": {}
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [
+        "c-0d2b412438070f31",
+        "c-e657fbf02dadb0c8",
+        "c-6408a9d2bd939f32",
+        "c-b99b4c85fdd6c0de",
+        "c-0e5e97d692e1de32"
+      ],
+      "size_bytes": null,
+      "child_count": 9,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 18,
+        "explanation": "Named after Mozilla Firefox (x64 en-US) and refers to its install folder · Named exactly like Mozilla Firefox (x64 en-US) · Mozilla Firefox (x64 en-US)'s product name under its vendor's name · Name matches Mozilla Firefox (x64 en-US) · Created or changed while Mozilla Firefox (x64 en-US) was being installed or removed"
+      }
+    },
+    {
+      "id": "c-49f788687f8e815d",
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Mozilla\\Firefox"
+      },
+      "action": "DeleteKey",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "ProvenOwnedSkeleton",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "subtree:HKLM\\SOFTWARE\\Mozilla\\Firefox",
+          "detail": {
+            "baseline": "Professional-26340.9882",
+            "key": "HKLM\\SOFTWARE\\Mozilla\\Firefox",
+            "via": "subtree"
+          }
+        },
+        {
+          "kind": "AppNamedKeyWithRootRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "software-key:HKLM\\SOFTWARE\\Mozilla\\Firefox",
+          "detail": {
+            "path": "C:\\Program Files\\Mozilla Firefox",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "ExactFullName",
+          "tier": "B",
+          "weight": 4,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "ProductSubfolderOfVendor",
+          "tier": "B",
+          "weight": 3,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "NameTokenExact",
+          "tier": "C",
+          "weight": 3,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "window",
+          "detail": {}
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [
+        "c-d24d38eade1e0567"
+      ],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 26,
+        "explanation": "Everything in it belonged to Mozilla Firefox (x64 en-US) · now empty · not on clean Windows Professional-26340.9882 · Named after Mozilla Firefox (x64 en-US) and refers to its install folder · Named exactly like Mozilla Firefox (x64 en-US) · Mozilla Firefox (x64 en-US)'s product name under its vendor's name · Name matches Mozilla Firefox (x64 en-US) · Created or changed while Mozilla Firefox (x64 en-US) was being installed or removed"
+      }
+    },
+    {
+      "id": "c-8651f9452814ea76",
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Mozilla\\MaintenanceService"
+      },
+      "action": "DeleteKey",
+      "owner": {
+        "program_id": "HKLM|64|MozillaMaintenanceService",
+        "display_name": "Mozilla Maintenance Service"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "ProductSubfolderOfVendor",
+          "tier": "B",
+          "weight": 3,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:Mozilla Maintenance Service",
+          "detail": {
+            "name": "Mozilla Maintenance Service"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "window",
+          "detail": {}
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 4,
+        "explanation": "Mozilla Maintenance Service's product name under its vendor's name · Created or changed while Mozilla Maintenance Service was being installed or removed"
+      }
+    },
+    {
+      "id": "c-c4897971a5db6914",
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Mozilla"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:mozilla",
+          "detail": {
+            "children": "[\"Firefox\\\\\"]",
+            "empty_after_plan": "pending",
+            "vendor": "mozilla"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "window",
+          "detail": {}
+        },
+        {
+          "kind": "EmptyAfterPlan",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "plan:empty-after",
+          "detail": {
+            "ignored_files": "0",
+            "removed_children": "1"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 11,
+        "explanation": "Empty once the ticked items inside it are removed · Vendor container, removed only if it is empty · Created or changed while Mozilla Firefox (x64 en-US) was being installed or removed"
+      }
+    },
+    {
+      "id": "c-89c78455d0a87df7",
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:mozilla",
+          "detail": {
+            "children": "[\"Firefox\\\\\"]",
+            "empty_after_plan": "pending",
+            "vendor": "mozilla"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "window",
+          "detail": {}
+        },
+        {
+          "kind": "EmptyAfterPlan",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "plan:empty-after",
+          "detail": {
+            "ignored_files": "0",
+            "removed_children": "1"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 11,
+        "explanation": "Empty once the ticked items inside it are removed · Vendor container, removed only if it is empty · Created or changed while Mozilla Firefox (x64 en-US) was being installed or removed"
+      }
+    },
+    {
+      "id": "c-288ed087452b4404",
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox"
+      },
+      "action": "Quarantine",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "FS-APPDATA",
+      "category": "UserData",
+      "evidence": [
+        {
+          "kind": "ProductSubfolderOfVendor",
+          "tier": "B",
+          "weight": 3,
+          "scope": "Path",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "UserData"
+        }
+      ],
+      "harm": "High",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": 46670757,
+      "child_count": 98,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 3,
+        "explanation": "Mozilla Firefox (x64 en-US)'s product name under its vendor's name · May hold your own data"
+      },
+      "item_fp": {
+        "file_id": "53730200000004000000000000000000",
+        "volume_serial": 14868715973192076673
+      }
+    },
+    {
+      "id": "c-402045b74468be38",
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox"
+      },
+      "action": "Quarantine",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "FS-APPDATA",
+      "category": "UserData",
+      "evidence": [
+        {
+          "kind": "ProductSubfolderOfVendor",
+          "tier": "B",
+          "weight": 3,
+          "scope": "Path",
+          "trust": "AdminOnly",
+          "source": "identity:firefox",
+          "detail": {
+            "name": "firefox"
+          }
+        },
+        {
+          "kind": "ExecutablesPresent",
+          "tier": "C",
+          "weight": -4,
+          "scope": "Path",
+          "trust": "AdminOnly",
+          "source": "scan",
+          "detail": {
+            "count": "2",
+            "path": "C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "UserData"
+        }
+      ],
+      "harm": "High",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": 57639520,
+      "child_count": 89,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": -1,
+        "explanation": "Mozilla Firefox (x64 en-US)'s product name under its vendor's name · Against: it contains programs · May hold your own data"
+      },
+      "item_fp": {
+        "file_id": "4c730200000004000000000000000000",
+        "volume_serial": 14868715973192076673
+      }
+    },
+    {
+      "id": "c-f2d66a5a2a700815",
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Mozilla"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppData",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Path",
+          "trust": "AdminOnly",
+          "source": "identity:mozilla",
+          "detail": {
+            "children": "[\"Firefox\\\\\"]",
+            "empty_after_plan": "pending",
+            "vendor": "mozilla"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Weak",
+        "preselected": false,
+        "score": 2,
+        "explanation": "Vendor container, removed only if it is empty"
+      },
+      "item_fp": {
+        "file_id": "52730200000004000000000000000000",
+        "volume_serial": 14868715973192076673
+      }
+    },
+    {
+      "id": "c-c4e99b6d7b149561",
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Mozilla"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppData",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Path",
+          "trust": "AdminOnly",
+          "source": "identity:mozilla",
+          "detail": {
+            "children": "[\"Firefox\\\\\"]",
+            "empty_after_plan": "pending",
+            "vendor": "mozilla"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Weak",
+        "preselected": false,
+        "score": 2,
+        "explanation": "Vendor container, removed only if it is empty"
+      },
+      "item_fp": {
+        "file_id": "4b730200000004000000000000000000",
+        "volume_serial": 14868715973192076673
+      }
+    },
+    {
+      "id": "c-e635fe630248cc56",
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates\\308046B0AF4A39CB"
+      },
+      "action": "Quarantine",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "FS-APPDATA",
+      "category": "Cache",
+      "evidence": [
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Path",
+          "trust": "AdminOnly",
+          "source": "token:progid:FirefoxHTML-308046B0AF4A39CB",
+          "detail": {
+            "token": "308046B0AF4A39CB"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Path",
+          "trust": "AdminOnly",
+          "source": "window",
+          "detail": {}
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": 0,
+      "child_count": 1,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 8,
+        "explanation": "Carries Mozilla Firefox (x64 en-US)'s identifier 308046B0AF4A39CB · Created or changed while Mozilla Firefox (x64 en-US) was being installed or removed"
+      },
+      "item_fp": {
+        "file_id": "a5730200000008000000000000000000",
+        "volume_serial": 14868715973192076673
+      }
+    },
+    {
+      "id": "c-94fa290ceed7a008",
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppData",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Path",
+          "trust": "AdminOnly",
+          "source": "identity:mozilla",
+          "detail": {
+            "children": "[\"308046B0AF4A39CB\\\\\"]",
+            "empty_after_plan": "pending",
+            "vendor": "mozilla"
+          }
+        },
+        {
+          "kind": "EmptyAfterPlan",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Path",
+          "trust": "AdminOnly",
+          "source": "plan:empty-after",
+          "detail": {
+            "ignored_files": "0",
+            "removed_children": "1"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 10,
+        "explanation": "Empty once the ticked items inside it are removed · Vendor container, removed only if it is empty"
+      },
+      "item_fp": {
+        "file_id": "9f730200000009000000000000000000",
+        "volume_serial": 14868715973192076673
+      }
+    }
+  ],
+  "absorbed": [
+    {
+      "id": "c-ef49da969221a769",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox\\TaskBarIDs",
+        "name": "C:\\Program Files\\Mozilla Firefox"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "A",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\mozilla firefox",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\mozilla firefox",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 13,
+        "explanation": "Points to c:\\program files\\mozilla firefox, which no longer exists · Points to c:\\program files\\mozilla firefox in Mozilla Firefox (x64 en-US)'s install folder"
+      }
+    },
+    {
+      "id": "c-0d2b412438070f31",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\DllPrefetchExperiment",
+        "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\DllPrefetchExperiment|C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+          "detail": {
+            "anchor": "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+          }
+        },
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "A",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 21,
+        "explanation": "Pointed to C:\\Program Files\\Mozilla Firefox\\firefox.exe before uninstall · Points to c:\\program files\\mozilla firefox\\firefox.exe, which no longer exists · Points to c:\\program files\\mozilla firefox\\firefox.exe in Mozilla Firefox (x64 en-US)'s install folder"
+      }
+    },
+    {
+      "id": "c-e657fbf02dadb0c8",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\Launcher",
+        "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Blocklist"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\Launcher|C:\\Program Files\\Mozilla Firefox\\firefox.exe|Blocklist",
+          "detail": {
+            "anchor": "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+          }
+        },
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "A",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 21,
+        "explanation": "Pointed to C:\\Program Files\\Mozilla Firefox\\firefox.exe before uninstall · Points to c:\\program files\\mozilla firefox\\firefox.exe, which no longer exists · Points to c:\\program files\\mozilla firefox\\firefox.exe in Mozilla Firefox (x64 en-US)'s install folder"
+      }
+    },
+    {
+      "id": "c-0e5e97d692e1de32",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings",
+        "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Enabled"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings|C:\\Program Files\\Mozilla Firefox\\firefox.exe|Enabled",
+          "detail": {
+            "anchor": "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+          }
+        },
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "A",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 21,
+        "explanation": "Pointed to C:\\Program Files\\Mozilla Firefox\\firefox.exe before uninstall · Points to c:\\program files\\mozilla firefox\\firefox.exe, which no longer exists · Points to c:\\program files\\mozilla firefox\\firefox.exe in Mozilla Firefox (x64 en-US)'s install folder"
+      }
+    },
+    {
+      "id": "c-6408a9d2bd939f32",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings",
+        "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Progress"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings|C:\\Program Files\\Mozilla Firefox\\firefox.exe|Progress",
+          "detail": {
+            "anchor": "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+          }
+        },
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "A",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 21,
+        "explanation": "Pointed to C:\\Program Files\\Mozilla Firefox\\firefox.exe before uninstall · Points to c:\\program files\\mozilla firefox\\firefox.exe, which no longer exists · Points to c:\\program files\\mozilla firefox\\firefox.exe in Mozilla Firefox (x64 en-US)'s install folder"
+      }
+    },
+    {
+      "id": "c-b99b4c85fdd6c0de",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings",
+        "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Theme"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings|C:\\Program Files\\Mozilla Firefox\\firefox.exe|Theme",
+          "detail": {
+            "anchor": "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+          }
+        },
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "A",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\mozilla firefox\\firefox.exe",
+          "detail": {
+            "path": "c:\\program files\\mozilla firefox\\firefox.exe",
+            "root": "C:\\Program Files\\Mozilla Firefox"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 21,
+        "explanation": "Pointed to C:\\Program Files\\Mozilla Firefox\\firefox.exe before uninstall · Points to c:\\program files\\mozilla firefox\\firefox.exe, which no longer exists · Points to c:\\program files\\mozilla firefox\\firefox.exe in Mozilla Firefox (x64 en-US)'s install folder"
+      }
+    },
+    {
+      "id": "c-d24d38eade1e0567",
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Mozilla\\Firefox\\TaskBarIDs"
+      },
+      "action": "DeleteKey",
+      "owner": {
+        "program_id": "HKLM|64|Mozilla Firefox",
+        "display_name": "Mozilla Firefox (x64 en-US)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "ProvenOwnedSkeleton",
+          "tier": "A",
+          "weight": 8,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "subtree:HKLM\\SOFTWARE\\Mozilla\\Firefox\\TaskBarIDs",
+          "detail": {
+            "baseline": "Professional-26340.9882",
+            "key": "HKLM\\SOFTWARE\\Mozilla\\Firefox\\TaskBarIDs",
+            "via": "subtree"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 0,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 8,
+        "explanation": "Everything in it belonged to Mozilla Firefox (x64 en-US) · now empty · not on clean Windows Professional-26340.9882"
+      }
+    }
+  ]
+}

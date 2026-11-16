@@ -1,0 +1,360 @@
+{
+  "schema": "purge.fp/0",
+  "app": {
+    "program_id": "HKLM|64|{23170F69-40C1-2702-2408-000001000000}",
+    "display_name": "7-Zip 24.08 (x64 edition)"
+  },
+  "identity": {
+    "names": [
+      "7-Zip 24.08 (x64 edition)"
+    ],
+    "vendors": [
+      "Igor Pavlov",
+      "7-zip"
+    ],
+    "tokens": [
+      "7",
+      "zip"
+    ],
+    "mega_vendor": false
+  },
+  "roots": [],
+  "exes": [],
+  "outside_root_files": [],
+  "anchors": {
+    "progids": [],
+    "clsids": [],
+    "appids": [],
+    "typelibs": [],
+    "aumids": [],
+    "package_families": [],
+    "package_full_names": [],
+    "run_entries": []
+  },
+  "tokens": [
+    {
+      "token": "23170F69-40C1-2702-2408-000001000000",
+      "source": "arp:key"
+    }
+  ],
+  "inno": [],
+  "ref_snapshot": [
+    {
+      "target": {
+        "type": "RegMultiSzSegment",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH\\ARP",
+        "name": "0",
+        "segment": "{23170F69-40C1-2702-2408-000001000000}",
+        "index": 1
+      },
+      "carrier": "Segment",
+      "anchor": {
+        "kind": "Token",
+        "text": "23170F69-40C1-2702-2408-000001000000"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "93927e20372c201d"
+    },
+    {
+      "target": {
+        "type": "RegMultiSzSegment",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH\\ARP",
+        "name": "0",
+        "segment": "MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}",
+        "index": 2
+      },
+      "carrier": "Segment",
+      "anchor": {
+        "kind": "Token",
+        "text": "23170F69-40C1-2702-2408-000001000000"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "93927e20372c201d"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}",
+        "name": "ModifyPath"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "23170F69-40C1-2702-2408-000001000000"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "b21667f712df364e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}",
+        "name": "UninstallString"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "23170F69-40C1-2702-2408-000001000000"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "b21667f712df364e"
+    }
+  ],
+  "subtrees": [
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion",
+      "values": [
+        {
+          "subkey": "",
+          "name": "CommonFilesDir",
+          "hash": "1:4d9f3d94c23d7d25"
+        },
+        {
+          "subkey": "",
+          "name": "CommonFilesDir (x86)",
+          "hash": "1:48b4f7c237c23203"
+        },
+        {
+          "subkey": "",
+          "name": "CommonW6432Dir",
+          "hash": "1:4d9f3d94c23d7d25"
+        },
+        {
+          "subkey": "",
+          "name": "DevicePath",
+          "hash": "2:9552352d0f76d040"
+        },
+        {
+          "subkey": "",
+          "name": "MediaPathUnexpanded",
+          "hash": "2:ea39aa8da3ebd245"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramFilesDir",
+          "hash": "1:5c64b95adc8ce922"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramFilesDir (x86)",
+          "hash": "1:370c7c4862db64a8"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramFilesPath",
+          "hash": "2:02677332d1b64eea"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramW6432Dir",
+          "hash": "1:5c64b95adc8ce922"
+        },
+        {
+          "subkey": "",
+          "name": "SM_ConfigureProgramsName",
+          "hash": "1:485783de4c7de0d4"
+        },
+        {
+          "subkey": "",
+          "name": "SM_GamesName",
+          "hash": "1:1a89cdfc4b574fce"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134392930425990815,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH",
+      "values": [
+        {
+          "subkey": "ARP",
+          "name": "0",
+          "hash": "7:93927e20372c201d"
+        }
+      ],
+      "subkeys": [
+        "ARP"
+      ],
+      "lwt": 134392930425990815,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH\\ARP",
+      "values": [
+        {
+          "subkey": "",
+          "name": "0",
+          "hash": "7:93927e20372c201d"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134392930425990815,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134392930404752315,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}",
+      "values": [
+        {
+          "subkey": "",
+          "name": "AuthorizedCDFPrefix",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "Comments",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "Contact",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayName",
+          "hash": "1:bcee70573f94c3ff"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayVersion",
+          "hash": "1:dd866e0298a2cdaf"
+        },
+        {
+          "subkey": "",
+          "name": "EstimatedSize",
+          "hash": "4:c9a37daf63719cf4"
+        },
+        {
+          "subkey": "",
+          "name": "HelpLink",
+          "hash": "2:21392e8f564dab0b"
+        },
+        {
+          "subkey": "",
+          "name": "HelpTelephone",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "InstallDate",
+          "hash": "1:bf4e9889d69ec628"
+        },
+        {
+          "subkey": "",
+          "name": "InstallLocation",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "InstallSource",
+          "hash": "1:b4f981e8f4c85784"
+        },
+        {
+          "subkey": "",
+          "name": "Language",
+          "hash": "4:641c2b20cfae89ad"
+        },
+        {
+          "subkey": "",
+          "name": "ModifyPath",
+          "hash": "2:b21667f712df364e"
+        },
+        {
+          "subkey": "",
+          "name": "Publisher",
+          "hash": "1:4acf76b8f90c0e20"
+        },
+        {
+          "subkey": "",
+          "name": "Readme",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "Size",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "UninstallString",
+          "hash": "2:b21667f712df364e"
+        },
+        {
+          "subkey": "",
+          "name": "URLInfoAbout",
+          "hash": "1:5ee3c9f65e862c55"
+        },
+        {
+          "subkey": "",
+          "name": "URLUpdateInfo",
+          "hash": "1:fd05dd735af7ac21"
+        },
+        {
+          "subkey": "",
+          "name": "Version",
+          "hash": "4:fb2e098e60a26c26"
+        },
+        {
+          "subkey": "",
+          "name": "VersionMajor",
+          "hash": "4:17fa9c7f5e9039a2"
+        },
+        {
+          "subkey": "",
+          "name": "VersionMinor",
+          "hash": "4:dc765660b06ee03d"
+        },
+        {
+          "subkey": "",
+          "name": "WindowsInstaller",
+          "hash": "4:67abdd721024f0ff"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134392930404772195,
+      "ti_owned": false,
+      "fully_attributed": false
+    }
+  ],
+  "ext_journal": [],
+  "co_removed": [],
+  "os": {
+    "edition": "EnterpriseSEval",
+    "build": 26100,
+    "ubr": 1742
+  },
+  "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "window": {
+    "install_time": 134392896000000000,
+    "t_start": 134392931230732173,
+    "t_end": 134392931250806000
+  },
+  "verify_gone": {
+    "arp_gone": true,
+    "msi_unknown_all_ctx": true,
+    "main_exes_gone": true,
+    "passed": true
+  },
+  "warnings": [
+    "roots: the app has no validated root; nothing can be attributed by path",
+    "anchors: the app has no install root and no exe; no registry anchor can be attributed",
+    "refsnap: the reference scan is incomplete (31 keys unreadable, first: HKLM\\SOFTWARE\\Microsoft\\EAPSIMMethods\\18\\FastReauthContext (access denied))",
+    "subtree: 2 subtrees were recorded in part (size caps or baseline keys)"
+  ]
+}

@@ -540,6 +540,10 @@ fn own_effect(
         ExecOp::QuarantineMove { .. }
         | ExecOp::RemoveDirIfEmpty { .. }
         | ExecOp::RemovePackage { .. } => None,
+        // M1b: wired by M1B-X-INTEG
+        ExecOp::DeleteService { .. }
+        | ExecOp::DeleteTask { .. }
+        | ExecOp::DeleteFirewallRule { .. } => None,
     }
 }
 
@@ -1055,6 +1059,8 @@ impl Stamp {
             }),
             ItemFacts::Package => Stamp::Package,
             ItemFacts::Absent | ItemFacts::Refused { .. } => return None,
+            // M1b: wired by M1B-X-INTEG (no object is validated yet, so these facts bind nothing)
+            ItemFacts::Object { .. } => return None,
         })
     }
 
@@ -1144,6 +1150,10 @@ fn validate_as(ctx: &GateCtx, item: &GateItem<'_>, op: Option<OpId>) -> GateOutc
             facts: ItemFacts::Package,
             exemptions: item.exemptions,
         }),
+        // M1b: wired by M1B-X-INTEG
+        ExecOp::DeleteService { .. }
+        | ExecOp::DeleteTask { .. }
+        | ExecOp::DeleteFirewallRule { .. } => GateOutcome::Refused(rule(reason::OP_KIND)),
     }
 }
 

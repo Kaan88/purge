@@ -309,6 +309,8 @@ fn uncount(counts: &mut OutcomeCounts, outcome: &ItemOutcome) {
         ItemOutcome::Skipped { .. } => &mut counts.skipped,
         ItemOutcome::HeldRetry => &mut counts.held_retry,
         ItemOutcome::PendingReboot { .. } => &mut counts.pending_reboot,
+        // M1b: wired by M1B-X-INTEG (counted with the pending reboots, as `OutcomeCounts::record` does)
+        ItemOutcome::PendingDelete => &mut counts.pending_reboot,
         ItemOutcome::Failed { .. } => &mut counts.failed,
     };
     *slot = slot.saturating_sub(1);

@@ -213,6 +213,7 @@ mod tests {
                 explanation: explanation.into(),
             }),
             item_fp: None,
+            object_fp: None,
         }
     }
 

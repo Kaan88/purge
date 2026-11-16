@@ -604,6 +604,7 @@ fn rig_candidates(doc: TargetsDoc) -> Result<Vec<Candidate>, String> {
             size_bytes: None,
             child_count: None,
             item_fp: None,
+            object_fp: None,
             decision: Some(Decision {
                 band: Band::Safe,
                 preselected: !package,

@@ -179,6 +179,8 @@ pub fn action_fits(action: Action, target: &Target) -> bool {
 fn support_scope(target: &Target) -> Option<Scope> {
     match target {
         Target::RegValueChanged { .. } => None,
+        // M1b: wired by M1B-POLICY (Object scope has no policy effect before then)
+        Target::Service { .. } | Target::Task { .. } | Target::FirewallRule { .. } => None,
         other => Scope::of(other),
     }
 }

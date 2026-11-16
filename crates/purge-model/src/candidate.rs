@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::exec::op::FileIdHex;
+use crate::object::ObjectFp;
 use crate::{AppRef, Band, Blocker, CandidateId, Category, Evidence, Target};
 
 /// How much the user loses if a removal turns out to be wrong (§5.8.5). Ordered from least to most.
@@ -89,7 +90,9 @@ pub enum Origin {
 /// scanner states such a change as (`RegValue`, `ReportOnly`).
 ///
 /// Producers: none of the service, task, firewall-rule, MRU-list or default-value pairs is emitted by any
-/// scanner yet (M1b). The executor does not run the service, task and firewall pairs before M1b either.
+/// scanner yet (M1b). The service, task and firewall pairs resolve to their own ops
+/// ([`ExecOp::DeleteService`](crate::exec::op::ExecOp::DeleteService) and its siblings) only together
+/// with [`Candidate::object_fp`]; the executor runs them from M1B-X-INTEG on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum Action {
     /// Move a file or directory to quarantine.
@@ -223,6 +226,16 @@ pub struct Candidate {
     /// executor acts only on the path it reads and checks itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item_fp: Option<ItemFp>,
+    /// For a [`Target::Service`], [`Target::Task`] or [`Target::FirewallRule`] item: the kind and identity
+    /// digest of the object as the scan read it (C-OBJECT). A `DeleteKey` candidate for such a target must
+    /// carry it, and the executor resolves such an item only when it does and its kind is the target's
+    /// ([`resolve`](crate::exec::op::resolve)). `None` for every other target. Absent from the JSON when
+    /// `None`, so documents written before the field existed read and write unchanged.
+    ///
+    /// **Not part of the plan hash** (`purge.planhash/0`), for the same reason as [`Candidate::item_fp`]:
+    /// it can only make the executor refuse or skip an item, never act on another object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_fp: Option<ObjectFp>,
 }
 
 impl Candidate {
@@ -368,6 +381,55 @@ mod tests {
         // A file id in any other spelling is refused.
         v["item_fp"]["file_id"] = json!("000102030405060708090A0B0C0D0E0F");
         assert!(serde_json::from_value::<Candidate>(v).is_err());
+    }
+
+    #[test]
+    fn object_fp_is_omitted_when_absent_and_round_trips_when_present() {
+        // A plan item without the field reads, and writes nothing for it.
+        let c: Candidate = serde_json::from_value(sample()).unwrap();
+        assert_eq!(c.object_fp, None);
+        assert!(!serde_json::to_string(&c).unwrap().contains("object_fp"));
+
+        let sha = "971eccc7bd4d8e319d26b61e8ce5a2862f44e7653ed48e8d922dea80bb81575c";
+        let mut v = sample();
+        v["target"] = json!({"type": "Service", "name": "VendorSvc"});
+        v["category"] = json!("System");
+        v["object_fp"] = json!({"kind": "service", "sha256": sha});
+        let c: Candidate = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(
+            c.object_fp,
+            Some(ObjectFp {
+                kind: crate::ObjectKind::Service,
+                sha256: sha.into()
+            })
+        );
+        assert_eq!(serde_json::to_value(&c).unwrap(), v);
+        // Its members are fixed.
+        v["object_fp"]["extra"] = json!(1);
+        assert!(serde_json::from_value::<Candidate>(v).is_err());
+    }
+
+    /// A scan document the M2 executor gate ran on (Firefox, `vm/` cleanpro run `cp2-m2-fidelity`):
+    /// every item, with its `item_fp`, reads and writes back unchanged.
+    #[test]
+    fn m2_scan_document_items_round_trip() {
+        let doc: Value =
+            serde_json::from_str(include_str!("../testdata/m2-firefox.scan.json")).unwrap();
+        assert_eq!(doc["schema"], json!("purge.scan/0"));
+        let mut with_item_fp = 0;
+        for list in ["items", "absorbed"] {
+            for item in doc[list].as_array().unwrap() {
+                let c: Candidate = serde_json::from_value(item.clone())
+                    .unwrap_or_else(|e| panic!("{}: {e}", item["id"]));
+                assert_eq!(c.object_fp, None);
+                with_item_fp += usize::from(c.item_fp.is_some());
+                assert_eq!(&serde_json::to_value(&c).unwrap(), item);
+            }
+        }
+        assert!(
+            with_item_fp > 0,
+            "the fixture carries scan-time file identities"
+        );
     }
 
     #[test]
@@ -528,6 +590,7 @@ mod tests {
             "ProgramId",
             "item_fp",
             "volume_serial",
+            "object_fp",
         ] {
             assert!(text.contains(name), "schema lacks {name}");
         }

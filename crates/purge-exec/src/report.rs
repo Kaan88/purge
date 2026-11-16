@@ -300,7 +300,12 @@ fn exec_op_of(op: &OpState, candidate: Option<&Candidate>) -> Option<ExecOp> {
     if let Some(intent) = &op.intent {
         return Some(intent.exec_op.clone());
     }
-    let resolved = resolve(&op.target, candidate?.action).ok()?;
+    let candidate = candidate?;
+    let resolved = resolve(&op.target, candidate.action, candidate.object_fp.as_ref()).ok()?;
+    // M1b: wired by M1B-X-INTEG (an object item has no executor op yet, as in M2)
+    if resolved.is_object() {
+        return None;
+    }
     (resolved.target() == op.target).then_some(resolved)
 }
 

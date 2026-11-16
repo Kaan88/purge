@@ -1225,6 +1225,7 @@ impl<'a> ScanCtx<'a> {
                 decision: None,
                 // Filled in by `ScanCtx::run` for path items, after the scanner is done.
                 item_fp: None,
+                object_fp: None,
             },
         }
     }
@@ -2636,6 +2637,9 @@ pub(crate) mod testkit {
             subtrees: Vec::new(),
             ext_journal: Vec::new(),
             co_removed: Vec::new(),
+            msi: Vec::new(),
+            burn: None,
+            sys: Default::default(),
             os: OsInfo {
                 edition: EDITION.into(),
                 build: BUILD,
@@ -3246,7 +3250,10 @@ mod tests {
         for kind in EvidenceKind::ALL {
             let expected = !matches!(
                 kind,
-                EvidenceKind::EmptyAfterPlan | EvidenceKind::ComKeyOwnership
+                EvidenceKind::EmptyAfterPlan
+                    | EvidenceKind::ComKeyOwnership
+                    // M1b: wired by M1B-FRAMEWORK (stated by the service, task and firewall scanners)
+                    | EvidenceKind::OwnedSystemObject
             );
             assert_eq!(seen.contains(&kind), expected, "{kind:?}");
         }

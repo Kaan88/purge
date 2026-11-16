@@ -46,6 +46,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purge_guard::live;
+use purge_model::ObjectKind;
 use purge_model::exec::journal::{RestorePointPolicy, RunSettings};
 use purge_model::exec::op::{ExecOp, Mismatch, OpId, Sha256Hex, resolve};
 use purge_model::{Action, Band, Blocker, Candidate, CandidateId};
@@ -704,9 +705,15 @@ fn selectable(scan: &ScanDoc, candidate: &Candidate) -> Result<Option<ExecOp>, N
     if candidate.action == Action::ReportOnly {
         return Err(NotSelectable::ReportOnly);
     }
-    let exec_op = match resolve(&candidate.target, candidate.action) {
+    let exec_op = match resolve(
+        &candidate.target,
+        candidate.action,
+        candidate.object_fp.as_ref(),
+    ) {
+        // M1b: wired by M1B-X-INTEG (a service, task or firewall item stays selectable without an
+        // executor op, as in M2)
+        _ if ObjectKind::of(&candidate.target).is_some() => None,
         Ok(op) => Some(op),
-        Err(Mismatch::NoExecutor) => None,
         Err(Mismatch::ReportOnly) => return Err(NotSelectable::ReportOnly),
         Err(other) => return Err(NotSelectable::Unresolvable(other)),
     };

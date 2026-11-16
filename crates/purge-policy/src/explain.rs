@@ -137,6 +137,12 @@ pub fn evidence_lines(evidence: &Evidence, owner: &str) -> Vec<String> {
             None => format!("Inside {owner}'s install folder"),
         },
         InstallerManifest(ManifestKind::Inno) => format!("Named in {owner}'s uninstall log"),
+        // M1b: wired by M1B-POLICY
+        InstallerManifest(ManifestKind::Msi | ManifestKind::Burn) => {
+            format!("Named in {owner}'s installer record")
+        }
+        // M1b: wired by M1B-POLICY
+        OwnedSystemObject => format!("Runs a program that belongs to {owner}"),
         InPreUninstallRefSnapshot => match fact(e, "anchor").or_else(|| fact(e, "path")) {
             Some(anchor) => format!("Pointed to {anchor} before uninstall"),
             None => format!("Pointed to {owner} before uninstall"),
@@ -234,6 +240,23 @@ pub fn blocker_line(blocker: &Blocker) -> String {
             s("An installed product's package could not be read to rule it out")
         }
         ChangedSinceScan => s("Changed since the scan"),
+        // M1b: wired by M1B-POLICY
+        Driver => s("Kept: it is a driver"),
+        // M1b: wired by M1B-POLICY
+        HasDependents { names } => format!(
+            "Kept: other services depend on it ({})",
+            names
+                .iter()
+                .map(|n| clean_name(n))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        // M1b: wired by M1B-POLICY
+        ObjectChangedSinceHarvest => s("Kept: it changed since the app was examined"),
+        // M1b: wired by M1B-POLICY
+        ReversibilityPartial => s("Undo cannot bring back all of it"),
+        // M1b: wired by M1B-POLICY
+        ProgramUnresolved => s("Its program could not be pinned to one file"),
     }
 }
 

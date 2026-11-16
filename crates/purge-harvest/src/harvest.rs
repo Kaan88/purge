@@ -451,6 +451,10 @@ pub fn harvest_report(
         subtrees: Vec::new(),
         ext_journal: Vec::new(),
         co_removed: Vec::new(),
+        // M1b: wired by M1B-HARVEST
+        msi: Vec::new(),
+        burn: None,
+        sys: Default::default(),
         os,
         user_sid,
         window: TimeWindow {

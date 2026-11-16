@@ -136,6 +136,10 @@ impl Hive {
             ExecOp::QuarantineMove { .. }
             | ExecOp::RemoveDirIfEmpty { .. }
             | ExecOp::RemovePackage { .. } => None,
+            // M1b: wired by M1B-X-INTEG
+            ExecOp::DeleteService { .. }
+            | ExecOp::DeleteTask { .. }
+            | ExecOp::DeleteFirewallRule { .. } => None,
         }
     }
 

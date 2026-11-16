@@ -297,6 +297,10 @@ fn place(op: &ExecOp) -> Option<Place<'_>> {
         ExecOp::DeleteKeyTree { key } | ExecOp::DeleteKeyIfEmpty { key } => Place::Key(key),
         ExecOp::DeleteValue { key, .. } | ExecOp::EditSegment { key, .. } => Place::Inside(key),
         ExecOp::RemovePackage { .. } => return None,
+        // M1b: wired by M1B-X-INTEG
+        ExecOp::DeleteService { .. }
+        | ExecOp::DeleteTask { .. }
+        | ExecOp::DeleteFirewallRule { .. } => return None,
     })
 }
 
@@ -886,6 +890,16 @@ impl Driver<'_> {
                     ),
                 }
             }
+            // M1b: wired by M1B-X-INTEG (no run executes an object op yet, so no journal holds one)
+            ExecOp::DeleteService { .. }
+            | ExecOp::DeleteTask { .. }
+            | ExecOp::DeleteFirewallRule { .. } => step.failed(
+                FailCode::Internal,
+                format!(
+                    "op {} deletes a system object, which this version cannot undo",
+                    op.op
+                ),
+            ),
             ExecOp::DeleteKeyTree { .. }
             | ExecOp::DeleteKeyIfEmpty { .. }
             | ExecOp::DeleteValue { .. }

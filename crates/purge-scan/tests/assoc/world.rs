@@ -81,6 +81,9 @@ pub fn fingerprint(progids: &[&str]) -> Fingerprint {
         subtrees: Vec::new(),
         ext_journal: Vec::new(),
         co_removed: Vec::new(),
+        msi: Vec::new(),
+        burn: None,
+        sys: Default::default(),
         os: OsInfo {
             edition: EDITION.into(),
             build: BUILD,

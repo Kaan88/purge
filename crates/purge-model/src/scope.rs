@@ -21,16 +21,25 @@ pub enum Scope {
     Path,
     /// An AppX/MSIX package.
     Package,
+    /// A system object: a service, a scheduled task or a firewall rule (M1b).
+    Object,
 }
 
 impl Scope {
     /// Every scope, in declaration order.
-    pub const ALL: [Scope; 4] = [Scope::Value, Scope::Key, Scope::Path, Scope::Package];
+    pub const ALL: [Scope; 5] = [
+        Scope::Value,
+        Scope::Key,
+        Scope::Path,
+        Scope::Package,
+        Scope::Object,
+    ];
 
     /// The scope of a target, i.e. the scope evidence must have to support it.
     ///
-    /// `None` for services, tasks and firewall rules: no M1a evidence kind attributes them, and they are
-    /// removed through their own APIs (M1b).
+    /// Services, tasks and firewall rules are [`Scope::Object`]: they are removed whole through their own
+    /// APIs, and only evidence about the object (`OwnedSystemObject`) speaks for them. Always `Some`; the
+    /// `Option` stays for callers that predate M1b.
     pub fn of(target: &Target) -> Option<Scope> {
         match target {
             Target::Path { .. } => Some(Scope::Path),
@@ -39,7 +48,9 @@ impl Scope {
             | Target::RegValueChanged { .. }
             | Target::RegMultiSzSegment { .. } => Some(Scope::Value),
             Target::AppxPackage { .. } => Some(Scope::Package),
-            Target::Service { .. } | Target::Task { .. } | Target::FirewallRule { .. } => None,
+            Target::Service { .. } | Target::Task { .. } | Target::FirewallRule { .. } => {
+                Some(Scope::Object)
+            }
         }
     }
 
@@ -49,6 +60,7 @@ impl Scope {
             Scope::Key => 2,
             Scope::Path => 4,
             Scope::Package => 8,
+            Scope::Object => 0x10,
         }
     }
 }
@@ -68,6 +80,8 @@ impl ScopeSet {
     pub const PATH: ScopeSet = ScopeSet::of(&[Scope::Path]);
     /// Package only.
     pub const PACKAGE: ScopeSet = ScopeSet::of(&[Scope::Package]);
+    /// System object only.
+    pub const OBJECT: ScopeSet = ScopeSet::of(&[Scope::Object]);
     /// Path or key.
     pub const PATH_KEY: ScopeSet = ScopeSet::of(&[Scope::Path, Scope::Key]);
     /// Value or key.
@@ -128,9 +142,62 @@ mod tests {
             Scope::of(&Target::AppxPackage { full_name: p() }),
             Some(Scope::Package)
         );
-        assert_eq!(Scope::of(&Target::Service { name: p() }), None);
-        assert_eq!(Scope::of(&Target::Task { path: p() }), None);
-        assert_eq!(Scope::of(&Target::FirewallRule { id: p() }), None);
+    }
+
+    #[test]
+    fn scope_of_typed_targets_is_object() {
+        let p = || "x".to_owned();
+        assert_eq!(
+            Scope::of(&Target::Service { name: p() }),
+            Some(Scope::Object)
+        );
+        assert_eq!(Scope::of(&Target::Task { path: p() }), Some(Scope::Object));
+        assert_eq!(
+            Scope::of(&Target::FirewallRule { id: p() }),
+            Some(Scope::Object)
+        );
+        // No other target is an object.
+        for target in [
+            Target::Path { path: p() },
+            Target::RegKey { path: p() },
+            Target::AppxPackage { full_name: p() },
+        ] {
+            assert_ne!(Scope::of(&target), Some(Scope::Object));
+        }
+        assert_eq!(Scope::ALL.len(), 5);
+        assert_eq!(Scope::Object.bit(), 0x10);
+    }
+
+    /// ANY gains Object; every other named set keeps exactly the bits it had in M1a.
+    #[test]
+    fn scopeset_any_includes_object_named_sets_unchanged() {
+        assert!(ScopeSet::ANY.contains(Scope::Object));
+        assert_eq!(ScopeSet::ANY.0, 0x1f);
+        assert_eq!(ScopeSet::ANY.iter().collect::<Vec<_>>(), Scope::ALL);
+        for (set, bits) in [
+            (ScopeSet::VALUE, 0x1),
+            (ScopeSet::KEY, 0x2),
+            (ScopeSet::PATH, 0x4),
+            (ScopeSet::PACKAGE, 0x8),
+            (ScopeSet::PATH_KEY, 0x6),
+            (ScopeSet::VALUE_KEY, 0x3),
+            (ScopeSet::PATH_KEY_VALUE, 0x7),
+            (ScopeSet::OBJECT, 0x10),
+        ] {
+            assert_eq!(set.0, bits, "{set:?}");
+        }
+        for set in [
+            ScopeSet::VALUE,
+            ScopeSet::KEY,
+            ScopeSet::PATH,
+            ScopeSet::PACKAGE,
+            ScopeSet::PATH_KEY,
+            ScopeSet::VALUE_KEY,
+            ScopeSet::PATH_KEY_VALUE,
+        ] {
+            assert!(!set.contains(Scope::Object), "{set:?}");
+        }
+        assert_eq!(serde_json::to_value(Scope::Object).unwrap(), "Object");
     }
 
     #[test]
@@ -142,7 +209,7 @@ mod tests {
             ScopeSet::VALUE_KEY.iter().collect::<Vec<_>>(),
             [Scope::Value, Scope::Key]
         );
-        assert_eq!(ScopeSet::ANY.iter().count(), 4);
+        assert_eq!(ScopeSet::ANY.iter().count(), 5);
         assert_eq!(ScopeSet::of(&[]).iter().count(), 0);
     }
 

@@ -221,6 +221,24 @@ mod tests {
         assert_eq!(plan_hash(&other, "m1a.2", ScanMode::Post), GOLDEN_HASH);
     }
 
+    /// `object_fp` is not hashed either (C-OBJECT, M1b): any digest on any item leaves the golden hash.
+    #[test]
+    fn object_fp_does_not_enter_the_hash() {
+        let mut items = items();
+        assert!(items.iter().all(|c| c.object_fp.is_none()));
+        for (i, item) in items.iter_mut().enumerate() {
+            item.object_fp = Some(purge_model::ObjectFp {
+                kind: purge_model::ObjectKind::ALL[i % 3],
+                sha256: format!("{i:064x}"),
+            });
+        }
+        assert_eq!(
+            canonical_plan_json(&items, "m1a.2", ScanMode::Post),
+            GOLDEN_JSON
+        );
+        assert_eq!(plan_hash(&items, "m1a.2", ScanMode::Post), GOLDEN_HASH);
+    }
+
     #[test]
     fn empty_plan_has_a_hash_too() {
         assert_eq!(

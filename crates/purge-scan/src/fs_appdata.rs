@@ -677,6 +677,9 @@ mod tests {
             subtrees: Vec::new(),
             ext_journal: Vec::new(),
             co_removed: Vec::new(),
+            msi: Vec::new(),
+            burn: None,
+            sys: Default::default(),
             os: OsInfo {
                 edition: "Professional".into(),
                 build: 26340,
