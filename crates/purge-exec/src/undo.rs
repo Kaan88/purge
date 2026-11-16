@@ -890,17 +890,22 @@ impl Driver<'_> {
             | ExecOp::DeleteKeyIfEmpty { .. }
             | ExecOp::DeleteValue { .. }
             | ExecOp::EditSegment { .. } => {
-                // A `done` no flush vouches for yet (a run that stopped uncleanly; `crate::durable`)
-                // may name a change that did not survive: the inverse runs in its completing form,
-                // which puts back what is missing and changes nothing that exists, so a key whose
-                // delete was lost, also one that still holds what other ops of the session removed
-                // from it, is not a conflict.
-                let unconfirmed = step.journal.state().is_unconfirmed(op.op);
                 let done = match &op.outcome {
-                    Some(ItemOutcome::Done) if again || unconfirmed => None,
+                    Some(ItemOutcome::Done) if again => None,
                     other => other.as_ref(),
                 };
-                match act_reg::prepare_undo_reg(self.ctx, self.session, intent, done) {
+                // An op whose `Done` recovery's re-probe replaced (`reconcile` `Retried` on a registry
+                // op; `crate::durable`) is completed only where its key equals the backup or is the
+                // run's own half-deleted tree: a key that exists and differs is somebody else's, and
+                // a conflict as in an ordinary undo (review S2). An unconfirmed op that the re-probe
+                // found done, or that no restart can have touched, is undone in the ordinary form.
+                let reprobed = !again
+                    && op
+                        .reconciles
+                        .iter()
+                        .any(|r| matches!(r, ReconcileResult::Retried { .. }));
+                match act_reg::prepare_undo_reg_with(self.ctx, self.session, intent, done, reprobed)
+                {
                     None => step.failed(
                         FailCode::Internal,
                         format!("op {} is not a registry op", op.op),

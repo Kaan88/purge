@@ -229,7 +229,8 @@ pub struct OpState {
     pub exemptions: GateExemptions,
     /// The intent, when one was written.
     pub intent: Option<Intent>,
-    /// The outcome of the `done` record, when one was written.
+    /// The outcome of the `done` record, when one was written; for an unconfirmed registry op that
+    /// recovery's re-probe did not find done, the outcome of its `reconcile` `Retried` instead.
     pub outcome: Option<ItemOutcome>,
     /// The results of the `reconcile` records for the op, in order.
     pub reconciles: Vec<ReconcileResult>,
@@ -300,6 +301,19 @@ impl OpState {
     }
 }
 
+/// Takes one `outcome` out of `counts` (the inverse of `OutcomeCounts::record`).
+fn uncount(counts: &mut OutcomeCounts, outcome: &ItemOutcome) {
+    let slot = match outcome {
+        ItemOutcome::Done => &mut counts.done,
+        ItemOutcome::Vanished => &mut counts.vanished,
+        ItemOutcome::Skipped { .. } => &mut counts.skipped,
+        ItemOutcome::HeldRetry => &mut counts.held_retry,
+        ItemOutcome::PendingReboot { .. } => &mut counts.pending_reboot,
+        ItemOutcome::Failed { .. } => &mut counts.failed,
+    };
+    *slot = slot.saturating_sub(1);
+}
+
 /// The pending kind an outcome stands for.
 fn pending_of(outcome: &ItemOutcome) -> Option<Pending> {
     match outcome {
@@ -325,6 +339,10 @@ fn pending_of(outcome: &ItemOutcome) -> Option<Pending> {
 /// - `reconcile`: the op is pending ([`OpState::pending`]); `Retried` only for a held item, the other
 ///   results only for a boot-time move. `NotMoved`, `MismatchKept` and `Lost` end the boot move's pending state like
 ///   `Completed` does; the last two leave the op needing attention ([`OpState::attention`]).
+///   Recovery's re-probe also writes `Retried` for an unconfirmed op ([`JournalState::unconfirmed`])
+///   while the run is open, with an outcome other than `Done`, `HeldRetry` and `PendingReboot`: that
+///   outcome replaces the op's `Done` (in [`OpState::outcome`] and in the counts), and the op is no
+///   longer unconfirmed.
 /// - `retry_intent`: after `commit` or `aborted`, for a held op ([`Pending::Held`]) with no retry in
 ///   flight ([`Violation::RetryNotHeld`], [`Violation::RetryInFlight`]). The `reconcile` with
 ///   `Retried` that follows ends the retry; its outcome replaces `HeldRetry`. A `Retried` without a
@@ -878,11 +896,25 @@ impl JournalState {
                 self.undo_plan = Some((plan.ops.clone(), BTreeSet::new()));
             }
             Record::Reconcile(r) => {
+                // A `Retried` for an unconfirmed op is recovery's verdict on a registry change it did
+                // not find: its outcome replaces the `done`'s `Done` (and is counted instead).
+                let corrected = match &r.result {
+                    ReconcileResult::Retried { outcome } if self.unconfirmed.remove(&r.op) => {
+                        Some(outcome.clone())
+                    }
+                    _ => None,
+                };
                 let s = self.known_mut(r.op);
                 if matches!(r.result, ReconcileResult::Retried { .. }) {
                     s.retry_in_flight = false;
                 }
                 s.reconciles.push(r.result.clone());
+                if let Some(outcome) = corrected {
+                    if let Some(old) = s.outcome.replace(outcome.clone()) {
+                        uncount(&mut self.counts, &old);
+                    }
+                    self.counts.record(&outcome);
+                }
             }
             Record::Expire(e) => self.known_mut(e.op).expired.push(e.class),
         }
@@ -900,6 +932,22 @@ impl JournalState {
     }
 
     fn check_reconcile(&self, r: &Reconcile) -> Result<(), Violation> {
+        if let ReconcileResult::Retried { outcome } = &r.result
+            && self.unconfirmed.contains(&r.op)
+        {
+            // Recovery's verdict on an unconfirmed registry op whose change it did not find: only
+            // while the run is open, and only an outcome that says the change is not (all) there.
+            self.run_open("reconcile")?;
+            let fits = !matches!(
+                outcome,
+                ItemOutcome::Done | ItemOutcome::HeldRetry | ItemOutcome::PendingReboot { .. }
+            );
+            return if fits {
+                Ok(())
+            } else {
+                Err(Violation::ReconcileMismatch(r.op))
+            };
+        }
         let pending = self.known(r.op)?.pending();
         let fits = match (pending, &r.result) {
             (None, _) => return Err(Violation::NotPending(r.op)),

@@ -1115,6 +1115,7 @@ fn recovered_json(out: &RecoverOutput) -> Value {
             "op": r.op,
             "probe": probe_json(&r.probe),
             "redone": r.redone.as_ref().map(to_json),
+            "corrected": r.corrected.as_ref().map(to_json),
             "matches_journal": r.matches_journal(),
             "detail": r.detail,
         })).collect::<Vec<_>>(),
@@ -1820,10 +1821,14 @@ mod tests {
             redone: Some(purge_model::exec::op::ItemOutcome::Skipped {
                 reason: purge_model::exec::op::SkipReason::ChangedSinceScan,
             }),
+            corrected: Some(purge_model::exec::op::ItemOutcome::Skipped {
+                reason: purge_model::exec::op::SkipReason::ChangedSinceScan,
+            }),
             detail: String::new(),
         });
         assert_eq!(recovered_exit(&lost, true), Exit::Partial);
         lost.reprobed[0].redone = Some(purge_model::exec::op::ItemOutcome::Done);
+        lost.reprobed[0].corrected = None;
         assert_eq!(recovered_exit(&lost, true), Exit::Ok);
     }
 

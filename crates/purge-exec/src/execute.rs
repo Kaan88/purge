@@ -1233,83 +1233,48 @@ impl<'a> Run<'a> {
         Ok(Some(SettledOp { op, probe, outcome }))
     }
 
-    /// Crash recovery, before [`Run::settle_open`]: probes again, in op order, every registry op whose
-    /// `done` says `Done` and that no hive flush vouched for ([`JournalState::unconfirmed`]; a power
-    /// loss may have taken the change, see [`crate::durable`]). A change found missing (`NotDone`) or
-    /// half made (`Partial`) is made again, bound to the journalled intent and backup
-    /// ([`act_reg::complete_reg`] under `JournalWriter::reprobe_token`); the journal keeps its `done`,
-    /// and the hives are flushed before the run's `group_end`, `commit` or `aborted`. An op whose key
-    /// a later key delete of the run took counts as done. What does not match the journal afterwards
-    /// is a warning in the report. Writes no journal record.
-    pub fn reprobe_unconfirmed(&mut self) -> Vec<crate::recover::ReprobedOp> {
-        use crate::recover::ReprobedOp;
-        let ops: Vec<OpState> = self.state().unconfirmed().cloned().collect();
-        let mut found = Vec::with_capacity(ops.len());
-        for op in ops {
-            let Some(intent) = op.intent.clone() else {
-                continue;
-            };
-            let probe = act_reg::probe_reg(&self.ctx, &self.session, &intent);
-            let entry = match &probe {
-                Probe::Done(_) => ReprobedOp {
-                    op: op.op,
-                    probe: probe.clone(),
-                    redone: None,
-                    detail: String::new(),
-                },
-                Probe::NotDone | Probe::Partial { .. } => {
-                    let result = match self.ledger.journal.reprobe_token(op.op) {
-                        Some(token) => {
-                            act_reg::complete_reg(&self.ctx, &self.session, &intent, &token)
-                        }
-                        None => act_reg::RegResult {
-                            outcome: ItemOutcome::Failed {
-                                code: FailCode::Internal,
-                                os_error: None,
-                                detail: "no token to make the change again".to_owned(),
-                            },
-                            detail: "no token to make the change again".to_owned(),
-                        },
-                    };
-                    ReprobedOp {
-                        op: op.op,
-                        probe: probe.clone(),
-                        redone: Some(result.outcome),
-                        detail: result.detail,
-                    }
-                }
-                Probe::Attention { .. }
-                    if crate::recover::removed_with_later_key(
-                        &self.ctx,
-                        &self.session,
-                        self.ledger.journal.state(),
-                        &op,
-                    ) =>
-                {
-                    ReprobedOp {
-                        op: op.op,
-                        probe: Probe::Done(ItemOutcome::Done),
-                        redone: None,
-                        detail: "gone with the key a later op of the run deleted".to_owned(),
-                    }
-                }
-                Probe::Attention { detail } => ReprobedOp {
-                    op: op.op,
-                    probe: probe.clone(),
-                    redone: None,
-                    detail: detail.clone(),
-                },
-            };
-            if !entry.matches_journal() {
-                self.ledger.notes.warnings.push(format!(
-                    "item {} (op {}): the journal says it was done, but after the interruption the \
-                     registry does not show it and it could not be done again ({:?}): {}",
-                    op.item.0, op.op, entry.probe, entry.detail
-                ));
-            }
-            found.push(entry);
+    /// Crash recovery after a restart that may have taken registry changes, before
+    /// [`Run::settle_open`]: probes again, in op order, every registry op whose `done` says `Done` and
+    /// that no hive flush vouched for ([`JournalState::unconfirmed`]; see [`crate::durable`]) and makes
+    /// a lost change again ([`crate::recover::reprobe_unconfirmed`]): the journal keeps its `done`, and
+    /// the hives are flushed before the run's `group_end`, `commit` or `aborted`. An op the run's later
+    /// ops explain counts as done. What does not match the journal afterwards gets a `reconcile`
+    /// `Retried` whose outcome replaces its `Done`, and a warning in the report. Each op is pushed to
+    /// `found`; `Err` only when the run must stop (a journal write failed).
+    pub fn reprobe_unconfirmed(
+        &mut self,
+        found: &mut Vec<crate::recover::ReprobedOp>,
+    ) -> Result<(), Abort> {
+        if let Some(abort) = self.stopped.take() {
+            return Err(abort);
         }
-        found
+        let start = found.len();
+        let result = crate::recover::reprobe_unconfirmed(
+            &self.ctx,
+            &self.session,
+            &mut self.ledger.journal,
+            found,
+        );
+        for entry in found.iter().skip(start) {
+            if entry.matches_journal() {
+                continue;
+            }
+            let item = self
+                .state()
+                .op(entry.op)
+                .map_or_else(String::new, |op| op.item.0.clone());
+            let now = entry
+                .corrected
+                .as_ref()
+                .map_or_else(|| "Done".to_owned(), |outcome| format!("{outcome:?}"));
+            self.ledger.notes.warnings.push(format!(
+                "item {item} (op {}): the journal said it was done, but after the restart the \
+                 registry does not show it and it could not be done again ({:?}): {}; it stands at \
+                 {now}",
+                entry.op, entry.probe, entry.detail
+            ));
+        }
+        result.map_err(Abort::journal)
     }
 
     /// The forward completion of [`Run::settle_open`] for an intent the probe found not done or half

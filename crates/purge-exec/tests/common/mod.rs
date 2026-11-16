@@ -27,8 +27,8 @@ use purge_guard::deny::DenyList;
 use purge_model::exec::op::{Inverse, ItemOutcome, OpId};
 use purge_model::exec::session::{SessionId, SessionSummary};
 use purge_model::{
-    Action, AppRef, Band, Candidate, CandidateId, Category, Decision, Harm, Origin, Reversibility,
-    ScanMode, Target, Tool,
+    Action, AppRef, Band, Candidate, CandidateId, Category, Decision, FileTime, Harm, Origin,
+    Reversibility, ScanMode, Target, Tool,
 };
 use purge_plan::emit::{ScanDoc, ScanSchema};
 use purge_win::appx::{AppxPackage, SignatureKind};
@@ -57,6 +57,12 @@ pub fn unique(tag: &str) -> String {
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+/// The current time as a FILETIME.
+pub fn filetime_now() -> FileTime {
+    let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    FileTime(116_444_736_000_000_000 + u64::try_from(since.as_nanos() / 100).unwrap())
 }
 
 /// The `\\?\` form of an absolute path.
@@ -646,6 +652,9 @@ pub struct Rig {
     pub packages: FakePackages,
     pub rm: FakeRm,
     pub pending: MemoryPendingRenames,
+    /// Whether recovery takes Windows to have restarted since the run began (a power loss): the
+    /// system's start it is given is then now, else long before any run.
+    pub restarted: bool,
     pub s: Scratch,
 }
 
@@ -668,6 +677,7 @@ impl Rig {
             packages: FakePackages::new(&s.path("package.installed")),
             rm: FakeRm,
             pending: MemoryPendingRenames::with_pairs(&[]),
+            restarted: false,
             s,
         }
     }
@@ -713,8 +723,14 @@ impl Rig {
     }
 
     pub fn recover_env(&mut self) -> RecoverEnv<'_> {
+        let system_started = if self.restarted {
+            filetime_now()
+        } else {
+            FileTime(0)
+        };
         RecoverEnv {
             retry: fast_retry(),
+            system_started: Some(system_started),
             ..RecoverEnv::new(
                 &self.roots,
                 &self.deny,

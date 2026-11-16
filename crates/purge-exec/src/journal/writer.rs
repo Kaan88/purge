@@ -343,13 +343,23 @@ impl JournalWriter {
 
     /// Writes and flushes the op's `intent`, closing the open group first if it is full, and returns the
     /// token the action and [`JournalWriter::done`] need. Hits [`fault::INTENT_FLUSHED`] after the flush.
+    ///
+    /// A registry op whose key is in no hive the writer can flush (a root other than `HKLM` or `HKU`;
+    /// [`crate::durable`]) is refused with [`Violation::InconsistentIntent`] and nothing is written:
+    /// its change could never be vouched for (review M6; plan intake lets only canonical targets
+    /// through, so this does not happen today).
     pub fn intent(&mut self, intent: Intent) -> Result<IntentToken, JournalError> {
         self.check_poison()?;
+        let hive = Hive::of_op(&intent.exec_op);
+        if intent.exec_op.is_registry() && hive.is_none() {
+            return Err(JournalError::Refused(Violation::InconsistentIntent(
+                intent.op,
+            )));
+        }
         if self.state.open_group_intents() >= MAX_GROUP_INTENTS {
             self.end_group()?;
         }
         let (op, item) = (intent.op, intent.item.clone());
-        let hive = Hive::of_op(&intent.exec_op);
         self.append(&Record::Intent(intent), true)?;
         self.hives.touch(hive);
         fault::point(fault::INTENT_FLUSHED);
@@ -468,10 +478,11 @@ impl JournalWriter {
     /// The token of an unconfirmed registry op ([`JournalState::unconfirmed`]: its `done` says `Done`,
     /// no flush vouches for it yet) when [`JournalWriter::open_append`] read the journal, for recovery
     /// to carry out again a change its probe finds undone (`act_reg::complete_reg`): the journal
-    /// already says what the change is, so the token is dropped afterwards without a second `done`,
-    /// and the next `group_end`, `commit` or `aborted` flushes the change. Handed out once per op,
-    /// like [`JournalWriter::resume_intent`]: `None` on a second call, for any other op, on a writer
-    /// made by [`JournalWriter::create`], and once the run ended.
+    /// already says what the change is, so when the machine matches the journal afterwards the token
+    /// is dropped without a second record, and the next `group_end`, `commit` or `aborted` flushes the
+    /// change; when it does not, [`JournalWriter::reprobed`] records what the op stands at. Handed out
+    /// once per op, like [`JournalWriter::resume_intent`]: `None` on a second call, for any other op,
+    /// on a writer made by [`JournalWriter::create`], and once the run ended.
     pub fn reprobe_token(&mut self, op: OpId) -> Option<IntentToken> {
         if !self.reprobable.remove(&op) {
             return None;
@@ -741,6 +752,33 @@ impl JournalWriter {
             }),
             true,
         )
+    }
+
+    /// Writes and flushes the `reconcile` `Retried{outcome}` that ends recovery's re-probe of an
+    /// unconfirmed registry op whose change the machine does not show and that could not be made again
+    /// (`outcome` is `Failed{VerifyFailed}`, or the outcome of the attempt), consuming the token of
+    /// [`JournalWriter::reprobe_token`]: the outcome replaces the op's `Done` (see
+    /// [`JournalState`]). The registry hives are flushed first, since the attempt may have written
+    /// (a key delete that stopped and put back what it deleted). Refused with
+    /// [`Violation::ReconcileMismatch`] for `Done`, `HeldRetry` or `PendingReboot`, and with
+    /// [`Violation::NotPending`] for an op that is not unconfirmed.
+    pub fn reprobed(
+        &mut self,
+        token: IntentToken,
+        at: FileTime,
+        outcome: ItemOutcome,
+    ) -> Result<(), JournalError> {
+        self.check_poison()?;
+        self.own(token.writer, token.op)?;
+        let record = Record::Reconcile(Reconcile {
+            at,
+            op: token.op,
+            result: ReconcileResult::Retried { outcome },
+        });
+        // Refuse before the flush, so a refused record costs nothing.
+        self.state.check(&record).map_err(JournalError::Refused)?;
+        self.flush_registry()?;
+        self.append(&record, true)
     }
 
     /// The token of an op whose retry was in flight (a `retry_intent` with no `reconcile` after it)

@@ -55,7 +55,9 @@
 //! `group_end`, `commit`, `aborted`, `undo_done`, `undo_conflict` or a boot-move `done` the writer
 //! flushes the registry hives its ops touched since the last such flush; a `group_end` written after
 //! that flush carries `registry_flushed`. A registry `done` (outcome `Done`) after the last marked
-//! `group_end` of a run that has not ended is [`JournalState::unconfirmed`]: recovery probes it again.
+//! `group_end` of a run that has not ended is [`JournalState::unconfirmed`]: after a possible restart
+//! recovery probes it again, and a change it does not find and cannot make again gets a `reconcile`
+//! `Retried` whose outcome replaces the `Done` (`JournalWriter::reprobed`).
 //!
 //! **Index mark (review M7).** The chain cannot tell a journal cut at a line boundary from a shorter
 //! one, so the session's index entry records how far the journal reached when the entry was written:

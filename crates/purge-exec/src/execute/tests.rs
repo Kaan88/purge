@@ -399,10 +399,12 @@ impl Rig {
         }
     }
 
-    /// The environment of a recovery or a retry: no sleeping between retries.
+    /// The environment of a recovery or a retry: no sleeping between retries, and no restart of
+    /// Windows since the system started long before any run.
     fn recover_env(&mut self) -> crate::recover::RecoverEnv<'_> {
         crate::recover::RecoverEnv {
             retry: Retry::with(RETRY_DELAYS.to_vec(), |_| {}),
+            system_started: Some(purge_model::FileTime(0)),
             ..crate::recover::RecoverEnv::new(
                 &self.roots,
                 &self.deny,

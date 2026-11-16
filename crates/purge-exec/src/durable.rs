@@ -24,6 +24,8 @@
 //!   inverse may have written are flushed before each of them (one flush per registry inverse). What
 //!   recovery writes forward (a completed key delete, an unconfirmed op done again) goes under the
 //!   run's rule: it is flushed before the `group_end`, `commit` or `aborted` that ends the recovery.
+//!   The `reconcile` `Retried` that replaces an unconfirmed op's `Done` when its change is not there
+//!   is written after a flush, since the attempt to make the change again may have written.
 //! - **Boot-time moves.** Registering one writes `PendingFileRenameOperations` in the `SYSTEM` hive;
 //!   that hive is flushed before the `done` that records the pair, and before the `undo_done` of an
 //!   undo that took a pair back.
@@ -37,13 +39,58 @@
 //! A hive is addressed by its root key, `HKLM\<first component>` (`SOFTWARE`, `SYSTEM`, ...) or
 //! `HKU\<SID>` / `HKU\<SID>_Classes`, opened read-only and without following links. A hive that is not
 //! loaded holds no change of this process and is skipped.
+//!
+//! # When a change can have been lost
+//!
+//! Only a restart of Windows (a power loss, a crash of the system) loses a registry change that was
+//! made: after the process alone died, every change is in the live registry. So recovery probes the
+//! unconfirmed ops again only when Windows may have started since the run began
+//! ([`restart_possible`]): the system's start (now less `GetTickCount64`, which counts sleep and
+//! hibernation too) is compared with the journal header's `created`, the earliest time any of the
+//! session's records was written. When the system started before the run, with a margin of
+//! [`RESTART_MARGIN`] for clock adjustments, every record and every change was made since, and nothing
+//! can have been lost. In doubt (the start cannot be read, the clock is behind the run's start, the
+//! start is not clearly before the run) the ops are probed again. The header's time is used rather
+//! than the journal's last record because a recovery after the restart may have written that record.
 
 use std::collections::BTreeSet;
 
+use purge_model::FileTime;
 use purge_model::exec::op::ExecOp;
 use purge_win::os::Win32Error;
 use purge_win::reg::{RegRoot, RegView};
 use purge_win::reg_write::{KeyAccess, WKey};
+
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    /// `GetTickCount64`: milliseconds since the system started, sleep and hibernation included.
+    fn GetTickCount64() -> u64;
+}
+
+/// How far before the run's start the system must have started for recovery to rule out a restart
+/// since: ten minutes, in FILETIME ticks (100 ns). It absorbs clock adjustments made while the
+/// session was open.
+pub const RESTART_MARGIN: u64 = 10 * 60 * 10_000_000;
+
+/// When the system started: the current time less the time since the start. `None` when that would
+/// lie before 1601.
+pub fn system_started() -> Option<FileTime> {
+    // SAFETY: `GetTickCount64` takes no arguments and cannot fail.
+    let ms = unsafe { GetTickCount64() };
+    let now = crate::storage::now();
+    now.0.checked_sub(ms.checked_mul(10_000)?).map(FileTime)
+}
+
+/// Whether Windows may have restarted since `since` (the journal header's `created`), so that a
+/// registry change made since may have been lost: `started` is when the system started
+/// ([`system_started`]), `now` the current time. `false` only when the system clearly started before
+/// `since` ([`RESTART_MARGIN`]) and the clock is not behind `since`; `true` in every case of doubt.
+pub fn restart_possible(since: FileTime, started: Option<FileTime>, now: FileTime) -> bool {
+    let Some(started) = started else {
+        return true;
+    };
+    now.0 < since.0 || started.0.saturating_add(RESTART_MARGIN) >= since.0
+}
 
 /// One registry hive, by its root key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -224,6 +271,38 @@ mod tests {
             }),
             Hive::of_key(r"HKLM\SOFTWARE")
         );
+    }
+
+    /// Review M1: only a restart of Windows can take a registry change, so recovery probes again only
+    /// when the system may have started since the run began; in doubt it does.
+    #[test]
+    fn a_restart_is_ruled_out_only_when_the_system_started_well_before_the_run() {
+        let minute = 60 * 10_000_000;
+        let run = FileTime(1_000 * minute);
+        let now = FileTime(run.0 + 5 * minute);
+        // Started long before the run: nothing can have been lost.
+        assert!(!restart_possible(
+            run,
+            Some(FileTime(run.0 - 60 * minute)),
+            now
+        ));
+        // Started after the run began (a power loss), or within the margin before it.
+        assert!(restart_possible(run, Some(FileTime(run.0 + minute)), now));
+        assert!(restart_possible(
+            run,
+            Some(FileTime(run.0 - 9 * minute)),
+            now
+        ));
+        // The start cannot be read, or the clock is behind the run's start.
+        assert!(restart_possible(run, None, now));
+        assert!(restart_possible(
+            run,
+            Some(FileTime(run.0 - 60 * minute)),
+            FileTime(run.0 - minute)
+        ));
+        // The host's own start lies in the past.
+        let started = system_started().unwrap();
+        assert!(started.0 <= crate::storage::now().0);
     }
 
     #[test]

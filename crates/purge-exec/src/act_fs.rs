@@ -987,13 +987,19 @@ fn verify_moved(checked: &CheckedPath, dest: &CheckedDest, path: &str) -> FsResu
     verify_gone(path, stamp.identity, "moved")
 }
 
-/// Whether an item on the volume with serial `serial` is on another volume than the session's journal
-/// (the store's data root), or that cannot be told. A change on the journal's volume is on disk once a
-/// later journal record is flushed, since `FlushFileBuffers` commits the volume's file system log up to
-/// that record, and the change was logged before it; a change on another volume is not
-/// ([`crate::durable`]).
+/// Whether a change on the volume with serial `serial` needs a flush of its own before the record
+/// that vouches for it: it is on another volume than the session's journal (the store's data root),
+/// or the journal's volume is not NTFS, or either cannot be told. A change on the journal's NTFS
+/// volume is on disk once a later journal record is flushed, since `FlushFileBuffers` commits the
+/// volume's file system log up to that record, and the change was logged before it; a change on
+/// another volume is not ([`crate::durable`]). That reasoning is NTFS's log order; a data root on
+/// ReFS (or anything else) gets the flushes too (review M5).
 fn off_journal_volume(session: &SessionDir, serial: u64) -> bool {
-    crate::report::volume_serial(session.roots().data_root()) != Some(serial)
+    let roots = session.roots();
+    let ntfs = roots
+        .volume(roots.data_root())
+        .is_ok_and(|volume| volume.fs_name.eq_ignore_ascii_case("NTFS"));
+    !ntfs || crate::report::volume_serial(roots.data_root()) != Some(serial)
 }
 
 /// Verify that `path` no longer holds the object `identity`: not found, or another object.
@@ -1331,15 +1337,22 @@ pub fn undo_fs(
     Ok(durable_restore(session, undone, serial, &put_into))
 }
 
-/// A restore that put `path` back on another volume than the journal's is flushed (its parent
-/// directory) before the `undo_done` that records it is written: the journal's own flushes do not
-/// commit that volume's file system log ([`crate::durable`]). A flush that fails turns `Restored`
+#[cfg(test)]
+thread_local! {
+    /// Test seam: how many parent directories [`durable_restore`] flushed on this thread.
+    static RESTORE_FLUSHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A restore that put `path` back on another volume than the journal's, or found it back already
+/// (the move back of an earlier, interrupted undo may not be on disk yet; review M4), is flushed (its
+/// parent directory) before the `undo_done` that records it is written: the journal's own flushes do
+/// not commit that volume's file system log ([`crate::durable`]). A flush that fails turns the outcome
 /// into `Failed{VerifyFailed}`, which a later undo runs again in its completing form.
 fn durable_restore(session: &SessionDir, undone: FsUndo, serial: u64, path: &str) -> FsUndo {
     let restored = matches!(
         undone,
         FsUndo::Done {
-            outcome: UndoOutcome::Restored,
+            outcome: UndoOutcome::Restored | UndoOutcome::AlreadyRestored,
             ..
         }
     );
@@ -1351,6 +1364,10 @@ fn durable_restore(session: &SessionDir, undone: FsUndo, serial: u64, path: &str
         .ok_or_else(|| "it has no parent directory".to_owned())
         .and_then(|parent| extended_path(parent).map_err(|e| e.to_string()))
         .and_then(|parent| purge_win::fs_write::flush_dir(&parent).map_err(|e| e.to_string()));
+    #[cfg(test)]
+    if flushed.is_ok() {
+        RESTORE_FLUSHES.with(|n| n.set(n.get() + 1));
+    }
     match flushed {
         Ok(()) => undone,
         Err(e) => FsUndo::failed(

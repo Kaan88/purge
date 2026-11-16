@@ -43,18 +43,26 @@
 //! # Registry changes the journal does not vouch for yet
 //!
 //! Windows writes registry changes lazily, and a run flushes the hives only before `group_end`,
-//! `commit` and `aborted` ([`crate::durable`]). After an unclean stop (a power loss), a registry op
-//! whose `done` says `Done` may therefore have lost its change; those after the last `group_end`
-//! marked `registry_flushed` are [`JournalState::unconfirmed`] (all of them in a journal written
-//! before the mark existed). Recovery does not take them on trust:
+//! `commit` and `aborted` ([`crate::durable`]). After an unclean stop of Windows (a power loss), a
+//! registry op whose `done` says `Done` may therefore have lost its change; those after the last
+//! `group_end` marked `registry_flushed` are [`JournalState::unconfirmed`] (all of them in a journal
+//! written before the mark existed). Only a restart of Windows loses a change: when the system
+//! started well before the run began ([`durable::restart_possible`]; in doubt it is taken to have
+//! restarted) the process alone died, every change is in the live registry, and recovery takes the
+//! unconfirmed ops as they are (review M1). After a possible restart it probes them again
+//! ([`reprobe_unconfirmed`]), in op order, first thing in both resume and rollback:
 //!
-//! | Recovery | Unconfirmed op, probed again in op order |
+//! | Unconfirmed op, probed again in op order | What recovery does |
 //! |---|---|
-//! | resume, probe `Done` | nothing to do: the change is there |
-//! | resume, probe `NotDone` or `Partial` | the change is made again ([`act_reg::complete_reg`], bound to the journalled intent and backup) and flushed before the run ends; the journal already holds its `done` |
-//! | resume, probe `Attention`, and a later key delete of the run took the key the change lies in | counted as there: the value or key went with that key |
-//! | resume, probe `Attention` otherwise, or the change cannot be made again | left as it is, reported ([`RecoverOutput::reprobed`] and a warning in the report) |
-//! | rollback | probed and reported; its undo runs in the completing form (a key tree is completed from its backup, nothing existing changed), so a lost change is `AlreadyRestored`, not a conflict |
+//! | probe `Done` | nothing: the change is there |
+//! | probe `NotDone` or `Partial` | the change is made again ([`act_reg::complete_reg`], bound to the journalled intent and backup: only what is exactly the verified backup is deleted) and flushed before the run ends; the journal already holds its `done` |
+//! | probe `Attention`, and the run's later journalled ops (a `done` saying `Done`, or an open intent) explain it ([`overtaken`]): a later key delete took the key the change lies in, or later segment edits or a value delete of the same value changed it again | counted as there |
+//! | probe `Attention` otherwise, or the change cannot be made again | a `reconcile` `Retried` whose outcome replaces the op's `Done` (`Failed{VerifyFailed}`, or the redo's outcome), so the report, the counts and a later undo read what the op stands at; a warning in the report ([`RecoverOutput::reprobed`]) |
+//!
+//! A rollback then undoes every op in the ordinary form: what the re-probe brought to the journal's
+//! state is restored as after any run. An op whose `Done` the re-probe replaced is undone in the exact
+//! completing form: a key that is absent, as backed up, or partly deleted is completed from its backup,
+//! one that exists and differs is a conflict (`KeyExists`), as in an ordinary undo (review S2).
 //!
 //! [`pending`] lists them ([`PendingSession::unconfirmed`]) and [`probe`] probes them like an open
 //! intent.
@@ -67,7 +75,7 @@
 //! | no journal, one without a complete header, or an empty one | removes the directory by handle when it holds nothing but the scan copy and that journal ([`SessionDir::remove_unstarted`]; [`RecoverError::Unstarted`] otherwise) |
 //! | a journal without a `settings` record (written before the record existed) and validation incomplete | nothing was acted on: writes `aborted` (`Cancelled`) |
 //! | the run stopped before every item was validated | continued as if never interrupted ([`Run::resume`]): the items without a `validated` record are validated now, a journalled record is never validated again |
-//! | unconfirmed registry `done` records | probed again first, in op order, and their change made again where it is missing ([`Run::reprobe_unconfirmed`]; see above) |
+//! | unconfirmed registry `done` records, after a possible restart | probed again first, in op order, and their change made again where it is missing ([`Run::reprobe_unconfirmed`]; see above) |
 //! | an open intent, probe `Done` | writes the missing `done` |
 //! | an open intent, probe `NotDone` | runs the action now, bound to the journalled intent, and writes its `done`; a file in use goes to the locked-file ladder ([`Run::settle_open`]) |
 //! | an open intent, probe `Partial` | finishes the key delete from the backup ([`act_reg::complete_reg`]) |
@@ -85,6 +93,7 @@
 //! | The session | What rollback does |
 //! |---|---|
 //! | no journal; validation incomplete | nothing was acted on: removes the directory, or writes `aborted` (`RolledBack`); nothing to undo |
+//! | unconfirmed registry `done` records, after a possible restart | probed again first, as resume does (see above) |
 //! | an open intent, probe `Done` | writes the missing `done` |
 //! | an open intent, probe `NotDone` | writes `done` `Skipped{NotAttempted}`: the action did not run and will not |
 //! | an open intent, probe `Partial` or `Attention` | writes `done` `Failed{VerifyFailed}`; its undo then runs in the completing form (a key tree is completed from its backup, a move back looks where the item is, after taking back the op's boot-time move when it is listed once; while it is listed more than once or the list cannot be read, the undo is a conflict naming the pair: [`locked::listed_before_move_back`]) |
@@ -102,15 +111,17 @@
 use std::collections::BTreeSet;
 
 use purge_guard::deny::DenyList;
+use purge_guard::prefix;
 use purge_model::FileTime;
-use purge_model::exec::journal::{AbortReason, Intent};
-use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, SkipReason};
+use purge_model::exec::journal::{AbortReason, Intent, ItemFacts};
+use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::session::{ExecReport, SessionId, SessionState, UndoItemReport};
 use purge_win::fs_write::FsError;
 
 use crate::act_fs::{self, Retry};
 use crate::act_reg;
 use crate::act_typed::{self, PackageBackend};
+use crate::durable;
 use crate::execute::{self, Abort, ExecEnv, ExecError, ItemStep, Run};
 use crate::gate::{GateCtx, GateSetupError};
 use crate::journal::{
@@ -141,10 +152,14 @@ pub struct RecoverEnv<'a> {
     pub pending_renames: &'a mut dyn PendingRenames,
     /// How an item in use is retried.
     pub retry: Retry,
+    /// When Windows last started ([`durable::system_started`]; `None`: unknown). Recovery probes the
+    /// unconfirmed registry ops again only when a restart since the run began is possible
+    /// ([`durable::restart_possible`]).
+    pub system_started: Option<FileTime>,
 }
 
 impl<'a> RecoverEnv<'a> {
-    /// An environment with the standard retries.
+    /// An environment with the standard retries and the system's start as Windows reports it.
     pub fn new(
         roots: &'a StorageRoots,
         deny: &'a DenyList,
@@ -159,7 +174,14 @@ impl<'a> RecoverEnv<'a> {
             lockers,
             pending_renames,
             retry: Retry::standard(),
+            system_started: durable::system_started(),
         }
+    }
+
+    /// Whether Windows may have restarted since the run of `state` began, so that a registry change
+    /// no flush vouched for may be lost ([`durable::restart_possible`]).
+    fn restart_possible(&self, state: &JournalState) -> bool {
+        durable::restart_possible(state.header().created, self.system_started, now())
     }
 }
 
@@ -168,6 +190,7 @@ impl std::fmt::Debug for RecoverEnv<'_> {
         f.debug_struct("RecoverEnv")
             .field("roots", &self.roots)
             .field("retry", &self.retry)
+            .field("system_started", &self.system_started)
             .finish_non_exhaustive()
     }
 }
@@ -584,48 +607,199 @@ pub struct ReprobedOp {
     pub op: OpId,
     /// What the probe found. An op whose key a later key delete of the run took counts as `Done`.
     pub probe: Probe,
-    /// The outcome of making the change again, when the probe found it missing (resume only); `Done`
-    /// when the machine now matches the journal.
+    /// The outcome of making the change again, when the probe found it missing; `Done` when the
+    /// machine now matches the journal.
     pub redone: Option<ItemOutcome>,
+    /// The outcome journalled in place of the `done`'s `Done` (`reconcile` `Retried`) when the machine
+    /// does not match the journal after the re-probe: `Failed{VerifyFailed}`, or the redo's outcome.
+    pub corrected: Option<ItemOutcome>,
     /// For the report: why it counts as done, or what stands in the way; may be empty.
     pub detail: String,
 }
 
 impl ReprobedOp {
     /// Whether the machine matches the journal's `Done` for the op after recovery: the probe found the
-    /// change, or it was made again.
+    /// change, or it was made again (or its value was found gone meanwhile).
     pub fn matches_journal(&self) -> bool {
         match &self.redone {
-            Some(outcome) => *outcome == ItemOutcome::Done,
+            Some(outcome) => matches!(outcome, ItemOutcome::Done | ItemOutcome::Vanished),
             None => matches!(self.probe, Probe::Done(_)),
         }
     }
 }
 
-/// Whether the change of registry op `op` lies in a key a later key delete of the run took, and that key
-/// is gone now: a value deleted from a key (or a key deleted below one) that a later op of the same run
-/// deleted whole cannot be probed by itself, since the key it is checked in is missing, but it is gone
-/// as the journal says.
-pub(crate) fn removed_with_later_key(
+/// Recovery's re-probe of the unconfirmed registry ops ([`JournalState::unconfirmed`]), after a
+/// restart that may have taken their changes (see the module docs), in op order: a later op's backup
+/// holds its key as the earlier ops left it. Each op's change is probed ([`act_reg::probe_reg`]); one
+/// found missing (`NotDone`) or half made (`Partial`) is made again, bound to the journalled intent and
+/// backup ([`act_reg::complete_reg`] under `JournalWriter::reprobe_token`), which deletes only what is
+/// exactly its verified backup. A probe that finds neither the state before nor the state after the op
+/// is judged against what the run's later journalled ops (a `done` saying `Done`, or an open intent)
+/// leave at the same place ([`overtaken`]). What still does not match the journal gets a `reconcile`
+/// `Retried` whose outcome replaces the op's `Done` (`JournalWriter::reprobed`). Each op is pushed to
+/// `found` as it is settled; `Err` only when a journal record could not be written.
+pub(crate) fn reprobe_unconfirmed(
+    ctx: &GateCtx,
+    session: &SessionDir,
+    journal: &mut JournalWriter,
+    found: &mut Vec<ReprobedOp>,
+) -> Result<(), JournalError> {
+    let ops: Vec<OpState> = journal.state().unconfirmed().cloned().collect();
+    for op in ops {
+        let Some(intent) = op.intent.clone() else {
+            continue;
+        };
+        let token = journal.reprobe_token(op.op);
+        let probe = act_reg::probe_reg(ctx, session, &intent);
+        let mut entry = ReprobedOp {
+            op: op.op,
+            probe: probe.clone(),
+            redone: None,
+            corrected: None,
+            detail: String::new(),
+        };
+        match &probe {
+            Probe::Done(_) => {}
+            Probe::NotDone | Probe::Partial { .. } => {
+                let result = match &token {
+                    Some(token) => act_reg::complete_reg(ctx, session, &intent, token),
+                    None => act_reg::RegResult {
+                        outcome: failed(
+                            FailCode::Internal,
+                            None,
+                            "no token to make the change again",
+                        ),
+                        detail: "no token to make the change again".to_owned(),
+                    },
+                };
+                entry.redone = Some(result.outcome);
+                entry.detail = result.detail;
+            }
+            Probe::Attention { detail } => match overtaken(ctx, session, journal.state(), &op) {
+                Some(why) => {
+                    entry.probe = Probe::Done(ItemOutcome::Done);
+                    entry.detail = why;
+                }
+                None => entry.detail = detail.clone(),
+            },
+        }
+        if !entry.matches_journal()
+            && let Some(token) = token
+        {
+            let outcome = match &entry.redone {
+                Some(outcome) => outcome.clone(),
+                None => failed(FailCode::VerifyFailed, None, entry.detail.clone()),
+            };
+            journal.reprobed(token, now(), outcome.clone())?;
+            entry.corrected = Some(outcome);
+        }
+        found.push(entry);
+    }
+    Ok(())
+}
+
+/// Why the change of the unconfirmed registry op `op` is there although its probe found neither the
+/// state before nor the state after it: what the run's later journalled ops (a `done` saying `Done`,
+/// or an open intent, which recovery settles next) do to the same place explains it, as the gate
+/// judges a key against the run's own effects (`GateCtx::note_done`). `None` when they do not.
+///
+/// - The key the change lies in is missing (only the gate's `gate.undo-key-missing` refusal; review
+///   M7), and a later key delete of the run on that key or above it is done or half done: the value
+///   or key went with it.
+/// - A segment edit whose value a later op of the run changed again: the value holds what a chain of
+///   later segment edits of it wrote, each starting from what the one before wrote; or it is gone and
+///   a later value delete of it was bound to what that chain wrote.
+pub(crate) fn overtaken(
     ctx: &GateCtx,
     session: &SessionDir,
     state: &JournalState,
     op: &OpState,
-) -> bool {
-    let Some(intent) = &op.intent else {
-        return false;
-    };
-    state
+) -> Option<String> {
+    let intent = op.intent.as_ref()?;
+    let later: Vec<&Intent> = state
         .ops()
-        .filter(|later| later.op > op.op && later.outcome == Some(ItemOutcome::Done))
-        .filter_map(|later| later.intent.as_ref())
+        .filter(|later| later.op > op.op)
         .filter(|later| {
-            matches!(
-                later.exec_op,
-                ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. }
-            ) && undo::depends_on(&intent.exec_op, &later.exec_op)
+            later.outcome == Some(ItemOutcome::Done)
+                || matches!(later.status(), OpStatus::IntentOnly)
         })
-        .any(|later| act_reg::probe_reg(ctx, session, later) == Probe::Done(ItemOutcome::Done))
+        .filter_map(|later| later.intent.as_ref())
+        .collect();
+    if act_reg::key_missing(ctx, intent) {
+        return later
+            .iter()
+            .filter(|later| {
+                matches!(
+                    later.exec_op,
+                    ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. }
+                ) && undo::depends_on(&intent.exec_op, &later.exec_op)
+            })
+            .find(|later| {
+                matches!(
+                    act_reg::probe_reg(ctx, session, later),
+                    Probe::Done(ItemOutcome::Done) | Probe::Partial { .. }
+                )
+            })
+            .map(|later| format!("gone with the key op {} of the run deleted", later.op));
+    }
+    let (
+        ExecOp::EditSegment { key, name, .. },
+        Inverse::ReinsertSegment {
+            written_value_hash, ..
+        },
+    ) = (&intent.exec_op, &intent.inverse)
+    else {
+        return None;
+    };
+    let live = act_reg::value_now(ctx, intent)
+        .ok()?
+        .map(|data| sha256_bytes(&data));
+    let mut written = *written_value_hash;
+    for later in later {
+        let same_value = |other_key: &str, other_name: &str| {
+            prefix::is_same(key, other_key) && prefix::eq_ci(name, other_name)
+        };
+        match (&later.exec_op, &later.inverse, &later.pre) {
+            (
+                ExecOp::EditSegment {
+                    key: other_key,
+                    name: other_name,
+                    ..
+                },
+                Inverse::ReinsertSegment {
+                    original_value_hash,
+                    written_value_hash,
+                    ..
+                },
+                _,
+            ) if same_value(other_key, other_name) && *original_value_hash == written => {
+                written = *written_value_hash;
+                if live == Some(written) {
+                    return Some(format!(
+                        "the value holds what op {} of the run wrote into it after this edit",
+                        later.op
+                    ));
+                }
+            }
+            (
+                ExecOp::DeleteValue {
+                    key: other_key,
+                    name: other_name,
+                },
+                _,
+                ItemFacts::Value(pre),
+            ) if same_value(other_key, other_name) && pre.data_sha256 == written => {
+                return live.is_none().then(|| {
+                    format!(
+                        "the value was deleted by op {} of the run after this edit",
+                        later.op
+                    )
+                });
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// What a recovery did.
@@ -724,6 +898,8 @@ fn recover(
     if !read.state.is_finished() {
         let state = &read.state;
         let validated = state.validated_count() == state.header().items;
+        // Unconfirmed registry changes can only have been lost if Windows went down (review M1).
+        let restart = env.restart_possible(state);
         // Undo records in a run that has not ended come from a rollback that was interrupted; going
         // forward from there would commit a session that is neither the plan applied nor the machine
         // as before (M2 of the final M2 review).
@@ -736,16 +912,16 @@ fn recover(
                      rollback instead of resuming the run"
                         .to_owned(),
                 );
-                rollback_run(&mut env, session, &read, &mut out)?;
+                rollback_run(&mut env, session, &read, restart, &mut out)?;
             }
             // A journal from before the `settings` record cannot be resumed; one that stopped in its
             // validation acted on nothing and ends here.
             RecoverMode::Resume if state.settings().is_none() && !validated => {
                 end_unvalidated(&session, mode)?;
             }
-            RecoverMode::Resume => resume_run(&mut env, session, &mut out)?,
+            RecoverMode::Resume => resume_run(&mut env, session, restart, &mut out)?,
             RecoverMode::Rollback if !validated => end_unvalidated(&session, mode)?,
-            RecoverMode::Rollback => rollback_run(&mut env, session, &read, &mut out)?,
+            RecoverMode::Rollback => rollback_run(&mut env, session, &read, restart, &mut out)?,
         }
     }
     finish_tail(&mut env, id, index.is_some(), &mut out)?;
@@ -769,20 +945,28 @@ fn end_unvalidated(session: &SessionDir, mode: RecoverMode) -> Result<(), Recove
 }
 
 /// Resume: the run is taken up again ([`Run::resume`], which validates what the interrupted pass had
-/// not reached), every open intent is settled by its probe and forward completion
-/// ([`Run::settle_open`]), the items without an intent run, and the run ends.
+/// not reached), the unconfirmed registry ops are probed again when a `restart` may have taken their
+/// changes ([`Run::reprobe_unconfirmed`]), every open intent is settled by its probe and forward
+/// completion ([`Run::settle_open`]), the items without an intent run, and the run ends.
 fn resume_run(
     env: &mut RecoverEnv<'_>,
     session: SessionDir,
+    restart: bool,
     out: &mut RecoverOutput,
 ) -> Result<(), RecoverError> {
     let scan = execute::read_scan_copy(&session)?;
     let mut run = Run::resume(exec_env(env), session, &scan)?;
-    // Registry changes a power loss may have taken first, in op order: a later op's backup holds its
-    // key as the earlier ops left it.
-    out.reprobed = run.reprobe_unconfirmed();
-    let open: Vec<OpId> = run.state().open_intents().map(|op| op.op).collect();
     let mut aborted = None;
+    // Registry changes a restart may have taken first, in op order: a later op's backup holds its
+    // key as the earlier ops left it.
+    if restart && let Err(abort) = run.reprobe_unconfirmed(&mut out.reprobed) {
+        aborted = Some(abort);
+    }
+    let open: Vec<OpId> = if aborted.is_none() {
+        run.state().open_intents().map(|op| op.op).collect()
+    } else {
+        Vec::new()
+    };
     for op in open {
         match run.settle_open(op) {
             Ok(Some(settled)) => out.settled.push(settled),
@@ -829,6 +1013,7 @@ fn rollback_run(
     env: &mut RecoverEnv<'_>,
     session: SessionDir,
     read: &JournalRead,
+    restart: bool,
     out: &mut RecoverOutput,
 ) -> Result<(), RecoverError> {
     let open: Vec<OpState> = read.state.open_intents().cloned().collect();
@@ -840,6 +1025,23 @@ fn rollback_run(
         &read.state,
         &mut out.warnings,
     )?;
+    // After a restart, the unconfirmed registry ops are brought to what the journal says first, as
+    // resume does (a lost change made again, from its exact backup), so that their undo is the
+    // ordinary one; what cannot be brought there gets the outcome it stands at (review S2).
+    if restart {
+        let start = out.reprobed.len();
+        let reprobed = reprobe_unconfirmed(&ctx, &session, &mut journal, &mut out.reprobed);
+        for entry in out.reprobed.iter().skip(start) {
+            if !entry.matches_journal() {
+                out.warnings.push(format!(
+                    "op {}: the journal said it was done, but after the restart the registry does \
+                     not show it ({:?}): {}",
+                    entry.op, entry.probe, entry.detail
+                ));
+            }
+        }
+        reprobed?;
+    }
     for op in &open {
         let Some(intent) = &op.intent else {
             continue;
@@ -868,23 +1070,6 @@ fn rollback_run(
         });
     }
     journal.sync()?;
-
-    // Registry `done` records no flush vouched for: probed and reported; their undo runs in the
-    // completing form (`undo::Driver`), so a change that did not survive is not a conflict.
-    let opened: BTreeSet<OpId> = open.iter().map(|op| op.op).collect();
-    for op in journal.state().unconfirmed() {
-        let Some(intent) = op.intent.as_ref().filter(|_| !opened.contains(&op.op)) else {
-            continue;
-        };
-        out.reprobed.push(ReprobedOp {
-            op: op.op,
-            probe: act_reg::probe_reg(&ctx, &session, intent),
-            redone: None,
-            detail:
-                "rolled back: its undo puts back what is missing and changes nothing that exists"
-                    .to_owned(),
-        });
-    }
 
     let all: BTreeSet<OpId> = journal
         .state()

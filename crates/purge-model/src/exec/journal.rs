@@ -514,6 +514,12 @@ pub enum ReconcileResult {
     Cancelled,
     /// A held item was tried again, with this outcome. Written after the op's [`RetryIntent`]; the
     /// outcome takes the place of `HeldRetry`.
+    ///
+    /// Also written by crash recovery, before the run's `commit` or `aborted`, for a registry op whose
+    /// `done` says `Done` but that no hive flush vouched for yet (an unconfirmed op): probed again after
+    /// a restart that may have taken its change, the machine did not show the change and it could not
+    /// be made again. The outcome takes the place of the `done`'s `Done`: `Failed{VerifyFailed}` when
+    /// the probe found something else, or the outcome of the attempt to make the change again.
     Retried {
         /// The outcome of the new attempt.
         outcome: ItemOutcome,

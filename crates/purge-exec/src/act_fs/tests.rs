@@ -1590,6 +1590,71 @@ fn a_source_volume_the_store_cannot_use_is_cannot_back_up() {
     assert_eq!(std::fs::read(&f).unwrap(), b"stays");
 }
 
+/// Volume facts as the system reports them, with every file system called ReFS.
+#[derive(Debug)]
+struct AllRefs;
+
+impl VolumeProbe for AllRefs {
+    fn volume(&self, path: &Path) -> Result<StoreVolumeFacts, FsError> {
+        let mut facts = SystemVolumes.volume(path)?;
+        facts.fs_name = "ReFS".to_owned();
+        Ok(facts)
+    }
+}
+
+/// Review M5: a change on the journal's own volume is left to the journal's next flush only because
+/// NTFS commits its log in order. With the data root on ReFS the change is flushed by itself, as one on
+/// another volume is. Before the fix only the volume serial was compared.
+#[test]
+fn a_change_on_a_journal_volume_that_is_not_ntfs_is_flushed_by_itself() {
+    let s = Scratch::new("refs");
+    let ntfs = store(&s);
+    let serial = crate::report::volume_serial(ntfs.data_root()).unwrap();
+    let session = ntfs.create_session().unwrap();
+    assert!(!off_journal_volume(&session, serial));
+    assert!(off_journal_volume(&session, serial ^ 1));
+    drop(session);
+    let refs = StorageRoots::relaxed(Path::new(&s.path("data")))
+        .unwrap()
+        .with_volume_probe(Arc::new(AllRefs));
+    let session = refs.create_session().unwrap();
+    assert!(off_journal_volume(&session, serial));
+}
+
+/// Review M4: an undo that finds its item back already (here: the act never ran) may stand on a move
+/// back of an earlier, interrupted undo that is not on disk yet, so off the journal's log it is flushed
+/// before its `undo_done` as a restore is. Before the fix only `Restored` was flushed.
+#[test]
+fn an_item_found_back_already_is_flushed_before_its_undo_done() {
+    let s = Scratch::new("found-back");
+    let f = s.file(r"src\never-moved.txt", b"stays");
+    let g = s.file(r"src\moved.txt", b"moves");
+    let roots = store(&s).with_volume_probe(Arc::new(AllRefs));
+    let mut env = Env::with_roots(s, roots, vec![mv(&f), mv(&g)]);
+    let flushes = || RESTORE_FLUSHES.with(std::cell::Cell::get);
+    let (action, token) = env.intent_only(1);
+    drop(action);
+    drop(token);
+    let before = flushes();
+    assert!(matches!(
+        env.undo(1),
+        FsUndo::Done {
+            outcome: UndoOutcome::AlreadyRestored,
+            ..
+        }
+    ));
+    assert_eq!(flushes(), before + 1);
+    // And a restore, as before.
+    let (action, token) = env.intent_only(2);
+    let FsActed::Finished(result) = act_fs(action, &token, &no_wait()) else {
+        panic!()
+    };
+    assert_done(&result);
+    drop(token);
+    assert_restored(&env.undo(2));
+    assert_eq!(flushes(), before + 2);
+}
+
 /// Real cross-volume: `PURGE_TEST_OTHER_VOLUME_DIR` names an empty directory on another fixed NTFS volume.
 /// The store's volume probe is told the source is on the data root's volume, so the op directory is
 /// made in the data root's quarantine; the serials then differ and the item is skipped, never copied.

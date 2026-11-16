@@ -2346,3 +2346,108 @@ fn registry_dones_are_unconfirmed_until_a_flushed_group_end() {
     assert!(!body(Record::Header(header(1))).contains("registry_flushed"));
     assert!(group_end(false).ends_with(r#""ops":1}"#));
 }
+
+/// Review S3: an unconfirmed registry op that recovery's re-probe did not find done gets a `reconcile`
+/// `Retried`, written with the op's reprobe token, whose outcome replaces its `Done`: in the op, in the
+/// counts (so the `commit` agrees), and when the journal is read back. Before the fix no record could
+/// be written and the op stayed `Done`.
+#[test]
+fn a_reprobe_correction_replaces_the_done_of_an_unconfirmed_op() {
+    let verify = ItemOutcome::Failed {
+        code: FailCode::VerifyFailed,
+        os_error: None,
+        detail: "the value is not the one backed up".to_owned(),
+    };
+    let dir = TempDir::new("reprobed");
+    let mut w = JournalWriter::create(&dir.session, dir.header(3)).unwrap();
+    for n in 1..=2 {
+        w.validated(reg_validated(n)).unwrap();
+    }
+    w.validated(validated(3)).unwrap();
+    for n in 1..=2 {
+        let token = w.intent(reg_intent(n)).unwrap();
+        w.done(token, ItemOutcome::Done).unwrap();
+    }
+    drop(w);
+
+    // Only an outcome that says the change is not (all) there; a refused record writes nothing.
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    let token = w.reprobe_token(OpId(1)).unwrap();
+    let len = w.len();
+    assert_eq!(
+        refused(w.reprobed(token, FileTime(5), ItemOutcome::Done)),
+        Violation::ReconcileMismatch(OpId(1))
+    );
+    assert_eq!(w.len(), len);
+    drop(w);
+
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    let token = w.reprobe_token(OpId(1)).unwrap();
+    w.reprobed(token, FileTime(5), verify.clone()).unwrap();
+    let op = w.state().op(OpId(1)).unwrap();
+    assert_eq!(op.outcome, Some(verify.clone()));
+    assert_eq!(
+        op.reconciles,
+        [ReconcileResult::Retried {
+            outcome: verify.clone()
+        }]
+    );
+    assert!(!w.state().is_unconfirmed(OpId(1)));
+    assert!(w.state().is_unconfirmed(OpId(2)));
+    assert_eq!((w.state().counts().done, w.state().counts().failed), (1, 1));
+    // A reconcile of an op that is neither pending nor unconfirmed is still refused.
+    assert_eq!(
+        refused(w.reconcile(Reconcile {
+            at: FileTime(6),
+            op: OpId(1),
+            result: ReconcileResult::Completed,
+        })),
+        Violation::NotPending(OpId(1))
+    );
+    let t3 = w.intent(intent(3)).unwrap();
+    w.done(t3, ItemOutcome::Done).unwrap();
+    let commit = w.commit(FileTime(7), 0).unwrap();
+    assert_eq!((commit.counts.done, commit.counts.failed), (2, 1));
+    drop(w);
+
+    let read = super::read(&dir.session).unwrap();
+    assert_eq!(
+        read.state.op(OpId(1)).unwrap().outcome,
+        Some(verify.clone())
+    );
+    assert_eq!(read.state.counts(), commit.counts);
+    // Once the run ended, the correction is refused like any other record of the run.
+    let mut bodies: Vec<String> = read.records.iter().cloned().map(body).collect();
+    bodies.push(body(Record::Reconcile(Reconcile {
+        at: FileTime(8),
+        op: OpId(2),
+        result: ReconcileResult::Retried { outcome: verify },
+    })));
+    assert!(parse(&chained(&bodies)).is_err());
+}
+
+/// Review M6: a registry op whose key is in no hive the writer can flush is refused at its intent,
+/// and nothing is written. Before the fix the intent was written and its change never vouched for.
+#[test]
+fn an_intent_on_a_key_in_no_flushable_hive_is_refused() {
+    let dir = TempDir::new("nohive");
+    let mut w = JournalWriter::create(&dir.session, dir.header(1)).unwrap();
+    let mut validated = reg_validated(1);
+    validated.target = Target::RegValue {
+        path: r"HKCU\Software\Vendor".into(),
+        name: "v1".into(),
+    };
+    w.validated(validated).unwrap();
+    let mut intent = reg_intent(1);
+    intent.exec_op = ExecOp::DeleteValue {
+        key: r"HKCU\Software\Vendor".into(),
+        name: "v1".into(),
+    };
+    let len = w.len();
+    assert_eq!(
+        refused(w.intent(intent)),
+        Violation::InconsistentIntent(OpId(1))
+    );
+    assert_eq!(w.len(), len);
+    assert!(!w.is_poisoned());
+}
