@@ -17,10 +17,14 @@
 //! - **Single keys only.** There is no tree delete (`RegDeleteTree`), no `RegSaveKey`, no link
 //!   creation. A key with subkeys is not deleted ([`HAS_SUBKEYS`]); the caller walks deepest first.
 //!   [`WKey::delete_if_empty`] also refuses a key with values ([`HAS_VALUES`]).
-//! - **Purge never raises its own access.** No privilege is enabled, no ownership is taken, and
-//!   [`KeyAccess`] cannot request `WRITE_DAC` or `WRITE_OWNER`. The only security write is
+//! - **Purge never raises its own access.** No ownership is taken, and [`KeyAccess`] cannot
+//!   request `WRITE_DAC` or `WRITE_OWNER`. The only security write is
 //!   [`CreatedKey::set_security`], reachable solely through the value returned by
-//!   [`WKey::create_subkey`], that is, on a key this process created a moment ago (undo).
+//!   [`WKey::create_subkey`], that is, on a key this process created a moment ago (undo). The one
+//!   privilege ever enabled is `SeRestorePrivilege`, and only there: when the recorded owner is one
+//!   the token may not assign (SYSTEM, TrustedInstaller), on a private impersonation copy of the
+//!   process token, for the single `NtSetSecurityObject` call on that handle, reverted at once. It
+//!   opens nothing and grants no access to any other object.
 //! - **Exact data.** Values are read and written as raw type and raw bytes through
 //!   `NtQueryValueKey`, `NtEnumerateValueKey` and `NtSetValueKey`: `RegSetValueExW` may append a
 //!   terminator to string types, and the Win32 reads may zero the last byte of an odd-length
@@ -29,6 +33,10 @@
 //!   name would make a later call address a different object.
 //! - **Security on the handle.** The descriptor is read and written with `NtQuerySecurityObject`
 //!   and `NtSetSecurityObject`; `RegGetKeySecurity` and `RegSetKeySecurity` open the key again.
+//!   A written DACL is stored exactly as given: its auto-inherited flag (`AI`, which the kernel
+//!   keeps only when the descriptor also carries `SE_DACL_AUTO_INHERIT_REQ`), its protected flag
+//!   and its inherited ACEs as inherited. Nothing is recomputed from the parent and nothing is
+//!   propagated to subkeys (`SetSecurityInfo` would do both).
 //!
 //! All `unsafe` FFI is confined to this module and carries `SAFETY` comments.
 
@@ -36,23 +44,33 @@ use std::ffi::c_void;
 use std::ops::{BitOr, Deref};
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{FILETIME, LocalFree, RtlNtStatusToDosError, UNICODE_STRING};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, FILETIME, GetLastError, HANDLE, LUID, LocalFree, RtlNtStatusToDosError,
+    UNICODE_STRING,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    ACL, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, GetSecurityDescriptorControl,
-    GetSecurityDescriptorDacl, GetSecurityDescriptorGroup, GetSecurityDescriptorOwner,
-    GetSecurityDescriptorSacl, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
-    UNPROTECTED_DACL_SECURITY_INFORMATION,
+    ACL, AdjustTokenPrivileges, DACL_SECURITY_INFORMATION, DuplicateTokenEx,
+    GROUP_SECURITY_INFORMATION, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+    GetSecurityDescriptorGroup, GetSecurityDescriptorOwner, GetSecurityDescriptorSacl,
+    LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, RevertToSelf,
+    SE_DACL_AUTO_INHERIT_REQ, SE_DACL_AUTO_INHERITED, SE_DACL_PROTECTED, SE_PRIVILEGE_ENABLED,
+    SECURITY_ATTRIBUTES, SecurityImpersonation, SetSecurityDescriptorControl,
+    TOKEN_ADJUST_PRIVILEGES, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    TokenImpersonation, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_CREATE_SUB_KEY, KEY_QUERY_VALUE, KEY_READ,
     KEY_SET_VALUE, KEY_WOW64_32KEY, KEY_WOW64_64KEY, REG_CREATED_NEW_KEY, REG_OPTION_NON_VOLATILE,
     REG_OPTION_OPEN_LINK, REG_OPTION_VOLATILE, RegCloseKey, RegCreateKeyExW, RegDeleteValueW,
     RegEnumKeyExW, RegFlushKey, RegOpenKeyExW, RegQueryInfoKeyW,
+};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken, SetThreadToken,
 };
 
 use crate::os::{Win32Error, from_wide_ptr, wide};
@@ -71,6 +89,15 @@ pub const ALREADY_EXISTS: Win32Error = Win32Error(183);
 /// `ERROR_NO_UNICODE_TRANSLATION`: a key name, value name or class string is not valid UTF-16 or
 /// holds a NUL, so it cannot be addressed exactly through this module.
 pub const NAME_NOT_REPRESENTABLE: Win32Error = Win32Error(1113);
+
+/// `ERROR_INVALID_OWNER`: the token may not assign the owner of a security descriptor.
+const INVALID_OWNER: Win32Error = Win32Error(1307);
+/// `ERROR_PRIVILEGE_NOT_HELD`: the token does not hold `SeRestorePrivilege`.
+const PRIVILEGE_NOT_HELD: Win32Error = Win32Error(1314);
+/// `ERROR_NO_TOKEN`: the thread does not impersonate.
+const NO_TOKEN: Win32Error = Win32Error(1008);
+/// `ERROR_NOT_ALL_ASSIGNED`: `AdjustTokenPrivileges` succeeded without enabling the privilege.
+const NOT_ALL_ASSIGNED: u32 = 1300;
 
 /// Name of the value that holds a link key's target.
 const SYMBOLIC_LINK_VALUE: &str = "SymbolicLinkValue";
@@ -316,6 +343,8 @@ struct ParsedSd {
     psd: PSECURITY_DESCRIPTOR,
     /// The `SECURITY_INFORMATION` bits for the parts the SDDL string holds.
     info: u32,
+    /// The DACL part is present and carries the auto-inherited flag (`D:AI`, `D:PAI`).
+    dacl_auto_inherited: bool,
 }
 
 impl Drop for ParsedSd {
@@ -345,7 +374,11 @@ impl ParsedSd {
         if ok == 0 {
             return Err(Win32Error::last());
         }
-        let mut sd = ParsedSd { psd, info: 0 };
+        let mut sd = ParsedSd {
+            psd,
+            info: 0,
+            dacl_auto_inherited: false,
+        };
 
         let (mut sid, mut defaulted): (PSID, i32) = (ptr::null_mut(), 0);
         // SAFETY: `psd` is the valid descriptor allocated above; out-pointers are locals.
@@ -388,12 +421,134 @@ impl ParsedSd {
                 } else {
                     UNPROTECTED_DACL_SECURITY_INFORMATION
                 };
+            sd.dacl_auto_inherited = control & SE_DACL_AUTO_INHERITED != 0;
         }
         if sd.info == 0 {
             return Err(Win32Error::INVALID_PARAMETER);
         }
         Ok(sd)
     }
+
+    /// Prepares the descriptor for `NtSetSecurityObject`: the kernel stores the auto-inherited flag
+    /// of a DACL only when the descriptor also carries `SE_DACL_AUTO_INHERIT_REQ`; without it
+    /// `D:AI(...)` is stored as `D:(...)` and `D:PAI(...)` as `D:P(...)`. With it the DACL is still
+    /// stored as given (ACE order, inherited ACEs) and nothing is propagated to subkeys. So the
+    /// request bit is set exactly when the DACL has the flag. (Key creation ignores the bit, which
+    /// is why a created key's descriptor is compared and set again.)
+    fn request_auto_inherited(&self) -> Result<(), Win32Error> {
+        let bits = if self.dacl_auto_inherited {
+            SE_DACL_AUTO_INHERIT_REQ
+        } else {
+            0
+        };
+        // SAFETY: `psd` is a valid descriptor owned by `self`; the bit is one
+        // `SetSecurityDescriptorControl` documents as settable.
+        if unsafe { SetSecurityDescriptorControl(self.psd, SE_DACL_AUTO_INHERIT_REQ, bits) } == 0 {
+            return Err(Win32Error::last());
+        }
+        Ok(())
+    }
+}
+
+/// A token handle, closed on drop.
+struct Token(HANDLE);
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from a successful token open or duplicate, is owned by this value
+        // and is closed exactly once here.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// Ends the current thread's impersonation on drop (also on unwind).
+struct Impersonation;
+
+impl Drop for Impersonation {
+    fn drop(&mut self) {
+        // SAFETY: takes no arguments; the thread impersonates since `SetThreadToken` succeeded.
+        unsafe { RevertToSelf() };
+    }
+}
+
+/// Runs `f` with `SeRestorePrivilege` enabled for the current thread only: on an impersonation copy
+/// of the process token, set on this thread for the call and reverted right after it. The process
+/// token is not changed. Fails, without running `f`, with [`PRIVILEGE_NOT_HELD`] when the token does
+/// not hold the privilege (an unelevated token), with [`Win32Error::ACCESS_DENIED`] when the thread
+/// already impersonates (that token is left alone), and with the error of a failed token call.
+fn with_restore_privilege<T>(f: impl FnOnce() -> T) -> Result<T, Win32Error> {
+    let mut held: HANDLE = ptr::null_mut();
+    // SAFETY: the pseudo handle of the current thread needs no closing; `held` is a valid
+    // out-pointer.
+    if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut held) } != 0 {
+        drop(Token(held));
+        return Err(Win32Error::ACCESS_DENIED);
+    }
+    let e = Win32Error::last();
+    if e != NO_TOKEN {
+        return Err(e);
+    }
+    let mut process: HANDLE = ptr::null_mut();
+    // SAFETY: the pseudo handle of the current process needs no closing; `process` is a valid
+    // out-pointer.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE, &mut process) } == 0 {
+        return Err(Win32Error::last());
+    }
+    let process = Token(process);
+    let mut copy: HANDLE = ptr::null_mut();
+    // SAFETY: `process.0` is a live token opened with TOKEN_DUPLICATE; no attributes are given;
+    // `copy` is a valid out-pointer.
+    let ok = unsafe {
+        DuplicateTokenEx(
+            process.0,
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY | TOKEN_IMPERSONATE,
+            ptr::null(),
+            SecurityImpersonation,
+            TokenImpersonation,
+            &mut copy,
+        )
+    };
+    if ok == 0 {
+        return Err(Win32Error::last());
+    }
+    let copy = Token(copy);
+    let name = wide("SeRestorePrivilege");
+    let mut luid = LUID {
+        LowPart: 0,
+        HighPart: 0,
+    };
+    // SAFETY: `name` is NUL-terminated and outlives the call; the system name is null (local);
+    // `luid` is a valid out-pointer.
+    if unsafe { LookupPrivilegeValueW(ptr::null(), name.as_ptr(), &mut luid) } == 0 {
+        return Err(Win32Error::last());
+    }
+    let privileges = TOKEN_PRIVILEGES {
+        PrivilegeCount: 1,
+        Privileges: [LUID_AND_ATTRIBUTES {
+            Luid: luid,
+            Attributes: SE_PRIVILEGE_ENABLED,
+        }],
+    };
+    // SAFETY: `copy.0` is a live token opened with TOKEN_ADJUST_PRIVILEGES; `privileges` is a valid
+    // TOKEN_PRIVILEGES with one entry; the previous state is not requested.
+    let ok = unsafe {
+        AdjustTokenPrivileges(copy.0, 0, &privileges, 0, ptr::null_mut(), ptr::null_mut())
+    };
+    // SAFETY: reads the calling thread's last error, as `AdjustTokenPrivileges` documents.
+    let last = unsafe { GetLastError() };
+    if ok == 0 {
+        return Err(Win32Error(last));
+    }
+    if last == NOT_ALL_ASSIGNED {
+        return Err(PRIVILEGE_NOT_HELD);
+    }
+    // SAFETY: a null thread pointer means the current thread; `copy.0` is a live impersonation
+    // token opened with TOKEN_IMPERSONATE.
+    if unsafe { SetThreadToken(ptr::null(), copy.0) } == 0 {
+        return Err(Win32Error::last());
+    }
+    let _revert = Impersonation;
+    Ok(f())
 }
 
 /// An open registry key for the executor: explicit view, opened with `REG_OPTION_OPEN_LINK`, never
@@ -788,8 +943,9 @@ impl WKey {
     /// - `class` is the key's class string (`""` for none).
     /// - `sddl` (owner, group, DACL; any subset) is applied atomically at creation; `None` leaves
     ///   the inherited default. An owner the caller's token may not assign fails with
-    ///   `ERROR_INVALID_OWNER` (1307), because no privilege is enabled. Compare
-    ///   [`WKey::security_sddl`] afterwards and use [`CreatedKey::set_security`] for a difference.
+    ///   `ERROR_INVALID_OWNER` (1307), because no privilege is enabled here. Creation also drops a
+    ///   DACL's auto-inherited flag (`D:AI` is created as `D:`). Compare [`WKey::security_sddl`]
+    ///   afterwards and use [`CreatedKey::set_security`] for a difference.
     /// - `volatile` selects `REG_OPTION_VOLATILE`; the executor passes `false` except when a
     ///   backup recorded a volatile key.
     ///
@@ -937,18 +1093,30 @@ impl Deref for CreatedKey {
 impl CreatedKey {
     /// Sets the parts present in `sddl` (owner `O:`, group `G:`, DACL `D:`; any subset, at least
     /// one) on this key, through this handle (`NtSetSecurityObject`; the Win32 call opens the key
-    /// a second time). The DACL is stored as given, including its protected flag and
-    /// inherited-ACE flags; nothing is recomputed from the parent. A SACL part is refused. An owner
-    /// the caller's token may not assign fails with `ERROR_INVALID_OWNER`.
+    /// a second time). The DACL is stored as given, including its protected (`P`) and
+    /// auto-inherited (`AI`) flags and its inherited-ACE flags; nothing is recomputed from the
+    /// parent and nothing is propagated to subkeys. A SACL part is refused.
+    ///
+    /// An owner the caller's token may not assign (SYSTEM, TrustedInstaller) is assigned with
+    /// `SeRestorePrivilege` enabled for this one call, on an impersonation copy of the process token
+    /// (an elevated administrator holds the privilege). Without the privilege it fails with
+    /// `ERROR_INVALID_OWNER` (1307) and nothing is changed.
     ///
     /// Put all parts into one call (or give them to [`WKey::create_subkey`]): the kernel checks an
     /// owner or group change against the DACL in force, so after a restrictive DACL has been set a
     /// separate owner call fails with `ERROR_ACCESS_DENIED`.
     pub fn set_security(&self, sddl: &str) -> Result<(), Win32Error> {
         let sd = ParsedSd::parse(sddl)?;
+        sd.request_auto_inherited()?;
         self.0.refuse_link()?;
         // SAFETY: `sd.psd` is a valid descriptor kept alive by `sd`; `hkey` is live.
-        nt(unsafe { NtSetSecurityObject(self.0.hkey, sd.info, sd.psd) })
+        let set = || nt(unsafe { NtSetSecurityObject(self.0.hkey, sd.info, sd.psd) });
+        match set() {
+            Err(INVALID_OWNER) if sd.info & OWNER_SECURITY_INFORMATION != 0 => {
+                with_restore_privilege(set).unwrap_or(Err(INVALID_OWNER))
+            }
+            other => other,
+        }
     }
 
     /// Gives up the security write and keeps the plain key handle.
@@ -1813,9 +1981,125 @@ mod tests {
         );
         assert_eq!(copy.security_sddl().unwrap(), after);
 
-        // An owner the token may not assign is an error, not a privilege request.
-        let foreign = copy.set_security(&format!("O:{TRUSTED_INSTALLER_SID}"));
-        assert_eq!(foreign.unwrap_err(), Win32Error(1307));
-        assert_eq!(copy.security_sddl().unwrap(), after);
+        // An owner the token may not assign is an error unless the token holds SeRestorePrivilege.
+        if !restore_privilege_held() {
+            let foreign = copy.set_security(&format!("O:{TRUSTED_INSTALLER_SID}"));
+            assert_eq!(foreign.unwrap_err(), Win32Error(1307));
+            assert_eq!(copy.security_sddl().unwrap(), after);
+        }
+    }
+
+    /// Smoke run M2: keys under `HKLM\SOFTWARE` carry `D:AI(...)` with inherited ACEs; the restore
+    /// stored them as `D:(...)`. The auto-inherited flag, the protected flag and a mix of explicit
+    /// and inherited ACEs (inherited ones the parent does not even hold) are stored as given, with
+    /// nothing propagated to subkeys.
+    #[test]
+    fn set_security_keeps_auto_inherited_protected_and_inherited_aces() {
+        let root = TestRoot::new();
+        let sid = current_user_sid().unwrap();
+        let og = format!("O:{sid}G:{sid}");
+        let cases = [
+            // Auto-inherited, inherited ACEs only (an empty key below HKLM\SOFTWARE).
+            format!("{og}D:AI(A;CIID;KR;;;BU)(A;CIID;KA;;;{sid})(A;CIIOID;KA;;;CO)"),
+            // Auto-inherited, explicit and inherited ACEs mixed, in that order.
+            format!("{og}D:AI(A;CI;KR;;;WD)(A;CIID;KA;;;{sid})(A;CIID;KR;;;BU)"),
+            // Protected and auto-inherited.
+            format!("{og}D:PAI(A;CI;KA;;;{sid})(A;CI;KR;;;BU)"),
+            // Protected only.
+            format!("{og}D:P(A;CI;KA;;;{sid})(A;CIIO;GR;;;BU)"),
+            // Neither flag, inherited ACEs kept as inherited.
+            format!("{og}D:(A;CIID;KA;;;{sid})(A;CI;KR;;;BU)"),
+        ];
+        let parent = root.key.create_subkey("parent", "", None, false).unwrap();
+        let child = parent.create_subkey("child", "", None, false).unwrap();
+        let child_before = child.security_sddl().unwrap();
+        for (i, sddl) in cases.iter().enumerate() {
+            // On a fresh key (the restore's case) and over each of the other cases.
+            let fresh = root
+                .key
+                .create_subkey(&format!("k{i}"), "", None, false)
+                .unwrap();
+            fresh.set_security(sddl).unwrap();
+            assert_eq!(&fresh.security_sddl().unwrap(), sddl, "fresh key, case {i}");
+            for (j, before) in cases.iter().enumerate() {
+                parent.set_security(before).unwrap();
+                parent.set_security(sddl).unwrap();
+                assert_eq!(&parent.security_sddl().unwrap(), sddl, "case {j} -> {i}");
+            }
+        }
+        // Nothing reached the subkey: it keeps what it was created with.
+        assert_eq!(child.security_sddl().unwrap(), child_before);
+        // A DACL part alone keeps owner and group and still stores its flags.
+        let dacl = format!("D:AI(A;CIID;KA;;;{sid})(A;CI;KR;;;BU)");
+        parent.set_security(&dacl).unwrap();
+        assert_eq!(parent.security_sddl().unwrap(), format!("{og}{dacl}"));
+    }
+
+    /// Whether this process's token holds `SeRestorePrivilege` (an elevated administrator's does).
+    fn restore_privilege_held() -> bool {
+        with_restore_privilege(|| ()).is_ok()
+    }
+
+    #[test]
+    fn an_owner_other_than_the_caller_needs_the_restore_privilege() {
+        let root = TestRoot::new();
+        let sid = current_user_sid().unwrap();
+        let key = root.key.create_subkey("k", "", None, false).unwrap();
+        let _restore = RestoreDacl(&key, format!("O:{sid}D:P(A;CI;KA;;;{sid})"));
+        let before = key.security_sddl().unwrap();
+        // The caller's own SID is always assignable.
+        key.set_security(&format!("O:{sid}")).unwrap();
+        let system = format!("O:SYG:SYD:PAI(A;CI;KA;;;SY)(A;CI;KA;;;{sid})");
+        if restore_privilege_held() {
+            key.set_security(&system).unwrap();
+            assert_eq!(key.security_sddl().unwrap(), system);
+        } else {
+            // Unelevated: refused, nothing changed, and no impersonation is left on the thread.
+            assert_eq!(key.set_security(&system), Err(Win32Error(1307)));
+            assert_eq!(key.security_sddl().unwrap(), before);
+            assert!(!thread_impersonates());
+        }
+    }
+
+    /// Whether the current thread holds an impersonation token.
+    fn thread_impersonates() -> bool {
+        let mut token: HANDLE = ptr::null_mut();
+        // SAFETY: `token` is a valid out-pointer; the pseudo handle needs no closing.
+        let ok = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
+        if ok != 0 {
+            drop(Token(token));
+        }
+        ok != 0
+    }
+
+    /// The SYSTEM owner case of the smoke run (`O:SYG:SYD:P...` came back owned by BA): needs an
+    /// elevated administrator, whose token holds `SeRestorePrivilege`. The rig runs it with
+    /// `cargo test -p purge-win --features write --lib -- --ignored elevated_set_security_assigns_system_owner`.
+    #[test]
+    #[ignore = "needs an elevated administrator (SeRestorePrivilege)"]
+    fn elevated_set_security_assigns_system_owner() {
+        assert!(restore_privilege_held(), "run elevated");
+        let root = TestRoot::new();
+        let sid = current_user_sid().unwrap();
+        let key = root.key.create_subkey("sys", "", None, false).unwrap();
+        let _restore = RestoreDacl(&key, format!("O:{sid}D:P(A;CI;KA;;;{sid})"));
+        let system = "O:SYG:SYD:P(A;CI;KA;;;SY)(A;CI;KA;;;BA)(A;CIIO;GR;;;BU)";
+        // Refused at creation (no privilege is enabled there), stored by set_security.
+        assert_eq!(
+            root.key
+                .create_subkey("sys2", "", Some(system), false)
+                .unwrap_err(),
+            Win32Error(1307)
+        );
+        key.set_security(system).unwrap();
+        assert_eq!(key.security_sddl().unwrap(), system);
+        let trusted_installer = format!("O:{TRUSTED_INSTALLER_SID}");
+        key.set_security(&trusted_installer).unwrap();
+        assert!(
+            key.security_sddl()
+                .unwrap()
+                .starts_with(&format!("{trusted_installer}G:SY"))
+        );
+        assert!(!thread_impersonates());
     }
 }

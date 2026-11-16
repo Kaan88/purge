@@ -30,10 +30,14 @@
 //!   ([`finish_delete_tree`]) that stops says how many keys an earlier, interrupted run had deleted and
 //!   are still missing ([`Rollback::PartialBefore`]); [`restore_missing`] puts exactly those back.
 //! - **Restore never forces.** [`restore_tree`] recreates keys with their recorded class and security
-//!   descriptor (applied atomically at creation), and follows the conflict rules of §7.8: an existing key
-//!   under `Installer`, `Services` or a COM root is a conflict, elsewhere an existing key is merged into only
-//!   when it is empty. A failure rolls back the keys created so far. An owner the token may not assign is
-//!   left to the token and reported ([`DifferenceKind::OwnerNotRestored`]); no privilege is enabled.
+//!   descriptor (applied at creation, then read back and, where creation lost something, set again through
+//!   the new key's handle: the DACL's auto-inherited and protected flags, inherited ACEs as inherited, and
+//!   an owner such as SYSTEM with `SeRestorePrivilege` for that one write when the token holds it), and
+//!   follows the conflict rules of §7.8: an existing key under `Installer`, `Services` or a COM root is a
+//!   conflict, elsewhere an existing key is merged into only when it is empty. A failure rolls back the keys
+//!   created so far. A descriptor that still reads back other than recorded is reported
+//!   ([`DifferenceKind::OwnerNotRestored`], [`DifferenceKind::SecurityDiffers`]; see
+//!   [`Difference::is_security`]).
 //! - **Segments** of `;` lists and `REG_MULTI_SZ` values are removed in one read-modify-write that keeps
 //!   type and terminators ([`plan_segment_removal`], [`apply_segment_removal`]) and put back only while the
 //!   value is what Purge wrote or merely lacks the segment ([`reinsert_segment`]).
@@ -374,12 +378,25 @@ pub struct Difference {
     pub kind: DifferenceKind,
 }
 
+impl Difference {
+    /// Whether the difference is in a key's security descriptor that the restore meant to put back
+    /// ([`DifferenceKind::OwnerNotRestored`], [`DifferenceKind::SecurityDiffers`]): the key is back, but
+    /// not as it was, and that needs attention. Kept security of an existing key that was merged into, or
+    /// left as it was, is not one.
+    pub fn is_security(&self) -> bool {
+        matches!(
+            self.kind,
+            DifferenceKind::OwnerNotRestored { .. } | DifferenceKind::SecurityDiffers
+        )
+    }
+}
+
 /// The kinds of [`Difference`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DifferenceKind {
-    /// The recorded owner could not be assigned by this token (`ERROR_INVALID_OWNER`, for example
-    /// TrustedInstaller); the key was created with the token's default owner and the recorded group and
-    /// DACL.
+    /// The recorded owner could not be assigned (`ERROR_INVALID_OWNER`: SYSTEM or TrustedInstaller by a
+    /// token without `SeRestorePrivilege`); the key has the token's default owner and the recorded group
+    /// and DACL.
     OwnerNotRestored {
         /// The owner part of the recorded SDDL (`S-1-5-80-…` or an alias such as `SY`).
         recorded_owner: String,
@@ -1547,32 +1564,81 @@ fn create_key(
         None => String::new(),
     };
     let volatile = node_volatile(node);
-    let (key, owner_dropped) = match parent.create_subkey(&name, &class, Some(&node.sddl), volatile)
-    {
-        Ok(key) => (key, false),
+    let key = match parent.create_subkey(&name, &class, Some(&node.sddl), volatile) {
+        Ok(key) => key,
         Err(e) if e == INVALID_OWNER => {
-            // The token may not assign the recorded owner; Purge enables no privilege to force it.
+            // Creation enables no privilege, so a recorded owner the token may not assign by itself
+            // (SYSTEM, TrustedInstaller) is refused here; `finish_key` sets it on the new key.
             let rest = without_owner(&node.sddl);
             let sddl = (!rest.is_empty()).then_some(rest);
-            let key = parent
+            parent
                 .create_subkey(&name, &class, sddl, volatile)
-                .map_err(|e| (fail("create key", e), None))?;
-            (key, true)
+                .map_err(|e| (fail("create key", e), None))?
         }
         Err(e) => return Err((fail("create key", e), None)),
     };
-    match finish_key(tree, &key, index, owner_dropped, differences) {
+    match finish_key(tree, &key, index, differences) {
         Ok(()) => Ok(key),
         Err(failure) => Err((failure, Some(key))),
     }
 }
 
-/// Security check and values of a key just created.
+/// Puts the recorded descriptor on a key just created, exactly, and reads it back: creation stores a
+/// DACL without its auto-inherited flag (`D:AI(...)` comes out as `D:(...)`) and refuses an owner the
+/// token may not assign without `SeRestorePrivilege`. When the descriptor read back is not the
+/// recorded one, the whole recorded descriptor is set once through the handle Purge created
+/// ([`CreatedKey::set_security`]: flags and inherited ACEs as recorded, the owner with
+/// `SeRestorePrivilege` when the token holds it); an owner that still cannot be assigned is retried
+/// without the owner part. What then still differs is reported, never accepted silently: only the
+/// owner as [`DifferenceKind::OwnerNotRestored`], anything else as [`DifferenceKind::SecurityDiffers`].
+fn restore_security(
+    key: &CreatedKey,
+    recorded: &str,
+    at: &str,
+    differences: &mut Vec<Difference>,
+) -> Result<(), KeyOpError> {
+    let fail = |op, error| KeyOpError {
+        at: at.to_owned(),
+        op,
+        error,
+    };
+    let mut live = key.security_sddl().map_err(|e| fail("read security", e))?;
+    if live != recorded {
+        // A failed write changes nothing; the read below says what the key holds either way.
+        let rest = without_owner(recorded);
+        if let Err(e) = key.set_security(recorded)
+            && e == INVALID_OWNER
+            && !rest.is_empty()
+            && rest != recorded
+        {
+            let _ = key.set_security(rest);
+        }
+        live = key.security_sddl().map_err(|e| fail("read security", e))?;
+    }
+    if live == recorded {
+        return Ok(());
+    }
+    let kind = if without_owner(&live) == without_owner(recorded) {
+        DifferenceKind::OwnerNotRestored {
+            recorded_owner: split_owner(recorded)
+                .map(|(owner, _)| owner.to_owned())
+                .unwrap_or_default(),
+        }
+    } else {
+        DifferenceKind::SecurityDiffers
+    };
+    differences.push(Difference {
+        at: at.to_owned(),
+        kind,
+    });
+    Ok(())
+}
+
+/// Security and values of a key just created.
 fn finish_key(
     tree: &RegTree,
     key: &CreatedKey,
     index: usize,
-    owner_dropped: bool,
     differences: &mut Vec<Difference>,
 ) -> Result<(), KeyOpError> {
     let node = &tree.keys[index];
@@ -1582,41 +1648,7 @@ fn finish_key(
         op,
         error,
     };
-    if owner_dropped {
-        differences.push(Difference {
-            at: at(),
-            kind: DifferenceKind::OwnerNotRestored {
-                recorded_owner: split_owner(&node.sddl)
-                    .map(|(owner, _)| owner.to_owned())
-                    .unwrap_or_default(),
-            },
-        });
-    }
-    let expected = if owner_dropped {
-        without_owner(&node.sddl)
-    } else {
-        node.sddl.as_str()
-    };
-    let matches = |live: &str| {
-        if owner_dropped {
-            without_owner(live) == expected
-        } else {
-            live == expected
-        }
-    };
-    let live = key.security_sddl().map_err(|e| fail("read security", e))?;
-    if !matches(&live) {
-        // One correction through the handle Purge created; a difference that remains is reported.
-        let fixed = !expected.is_empty()
-            && key.set_security(expected).is_ok()
-            && key.security_sddl().is_ok_and(|live| matches(&live));
-        if !fixed {
-            differences.push(Difference {
-                at: at(),
-                kind: DifferenceKind::SecurityDiffers,
-            });
-        }
-    }
+    restore_security(key, &node.sddl, &at(), differences)?;
     for value in &node.values {
         let name = name_of(&value.name_b64)
             .ok_or_else(|| fail("read value name", NAME_NOT_REPRESENTABLE))?;
@@ -2766,11 +2798,55 @@ pub struct SegmentRemoval {
     pub written_value_hash: Sha256Hex,
 }
 
+/// The removal of `segment` from list data of type `ty`: the zero-based position of the element removed
+/// and the data to write. See [`plan_segment_removal`] for the rule.
+fn remove_segment(
+    ty: u32,
+    data: &[u8],
+    segment: &str,
+    index: Option<u32>,
+) -> Result<(u32, Vec<u8>), SegmentError> {
+    let list = List::parse(ty, data)?;
+    let units = segment_units(list.kind, segment)?;
+    let position = match index {
+        Some(i) if list.segments.get(i as usize) == Some(&units) => i as usize,
+        _ => list
+            .segments
+            .iter()
+            .position(|s| *s == units)
+            .ok_or(SegmentError::SegmentAbsent)?,
+    };
+    let mut edited = list;
+    edited.segments.remove(position);
+    let position = u32::try_from(position).map_err(|_| SegmentError::NotAList)?;
+    Ok((position, edited.render()))
+}
+
 /// Reads value `name` of `key` and plans the removal of `segment`: the element at `index` when it is the
-/// segment, else the first element equal to it (exact, case-sensitive match). Changes nothing.
+/// segment, else the first element equal to it (exact, case-sensitive match: `c:\x` is not `C:\x`).
+/// Changes nothing.
 ///
 /// `;` lists (`REG_SZ`, `REG_EXPAND_SZ`) and `REG_MULTI_SZ` keep their type, their empty elements and
 /// their terminating NULs exactly; other types are refused ([`SegmentError::NotAList`]).
+///
+/// **The rule.** The element is removed with exactly one adjacent separator: the one before it when it is
+/// not the first element, else the one after it (none when it is the only element). Nothing else changes:
+/// other empty elements, a leading or trailing separator and the terminating NULs stay. So the result is
+/// the value as it was before the element was appended or inserted with one separator, which is the one
+/// state derivable from the value alone:
+///
+/// | before | segment | after |
+/// |---|---|---|
+/// | `A;B` | `B` | `A` |
+/// | `A;;B` | `B` | `A;` |
+/// | `A;B;` | `B` | `A;` |
+/// | `B;A` | `B` | `A` |
+/// | `;B` | `B` | (empty) |
+/// | `B` | `B` | (empty) |
+///
+/// A value that ended with a separator before the element was appended *without* one more (`A;` +
+/// `B` = `A;B`) cannot be told apart from `A` + `;B`: it becomes `A`. The undo still writes back the
+/// exact data and type read before the edit (the value backup, see [`reinsert_segment`]).
 pub fn plan_segment_removal(
     key: &WKey,
     name: &str,
@@ -2793,23 +2869,11 @@ pub fn plan_segment_removal(
         .value(name)
         .map_err(os("read value"))?
         .ok_or(SegmentError::ValueAbsent)?;
-    let list = List::parse(value.ty, &value.data)?;
-    let units = segment_units(list.kind, segment)?;
-    let position = match index {
-        Some(i) if list.segments.get(i as usize) == Some(&units) => i as usize,
-        _ => list
-            .segments
-            .iter()
-            .position(|s| *s == units)
-            .ok_or(SegmentError::SegmentAbsent)?,
-    };
-    let mut edited = list.clone();
-    edited.segments.remove(position);
-    let written = edited.render();
+    let (index, written) = remove_segment(value.ty, &value.data, segment, index)?;
     Ok(SegmentRemoval {
         name: name.to_owned(),
         segment: segment.to_owned(),
-        index: u32::try_from(position).map_err(|_| SegmentError::NotAList)?,
+        index,
         original_value_hash: sha256(&value.data),
         original: ValueBackup {
             name_b64: WideB64::from(name),
@@ -4521,6 +4585,10 @@ mod tests {
         }
         let system_backup = save(&dir, 2, &system_owned);
         delete_tree(&root.open("O", KeyAccess::DELETE), &backup).unwrap();
+        if restore_privilege_held(&root) {
+            // Elevated: the owner is assigned; `elevated_restore_puts_back_a_system_owner` covers it.
+            return;
+        }
 
         let report = restore_tree(&parent_of(&system_backup), &system_backup).unwrap();
         assert_eq!(report.outcome, RestoreOutcome::Restored);
@@ -4548,6 +4616,154 @@ mod tests {
                 .outcome,
             RestoreOutcome::AlreadyRestored
         );
+    }
+
+    /// Whether the test process may assign SYSTEM as an owner (an elevated administrator's token holds
+    /// `SeRestorePrivilege`): tried on a scratch key below `root`, removed again.
+    fn restore_privilege_held(root: &TestRoot) -> bool {
+        let probe = root
+            .key
+            .create_subkey("privilege-probe", "", None, false)
+            .unwrap();
+        let held = probe.set_security("O:SY").is_ok();
+        drop(probe);
+        nuke(&root.key, "privilege-probe", &root.path).unwrap();
+        held
+    }
+
+    /// `O:<sid>G:<sid>` for the current user: an owner every token may assign.
+    fn own_owner_and_group() -> String {
+        let sid = current_user_sid().unwrap();
+        format!("O:{sid}G:{sid}")
+    }
+
+    /// Smoke run M2: keys restored from a backup lost the DACL's auto-inherited flag (`D:AI(...)` came
+    /// back as `D:(...)`): an empty key, a subkey, a name ending with a space and a non-ASCII name. The
+    /// restore puts back every descriptor exactly, flags and inherited ACEs included, with no difference
+    /// to report; also the put-back of a delete that stops.
+    #[test]
+    fn restore_puts_back_auto_inherited_and_protected_dacls_exactly() {
+        let root = TestRoot::new();
+        let sid = current_user_sid().unwrap();
+        let og = own_owner_and_group();
+        let inherited = format!("(A;CIID;KA;;;{sid})(A;CIID;KR;;;BU)(A;CIIOID;KA;;;CO)");
+        let keys = [
+            ("", format!("{og}D:PAI(A;CI;KA;;;{sid})(A;CI;KR;;;BU)")),
+            ("EmptySub", format!("{og}D:AI{inherited}")),
+            ("Sub1", format!("{og}D:AI(A;CI;KR;;;WD){inherited}")),
+            (r"Sub1\Sub2 trailing space ", format!("{og}D:AI{inherited}")),
+            ("\u{fc}-\u{540d}\u{524d}", format!("{og}D:AI{inherited}")),
+            (
+                "Protected",
+                format!("{og}D:P(A;CI;KA;;;{sid})(A;CIIO;GR;;;BU)"),
+            ),
+            ("Plain", format!("{og}D:(A;CIID;KA;;;{sid})(A;CI;KR;;;BU)")),
+        ];
+        for (rel, sddl) in &keys {
+            let (parent, leaf) = match rel.rsplit_once('\\') {
+                Some((parent, leaf)) => (format!(r"S\{parent}"), leaf),
+                None if rel.is_empty() => (String::new(), "S"),
+                None => ("S".to_owned(), *rel),
+            };
+            let opened;
+            let parent: &WKey = if parent.is_empty() {
+                &root.key
+            } else {
+                opened = root.open(&parent, KeyAccess::CREATE_SUB_KEY);
+                &opened
+            };
+            let key = parent.create_subkey(leaf, "", None, false).unwrap();
+            key.set_security(sddl).unwrap();
+            if *rel == "Sub1" {
+                key.set_value_raw("v", REG_DWORD, &[1, 0, 0, 0]).unwrap();
+            }
+        }
+        let doc = capture(&root, "S");
+        // The capture holds the descriptors as set: the flags are what the restore must keep.
+        let captured: Vec<String> = doc
+            .tree()
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.sddl.clone())
+            .collect();
+        for (_, sddl) in &keys {
+            assert!(captured.contains(sddl), "{sddl} not in {captured:#?}");
+        }
+
+        let dir = TempDir::new();
+        let backup = save(&dir, 1, &doc);
+        delete_tree(&root.open("S", KeyAccess::DELETE), &backup).unwrap();
+        let report = restore_tree(&parent_of(&backup), &backup).unwrap();
+        assert_eq!(report.outcome, RestoreOutcome::Restored);
+        assert_eq!(report.differences, []);
+        assert_eq!(shape(&capture(&root, "S")), shape(&doc));
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Intact
+        );
+
+        // A delete that stops on a change at the root, after every subkey is gone, puts back what it
+        // deleted, exactly as well.
+        let key = root.open("S", KeyAccess::DELETE);
+        let mut hook = |index: usize| {
+            if index == 0 {
+                root.open("S", KeyAccess::SET_VALUE)
+                    .set_value_raw("late", REG_DWORD, &[2, 0, 0, 0])
+                    .unwrap();
+            }
+            true
+        };
+        let stopped = match delete_walk(&key, backup.tree().unwrap(), false, &mut hook) {
+            Err(stopped) => stopped,
+            Ok(_) => panic!("the delete went through a change"),
+        };
+        drop(key);
+        assert_eq!(
+            stopped.rollback,
+            Rollback::Done {
+                keys: 6,
+                differences: Vec::new()
+            },
+            "{stopped}"
+        );
+        root.open("S", KeyAccess::SET_VALUE)
+            .delete_value("late")
+            .unwrap();
+        assert_eq!(shape(&capture(&root, "S")), shape(&doc));
+    }
+
+    /// The SYSTEM owner of the smoke run (`O:SYG:SYD:P(...)` came back owned by BA): with
+    /// `SeRestorePrivilege`, which an elevated administrator holds, the restore assigns it. Run by the
+    /// rig: `cargo test -p purge-exec --features <ci set> --lib -- --ignored
+    /// elevated_restore_puts_back_a_system_owner`.
+    #[test]
+    #[ignore = "needs an elevated administrator (SeRestorePrivilege)"]
+    fn elevated_restore_puts_back_a_system_owner() {
+        let root = TestRoot::new();
+        assert!(restore_privilege_held(&root), "run elevated");
+        let sid = current_user_sid().unwrap();
+        let system =
+            format!("O:SYG:SYD:P(A;CI;KA;;;SY)(A;CI;KA;;;BA)(A;CI;KA;;;{sid})(A;CIIO;GR;;;BU)");
+        let inherited = format!("O:SYG:SYD:AI(A;CIID;KA;;;SY)(A;CIID;KA;;;{sid})");
+        let t = root.key.create_subkey("Sys", "", None, false).unwrap();
+        let sub = t.create_subkey("Sub1", "", None, false).unwrap();
+        sub.set_value_raw("v", REG_DWORD, &[1, 0, 0, 0]).unwrap();
+        let inner = sub.create_subkey("Inner", "", None, false).unwrap();
+        inner.set_security(&inherited).unwrap();
+        sub.set_security(&system).unwrap();
+        drop((t, sub, inner));
+        let doc = capture(&root, "Sys");
+        let dir = TempDir::new();
+        let backup = save(&dir, 1, &doc);
+        delete_tree(&root.open("Sys", KeyAccess::DELETE), &backup).unwrap();
+
+        let report = restore_tree(&parent_of(&backup), &backup).unwrap();
+        assert_eq!(report.outcome, RestoreOutcome::Restored);
+        assert_eq!(report.differences, []);
+        assert_eq!(shape(&capture(&root, "Sys")), shape(&doc));
+        let restored = capture(&root, r"Sys\Sub1");
+        assert_eq!(restored.tree().unwrap().keys[0].sddl, system);
     }
 
     #[test]
@@ -4829,23 +5045,83 @@ mod tests {
     /// Removes `segment` purely and checks that the re-insert of the written data restores the original
     /// exactly through the readings. Returns (index, written data as text).
     fn remove_and_back(ty: u32, data: &[u8], segment: &str, index: Option<u32>) -> (u32, Vec<u8>) {
-        let parsed = List::parse(ty, data).unwrap();
-        let units = segment_units(parsed.kind, segment).unwrap();
-        let pos = match index {
-            Some(i) if parsed.segments.get(i as usize) == Some(&units) => i as usize,
-            _ => parsed.segments.iter().position(|s| *s == units).unwrap(),
-        };
-        let mut edited = parsed.clone();
-        edited.segments.remove(pos);
-        let written = edited.render();
+        let (pos, written) = remove_segment(ty, data, segment, index).unwrap();
         let back = List::parse(ty, &written).unwrap();
+        let units = segment_units(back.kind, segment).unwrap();
         let restored = back
             .readings()
             .iter()
-            .map(|r| r.insert(pos as u32, &units).render())
+            .map(|r| r.insert(pos, &units).render())
             .find(|d| sha256(d) == sha256(data));
         assert_eq!(restored.as_deref(), Some(data), "re-insert of {segment:?}");
-        (pos as u32, written)
+        (pos, written)
+    }
+
+    /// Smoke run M2 (user PATH): the rule of [`plan_segment_removal`], one table. The run's value read
+    /// `...\WindowsApps;C:\Program Files\PurgeFixtureApp\bin` at scan time (the rig had dropped the
+    /// trailing `;` of `...\WindowsApps;` when it appended); removing the last segment gives
+    /// `...\WindowsApps`, the value as it was before that segment was added with one separator. The
+    /// trailing `;` the rig dropped is not in the value and cannot be derived.
+    #[test]
+    fn a_segment_goes_with_exactly_one_adjacent_separator() {
+        let apps = r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps";
+        let bin = r"C:\Program Files\PurgeFixtureApp\bin";
+        let smoke_before = format!("{apps};{bin}\0");
+        let smoke_after = format!("{apps}\0");
+        /// (type, data, segment, index asked for, index removed, data written).
+        type Case<'a> = (u32, String, &'a str, Option<u32>, u32, String);
+        let cases: Vec<Case<'_>> = [
+            (
+                REG_EXPAND_SZ,
+                smoke_before.as_str(),
+                bin,
+                Some(1),
+                1,
+                smoke_after.as_str(),
+            ),
+            // Last of two: the separator before it.
+            (REG_SZ, "A;B\0", "B", None, 1, "A\0"),
+            // First of two: the separator after it.
+            (REG_SZ, "B;A\0", "B", None, 0, "A\0"),
+            // Middle: the separator before it.
+            (REG_SZ, "A;B;C\0", "B", None, 1, "A;C\0"),
+            // Empty elements around it: only one separator goes, the empty element stays.
+            (REG_SZ, "A;;B\0", "B", None, 2, "A;\0"),
+            (REG_SZ, "A;;B;;C\0", "B", None, 2, "A;;;C\0"),
+            (REG_SZ, "B;;A\0", "B", None, 0, ";A\0"),
+            // Trailing and leading separators stay.
+            (REG_SZ, "A;B;\0", "B", None, 1, "A;\0"),
+            (REG_SZ, ";B\0", "B", None, 1, "\0"),
+            (REG_SZ, ";B;A\0", "B", None, 1, ";A\0"),
+            (REG_SZ, "B;\0", "B", None, 0, "\0"),
+            // A single segment: the value becomes empty, terminators kept.
+            (REG_EXPAND_SZ, "B\0", "B", None, 0, "\0"),
+            (REG_SZ, "B", "B", None, 0, ""),
+            // Duplicates: the one at the index, else the first; the other stays.
+            (REG_SZ, "B;A;B\0", "B", Some(2), 2, "B;A\0"),
+            (REG_SZ, "B;A;B\0", "B", None, 0, "A;B\0"),
+            (REG_SZ, "B;A;B\0", "B", Some(1), 0, "A;B\0"),
+            // Case: only the exact spelling is the segment.
+            (REG_SZ, "b;A;B\0", "B", None, 2, "b;A\0"),
+        ]
+        .into_iter()
+        .map(|(ty, data, seg, index, at, want)| {
+            (ty, data.to_owned(), seg, index, at, want.to_owned())
+        })
+        .collect();
+        for (ty, data, segment, index, want_index, want) in cases {
+            let bytes = list(&data);
+            assert_eq!(
+                remove_and_back(ty, &bytes, segment, index),
+                (want_index, list(&want)),
+                "{segment:?} from {data:?}"
+            );
+        }
+        // A spelling that differs only in case is not in the list.
+        assert_eq!(
+            remove_segment(REG_SZ, &list("a;C:\\x\0"), "c:\\X", None),
+            Err(SegmentError::SegmentAbsent)
+        );
     }
 
     /// (type, data, segment, index asked for, index removed, data written).
@@ -4976,6 +5252,14 @@ mod tests {
             ),
             ("only", REG_SZ, utf16z("only"), "only", None),
             ("unterminated", REG_SZ, utf16("a;b"), "b", None),
+            // The user PATH of the M2 smoke run: undo writes back these bytes and this type.
+            (
+                "userpath",
+                REG_EXPAND_SZ,
+                utf16z(r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Program Files\X\bin"),
+                r"C:\Program Files\X\bin",
+                Some(1),
+            ),
         ];
         for (name, ty, data, _, _) in &cases {
             s.set_value_raw(name, *ty, data).unwrap();

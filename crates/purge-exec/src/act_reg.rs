@@ -56,7 +56,7 @@
 //! | backup not written or not verified | [`BackupWriteError`]: `Skipped{NoVerifiedBackup}` |
 //! | done and verified on the handle (key deleted, value gone, value holds the written data) | `Done` |
 //! | the action ran but the verify does not see its result | `Failed{VerifyFailed}` |
-//! | a tree delete stopped and putting back the deleted keys failed | `Failed{VerifyFailed}` (mixed state) |
+//! | a tree delete stopped and putting back the deleted keys failed, or put a key back with another owner or DACL | `Failed{VerifyFailed}` (mixed state) |
 //!
 //! A tree delete that stops on a change puts the keys it already deleted back from the backup (per
 //! subtree, all or nothing) before it reports the skip.
@@ -96,7 +96,7 @@
 //! | any | the parent (key target) or the key holding the value is missing (at the undo gate, or deleted after it before anything was created) | conflict `ParentMissing` |
 //! | any | backup file missing | conflict `BackupMissing` |
 //! | any | backup file unreadable, size or SHA-256 differs, or not the op's backup | conflict `BackupTampered` |
-//! | `RestoreKeyTree`, `RecreateKey` | key absent | `Restored` (all or nothing) |
+//! | `RestoreKeyTree`, `RecreateKey` | key absent | `Restored` (all or nothing); a re-created key whose owner, group or DACL (flags included) reads back other than recorded after one correction: `Failed{VerifyFailed}` with the difference |
 //! | | key present and equal to the backup (owners aside) | `AlreadyRestored` |
 //! | | key present below `Installer`, `Services` or a COM root | conflict `KeyExists` |
 //! | | key present elsewhere, empty | merged into it: `Restored` (its own class and security kept, reported) |
@@ -406,6 +406,30 @@ fn refused(refusal: &Refusal, exec_op: &ExecOp) -> RegResult {
         }
         Blocker::ChangedSinceScan => RegResult::skipped(SkipReason::ChangedSinceScan, detail),
         blocker => RegResult::blocked(blocker.clone(), detail),
+    }
+}
+
+/// The result of a gate outcome that is not a pass, for a registry item the executor journals without an
+/// intent (`done_without_intent`), such as one the validate pass refused: `Vanished`, a refusal as the
+/// act reports it (a delete-if-empty key that holds a value or subkey is `Skipped{NoLongerEmpty}`, any
+/// other soft refusal `Skipped{ChangedSinceScan}`, a hard one `Skipped{GateBlocked{blocker}}`), or
+/// `Failed`. `None` for `Pass` and `Locked`.
+///
+/// A key that was not empty when it was validated did not change: it is simply not empty. The guard
+/// gives that the soft blocker `ChangedSinceScan` with the reason `live.g13.not-empty`, and the reason
+/// is what decides here, before the blocker.
+pub fn gate_result<T>(outcome: &GateOutcome<T>, exec_op: &ExecOp) -> Option<RegResult> {
+    match outcome {
+        GateOutcome::Pass(_) | GateOutcome::Locked(_) => None,
+        GateOutcome::Vanished => Some(RegResult::new(
+            ItemOutcome::Vanished,
+            format!("{} no longer exists", what(exec_op)),
+        )),
+        GateOutcome::Refused(refusal) => Some(refused(refusal, exec_op)),
+        GateOutcome::Failed(e) => Some(RegResult::os(
+            *e,
+            format!("opening {} failed: {e}; left untouched", what(exec_op)),
+        )),
     }
 }
 
@@ -1055,7 +1079,14 @@ fn delete_stopped(error: &DeleteError, at: &str, empty: bool) -> RegResult {
         error.failure,
         rollback_text(&error.rollback)
     );
-    if !error.rollback.is_complete() {
+    // Keys put back with another owner or DACL than they had are a change Purge made: not a skip.
+    let security_lost = match &error.rollback {
+        Rollback::Done { differences, .. } | Rollback::PartialBefore { differences, .. } => {
+            differences.iter().any(Difference::is_security)
+        }
+        Rollback::NotNeeded | Rollback::Incomplete { .. } => false,
+    };
+    if !error.rollback.is_complete() || security_lost {
         let os_error = match &error.rollback {
             Rollback::Incomplete { failure, .. } => Some(failure.error.code()),
             _ => None,
@@ -1487,6 +1518,11 @@ fn restore_result(result: Result<RestoreReport, RestoreError>, at: &str) -> RegU
                     differences_text(&report.differences)
                 )
             };
+            // A key back with another owner or DACL than recorded is not the state before the op: the
+            // restore ran, but its verify does not see what it was to put back.
+            if report.differences.iter().any(Difference::is_security) {
+                return RegUndoResult::failed(FailCode::VerifyFailed, None, detail);
+            }
             let outcome = match report.outcome {
                 RestoreOutcome::Restored => UndoOutcome::Restored,
                 RestoreOutcome::AlreadyRestored => UndoOutcome::AlreadyRestored,

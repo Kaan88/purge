@@ -15,7 +15,7 @@ use purge_exec::recover;
 use purge_exec::storage::{BackupKind, backup_rel};
 use purge_exec::undo::{LABELS_SCHEMA, UndoError, UndoLabels, UndoRequest, UndoSelection, undo};
 use purge_model::exec::journal::{Expire, UndoConflict, UndoOutcome};
-use purge_model::exec::op::{ItemOutcome, OpId};
+use purge_model::exec::op::{ItemOutcome, OpId, SkipReason};
 use purge_model::exec::session::{RetentionClass, SessionState, UndoResult};
 use purge_model::{Action, Blocker, FileTime};
 use purge_win::reg::{REG_BINARY, REG_MULTI_SZ, REG_SZ};
@@ -276,6 +276,33 @@ fn every_action_type_round_trips() {
     assert_eq!(again.report.state, SessionState::Undone);
     assert_eq!(again.labels_file, None);
     assert_eq!(rig.store_files(), store);
+    assert_eq!(k.snap(), keys_before);
+}
+
+/// Smoke run M2: a delete-if-empty key that held a foreign value already at validation is skipped as
+/// `NoLongerEmpty` (it did not change; it is not empty), and left as it is.
+#[test]
+fn a_key_with_a_value_at_validation_is_skipped_as_no_longer_empty() {
+    let mut rig = Rig::new("notempty");
+    let k = TestKey::new();
+    k.create("NotEmptyKey");
+    k.set("NotEmptyKey", "foreign", REG_SZ, &utf16z("not ours"));
+    let keys_before = k.snap();
+    let items = vec![safe(
+        "c-notempty",
+        key(&k.wire("NotEmptyKey")),
+        Action::RemoveDirIfEmpty,
+    )];
+    let done = rig.run(request(items, Vec::new()));
+    let read = rig.journal(&done.session);
+    assert_eq!(
+        outcomes(&read),
+        vec![Some(ItemOutcome::Skipped {
+            reason: SkipReason::NoLongerEmpty
+        })],
+        "{:#?}",
+        done.report
+    );
     assert_eq!(k.snap(), keys_before);
 }
 

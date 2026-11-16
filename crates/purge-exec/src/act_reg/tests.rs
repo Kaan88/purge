@@ -2349,3 +2349,151 @@ fn a_non_registry_op_is_an_internal_failure() {
     run.ctx.record(&package, &forged, 5_000).unwrap();
     assert!(internal(&run), "a package op");
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Smoke run M2
+// ---------------------------------------------------------------------------------------------------
+
+/// Smoke run M2: a delete-if-empty key that held a foreign value already when it was validated was
+/// reported `Skipped{ChangedSinceScan}`. It did not change, it is not empty: `Skipped{NoLongerEmpty}`,
+/// also for an item the validate pass refused (the executor reports it through [`gate_result`]).
+#[test]
+fn a_key_not_empty_at_validation_is_no_longer_empty_not_changed() {
+    let empty = ExecOp::DeleteKeyIfEmpty {
+        key: r"HKLM\SOFTWARE\Vendor\NotEmptyKey".into(),
+    };
+    let tree = ExecOp::DeleteKeyTree {
+        key: r"HKLM\SOFTWARE\Vendor\NotEmptyKey".into(),
+    };
+    let not_empty = GateOutcome::<()>::Refused(purge_guard::live::Refusal {
+        blocker: Blocker::ChangedSinceScan,
+        reason: purge_guard::live::reason::NOT_EMPTY,
+    });
+    let changed = GateOutcome::<()>::Refused(purge_guard::live::Refusal {
+        blocker: Blocker::ChangedSinceScan,
+        reason: gate::reason::KEY_CHANGED,
+    });
+    let link = GateOutcome::<()>::Refused(purge_guard::live::Refusal {
+        blocker: Blocker::RegLink,
+        reason: purge_guard::live::reason::KEY_IS_LINK,
+    });
+    let reason = |outcome: &GateOutcome<()>, op: &ExecOp| {
+        gate_result(outcome, op).map(|result| result.outcome)
+    };
+    let skipped = |reason| Some(ItemOutcome::Skipped { reason });
+    assert_eq!(
+        reason(&not_empty, &empty),
+        skipped(SkipReason::NoLongerEmpty)
+    );
+    assert_eq!(
+        reason(&changed, &empty),
+        skipped(SkipReason::ChangedSinceScan)
+    );
+    assert_eq!(
+        reason(&not_empty, &tree),
+        skipped(SkipReason::ChangedSinceScan)
+    );
+    assert_eq!(
+        reason(&link, &empty),
+        skipped(SkipReason::GateBlocked {
+            blocker: Blocker::RegLink
+        })
+    );
+    assert_eq!(
+        reason(&GateOutcome::<()>::Vanished, &empty),
+        Some(ItemOutcome::Vanished)
+    );
+    assert_eq!(reason(&GateOutcome::Pass(()), &empty), None);
+    assert!(matches!(
+        reason(
+            &GateOutcome::<()>::Failed(Win32Error::ACCESS_DENIED),
+            &empty
+        ),
+        Some(ItemOutcome::Failed {
+            code: FailCode::AccessDenied,
+            ..
+        })
+    ));
+}
+
+/// Smoke run M2: a restored key whose owner or DACL reads back other than recorded is not accepted as
+/// `Restored`: the undo says the verify failed and why. Differences of an existing key that was merged
+/// into keep the outcome.
+#[test]
+fn a_restore_that_could_not_put_security_back_is_not_restored() {
+    let report = |kind: DifferenceKind| RestoreReport {
+        outcome: RestoreOutcome::Restored,
+        keys_created: 2,
+        differences: vec![Difference {
+            at: "Sub1".into(),
+            kind,
+        }],
+    };
+    let owner = restore_result(
+        Ok(report(DifferenceKind::OwnerNotRestored {
+            recorded_owner: "SY".into(),
+        })),
+        "HKLM\\SOFTWARE\\Vendor",
+    );
+    match owner {
+        RegUndoResult::Done {
+            outcome:
+                UndoOutcome::Failed {
+                    code: FailCode::VerifyFailed,
+                    ..
+                },
+            detail,
+        } => assert!(detail.contains("Sub1: owner SY not restored"), "{detail}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        restore_result(Ok(report(DifferenceKind::SecurityDiffers)), "k"),
+        RegUndoResult::Done {
+            outcome: UndoOutcome::Failed {
+                code: FailCode::VerifyFailed,
+                ..
+            },
+            ..
+        }
+    ));
+    assert!(matches!(
+        restore_result(Ok(report(DifferenceKind::RootSecurityKept)), "k"),
+        RegUndoResult::Done {
+            outcome: UndoOutcome::Restored,
+            ..
+        }
+    ));
+
+    // The put-back of a stopped delete that lost security is a change, not a skip.
+    let stopped = DeleteError {
+        at: String::new(),
+        failure: DeleteFailure::Changed(Change::ValuesDiffer),
+        rollback: Rollback::Done {
+            keys: 1,
+            differences: vec![Difference {
+                at: "Sub1".into(),
+                kind: DifferenceKind::SecurityDiffers,
+            }],
+        },
+    };
+    assert!(matches!(
+        delete_stopped(&stopped, "k", false).outcome,
+        ItemOutcome::Failed {
+            code: FailCode::VerifyFailed,
+            ..
+        }
+    ));
+    let clean = DeleteError {
+        rollback: Rollback::Done {
+            keys: 1,
+            differences: Vec::new(),
+        },
+        ..stopped
+    };
+    assert_eq!(
+        delete_stopped(&clean, "k", false).outcome,
+        ItemOutcome::Skipped {
+            reason: SkipReason::ChangedSinceScan
+        }
+    );
+}

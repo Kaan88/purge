@@ -1280,8 +1280,13 @@ impl<'a> Run<'a> {
                 // The same view as the validate pass, scan-time identity included, so an item refused
                 // for its identity is reported as such again.
                 let look = gate::validate(&self.ctx, &self.gate_item(op, &exec_op));
-                match act_fs::gate_result(&look) {
-                    Some(result) => (result.outcome, result.detail),
+                let result = if exec_op.is_registry() {
+                    act_reg::gate_result(&look, &exec_op).map(|r| (r.outcome, r.detail))
+                } else {
+                    act_fs::gate_result(&look).map(|r| (r.outcome, r.detail))
+                };
+                match result {
+                    Some(result) => result,
                     None => (
                         ItemOutcome::Skipped {
                             reason: SkipReason::ChangedSinceScan,
