@@ -11,11 +11,14 @@
 # '--- setup-m2 json ---' and '--- end json ---' so the host reads it from the job log.
 # Self-contained on purpose (no riglib.ps1): rig-base holds the M0 copy of C:\cr\guest, and pushing fresh guest
 # scripts would put more into the snapshot than the two additions above.
-param([switch]$Check)
+# -NoDataDisk (host: setup-m2-base.ps1 -NoDataDisk, placeholder __NODISK__): System Restore only, no data disk and no
+# D: check. For a VM whose M2 runs never use D: (Purge-CleanPro: m2-traps and m2-fidelity; the D: stage is m2-install).
+param([switch]$Check, [switch]$NoDataDisk)
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 if ('__CHECK__' -eq '1') { $Check = $true }
+if ('__NODISK__' -eq '1') { $NoDataDisk = $true }
 
 $Mode = $(if ($Check) { 'check' } else { 'setup' })
 $OutDir = 'C:\cr\out\setup-m2'
@@ -247,13 +250,13 @@ function Get-SrState {
 
 if (-not $R.admin) { Problem 'not elevated: run this through the agent' }
 elseif (-not $Check) {
-    try { Set-DataDisk } catch { Problem "data disk setup failed: $($_.Exception.Message)" }
+    if (-not $NoDataDisk) { try { Set-DataDisk } catch { Problem "data disk setup failed: $($_.Exception.Message)" } }
     try { Set-SystemRestore } catch { Problem "System Restore setup failed: $($_.Exception.Message)" }
     if ($R.problems.Count) { Log "setup problems: $($R.problems.Count); the state check follows" }
 }
 if ($R.admin) {
     # Setup and check both end with the full state check; setup problems are kept.
-    $R.data_disk = Get-DataState
+    $R.data_disk = $(if ($NoDataDisk) { 'skipped (-NoDataDisk)' } else { Get-DataState })
     $R.system_restore = Get-SrState
 }
 $R.ok = ($R.problems.Count -eq 0)

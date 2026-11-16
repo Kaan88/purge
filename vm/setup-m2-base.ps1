@@ -16,11 +16,15 @@
   Get-ComputerRestorePoint, Checkpoint-Computer 'purge-rig-probe') -> power off -> restore m2-base (probe
   discarded) -> restore rig-base.
   The VM is left powered off with rig-base restored in both modes. Only $VmName is ever touched.
+  -NoDataDisk: no data disk is created or attached and setup-m2.ps1 skips the D: part (System Restore only). For a
+  VM whose M2 runs never use D: (Purge-CleanPro runs m2-traps and m2-fidelity; the D: stage is m2-install):
+    .\vm\setup-m2-base.ps1 -VmName Purge-CleanPro -NoDataDisk
 #>
 [CmdletBinding()]
 param(
     [string] $VmName = 'Inbound-Win11-Test',
     [switch] $VerifyOnly,
+    [switch] $NoDataDisk,
     [string] $Parent = 'rig-base',
     [string] $SnapshotName = 'm2-base',
     [string] $DataDisk = 'E:\purge-vm\inbound-m2-data.vdi',
@@ -117,7 +121,7 @@ function Add-DataDisk {
 
 # Runs guest\setup-m2.ps1 (or -Check) as an agent job. Returns {exit, json, log, done}.
 function Invoke-SetupM2([switch]$Check) {
-    $text = [IO.File]::ReadAllText((Join-Path $script:RigDir (HostPath 'guest\setup-m2.ps1'))).Replace('__CHECK__', $(if ($Check) { '1' } else { '0' }))
+    $text = [IO.File]::ReadAllText((Join-Path $script:RigDir (HostPath 'guest\setup-m2.ps1'))).Replace('__CHECK__', $(if ($Check) { '1' } else { '0' })).Replace('__NODISK__', $(if ($NoDataDisk) { '1' } else { '0' }))
     $name = $(if ($Check) { 'setup-m2-check' } else { 'setup-m2' })
     $j = Invoke-GuestJob -Text $text -Name $name -TimeoutSec 900
     Get-JobResult $j
@@ -211,7 +215,7 @@ $taken = $false
 try {
     Write-RigLog "build $SnapshotName from $Parent on $VmName"
     Restore-Snap $Parent
-    $port = Add-DataDisk
+    $port = $(if ($NoDataDisk) { -1 } else { Add-DataDisk })
     Start-VmAgent
     $set = Invoke-SetupM2
     Write-Result 'setup' $set
@@ -220,7 +224,8 @@ try {
     Write-Result 'check' $chk
     if (-not $chk.ok) { throw 'setup-m2 -Check failed (see the job log)' }
     Stop-VmClean
-    $desc = "M2 rig base (offline): $Parent + 2 GB data disk D: (NTFS, label PURGE-D, empty; $DataDisk on $Controller port $port) " +
+    $disk = $(if ($NoDataDisk) { 'no data disk (no D:, m2-install not supported)' } else { "2 GB data disk D: (NTFS, label PURGE-D, empty; $DataDisk on $Controller port $port)" })
+    $desc = "M2 rig base (offline): $Parent + $disk " +
             "+ System Restore on C: (shadow storage 10%, rig-only SystemRestorePointCreationFrequency=0). " +
             "Built by vm\setup-m2-base.ps1 / guest\setup-m2.ps1 on $(Get-Date -Format 'yyyy-MM-dd')."
     $r = Invoke-VBox @('snapshot', $script:VmName, 'take', $SnapshotName, '--description', $desc)

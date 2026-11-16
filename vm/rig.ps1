@@ -738,16 +738,31 @@ function Push-M2Install {
     Write-RigLog '  pushed install\install.ps1 to C:\cr\install'
 }
 
-# vm\truth\m2-ambient.json (RIG.md section 11.8) to C:\cr\bin\m2-ambient.json, where riglib Invoke-M2Execdiff passes
-# it as --ambient. -None (null runs) or no file: the guest copy is deleted, so execdiff runs without one.
+# Pure: the M2 ambient set of a VM (RIG.md section 11.8). Each VM has its own, derived from its own null runs
+# (Windows churn differs per build): Inbound-Win11-Test truth\m2-ambient.json, Purge-CleanPro
+# truth\m2-ambient-cleanpro.json. A VM outside the list has none (Assert-RigVm refuses it anyway).
+function Get-M2AmbientFile([string]$Name = $script:VmName) {
+    $leaf = switch -CaseSensitive ($Name) { 'Inbound-Win11-Test' { 'm2-ambient.json' } 'Purge-CleanPro' { 'm2-ambient-cleanpro.json' } default { $null } }
+    if (-not $leaf) { throw "no M2 ambient set for VM '$Name'" }
+    Join-Path $script:RigDir (HostPath "truth\$leaf")
+}
+
+# The VM's M2 ambient set (Get-M2AmbientFile) to C:\cr\bin\m2-ambient.json, where riglib Invoke-M2Execdiff passes it
+# as --ambient. -None (null runs) or no file: the guest copy is deleted, so execdiff runs without one.
 function Push-M2Ambient {
     param([switch]$None)
-    $src = Join-Path $script:RigDir (HostPath 'truth\m2-ambient.json')
+    $src = Get-M2AmbientFile
     $null = Invoke-GuestCmd 'del /f /q C:\cr\bin\m2-ambient.json'
     if ($None -or -not (Test-Path -LiteralPath $src)) { Write-RigLog "  no M2 ambient set pushed$(if (-not $None) { " ($src missing)" })"; return $false }
-    $r = Invoke-Guest @('copyto', '--target-directory', 'C:\cr\bin\', $src)
+    # Copied under the guest's fixed name, whatever the host file is called.
+    $tmp = Join-Path (Get-HostTemp) ('m2amb-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force $tmp | Out-Null
+    try {
+        Copy-Item -LiteralPath $src -Destination (Join-Path $tmp 'm2-ambient.json') -Force
+        $r = Invoke-Guest @('copyto', '--target-directory', 'C:\cr\bin\', (Join-Path $tmp 'm2-ambient.json'))
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
     if ($r.code -ne 0) { throw "copy m2-ambient.json failed: $($r.out -join ' ')" }
-    Write-RigLog '  pushed truth\m2-ambient.json to C:\cr\bin'
+    Write-RigLog "  pushed truth\$(Split-Path -Leaf $src) to C:\cr\bin\m2-ambient.json"
     $true
 }
 
@@ -995,18 +1010,19 @@ function Invoke-M2Mode {
 
 # The M2 ambient set (RIG.md section 11.8): -Count null runs of each of -Modes (run names n<k>-<mode>, each from a
 # fresh restore of -Snapshot with the same phases as the real mode up to snap A, an idle wait instead of exec, snap
-# B), then the host's rigtool `ambient --m2` over them -> vm\truth\m2-ambient.json. Returns the run records.
+# B), then the host's rigtool `ambient --m2` over them -> the VM's ambient file (Get-M2AmbientFile:
+# vm\truth\m2-ambient.json for Inbound, vm\truth\m2-ambient-cleanpro.json for Purge-CleanPro). Returns the run records.
 #   . .\vm\rig.ps1; Invoke-M2NullCampaign -Count 6 -Engine <rig-exec purge-engine.exe>
 function Invoke-M2NullCampaign {
     param([int]$Count = 6, [string[]]$Modes = @('m2-traps', 'm2-fidelity'), [string]$Snapshot = 'm2-base', [string]$Engine = '',
-          [string]$RigTool = $env:RIG_RIGTOOL, [string]$Out = (Join-Path $script:RigDir (HostPath 'truth\m2-ambient.json')))
+          [string]$RigTool = $env:RIG_RIGTOOL, [string]$Out = (Get-M2AmbientFile), [string]$RunPrefix = 'n')
     if ($Count -lt 1) { throw '-Count must be at least 1' }
     if (-not $RigTool) { $RigTool = Join-Path $script:RigDir (HostPath 'rigtool\target\release\rigtool.exe') }
     if (-not (Test-Path -LiteralPath $RigTool)) { throw "rigtool not built: $RigTool" }
     $recs = @(); $dirs = @()
     foreach ($k in 1..$Count) {
         foreach ($m in $Modes) {
-            $r = Invoke-M2Mode -Mode $m -Snapshot $Snapshot -Engine $Engine -RunPrefix "n$k-" -Null
+            $r = Invoke-M2Mode -Mode $m -Snapshot $Snapshot -Engine $Engine -RunPrefix "$RunPrefix$k-" -Null
             $recs += $r
             $d = Join-Path $script:RunsDir $r.run
             if ($r.ok -and (Test-Path -LiteralPath (Join-Path $d "snap-$($r.run)-b.tsv.gz"))) { $dirs += $d } else { Write-RigLog "!! null run $($r.run) failed: $($r.error)" }
