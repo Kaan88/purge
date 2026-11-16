@@ -894,9 +894,13 @@ key. Two rules cover them without narrowing the snapshots:
   hand-written ambient entry. The snapshot restore undoes the pause.
 - **settle wait** (since 2026-11-16): right before snap A (m2-traps, m2-fidelity, their null runs, and each app
   stage) riglib `Wait-M2BootSettle` waits until the ReadyBoot ETW session (`logman query ReadyBoot -ets`) has
-  stopped, at most `settle_max` seconds (opts, default 300), then 5 s more (run.json `results.settle.<start | app-<id>>`). The boot trace
-  grows `C:\WINDOWS\Prefetch\ReadyBoot\ReadyBoot.etl` when it stops, about two minutes after boot; inside an exec
-  window that was m2-traps collateral no null run had seen.
+  stopped, then 5 s more, then until the guest's uptime is at least `settle_min_uptime` seconds (opts, default
+  180), all within `settle_max` seconds (default 300); run.json `results.settle.<start | app-<id>>`. Timing on
+  m2-base (gate run of 2026-11-16, `readyboot-diag` and the m2-traps execdiffs): the ReadyBoot session stops
+  about 60 s after boot and deletes `C:\WINDOWS\Prefetch\ReadyBoot\ReadyBoot.etl` (a snap A taken while it ran
+  left `~F ReadyBoot.etl` as collateral); Explorer's first-run writes (`Explorer\Advanced|TaskbarStateLastRun`,
+  `Explorer\Discardable\PostSetup\Component Categories64\...\Enum|Implementing`) landed at uptime ~71 s, in the
+  exec window of a run whose snap A came at 67 s. The 180 s floor puts both well before snap A.
 - **engine-rp** (allowed side effect): keys and values at or under
   `HKLM\SYSTEM\<CurrentControlSet|ControlSetNNN>\Services\VSS\Diag` that changed or were added, which the Volume
   Shadow Copy service writes when the engine creates its restore point in the exec window. A removal there is
@@ -922,7 +926,9 @@ The set is tied to m2-base and the rig's timing; regenerate it when m2-base is r
 rebuilt in the gate run of 2026-11-16, the first with the telemetry pause before snap A, from 12 null runs of each
 mode (`n1-` to `n12-`). None of them saw `~F C:\WINDOWS\Prefetch\ReadyBoot\ReadyBoot.etl` (the boot trace,
 4 MB -> 20 MB about two minutes after boot), which one of the gate run's two m2-traps runs left as its only
-collateral record; a settle wait before snap A (boot trace finished) would take it out of the window. The real-app stage (`app`) has no null analog: its exec window follows an install, launch and
+collateral record. Rebuilt again the same day after the settle wait with its 180 s uptime floor (the null runs
+take the same settle): `Invoke-M2NullCampaign -Count 6`, union 260 records and 28 patterns (456 and 67 before
+the floor: a later, quieter window). The real-app stage (`app`) has no null analog: its exec window follows an install, launch and
 uninstall, and the first gate run's npp round showed 20 records of shell churn there (AppModel HAM `LU`, bam
 UserSettings, VolatileNotifications, WER TermReason) that the repeat run did not. Collateral that remains
 after it is either churn the null runs did not see (add null runs) or a real finding: the execdiff report lists

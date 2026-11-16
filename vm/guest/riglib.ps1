@@ -630,12 +630,14 @@ function Suspend-M2Telemetry {
 
 # M2 settle wait (RIG.md §11.8), right before snap A of every exec-run job (null runs included): waits until the
 # ReadyBoot ETW session (`logman query ReadyBoot -ets`) has stopped, or $MaxSec, whichever comes first, then
-# $AfterSec more for the trace file to be written. The boot trace grows C:\WINDOWS\Prefetch\ReadyBoot\ReadyBoot.etl
-# (4 MB -> 20 MB) when it stops, about two minutes after boot; inside an exec window that was m2-traps collateral
-# in the gate run of 2026-11-16. Never throws; returns the record for run.json `settle`.
-function Wait-M2BootSettle([int]$MaxSec = 300, [int]$AfterSec = 5, [int]$PollSec = 3) {
+# $AfterSec more for the trace file to be written, then until the uptime is at least $MinUptimeSec (all within
+# $MaxSec). On m2-base the trace stops about 60 s after boot (ReadyBoot.etl deleted); written while it ran, it was
+# m2-traps collateral in the gate run of 2026-11-16, and so were Explorer's first-run writes at uptime ~71 s, hence
+# the 180 s floor. Never throws; returns the record for run.json `results.settle`.
+function Wait-M2BootSettle([int]$MaxSec = 300, [int]$AfterSec = 5, [int]$PollSec = 3, [int]$MinUptimeSec = 180) {
     $t0 = Get-Date
-    $rec = [ordered]@{ session = 'ReadyBoot'; active_at_start = $null; first_query = $null; stopped = $false; bounded = $false; waited_sec = $null; uptime_sec = $null; error = $null }
+    $rec = [ordered]@{ session = 'ReadyBoot'; active_at_start = $null; first_query = $null; stopped = $false; bounded = $false; min_uptime_sec = $MinUptimeSec
+        floor_wait_sec = 0; waited_sec = $null; uptime_sec = $null; error = $null }
     try {
         $logman = Join-Path $env:SystemRoot 'System32\logman.exe'
         while ($true) {
@@ -650,10 +652,20 @@ function Wait-M2BootSettle([int]$MaxSec = 300, [int]$AfterSec = 5, [int]$PollSec
             Start-Sleep -Seconds $PollSec
         }
         if ($rec.stopped -and $rec.active_at_start) { Start-Sleep -Seconds $AfterSec }
-        $rec.uptime_sec = [int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds
+        # Uptime floor: the shell's first-run writes after logon come later than the trace stop (Explorer
+        # TaskbarStateLastRun and Component Categories64 at uptime ~71 s in the gate run of 2026-11-16).
+        $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+        $up = ((Get-Date) - $boot).TotalSeconds
+        if ($up -lt $MinUptimeSec) {
+            $wait = [math]::Min($MinUptimeSec - $up, [math]::Max(0, $MaxSec - ((Get-Date) - $t0).TotalSeconds))
+            if ($wait -lt $MinUptimeSec - $up) { $rec.bounded = $true }
+            $rec.floor_wait_sec = [math]::Round($wait, 1)
+            Start-Sleep -Milliseconds ([int]($wait * 1000))
+        }
+        $rec.uptime_sec = [int]((Get-Date) - $boot).TotalSeconds
     } catch { $rec.error = $_.Exception.Message }
     $rec.waited_sec = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
-    Log "settle: ReadyBoot session $(if ($rec.active_at_start) { 'was active' } else { 'not active' }); $(if ($rec.bounded) { "still active after the $MaxSec s bound" } else { 'stopped' }); waited $($rec.waited_sec) s; uptime $($rec.uptime_sec) s$(if ($rec.error) { ' !! ' + $rec.error })"
+    Log "settle: ReadyBoot session $(if ($rec.active_at_start) { 'was active' } else { 'not active' }); $(if ($rec.bounded) { "bound of $MaxSec s reached" } else { 'stopped' }); uptime floor $MinUptimeSec s (waited $($rec.floor_wait_sec) s for it); waited $($rec.waited_sec) s; uptime $($rec.uptime_sec) s$(if ($rec.error) { ' !! ' + $rec.error })"
     $rec
 }
 

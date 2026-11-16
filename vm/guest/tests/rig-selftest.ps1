@@ -996,7 +996,7 @@ function Ev([string]$s) { [IO.File]::AppendAllText($script:FakeEv, $s + "`r`n") 
 function Start-Sleep { }
 function Suspend-EdgeUpdate { Ev 'edge-pause'; [ordered]@{ method = 'fake' } }
 function Suspend-M2Telemetry { Ev 'telemetry-pause'; [ordered]@{ service = 'DiagTrack'; after = 'Stopped' } }
-function Wait-M2BootSettle([int]$MaxSec = 300, [int]$AfterSec = 5, [int]$PollSec = 3) { Ev "settle:$MaxSec"; [ordered]@{ session = 'ReadyBoot'; stopped = $true; bounded = $false } }
+function Wait-M2BootSettle([int]$MaxSec = 300, [int]$AfterSec = 5, [int]$PollSec = 3, [int]$MinUptimeSec = 180) { Ev "settle:${MaxSec}:${MinUptimeSec}"; [ordered]@{ session = 'ReadyBoot'; stopped = $true; bounded = $false } }
 function LaunchMedium([string]$Exe, [string]$Arguments = '', [string]$WorkDir = '', [string]$TaskName = 'PurgeRigLaunch', [int]$StartTimeoutSec = 30) { Ev "medium:$Arguments"; [pscustomobject]@{ task = $TaskName; pid = 4000001; found = $true } }
 function Stop-Launch($Launch, [int]$GraceSec = 5) { [pscustomobject]@{ closed = @(); killed = @() } }
 function Start-Native([string]$Exe, [string]$Arguments = '', [string]$WorkDir = '') {
@@ -1187,7 +1187,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'null run: ok, no exec / undo / execdiff, snap A and B taken, no app stage' ($rec.ok -and -not (Failed $j) -and -not @($j.engine.calls | Where-Object { $_.step -match '^(exec|undo)-' }).Count -and -not @($ev -match '^execdiff:').Count -and @($ev -match '^snap:snap-n1-m2-fidelity-[ab]\.tsv\.gz$').Count -eq 2 -and -not @($rec.after | Where-Object { $_ }).Count -and $j.null_run.null -eq $true) "error=$($rec.error) $(Failed $j) $(($ev -match '^(snap|engine)') -join ' | ')"
     Check 'null run: the guest ambient copy is deleted, none pushed' (($script:M2Guest -contains 'cmd del /f /q C:\cr\bin\m2-ambient.json') -and -not @($script:M2Guest -match 'copyto .*m2-ambient').Count)
     Check 'null run: DiagTrack paused before snap A, like a real run' (@($ev -match '^telemetry-pause$').Count -eq 1 -and [array]::IndexOf($ev, 'telemetry-pause') -lt [array]::IndexOf($ev, 'snap:snap-n1-m2-fidelity-a.tsv.gz') -and $j.telemetry_pause.after -eq 'Stopped') (($ev | Select-Object -First 8) -join ' | ')
-    Check 'null run: the boot settle wait runs right before snap A, like a real run' (@($ev -match '^settle:').Count -eq 1 -and [array]::IndexOf($ev, 'settle:300') -eq [array]::IndexOf($ev, 'snap:snap-n1-m2-fidelity-a.tsv.gz') - 1 -and $j.results.settle.start.stopped -eq $true) (($ev | Select-Object -First 12) -join ' | ')
+    Check 'null run: the boot settle wait runs right before snap A, like a real run' (@($ev -match '^settle:').Count -eq 1 -and [array]::IndexOf($ev, 'settle:300:180') -eq [array]::IndexOf($ev, 'snap:snap-n1-m2-fidelity-a.tsv.gz') - 1 -and $j.results.settle.start.stopped -eq $true) (($ev | Select-Object -First 12) -join ' | ')
     $m = $null; try { $null = Invoke-M2Mode -Mode 'm2-install' -Null } catch { $m = $_.Exception.Message }
     Check 'null run: refused for a mode other than m2-traps / m2-fidelity' ($m -match 'm2-traps / m2-fidelity only') $m
 
