@@ -82,6 +82,8 @@
 //! - [`undo_locked`] says how to undo a lock op; a pending boot move is undone by removing **our exact
 //!   pair only** ([`remove_boot_move`], under an undo token).
 //! - [`pending_after_crash`] tells recovery whether an intent-only op left a registered pair.
+//! - [`listed_before_move_back`] says, before the ordinary move back of a quarantine move that failed
+//!   or has no `done`, whether its pair is still listed: taken back first, or a conflict.
 //!
 //! # The boot-time move list
 //!
@@ -1448,6 +1450,66 @@ pub fn undo_locked(op: &OpState, store: &dyn PendingRenames) -> Option<LockUndo>
             },
             Ok(_) => LockUndo::RemovePair(PairRemoval { op: op.op, pair }),
         }),
+    }
+}
+
+/// The boot-time move a quarantine move may still have registered when its undo is the ordinary move
+/// back (review M2 M7): an op whose `done` is a failure (recovery journals `Failed{VerifyFailed}` when
+/// its probe could not tell whether a restart still moves the item) or that has no `done`. A pair left
+/// in the list would move the restored item into quarantine again at the next restart while the
+/// journal says it is back. Read-only; ops of any other kind or outcome are `None`, and so is a lock
+/// op, whose undo is [`undo_locked`]'s.
+///
+/// - `None`: our pair is not listed; the move back runs as usual.
+/// - [`LockUndo::RemovePair`]: our pair stands in the list once. Take it back with
+///   [`remove_boot_move`] under the op's undo token first; the move back runs only when that ends
+///   `Restored` or `AlreadyRestored`, so the op is never settled while the pair is listed.
+/// - [`LockUndo::Conflict`] (`GateBlocked{DenyListed{`[`reason::BOOT_MOVE_INDETERMINATE`]`}}`, which
+///   does not settle the op): the list cannot be read or holds our pair more than once. Nothing is
+///   moved; the detail names the pair.
+pub fn listed_before_move_back(op: &OpState, store: &dyn PendingRenames) -> Option<LockUndo> {
+    if !matches!(op.outcome, None | Some(ItemOutcome::Failed { .. })) {
+        return None;
+    }
+    let intent = op.intent.as_ref()?;
+    let (
+        ExecOp::QuarantineMove { .. },
+        Inverse::MoveBack {
+            quarantine_path,
+            original_path,
+            ..
+        },
+    ) = (&intent.exec_op, &intent.inverse)
+    else {
+        return None;
+    };
+    let expected = expected_pair(original_path, quarantine_path).ok()?;
+    let conflict = |detail: String| LockUndo::Conflict {
+        conflict: UndoConflict::GateBlocked {
+            blocker: Blocker::DenyListed {
+                rule: reason::BOOT_MOVE_INDETERMINATE.to_owned(),
+            },
+        },
+        detail,
+    };
+    let named = format!("{} -> {}", expected.src, expected.dst);
+    match store.list().map(|list| occurrences(&list, &expected)) {
+        Err(e) => Some(conflict(format!(
+            "the boot-time move list cannot be read ({e}); whether the boot-time move {named} is \
+             still registered cannot be told, so the item is not put back"
+        ))),
+        Ok(listed) => match listed.as_slice() {
+            [] => None,
+            [stored] => Some(LockUndo::RemovePair(PairRemoval {
+                op: op.op,
+                pair: model_pair(stored),
+            })),
+            many => Some(conflict(format!(
+                "the boot-time move {named} stands {} times in the list; Purge added it once, so \
+                 nothing is removed and the item is not put back",
+                many.len()
+            ))),
+        },
     }
 }
 

@@ -323,6 +323,10 @@ pub struct Done {
     pub item: CandidateId,
     /// The outcome.
     pub outcome: ItemOutcome,
+    /// Why a skipped item was skipped, as the report says it (for example the step that could not
+    /// make a backup location, with its error); may be empty. Absent in journals written before it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
 }
 
 /// The end of a group of intents; the journal is flushed after it.

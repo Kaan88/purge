@@ -118,7 +118,8 @@ use crate::prepare::{
 use crate::recover::{Probe, SettledOp};
 use crate::report::{self, DataVolume, RunNotes};
 use crate::storage::{
-    SCAN_FILE, SessionDir, StorageError, StorageRoots, VOLUME_QUARANTINE_DIR, cap_bytes, now,
+    QuarantineDir, SCAN_FILE, SessionDir, StorageError, StorageRoots, VOLUME_QUARANTINE_DIR,
+    cap_bytes, now,
 };
 
 #[cfg(test)]
@@ -567,10 +568,18 @@ struct Ledger {
 }
 
 impl Ledger {
-    fn note(&mut self, op: OpId, outcome: &ItemOutcome, detail: String) {
+    /// Keeps `detail` for the report, and returns what the `done` record carries: the detail of a
+    /// skipped item (why it was left untouched, e.g. the step that could not make a backup location),
+    /// empty for every other outcome.
+    fn note(&mut self, op: OpId, outcome: &ItemOutcome, detail: String) -> String {
+        let journalled = match outcome {
+            ItemOutcome::Skipped { .. } => detail.clone(),
+            _ => String::new(),
+        };
         if !detail.is_empty() && !outcome.is_success() {
             self.notes.details.insert(op, detail);
         }
+        journalled
     }
 
     /// Writes and flushes an intent; the token proves it durable.
@@ -585,9 +594,9 @@ impl Ledger {
         outcome: ItemOutcome,
         detail: String,
     ) -> Result<ItemOutcome, Abort> {
-        self.note(token.op(), &outcome, detail);
+        let detail = self.note(token.op(), &outcome, detail);
         self.journal
-            .done(token, outcome.clone())
+            .done_noted(token, outcome.clone(), detail)
             .map_err(Abort::journal)?;
         Ok(outcome)
     }
@@ -609,9 +618,9 @@ impl Ledger {
                 detail: "an outcome that needs an intent was decided without one".into(),
             }
         };
-        self.note(op, &outcome, detail);
+        let detail = self.note(op, &outcome, detail);
         self.journal
-            .done_without_intent(op, outcome.clone())
+            .done_without_intent_noted(op, outcome.clone(), detail)
             .map_err(Abort::journal)?;
         Ok(outcome)
     }
@@ -1356,10 +1365,14 @@ impl<'a> Run<'a> {
     }
 
     /// The quarantine path of an item found locked: the one its intent recorded, or `<op dir>\<leaf>`
-    /// in an op directory made now for an item locked before any intent.
-    fn locked_destination(&self, locked: &act_fs::LockedItem) -> Result<String, StorageError> {
+    /// in an op directory made now for an item locked before any intent, which is returned too, so
+    /// that a ladder that decides without acting takes it away again (review M2 M5).
+    fn locked_destination(
+        &self,
+        locked: &act_fs::LockedItem,
+    ) -> Result<(String, Option<QuarantineDir>), StorageError> {
         if let Some(path) = &locked.quarantine_path {
-            return Ok(path.clone());
+            return Ok((path.clone(), None));
         }
         let source = Path::new(&locked.path);
         let leaf = source
@@ -1370,7 +1383,10 @@ impl<'a> Run<'a> {
         // An empty op directory left by a run that stopped before this op's intent is adopted, as the
         // file action adopts one (review M2 M5); a directory that holds something still refuses.
         let dir = act_fs::create_op_dir_for(&self.session, source, serial, locked.op)?;
-        Ok(dir.item_path(&leaf).to_string_lossy().into_owned())
+        Ok((
+            dir.item_path(&leaf).to_string_lossy().into_owned(),
+            Some(dir),
+        ))
     }
 
     /// The locked-file ladder for an item that stayed locked after its retries. `held` is the intent
@@ -1385,8 +1401,8 @@ impl<'a> Run<'a> {
             Some((intent, token)) => (Some(intent), Some(token)),
             None => (None, None),
         };
-        let destination = match self.locked_destination(&locked) {
-            Ok(path) => path,
+        let (destination, made) = match self.locked_destination(&locked) {
+            Ok(made) => made,
             Err(StorageError::CannotBackUp { reason, .. }) => {
                 let outcome = ItemOutcome::Skipped {
                     reason: SkipReason::GateBlocked {
@@ -1397,8 +1413,15 @@ impl<'a> Run<'a> {
             }
             Err(e) => return Err(Abort::store(&e)),
         };
+        // The op directory made for the ladder goes again, while empty, when nothing is acted on.
+        let discard = |made: Option<QuarantineDir>| {
+            if let Some(dir) = made {
+                act_fs::remove_empty_op_dir(dir);
+            }
+        };
         let Some(item) = locked::LockedItem::from_gate(&self.ctx, op, &locked.locked, destination)
         else {
+            discard(made);
             let (outcome, detail) = internal("a locked item without journalled file facts");
             return self.ledger.end(op, token, outcome, detail);
         };
@@ -1409,10 +1432,12 @@ impl<'a> Run<'a> {
         };
         let result = match ladder.prepare(&item, journalled.as_ref()) {
             LockPrepared::Decided(result) => {
+                discard(made);
                 Self::note_lockers(&mut self.ledger, op, &result);
                 return self.ledger.end(op, token, result.outcome, result.detail);
             }
             LockPrepared::Ready(action) => {
+                drop(made);
                 let token = match (token, action.intent_to_write()) {
                     (Some(token), _) => token,
                     (None, Some(intent)) => self.ledger.intent(intent.clone())?,

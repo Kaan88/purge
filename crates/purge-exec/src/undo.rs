@@ -42,6 +42,7 @@
 //! | boot-time move still registered | the pair is taken back ([`locked::remove_boot_move`]) |
 //! | boot-time move, state cannot be told | `Failed{VerifyFailed}`, to be tried again |
 //! | reconcile left it needing attention | the conflict of [`locked::undo_locked`] |
+//! | quarantine move that failed or has no `done`, its boot-time move still listed | the pair is taken back first; listed more than once or unreadable: a conflict ([`locked::listed_before_move_back`]) |
 //! | file op | [`act_fs::plan_undo_fs`], [`act_fs::undo_fs`] |
 //! | registry op | [`act_reg::prepare_undo_reg`] (which reads the backup hash-checked), [`act_reg::run_undo_reg`] |
 //! | package removal | [`act_typed::undo_typed`]: an `Irreversible` record, not an error |
@@ -806,6 +807,27 @@ impl Driver<'_> {
                         );
                     }
                     None => {}
+                }
+                // A boot-time move the op may have left registered is taken back before the item is
+                // put back, and an op whose pair cannot be told stays unsettled (review M2 M7).
+                match locked::listed_before_move_back(op, &*self.pending) {
+                    Some(LockUndo::RemovePair(removal)) => {
+                        match locked::remove_boot_move(removal, step.token()?, &mut *self.pending) {
+                            UndoOutcome::Restored | UndoOutcome::AlreadyRestored => {}
+                            outcome => {
+                                return step.done(
+                                    outcome,
+                                    "the registered boot-time move could not be taken back; the \
+                                     item was not put back"
+                                        .to_owned(),
+                                );
+                            }
+                        }
+                    }
+                    Some(LockUndo::Conflict { conflict, detail }) => {
+                        return step.conflict(conflict, detail);
+                    }
+                    Some(LockUndo::Done(_) | LockUndo::ReconcileFirst { .. }) | None => {}
                 }
                 let done = effective_outcome(op);
                 match act_fs::plan_undo_fs(intent, done.as_ref()) {

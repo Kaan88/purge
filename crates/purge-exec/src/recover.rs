@@ -67,7 +67,7 @@
 //! | no journal; validation incomplete | nothing was acted on: removes the directory, or writes `aborted` (`RolledBack`); nothing to undo |
 //! | an open intent, probe `Done` | writes the missing `done` |
 //! | an open intent, probe `NotDone` | writes `done` `Skipped{NotAttempted}`: the action did not run and will not |
-//! | an open intent, probe `Partial` or `Attention` | writes `done` `Failed{VerifyFailed}`; its undo then runs in the completing form (a key tree is completed from its backup, a move back looks where the item is) |
+//! | an open intent, probe `Partial` or `Attention` | writes `done` `Failed{VerifyFailed}`; its undo then runs in the completing form (a key tree is completed from its backup, a move back looks where the item is, after taking back the op's boot-time move when it is listed once; while it is listed more than once or the list cannot be read, the undo is a conflict naming the pair: [`locked::listed_before_move_back`]) |
 //! | every op with an intent | undone in reverse order by the undo driver ([`crate::undo`]) |
 //! | the end | `aborted` (`RolledBack`), index entry and report through [`Run::abort`] |
 //! | finished session | as resume: an interrupted undo or retry is finished, a missing report written, the index entry brought up to date |

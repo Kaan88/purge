@@ -63,6 +63,7 @@ fn done(op: u32, outcome: ItemOutcome) -> Record {
         op: OpId(op),
         item: item(op),
         outcome,
+        detail: String::new(),
     })
 }
 

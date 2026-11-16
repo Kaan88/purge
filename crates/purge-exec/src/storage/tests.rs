@@ -499,45 +499,45 @@ fn volume_quarantine_is_created_hidden_and_a_precreated_one_is_never_adopted() {
         }
     };
 
-    // Pre-created by someone else: an ordinary directory, inheriting its parent's DACL.
+    // Pre-created by someone else and held open without delete sharing: it cannot be renamed aside,
+    // so the volume is refused, with the step and the Win32 error.
     std::fs::create_dir(&purge_q).unwrap();
     std::fs::write(purge_q.join("planted.txt"), b"x").unwrap();
-    let inner = inner_error(&session.create_op_dir(&source, serial, OpId(1)).unwrap_err());
+    let held = open_dir_without_delete_sharing(&purge_q);
+    let err = session.create_op_dir(&source, serial, OpId(1)).unwrap_err();
+    let inner = inner_error(&err);
     let StorageError::Integrity {
         failure,
-        renamed_to: Some(to),
+        renamed_to: None,
+        rename_error: Some(rename_error),
         ..
     } = &inner
     else {
         panic!("{inner}");
     };
     assert_eq!(failure, &IntegrityFailure::UnprotectedDacl);
-    assert_eq!(names(to), ["planted.txt"]);
-    assert!(!purge_q.exists());
-
-    // A planted junction is refused the same way.
-    let canary = Canary::new(s.path("elsewhere"));
-    junction(&purge_q, &canary.0);
-    let inner = inner_error(&session.create_op_dir(&source, serial, OpId(1)).unwrap_err());
-    assert_renamed_reparse(&inner, &purge_q);
-    canary.intact();
-
-    // The next use creates its own: hidden, system, not indexed.
-    let op = session.create_op_dir(&source, serial, OpId(1)).unwrap();
-    assert_eq!(
-        op.root(),
-        &QuarantineRoot::Volume {
-            root: s.path("volb")
-        }
+    assert_eq!(*rename_error, FsError::SharingViolation);
+    let text = err.to_string();
+    assert!(
+        text.contains("renaming it aside failed") && text.contains("Win32 error 32"),
+        "{text}"
     );
+    drop(held);
+    assert_eq!(names(&purge_q), ["planted.txt"]);
+
+    // Once it can be renamed: never adopted, renamed aside with its content, and the store makes its
+    // own in its place in the same use.
+    let op = session.create_op_dir(&source, serial, OpId(1)).unwrap();
+    let aside: Vec<String> = names(&s.path("volb"))
+        .into_iter()
+        .filter(|n| n.starts_with(".purge-q.rejected-"))
+        .collect();
+    assert_eq!(aside.len(), 1, "{aside:?}");
+    assert_eq!(names(&s.path("volb").join(&aside[0])), ["planted.txt"]);
+    assert_eq!(names(&purge_q), [session.id().as_str()]);
     assert_eq!(
         op.path(),
         purge_q.join(session.id().as_str()).join("000001")
-    );
-    let attrs = purge_win::fs::metadata(&purge_q).unwrap().attributes;
-    assert_eq!(
-        attrs & VOLUME_QUARANTINE_ATTRIBUTES,
-        VOLUME_QUARANTINE_ATTRIBUTES
     );
     let item = op.item_path("a.txt");
     drop(op);
@@ -562,6 +562,60 @@ fn volume_quarantine_is_created_hidden_and_a_precreated_one_is_never_adopted() {
             root: s.path("volb")
         }
     );
+}
+
+/// A handle on the directory `path` that shares read and write but not delete.
+fn open_dir_without_delete_sharing(path: &Path) -> File {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x1 | 0x2)
+        .custom_flags(0x0200_0000)
+        .open(path)
+        .unwrap()
+}
+
+#[test]
+fn a_planted_volume_quarantine_junction_is_renamed_aside_and_replaced() {
+    let (s, roots) = fixture("purgeqj");
+    let session = roots.create_session().unwrap();
+    let serial = real_serial(&s.0);
+    let purge_q = s.path(r"volb\.purge-q");
+    let source = s.path(r"volb\app\a.txt");
+    let canary = Canary::new(s.path("elsewhere"));
+    junction(&purge_q, &canary.0);
+
+    // The junction is moved aside as a link and a fresh `.purge-q` takes its name: hidden, system,
+    // not indexed, nothing written through the link.
+    let op = session.create_op_dir(&source, serial, OpId(1)).unwrap();
+    assert_eq!(
+        op.root(),
+        &QuarantineRoot::Volume {
+            root: s.path("volb")
+        }
+    );
+    assert_eq!(
+        op.path(),
+        purge_q.join(session.id().as_str()).join("000001")
+    );
+    let attrs = purge_win::fs::metadata(&purge_q).unwrap().attributes;
+    assert_eq!(
+        attrs & VOLUME_QUARANTINE_ATTRIBUTES,
+        VOLUME_QUARANTINE_ATTRIBUTES
+    );
+    assert_eq!(purge_win::fs::metadata(&purge_q).unwrap().reparse_tag, 0);
+    canary.intact();
+    let aside: Vec<PathBuf> = names(&s.path("volb"))
+        .into_iter()
+        .filter(|n| n.starts_with(".purge-q.rejected-"))
+        .map(|n| s.path("volb").join(n))
+        .collect();
+    assert_eq!(aside.len(), 1, "{aside:?}");
+    assert_ne!(purge_win::fs::metadata(&aside[0]).unwrap().reparse_tag, 0);
+    // Opening it for undo finds the store's own.
+    let item = op.item_path("a.txt");
+    drop(op);
+    session.open_op_dir(&item, OpId(1), serial).unwrap();
 }
 
 #[test]

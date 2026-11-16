@@ -1453,6 +1453,72 @@ fn an_item_over_the_volume_budget_is_skipped_and_the_rest_run() {
     assert!(exists(&big) && !exists(&small));
 }
 
+/// The system's volume facts, except that reading the volume of a path below `failing` is refused.
+#[derive(Debug)]
+struct VolumeUnreadableBelow {
+    failing: String,
+}
+
+impl crate::storage::VolumeProbe for VolumeUnreadableBelow {
+    fn volume(
+        &self,
+        path: &Path,
+    ) -> Result<crate::storage::VolumeFacts, purge_win::fs_write::FsError> {
+        let text = path.to_string_lossy();
+        let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+        if purge_guard::prefix::is_same_or_inside(text, &self.failing) {
+            return Err(purge_win::fs_write::FsError::AccessDenied);
+        }
+        crate::storage::VolumeProbe::volume(&crate::storage::SystemVolumes, path)
+    }
+}
+
+#[test]
+fn an_item_without_a_backup_location_says_why_in_the_journal_and_the_report() {
+    let s = Scratch::new("nolocation");
+    let f = s.file(r"src\a.txt", b"stays");
+    let roots = StorageRoots::install_relaxed(Path::new(&s.path("data")))
+        .unwrap()
+        .with_volume_probe(std::sync::Arc::new(VolumeUnreadableBelow {
+            failing: s.path("src"),
+        }));
+    let mut rig = Rig::with(s, roots);
+    let output = rig.run(preselected(vec![quarantine("c-1", &f)], Vec::new()));
+    assert_eq!(
+        output.report.items[0].outcome,
+        ItemOutcome::Skipped {
+            reason: SkipReason::GateBlocked {
+                blocker: Blocker::CannotBackUp
+            }
+        }
+    );
+    assert!(exists(&f));
+    // The journal's done record names the failed step and the Win32 error; the report says the same.
+    let read = rig.journal(&output.report.session);
+    let details: Vec<&str> = read
+        .records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Done(done) => Some(done.detail.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(details.len(), 1);
+    assert!(
+        details[0].contains("read the volume of") && details[0].contains("Win32 error 5"),
+        "{details:?}"
+    );
+    assert!(
+        output
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.contains(details[0])),
+        "{:?}",
+        output.report.warnings
+    );
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Resume
 // ---------------------------------------------------------------------------------------------------
@@ -2100,6 +2166,66 @@ fn a_locked_item_adopts_the_empty_op_directory_of_an_interrupted_run() {
     let output = run.finish();
     assert_eq!(output.report.state, SessionState::Committed);
     assert!(output.closed);
+    drop(handle);
+    assert_eq!(std::fs::read(ext(&locked)).unwrap(), b"in use");
+}
+
+/// Review M2 M5: a ladder that decides without acting takes the op directory made for it away again
+/// at once, while it is empty; one the ladder acts on stays.
+#[test]
+fn a_locked_item_decided_without_acting_leaves_no_op_directory() {
+    let mut rig = Rig::new("lock-decided");
+    let locked = rig.s.file(r"app\busy.dll", b"in use");
+    let request = preselected(vec![quarantine("c-1", &locked)], Vec::new());
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    run.validate().unwrap();
+    let op_dir = run
+        .env
+        .roots
+        .quarantine_path()
+        .join(run.session().id().as_str())
+        .join(OpId(1).file_stem());
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(ext(&locked))
+        .unwrap();
+    let prepared = prepare_fs(&run.ctx, &run.session, OpId(1), &run.env.retry).unwrap();
+    let FsPrepared::Locked(mut item) = prepared else {
+        panic!("{prepared:?}");
+    };
+    // The same item, but an open error that does not mean "in use": the ladder decides at once.
+    item.locked.error = Win32Error(5);
+    let outcome = run.locked_item(*item, None).unwrap();
+    assert!(
+        matches!(
+            outcome,
+            ItemOutcome::Failed {
+                code: FailCode::AccessDenied,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert!(!op_dir.exists(), "{}", op_dir.display());
+    drop(run);
+
+    // A held item keeps its op directory: the intent records the quarantine path in it.
+    let request = preselected(vec![quarantine("c-1", &locked)], Vec::new());
+    let mut run = Run::start(request, rig.env(None)).unwrap();
+    run.validate().unwrap();
+    let op_dir = run
+        .env
+        .roots
+        .quarantine_path()
+        .join(run.session().id().as_str())
+        .join(OpId(1).file_stem());
+    assert_eq!(
+        run.run_item(OpId(1)).unwrap(),
+        ItemStep::Finished(ItemOutcome::HeldRetry)
+    );
+    assert!(op_dir.is_dir());
+    drop(run);
     drop(handle);
     assert_eq!(std::fs::read(ext(&locked)).unwrap(), b"in use");
 }
@@ -2979,4 +3105,110 @@ fn an_indeterminate_boot_move_at_undo_is_a_conflict_of_its_own() {
     assert!(!op.undo.is_settled());
     assert_eq!(read.state.undo_plan(), Some(&[OpId(1)][..]));
     assert!(read.state.undo_unfinished().is_empty());
+}
+
+/// Review M2 M7: a rollback whose probe found the op's boot-time move listed twice (`Attention`) ends
+/// the op `Failed{VerifyFailed}`; its undo then does not say `AlreadyRestored` while the pair is
+/// listed, but a conflict naming the pair, and nothing is removed. A later undo that finds the pair
+/// once takes exactly that pair back before the op settles.
+#[test]
+fn a_move_back_never_settles_while_its_boot_move_is_listed() {
+    let mut rig = Rig::new("undo-listed");
+    let file = rig.s.file(r"app\boot.dll", b"b");
+    let request = preselected(vec![quarantine("c-boot", &file)], Vec::new());
+    let (id, intent) = crash_after_the_first_intent(&mut rig, request);
+    let Inverse::MoveBack {
+        quarantine_path,
+        original_path,
+        ..
+    } = &intent.inverse
+    else {
+        panic!("{intent:?}");
+    };
+    let pair =
+        purge_win::fs_write::pending_pair(Path::new(original_path), Path::new(quarantine_path))
+            .unwrap();
+    let foreign = (r"\??\C:\Other\a.tmp", r"\??\C:\Other\b.tmp");
+    let ours = (pair.src.as_str(), pair.dst.as_str());
+    rig.pending = MemoryPendingRenames::with_pairs(&[ours, foreign, ours]);
+    let before = rig.pending.bytes().to_vec();
+
+    let out = crate::recover::rollback(&id, rig.recover_env()).unwrap();
+    assert!(
+        matches!(
+            out.settled[0].outcome,
+            ItemOutcome::Failed {
+                code: FailCode::VerifyFailed,
+                ..
+            }
+        ),
+        "{out:#?}"
+    );
+    let [item] = out.undone.as_slice() else {
+        panic!("{out:#?}");
+    };
+    let indeterminate = UndoConflict::GateBlocked {
+        blocker: Blocker::DenyListed {
+            rule: locked::reason::BOOT_MOVE_INDETERMINATE.to_owned(),
+        },
+    };
+    let purge_model::exec::session::UndoResult::Conflict { conflict, detail } = &item.result else {
+        panic!("{item:#?}");
+    };
+    assert_eq!(conflict, &indeterminate);
+    assert!(
+        detail.contains(&pair.src) && detail.contains("2 times"),
+        "{detail}"
+    );
+    assert_eq!(rig.pending.bytes(), before.as_slice());
+    assert_eq!(rig.pending.removals, 0);
+    assert!(
+        !rig.journal(&id)
+            .state
+            .op(OpId(1))
+            .unwrap()
+            .undo
+            .is_settled()
+    );
+    assert_eq!(std::fs::read(ext(&file)).unwrap(), b"b");
+
+    // The list holds the pair once now: the undo takes exactly it back, the foreign pair stays.
+    rig.pending = MemoryPendingRenames::with_pairs(&[foreign, ours]);
+    let request = crate::undo::UndoRequest {
+        session: id.clone(),
+        selection: crate::undo::UndoSelection::All,
+        plan_hash: None,
+    };
+    let env = crate::undo::UndoEnv {
+        retry: Retry::with(RETRY_DELAYS.to_vec(), |_| {}),
+        ..crate::undo::UndoEnv::new(&rig.roots, &rig.deny, &mut rig.pending)
+    };
+    let undone = crate::undo::undo(&request, env).unwrap();
+    let [item] = undone.report.items.as_slice() else {
+        panic!("{undone:#?}");
+    };
+    assert!(
+        matches!(
+            item.result,
+            purge_model::exec::session::UndoResult::Finished {
+                outcome: purge_model::exec::journal::UndoOutcome::AlreadyRestored
+            }
+        ),
+        "{item:#?}"
+    );
+    assert_eq!(
+        rig.pending.bytes(),
+        MemoryPendingRenames::with_pairs(&[foreign]).bytes()
+    );
+    assert_eq!(rig.pending.removals, 1);
+    let read = rig.journal(&id);
+    let op = read.state.op(OpId(1)).unwrap();
+    assert!(op.undo.is_settled());
+    // The removal ran under an undo intent.
+    assert!(
+        read.records
+            .iter()
+            .any(|r| matches!(r, Record::UndoIntent(u) if u.op == OpId(1)))
+    );
+    assert_eq!(std::fs::read(ext(&file)).unwrap(), b"b");
 }

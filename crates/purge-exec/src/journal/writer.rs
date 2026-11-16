@@ -344,6 +344,16 @@ impl JournalWriter {
     /// returns (one `FlushFileBuffers` per boot-time move). [`fault::BOOTMOVE_REGISTERED`] is hit first
     /// for it: the move is registered, its `done` not yet written.
     pub fn done(&mut self, token: IntentToken, outcome: ItemOutcome) -> Result<(), JournalError> {
+        self.done_noted(token, outcome, String::new())
+    }
+
+    /// [`JournalWriter::done`] with the record's `detail` (why a skipped item was skipped).
+    pub fn done_noted(
+        &mut self,
+        token: IntentToken,
+        outcome: ItemOutcome,
+        detail: String,
+    ) -> Result<(), JournalError> {
         self.check_poison()?;
         self.own(token.writer, token.op)?;
         let durable = needs_flush(&outcome);
@@ -356,6 +366,7 @@ impl JournalWriter {
                 op: token.op,
                 item: token.item,
                 outcome,
+                detail,
             }),
             durable,
         )?;
@@ -370,6 +381,17 @@ impl JournalWriter {
         op: OpId,
         outcome: ItemOutcome,
     ) -> Result<(), JournalError> {
+        self.done_without_intent_noted(op, outcome, String::new())
+    }
+
+    /// [`JournalWriter::done_without_intent`] with the record's `detail` (why a skipped item was
+    /// skipped).
+    pub fn done_without_intent_noted(
+        &mut self,
+        op: OpId,
+        outcome: ItemOutcome,
+        detail: String,
+    ) -> Result<(), JournalError> {
         self.check_poison()?;
         let state = self
             .state
@@ -380,7 +402,15 @@ impl JournalWriter {
         }
         let item = state.item.clone();
         fault::point(fault::DONE_BEFORE);
-        self.append(&Record::Done(Done { op, item, outcome }), false)?;
+        self.append(
+            &Record::Done(Done {
+                op,
+                item,
+                outcome,
+                detail,
+            }),
+            false,
+        )?;
         self.close_full_group()
     }
 

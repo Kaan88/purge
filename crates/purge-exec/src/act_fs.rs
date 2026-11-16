@@ -711,26 +711,11 @@ pub fn create_op_dir_for(
     session.create_op_dir(source, source_serial, op)
 }
 
-/// Removes `dir`, an op directory of this session, through a handle on it whose volume serial and file id
-/// are those of the store's checked handle, and only while it is empty (`remove_dir_if_empty`, never
-/// recursive). The store's handle is closed afterwards. Whether it was removed; anything else leaves it
-/// for expiry.
-fn remove_empty_op_dir(dir: QuarantineDir) -> bool {
-    let Ok(p) = extended_path(dir.path()) else {
-        return false;
-    };
-    let Ok(handle) = MoveHandle::open(&p) else {
-        return false;
-    };
-    let store_id = dir.dir().file_id();
-    let same = handle
-        .file_id()
-        .is_ok_and(|id| id.volume_serial == store_id.volume_serial && id.id == store_id.id);
-    let removed = same && handle.remove_dir_if_empty().is_ok();
-    // Without POSIX delete semantics the name goes when the last handle closes.
-    drop(handle);
-    drop(dir);
-    removed
+/// Removes `dir`, an op directory of this session that this op created, through a handle opened
+/// relative to the store's checked handle on it, and only while it is empty, never recursively
+/// ([`QuarantineDir::remove_if_empty`]). Whether it was removed; anything else leaves it for expiry.
+pub(crate) fn remove_empty_op_dir(dir: QuarantineDir) -> bool {
+    dir.remove_if_empty().is_ok()
 }
 
 // ---------------------------------------------------------------------------------------------------
