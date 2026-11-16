@@ -845,36 +845,117 @@ function Get-AppxRecords {
     }
 }
 
+# M1b (C-OBJECT): besides the M0 fields, each task carries hidden, logon_type (the Principal's LogonType name:
+# Password, S4U, Interactive, Group, ServiceAccount, InteractiveOrPassword, None), has_stored_password (LogonType
+# Password or InteractiveOrPassword) and actions_detail (one record per action: kind exec | com_handler | other,
+# path, arguments, working_dir, clsid, data; 'actions' keeps its M0 string form). -Tasks: test input.
 function Get-TaskRecords {
-    foreach ($t in @(Get-ScheduledTask -ErrorAction Stop)) {
+    param($Tasks = $null)
+    if ($null -eq $Tasks) { $Tasks = @(Get-ScheduledTask -ErrorAction Stop) }
+    foreach ($t in @($Tasks)) {
+        if (-not $t) { continue }
         $acts = @()
+        $detail = @()
         foreach ($a in @($t.Actions)) {
             if (-not $a) { continue }
-            if ($a.CimClass.CimClassName -eq 'MSFT_TaskExecAction') { $acts += ("$($a.Execute) $($a.Arguments)").Trim() }
-            elseif ($a.CimClass.CimClassName -eq 'MSFT_TaskComHandlerAction') { $acts += ("com:$($a.ClassId) $($a.Data)").Trim() }
-            else { $acts += "$($a.CimClass.CimClassName)" }
+            $cls = "$($a.CimClass.CimClassName)"
+            if ($cls -eq 'MSFT_TaskExecAction') {
+                $acts += ("$($a.Execute) $($a.Arguments)").Trim()
+                $detail += [pscustomobject][ordered]@{ kind = 'exec'; path = $a.Execute; arguments = $a.Arguments; working_dir = $a.WorkingDirectory; clsid = $null; data = $null }
+            } elseif ($cls -eq 'MSFT_TaskComHandlerAction') {
+                $acts += ("com:$($a.ClassId) $($a.Data)").Trim()
+                $detail += [pscustomobject][ordered]@{ kind = 'com_handler'; path = $null; arguments = $null; working_dir = $null; clsid = $a.ClassId; data = $a.Data }
+            } else {
+                $acts += $cls
+                $detail += [pscustomobject][ordered]@{ kind = 'other'; path = $null; arguments = $null; working_dir = $null; clsid = $null; data = $cls }
+            }
         }
-        [pscustomobject][ordered]@{ path = "$($t.TaskPath)$($t.TaskName)"; actions = $acts; enabled = ("$($t.State)" -ne 'Disabled') }
+        $logon = $(if ($t.Principal -and $null -ne $t.Principal.LogonType) { "$($t.Principal.LogonType)" } else { $null })
+        [pscustomobject][ordered]@{
+            path = "$($t.TaskPath)$($t.TaskName)"; actions = $acts; enabled = ("$($t.State)" -ne 'Disabled')
+            hidden = [bool]($t.Settings -and $t.Settings.Hidden); logon_type = $logon
+            has_stored_password = (@('Password', 'InteractiveOrPassword') -contains $logon); actions_detail = $detail
+        }
     }
 }
 
+# M1b (C-OBJECT): besides the M0 fields (WMI view), each service carries the registry view of
+# HKLM\SYSTEM\CurrentControlSet\Services\<name>: image_path_raw (ImagePath as stored, REG_EXPAND_SZ not expanded),
+# service_dll (Parameters\ServiceDll, else the top-level ServiceDll, as stored), service_type (Type), start_value
+# (Start), object_name, depend_on_service (array), and state (WMI State). A value that is absent is null.
+# -Services / -Drivers / -OpenKey: test input (OpenKey: { param($canon) <RegistryKey-like or $null> }).
 function Get-ServiceRecords {
-    foreach ($s in @(Get-CimInstance Win32_Service -ErrorAction Stop)) {
-        [pscustomobject][ordered]@{ name = $s.Name; display = $s.DisplayName; image_path = $s.PathName; start = $s.StartMode; type = $s.ServiceType }
+    param($Services = $null, $Drivers = $null, [scriptblock]$OpenKey = $null)
+    if ($null -eq $Services) { $Services = @(Get-CimInstance Win32_Service -ErrorAction Stop) }
+    if ($null -eq $Drivers) { $Drivers = @(Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue) }
+    if (-not $OpenKey) { $OpenKey = { param($c) Open-RegKey $c } }
+    $raw = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+    $reg = {
+        param([string]$Name)
+        $r = [ordered]@{ image_path_raw = $null; service_dll = $null; service_type = $null; start_value = $null; object_name = $null; depend_on_service = @() }
+        $k = $null
+        try { $k = & $OpenKey "HKLM\SYSTEM\CurrentControlSet\Services\$Name" } catch { }
+        if (-not $k) { return $r }
+        try {
+            $r.image_path_raw = $k.GetValue('ImagePath', $null, $raw)
+            $ty = $k.GetValue('Type', $null); if ($null -ne $ty) { $r.service_type = [uint32]([int64]$ty -band [int64]4294967295) }
+            $st = $k.GetValue('Start', $null); if ($null -ne $st) { $r.start_value = [uint32]([int64]$st -band [int64]4294967295) }
+            $r.object_name = $k.GetValue('ObjectName', $null, $raw)
+            $dep = $k.GetValue('DependOnService', $null); if ($null -ne $dep) { $r.depend_on_service = @($dep | Where-Object { "$_" -ne '' }) }
+            $r.service_dll = $k.GetValue('ServiceDll', $null, $raw)
+            $p = $null
+            try { $p = $k.OpenSubKey('Parameters', $false) } catch { }
+            if ($p) { try { $d = $p.GetValue('ServiceDll', $null, $raw); if ($null -ne $d) { $r.service_dll = $d } } finally { $p.Dispose() } }
+        } catch { } finally { $k.Dispose() }
+        $r
     }
-    foreach ($s in @(Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue)) {
-        [pscustomobject][ordered]@{ name = $s.Name; display = $s.DisplayName; image_path = $s.PathName; start = $s.StartMode; type = "driver:$($s.ServiceType)" }
+    foreach ($s in @($Services)) {
+        if (-not $s) { continue }
+        $g = & $reg $s.Name
+        [pscustomobject][ordered]@{ name = $s.Name; display = $s.DisplayName; image_path = $s.PathName; start = $s.StartMode; type = $s.ServiceType
+            image_path_raw = $g.image_path_raw; service_dll = $g.service_dll; service_type = $g.service_type; start_value = $g.start_value
+            object_name = $g.object_name; depend_on_service = $g.depend_on_service; state = $s.State }
+    }
+    foreach ($s in @($Drivers)) {
+        if (-not $s) { continue }
+        $g = & $reg $s.Name
+        [pscustomobject][ordered]@{ name = $s.Name; display = $s.DisplayName; image_path = $s.PathName; start = $s.StartMode; type = "driver:$($s.ServiceType)"
+            image_path_raw = $g.image_path_raw; service_dll = $g.service_dll; service_type = $g.service_type; start_value = $g.start_value
+            object_name = $g.object_name; depend_on_service = $g.depend_on_service; state = $s.State }
     }
 }
 
 # One call for all application filters, joined to rules by InstanceID (per-rule filter calls take minutes).
+# M1b (C-OBJECT): each rule also carries value_name (the registry value name, = id, when the rule is in one of the
+# rule stores below: value name = rule id = WMI InstanceID; else null), raw (that value's string, as stored) and
+# reg_key (the key it was found in). -Rules / -Filters / -RegRules (hashtable id -> @{ raw; key }): test input.
 function Get-FirewallRecords {
+    param($Rules = $null, $Filters = $null, [hashtable]$RegRules = $null)
+    if ($null -eq $Filters) { $Filters = @(Get-NetFirewallApplicationFilter -All -ErrorAction Stop) }
+    if ($null -eq $Rules) { $Rules = @(Get-NetFirewallRule -ErrorAction Stop) }
+    if ($null -eq $RegRules) {
+        $RegRules = @{}
+        $fp = 'HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy'
+        foreach ($kp in "$fp\FirewallRules", "$fp\RestrictedServices\AppIso\FirewallRules", "$fp\RestrictedServices\Configurable\System") {
+            $k = Open-RegKey $kp
+            if (-not $k) { continue }
+            try {
+                foreach ($n in $k.GetValueNames()) {
+                    if (-not $RegRules.ContainsKey($n)) { $RegRules[$n] = @{ raw = "$($k.GetValue($n, $null, 'DoNotExpandEnvironmentNames'))"; key = $kp } }
+                }
+            } finally { $k.Dispose() }
+        }
+    }
     $prog = @{}
-    foreach ($f in @(Get-NetFirewallApplicationFilter -All -ErrorAction Stop)) { $prog[[string]$f.InstanceID] = $f.Program }
-    foreach ($r in @(Get-NetFirewallRule -ErrorAction Stop)) {
+    foreach ($f in @($Filters)) { if ($f) { $prog[[string]$f.InstanceID] = $f.Program } }
+    foreach ($r in @($Rules)) {
+        if (-not $r) { continue }
+        $id = [string]$r.Name
+        $rr = $(if ($id -and $RegRules.ContainsKey($id)) { $RegRules[$id] } else { $null })
         [pscustomobject][ordered]@{
             id = $r.Name; display = $r.DisplayName; program = $prog[[string]$r.InstanceID]
             direction = "$($r.Direction)"; enabled = ("$($r.Enabled)" -eq 'True')
+            value_name = $(if ($rr) { $id } else { $null }); raw = $(if ($rr) { $rr.raw } else { $null }); reg_key = $(if ($rr) { $rr.key } else { $null })
         }
     }
 }

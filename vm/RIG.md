@@ -118,6 +118,14 @@ records access errors.
   "processes": [ {"pid","name","path","start"} ] }
 ```
 
+M1b (C-OBJECT, `riglib.ps1`) adds fields; the ones above keep their names. `tasks[]`: `hidden`, `logon_type`
+(Principal LogonType name), `has_stored_password` (LogonType `Password` or `InteractiveOrPassword`),
+`actions_detail` [ {`kind` exec|com_handler|other, `path`, `arguments`, `working_dir`, `clsid`, `data`} ].
+`services[]` (from `HKLM\SYSTEM\CurrentControlSet\Services\<name>`, values as stored): `image_path_raw`,
+`service_dll` (Parameters\ServiceDll, else the top-level one), `service_type` (Type), `start_value` (Start),
+`object_name`, `depend_on_service` [names], `state`. `firewall[]`: `value_name` (registry value name = id),
+`raw` (the rule string as stored), `reg_key` (FirewallRules, AppIso or Configurable store); null when not found.
+
 ## 4. Run protocol (one app, `guest\run-app.ps1`, phases written to `C:\cr\out\<run>\`)
 
 `<run>` = `<app id>` for app runs, `null1..null3` for null runs. With `rig.ps1 -RunPrefix <p>` an app run is
