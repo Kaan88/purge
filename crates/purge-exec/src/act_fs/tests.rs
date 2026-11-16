@@ -563,6 +563,7 @@ fn a_read_only_hidden_file_with_streams_comes_back_unchanged() {
         original_path,
         file_id,
         volume_serial,
+        ..
     } = &intent.inverse
     else {
         panic!("{intent:?}");
@@ -1081,6 +1082,154 @@ fn a_recorded_owner_the_token_cannot_assign_falls_back_to_the_default_owner() {
     );
 }
 
+/// S1 of the final M2 review: a directory standing where a removed one is to be recreated is adopted
+/// as `AlreadyRestored` only when its owner and DACL are the recorded ones. Before the fix any plain
+/// directory was `AlreadyRestored`, whoever had created it and whoever may write to it.
+#[test]
+fn an_existing_directory_counts_as_restored_only_with_the_recorded_owner_and_dacl() {
+    let s = Scratch::new("adopt");
+    let p = s.dir(r"src\Shared");
+    let mut env = Env::new(s, vec![rmdir(&p)]);
+    assert_done(&env.run(1));
+    // Created again by somebody else, the way the original was: same owner, same inherited DACL.
+    std::fs::create_dir(&p).unwrap();
+    let Inverse::RecreateDir { sddl, .. } = env.intents[&1].inverse.clone() else {
+        panic!()
+    };
+    let at = sddl.find("D:").unwrap();
+    let dacl = &sddl[at..];
+    let with_sddl = |env: &mut Env, sddl: String| {
+        let mut intent = env.intents[&1].clone();
+        let Inverse::RecreateDir { sddl: recorded, .. } = &mut intent.inverse else {
+            panic!()
+        };
+        *recorded = sddl;
+        env.undo_intent_as(1, Some(intent))
+    };
+
+    // The recorded DACL had one more ACE than the directory now has (or, read the other way, the
+    // directory now lets fewer or other principals in): not the recorded directory.
+    let more = format!("{}{dacl}(A;OICI;FA;;;WD)", &sddl[..at]);
+    let undo = with_sddl(&mut env, more);
+    let FsUndo::Conflict {
+        conflict: UndoConflict::DestinationExists,
+        detail,
+    } = &undo
+    else {
+        panic!("{undo:?}");
+    };
+    assert!(
+        detail.contains("DACL") && !detail.contains("owner"),
+        "{detail}"
+    );
+    // Another recorded owner.
+    let undo = with_sddl(&mut env, format!("O:SYG:SY{dacl}"));
+    let FsUndo::Conflict {
+        conflict: UndoConflict::DestinationExists,
+        detail,
+    } = &undo
+    else {
+        panic!("{undo:?}");
+    };
+    assert!(detail.contains("owner"), "{detail}");
+
+    // An extra ACE on the directory standing there (Everyone, full control): a conflict.
+    let status = Command::new("icacls")
+        .args([p.as_str(), "/grant", "*S-1-1-0:(OI)(CI)F", "/q"])
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(matches!(
+        env.undo(1),
+        FsUndo::Conflict {
+            conflict: UndoConflict::DestinationExists,
+            ..
+        }
+    ));
+    assert!(exists(&p), "a conflict changes nothing");
+
+    // Created again with the inherited descriptor only: the recorded owner and DACL, adopted.
+    std::fs::remove_dir(&p).unwrap();
+    std::fs::create_dir(&p).unwrap();
+    assert!(matches!(
+        env.undo(1),
+        FsUndo::Done {
+            outcome: UndoOutcome::AlreadyRestored,
+            ..
+        }
+    ));
+}
+
+/// F1 of the M2 fix-round review: the directory a quarantined file was in is removed by something
+/// other than the session and created again by somebody else. The file goes back only into a
+/// directory with the recorded owner and DACL; before the fix it went into any plain directory there.
+#[test]
+fn a_move_back_goes_only_into_a_parent_with_the_recorded_owner_and_dacl() {
+    let s = Scratch::new("parent");
+    let f = s.file(r"src\App\helper.exe", b"helper");
+    let keep = s.file(r"src\App\keep.txt", b"not the session's");
+    let app = s.path(r"src\App");
+    let mut env = Env::new(s, vec![mv(&f)]);
+    assert_done(&env.run(1));
+    let Inverse::MoveBack {
+        parent: Some(parent),
+        ..
+    } = &env.intents[&1].inverse
+    else {
+        panic!("{:?}", env.intents[&1].inverse);
+    };
+    assert!(parent.sddl.contains("D:"), "{}", parent.sddl);
+
+    // Something else removes the directory; somebody creates it again and lets Everyone write to it.
+    std::fs::remove_file(&keep).unwrap();
+    std::fs::remove_dir(&app).unwrap();
+    std::fs::create_dir(&app).unwrap();
+    let status = Command::new("icacls")
+        .args([app.as_str(), "/grant", "*S-1-1-0:(OI)(CI)F", "/q"])
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let undo = env.undo(1);
+    let FsUndo::Conflict {
+        conflict: UndoConflict::DestinationExists,
+        detail,
+    } = &undo
+    else {
+        panic!("{undo:?}");
+    };
+    assert!(detail.contains("DACL"), "{detail}");
+    assert!(!exists(&f), "a conflict moves nothing");
+    assert_eq!(std::fs::read(env.quarantine_path(1)).unwrap(), b"helper");
+
+    // Created again with the inherited descriptor only: the recorded owner and DACL, so it goes back.
+    std::fs::remove_dir(&app).unwrap();
+    std::fs::create_dir(&app).unwrap();
+    assert_restored(&env.undo(1));
+    assert_eq!(std::fs::read(&f).unwrap(), b"helper");
+
+    // An owner no standard user can set passes in place of the recorded one (what undo's own
+    // recreate leaves when SYSTEM cannot be assigned); a user's does not.
+    assert!(admin_only_owner("BA") && admin_only_owner("SY") && admin_only_owner("S-1-5-18"));
+    assert!(!admin_only_owner(&current_user_sid().unwrap()) && !admin_only_owner("BU"));
+}
+
+#[test]
+fn sddl_parts_are_cut_at_the_next_part() {
+    let full = "O:S-1-5-21-1-2-3-1001G:S-1-5-21-1-2-3-513D:AI(A;OICIID;FA;;;SY)S:(ML;;NW;;;LW)";
+    assert_eq!(sddl_part(full, b'O'), Some("S-1-5-21-1-2-3-1001"));
+    assert_eq!(sddl_part(full, b'G'), Some("S-1-5-21-1-2-3-513"));
+    assert_eq!(sddl_part(full, b'D'), Some("AI(A;OICIID;FA;;;SY)"));
+    assert_eq!(sddl_part(full, b'S'), Some("(ML;;NW;;;LW)"));
+    assert_eq!(sddl_part("O:BAG:SYD:P(A;;FA;;;BA)", b'O'), Some("BA"));
+    assert_eq!(
+        sddl_part("O:BAG:SYD:P(A;;FA;;;BA)", b'D'),
+        Some("P(A;;FA;;;BA)")
+    );
+    assert_eq!(sddl_part("D:(A;;FA;;;WD)", b'O'), None);
+}
+
 #[test]
 fn owner_and_group_are_cut_from_an_sddl() {
     assert_eq!(
@@ -1349,6 +1498,7 @@ fn volume_serial_zero_is_unknown_and_other_volumes_are_never_copied() {
             original_path: r"C:\x\a.txt".into(),
             file_id: FileIdHex([1; 16]),
             volume_serial: 0,
+            parent: None,
         },
         definition: None,
         pre: ItemFacts::File(pre.clone()),
@@ -1394,6 +1544,7 @@ fn volume_serial_zero_is_unknown_and_other_volumes_are_never_copied() {
         original_path: r"C:\Windows\a.txt".into(),
         file_id: FileIdHex([1; 16]),
         volume_serial: 5,
+        parent: None,
     };
     assert!(matches!(
         plan_undo_fs(&skewed, Some(&ItemOutcome::Done)),

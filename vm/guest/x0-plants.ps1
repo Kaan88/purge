@@ -1,4 +1,4 @@
-# Purge rig v2: plant functions of the x0 variants (vm\RIG.md §4b; apps.ps1 'plant_pre' / 'plant_post'). Dot-sourced
+﻿# Purge rig v2: plant functions of the x0 variants (vm\RIG.md §4b; apps.ps1 'plant_pre' / 'plant_post'). Dot-sourced
 # by run-app.ps1 after riglib.ps1 and apps.ps1. Each Plant-* function takes the plant context
 #   $Ctx = { Phase ('plant-pre' | 'plant-post'), S (the run record; planted items go to S.planted), App, Main, Dir }
 # and writes what a real user (or another product) would have on the machine: files, registry keys and values,

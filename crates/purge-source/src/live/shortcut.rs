@@ -4,7 +4,7 @@
 //! calling thread. Scanner threads must not have their COM state changed (a thread already in the
 //! multithreaded apartment, or a thread pool another library initialised, would otherwise mix models), so
 //! every read is sent to one worker thread that does nothing else. The worker enters a single-threaded
-//! apartment for each read through `purge-win` and leaves it again; it is started on the first read and
+//! apartment once through `purge-win` and stays in it until it ends; it is started on the first read and
 //! ends when the owning [`ShortcutWorker`] is dropped.
 //!
 //! A panic inside a read is caught on the worker and reported as an error for that read only; if the
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, PoisonError};
 
-use purge_win::shelllink::{ShellLinkInfo, read_shell_link};
+use purge_win::shelllink::{Apartment, ShellLinkInfo, read_shell_link};
 
 use super::errors::{ERROR_WORKER_GONE, map_io};
 use crate::types::{SourceError, SourceResult};
@@ -71,8 +71,11 @@ impl ShortcutWorker {
     }
 }
 
-/// The worker loop: one read at a time until every sender is dropped.
+/// The worker loop: one read at a time until every sender is dropped. The worker stays in its
+/// apartment between reads (`Apartment`), so a read does not start COM up and shut it down again;
+/// should entering fail, each read enters on its own as before.
 fn serve(rx: Receiver<Job>) {
+    let _apartment = Apartment::enter().ok();
     for job in rx {
         let result = catch_unwind(AssertUnwindSafe(|| read_shell_link(&job.path)))
             .unwrap_or_else(|_| Err(std::io::Error::other("shell link read panicked")))

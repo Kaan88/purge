@@ -1184,6 +1184,22 @@ fn an_intent_journalled_by_the_file_action_must_be_the_same() {
         }
         LockPrepared::Decided(r) => panic!("{r:?}"),
     }
+    // M4 of the final M2 review: the file action's intent carries `pre` from its act-time handle (a
+    // directory that gained a file since validation has another size); the same action, so the
+    // ladder goes on, and carries the journalled intent. Before the fix: `Failed{Internal}`.
+    let mut grown = same.clone();
+    let ItemFacts::File(pre) = &mut grown.pre else {
+        panic!("{grown:?}");
+    };
+    pre.size += 4096;
+    pre.tree_bytes = Some(pre.tree_bytes.unwrap_or(0) + 4096);
+    match l.prepare(&locked, Some(&grown)) {
+        LockPrepared::Ready(action) => {
+            assert!(action.intent_to_write().is_none());
+            assert_eq!(action.intent(), &grown);
+        }
+        LockPrepared::Decided(r) => panic!("the same action was refused: {r:?}"),
+    }
     let mut other = same.clone();
     if let Inverse::MoveBack {
         quarantine_path, ..
@@ -1194,6 +1210,16 @@ fn an_intent_journalled_by_the_file_action_must_be_the_same() {
     match l.prepare(&locked, Some(&other)) {
         LockPrepared::Decided(r) => assert_eq!(r.code, Some(reason::INTENT_DIFFERS)),
         LockPrepared::Ready(_) => panic!("a differing intent must not be acted on"),
+    }
+    // Another identity in `pre` is another action too.
+    let mut moved = same.clone();
+    let ItemFacts::File(pre) = &mut moved.pre else {
+        panic!("{moved:?}");
+    };
+    pre.file_id = FileIdHex([0x42; 16]);
+    match l.prepare(&locked, Some(&moved)) {
+        LockPrepared::Decided(r) => assert_eq!(r.code, Some(reason::INTENT_DIFFERS)),
+        LockPrepared::Ready(_) => panic!("another identity must not be acted on"),
     }
 }
 
@@ -1723,11 +1749,11 @@ impl RetryMove for Mover<'_> {
 
 #[test]
 fn retry_held_passes_the_journalled_destination_and_maps_outcomes() {
-    let fx = Fx::new("retry", 3);
+    let fx = Fx::new("retry", 4);
     let rm = FakeRm::default();
     let held = Env::holding("live.boot.user-writable");
     let mut store = MemoryPendingRenames::default();
-    for n in 1..=3 {
+    for n in 1..=4 {
         fx.run(&ladder(&fx, &held, &rm, &DenyAll), n, &mut store);
     }
     // A retry belongs to a later start: the run has ended.
@@ -1746,18 +1772,23 @@ fn retry_held_passes_the_journalled_destination_and_maps_outcomes() {
                 code: FailCode::AccessDenied,
                 os_error: Some(5),
             },
+            // The rename went through and its verification failed: the item may be in quarantine.
+            RetryAttempt::Failed {
+                code: FailCode::VerifyFailed,
+                os_error: None,
+            },
         ],
     };
     let retried = retry_held(&mut fx.journal.borrow_mut(), &mut mover, FileTime(2)).unwrap();
     assert_eq!(
         mover.seen,
-        (1..=3)
+        (1..=4)
             .map(|n| (OpId(n), fx.it(n).quarantine.clone()))
             .collect::<Vec<_>>()
     );
     assert_eq!(
         mover.durable,
-        vec![true; 3],
+        vec![true; 4],
         "each move ran after its flushed retry_intent"
     );
     assert_eq!(retried[0].outcome, ItemOutcome::Done);
@@ -1769,6 +1800,13 @@ fn retry_held_passes_the_journalled_destination_and_maps_outcomes() {
             ..
         }
     ));
+    assert!(matches!(
+        retried[3].outcome,
+        ItemOutcome::Failed {
+            code: FailCode::VerifyFailed,
+            ..
+        }
+    ));
     // retry_held journalled each retry: its retry_intent, then the `Retried` that ends it.
     assert_eq!(fx.state().retries_in_flight().count(), 0);
     let read = crate::journal::read(&fx.session).unwrap();
@@ -1776,26 +1814,26 @@ fn retry_held_passes_the_journalled_destination_and_maps_outcomes() {
         .records
         .iter()
         .rev()
-        .take(6)
+        .take(8)
         .map(Record::name)
         .collect();
-    assert_eq!(
-        tail,
-        [
-            "reconcile",
-            "retry_intent",
-            "reconcile",
-            "retry_intent",
-            "reconcile",
-            "retry_intent"
-        ]
-    );
+    assert_eq!(tail, ["reconcile", "retry_intent"].repeat(4));
     let held_now: Vec<u32> = fx.state().held_retry().map(|s| s.op.0).collect();
     assert_eq!(held_now, vec![2]);
     assert_eq!(undo_locked(&fx.op(1), &store), None, "moved: ordinary undo");
     assert_eq!(
         undo_locked(&fx.op(2), &store),
         Some(LockUndo::Done(UndoOutcome::NothingToUndo))
+    );
+    assert_eq!(
+        undo_locked(&fx.op(3), &store),
+        Some(LockUndo::Done(UndoOutcome::NothingToUndo)),
+        "access denied: the item never moved"
+    );
+    assert_eq!(
+        undo_locked(&fx.op(4), &store),
+        None,
+        "a failed verify may have moved the item: the ordinary move back looks where it is"
     );
     assert_eq!(store.registers, 0, "a retry never registers a boot move");
 }
@@ -1811,17 +1849,17 @@ fn recovery_finds_a_pair_registered_before_the_crash() {
     ]);
     assert_eq!(
         pending_after_crash(&intent, &store),
-        Some(ItemOutcome::PendingReboot {
+        Ok(Some(ItemOutcome::PendingReboot {
             pair: BootMovePair {
                 src: format!("*1{}", ours.src),
                 dst: ours.dst.clone(),
             },
             confirmed: true,
-        })
+        }))
     );
     assert_eq!(
         pending_after_crash(&intent, &MemoryPendingRenames::default()),
-        None
+        Ok(None)
     );
 }
 
@@ -1857,7 +1895,14 @@ fn system_list_registers_and_removes_only_our_pair_vm() {
         .register(Path::new(&it.source), Path::new(&it.quarantine))
         .unwrap();
     let pair = model_pair(&registered.pair);
-    assert_eq!(occurrences(&store.list().unwrap(), &pair).len(), 1);
-    assert_eq!(store.remove_exact(&registered.pair).unwrap(), 1);
+    let listed = store.list().unwrap();
+    assert_eq!(occurrences(&listed, &pair).len(), 1);
+    // The removal the executor uses: a wrong expected count changes nothing.
+    assert_eq!(
+        store.remove_counted(&registered.pair, 2),
+        Err(FsError::PendingCountMismatch { found: 1 })
+    );
+    assert_eq!(store.list().unwrap(), listed);
+    assert_eq!(store.remove_counted(&registered.pair, 1).unwrap(), 1);
     assert_eq!(store.list().unwrap(), before);
 }

@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use purge_model::exec::journal::{
-    FileFacts, GateExemptions, Header, Intent, ItemFacts, JournalSchema, RegFacts, Validated,
+    FileFacts, GateExemptions, Header, Intent, ItemFacts, JournalSchema, Reconcile, RegFacts,
+    Validated,
 };
 use purge_model::exec::op::{
     BackupRef, BootMovePair, ExecOp, FileIdHex, Inverse, ItemOutcome, OpId,
@@ -222,9 +223,29 @@ fn facts_of(mover: &MoveHandle, source: &str, tree_bytes: u64) -> FileFacts {
         n_links: meta.n_links,
         is_dir: meta.is_dir,
         size: if meta.is_dir { 0 } else { meta.size },
-        tree_entries: None,
+        tree_entries: meta.is_dir.then(|| entries_below(source)),
         tree_bytes: meta.is_dir.then_some(tree_bytes),
     }
+}
+
+/// How many entries lie below the directory `dir`, as the gate counts them: every listed entry,
+/// descending into plain directories only (never into a reparse point).
+fn entries_below(dir: &str) -> u64 {
+    use std::os::windows::fs::MetadataExt;
+    let mut count = 0;
+    let mut todo = vec![ext(dir)];
+    while let Some(d) = todo.pop() {
+        for entry in std::fs::read_dir(&d).unwrap() {
+            let entry = entry.unwrap();
+            count += 1;
+            let meta = std::fs::symlink_metadata(entry.path()).unwrap();
+            let reparse = meta.file_attributes() & 0x400 != 0;
+            if meta.is_dir() && !reparse {
+                todo.push(entry.path());
+            }
+        }
+    }
+    count
 }
 
 /// Runs a session that quarantines `items` (op ids 1..), started at `created`; with `with_backup` an
@@ -311,6 +332,7 @@ fn build(
                     original_path: p.source.clone(),
                     file_id: facts.file_id,
                     volume_serial: facts.volume_serial,
+                    parent: None,
                 },
                 definition: None,
                 pre: ItemFacts::File(facts.clone()),
@@ -371,6 +393,7 @@ fn reg_facts() -> RegFacts {
         is_link: false,
         owner: "S-1-5-32-544".into(),
         last_write_time: FileTime(1),
+        tree_sha256: None,
     }
 }
 
@@ -944,6 +967,150 @@ fn a_locked_file_fails_the_item_keeps_the_rest_and_a_later_run_completes_it() {
     assert_deletes_inside(&fx.quarantine_of(built.session.id()));
 }
 
+/// S3 of the final M2 review: names the path canonicaliser refuses (DOS device names with and without
+/// an extension, a trailing dot or space, an unpaired surrogate) are ordinary entries inside a
+/// quarantined tree; the quarantine move took them whole. Before the fix the walk stopped at the first
+/// of them with `WalkError::Gate` (or `NameNotRepresentable`) after the expire record, on every run.
+#[test]
+fn entries_with_reserved_or_odd_names_below_the_item_are_deleted() {
+    use std::os::windows::ffi::OsStringExt;
+
+    let fx = Fx::new("oddnames");
+    let item = fx.scratch.dir(r"src\item");
+    let odd = |name: std::ffi::OsString| ext(&item).join(name);
+    for name in ["nul", "aux.h", "COM1.log", "name.", "name ", "CON"] {
+        std::fs::write(odd(name.into()), name.as_bytes()).unwrap();
+    }
+    // A directory with a device name, holding another one.
+    std::fs::create_dir(odd("aux".into())).unwrap();
+    std::fs::write(odd("aux".into()).join("prn.txt"), b"prn").unwrap();
+    std::fs::create_dir(odd("dir. ".into())).unwrap();
+    std::fs::write(odd("dir. ".into()).join("lpt1"), b"lpt1").unwrap();
+    // An unpaired high surrogate.
+    let surrogate = std::ffi::OsString::from_wide(&[u16::from(b's'), 0xD800, u16::from(b'x')]);
+    std::fs::write(odd(surrogate), b"surrogate").unwrap();
+    let ok = fx.scratch.file(r"src\item\ok.txt", b"ok");
+    let _ = ok;
+    let built = build(&fx, at_day(0), &[app(item)], false, true);
+    let q = fx.quarantine_of(built.session.id());
+
+    let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(30)).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    // 6 files, aux + prn.txt, `dir. ` + lpt1, the surrogate name, ok.txt, the item.
+    assert_eq!(report.items[0].entries_deleted, 6 + 2 + 2 + 1 + 1 + 1);
+    assert!(!exists(&built.quarantined[0]));
+    assert!(report.items[0].op_dir_removed);
+    assert!(expiring(&fx.roots, at_day(30)).unwrap().items.is_empty());
+    assert_deletes_inside(&q);
+}
+
+/// M14 of the final M2 review: a directory moved whole keeps its DACL, so its former owner may add to
+/// it in quarantine. More entries than the validation counted refuse the item before the expire record,
+/// on every run, with nothing deleted; something added while the walk runs stops the walk before the
+/// extra entry is opened. Before the fix the walk deleted all of it.
+#[test]
+fn an_item_that_grew_in_quarantine_is_not_deleted() {
+    let fx = Fx::new("grown");
+    let item = fx.scratch.dir(r"src\item");
+    fx.scratch.file(r"src\item\a.txt", b"a");
+    fx.scratch.file(r"src\item\b\c.txt", b"c");
+    let built = build(&fx, at_day(0), &[app(item)], false, true);
+    let q = &built.quarantined[0];
+    let planted = format!(r"{q}\b\planted.txt");
+    std::fs::write(ext(&planted), b"planted").unwrap();
+    for day in [30, 31] {
+        let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(day)).unwrap();
+        assert_eq!(
+            report.items[0].outcome,
+            PurgeOutcome::Refused(Refused::MoreEntriesThanCounted { counted: 3 }),
+            "{report:?}"
+        );
+        assert_eq!(report.alerts.len(), 1, "{report:?}");
+        assert_eq!(report.items[0].entries_deleted, 0);
+        assert!(expire_records(&built.session).is_empty(), "still undoable");
+        for left in ["a.txt", r"b\c.txt", r"b\planted.txt"] {
+            assert!(exists(&format!(r"{q}\{left}")), "{left}");
+        }
+    }
+
+    // Added after the count, while the walk runs: the walk stops at the extra entry.
+    std::fs::remove_file(ext(&planted)).unwrap();
+    let (root, late) = (q.clone(), format!(r"{q}\z-late.txt"));
+    let late_in_hook = late.clone();
+    let mut planted_late = false;
+    set_hook(move |dir| {
+        if !planted_late && dir.eq_ignore_ascii_case(&root) {
+            planted_late = true;
+            std::fs::write(ext(&late_in_hook), b"late").unwrap();
+        }
+    });
+    let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(32));
+    clear_hook();
+    let report = report.unwrap();
+    match &report.items[0].outcome {
+        PurgeOutcome::Failed(Failure::Walk(WalkFailure { at, error })) => {
+            assert!(at.eq_ignore_ascii_case(&late), "{at}");
+            assert_eq!(error, &WalkError::MoreEntriesThanCounted { counted: 3 });
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(report.alerts.len(), 1, "{report:?}");
+    assert_eq!(std::fs::read(ext(&late)).unwrap(), b"late");
+    assert_deletes_inside(&fx.quarantine_of(built.session.id()));
+}
+
+/// S3, index half: the session index loses an item's bytes only once the item is gone. Before the fix
+/// they were subtracted when the expire record was written, also when the walk then stopped.
+#[test]
+fn the_index_loses_an_items_bytes_only_once_it_is_gone() {
+    let fx = Fx::new("indexwalk");
+    let item = fx.scratch.dir(r"src\item");
+    fx.scratch.file(r"src\item\a.txt", b"a");
+    fx.scratch.file(r"src\item\m-locked.txt", b"locked");
+    let built = build(&fx, at_day(0), &[app(item)], false, true);
+    let mut index = SessionIndex::default();
+    index.upsert(summary(&built, 10_000));
+    fx.roots.write_index(&index).unwrap();
+    let locked_path = format!(r"{}\m-locked.txt", built.quarantined[0]);
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x1)
+        .open(ext(&locked_path))
+        .unwrap();
+
+    let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(30)).unwrap();
+    assert!(
+        matches!(
+            outcome_of(&report, &built.ids[0]),
+            PurgeOutcome::Failed(Failure::Walk(_))
+        ),
+        "{report:?}"
+    );
+    assert!(report.items[0].expire_recorded);
+    let s = fx.roots.read_index().unwrap().sessions[0].clone();
+    assert_eq!(s.backup_bytes, 10_000, "the item is still there");
+    assert_eq!(s.usage[0].bytes, 10_000);
+    assert!(s.purged.is_empty());
+
+    drop(holder);
+    let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(31)).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    assert!(!report.items[0].expire_recorded, "no second expire record");
+    assert_eq!(report.index, IndexUpdate::Updated);
+    let s = fx.roots.read_index().unwrap().sessions[0].clone();
+    assert_eq!(s.backup_bytes, 10_000 - built.bytes[0]);
+    assert_eq!(s.usage[0].bytes, 10_000 - built.bytes[0]);
+    assert_eq!(s.purged, [RetentionClass::Quarantine]);
+
+    // A third run finds nothing and subtracts nothing again.
+    let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(32)).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::AlreadyGone);
+    assert!(!report.items[0].expire_recorded);
+    assert_eq!(report.index, IndexUpdate::NotNeeded);
+    let s = fx.roots.read_index().unwrap().sessions[0].clone();
+    assert_eq!(s.backup_bytes, 10_000 - built.bytes[0]);
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Journal state
 // ---------------------------------------------------------------------------------------------------
@@ -973,6 +1140,295 @@ fn a_session_being_undone_is_not_expired() {
     }
     assert!(exists(&built.quarantined[0]) && exists(&built.quarantined[1]));
     assert!(expire_records(&built.session).is_empty());
+}
+
+/// M15 of the final M2 review: an undo run that died between two ops leaves no undo in progress, but
+/// the ops its plan had not reached are still to be undone. Before the fix they were purged.
+#[test]
+fn a_session_whose_undo_run_stopped_between_two_ops_is_not_expired() {
+    let fx = Fx::new("undoplan");
+    let a = fx.scratch.file(r"src\a.txt", b"aaa");
+    let b = fx.scratch.file(r"src\b.txt", b"bbb");
+    let built = build(&fx, at_day(0), &[app(a), app(b)], false, true);
+    let mut w = JournalWriter::open_append(&built.session).unwrap();
+    w.undo_plan(at_day(1), vec![OpId(2), OpId(1)]).unwrap();
+    let token = w.undo_intent(OpId(2)).unwrap();
+    w.undo_done(token, UndoOutcome::Restored).unwrap();
+    assert_eq!(w.state().undo_in_progress().count(), 0);
+    assert_eq!(w.state().undo_unfinished(), [OpId(1)]);
+    drop(w);
+
+    let listing = expiring(&fx.roots, at_day(40)).unwrap();
+    assert!(listing.items.is_empty(), "{listing:?}");
+    let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(40)).unwrap();
+    assert_eq!(
+        outcome_of(&report, &built.ids[0]),
+        &PurgeOutcome::Excluded(Exclusion::Held(HoldReason::SessionUndoInProgress)),
+        "{report:?}"
+    );
+    assert!(exists(&built.quarantined[0]));
+    assert!(expire_records(&built.session).is_empty());
+}
+
+/// The journal header of a test session with `items` items, started at day 0.
+fn header_of(session: &SessionDir, items: u32) -> Header {
+    Header {
+        schema: JournalSchema,
+        session: session.id().clone(),
+        created: at_day(0),
+        engine_version: "0.1.0".into(),
+        app: "vendor-app".into(),
+        plan_hash: sha256_bytes(b"plan"),
+        selection_hash: sha256_bytes(b"selection"),
+        policy_version: "test".into(),
+        mode: ScanMode::Post,
+        items,
+        allow_irreversible: false,
+        volumes: Vec::new(),
+    }
+}
+
+/// A committed session with one quarantine op that was held (`HeldRetry`) by its run and retried
+/// afterwards: the retry moved the item into quarantine for real and journalled `retried`, followed by
+/// `reconciles`.
+fn build_retried(
+    fx: &Fx,
+    source: String,
+    retried: ItemOutcome,
+    reconciles: &[ReconcileResult],
+) -> Built {
+    let session = fx.roots.create_session().unwrap();
+    let mut w = JournalWriter::create(&session, header_of(&session, 1)).unwrap();
+    let mover = MoveHandle::open(&ext(&source)).unwrap();
+    let facts = facts_of(&mover, &source, 0);
+    w.validated(Validated {
+        op: OpId(1),
+        item: item_id(1),
+        target: Target::Path {
+            path: source.clone(),
+        },
+        facts: ItemFacts::File(facts.clone()),
+        exemptions: GateExemptions::default(),
+    })
+    .unwrap();
+    let op_dir = session
+        .create_op_dir(Path::new(&source), facts.volume_serial, OpId(1))
+        .unwrap();
+    let leaf = Path::new(&source)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let qpath = op_dir.item_path(&leaf).to_string_lossy().into_owned();
+    let token = w
+        .intent(Intent {
+            op: OpId(1),
+            item: item_id(1),
+            exec_op: ExecOp::QuarantineMove {
+                path: source.clone(),
+            },
+            inverse: Inverse::MoveBack {
+                quarantine_path: qpath.clone(),
+                original_path: source.clone(),
+                file_id: facts.file_id,
+                volume_serial: facts.volume_serial,
+                parent: None,
+            },
+            definition: None,
+            pre: ItemFacts::File(facts.clone()),
+        })
+        .unwrap();
+    w.done(token, ItemOutcome::HeldRetry).unwrap();
+    w.commit(at_day(0), 0).unwrap();
+    let retry = w.retry_intent(OpId(1), at_day(1)).unwrap();
+    mover.rename_into(&op_dir, &leaf).unwrap();
+    w.retried(retry, at_day(1), retried).unwrap();
+    for result in reconciles {
+        w.reconcile(Reconcile {
+            at: at_day(2),
+            op: OpId(1),
+            result: result.clone(),
+        })
+        .unwrap();
+    }
+    drop(w);
+    write_scan_copy(&session, &[app(source)]);
+    Built {
+        ids: vec![ExpiryId {
+            session: session.id().clone(),
+            op: OpId(1),
+        }],
+        session,
+        quarantined: vec![qpath],
+        bytes: vec![facts.size],
+    }
+}
+
+/// M16 of the final M2 review: expiry reads an op's records the way undo does. A retry whose verify
+/// failed may have left the item in quarantine; a retry that registered a boot-time move which then
+/// completed has it there. Before the fix the first was "not in quarantine" and the second "held" for
+/// ever; both are purgeable now, and a retry still waiting for its restart is held.
+#[test]
+fn retried_ops_are_read_as_undo_reads_them() {
+    let fx = Fx::new("retried");
+    let verify_failed = ItemOutcome::Failed {
+        code: FailCode::VerifyFailed,
+        os_error: None,
+        detail: "after the move the item is not where it should be".into(),
+    };
+    let pair = |n: u32| ItemOutcome::PendingReboot {
+        pair: BootMovePair {
+            src: format!(r"\??\C:\src\{n}"),
+            dst: format!(r"\??\C:\q\{n}"),
+        },
+        confirmed: true,
+    };
+    let failed = build_retried(
+        &fx,
+        fx.scratch.file(r"src\failed.txt", b"failed"),
+        verify_failed,
+        &[],
+    );
+    let completed = build_retried(
+        &fx,
+        fx.scratch.file(r"src\completed.txt", b"completed"),
+        pair(1),
+        &[ReconcileResult::Completed],
+    );
+    let waiting = build_retried(
+        &fx,
+        fx.scratch.file(r"src\waiting.txt", b"waiting"),
+        pair(2),
+        &[ReconcileResult::StillPending],
+    );
+    for built in [&failed, &completed] {
+        let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(40)).unwrap();
+        assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+        assert!(!exists(&built.quarantined[0]));
+    }
+    let report = purge(&fx.roots, &waiting.ids, &all(&waiting.ids), at_day(40)).unwrap();
+    assert_eq!(
+        report.items[0].outcome,
+        PurgeOutcome::Excluded(Exclusion::Held(HoldReason::PendingReboot)),
+        "{report:?}"
+    );
+    assert!(exists(&waiting.quarantined[0]));
+}
+
+/// A volume probe that answers "not found" for one drive, as for a volume that is not attached.
+#[derive(Debug)]
+struct Detached(&'static str);
+
+impl crate::storage::VolumeProbe for Detached {
+    fn volume(&self, path: &Path) -> Result<crate::storage::VolumeFacts, FsError> {
+        let text = path.to_string_lossy();
+        let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
+        if plain
+            .get(..2)
+            .is_some_and(|drive| drive.eq_ignore_ascii_case(self.0))
+        {
+            return Err(FsError::NotFound);
+        }
+        crate::storage::SystemVolumes.volume(path)
+    }
+}
+
+/// M17 of the final M2 review: an item on a volume that is not attached is not "already gone". Before
+/// the fix the purge wrote its expire record and subtracted its bytes; when the volume came back the
+/// item was there and could no longer be undone.
+#[test]
+fn an_item_on_a_volume_that_is_not_attached_is_not_taken_as_gone() {
+    let fx = Fx::new("detached");
+    let roots = fx
+        .roots
+        .clone()
+        .with_volume_probe(std::sync::Arc::new(Detached("Q:")));
+    let session = roots.create_session().unwrap();
+    let mut w = JournalWriter::create(&session, header_of(&session, 1)).unwrap();
+    let source = r"Q:\Vendor\gone.bin".to_owned();
+    let pre = FileFacts {
+        final_path: source.clone(),
+        file_id: FileIdHex([5; 16]),
+        volume_serial: 0x5151,
+        reparse_tag: 0,
+        attributes: 32,
+        n_links: 1,
+        is_dir: false,
+        size: 77,
+        tree_entries: None,
+        tree_bytes: None,
+    };
+    w.validated(Validated {
+        op: OpId(1),
+        item: item_id(1),
+        target: Target::Path {
+            path: source.clone(),
+        },
+        facts: ItemFacts::File(pre.clone()),
+        exemptions: GateExemptions::default(),
+    })
+    .unwrap();
+    let qpath = format!(r"Q:\.purge-q\{}\000001\gone.bin", session.id().as_str());
+    let token = w
+        .intent(Intent {
+            op: OpId(1),
+            item: item_id(1),
+            exec_op: ExecOp::QuarantineMove {
+                path: source.clone(),
+            },
+            inverse: Inverse::MoveBack {
+                quarantine_path: qpath,
+                original_path: source.clone(),
+                file_id: FileIdHex([5; 16]),
+                volume_serial: 0x5151,
+                parent: None,
+            },
+            definition: None,
+            pre: ItemFacts::File(pre),
+        })
+        .unwrap();
+    w.done(token, ItemOutcome::Done).unwrap();
+    w.commit(at_day(0), 77).unwrap();
+    drop(w);
+    write_scan_copy(&session, &[app(source)]);
+    let ids = [ExpiryId {
+        session: session.id().clone(),
+        op: OpId(1),
+    }];
+
+    let report = purge(&roots, &ids, &all(&ids), at_day(40)).unwrap();
+    assert!(
+        matches!(
+            &report.items[0].outcome,
+            PurgeOutcome::Failed(Failure::Store(StorageError::Io {
+                source: FsError::NotFound,
+                ..
+            }))
+        ),
+        "{report:?}"
+    );
+    assert!(!report.items[0].expire_recorded);
+    assert!(
+        expire_records(&session).is_empty(),
+        "the op can still be undone"
+    );
+    assert_eq!(report.index, IndexUpdate::NotNeeded);
+}
+
+#[test]
+fn the_own_directories_of_an_item_are_told_from_the_rest_of_its_path() {
+    let q = r"C:\ProgramData\Purge\Quarantine\20261115T101502Z-9f3a6c1d2b7e4a50\000001\a.txt";
+    let own = |p: &str| is_own_dir_of(q, Path::new(p));
+    assert!(own(
+        r"C:\ProgramData\Purge\Quarantine\20261115T101502Z-9f3a6c1d2b7e4a50\000001"
+    ));
+    assert!(own(
+        r"\\?\c:\programdata\purge\quarantine\20261115T101502Z-9F3A6C1D2B7E4A50"
+    ));
+    assert!(!own(r"C:\ProgramData\Purge\Quarantine"));
+    assert!(!own(r"C:\"));
+    assert!(!own(q));
+    assert!(!own(r"Q:\.purge-q"));
 }
 
 #[test]
@@ -1098,6 +1554,7 @@ fn one_op_session(fx: &Fx, committed: Option<FileTime>) -> ExpiryId {
                 original_path: path.clone(),
                 file_id: FileIdHex([5; 16]),
                 volume_serial: 9,
+                parent: None,
             },
             definition: None,
             pre: ItemFacts::File(pre),
@@ -1599,7 +2056,9 @@ fn an_unfinished_backup_purge_is_continued_without_a_second_record() {
     let report = purge(&fx.roots, &b.ids[..1], &naming_files(&b), at_day(181)).unwrap();
     assert_eq!(report.items[0].outcome, PurgeOutcome::Purged);
     assert!(!report.items[0].expire_recorded);
-    assert_eq!(report.index, IndexUpdate::NotNeeded);
+    // Changed by S3 of the final M2 review: the bytes leave the index when the files are gone, so
+    // the run that finishes the op updates it (the run that wrote the record and stopped did not).
+    assert_eq!(report.index, IndexUpdate::Updated);
     assert!(!backup_exists(&b, &b.files[0]) && backup_exists(&b, &b.files[1]));
     assert_eq!(
         expire_records(&b.session),

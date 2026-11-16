@@ -56,7 +56,7 @@
 //! | backup not written or not verified | [`BackupWriteError`]: `Skipped{NoVerifiedBackup}` |
 //! | done and verified on the handle (key deleted, value gone, value holds the written data) | `Done` |
 //! | the action ran but the verify does not see its result | `Failed{VerifyFailed}` |
-//! | a tree delete stopped and putting back the deleted keys failed | `Failed{VerifyFailed}` (mixed state) |
+//! | a tree delete stopped and putting back the deleted keys failed, or put a key back with another owner or DACL | `Failed{VerifyFailed}` (mixed state) |
 //!
 //! A tree delete that stops on a change puts the keys it already deleted back from the backup (per
 //! subtree, all or nothing) before it reports the skip.
@@ -96,7 +96,7 @@
 //! | any | the parent (key target) or the key holding the value is missing (at the undo gate, or deleted after it before anything was created) | conflict `ParentMissing` |
 //! | any | backup file missing | conflict `BackupMissing` |
 //! | any | backup file unreadable, size or SHA-256 differs, or not the op's backup | conflict `BackupTampered` |
-//! | `RestoreKeyTree`, `RecreateKey` | key absent | `Restored` (all or nothing) |
+//! | `RestoreKeyTree`, `RecreateKey` | key absent | `Restored` (all or nothing); a re-created key whose owner, group or DACL (flags included) reads back other than recorded after one correction: `Failed{VerifyFailed}` with the difference |
 //! | | key present and equal to the backup (owners aside) | `AlreadyRestored` |
 //! | | key present below `Installer`, `Services` or a COM root | conflict `KeyExists` |
 //! | | key present elsewhere, empty | merged into it: `Restored` (its own class and security kept, reported) |
@@ -120,7 +120,11 @@
 //! A run may delete values and subkeys of a key and then the key (delete-if-empty, or a tree that
 //! still holds other things); the plan puts the inner items first. The executor tells the gate context
 //! the run's ops and each completed op (`GateCtx::set_run_ops`, `GateCtx::note_done`), and the gate
-//! accepts the key as changed by exactly those own ops (see `crate::gate`). Each item keeps its own
+//! accepts the key as changed by exactly those own ops (see `crate::gate`). A key action's backup is
+//! also bound to the whole tree its validation read (`gate::bind_tree`): the captured tree, with what
+//! those own ops changed in it put back, must have the digest the `validated` record holds, so a change
+//! by anyone else anywhere in the tree, also one made before an own op on the same key, is refused before
+//! anything is deleted (review M2 final S4, S5). Each item keeps its own
 //! backup and inverse: the key's backup holds the key as it was at its act (without what the earlier
 //! items removed), each earlier item's backup holds what it removed. Undo must run the session's
 //! registry ops in **reverse op order**: the key is put back first (`RecreateKey` re-creates the empty
@@ -134,9 +138,9 @@ use std::path::PathBuf;
 use purge_guard::containers;
 use purge_guard::deny::Exemptions;
 use purge_guard::live::{self, Refusal};
-use purge_model::exec::journal::{Intent, UndoConflict, UndoOutcome};
+use purge_model::exec::journal::{Intent, ItemFacts, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{BackupRef, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
-use purge_model::exec::regbackup::{RegBackup, RegBackupBody, RegBackupSchema};
+use purge_model::exec::regbackup::{RegBackup, RegBackupBody, RegBackupSchema, WideB64};
 use purge_model::{Blocker, Target};
 use purge_win::fs_write::FsError;
 use purge_win::os::Win32Error;
@@ -405,6 +409,30 @@ fn refused(refusal: &Refusal, exec_op: &ExecOp) -> RegResult {
     }
 }
 
+/// The result of a gate outcome that is not a pass, for a registry item the executor journals without an
+/// intent (`done_without_intent`), such as one the validate pass refused: `Vanished`, a refusal as the
+/// act reports it (a delete-if-empty key that holds a value or subkey is `Skipped{NoLongerEmpty}`, any
+/// other soft refusal `Skipped{ChangedSinceScan}`, a hard one `Skipped{GateBlocked{blocker}}`), or
+/// `Failed`. `None` for `Pass` and `Locked`.
+///
+/// A key that was not empty when it was validated did not change: it is simply not empty. The guard
+/// gives that the soft blocker `ChangedSinceScan` with the reason `live.g13.not-empty`, and the reason
+/// is what decides here, before the blocker.
+pub fn gate_result<T>(outcome: &GateOutcome<T>, exec_op: &ExecOp) -> Option<RegResult> {
+    match outcome {
+        GateOutcome::Pass(_) | GateOutcome::Locked(_) => None,
+        GateOutcome::Vanished => Some(RegResult::new(
+            ItemOutcome::Vanished,
+            format!("{} no longer exists", what(exec_op)),
+        )),
+        GateOutcome::Refused(refusal) => Some(refused(refusal, exec_op)),
+        GateOutcome::Failed(e) => Some(RegResult::os(
+            *e,
+            format!("opening {} failed: {e}; left untouched", what(exec_op)),
+        )),
+    }
+}
+
 /// The act-time gate for op `op`: the key opened with the access the action needs, every fact read from
 /// that handle, every rule applied, against the facts of the op's journal `validated` record (a key's
 /// counts, link state, owner and last write time; a value's type, length and hash; for a segment edit
@@ -577,18 +605,24 @@ pub fn prepare_reg(
             Ok(doc) => (doc, Act::Empty),
             Err(result) => return decided(result),
         },
-        ExecOp::DeleteValue { name, .. } => {
-            match regbackup::capture_value(checked.key(), &key, name) {
-                Ok(Some(doc)) => (doc, Act::Value { name: name.clone() }),
-                Ok(None) => {
-                    return decided(RegResult::new(
-                        ItemOutcome::Vanished,
-                        format!("{} no longer exists", what(exec_op)),
-                    ));
-                }
+        // The value as the gate read and checked it on the acting handle, not read again (review M2
+        // final M11); the delete removes it only while it is still exactly this.
+        ExecOp::DeleteValue { name, .. } => match checked.value().cloned() {
+            Some(value) => match regbackup::value_backup(&key, value) {
+                Ok(doc) => (doc, Act::Value { name: name.clone() }),
                 Err(e) => return decided(capture_refused(&e, exec_op)),
+            },
+            None => {
+                return decided(RegResult::failed(
+                    FailCode::Internal,
+                    None,
+                    format!(
+                        "the gate passed {} without the value it read; left untouched",
+                        what(exec_op)
+                    ),
+                ));
             }
-        }
+        },
         ExecOp::EditSegment {
             name,
             segment,
@@ -610,7 +644,29 @@ pub fn prepare_reg(
         | ExecOp::RemoveDirIfEmpty { .. }
         | ExecOp::RemovePackage { .. } => unreachable!("checked by is_registry above"),
     };
+    // A key action is bound to the whole tree it validated, not only to the root's facts: the tree the
+    // backup will hold must be that tree as this run's own completed ops left it (review M2 final S4,
+    // S5). The digest of the capture goes into the intent's `pre`.
+    let mut pre = checked.item_facts().clone();
+    if let (Act::Tree | Act::Empty, Some(tree)) = (&act, doc.tree()) {
+        if let Err(refusal) = gate::bind_tree(ctx, op, &checked, tree) {
+            return decided(refused(&refusal, exec_op));
+        }
+        if let ItemFacts::Key(facts) = &mut pre {
+            facts.tree_sha256 = regbackup::tree_digest(tree);
+        }
+    }
+    // The document must be this op's backup before it is written (review M2 final S6).
+    if let Err(detail) = backup_for_op(ctx, &doc, exec_op, &checked) {
+        return decided(not_this_ops_backup(exec_op, &detail));
+    }
     let backup = write_backup(session, op, &doc)?;
+    // ... and the file as written and read back (or adopted) too, before anything is deleted.
+    if let Err(detail) = backup_for_op(ctx, backup.doc(), exec_op, &checked)
+        .and_then(|()| same_capture(backup.doc(), &doc))
+    {
+        return decided(not_this_ops_backup(exec_op, &detail));
+    }
     let reference = backup.reference().clone();
     let inverse = match &act {
         Act::Tree => Inverse::RestoreKeyTree { backup: reference },
@@ -632,7 +688,7 @@ pub fn prepare_reg(
         exec_op: exec_op.clone(),
         inverse,
         definition: None,
-        pre: checked.item_facts().clone(),
+        pre,
     };
     Ok(RegPrepared::Ready(Box::new(RegAction {
         intent,
@@ -640,6 +696,90 @@ pub fn prepare_reg(
         backup,
         act,
     })))
+}
+
+/// Whether `doc` is the backup of `exec_op` as the gate opened it (`checked`), checked before the
+/// backup is written and again on the file as read back, so that nothing is deleted whose backup undo,
+/// probe or completion would refuse (review M2 final S6):
+///
+/// - the document is the op's backup as every reader checks it (`RegBackup::validate_for`: the op's
+///   key text, a tree whose root name is the leaf of that text, or the op's value);
+/// - its key text leads to the address, view and root the gate opened ([`live::key_probe`]);
+/// - a tree's root name is the leaf of that address (the name undo re-creates below the parent);
+/// - a value is the value the gate read on the acting handle (name, type, data).
+fn backup_for_op(
+    ctx: &GateCtx,
+    doc: &RegBackup,
+    exec_op: &ExecOp,
+    checked: &CheckedKey,
+) -> Result<(), String> {
+    doc.validate_for(exec_op)
+        .map_err(|e| format!("it is not the op's backup: {e}"))?;
+    let target = match exec_op {
+        ExecOp::DeleteValue { name, .. } | ExecOp::EditSegment { name, .. } => Target::RegValue {
+            path: doc.key.clone(),
+            name: name.clone(),
+        },
+        _ => Target::RegKey {
+            path: doc.key.clone(),
+        },
+    };
+    let probe = live::key_probe(&target, ctx.deny().env())
+        .map_err(|refusal| format!("its key does not lead to a key: {refusal}"))?;
+    if !probe.open.is_same(checked.address()) {
+        return Err(format!(
+            "its key leads to {}, not to {}",
+            probe.open,
+            checked.address()
+        ));
+    }
+    match (&doc.body, exec_op) {
+        (RegBackupBody::Tree(tree), _) => {
+            let leaf = purge_guard::prefix::leaf(&checked.address().path).unwrap_or_default();
+            let root = tree.keys.first().map(|key| key.name_b64.0.clone());
+            if root.map(|units| regbackup::fold_units(&units)) != Some(regbackup::fold_str(leaf)) {
+                return Err(format!("its root key is not {leaf:?}"));
+            }
+        }
+        (RegBackupBody::Value(value), ExecOp::DeleteValue { .. }) => {
+            let read = checked.value();
+            let same = read.is_some_and(|read| {
+                value.name_b64 == WideB64::from(read.name.as_str())
+                    && value.value_type == read.ty
+                    && value.data_b64.0 == read.data
+            });
+            if !same {
+                return Err("its value is not the one the gate read".to_owned());
+            }
+        }
+        (RegBackupBody::Value(_), _) => {}
+    }
+    Ok(())
+}
+
+/// Whether the backup file holds what was captured (`doc`), the capture time aside (an adopted file
+/// keeps its own).
+fn same_capture(found: &RegBackup, doc: &RegBackup) -> Result<(), String> {
+    let fresh = RegBackup {
+        captured: found.captured,
+        ..doc.clone()
+    };
+    if *found == fresh {
+        Ok(())
+    } else {
+        Err("the file does not hold what was captured".to_owned())
+    }
+}
+
+/// The result of a backup that is not the op's backup: skipped, nothing deleted.
+fn not_this_ops_backup(exec_op: &ExecOp, detail: &str) -> RegResult {
+    RegResult::skipped(
+        SkipReason::NoVerifiedBackup,
+        format!(
+            "{}: the backup was not used: {detail}; left untouched",
+            what(exec_op)
+        ),
+    )
 }
 
 /// Delete-if-empty: the counts read again on the gated handle, then the one-key capture.
@@ -939,7 +1079,9 @@ fn delete_stopped(error: &DeleteError, at: &str, empty: bool) -> RegResult {
         error.failure,
         rollback_text(&error.rollback)
     );
-    if !error.rollback.is_complete() {
+    // Keys put back with another owner or DACL than they had are a change Purge made: not a skip.
+    let lost = !security_lost(&error.rollback).is_empty();
+    if !error.rollback.is_complete() || lost {
         let os_error = match &error.rollback {
             Rollback::Incomplete { failure, .. } => Some(failure.error.code()),
             _ => None,
@@ -1371,6 +1513,11 @@ fn restore_result(result: Result<RestoreReport, RestoreError>, at: &str) -> RegU
                     differences_text(&report.differences)
                 )
             };
+            // A key back with another owner or DACL than recorded is not the state before the op: the
+            // restore ran, but its verify does not see what it was to put back.
+            if report.differences.iter().any(Difference::is_security) {
+                return RegUndoResult::failed(FailCode::VerifyFailed, None, detail);
+            }
             let outcome = match report.outcome {
                 RestoreOutcome::Restored => UndoOutcome::Restored,
                 RestoreOutcome::AlreadyRestored => UndoOutcome::AlreadyRestored,
@@ -1647,21 +1794,65 @@ fn complete_key(ctx: &GateCtx, session: &SessionDir, intent: &Intent) -> RegResu
         }
         Err(stopped) => stopped,
     };
-    let whole =
-        stopped.rollback.is_complete() || regbackup::restore_missing(&parent, &backup).is_ok();
-    if !whole {
+    let missing =
+        (!stopped.rollback.is_complete()).then(|| regbackup::restore_missing(&parent, &backup));
+    completion_stopped(&stopped, missing)
+}
+
+/// The security differences of a rollback: keys put back with another owner or DACL than they had.
+fn security_lost(rollback: &Rollback) -> Vec<Difference> {
+    match rollback {
+        Rollback::Done { differences, .. } | Rollback::PartialBefore { differences, .. } => {
+            differences
+                .iter()
+                .filter(|d| d.is_security())
+                .cloned()
+                .collect()
+        }
+        Rollback::NotNeeded | Rollback::Incomplete { .. } => Vec::new(),
+    }
+}
+
+/// The result of a resumed key delete ([`complete_key`]) that stopped. `missing` is the put-back of the
+/// keys still missing after the rollback ([`regbackup::restore_missing`]), `None` when the rollback alone
+/// made the key whole. The key must be whole, and put back with the recorded owners and DACLs, as
+/// [`delete_stopped`] requires of an ordinary run; otherwise `Failed{VerifyFailed}`, which undo reads as
+/// a change to look at (F3 of the M2 fix-round review: it was `Skipped`, "nothing to undo").
+fn completion_stopped(
+    stopped: &DeleteError,
+    missing: Option<Result<RestoreReport, RestoreError>>,
+) -> RegResult {
+    let mut lost = security_lost(&stopped.rollback);
+    match missing {
+        Some(Err(_)) => {
+            return RegResult::failed(
+                FailCode::VerifyFailed,
+                None,
+                format!(
+                    "the key delete stopped ({stopped}) and the key could not be put back whole"
+                ),
+            );
+        }
+        Some(Ok(report)) => lost.extend(report.differences.into_iter().filter(|d| d.is_security())),
+        None => {}
+    }
+    if !lost.is_empty() {
         return RegResult::failed(
             FailCode::VerifyFailed,
             None,
-            format!("the key delete stopped ({stopped}) and the key could not be put back whole"),
+            format!(
+                "the key delete stopped ({stopped}); the key is whole, but keys were put back with \
+                 differences: {}",
+                differences_text(&lost)
+            ),
         );
     }
-    match stopped.failure {
+    match &stopped.failure {
         DeleteFailure::Changed(_) => changed_since_scan(format!(
             "the key delete stopped: {stopped}; the key is whole"
         )),
         DeleteFailure::Os { error, .. } => {
-            RegResult::os(error, format!("the key delete stopped: {stopped}"))
+            RegResult::os(*error, format!("the key delete stopped: {stopped}"))
         }
         DeleteFailure::WrongBackupKind | DeleteFailure::NotThisKey => RegResult::failed(
             FailCode::Internal,

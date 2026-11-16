@@ -9,7 +9,9 @@
 //! 3. `purge-win` must not have feature `write` in purge-mcp's own tree (kept as a direct statement of the
 //!    rule; check 1 already implies it).
 //! 4. **Executor.** Only purge-engine links purge-exec, only with its `rig-exec` feature, and `fault-inject`
-//!    comes on only through `rig-exec` (see `exec_violations`).
+//!    comes on only through `rig-exec` (see `exec_violations`). A default workspace build links purge-exec
+//!    into nothing, and the engine's own tree has no `purge-win/write` (see `default_build_violations`;
+//!    releases are built with `cargo build --release -p purge-engine`).
 //! 5. **Relaxed store.** purge-exec's `test-support` comes on only through purge-engine's `sandbox-dev`
 //!    (never a default, `rig-exec` or workspace build; see `test_support_violations`).
 //!
@@ -261,6 +263,42 @@ fn test_support_violations(manifest: &str, engine_sandbox: &str) -> Vec<String> 
     out
 }
 
+/// Violations of the default build's rules (review M2 M22). The listings are:
+/// - `default_dependents`: `cargo tree --workspace -i purge-exec -f "{p}"` with default features: a
+///   default workspace build links purge-exec into nothing (a feature another member switches on in the
+///   engine would show here, though `-p purge-engine` alone does not show it);
+/// - `engine_default`: `cargo tree -p purge-engine -f "{p} {f}"`: purge-win without `write`.
+///
+/// Releases are built with `cargo build --release -p purge-engine`: a `--workspace` build unifies
+/// `purge-win/write` (purge-exec's) into the engine, `-p purge-engine` does not.
+fn default_build_violations(default_dependents: &str, engine_default: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut deps = default_dependents
+        .lines()
+        .filter_map(parse_line)
+        .map(|l| l.name);
+    if deps.next() != Some(EXEC) {
+        out.push(format!(
+            "unexpected cargo tree -i {EXEC} output (first package is not {EXEC})"
+        ));
+    }
+    for name in deps.collect::<BTreeSet<_>>() {
+        out.push(format!(
+            "a default workspace build links {EXEC} into {name}"
+        ));
+    }
+    if engine_default
+        .lines()
+        .filter_map(parse_line)
+        .any(|l| l.name == "purge-win" && l.features.contains(&"write"))
+    {
+        out.push(format!(
+            "{ENGINE} builds purge-win with feature `write` without rig-exec"
+        ));
+    }
+    out
+}
+
 fn cargo_tree(root: &Path, args: &[&str]) -> Result<String> {
     let output = crate::cargo()
         .arg("tree")
@@ -277,6 +315,32 @@ fn cargo_tree(root: &Path, args: &[&str]) -> Result<String> {
         );
     }
     String::from_utf8(output.stdout).context("cargo tree output is not UTF-8")
+}
+
+/// The text of [`ENGINE`]'s Cargo.toml, found through `cargo metadata` (the workspace may lay it out
+/// anywhere: `bins/purge-engine` in the repository, `purge-engine` in the fixtures of the tests).
+fn engine_manifest(root: &Path) -> Result<String> {
+    let output = crate::cargo()
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(root)
+        .output()
+        .context("running cargo metadata")?;
+    if !output.status.success() {
+        bail!(
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let meta: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("cargo metadata output is not JSON")?;
+    let path = meta["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|p| p["name"] == ENGINE)
+        .and_then(|p| p["manifest_path"].as_str())
+        .with_context(|| format!("cargo metadata lists no {ENGINE}"))?;
+    std::fs::read_to_string(path).with_context(|| format!("reading {path}"))
 }
 
 /// Runs the check; `Ok(false)` on a violation.
@@ -313,7 +377,7 @@ pub fn run(root: &Path) -> Result<bool> {
             "{p}",
         ],
     )?;
-    let engine_default = cargo_tree(root, &["-p", ENGINE, "-f", "{p}"])?;
+    let engine_default = cargo_tree(root, &["-p", ENGINE, "-f", "{p} {f}"])?;
     let engine_rig = cargo_tree(
         root,
         &["-p", ENGINE, "--features", "rig-exec", "-f", "{p} {f}"],
@@ -325,8 +389,12 @@ pub fn run(root: &Path) -> Result<bool> {
         &engine_rig,
         &workspace_features,
     ));
-    let manifest = std::fs::read_to_string(root.join("bins/purge-engine/Cargo.toml"))
-        .context("reading bins/purge-engine/Cargo.toml")?;
+    let default_dependents = cargo_tree(root, &["--workspace", "-i", EXEC, "-f", "{p}"])?;
+    found.extend(default_build_violations(
+        &default_dependents,
+        &engine_default,
+    ));
+    let manifest = engine_manifest(root)?;
     let engine_sandbox = cargo_tree(
         root,
         &["-p", ENGINE, "--features", SANDBOX_DEV, "-f", "{p} {f}"],
@@ -345,7 +413,8 @@ pub fn run(root: &Path) -> Result<bool> {
             forbidden.len()
         );
         println!(
-            "check-deps: ok ({EXEC} is linked only by {ENGINE}, and with fault-inject only through rig-exec)"
+            "check-deps: ok ({EXEC} is linked only by {ENGINE}, and with fault-inject only through rig-exec; \
+             a default build links it into nothing and {ENGINE} has no purge-win/write)"
         );
         println!(
             "check-deps: ok ({EXEC} test-support only through {ENGINE} feature {SANDBOX_DEV})"
@@ -527,5 +596,120 @@ mod tests {
             test_support_violations(good, rig_only),
             ["purge-engine with feature sandbox-dev does not build purge-exec with test-support"]
         );
+    }
+
+    #[test]
+    fn a_default_build_links_no_executor_and_no_write() {
+        let none = "purge-exec v0.1.0 (C:\\x)\n";
+        let engine = "purge-engine v0.1.0 (C:\\e)\npurge-win v0.1.0 (C:\\w) appx,read,run\n";
+        assert!(default_build_violations(none, engine).is_empty());
+        let linked = "purge-exec v0.1.0 (C:\\x)\npurge-engine v0.1.0 (C:\\e)\n\
+                      purge-xtask v0.1.0 (C:\\t)\npurge-engine v0.1.0 (C:\\e) (*)\n";
+        assert_eq!(
+            default_build_violations(linked, engine),
+            [
+                "a default workspace build links purge-exec into purge-engine",
+                "a default workspace build links purge-exec into purge-xtask",
+            ]
+        );
+        let write = "purge-engine v0.1.0 (C:\\e)\npurge-win v0.1.0 (C:\\w) read,write\n";
+        assert_eq!(
+            default_build_violations(none, write),
+            ["purge-engine builds purge-win with feature `write` without rig-exec"]
+        );
+        assert_eq!(default_build_violations("", engine).len(), 1);
+    }
+
+    /// A scratch Cargo workspace with the crates rule 4 names, removed on drop.
+    struct FixtureWorkspace(std::path::PathBuf);
+
+    impl FixtureWorkspace {
+        /// Members `purge-mcp`, `purge-exec`, `purge-win`, `purge-engine` as the real ones relate
+        /// (`engine_extra` is added to the engine's manifest), plus `purge-other` with `other_deps`.
+        fn new(tag: &str, engine_extra: &str, other_deps: &str) -> FixtureWorkspace {
+            let root =
+                std::env::temp_dir().join(format!("purge-xtask-deps-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let krate = |name: &str, manifest: &str| {
+                let dir = root.join(name);
+                std::fs::create_dir_all(dir.join("src")).unwrap();
+                std::fs::write(dir.join("src").join("lib.rs"), "").unwrap();
+                std::fs::write(
+                    dir.join("Cargo.toml"),
+                    format!(
+                        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n{manifest}"
+                    ),
+                )
+                .unwrap();
+            };
+            krate("purge-mcp", "");
+            krate(
+                "purge-win",
+                "[features]\ndefault = [\"read\"]\nread = []\nwrite = [\"read\"]\n",
+            );
+            krate(
+                "purge-exec",
+                "[features]\nfault-inject = []\ntest-support = []\n\
+                 [dependencies]\npurge-win = { path = \"../purge-win\", features = [\"write\"] }\n",
+            );
+            krate(
+                "purge-engine",
+                &format!(
+                    "[features]\nrig-exec = [\"dep:purge-exec\", \"purge-exec/fault-inject\"]\n\
+                     sandbox-dev = [\"rig-exec\", \"purge-exec/test-support\"]\n{engine_extra}\n\
+                     [dependencies]\npurge-win = {{ path = \"../purge-win\", features = [\"read\"] }}\n\
+                     purge-exec = {{ path = \"../purge-exec\", optional = true }}\n"
+                ),
+            );
+            krate("purge-other", &format!("[dependencies]\n{other_deps}\n"));
+            std::fs::write(
+                root.join("Cargo.toml"),
+                "[workspace]\nresolver = \"2\"\n\
+                 members = [\"purge-mcp\", \"purge-win\", \"purge-exec\", \"purge-engine\", \"purge-other\"]\n",
+            )
+            .unwrap();
+            FixtureWorkspace(root)
+        }
+    }
+
+    impl Drop for FixtureWorkspace {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Review M2 M22: the rule run on real manifests. A clean workspace passes; an engine feature that
+    /// another member switches on and links the executor fails, and so does an engine that asks for
+    /// `purge-win/write` itself. Both broken manifests passed the checks before this rule.
+    #[test]
+    fn rule_4_fails_on_broken_manifests() {
+        let clean = FixtureWorkspace::new("clean", "", "");
+        assert!(run(&clean.0).unwrap());
+
+        let unified = FixtureWorkspace::new(
+            "unified",
+            "exec-core = [\"dep:purge-exec\"]",
+            "purge-engine = { path = \"../purge-engine\", features = [\"exec-core\"] }",
+        );
+        assert!(!run(&unified.0).unwrap());
+        let tree = |root: &Path, args: &[&str]| cargo_tree(root, args).unwrap();
+        assert_eq!(
+            default_build_violations(
+                &tree(&unified.0, &["--workspace", "-i", EXEC, "-f", "{p}"]),
+                &tree(&unified.0, &["-p", ENGINE, "-f", "{p} {f}"]),
+            ),
+            [
+                "a default workspace build links purge-exec into purge-engine",
+                "a default workspace build links purge-exec into purge-other",
+            ]
+        );
+
+        let write = FixtureWorkspace::new("write", "", "");
+        let manifest = write.0.join("purge-engine").join("Cargo.toml");
+        let text = std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("features = [\"read\"]", "features = [\"read\", \"write\"]");
+        std::fs::write(&manifest, text).unwrap();
+        assert!(!run(&write.0).unwrap());
     }
 }

@@ -6,8 +6,9 @@
 //!   administrator ACLs) under [`ROOT_VAR`], or `%LOCALAPPDATA%\PurgeSandboxDev` when it is unset. `exec`
 //!   creates it on first use; the other verbs need it to exist.
 //! - **Elevation.** Not needed: [`crate::cli::exec::run_live`] answers "elevated" for this build.
-//! - **Sandboxie only.** Every destructive verb (`exec`, `undo`, `journal resume` / `rollback`,
-//!   `quarantine purge`) is refused with [`Exit::NotInSandbox`](crate::cli::Exit) unless the process runs
+//! - **Sandboxie only.** Every destructive verb (`exec`, `undo`, `journal resume` / `rollback` /
+//!   `retry-held`, `quarantine purge`) is refused with exit code 13,
+//!   [`Exit::NotInSandbox`](crate::cli::Exit), unless the process runs
 //!   inside Sandboxie, which this module tells by `SbieDll.dll` being loaded in it: Sandboxie injects that
 //!   DLL into every sandboxed process (the x64 and the x86 DLL have the same name). The check runs before
 //!   anything is read or created, so this build cannot change the real machine by accident.
@@ -38,6 +39,10 @@ pub const SBIE_DLL: &str = "SbieDll.dll";
 /// What a refused destructive verb prints after its name.
 pub const REFUSAL: &str = "this is a SANDBOX DEV BUILD and the process is not running inside Sandboxie \
                            (SbieDll.dll is not loaded); start it in a Sandboxie box. Nothing was done.";
+
+/// What `--help` of a `sandbox-dev` build adds after the common text: its exit code 13.
+pub const HELP: &str = "\nsandbox dev build:\n  13  sandbox dev build: destructive verb refused outside \
+                        Sandboxie; nothing was done\n";
 
 thread_local! {
     static INSIDE_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
@@ -170,6 +175,13 @@ mod tests {
         // A second use opens the same store.
         store_at(&root, false).unwrap().check().unwrap();
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_help_names_exit_13_with_the_table_wording() {
+        let exit = crate::cli::Exit::NotInSandbox;
+        assert_eq!(exit.code(), 13);
+        assert!(HELP.contains(&format!("{:>4}  {}\n", exit.code(), exit.meaning())));
     }
 
     #[test]

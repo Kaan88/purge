@@ -279,10 +279,24 @@ pub const ROOT_TAKEOVER_RIGHTS: u32 = 0x40 | 0x0004_0000 | 0x0008_0000 | 0x1000_
 const CREATOR_OWNER_SID: &str = "S-1-3-0";
 /// `OWNER RIGHTS`, whose entries apply to the owner, checked separately.
 const OWNER_RIGHTS_SID: &str = "S-1-3-4";
+/// `LOCAL SERVICE`.
+const LOCAL_SERVICE_SID: &str = "S-1-5-19";
+/// `NETWORK SERVICE`. The Storage Management API formats volumes in a host process running as this
+/// account, which then owns the new volume's root (`Format-Volume`: the M2 rig's `D:\` is owned by it).
+const NETWORK_SERVICE_SID: &str = "S-1-5-20";
+
+/// Whether `sid` may own a volume root or hold [`ROOT_TAKEOVER_RIGHTS`] on it: an administrator
+/// principal of `policy`, or one of the two built-in service accounts. Those are not users anybody
+/// logs on as; services under them are configured by administrators and hold the impersonation
+/// privilege, which Windows does not treat as a boundary to SYSTEM. A standard user is never one of
+/// them.
+fn is_root_principal(policy: &IntegrityPolicy, sid: &str) -> bool {
+    policy.is_admin_sid(sid) || sid == LOCAL_SERVICE_SID || sid == NETWORK_SERVICE_SID
+}
 
 /// The verdict on the root of a volume that is to hold `X:\.purge-q`: `Ok` when only
-/// Administrators, SYSTEM and TrustedInstaller (and the test user under the relaxed policy) own it
-/// or hold [`ROOT_TAKEOVER_RIGHTS`] on the root itself.
+/// Administrators, SYSTEM, TrustedInstaller, LOCAL SERVICE and NETWORK SERVICE (and the test user
+/// under the relaxed policy) own it or hold [`ROOT_TAKEOVER_RIGHTS`] on the root itself.
 ///
 /// `.purge-q` refuses everyone else, but a principal with delete-child on the root can rename it
 /// away and plant another; the store then rejects the planted one and the quarantined data is lost
@@ -293,7 +307,7 @@ pub fn volume_root_verdict(
     owner: Option<&str>,
     dacl: Option<&[Ace]>,
 ) -> Result<(), IntegrityFailure> {
-    if !owner.is_some_and(|o| policy.is_admin_sid(o)) {
+    if !owner.is_some_and(|o| is_root_principal(policy, o)) {
         return Err(IntegrityFailure::Owner {
             owner: owner.map(str::to_owned),
         });
@@ -303,7 +317,7 @@ pub fn volume_root_verdict(
     };
     for ace in dacl.iter().filter(|a| a.is_allow() && a.is_effective()) {
         if ace.sid.as_deref().is_some_and(|s| {
-            policy.is_admin_sid(s) || s == CREATOR_OWNER_SID || s == OWNER_RIGHTS_SID
+            is_root_principal(policy, s) || s == CREATOR_OWNER_SID || s == OWNER_RIGHTS_SID
         }) {
             continue;
         }
@@ -377,6 +391,48 @@ mod tests {
         assert_eq!(volume_root_verdict(&relaxed, Some(ME), Some(&mine)), Ok(()));
         mine.push(ace(USERS, 0x40, 0));
         assert!(volume_root_verdict(&relaxed, Some(ME), Some(&mine)).is_err());
+    }
+
+    #[test]
+    fn a_volume_root_formatted_by_the_storage_service_is_accepted() {
+        // The M2 rig's `D:\` after `Format-Volume`: owner NETWORK SERVICE, the usual drive DACL.
+        let strict = IntegrityPolicy::strict();
+        let mut drive = admin_dacl();
+        drive.push(ace("S-1-5-11", 0x0000_0004, 0));
+        drive.push(ace(USERS, 0x0012_00A9, 0x03));
+        drive.push(ace(CREATOR_OWNER_SID, 0x1000_0000, 0x0B));
+        for service in [NETWORK_SERVICE_SID, LOCAL_SERVICE_SID] {
+            assert_eq!(
+                volume_root_verdict(&strict, Some(service), Some(&drive)),
+                Ok(()),
+                "{service}"
+            );
+            let mut granted = drive.clone();
+            granted.push(ace(service, 0x001F_01FF, 0x03));
+            assert_eq!(
+                volume_root_verdict(&strict, Some(ADMINISTRATORS_SID), Some(&granted)),
+                Ok(()),
+                "{service}"
+            );
+        }
+        // A user still may not own the root or take children away, whoever else owns it.
+        assert!(volume_root_verdict(&strict, Some(ME), Some(&drive)).is_err());
+        let mut open = drive.clone();
+        open.push(ace(ME, 0x40, 0));
+        assert_eq!(
+            volume_root_verdict(&strict, Some(NETWORK_SERVICE_SID), Some(&open)),
+            Err(IntegrityFailure::ForeignAccess {
+                sid: Some(ME.to_owned()),
+                mask: 0x40
+            })
+        );
+        // Store objects themselves still need Administrators or SYSTEM as owner.
+        let mut facts = dir_facts(admin_dacl());
+        facts.owner = Some(NETWORK_SERVICE_SID.to_owned());
+        assert!(matches!(
+            verdict(&strict, ObjectKind::Store, &facts),
+            Err(IntegrityFailure::Owner { .. })
+        ));
     }
     const ME: &str = "S-1-5-21-1-2-3-1001";
 

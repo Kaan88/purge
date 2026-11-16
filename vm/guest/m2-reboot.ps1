@@ -1,4 +1,4 @@
-# Purge rig, M2: boot-time moves (vm\RIG.md §11; docs\M2_DESIGN.json gate G4). Template: the host (rig.ps1
+﻿# Purge rig, M2: boot-time moves (vm\RIG.md §11; docs\M2_DESIGN.json gate G4). Template: the host (rig.ps1
 # New-M2JobText) replaces __RUN__, __MODE__ (m2-reboot), __STAGE__ and __OPTS__ and submits it as an agent job.
 # Windows PowerShell 5.1. The trap items of group 'locked' (vm\truth\m2-traps.json): boot-admin-locked.file (admin
 # directory, expected PendingReboot) and boot-uw-planted.file (user-writable ancestor, expected HeldRetry).
@@ -136,7 +136,9 @@ function Invoke-Start {
         if ($r1.exit -ne 0) { throw "install.ps1 exited $($r1.exit)" }
         $S.engine.exe = Get-M2EngineExe
     } $S
-    Phase 'traps-build' { $e = Invoke-Traps ''; if ($e -ne 0) { throw "m2-traps build exit $e" } } $S
+    # -RebootSafe: ph\cloud-tag.txt carries OFFLINE instead of the cloud reparse tag, which does not survive a reboot
+    # (ERROR_FILE_CORRUPT afterwards; RIG.md §11.3). The non-reboot modes keep the reparse tag.
+    Phase 'traps-build' { $e = Invoke-Traps '-RebootSafe'; if ($e -ne 0) { throw "m2-traps build exit $e" } } $S
     Phase 'pfro-before' {
         $St.pfro_before = @(Save-Pfro 'before')
         $li = Get-LockedItems

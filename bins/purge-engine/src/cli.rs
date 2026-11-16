@@ -19,12 +19,17 @@
 //! | 4 | `UninstallFailed` | the uninstaller failed, was cancelled or timed out (`run.json` is still written) |
 //! | 5 | `NeedsConsent` | an executor verb (`exec`, `undo`, `journal`, `quarantine`, `plan from-targets`) in a build without `rig-exec`: it needs the consent dialog of a later version |
 //! | 6 | `PlanRefused` | the plan was refused before a session existed: plan hash, sidecar, selection, order or confirmation; an undo of items the session does not hold or under another plan hash |
-//! | 7 | `NeedsElevation` | `exec`, `undo`, `journal resume` / `rollback`, `quarantine purge` run unelevated |
+//! | 7 | `NeedsElevation` | `exec`, `undo`, `journal resume` / `rollback` / `retry-held`, `quarantine purge` run unelevated |
 //! | 8 | `NeedsRecovery` | an interrupted session must be resumed or rolled back first |
 //! | 9 | `StoreIntegrity` | the store or a journal failed its integrity check |
 //! | 10 | `Partial` | the run did not commit, or an item did not end done; a purge item was not deleted (the document is written) |
 //! | 11 | `UndoConflicts` | an undo (or a rollback) ended with conflicts or failures (the document is written) |
-//! | 12 | `NotInSandbox` | `sandbox-dev` builds only: a destructive verb outside Sandboxie ([`sandbox`]) |
+//! | 12 | `Unrecorded` | the session was not closed (a later recovery finishes it), or its report or index entry could not be written; a purge whose index entry was not updated (the document is written) |
+//! | 13 | `NotInSandbox` | `sandbox-dev` builds only: a destructive verb outside Sandboxie ([`sandbox`]); nothing was done |
+//!
+//! When several apply, the higher code is returned: 12 takes precedence over 10 and 11. The document
+//! still states the outcome (the run's state and item outcomes, the undo's counts, each purge result),
+//! and a `warning:` line on stderr names the code 12 hides. 13 is returned before anything is read.
 //!
 //! Being unelevated is never an error for the M1a verbs: `harvest` and `scan` warn and go on with what
 //! they can read.
@@ -44,12 +49,14 @@ pub mod show;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
 use purge_identity::kbdata::Kb;
 use purge_inventory::runner::{ProcessHost, RunOptions};
 use purge_model::{Fingerprint, InventoryDoc, Plan};
 use purge_plan::emit::ScanDoc;
+use purge_source::metered::{Meter, MeterSnapshot};
 
 use crate::pipeline::{self, PipelineError, Scanned, Settings, Sources};
 use args::{
@@ -84,14 +91,16 @@ pub enum Exit {
     Partial,
     /// 11: the undo ended with conflicts or failures.
     UndoConflicts,
-    /// 12: a destructive verb of a `sandbox-dev` build outside Sandboxie (that build only).
+    /// 12: the session was not closed, or its report or index entry was not written.
+    Unrecorded,
+    /// 13: a destructive verb of a `sandbox-dev` build outside Sandboxie (that build only).
     #[cfg(feature = "sandbox-dev")]
     NotInSandbox,
 }
 
 impl Exit {
     /// Every exit code, in numeric order.
-    pub const ALL: [Exit; 12] = [
+    pub const ALL: [Exit; 13] = [
         Exit::Ok,
         Exit::NotImplemented,
         Exit::Usage,
@@ -104,6 +113,7 @@ impl Exit {
         Exit::StoreIntegrity,
         Exit::Partial,
         Exit::UndoConflicts,
+        Exit::Unrecorded,
     ];
 
     /// The numeric exit code.
@@ -121,8 +131,9 @@ impl Exit {
             Exit::StoreIntegrity => 9,
             Exit::Partial => 10,
             Exit::UndoConflicts => 11,
+            Exit::Unrecorded => 12,
             #[cfg(feature = "sandbox-dev")]
-            Exit::NotInSandbox => 12,
+            Exit::NotInSandbox => 13,
         }
     }
 
@@ -146,6 +157,9 @@ impl Exit {
             Exit::Partial => "partial: not every item ended done (the document is still written)",
             Exit::UndoConflicts => {
                 "undo ended with conflicts or failures (the document is still written)"
+            }
+            Exit::Unrecorded => {
+                "session not closed, or its report or index entry not written (the document is still written; takes precedence over 10 and 11, which stderr then names)"
             }
             #[cfg(feature = "sandbox-dev")]
             Exit::NotInSandbox => {
@@ -232,9 +246,32 @@ impl Env<'_> {
     }
 }
 
-/// Writes progress lines to a stream, each with the seconds since `started`.
+/// Writes progress lines to a stream, each with the seconds since `started`. When a source meter is
+/// installed (`PURGE_TIMING`, see `main.rs`), each line is followed by a `timing:` line with the source
+/// calls made since the line before.
 fn progress_line(stderr: &mut dyn Write, started: Instant, line: &str) {
     let _ = writeln!(stderr, "[{:7.3}s] {line}", started.elapsed().as_secs_f64());
+    if let Some(meter) = purge_source::metered::installed() {
+        timing_line(stderr, meter);
+    }
+}
+
+/// The meter's counters at the last [`timing_line`].
+static LAST_TIMING: Mutex<Option<MeterSnapshot>> = Mutex::new(None);
+
+/// Writes the source calls made since the previous call (nothing when there were none).
+fn timing_line(stderr: &mut dyn Write, meter: &Meter) {
+    let now = meter.snapshot();
+    let mut last = LAST_TIMING.lock().unwrap_or_else(PoisonError::into_inner);
+    let delta = match last.as_ref() {
+        Some(before) => now.since(before),
+        None => now.clone(),
+    };
+    *last = Some(now);
+    let summary = delta.summary();
+    if !summary.is_empty() {
+        let _ = writeln!(stderr, "timing:   {summary}");
+    }
 }
 
 /// Runs one command line (without the program name) and returns its exit code. In a `rig-exec` build
@@ -305,6 +342,8 @@ fn run_inner(
         }
         Invocation::Help => {
             let _ = write!(env.stdout, "{USAGE}");
+            #[cfg(feature = "sandbox-dev")]
+            let _ = write!(env.stdout, "{}", sandbox::HELP);
             Exit::Ok
         }
         Invocation::NotImplemented(cmd, _) => {
@@ -669,7 +708,7 @@ mod tests {
     #[test]
     fn exit_codes_are_the_documented_numbers() {
         let codes: Vec<u8> = Exit::ALL.iter().map(|e| e.code()).collect();
-        assert_eq!(codes, (0..=11).collect::<Vec<u8>>());
+        assert_eq!(codes, (0..=12).collect::<Vec<u8>>());
         // The help prints the same table, one code per line.
         for exit in Exit::ALL {
             let line = format!("{:>4}  {}\n", exit.code(), exit.meaning());
@@ -710,6 +749,7 @@ mod tests {
             "journal resume",
             "journal rollback --session s1",
             "journal show --session s1",
+            "journal retry-held --session s1",
             "quarantine expiring",
             "quarantine purge --ids s/1 --yes-irreversible",
         ] {

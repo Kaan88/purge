@@ -8,8 +8,9 @@
 //! 1. The store is checked, the session opened, and its journal read against the mark of its index
 //!    entry ([`journal::read_indexed`]): a journal cut at a line boundary is refused as damaged. An
 //!    unavailable index is a warning, never a guess.
-//! 2. The run must have ended (`commit` or `aborted`) and no retry of a held item may be in flight;
-//!    otherwise the session needs [`crate::recover`] first.
+//! 2. The run must have ended (`commit` or `aborted`), no retry of a held item may be in flight, and
+//!    no earlier undo run may have stopped short of its `undo_plan`
+//!    ([`JournalState::undo_unfinished`]); otherwise the session needs [`crate::recover`] first.
 //! 3. The selection is turned into ops. A partial selection pulls in the ops its restores depend on
 //!    ([`dependencies`]): a file needs the directories above it that this session removed or moved, a
 //!    key or value needs the keys above it that this session deleted.
@@ -18,10 +19,13 @@
 //!    in its module.
 //! 5. Boot-time moves that are still pending are reconciled first ([`locked::reconcile`]); every
 //!    verdict but "still pending" and "cannot be told" is journalled.
-//! 6. The ops are undone in the exact reverse order of the journal's `done` records, the
-//!    `RecreateDir` inverses before all others ([`undo_order`]). Each op is
+//! 6. The ops are undone in the exact reverse order of the journal's `done` records ([`undo_order`]):
+//!    every directory comes back before what was below it. Each op is
 //!    `undo_intent` -> inverse -> `undo_done` or `undo_conflict`; what is decided without running an
-//!    inverse is journalled without an `undo_intent`.
+//!    inverse is journalled without an `undo_intent`. A file op whose item lies below a directory that
+//!    another op of the session removed or moved, and whose undo has not settled, is a conflict
+//!    ([`act_fs::reason::UNDO_PARENT_NOT_RESTORED`]): nothing is put into a directory that is not
+//!    known to be the recorded one.
 //! 7. The session's standing ([`standing`]) goes into its index entry, and the ops the caller asked
 //!    for and got back are written as false-positive labels ([`UndoLabels`]) into the session
 //!    directory.
@@ -38,6 +42,7 @@
 //! | boot-time move still registered | the pair is taken back ([`locked::remove_boot_move`]) |
 //! | boot-time move, state cannot be told | `Failed{VerifyFailed}`, to be tried again |
 //! | reconcile left it needing attention | the conflict of [`locked::undo_locked`] |
+//! | quarantine move that failed or has no `done`, its boot-time move still listed | the pair is taken back first; listed more than once or unreadable: a conflict ([`locked::listed_before_move_back`]) |
 //! | file op | [`act_fs::plan_undo_fs`], [`act_fs::undo_fs`] |
 //! | registry op | [`act_reg::prepare_undo_reg`] (which reads the backup hash-checked), [`act_reg::run_undo_reg`] |
 //! | package removal | [`act_typed::undo_typed`]: an `Irreversible` record, not an error |
@@ -60,7 +65,7 @@ use std::io::Write;
 use purge_guard::deny::{DenyList, Exemptions};
 use purge_guard::prefix;
 use purge_model::exec::journal::{ReconcileResult, Record, UndoConflict, UndoOutcome};
-use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId, Sha256Hex};
+use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, Sha256Hex};
 use purge_model::exec::session::{
     SessionId, SessionIndex, SessionState, SessionSummary, UndoCounts, UndoItemReport, UndoReport,
     UndoReportSchema, UndoResult,
@@ -184,7 +189,8 @@ pub enum UndoError {
     /// A named item is not part of the session.
     #[error("item {0:?} is not part of the session")]
     UnknownItem(String),
-    /// The run did not end, or a retry is in flight: crash recovery comes first.
+    /// The run did not end, a retry is in flight, or an undo run was interrupted before it reached
+    /// every op of its plan: crash recovery comes first.
     #[error("the session needs recovery first: {0}")]
     NeedsRecovery(String),
     /// The journal changed between reading it and opening it to append.
@@ -329,30 +335,46 @@ pub(crate) fn dependencies(ops: &[&OpState], selected: &BTreeSet<OpId>) -> BTree
 }
 
 /// The order `ops` are undone in: the exact reverse of the journal's `done` records (an op with an
-/// intent and no `done` counts at its intent), with every op whose inverse is `RecreateDir` before all
-/// others. Ops with neither record are left out.
+/// intent and no `done` counts at its intent). Ops with neither record are left out.
+///
+/// The run removed and moved inner items before the directories around them (the plan's order check),
+/// so the reverse puts every directory back before anything below it: a directory removed after the
+/// files in it is recreated before they are moved back, and a directory quarantined whole after an
+/// empty directory inside it was removed is moved back before that one is recreated.
 pub(crate) fn undo_order(records: &[Record], ops: &BTreeSet<OpId>) -> Vec<OpId> {
-    // Per op: where it counts in the journal, and whether its inverse recreates a directory.
-    let mut ranked: BTreeMap<OpId, (usize, bool)> = BTreeMap::new();
+    // Per op: where it counts in the journal.
+    let mut ranked: BTreeMap<OpId, usize> = BTreeMap::new();
     for (line, record) in records.iter().enumerate() {
         match record {
             Record::Intent(intent) if ops.contains(&intent.op) => {
-                let recreate = matches!(intent.inverse, Inverse::RecreateDir { .. });
-                ranked.insert(intent.op, (line, recreate));
+                ranked.insert(intent.op, line);
             }
             Record::Done(done) if ops.contains(&done.op) => {
-                let recreate = ranked.get(&done.op).is_some_and(|(_, recreate)| *recreate);
-                ranked.insert(done.op, (line, recreate));
+                ranked.insert(done.op, line);
             }
             _ => {}
         }
     }
-    let mut order: Vec<(OpId, usize, bool)> = ranked
-        .into_iter()
-        .map(|(op, (line, recreate))| (op, line, recreate))
-        .collect();
-    order.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
-    order.into_iter().map(|(op, _, _)| op).collect()
+    let mut order: Vec<(OpId, usize)> = ranked.into_iter().collect();
+    order.sort_by_key(|&(_, line)| std::cmp::Reverse(line));
+    order.into_iter().map(|(op, _)| op).collect()
+}
+
+/// An op of `ops` that removed or moved a directory above the item of `op` (by path), still stands
+/// changed, and whose undo has not settled: nothing is restored below it, since whatever stands at
+/// that path now is not known to be the recorded directory (S1 of the final M2 review).
+fn unrestored_ancestor<'a>(ops: impl Iterator<Item = &'a OpState>, op: &OpState) -> Option<OpId> {
+    let Some(Place::Path(path)) = op.intent.as_ref().and_then(|i| place(&i.exec_op)) else {
+        return None;
+    };
+    ops.filter(|other| other.op != op.op && stands_changed(other) && !other.undo.is_settled())
+        .find(|other| {
+            matches!(
+                other.intent.as_ref().and_then(|i| place(&i.exec_op)),
+                Some(Place::Path(above)) if prefix::is_ancestor(above, path)
+            )
+        })
+        .map(|other| other.op)
 }
 
 /// Journals the `undo_plan` of an undo run over `order` (the selected and pulled-in ops in undo order),
@@ -786,6 +808,27 @@ impl Driver<'_> {
                     }
                     None => {}
                 }
+                // A boot-time move the op may have left registered is taken back before the item is
+                // put back, and an op whose pair cannot be told stays unsettled (review M2 M7).
+                match locked::listed_before_move_back(op, &*self.pending) {
+                    Some(LockUndo::RemovePair(removal)) => {
+                        match locked::remove_boot_move(removal, step.token()?, &mut *self.pending) {
+                            UndoOutcome::Restored | UndoOutcome::AlreadyRestored => {}
+                            outcome => {
+                                return step.done(
+                                    outcome,
+                                    "the registered boot-time move could not be taken back; the \
+                                     item was not put back"
+                                        .to_owned(),
+                                );
+                            }
+                        }
+                    }
+                    Some(LockUndo::Conflict { conflict, detail }) => {
+                        return step.conflict(conflict, detail);
+                    }
+                    Some(LockUndo::Done(_) | LockUndo::ReconcileFirst { .. }) | None => {}
+                }
                 let done = effective_outcome(op);
                 match act_fs::plan_undo_fs(intent, done.as_ref()) {
                     None => {
@@ -798,6 +841,20 @@ impl Driver<'_> {
                         step.conflict(conflict, detail)
                     }
                     Some(FsUndoPlan::Run(job)) => {
+                        if let Some(above) = unrestored_ancestor(step.journal.state().ops(), op) {
+                            return step.conflict(
+                                UndoConflict::GateBlocked {
+                                    blocker: Blocker::DenyListed {
+                                        rule: act_fs::reason::UNDO_PARENT_NOT_RESTORED.to_owned(),
+                                    },
+                                },
+                                format!(
+                                    "op {above} removed or moved a directory above this item and \
+                                     its undo has not ended restored; nothing is put back below \
+                                     whatever stands there now"
+                                ),
+                            );
+                        }
                         let ran =
                             act_fs::undo_fs(self.ctx, self.session, job, self.retry, step.token()?);
                         match ran {
@@ -937,6 +994,13 @@ pub fn undo(request: &UndoRequest, env: UndoEnv<'_>) -> Result<UndoOutput, UndoE
     if read.state.retries_in_flight().next().is_some() {
         return Err(UndoError::NeedsRecovery(
             "a retry of a held item was interrupted".to_owned(),
+        ));
+    }
+    // A new plan would replace the interrupted run's, and the ops that run had not reached would drop
+    // off recovery's list.
+    if !read.state.undo_unfinished().is_empty() {
+        return Err(UndoError::NeedsRecovery(
+            "an undo run was interrupted before it reached every op of its plan".to_owned(),
         ));
     }
     let requested = select(&read.state, &request.selection)?;

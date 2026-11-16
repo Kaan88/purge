@@ -67,15 +67,18 @@
 //! one is a conflict. [`plan_undo_fs`] decides from the journal alone ([`FsUndoPlan::Decided`]: journal with
 //! `undo_done_without_intent` or `undo_conflict_without_intent`) or asks to run ([`FsUndoPlan::Run`]: the
 //! undo driver writes `undo_intent`, then calls [`undo_fs`] with the token and journals the [`FsUndo`] with
-//! `undo_done` or `undo_conflict`). The driver runs every `RecreateDir` inverse of the session first, in
-//! reverse op order (parents before children), then the `MoveBack` inverses in reverse op order.
+//! `undo_done` or `undo_conflict`). The driver runs the inverses in the exact reverse order of the
+//! run, so every directory comes back before what was below it, and runs none below a directory of the
+//! session whose own undo has not settled ([`reason::UNDO_PARENT_NOT_RESTORED`]).
 //!
 //! - **Move back**: the op directory is opened through the store's checks, the quarantined item by handle
 //!   with its file id and volume serial compared with the journal, the original path's parent checked
 //!   by the gate ([`gate::check_undo_path`]), and the item renamed by handle into that checked directory
 //!   under its original leaf. Nothing is overwritten: an occupied original path is
 //!   `UndoConflict::DestinationExists`. No directory is created here; a missing parent is
-//!   `UndoConflict::ParentMissing`.
+//!   `UndoConflict::ParentMissing`. The parent must be the directory the item was moved out of (the
+//!   intent's `MoveBack.parent`, its file id), or one with the recorded owner and DACL; another is
+//!   `UndoConflict::DestinationExists` ([`parent_differs`]; an intent without the record is not checked).
 //! - **Recreate dir**: the original path's parent is checked by the gate ([`gate::check_undo_path`]) and
 //!   the directory is created **relative to that checked parent handle** (`DestDir::create_dir`; nothing
 //!   existing is adopted). Through the new directory's own handle the recorded security descriptor is
@@ -84,8 +87,10 @@
 //!   last-write times set last. An owner or group the token cannot assign is left to the token's
 //!   defaults with the recorded DACL, `Restored` with a note; Purge never takes ownership or enables a
 //!   privilege. If anything after the creation fails, the new (empty) directory is removed again
-//!   through its handle and the undo is `Failed`. An existing plain directory is `AlreadyRestored`. A
-//!   later move back of a child into the directory updates its last-write time (the file system's doing).
+//!   through its handle and the undo is `Failed`. An existing plain directory is `AlreadyRestored` only
+//!   when its owner and DACL are the recorded ones; otherwise it is `UndoConflict::DestinationExists`
+//!   and nothing is restored into it (somebody else may have created it with other rights). A later
+//!   move back of a child into the directory updates its last-write time (the file system's doing).
 //!
 //! # Quarantine op directories
 //!
@@ -109,11 +114,14 @@ use purge_guard::live::{
 };
 use purge_guard::prefix;
 use purge_model::exec::journal::{FileFacts, Intent, ItemFacts, UndoConflict, UndoOutcome};
-use purge_model::exec::op::{ExecOp, FailCode, FileIdHex, Inverse, ItemOutcome, OpId, SkipReason};
+use purge_model::exec::op::{
+    ExecOp, FailCode, FileIdHex, Inverse, ItemOutcome, OpId, ParentDir, SkipReason,
+};
 use purge_model::{Blocker, CandidateId, FileTime};
 use purge_win::fs::FileHandle;
 use purge_win::fs_write::{CHANGEABLE_ATTRIBUTES, FsError, MoveHandle, extended_path};
 use purge_win::os::Win32Error;
+use purge_win::secure::{handle_security, open_for_security};
 
 use crate::fault;
 use crate::gate::{self, CheckedDest, CheckedPath, GateCtx, GateOutcome, LockedPath, Stamp};
@@ -132,6 +140,10 @@ pub mod reason {
     pub const SERIAL_UNKNOWN: &str = "act_fs.volume-serial-unknown";
     /// The journal's intent does not hang together (`Intent::is_consistent`).
     pub const INTENT_INCONSISTENT: &str = "act_fs.intent-inconsistent";
+    /// An undo would put an item below a directory this session removed or moved whose own undo has
+    /// not settled (it ended in a conflict or a failure, or has not run): the directory standing there
+    /// now is not known to be the recorded one.
+    pub const UNDO_PARENT_NOT_RESTORED: &str = "act_fs.undo-parent-not-restored";
 }
 
 /// The waits between the attempts on an item in use (§7.5): three retries.
@@ -650,11 +662,28 @@ fn quarantine_destination(
             return Ok(Err(refusal_to_result(&refusal, false)));
         }
     };
+    let parent = checked
+        .facts()
+        .final_path
+        .as_deref()
+        .and_then(|item_final| parent_dir(path, item_final));
+    let Some(parent) = parent else {
+        drop(dest);
+        remove_empty_op_dir(quarantine);
+        return Ok(Err(FsResult::blocked(
+            Blocker::CannotBackUp,
+            format!(
+                "the directory holding {path} cannot be read, so its move back could not be checked; \
+                 not moved"
+            ),
+        )));
+    };
     let inverse = Inverse::MoveBack {
         quarantine_path: dest.path().to_owned(),
         original_path: path.to_owned(),
         file_id: FileIdHex(stamp.identity.file_id),
         volume_serial: serial,
+        parent: Some(parent),
     };
     Ok(Ok((
         inverse,
@@ -703,26 +732,11 @@ pub fn create_op_dir_for(
     session.create_op_dir(source, source_serial, op)
 }
 
-/// Removes `dir`, an op directory of this session, through a handle on it whose volume serial and file id
-/// are those of the store's checked handle, and only while it is empty (`remove_dir_if_empty`, never
-/// recursive). The store's handle is closed afterwards. Whether it was removed; anything else leaves it
-/// for expiry.
-fn remove_empty_op_dir(dir: QuarantineDir) -> bool {
-    let Ok(p) = extended_path(dir.path()) else {
-        return false;
-    };
-    let Ok(handle) = MoveHandle::open(&p) else {
-        return false;
-    };
-    let store_id = dir.dir().file_id();
-    let same = handle
-        .file_id()
-        .is_ok_and(|id| id.volume_serial == store_id.volume_serial && id.id == store_id.id);
-    let removed = same && handle.remove_dir_if_empty().is_ok();
-    // Without POSIX delete semantics the name goes when the last handle closes.
-    drop(handle);
-    drop(dir);
-    removed
+/// Removes `dir`, an op directory of this session that this op created, through a handle opened
+/// relative to the store's checked handle on it, and only while it is empty, never recursively
+/// ([`QuarantineDir::remove_if_empty`]). Whether it was removed; anything else leaves it for expiry.
+pub(crate) fn remove_empty_op_dir(dir: QuarantineDir) -> bool {
+    dir.remove_if_empty().is_ok()
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1039,6 +1053,7 @@ enum UndoKind {
         quarantine_path: String,
         original_path: String,
         stamp: PathStamp,
+        parent: Option<ParentDir>,
     },
     RecreateDir {
         path: String,
@@ -1063,7 +1078,7 @@ impl FsUndoJob {
         self.op
     }
 
-    /// Whether the job recreates a directory (the undo driver runs those first, in reverse op order).
+    /// Whether the job recreates a directory.
     pub fn is_recreate_dir(&self) -> bool {
         matches!(self.kind, UndoKind::RecreateDir { .. })
     }
@@ -1138,6 +1153,7 @@ pub fn plan_undo_fs(intent: &Intent, done: Option<&ItemOutcome>) -> Option<FsUnd
                 original_path,
                 file_id,
                 volume_serial,
+                parent,
             },
             true,
         ) => {
@@ -1154,6 +1170,7 @@ pub fn plan_undo_fs(intent: &Intent, done: Option<&ItemOutcome>) -> Option<FsUnd
                     },
                     is_dir: pre.is_dir,
                 },
+                parent: parent.clone(),
             }
         }
         (
@@ -1226,12 +1243,16 @@ pub fn undo_fs(
             quarantine_path,
             original_path,
             stamp,
+            parent,
         } => move_back(
             ctx,
             session,
             op,
-            &quarantine_path,
-            &original_path,
+            MoveBackPaths {
+                quarantine_path: &quarantine_path,
+                original: &original_path,
+                parent: parent.as_ref(),
+            },
             stamp,
             exemptions,
             retry,
@@ -1286,6 +1307,116 @@ fn look_at(path: &str) -> PathNow {
     }
 }
 
+/// The directory `path` is in, as [`Inverse::MoveBack`] records it: its file id and its owner, group and
+/// DACL, read from one handle opened on it without following a reparse point. `item_final` is the final
+/// path read from the item's own handle; the directory counts only when it is a plain directory whose
+/// handle's final path is the parent of that path, so the record is about the directory the item is
+/// really in. `None` when it cannot be read or is another object.
+pub(crate) fn parent_dir(path: &str, item_final: &str) -> Option<ParentDir> {
+    let parent = Path::new(path).parent()?;
+    let handle = extended_path(parent)
+        .and_then(|p| open_for_security(&p))
+        .ok()?;
+    let meta = handle.metadata().ok()?;
+    if !meta.is_dir || meta.reparse_tag != 0 {
+        return None;
+    }
+    let final_path = handle.final_path().ok()?;
+    let item_parent = prefix::parent(strip_verbatim(item_final))?;
+    if !prefix::is_same(strip_verbatim(&final_path), item_parent) {
+        return None;
+    }
+    let security = handle_security(&handle).ok()?;
+    Some(ParentDir {
+        file_id: FileIdHex(meta.file_id.id),
+        sddl: security.sddl,
+    })
+}
+
+/// Which of owner and DACL differ between two SDDL strings (`"owner"`, `"DACL"`); empty when both are
+/// equal. The rule for adopting an existing directory or key on undo (S1 of the final M2 review, F1 and
+/// F2 of the fix-round review).
+pub(crate) fn owner_dacl_differences(now: &str, recorded: &str) -> Vec<&'static str> {
+    [(b'O', "owner"), (b'D', "DACL")]
+        .into_iter()
+        .filter(|(part, _)| sddl_part(now, *part) != sddl_part(recorded, *part))
+        .map(|(_, what)| what)
+        .collect()
+}
+
+/// Whether an SDDL owner part names a principal no standard user can make the owner of a new object:
+/// Administrators, SYSTEM or TrustedInstaller.
+fn admin_only_owner(owner: &str) -> bool {
+    const TRUSTED_INSTALLER: &str =
+        "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+    matches!(
+        owner,
+        "BA" | "SY" | "S-1-5-32-544" | "S-1-5-18" | TRUSTED_INSTALLER
+    )
+}
+
+/// The directory a quarantined item would go back into (`dest`, checked by the undo gate), judged
+/// against the one the item was moved out of (F1 of the M2 fix-round review), by the rule
+/// [`existing_dir`] applies to a directory standing where a removed one is to be recreated: the same
+/// directory (file id), or one whose owner and DACL are the recorded ones. One exception for the owner:
+/// one no standard user can set ([`admin_only_owner`]) passes in place of the recorded one, which is what
+/// this undo's own `RecreateDir` leaves when the token cannot assign the recorded owner (SYSTEM). Anything
+/// else is `Conflict(DestinationExists)`: a directory somebody else created again may let others write
+/// where only administrators could before, and nothing is moved into it. A descriptor that cannot be read
+/// on that very directory is `Failed`, to be tried again. `None` when the item may go back.
+fn parent_differs(original: &str, dest: &CheckedDest, recorded: &ParentDir) -> Option<FsUndo> {
+    let unreadable = |code: u32| {
+        FsUndo::failed(
+            fail_code(code),
+            Some(code),
+            format!("the directory {original} goes back into cannot be read (Win32 error {code})"),
+        )
+    };
+    let now = match dest.dir().facts() {
+        Ok(facts) => facts.file_id,
+        Err(e) => return Some(unreadable(e.code())),
+    };
+    // A file id alone is not proof of the same directory: NTFS reissues ids (S1 of the adoption rule
+    // review), so the owner is judged on this branch too; only the DACL comparison is left out.
+    let same_id = now.id == recorded.file_id.0;
+    // The descriptor, read on a handle that is the checked directory itself.
+    let parent = Path::new(original).parent()?;
+    let security = extended_path(parent)
+        .and_then(|p| open_for_security(&p))
+        .and_then(|handle| {
+            let same = handle
+                .file_id()
+                .is_ok_and(|id| id.volume_serial == now.volume_serial && id.id == now.id);
+            if same {
+                handle_security(&handle)
+            } else {
+                Err(Win32Error::INVALID_PARAMETER)
+            }
+        });
+    let sddl = match security {
+        Ok(security) => security.sddl,
+        Err(e) => return Some(unreadable(e.code())),
+    };
+    let mut differs = owner_dacl_differences(&sddl, &recorded.sddl);
+    if sddl_part(&sddl, b'O').is_some_and(admin_only_owner) {
+        differs.retain(|what| *what != "owner");
+    }
+    if same_id {
+        differs.retain(|what| *what == "owner");
+    }
+    (!differs.is_empty()).then(|| {
+        FsUndo::conflict(
+            UndoConflict::DestinationExists,
+            format!(
+                "the directory {original} goes back into is not the one it was moved out of, and its \
+                 {} differs from the recorded one (now {sddl}, recorded {}); nothing is moved into it",
+                differs.join(" and "),
+                recorded.sddl
+            ),
+        )
+    })
+}
+
 /// The conflict for a missing parent of `path`, if it is missing: [`UndoConflict::ParentMissing`]
 /// (`move_back` and `RecreateDir` create no directory but their own).
 fn parent_missing(path: &str) -> Option<FsUndo> {
@@ -1324,18 +1455,32 @@ fn quarantine_missing(original: &str, stamp: PathStamp, detail: &str) -> FsUndo 
     }
 }
 
-/// Moves a quarantined item back to its original path (the inverse of a quarantine move).
-#[allow(clippy::too_many_arguments)]
+/// Where a move back takes an item from and to, as the intent's `MoveBack` records it.
+#[derive(Debug, Clone, Copy)]
+struct MoveBackPaths<'a> {
+    quarantine_path: &'a str,
+    original: &'a str,
+    /// The directory the item was moved out of, when recorded.
+    parent: Option<&'a ParentDir>,
+}
+
+/// Moves a quarantined item back to its original path (the inverse of a quarantine move). The
+/// directory it goes back into must be the one it was moved out of, or one with its recorded owner
+/// and DACL ([`parent_differs`]), when the intent recorded that directory.
 fn move_back(
     ctx: &GateCtx,
     session: &SessionDir,
     op: OpId,
-    quarantine_path: &str,
-    original: &str,
+    paths: MoveBackPaths<'_>,
     stamp: PathStamp,
     exemptions: Exemptions,
     retry: &Retry,
 ) -> Result<FsUndo, StorageError> {
+    let MoveBackPaths {
+        quarantine_path,
+        original,
+        parent,
+    } = paths;
     let serial = stamp.identity.volume_serial;
     // The op directory, through the store's checks; it is held open until the rename is done.
     let _op_dir = match session.open_op_dir(Path::new(quarantine_path), op, serial) {
@@ -1432,6 +1577,9 @@ fn move_back(
         Ok(dest) => dest,
         Err(refusal) => return Ok(undo_refusal(&refusal, original)),
     };
+    if let Some(conflict) = parent.and_then(|recorded| parent_differs(original, &dest, recorded)) {
+        return Ok(conflict);
+    }
     let (result, _) = retry.run(
         || match item.handle().rename_into(dest.dir(), dest.leaf()) {
             Err(e) if in_use(e, stamp.is_dir) => Err(e),
@@ -1513,6 +1661,67 @@ fn without_owner_and_group(sddl: &str) -> String {
     out
 }
 
+/// One part of an SDDL string (`b'O'`, `b'G'`, `b'D'` or `b'S'`) without its `X:` prefix, up to the
+/// next part; `None` when the string has no such part.
+fn sddl_part(sddl: &str, part: u8) -> Option<&str> {
+    let bytes = sddl.as_bytes();
+    let mut depth = 0u32;
+    let mut start = None;
+    for (i, &c) in bytes.iter().enumerate() {
+        if depth == 0 && bytes.get(i + 1) == Some(&b':') && matches!(c, b'O' | b'G' | b'D' | b'S') {
+            if let Some(start) = start {
+                return sddl.get(start..i);
+            }
+            if c == part {
+                start = Some(i + 2);
+            }
+        }
+        match c {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    start.and_then(|start| sddl.get(start..))
+}
+
+/// A directory already standing where a `RecreateDir` inverse would create one. It counts as the
+/// recorded directory (`AlreadyRestored`) only when its owner and its DACL are the recorded ones: a
+/// directory somebody else created there may let others write where only administrators could
+/// before, and nothing is restored into it. Otherwise `Conflict(DestinationExists)`; a descriptor
+/// that cannot be read is `Failed`, to be tried again.
+fn existing_dir(path: &str, recorded_sddl: &str) -> FsUndo {
+    let security = extended_path(Path::new(path))
+        .and_then(|p| open_for_security(&p))
+        .and_then(|handle| handle_security(&handle));
+    let now = match security {
+        Ok(security) => security.sddl,
+        Err(e) => {
+            return FsUndo::failed(
+                fail_code(e.code()),
+                Some(e.code()),
+                format!("{path} exists; its security descriptor cannot be read: {e}"),
+            );
+        }
+    };
+    let differs = owner_dacl_differences(&now, recorded_sddl);
+    if differs.is_empty() {
+        FsUndo::done(
+            UndoOutcome::AlreadyRestored,
+            format!("{path} exists as a directory with the recorded owner and DACL"),
+        )
+    } else {
+        FsUndo::conflict(
+            UndoConflict::DestinationExists,
+            format!(
+                "{path} exists as a directory whose {} differs from the recorded one (now {now}, \
+                 recorded {recorded_sddl}); it is not adopted and nothing is restored into it",
+                differs.join(" and ")
+            ),
+        )
+    }
+}
+
 /// What a `RecreateDir` inverse recorded about the removed directory.
 #[derive(Debug, Clone, Copy)]
 struct Recorded<'a> {
@@ -1543,12 +1752,7 @@ fn recreate_dir(
         PathNow::Missing => {}
         PathNow::Object {
             plain_dir: true, ..
-        } => {
-            return FsUndo::done(
-                UndoOutcome::AlreadyRestored,
-                format!("{path} exists as a directory"),
-            );
-        }
+        } => return existing_dir(path, recorded.sddl),
         PathNow::Object { .. } => {
             return FsUndo::conflict(
                 UndoConflict::DestinationExists,
@@ -1763,6 +1967,7 @@ pub(crate) fn probe_move_back(session: &SessionDir, intent: &Intent) -> Probe {
                 original_path,
                 file_id,
                 volume_serial,
+                ..
             },
         ) => {
             let recorded = FileIdentity {
@@ -1782,16 +1987,19 @@ pub(crate) fn probe_move_back(session: &SessionDir, intent: &Intent) -> Probe {
 
 /// Crash recovery: what really happened to the file op of `intent`, which the journal shows with no
 /// `done` (the module table of [`crate::recover`]). A quarantine move whose boot-time move pair stands
-/// in `pending` exactly once is `Done(PendingReboot)` ([`locked::pending_after_crash`]); otherwise the
-/// recorded item is looked for at its path and in its quarantine. A remove-directory looks at the path
-/// for the directory the intent's `pre` records. Read-only.
+/// in `pending` exactly once is `Done(PendingReboot)` ([`locked::pending_after_crash`]); a list that
+/// cannot be read, or holds the pair more than once, is `Attention` (a restart may still move the item,
+/// so it is not completed by handle); otherwise the recorded item is looked for at its path and in its
+/// quarantine. A remove-directory looks at the path for the directory the intent's `pre` records.
+/// Read-only.
 pub fn probe_fs(session: &SessionDir, intent: &Intent, pending: &dyn PendingRenames) -> Probe {
     match (&intent.exec_op, &intent.inverse, &intent.pre) {
         (ExecOp::QuarantineMove { .. }, Inverse::MoveBack { .. }, _) => {
-            if let Some(outcome) = locked::pending_after_crash(intent, pending) {
-                return Probe::Done(outcome);
+            match locked::pending_after_crash(intent, pending) {
+                Ok(Some(outcome)) => Probe::Done(outcome),
+                Ok(None) => probe_move_back(session, intent),
+                Err(detail) => Probe::Attention { detail },
             }
-            probe_move_back(session, intent)
         }
         (ExecOp::RemoveDirIfEmpty { path }, Inverse::RecreateDir { .. }, ItemFacts::File(pre)) => {
             recover::probe_remove_dir(see_path(
@@ -1812,16 +2020,24 @@ pub fn probe_fs(session: &SessionDir, intent: &Intent, pending: &dyn PendingRena
 /// same op, plan item, executor op and inverse (for a move: quarantine path, original path, file id and
 /// volume serial), and the same identity and kind in `pre`. Sizes and times in `pre` may differ (a held
 /// item's intent records its validated facts, a fresh handle reads them now); undo uses only the
-/// inverse and the kind.
-fn same_action(prepared: &Intent, journalled: &Intent) -> bool {
+/// inverse and the kind. The `MoveBack` record of the parent directory may differ too: it is what was
+/// read around the item when each intent was built, and undo checks against the journalled one.
+pub(crate) fn same_action(prepared: &Intent, journalled: &Intent) -> bool {
     let identity = |pre: &ItemFacts| match pre {
         ItemFacts::File(facts) => Some((facts.volume_serial, facts.file_id, facts.is_dir)),
         _ => None,
     };
+    let action = |inverse: &Inverse| {
+        let mut inverse = inverse.clone();
+        if let Inverse::MoveBack { parent, .. } = &mut inverse {
+            *parent = None;
+        }
+        inverse
+    };
     prepared.op == journalled.op
         && prepared.item == journalled.item
         && prepared.exec_op == journalled.exec_op
-        && prepared.inverse == journalled.inverse
+        && action(&prepared.inverse) == action(&journalled.inverse)
         && identity(&prepared.pre).is_some()
         && identity(&prepared.pre) == identity(&journalled.pre)
 }

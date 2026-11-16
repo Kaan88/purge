@@ -34,6 +34,7 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
   rigtool truth --s0 F --s1 F --s2 F --lists0 F --lists2 F --run run.json
                 [--ambient ambient.json] [--labels labels.json...] [--deny deny.json] [--sid SID] -o truth.json
   rigtool ambient --null DIR... -o ambient.json
+  rigtool ambient --m2 --null DIR... -o m2-ambient.json   (M2: removed/changed records of null runs)
   rigtool score --set APPDIR... [--deny deny.json] [--sid SID] [--classes] --json out.json --md out.md
   rigtool score --plan plan.json [--plan ...] --truth truth.json --s0 F --s2 F [--lists0 F]
                 [--deny deny.json] [--sid SID] [--classes] --json out.json --md out.md
@@ -47,7 +48,9 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
   rigtool deep --scope FILE... [--sid SID] -o deep.json
                 (FILE: purge.rig.deepscope/0, purge.rig.targets/0 or an m2-traps / m2-fixtures manifest)
   rigtool fidelity --before A.json --after C.json --journal journal.jsonl [--ambient ambient.json]
-                   [--sid SID] -o fidelity.json     (exit 1 = a differing object or an unverifiable row)
+                   [--sid SID] [--keep-items ID...] -o fidelity.json
+                   (exit 1 = a differing object or an unverifiable row; --keep-items: ops of these items were
+                   left quarantined on purpose, reported as row 'kept quarantined', not compared)
   rigtool execdiff --before A.tsv.gz --after B.tsv.gz --journal journal.jsonl --report report.json
                    [--traps m2-traps.json [m2-fixtures.json]...] [--group main ...] [--ambient ambient.json]
                    [--deep-before A.json --deep-after B.json] [--sid SID] -o execdiff.json
@@ -193,12 +196,16 @@ fn run(argv: Vec<String>) -> Result<()> {
             })
         }
         "ambient" => {
-            let a = Args::parse(rest, &[], &["--null"], &["-o"])?;
+            let a = Args::parse(rest, &["--m2"], &["--null"], &["-o"])?;
             let dirs: Vec<PathBuf> = a.all("--null").into_iter().map(PathBuf::from).collect();
             if dirs.is_empty() {
                 bail!("ambient needs --null DIR...");
             }
-            ambient::cmd_ambient(&dirs, &a.req("-o")?)
+            if a.has("--m2") {
+                ambient::cmd_ambient_m2(&dirs, &a.req("-o")?)
+            } else {
+                ambient::cmd_ambient(&dirs, &a.req("-o")?)
+            }
         }
         "score" => {
             let a = Args::parse(
@@ -260,13 +267,19 @@ fn run(argv: Vec<String>) -> Result<()> {
             })
         }
         "fidelity" => {
-            let a = Args::parse(rest, &[], &[], &["--before", "--after", "--journal", "--ambient", "--sid", "-o"])?;
+            let a = Args::parse(
+                rest,
+                &[],
+                &["--keep-items"],
+                &["--before", "--after", "--journal", "--ambient", "--sid", "-o"],
+            )?;
             let rep = fidelity::cmd_fidelity(&fidelity::FidelityArgs {
                 before: a.req("--before")?,
                 after: a.req("--after")?,
                 journal: a.req("--journal")?,
                 ambient: a.path("--ambient"),
                 sid: a.get("--sid"),
+                keep_items: a.all("--keep-items"),
                 out: a.req("-o")?,
             })?;
             if !rep.ok {

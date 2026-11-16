@@ -86,6 +86,7 @@ use purge_win::sid::{TRUSTED_INSTALLER_SID, is_admin_only_writable};
 use sha2::{Digest, Sha256};
 
 use crate::journal::{JournalState, OpState};
+use crate::regbackup;
 use crate::storage::QuarantineDir;
 
 mod ffi;
@@ -115,6 +116,15 @@ pub mod reason {
     /// A key to delete is not the one validated: subkey or value count, owner, link state or last write
     /// time differ from the `validated` record. Soft: changed since the scan.
     pub const KEY_CHANGED: &str = "gate.key-changed";
+    /// The tree of a key to delete, as captured for its backup, is not the tree validated: somewhere
+    /// below or in the key a value, a subkey, a class, a security descriptor or a volatility differs from
+    /// the `validated` record's digest after what the run's own completed ops did is put back
+    /// ([`super::bind_tree`]), or the record has no digest. Soft: changed since the scan.
+    pub const TREE_CHANGED: &str = "gate.tree-changed";
+    /// The validate pass could not read the tree of a key to delete for its digest (a link, a volatile
+    /// key, a `REG_LINK` value or a name the backup cannot hold somewhere below it, or more keys than the
+    /// item's limit); the blocker says which.
+    pub const TREE_NOT_READ: &str = "gate.tree-not-read";
     /// The key a restore acts on does not exist: the parent of a key to re-create, or the key a value or
     /// segment goes back into. Soft: an undo conflict, skipped and reported.
     pub const UNDO_KEY_MISSING: &str = "gate.undo-key-missing";
@@ -237,6 +247,11 @@ pub trait HostFacts: Send + Sync + fmt::Debug {
     /// `volume_serial` the serial of its `FILE_ID_INFO`. `None` when the volume cannot be told, or is not
     /// the one the handle is on.
     fn volume(&self, final_path: &str, volume_serial: u64) -> Option<VolumeFacts>;
+    /// The SID of the user the process token belongs to (`None` when it cannot be read): whose package
+    /// registrations a removal for the current user changes ([`GateCtx::package_user_refusal`]).
+    fn process_user_sid(&self) -> Option<String> {
+        purge_win::sid::current_user_sid().ok()
+    }
 }
 
 /// The facts as the system gives them.
@@ -312,6 +327,8 @@ pub struct GateCtx {
     /// What this run's own completed registry ops did to the keys later ops are bound to
     /// ([`GateCtx::note_done`]), by the op that did it.
     effects: BTreeMap<OpId, OwnEffect>,
+    /// The user the scan was made for (the run's `user_sid` setting, [`GateCtx::bind_user`]).
+    user_sid: Option<String>,
 }
 
 /// One op of the run, with the canonical address of the key it acts on (the key itself for a key op,
@@ -340,6 +357,60 @@ struct OwnEffect {
     /// When the gate learned of the effect: the op's own change to `key` happened no later than this
     /// (registry times come from the coarse system clock, which never runs ahead of the precise one).
     noted_at: FileTime,
+    /// Exactly what the op changed in the content of `key`, for the tree binding ([`bind_tree`]);
+    /// `None` when the journal does not say it exactly, which refuses every tree holding `key`.
+    content: Option<ContentChange>,
+}
+
+/// What one own op changed in the content of one key, as [`bind_tree`] puts it back. Names are folded
+/// (`regbackup::fold_str`); hashes are SHA-256 of raw value data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContentChange {
+    /// A value was deleted; it had this type and data hash (the intent's `pre`, read on the acting
+    /// handle; the delete happened only while the value was exactly its backup).
+    ValueDeleted {
+        name: Vec<u16>,
+        ty: u32,
+        sha256: [u8; 32],
+    },
+    /// A segment edit replaced the data with hash `original` by the data with hash `written` (the
+    /// intent's inverse); the type stayed.
+    ValueRewritten {
+        name: Vec<u16>,
+        original: [u8; 32],
+        written: [u8; 32],
+    },
+    /// A direct subkey was deleted whole; its tree had the digest recorded when it was validated (its
+    /// act was bound to that digest).
+    SubkeyDeleted { name: Vec<u16>, digest: [u8; 32] },
+}
+
+impl ContentChange {
+    /// Puts the change back into `content`, the content of the key now: what the key held before the
+    /// op. `false` when `content` is not what the op left (the value or subkey is there again, or the
+    /// rewritten value does not hold what the edit wrote): someone else changed the key since.
+    fn put_back(&self, content: &mut regbackup::KeyContent) -> bool {
+        match self {
+            ContentChange::ValueDeleted { name, ty, sha256 } => content
+                .values
+                .insert(name.clone(), (*ty, *sha256))
+                .is_none(),
+            ContentChange::ValueRewritten {
+                name,
+                original,
+                written,
+            } => match content.values.get_mut(name) {
+                Some((_, now)) if now == written => {
+                    *now = *original;
+                    true
+                }
+                _ => false,
+            },
+            ContentChange::SubkeyDeleted { name, digest } => {
+                content.subkeys.insert(name.clone(), *digest).is_none()
+            }
+        }
+    }
 }
 
 /// What this run's own completed ops explain about one key: the facts recorded at validation may
@@ -367,6 +438,8 @@ impl OwnChanges {
             is_link,
             owner,
             last_write_time,
+            // The tree is compared on its capture, with every own change put back ([`bind_tree`]).
+            tree_sha256: _,
         } = recorded;
         let time_explained = now.last_write_time == *last_write_time
             || self.touched_until.is_some_and(|until| {
@@ -403,29 +476,66 @@ fn op_key(op: &ExecOp, deny: &DenyList) -> Option<KeyAddress> {
 
 /// The effect a completed op (`intent`, whose `done` is `Done`) had on the key a later op may be bound
 /// to; `None` for an op that changes no key's facts (file and package ops, a key directly below its hive
-/// root, a target that does not canonicalise).
-fn own_effect(intent: &Intent, deny: &DenyList, noted_at: FileTime) -> Option<OwnEffect> {
+/// root, a target that does not canonicalise). `validated` is the stamp the op's act was bound to (for a
+/// key op: the digest of its tree, which the parent's content held).
+fn own_effect(
+    intent: &Intent,
+    validated: Option<&Stamp>,
+    deny: &DenyList,
+    noted_at: FileTime,
+) -> Option<OwnEffect> {
     let probe = live::key_probe(&intent.exec_op.target(), deny.env()).ok()?;
-    let effect = |key, values, subkeys, rewritten| OwnEffect {
+    let effect = |key, values, subkeys, rewritten, content| OwnEffect {
         key,
         values,
         subkeys,
         rewritten,
         noted_at,
+        content,
     };
     match &intent.exec_op {
-        ExecOp::DeleteValue { .. } => Some(effect(probe.open, 1, 0, None)),
-        ExecOp::EditSegment { name, .. } => {
-            let rewritten = match &intent.inverse {
-                Inverse::ReinsertSegment {
-                    written_value_hash, ..
-                } => Some((name.clone(), written_value_hash.0)),
+        ExecOp::DeleteValue { name, .. } => {
+            let content = match &intent.pre {
+                ItemFacts::Value(pre) => Some(ContentChange::ValueDeleted {
+                    name: regbackup::fold_str(name),
+                    ty: pre.value_type,
+                    sha256: pre.data_sha256.0,
+                }),
                 _ => None,
             };
-            Some(effect(probe.open, 0, 0, rewritten))
+            Some(effect(probe.open, 1, 0, None, content))
+        }
+        ExecOp::EditSegment { name, .. } => {
+            let (rewritten, content) = match &intent.inverse {
+                Inverse::ReinsertSegment {
+                    original_value_hash,
+                    written_value_hash,
+                    ..
+                } => (
+                    Some((name.clone(), written_value_hash.0)),
+                    Some(ContentChange::ValueRewritten {
+                        name: regbackup::fold_str(name),
+                        original: original_value_hash.0,
+                        written: written_value_hash.0,
+                    }),
+                ),
+                _ => (None, None),
+            };
+            Some(effect(probe.open, 0, 0, rewritten, content))
         }
         ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. } => {
-            Some(effect(probe.ancestors.last()?.clone(), 0, 1, None))
+            let content = match (prefix::leaf(&probe.open.path), validated) {
+                (Some(leaf), Some(Stamp::Key(facts))) => {
+                    facts
+                        .tree_sha256
+                        .map(|digest| ContentChange::SubkeyDeleted {
+                            name: regbackup::fold_str(leaf),
+                            digest: digest.0,
+                        })
+                }
+                _ => None,
+            };
+            Some(effect(probe.ancestors.last()?.clone(), 0, 1, None, content))
         }
         ExecOp::QuarantineMove { .. }
         | ExecOp::RemoveDirIfEmpty { .. }
@@ -449,10 +559,12 @@ impl Recorded {
     fn item(&self) -> GateItem<'_> {
         // The act is bound to the recorded stamp, which the validate pass already compared with the
         // scan-time identity; the act-time gate does not compare again.
+        // The key limit is not used at act time: the act's capture takes the run's limit itself.
         GateItem {
             op: &self.op,
             exemptions: self.exemptions,
             max_files: self.max_files,
+            max_keys: regbackup::DEFAULT_KEY_LIMIT,
             scan_identity: None,
         }
     }
@@ -509,7 +621,35 @@ impl GateCtx {
             validated: BTreeMap::new(),
             run_ops: Vec::new(),
             effects: BTreeMap::new(),
+            user_sid: None,
         })
+    }
+
+    /// Tells the gate whom the scan was made for: the run's `user_sid` setting (journalled with the
+    /// run's settings). The executor calls it once, when it makes the context. Package removals compare
+    /// it with the process token's user ([`GateCtx::package_user_refusal`]).
+    pub fn bind_user(&mut self, user_sid: Option<&str>) {
+        self.user_sid = user_sid.map(str::to_owned);
+    }
+
+    /// Why a package removal (always for the process token's user, `RemovalScope::CurrentUser`) must not
+    /// run in this context: the scan was made for a user (`user_sid`) and the process token belongs to
+    /// another user, or its user cannot be read (review M2 final M12: an elevated run under another
+    /// administrator account would remove that account's registration of the package, irreversibly).
+    /// `None` when they are the same user (SIDs compare without case), or when the run names no user,
+    /// in which case the removal is for the process's own user as before.
+    pub fn package_user_refusal(&self) -> Option<String> {
+        let scan_user = self.user_sid.as_deref()?;
+        match self.host.process_user_sid() {
+            Some(token_user) if token_user.eq_ignore_ascii_case(scan_user) => None,
+            Some(token_user) => Some(format!(
+                "the scan was made for user {scan_user}, but Purge runs as user {token_user}; a \
+                 package is removed only for the user Purge runs as"
+            )),
+            None => Some(format!(
+                "the scan was made for user {scan_user}, and the user Purge runs as cannot be read"
+            )),
+        }
     }
 
     /// Tells the gate every op of the run with its op id (plan order is op order: an item inside another
@@ -560,8 +700,16 @@ impl GateCtx {
     /// another owner. Outcomes other than `Done` note nothing (a vanished item, a failed or partial
     /// delete): what changed then is not this run's doing, and the key is refused as changed.
     ///
-    /// The effects come from journal records only (the intent's op and inverse, the done's outcome), so a
-    /// resumed run rebuilds them with [`GateCtx::note_journal`].
+    /// These counts and times cannot tell an outside change from an own one when both touch the same key
+    /// (an outside value added and an own value deleted keep the count). The content is bound separately:
+    /// each noted effect also records exactly what it changed (the value deleted, with its type and data
+    /// hash; the data an edit replaced and wrote; the subkey deleted, with the tree digest its own act
+    /// was bound to), and [`bind_tree`] puts these back into the tree a key action captured and compares
+    /// it with the digest its validation journalled (review M2 final S4, S5).
+    ///
+    /// The effects come from journal records only (the intent's op, `pre` and inverse, the done's
+    /// outcome, the deleted key's `validated` record), so a resumed run rebuilds them with
+    /// [`GateCtx::note_journal`].
     pub fn note_done(&mut self, op: &OpState) {
         if self.effects.contains_key(&op.op) {
             return;
@@ -572,7 +720,8 @@ impl GateCtx {
         if intent.op != op.op {
             return;
         }
-        if let Some(effect) = own_effect(intent, &self.deny, filetime_now()) {
+        let validated = self.validated.get(&op.op).map(|recorded| &recorded.stamp);
+        if let Some(effect) = own_effect(intent, validated, &self.deny, filetime_now()) {
             self.effects.insert(op.op, effect);
         }
     }
@@ -811,6 +960,10 @@ pub struct GateItem<'a> {
     /// hold; more is refused with [`Blocker::TooLarge`]. The plan's limit: 5,000, or 50,000 for a
     /// manifest-backed install root.
     pub max_files: u32,
+    /// The most keys the tree of a key delete may hold, the run's key limit (`RunSettings::key_limit`)
+    /// that the act's backup capture applies too; more is refused with [`Blocker::TooLarge`]. The
+    /// validate pass reads the tree with it (F6 of the M2 fix-round review: it used `max_files`).
+    pub max_keys: usize,
     /// The identity the scan read for the item (the candidate's `item_fp`), when it has one. For a
     /// file-system op the validate pass compares it with the file id and volume serial read from the
     /// handle its facts come from; any difference, or a volume serial of 0 on either side, is refused
@@ -821,15 +974,22 @@ pub struct GateItem<'a> {
 }
 
 impl<'a> GateItem<'a> {
-    /// An item with the default blast-radius limit (`purge_plan::decide::Limits::default().max_files`)
-    /// and no scan-time identity.
+    /// An item with the default blast-radius limit (`purge_plan::decide::Limits::default().max_files`),
+    /// the default key limit ([`regbackup::DEFAULT_KEY_LIMIT`]) and no scan-time identity.
     pub fn new(op: &'a ExecOp, exemptions: Exemptions) -> GateItem<'a> {
         GateItem {
             op,
             exemptions,
             max_files: purge_plan::decide::Limits::default().max_files,
+            max_keys: regbackup::DEFAULT_KEY_LIMIT,
             scan_identity: None,
         }
+    }
+
+    /// The item with the key limit `max_keys` ([`GateItem::max_keys`]).
+    #[must_use]
+    pub fn with_key_limit(self, max_keys: usize) -> GateItem<'a> {
+        GateItem { max_keys, ..self }
     }
 
     /// The item with the scan-time identity `scan_identity` ([`GateItem::scan_identity`]).
@@ -1936,6 +2096,9 @@ fn key_item_facts(op: KeyOp, seen: &KeySeen) -> Option<ItemFacts> {
                 is_link: seen.facts.node == KeyNode::Link,
                 owner: seen.owner.clone()?,
                 last_write_time: FileTime(info.last_write_time),
+                // Filled by the validate pass from the tree it reads ([`validate_key`]); the act-time
+                // gate compares the tree separately ([`bind_tree`]).
+                tree_sha256: None,
             }))
         }
         KeyOp::DeleteValue | KeyOp::EditSegment => {
@@ -2079,17 +2242,137 @@ struct Gated {
 
 fn validate_key(ctx: &GateCtx, item: &GateItem<'_>, op: Option<OpId>) -> GateOutcome<Validation> {
     gate_key(ctx, item, KeyAccess::READ, Binding::Capture, op).and_then(|gated| {
-        let stamp = match (&gated.item_facts, gated.facts.value) {
-            (ItemFacts::Key(facts), _) => Stamp::Key(facts.clone()),
-            (ItemFacts::Value(_), ValueState::Present(stamp)) => Stamp::Value(stamp),
+        let (stamp, facts) = match (gated.item_facts, gated.facts.value) {
+            (ItemFacts::Key(facts), _) => match validated_tree(&gated.key, item) {
+                Ok(digest) => {
+                    let facts = RegFacts {
+                        tree_sha256: Some(digest),
+                        ..facts
+                    };
+                    (Stamp::Key(facts.clone()), ItemFacts::Key(facts))
+                }
+                Err(outcome) => return *outcome,
+            },
+            (facts @ ItemFacts::Value(_), ValueState::Present(stamp)) => {
+                (Stamp::Value(stamp), facts)
+            }
             _ => return GateOutcome::Refused(rule(reason::FACTS_UNREADABLE)),
         };
         GateOutcome::Pass(Validation {
             stamp,
-            facts: gated.item_facts,
+            facts,
             exemptions: item.exemptions,
         })
     })
+}
+
+/// The key facts the gate reads for `item` now, without the tree: for tests that journal a record the
+/// validate pass itself would refuse, to reach the act-time checks.
+#[cfg(test)]
+pub(crate) fn key_facts_without_tree(ctx: &GateCtx, item: &GateItem<'_>) -> Option<ItemFacts> {
+    match gate_key(ctx, item, KeyAccess::READ, Binding::Capture, None) {
+        GateOutcome::Pass(gated) => Some(gated.item_facts),
+        _ => None,
+    }
+}
+
+/// The digest of the whole tree of a key to delete, read through the validate pass's handle `key` the
+/// way its backup will be read ([`regbackup::capture_tree`], at most [`GateItem::max_keys`] keys): what
+/// the act is bound to ([`bind_tree`]; review M2 final S5). A tree that cannot be read whole is refused
+/// here with the capture's blocker (a link, a volatile key, a `REG_LINK` value, a name the backup cannot
+/// hold, too many keys or bytes): the act would refuse it the same way. A key gone meanwhile is
+/// `Vanished`; any other failed call is `Failed`.
+fn validated_tree<T>(key: &WKey, item: &GateItem<'_>) -> Result<Sha256Hex, Box<GateOutcome<T>>> {
+    let (ExecOp::DeleteKeyTree { key: spelled } | ExecOp::DeleteKeyIfEmpty { key: spelled }) =
+        item.op
+    else {
+        return Err(Box::new(GateOutcome::Refused(rule(reason::OP_KIND))));
+    };
+    let doc = match regbackup::capture_tree(key, spelled, item.max_keys) {
+        Ok(doc) => doc,
+        Err(regbackup::CaptureError::Vanished) => return Err(Box::new(GateOutcome::Vanished)),
+        Err(e) => {
+            return Err(Box::new(match (e.blocker(), e) {
+                (Some(blocker), _) => GateOutcome::Refused(Refusal {
+                    blocker,
+                    reason: reason::TREE_NOT_READ,
+                }),
+                (None, regbackup::CaptureError::Os(e)) => GateOutcome::Failed(e.error),
+                (None, _) => GateOutcome::Refused(rule(reason::FACTS_UNREADABLE)),
+            }));
+        }
+    };
+    doc.tree()
+        .and_then(regbackup::tree_digest)
+        .ok_or_else(|| Box::new(GateOutcome::Refused(rule(reason::FACTS_UNREADABLE))))
+}
+
+/// Binds the tree of a key action to its validation (review M2 final S4, S5): `tree` is the tree the
+/// action's backup holds, captured through the acting handle of `checked` right after
+/// [`open_and_check_key`] passed for op `op`. It passes only when its digest
+/// ([`regbackup::tree_digest_with`]), with what this run's own completed ops changed in any key of the
+/// tree put back exactly ([`GateCtx::note_done`]), equals the digest of the op's journal `validated`
+/// record. Every value (name, type, data), subkey, class, security descriptor and volatility of every key
+/// of the tree is compared, so a change anywhere below the key, also one made between the validation and
+/// an own op on the same key, is refused, as is a record without a digest ([`reason::TREE_CHANGED`],
+/// soft). Last write times are not compared: content written back as it was is the content the backup
+/// holds and the user confirmed.
+///
+/// What is put back, per key and in reverse op order: a value an own `DeleteValue` deleted (its type and
+/// data hash from the intent's `pre`; it must be absent now), the data an own `EditSegment` replaced (the
+/// value must hold exactly what the edit wrote), a subkey an own key delete removed (with the digest its
+/// own act was bound to; it must be absent now). An own op whose change the journal does not record
+/// exactly refuses every tree holding its key.
+pub fn bind_tree(
+    ctx: &GateCtx,
+    op: OpId,
+    checked: &CheckedKey,
+    tree: &purge_model::exec::regbackup::RegTree,
+) -> Result<(), Refusal> {
+    let changed = || Refusal {
+        blocker: Blocker::ChangedSinceScan,
+        reason: reason::TREE_CHANGED,
+    };
+    let recorded = ctx.recorded(op)?;
+    let Stamp::Key(facts) = &recorded.stamp else {
+        return Err(rule(reason::STAMP_KIND));
+    };
+    let expected = facts.tree_sha256.ok_or_else(changed)?;
+    // The own effects on keys of this tree, by path below its root (folded names), in op order.
+    let root = checked.address();
+    let mut effects: Vec<(Vec<Vec<u16>>, &ContentChange)> = Vec::new();
+    for effect in ctx.effects.values() {
+        let Some(rel) = relative_path(root, &effect.key) else {
+            continue;
+        };
+        effects.push((rel, effect.content.as_ref().ok_or_else(changed)?));
+    }
+    let digest = regbackup::tree_digest_with(tree, |path, content| {
+        effects
+            .iter()
+            .rev()
+            .filter(|(rel, _)| rel.as_slice() == path)
+            .all(|(_, change)| change.put_back(content))
+    });
+    if digest == Some(expected) {
+        Ok(())
+    } else {
+        Err(changed())
+    }
+}
+
+/// The path of `key` below `root` as folded names (empty for `root` itself); `None` when `key` is not
+/// `root` or below it.
+fn relative_path(root: &KeyAddress, key: &KeyAddress) -> Option<Vec<Vec<u16>>> {
+    if root.root != key.root || root.view != key.view {
+        return None;
+    }
+    let segments =
+        |path: &str| -> Vec<Vec<u16>> { path.split('\\').map(regbackup::fold_str).collect() };
+    let (root_path, key_path) = (segments(&root.path), segments(&key.path));
+    key_path
+        .strip_prefix(root_path.as_slice())
+        .map(<[Vec<u16>]>::to_vec)
 }
 
 /// A registry item that passed the gate, with the key handle to act on.

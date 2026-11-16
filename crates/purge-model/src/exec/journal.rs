@@ -82,6 +82,12 @@ pub struct RegFacts {
     pub owner: String,
     /// The key's last write time.
     pub last_write_time: FileTime,
+    /// For a key to delete: the digest of the whole subtree as it was read (every key's class, security,
+    /// volatility, values by name, type and data hash, and subkeys by name and digest; last write times
+    /// are not in it). A key action is bound to it at the act; a record without one binds nothing and is
+    /// refused there. Absent in journals written before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree_sha256: Option<Sha256Hex>,
 }
 
 /// What one registry value showed.
@@ -205,6 +211,11 @@ pub struct RunSettings {
     pub key_limit: u64,
     /// When the run asks for a restore point.
     pub restore_point: RestorePointPolicy,
+    /// The selected candidate ids in op order (op 1 first), so that a run interrupted before every
+    /// item was validated is bound to its selection again without searching for it (review M2 M3).
+    /// Empty in journals written before the field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected: Vec<CandidateId>,
 }
 
 /// The deny-list exemptions an item was judged with (ENGINE_PLAN.md §5.10). The same four inputs as the
@@ -312,6 +323,10 @@ pub struct Done {
     pub item: CandidateId,
     /// The outcome.
     pub outcome: ItemOutcome,
+    /// Why a skipped item was skipped, as the report says it (for example the step that could not
+    /// make a backup location, with its error); may be empty. Absent in journals written before it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
 }
 
 /// The end of a group of intents; the journal is flushed after it.
@@ -1043,6 +1058,7 @@ mod tests {
                 original_path: original.into(),
                 file_id: FileIdHex([3; 16]),
                 volume_serial: 9,
+                parent: None,
             },
             definition: None,
             pre,
@@ -1118,6 +1134,7 @@ mod tests {
             is_link: false,
             owner: "S-1-5-32-544".into(),
             last_write_time: FileTime(1),
+            tree_sha256: None,
         });
         let backup = BackupRef {
             path: r"reg\000003.regbackup.json".into(),

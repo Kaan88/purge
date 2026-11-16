@@ -1,4 +1,4 @@
-# Host self-test for the rig v2 scripts. Needs no VM: VBoxManage, the guest and Task Scheduler are
+﻿# Host self-test for the rig v2 scripts. Needs no VM: VBoxManage, the guest and Task Scheduler are
 # replaced by fakes (VBoxManage by a .cmd that only reports whether the password file exists). Nothing is
 # registered and nothing outside a temporary directory is written. Windows PowerShell 5.1:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-selftest.ps1
@@ -324,7 +324,12 @@ if defined OUT >"%OUT%" echo {"schema":"purge.undo/1","session":"%SESS%","items"
 exit /b 0
 :m2journal
 if "%SUB%"=="fault-points" goto m2fp
+if "%SUB%"=="resume" goto m2recovered
+if "%SUB%"=="rollback" goto m2recovered
 echo journal %SUB% %SESS%: ok
+exit /b 0
+:m2recovered
+echo {"schema":"purge.cli.recovered/1","mode":"%SUB%","sessions":[{"session":"%SESS%","state":"Undone"}]}
 exit /b 0
 :m2fp
 echo journal.header	before the header record
@@ -990,6 +995,7 @@ $script:FakeEv = '@W@\events.txt'
 function Ev([string]$s) { [IO.File]::AppendAllText($script:FakeEv, $s + "`r`n") }
 function Start-Sleep { }
 function Suspend-EdgeUpdate { Ev 'edge-pause'; [ordered]@{ method = 'fake' } }
+function Suspend-M2Telemetry { Ev 'telemetry-pause'; [ordered]@{ service = 'DiagTrack'; after = 'Stopped' } }
 function LaunchMedium([string]$Exe, [string]$Arguments = '', [string]$WorkDir = '', [string]$TaskName = 'PurgeRigLaunch', [int]$StartTimeoutSec = 30) { Ev "medium:$Arguments"; [pscustomobject]@{ task = $TaskName; pid = 4000001; found = $true } }
 function Stop-Launch($Launch, [int]$GraceSec = 5) { [pscustomobject]@{ closed = @(); killed = @() } }
 function Start-Native([string]$Exe, [string]$Arguments = '', [string]$WorkDir = '') {
@@ -998,6 +1004,9 @@ function Start-Native([string]$Exe, [string]$Arguments = '', [string]$WorkDir = 
     $p | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms) $true }
     $p
 }
+function Remove-LaunchTask($Launch) { Ev "unlaunch:$($Launch.task)" }
+function Set-M2RestoreFrequency([int]$Minutes) { Ev "srfreq:$Minutes"; $Minutes }
+function Set-M2SystemProtection([bool]$On) { Ev "srprot:$On"; $On }
 function Get-RigBootId { [IO.File]::ReadAllText('@W@\bootid.txt').Trim() }
 function Invoke-RigShutdown([int]$DelaySec, [string]$Reason) { Ev "shutdown:$DelaySec" }
 function Start-M2Locker([string[]]$Paths, [string]$WorkDir, [int]$TimeoutSec = 60) { Ev "lock:$($Paths -join ',')"; [pscustomobject]@{ pid = 4000003; paths = $Paths; ready = $true; stop_file = '@W@\stop' } }
@@ -1098,8 +1107,8 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
         param([string]$Id, [string]$RunPrefix = '', [switch]$Engine)
         $run = "$RunPrefix$Id"
         $g = Join-Path (Join-Path $W 'out') $run; New-Item -ItemType Directory -Force $g | Out-Null
-        [IO.File]::WriteAllText((Join-Path $g 'plan-purge.json'), '{"schema":"purge.plan/0","app":"' + $Id + '","tool":"purge","mode":"post","items":[{"target":{"type":"Path","path":"C:\\fake\\left"},"band":"Safe","preselected":true,"scanner":"FS-INSTALLDIR"},{"target":{"type":"Path","path":"C:\\fake\\maybe"},"band":"Likely","preselected":false,"scanner":"FS-INSTALLDIR"}]}')
-        [IO.File]::WriteAllText((Join-Path $g 'plan-purge.scan.json'), '{"schema":"purge.scan/0","plan_hash":"abc123","items":[{"id":"c-left","target":{"type":"Path","path":"C:\\fake\\left"},"action":"Quarantine"},{"id":"c-maybe","target":{"type":"Path","path":"C:\\fake\\maybe"},"action":"Quarantine"}]}')
+        [IO.File]::WriteAllText((Join-Path $g 'plan-purge.json'), '{"schema":"purge.plan/0","app":"' + $Id + '","tool":"purge","mode":"post","items":[{"target":{"type":"Path","path":"C:\\fake\\left"},"band":"Safe","preselected":true,"scanner":"FS-INSTALLDIR"},{"target":{"type":"Path","path":"C:\\fake\\maybe"},"band":"Likely","preselected":false,"scanner":"FS-INSTALLDIR"},{"target":{"type":"Path","path":"C:\\fake\\shared"},"band":"Blocked","preselected":false,"scanner":"FS-INSTALLDIR"}]}')
+        [IO.File]::WriteAllText((Join-Path $g 'plan-purge.scan.json'), '{"schema":"purge.scan/0","plan_hash":"abc123","items":[{"id":"c-left","target":{"type":"Path","path":"C:\\fake\\left"},"action":"Quarantine"},{"id":"c-maybe","target":{"type":"Path","path":"C:\\fake\\maybe"},"action":"Quarantine"},{"id":"c-blocked","target":{"type":"Path","path":"C:\\fake\\shared"},"action":"Quarantine"}]}')
         $h = Join-Path $script:RunsDir $run; New-Item -ItemType Directory -Force $h | Out-Null
         [IO.File]::WriteAllText((Join-Path $h 'run.json'), (New-RunJson $run (Get-Date)))
         [pscustomobject]@{ run = $run; done = $true; seconds = 1; pulled = @('run.json') }
@@ -1127,6 +1136,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     $ev = Ev-Lines
     Check 'm2-install: one stage, run ok, restored m2-base, rig-exec engine + install.ps1 pushed' ($rec.ok -and @($rec.stages).Count -eq 1 -and $script:M2Guest[0] -eq 'restore m2-base' -and ($script:M2Guest -contains "push $(Join-Path $W 'repo\target\rig-exec\release\purge-engine.exe')") -and ($script:M2Guest -match 'copyto --target-directory C:\\cr\\install\\ ').Count -eq 1) "ok=$($rec.ok) error=$($rec.error) $(Failed $j)"
     Check 'm2-install: install, re-run unchanged, check; D: queue pre-created at medium IL' ($j.results.install.exit -eq 0 -and $j.results.install.rerun_changed -eq $false -and $j.results.install.renamed_aside -eq 1 -and $j.results.d_volume.present -eq $true -and @($ev -match '^medium:/c mkdir \S+\\dvol\\\.purge-q & echo planted-by-user> ').Count -eq 1) ($j.results | ConvertTo-Json -Depth 4 -Compress)
+    Check 'm2-install: the D: medium step waits for its marker, then deletes the launch task' (@($ev -match '^unlaunch:PurgeRigLaunch$').Count -eq 1) (($ev -match 'launch') -join ', ')
     Check 'm2-install: plan from-targets then exec --plan --confirm <sha256> --select -o' (@($ev -match '^engine:plan from-targets ').Count -eq 1 -and @($ev -match "^engine:exec --plan \S+plan-d-volume\.json --confirm $hex64 --select \S+select-d-volume\.json -o \S+report-d-volume\.json$").Count -eq 1) (($ev -match '^engine:') -join ' | ')
     Check 'm2-install: job log and store pulled' ((Test-Path (Join-Path $script:RunsDir 'm2-install\job-01-start.log')) -and (Test-Path (Join-Path $script:RunsDir 'm2-install\final-sessions.zip')) -and (Test-Path (Join-Path $script:RunsDir 'm2-install\final-quarantine.json')))
 
@@ -1160,9 +1170,28 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm2-fidelity: run ok, every phase ok (fixtures, partial, conflict, tamper, restore point, app)' ($rec.ok -and -not (Failed $j) -and @($rec.after).Count -eq 1 -and $rec.after[0].ok) "error=$($rec.error) $(Failed $j)"
     Check 'm2-fidelity: partial undo with --items, half the items' (@($calls | Where-Object { $_.step -eq 'undo-partial' -and $_.cmd -match '--items ' }).Count -eq 1 -and @($j.results.partial_undo.undone).Count -ge 1)
     Check 'm2-fidelity: backup tamper flips a byte of the intent''s backup file' ($j.results.backup_tamper.backup -eq 'b1.bin' -and $j.results.backup_tamper.undo_exit -eq 0)
-    Check 'm2-fidelity: restore point phase execs twice with --restore-point always' (@($calls | Where-Object { $_.cmd -match '--restore-point always' }).Count -eq 2 -and $j.results.restore_point.snapshot -eq 'm2-base')
-    Check 'm2-fidelity: app stage executes the default selection of the app plan (Safe + preselected)' ($j.results.apps.npp.selected -eq 1 -and (Get-Content -Raw (Join-Path $script:RunsDir 'm2-fidelity\select-app-npp.json')) -match 'c-left' -and (Get-Content -Raw (Join-Path $script:RunsDir 'm2-fidelity\select-app-npp.json')) -notmatch 'c-maybe' -and $j.results.fidelity.'app-npp' -eq $true)
+    $ev = Ev-Lines
+    Check 'm2-fidelity: restore point legs: created, throttled (frequency 1440), protection off then on again' (@($calls | Where-Object { $_.cmd -match '--restore-point always' }).Count -eq 3 -and $j.results.restore_point.snapshot -eq 'm2-base' -and $j.results.restore_point.frequency_value -eq 1440 -and @($ev -match '^srprot:False$').Count -eq 1 -and @($ev -match '^srprot:True$').Count -eq 1 -and $j.results.restore_point_off.reenabled -eq $true) (($ev -match '^sr') -join ', ')
+    $selApp = Get-Content -Raw (Join-Path $script:RunsDir 'm2-fidelity\select-app-npp.json')
+    Check 'm2-fidelity: app stage selects every Safe / Likely / Weak item of the app plan, never Blocked' ($j.results.apps.npp.selected -eq 2 -and $selApp -match 'c-left' -and $selApp -match 'c-maybe' -and $selApp -notmatch 'c-blocked' -and $j.results.fidelity.'app-npp' -eq $true) $selApp
     Check 'm2-fidelity: two stages recorded in run.json (start, app)' ((@($j.stages | ForEach-Object { $_.stage }) -join ',') -eq 'start,app')
+
+    # --- null runs: the phases up to deep A, an idle wait instead of exec, snap B; no ambient set pushed
+    Reset-Ev
+    $rec = Invoke-M2Mode -Mode 'm2-fidelity' -RunPrefix 'n1-' -Null -Apps @('npp')
+    $j = RunJson 'n1-m2-fidelity'
+    $ev = Ev-Lines
+    Check 'null run: ok, no exec / undo / execdiff, snap A and B taken, no app stage' ($rec.ok -and -not (Failed $j) -and -not @($j.engine.calls | Where-Object { $_.step -match '^(exec|undo)-' }).Count -and -not @($ev -match '^execdiff:').Count -and @($ev -match '^snap:snap-n1-m2-fidelity-[ab]\.tsv\.gz$').Count -eq 2 -and -not @($rec.after | Where-Object { $_ }).Count -and $j.null_run.null -eq $true) "error=$($rec.error) $(Failed $j) $(($ev -match '^(snap|engine)') -join ' | ')"
+    Check 'null run: the guest ambient copy is deleted, none pushed' (($script:M2Guest -contains 'cmd del /f /q C:\cr\bin\m2-ambient.json') -and -not @($script:M2Guest -match 'copyto .*m2-ambient').Count)
+    Check 'null run: DiagTrack paused before snap A, like a real run' (@($ev -match '^telemetry-pause$').Count -eq 1 -and [array]::IndexOf($ev, 'telemetry-pause') -lt [array]::IndexOf($ev, 'snap:snap-n1-m2-fidelity-a.tsv.gz') -and $j.telemetry_pause.after -eq 'Stopped') (($ev | Select-Object -First 8) -join ' | ')
+    $m = $null; try { $null = Invoke-M2Mode -Mode 'm2-install' -Null } catch { $m = $_.Exception.Message }
+    Check 'null run: refused for a mode other than m2-traps / m2-fidelity' ($m -match 'm2-traps / m2-fidelity only') $m
+
+    # --- elevated tests: the test binary is picked by its --list output, the exact name only
+    $lst = @('security::tests::elevated_set_security_assigns_system_owner: test', 'security::tests::elevated_set_security_assigns_system_owner_x: test', 'a::b: bench')
+    Check 'elevated tests: Find-TestInList takes the full path of the exact name' ((Find-TestInList $lst 'elevated_set_security_assigns_system_owner') -ceq 'security::tests::elevated_set_security_assigns_system_owner')
+    Check 'elevated tests: Find-TestInList never takes a longer name or a bench' (-not (Find-TestInList $lst 'assigns_system_owner_y') -and -not (Find-TestInList $lst 'b'))
+    Check 'elevated tests: both specs, one per crate' (@(Get-M2ElevatedTestSpecs).Count -eq 2 -and (@(Get-M2ElevatedTestSpecs).crate -join ',') -eq 'purge-win,purge-exec')
 
     # --- m2-crash: batches with a reboot continuation, torn journals
     Reset-Ev
@@ -1173,7 +1202,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm2-crash: start (4 iterations) -> reboot continuation -> matrix (3 + torn); run ok' ($rec.ok -and (@($rec.stages | ForEach-Object { $_.stage }) -join ',') -eq 'start,matrix' -and $rec.stages[0].continuation.kind -eq 'reboot' -and ($script:M2Guest -contains 'reboot from boot-1') -and -not (Failed $j)) "error=$($rec.error) $(Failed $j) stages=$(($rec.stages | ConvertTo-Json -Compress -Depth 4))"
     Check 'm2-crash: matrix rows: exec points x {resume, rollback} + undo points x resume' ($rows.Count -eq 7 -and @($rows | Where-Object { $_.phase -eq 'undo' -and $_.point -eq 'undo.intent' }).Count -eq 1 -and @($rows | Where-Object { $_.point -eq 'act.after' -and $_.after -eq 'rollback' }).Count -eq 1) ($rows | ForEach-Object { "$($_.point)/$($_.phase)/$($_.after)" })
     Check 'm2-crash: every point crashed with 0xC0000409, recovered twice idempotently, passed' (@($rows | Where-Object { $_.hit -and $_.crashed -and $_.recover_idempotent -and $_.pass }).Count -eq 7) (($rows | ForEach-Object { "$($_.tag) hit=$($_.hit) pass=$($_.pass) err=$($_.error)" }) -join ' | ')
-    Check 'm2-crash: an undo-phase row is resumed, then undone again (resume finishes only the undo ops in progress)' (@($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit -and $_.undo_exit -eq 0 }).Count -eq @($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit }).Count -and @($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit }).Count -ge 1) (($rows | Where-Object { $_.phase -eq 'undo' } | ForEach-Object { "$($_.tag) undo_exit=$($_.undo_exit)" }) -join ' | ')
+    Check 'm2-crash: an undo-phase row is resumed to Undone and not undone again (resume finishes the undo)' (@($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit -and $_.undone_by_recovery -eq $true -and $null -eq $_.undo_exit }).Count -eq @($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit }).Count -and @($rows | Where-Object { $_.phase -eq 'undo' -and $_.hit }).Count -ge 1) (($rows | Where-Object { $_.phase -eq 'undo' } | ForEach-Object { "$($_.tag) undone_by_recovery=$($_.undone_by_recovery) undo_exit=$($_.undo_exit)" }) -join ' | ')
     Check 'm2-crash: fault injected through PURGE_FAULT_AT, recover, resume and rollback issued' (@($j.engine.calls | Where-Object { $_.env -eq 'PURGE_FAULT_AT=act.after' }).Count -ge 2 -and @($j.engine.calls | Where-Object { $_.cmd -match ' journal rollback --session s\d+$' }).Count -ge 3 -and @($j.engine.calls | Where-Object { $_.cmd -match ' journal resume --session s\d+$' }).Count -ge 4 -and @($j.engine.calls | Where-Object { $_.cmd -match ' journal recover$' }).Count -ge 14)
     Check 'm2-crash: torn tail and torn middle variants recorded' ($j.results.torn.tail.crashed -and $j.results.torn.middle.crashed -and $null -ne $j.results.torn.middle.recover_exit -and (Test-Path (Join-Path $script:RunsDir 'm2-crash\crash-torn.json')))
     Check 'm2-crash: the continuation marker was archived as continue-1.json' ((Test-Path (Join-Path $script:RunsDir 'm2-crash\continue-1.json')) -and -not (Test-Path (Join-Path $script:RunsDir 'm2-crash\continue.json')))

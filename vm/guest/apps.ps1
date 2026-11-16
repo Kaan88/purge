@@ -1,4 +1,4 @@
-# Purge rig v2: the test apps (dot-sourced after riglib.ps1). Official vendor URLs only; each app covers a
+﻿# Purge rig v2: the test apps (dot-sourced after riglib.ps1). Official vendor URLs only; each app covers a
 # different installer technology. Ids, URLs, silent install arguments and 'match' are unchanged from v1.
 #
 #   id      truth label file (vm\truth\labels\<id>.json) and default run name (rig.ps1 -RunPrefix adds a prefix)

@@ -56,11 +56,15 @@
 //!    verified and is held open, by the one name the directory listing of that handle returned, with
 //!    `FILE_OPEN_REPARSE_POINT`. No path string is ever resolved, so no junction on any path is
 //!    followed, whatever is swapped in between the listing and the open.
-//! 4. Each opened entry is judged on its own handle by the guard ([`check_store_item`]): it must lie
-//!    strictly inside this session's quarantine directory (lexically and by its final path), be on the
-//!    item's volume, and be a plain directory to be descended into. A reparse point of **any** tag
-//!    (junction, symbolic link, mount point, cloud placeholder, unknown) is only ever deleted as the link
-//!    itself, through the handle that is on the link, and never listed or entered.
+//! 4. Each opened entry is judged on its own handle. The item itself goes through the guard
+//!    ([`check_store_item`]): it must lie strictly inside this session's quarantine directory
+//!    (lexically and by its final path). An entry below it must have the final path the walk opened
+//!    it by, compared segment by segment without the guard's canonicalisation, which refuses names
+//!    that are ordinary inside a tree (`nul`, `aux.h`, a trailing dot); it then lies below the item.
+//!    Every entry must be on the item's volume, and a plain directory to be descended into. A reparse
+//!    point of **any** tag (junction, symbolic link, mount point, cloud placeholder, unknown) is only
+//!    ever deleted as the link itself, through the handle that is on the link, and never listed or
+//!    entered.
 //! 5. The delete is a disposition on that same handle, so it removes exactly the name that was opened:
 //!    for a file with hard links, the name inside the quarantine; the other names and the data stay.
 //!    Read-only files are deleted with `FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE`, which changes
@@ -69,6 +73,15 @@
 //! 6. Handles on the directories being emptied are opened without delete sharing, so nobody can rename
 //!    them out of the quarantine while the walk works below them (NTFS also refuses to rename a directory
 //!    while a handle below it is open).
+//! 7. A directory moved whole keeps the DACL it had at its old place, so whoever could write there may
+//!    still write inside it in quarantine (M14 of the final M2 review). Before the `expire` record, the
+//!    entries below the item are counted the way the validation counted them before the move
+//!    (`pre.tree_entries`), through handles, deleting nothing; more than that refuses the item with
+//!    [`Refused::MoreEntriesThanCounted`] and an [`Alert`], and it stays undoable. The walk then opens
+//!    no more entries than that either: one more stops it with [`WalkError::MoreEntriesThanCounted`],
+//!    before that entry is opened. A tree that grew between its validation and its move is refused the
+//!    same way. Not covered: a later run of an item whose walk already deleted part of it compares
+//!    with the full count, so it lets through as many added entries as were deleted.
 //!
 //! The walk is post-order with an explicit stack of directory handles (no recursion), keeps one listing
 //! buffer and one batch of names at a time (never a whole tree), and stops the item at the first entry
@@ -84,9 +97,10 @@
 //! lists one whose item is still there as [`ExpiringItem::unfinished`]; [`purge`] then continues it
 //! without writing a second record. A session with an undo in progress, an unfinished run, a boot-time
 //! move that has not happened, or an op whose undo restored it, is not expired. After the walks, the
-//! session index is updated through [`StorageRoots::update_index`] (bytes, and the quarantine or backup
-//! class marked purged once every op of the session with data of that class is expired and its data
-//! gone); an unavailable index is reported, never guessed ([`IndexUpdate`]).
+//! session index is updated through [`StorageRoots::update_index`] (an item's bytes once the item is
+//! gone, not when its expire record is written; and the quarantine or backup class marked purged once
+//! every op of the session with data of that class is expired and its data gone); an unavailable index
+//! is reported, never guessed ([`IndexUpdate`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -97,8 +111,9 @@ use std::str::FromStr;
 
 use purge_guard::live::{
     Binding, FileIdentity, PathFacts, PathStamp, Refusal, StoreCheck, StoreOp, StoreScope,
-    check_store_item,
+    check_store_item, reason as live_reason,
 };
+use purge_guard::prefix;
 use purge_model::exec::journal::{Expire, Intent, ItemFacts, ReconcileResult, UndoOutcome};
 use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId};
 use purge_model::exec::session::{Expiry, JournalMark, RetentionClass, SessionId, SessionIndex};
@@ -112,6 +127,7 @@ use crate::journal::{
     self, JournalError, JournalState, JournalWriter, OpState, OpStatus, UndoState,
 };
 use crate::storage::{QuarantineDir, SCAN_FILE, SessionDir, StorageError, StorageRoots};
+use crate::undo;
 
 #[cfg(test)]
 mod tests;
@@ -376,6 +392,12 @@ pub enum Refused {
     /// The session's journal does not match the mark of its index entry: it was cut or replaced since
     /// the index recorded it ([`JournalError::IndexMismatch`]). Nothing of the session is touched.
     JournalMismatch(String),
+    /// More entries lie below the item than the validation counted before the move
+    /// (`pre.tree_entries`): something was added inside it in quarantine. Comes with an [`Alert`].
+    MoreEntriesThanCounted {
+        /// The entries the validation counted.
+        counted: u64,
+    },
 }
 
 /// Why the walk stopped at an entry.
@@ -389,8 +411,17 @@ pub enum WalkError {
     IdentityChanged,
     /// The nesting is deeper than [`MAX_WALK_DEPTH`].
     TooDeep,
-    /// An entry name is not valid UTF-16, so its path cannot be checked.
+    /// An entry name is not valid UTF-16, so its path cannot be checked. No longer raised: such an
+    /// entry is opened by its exact name and its path is compared in the same lossy decoding.
     NameNotRepresentable,
+    /// The walk met more entries below the item than the validation counted before the move
+    /// (`pre.tree_entries`): something was added inside the quarantined tree after the count that
+    /// precedes the walk ([`Refused::MoreEntriesThanCounted`]). The walk stops before it opens the
+    /// extra entry, with an [`Alert`].
+    MoreEntriesThanCounted {
+        /// The entries the validation counted.
+        counted: u64,
+    },
 }
 
 /// Where and why the walk stopped. Everything not yet deleted is still in place.
@@ -459,7 +490,7 @@ pub struct Alert {
 /// What became of the session index after a [`purge`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexUpdate {
-    /// No expire record was written, so nothing to update.
+    /// No expire record was written and no item was finished, so nothing to update.
     NotNeeded,
     /// The index was updated.
     Updated,
@@ -688,7 +719,9 @@ fn list_session(
 fn session_hold(state: &JournalState) -> Option<HoldReason> {
     if !state.is_finished() {
         Some(HoldReason::SessionOpen)
-    } else if state.undo_in_progress().next().is_some() {
+    } else if state.undo_in_progress().next().is_some() || !state.undo_unfinished().is_empty() {
+        // An undo run interrupted between two ops leaves none in progress; the ops its plan had not
+        // reached are still to be undone by recovery (M15 of the final M2 review).
         Some(HoldReason::SessionUndoInProgress)
     } else {
         None
@@ -707,6 +740,10 @@ enum InQuarantine {
 }
 
 /// Whether the op's item sits in the quarantine, from its outcome, reconcile records and undo state.
+/// The outcome is the one undo reads ([`undo::effective_outcome`]): a retry's outcome replaces
+/// `HeldRetry`, a completed boot-time move is `Done` (M16 of the final M2 review: expiry read the
+/// records on its own and took a failed verify after a retry for "nothing quarantined", and a retried
+/// boot move that completed for "held" for ever).
 fn quarantine_state(op: &OpState) -> InQuarantine {
     match &op.undo {
         UndoState::InProgress => return InQuarantine::Held(HoldReason::SessionUndoInProgress),
@@ -716,38 +753,34 @@ fn quarantine_state(op: &OpState) -> InQuarantine {
         UndoState::NotStarted | UndoState::Finished(UndoOutcome::Failed { .. }) => {}
         UndoState::Conflict(_) => {}
     }
+    if op.retry_in_flight {
+        return InQuarantine::Held(HoldReason::Unresolved);
+    }
     let outcome = match op.status() {
         OpStatus::Validated => return InQuarantine::No,
         OpStatus::IntentOnly => return InQuarantine::Held(HoldReason::Unresolved),
-        OpStatus::Done(outcome) => outcome,
+        OpStatus::Done(_) => undo::effective_outcome(op),
     };
     match outcome {
-        ItemOutcome::Done
-        | ItemOutcome::Failed {
-            code: FailCode::VerifyFailed,
-            ..
-        } => InQuarantine::Yes,
-        ItemOutcome::PendingReboot { .. } => {
-            match op
-                .reconciles
-                .iter()
-                .rev()
-                .find(|r| !matches!(r, ReconcileResult::StillPending))
-            {
-                Some(ReconcileResult::Completed) => InQuarantine::Yes,
-                Some(_) => InQuarantine::No,
-                None => InQuarantine::Held(HoldReason::PendingReboot),
-            }
-        }
-        ItemOutcome::HeldRetry => match op.reconciles.iter().rev().find_map(|r| match r {
-            ReconcileResult::Retried { outcome } => Some(outcome),
-            _ => None,
-        }) {
-            Some(ItemOutcome::Done) => InQuarantine::Yes,
-            Some(ItemOutcome::PendingReboot { .. }) => {
+        Some(
+            ItemOutcome::Done
+            | ItemOutcome::Failed {
+                code: FailCode::VerifyFailed,
+                ..
+            },
+        ) => InQuarantine::Yes,
+        // Waiting for the restart until a reconcile decided it (a retry that registered the move
+        // waits as well); `Completed` made the outcome `Done` above.
+        Some(ItemOutcome::PendingReboot { .. }) => match op
+            .reconciles
+            .iter()
+            .rev()
+            .find(|r| !matches!(r, ReconcileResult::StillPending))
+        {
+            None | Some(ReconcileResult::Retried { .. }) => {
                 InQuarantine::Held(HoldReason::PendingReboot)
             }
-            _ => InQuarantine::No,
+            Some(_) => InQuarantine::No,
         },
         _ => InQuarantine::No,
     }
@@ -760,6 +793,8 @@ struct QuarantineRecord {
     original_path: String,
     stamp: PathStamp,
     bytes: u64,
+    /// For a directory: how many entries the validation counted below it, when counted.
+    entries: Option<u64>,
 }
 
 impl QuarantineRecord {
@@ -777,6 +812,7 @@ impl QuarantineRecord {
             original_path,
             file_id,
             volume_serial,
+            ..
         } = &intent.inverse
         else {
             return None;
@@ -800,6 +836,7 @@ impl QuarantineRecord {
                 is_dir: pre.is_dir,
             },
             bytes,
+            entries: if pre.is_dir { pre.tree_entries } else { None },
         })
     }
 
@@ -850,7 +887,10 @@ fn presence(session: &SessionDir, record: &QuarantineRecord) -> Presence {
     }
 }
 
-/// The op directory of `record` and the item's leaf name; `Ok(None)` when the op directory is missing.
+/// The op directory of `record` and the item's leaf name; `Ok(None)` when the op directory, or the
+/// session's directory in the quarantine root above it, is missing. Anything else that is not found
+/// (the volume, its quarantine root) is an error: a volume that is not attached does not make the
+/// item gone (M17 of the final M2 review).
 fn open_op_dir(
     session: &SessionDir,
     record: &QuarantineRecord,
@@ -865,10 +905,25 @@ fn open_op_dir(
         Ok(found) => Ok(Some(found)),
         Err(StorageError::Io {
             source: FsError::NotFound,
+            path,
             ..
-        }) => Ok(None),
+        }) if is_own_dir_of(&record.quarantine_path, &path) => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// Whether `missing` is the op directory of the item at `quarantine_path`, or the session directory
+/// above that.
+fn is_own_dir_of(quarantine_path: &str, missing: &Path) -> bool {
+    let plain = |p: &str| p.strip_prefix(r"\\?\").unwrap_or(p).to_owned();
+    let missing = plain(&missing.to_string_lossy());
+    let item = Path::new(quarantine_path);
+    let op_dir = item.parent();
+    let session_dir = op_dir.and_then(Path::parent);
+    [op_dir, session_dir]
+        .into_iter()
+        .flatten()
+        .any(|dir| prefix::is_same(&plain(&dir.to_string_lossy()), &missing))
 }
 
 /// The op id a quarantine path names in its op directory component (`...\<session>\000042\<leaf>`).
@@ -1106,7 +1161,7 @@ fn purge_session(
         quarantine_purged: false,
         backup_purged: false,
     };
-    let mut wrote_any = false;
+    let mut touched = false;
     for id in wanted {
         let result = purge_one(
             &session,
@@ -1123,8 +1178,17 @@ fn purge_session(
             },
             alerts,
         );
-        if result.expire_recorded {
-            wrote_any = true;
+        touched |= result.expire_recorded;
+        // The bytes leave the index once the item is gone, and once only: when this call recorded
+        // the expiry and finished, or finished a walk an earlier call recorded and did not finish
+        // (which subtracted nothing). An item left half deleted still counts in full. A crash after
+        // the walk and before the index update leaves its bytes counted, the safe side of the cap.
+        let gone = matches!(
+            result.outcome,
+            PurgeOutcome::Purged | PurgeOutcome::AlreadyGone
+        ) && (result.expire_recorded || result.entries_deleted > 0);
+        if gone {
+            touched = true;
             // Quarantined bytes on the item's volume; backup files on the data root's, where the
             // session directory is.
             let freed = writer.state().op(id.op).and_then(|op| {
@@ -1142,7 +1206,7 @@ fn purge_session(
         }
         results.insert((*id).clone(), result);
     }
-    if !wrote_any {
+    if !touched {
         return None;
     }
     // The quarantine class of the session is purged once every quarantined op (there must be one) has
@@ -1318,6 +1382,33 @@ fn purge_one(
         ) {
             return untouched(id, PurgeOutcome::Refused(Refused::Gate(refusal)));
         }
+        // Nothing is written or deleted when more lies below the item than was counted before the
+        // move: the item stays undoable, and every later run stops here too.
+        if let (StoreOp::Descend, Some(counted)) = (op, record.entries) {
+            let mut buffer = vec![0u64; LIST_BUFFER_BYTES / 8];
+            match count_below(&root.handle, counted, &mut buffer) {
+                Ok(found) if found <= counted => {}
+                Ok(_) => {
+                    alerts.push(alert(format!(
+                        "the item in quarantine holds more than the {counted} entries counted when \
+                         it was moved; something was added to it there"
+                    )));
+                    return untouched(
+                        id,
+                        PurgeOutcome::Refused(Refused::MoreEntriesThanCounted { counted }),
+                    );
+                }
+                Err(e) => {
+                    return untouched(
+                        id,
+                        PurgeOutcome::Failed(Failure::Walk(WalkFailure {
+                            at: item_path,
+                            error: WalkError::Fs(e),
+                        })),
+                    );
+                }
+            }
+        }
     }
 
     // 3. Write-ahead: the expire record is durable before anything is deleted.
@@ -1330,13 +1421,19 @@ fn purge_one(
 
     // 4. The walk, from the very handle whose identity was compared.
     if let Some(root) = root {
-        let mut walk = Walk::new(scope, record.stamp.identity.volume_serial);
+        let mut walk = Walk::new(scope, record.stamp.identity.volume_serial, record.entries);
         let done = walk.delete_item(root, item_path, record.stamp);
         result.entries_deleted = walk.entries;
         result.bytes_deleted = walk.bytes;
         match done {
             Ok(()) => result.outcome = PurgeOutcome::Purged,
             Err(failure) => {
+                if let WalkError::MoreEntriesThanCounted { counted } = failure.error {
+                    alerts.push(alert(format!(
+                        "the item in quarantine holds more than the {counted} entries counted when \
+                         it was moved; something was added to it there"
+                    )));
+                }
                 result.outcome = PurgeOutcome::Failed(Failure::Walk(failure));
                 return result;
             }
@@ -1547,6 +1644,12 @@ struct Walk<'a> {
     volume_serial: u64,
     /// The path of the entry being worked on (the top frame, or a child of it).
     path: String,
+    /// The length of the item's own path: `path` is longer for every entry below the item.
+    root_len: usize,
+    /// The entries the validation counted below the item, when counted; the walk opens no more.
+    counted: Option<u64>,
+    /// The entries below the item this walk has opened so far.
+    met: u64,
     buffer: Vec<u64>,
     entries: u64,
     bytes: u64,
@@ -1561,11 +1664,14 @@ enum Step {
 }
 
 impl<'a> Walk<'a> {
-    fn new(scope: &'a StoreScope, volume_serial: u64) -> Walk<'a> {
+    fn new(scope: &'a StoreScope, volume_serial: u64, counted: Option<u64>) -> Walk<'a> {
         Walk {
             scope,
             volume_serial,
             path: String::new(),
+            root_len: 0,
+            counted,
+            met: 0,
             buffer: vec![0u64; LIST_BUFFER_BYTES / 8],
             entries: 0,
             bytes: 0,
@@ -1586,6 +1692,7 @@ impl<'a> Walk<'a> {
         root_path: String,
         recorded: PathStamp,
     ) -> Result<(), WalkFailure> {
+        self.root_len = root_path.len();
         self.path = root_path;
         let mut stack: Vec<Frame> = Vec::new();
         match self.act(root, Binding::Recheck(&recorded))? {
@@ -1610,10 +1717,17 @@ impl<'a> Walk<'a> {
             let mut vanished = None;
             for name in names {
                 let parent_len = self.path.len();
-                let text = String::from_utf16(&name)
-                    .map_err(|_| self.fail(WalkError::NameNotRepresentable))?;
+                // The entry is opened by its exact units; the text is for the path check against
+                // the final path (decoded the same way) and for reports.
                 self.path.push('\\');
-                self.path.push_str(&text);
+                self.path.push_str(&String::from_utf16_lossy(&name));
+                // Each entry is opened at most once (it is deleted, descended into, or gone), so
+                // this counts the entries below the item that this walk met (M14 of the final M2
+                // review).
+                self.met += 1;
+                if let Some(counted) = self.counted.filter(|counted| self.met > *counted) {
+                    return Err(self.fail(WalkError::MoreEntriesThanCounted { counted }));
+                }
                 let step = match probe(&stack[depth].handle, &name, false) {
                     Ok(p) => self.act(p, Binding::Capture)?,
                     Err(FsError::NotFound) => {
@@ -1660,16 +1774,7 @@ impl<'a> Walk<'a> {
         } else {
             StoreOp::Remove
         };
-        gate(
-            self.scope,
-            &self.path,
-            op,
-            binding,
-            self.volume_serial,
-            &facts,
-            &final_path,
-        )
-        .map_err(|r| self.fail(WalkError::Gate(r)))?;
+        self.judge(op, binding, &facts, &final_path)?;
         if plain_dir {
             let handle = reopen(
                 &probe_handle,
@@ -1712,19 +1817,110 @@ impl<'a> Walk<'a> {
     fn remove_dir(&mut self, frame: &Frame) -> Result<(), WalkFailure> {
         let facts = read_facts(&frame.handle).map_err(|e| self.fail(WalkError::Fs(e)))?;
         let final_path = final_path(&frame.handle).map_err(|e| self.fail(WalkError::Fs(e)))?;
-        gate(
-            self.scope,
-            &self.path,
+        self.judge(
             StoreOp::Remove,
             Binding::Recheck(&frame.stamp),
-            self.volume_serial,
             &facts,
             &final_path,
-        )
-        .map_err(|r| self.fail(WalkError::Gate(r)))?;
+        )?;
         dispose(&frame.handle, &facts).map_err(|e| self.fail(WalkError::Fs(e)))?;
         self.entries += 1;
         Ok(())
+    }
+
+    /// The verdict for the entry at `self.path`: the item itself through the guard ([`gate`]), an entry
+    /// below it through [`gate_below`].
+    fn judge(
+        &self,
+        op: StoreOp,
+        binding: Binding<'_, PathStamp>,
+        facts: &Facts,
+        final_path: &str,
+    ) -> Result<(), WalkFailure> {
+        let verdict = if self.path.len() > self.root_len {
+            gate_below(
+                &self.path,
+                op,
+                binding,
+                self.volume_serial,
+                facts,
+                final_path,
+            )
+        } else {
+            gate(
+                self.scope,
+                &self.path,
+                op,
+                binding,
+                self.volume_serial,
+                facts,
+                final_path,
+            )
+        };
+        verdict.map_err(|r| self.fail(WalkError::Gate(r)))
+    }
+}
+
+/// The verdict for an entry below an item whose own path the guard passed ([`gate`]): the guard's
+/// rules but the canonicalisation. The guard canonicalises the lexical path, and that refuses names
+/// that are ordinary inside a tree (`nul`, `aux.h`, `COM1.log`, a trailing dot or space, an unpaired
+/// surrogate); the quarantine move took such a tree whole (S3 of the final M2 review). Here
+///
+/// 1. the final path of the entry's handle, `\\?\` stripped, must name the walk's path segment by
+///    segment ([`prefix::is_same`], no normalisation): the entry lies where the walk opened it, below
+///    the item, hence inside the session's quarantine;
+/// 2. the handle's facts must agree with each other; a reparse point is only removed, never descended
+///    into, and a descent needs a directory;
+/// 3. the identity must be known and on the item's volume, and under [`Binding::Recheck`] the recorded
+///    one.
+///
+/// What keeps the walk inside is the handle-relative open by the listed name, never a path.
+fn gate_below(
+    path: &str,
+    op: StoreOp,
+    binding: Binding<'_, PathStamp>,
+    volume_serial: u64,
+    facts: &Facts,
+    final_path: &str,
+) -> Result<(), Refusal> {
+    let refuse = |blocker: Blocker, reason: &'static str| Err(Refusal { blocker, reason });
+    let verbatim = |p: &str| p.strip_prefix(r"\\?\").unwrap_or(p).to_owned();
+    let lexical = verbatim(path);
+    let at = verbatim(final_path);
+    let unc = |p: &str| {
+        p.get(..4)
+            .is_some_and(|head| head.eq_ignore_ascii_case(r"UNC\"))
+    };
+    if unc(&lexical) || unc(&at) || !prefix::is_same(&lexical, &at) {
+        return refuse(Blocker::ReparseMismatch, live_reason::FINAL_DIFFERS);
+    }
+    let reparse_bit = facts.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    if (facts.reparse_tag != 0) != reparse_bit
+        || facts.is_dir != (facts.attributes & FILE_ATTRIBUTE_DIRECTORY != 0)
+    {
+        return refuse(
+            Blocker::ReparseMismatch,
+            live_reason::HANDLE_FACTS_CONTRADICT,
+        );
+    }
+    if reparse_bit && op != StoreOp::Remove {
+        return refuse(Blocker::ReparseMismatch, live_reason::ITEM_IS_REPARSE_POINT);
+    }
+    if op == StoreOp::Descend && !facts.is_dir {
+        return refuse(Blocker::ChangedSinceScan, live_reason::NOT_A_DIRECTORY);
+    }
+    let found = stamp_of(facts);
+    if !found.identity.is_valid() {
+        return refuse(Blocker::ReparseMismatch, live_reason::IDENTITY_UNKNOWN);
+    }
+    if found.identity.volume_serial != volume_serial {
+        return refuse(Blocker::ReparseMismatch, live_reason::STORE_OTHER_VOLUME);
+    }
+    match binding {
+        Binding::Recheck(recorded) if *recorded != found => {
+            refuse(Blocker::ChangedSinceScan, live_reason::IDENTITY_CHANGED)
+        }
+        _ => Ok(()),
     }
 }
 
@@ -1868,6 +2064,8 @@ const CLASS_STANDARD: i32 = 1;
 const CLASS_DISPOSITION: i32 = 4;
 /// `FileAttributeTagInfo`.
 const CLASS_ATTRIBUTE_TAG: i32 = 9;
+/// `FileFullDirectoryInfo`: the next batch of a listing.
+const CLASS_FULL_DIRECTORY: i32 = 14;
 /// `FileFullDirectoryRestartInfo`: the first batch of a listing, from the start.
 const CLASS_FULL_DIRECTORY_RESTART: i32 = 15;
 /// `FileIdInfo`.
@@ -2257,13 +2455,67 @@ fn clear_readonly(h: &impl AsHandle, attributes: u32) -> Result<(), FsError> {
 /// (`FileFullDirectoryRestartInfo`), without `.` and `..`. Empty when the directory is empty. One
 /// buffer is reused; a batch holds what fits in it.
 fn read_batch(dir: &impl AsHandle, buffer: &mut [u64]) -> Result<Vec<Vec<u16>>, FsError> {
+    read_listing(dir, buffer, CLASS_FULL_DIRECTORY_RESTART)
+}
+
+/// How many entries lie below the directory behind `root`, counted as the validation counts them
+/// (every listed entry; plain directories are entered, reparse points never), opened relative to
+/// their parent's handle and never followed. Stops as soon as the count exceeds `limit`, so it holds
+/// at most `limit + 1` directory handles. Deletes nothing.
+fn count_below(root: &impl AsHandle, limit: u64, buffer: &mut [u64]) -> Result<u64, FsError> {
+    let mut count = 0u64;
+    let mut todo = vec![reopen(
+        root,
+        FILE_LIST_DIRECTORY,
+        SHARE_ALL,
+        FILE_DIRECTORY_FILE,
+    )?];
+    while let Some(dir) = todo.pop() {
+        let mut class = CLASS_FULL_DIRECTORY_RESTART;
+        loop {
+            let names = read_listing(&dir, buffer, class)?;
+            if names.is_empty() {
+                break;
+            }
+            class = CLASS_FULL_DIRECTORY;
+            for name in names {
+                count += 1;
+                if count > limit {
+                    return Ok(count);
+                }
+                let entry = match probe(&dir, &name, false) {
+                    Ok(entry) => entry,
+                    Err(FsError::NotFound) => continue,
+                    Err(e) => return Err(e),
+                };
+                if entry.facts.is_dir && entry.facts.reparse_tag == 0 {
+                    todo.push(reopen(
+                        &entry.handle,
+                        FILE_LIST_DIRECTORY,
+                        SHARE_ALL,
+                        FILE_DIRECTORY_FILE,
+                    )?);
+                }
+            }
+        }
+    }
+    Ok(count)
+}
+
+/// A batch of entry names of the directory behind `dir` with the listing class `class` (from the
+/// start, or on from the last batch), without `.` and `..`. Empty when no more entries follow.
+fn read_listing(
+    dir: &impl AsHandle,
+    buffer: &mut [u64],
+    class: i32,
+) -> Result<Vec<Vec<u16>>, FsError> {
     let size = u32::try_from(buffer.len() * 8).unwrap_or(u32::MAX);
     // SAFETY: the handle is live; `buffer` has `size` writable bytes, 8-byte aligned, which
     // FILE_FULL_DIR_INFO records need.
     let ok = unsafe {
         GetFileInformationByHandleEx(
             dir.as_handle().as_raw_handle(),
-            CLASS_FULL_DIRECTORY_RESTART,
+            class,
             buffer.as_mut_ptr().cast(),
             size,
         )

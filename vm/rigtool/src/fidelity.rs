@@ -47,6 +47,9 @@ pub const ROWS: &[&str] = &[
 pub const OUTSIDE: &str = "outside plan";
 /// Ops that ended without an intent record (refused by a gate, already gone, failed before any backup).
 pub const NOT_EXECUTED: &str = "not executed";
+/// Ops of items the run left quarantined on purpose (`--keep-items`, e.g. the m2-traps expiry item): reported, not
+/// compared.
+pub const KEPT: &str = "kept quarantined";
 
 /// Fields never compared (documented in the report).
 pub const EXCLUDED: &[&str] = &[
@@ -67,6 +70,8 @@ pub struct FidelityArgs {
     pub journal: PathBuf,
     pub ambient: Option<PathBuf>,
     pub sid: Option<String>,
+    /// Item ids whose ops the run did not undo on purpose (row `kept quarantined`, not compared).
+    pub keep_items: Vec<String>,
     pub out: PathBuf,
 }
 
@@ -434,6 +439,9 @@ pub mod journal {
         pub op: u32,
         pub item: String,
         pub outcome: Outcome,
+        /// Free text the engine adds for a skipped item (engine ceb5999 on; absent before).
+        #[serde(default)]
+        pub detail: Option<String>,
     }
 
     #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -611,6 +619,9 @@ pub mod journal {
         pub is_dir: Option<bool>,
         /// The `done` record's outcome.
         pub done: Option<Outcome>,
+        /// The `done` record's optional `detail` (why an item was skipped).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub done_detail: Option<String>,
         /// Effective outcome name: the done outcome, changed by later reconcile records (Completed -> Done,
         /// StillPending -> PendingReboot, Retried -> its outcome, MismatchMovedBack -> MovedBack, Cancelled ->
         /// Cancelled, NotMoved / MismatchKept / Lost -> that name). `None` = no done record yet.
@@ -738,6 +749,7 @@ pub mod journal {
                         renamed: false,
                         is_dir: v.facts.is_dir(),
                         done: None,
+                        done_detail: None,
                         outcome: None,
                         effective: None,
                         reconciled: Vec::new(),
@@ -791,6 +803,7 @@ pub mod journal {
                     o.outcome = Some(d.outcome.name().to_string());
                     o.effective = Some(d.outcome.clone());
                     o.done = Some(d.outcome);
+                    o.done_detail = d.detail;
                     o.reconciled.clear();
                 }
                 Record::Reconcile { op, result, .. } => {
@@ -1024,7 +1037,7 @@ pub mod journal {
             r#"{"rec":"done","op":1,"item":"c-01","outcome":{"kind":"Done"}}"#,
             r#"{"rec":"intent","op":2,"item":"c-02","exec_op":{"kind":"DeleteKeyTree","key":"HKLM\\SOFTWARE\\Vendor"},"inverse":{"kind":"RestoreKeyTree","backup":{"path":"reg\\000002.regbackup.json","sha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","bytes":4096}},"pre":{"kind":"Key","subkeys":2,"values":5,"is_link":false,"owner":"S-1-5-32-544","last_write_time":134078000000000000}}"#,
             r#"{"rec":"done","op":2,"item":"c-02","outcome":{"kind":"Failed","code":"AccessDenied","os_error":5}}"#,
-            r#"{"rec":"done","op":3,"item":"c-03","outcome":{"kind":"Skipped","reason":{"kind":"GateBlocked","blocker":{"kind":"RegLink"}}}}"#,
+            r#"{"rec":"done","op":3,"item":"c-03","outcome":{"kind":"Skipped","reason":{"kind":"GateBlocked","blocker":{"kind":"RegLink"}}},"detail":"value is a link"}"#,
             r#"{"rec":"intent","op":5,"item":"c-05","exec_op":{"kind":"RemovePackage","full_name":"Vendor.App_1.0.0.0_x64__abc"},"inverse":{"kind":"None"},"definition":{"path":"def\\000005.json","sha256":"60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752","bytes":900},"pre":{"kind":"Package"}}"#,
             r#"{"rec":"done","op":5,"item":"c-05","outcome":{"kind":"Done"}}"#,
             r#"{"rec":"group_end","group":1,"ops":3}"#,
@@ -1062,6 +1075,8 @@ pub mod journal {
             let o3 = j.op(3).unwrap();
             assert_eq!(o3.kind, None);
             assert_eq!(o3.effective.as_ref().unwrap().summary(), "Skipped/GateBlocked/RegLink");
+            assert_eq!(o3.done_detail.as_deref(), Some("value is a link"));
+            assert_eq!(j.op(1).unwrap().done_detail, None);
             assert_eq!(o3.target, Some(Target::RegValue { path: "HKLM\\SOFTWARE\\Other".into(), name: String::new() }));
             let o4 = j.op(4).unwrap();
             assert_eq!((o4.is_dir, o4.outcome.as_deref()), (Some(true), None));
@@ -1442,7 +1457,7 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
         {
             op_rows[i].objects += 1;
         }
-        if p.is_some_and(|p| p.kind == "RemovePackage") {
+        if p.is_some_and(|p| p.kind == "RemovePackage" || p.kind == KEPT) {
             return;
         }
         if matches!(o, Obj::File(_)) && !renamed {
@@ -1541,6 +1556,8 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
         };
         if l == "RemovePackage" {
             r.note = Some("Inverse None: not compared".into());
+        } else if l == KEPT {
+            r.note = Some("left quarantined by the run on purpose (--keep-items): not compared".into());
         } else {
             r.identical = n_obj - n_diff;
             r.differing = n_diff;
@@ -1585,7 +1602,12 @@ pub fn cmd_fidelity(a: &FidelityArgs) -> Result<FidelityReport> {
     let after = read_deep(&a.after)?;
     let text = journal::read_journal_text(&a.journal)?;
     let j = parse_journal(&text).with_context(|| format!("journal {}", a.journal.display()))?;
-    let (ops, jw) = (j.ops, j.warnings);
+    let (mut ops, jw) = (j.ops, j.warnings);
+    for o in &mut ops {
+        if o.kind.is_some() && a.keep_items.iter().any(|k| k == &o.item) {
+            o.kind = Some(KEPT.into());
+        }
+    }
     let amb = match &a.ambient {
         Some(p) => Some(AmbientSet::load(p)?),
         None => None,
@@ -2046,6 +2068,7 @@ mod tests {
         let amb = AmbientSet {
             union: crate::ambient::Matcher::new("u", &[format!("P:{R}\\sibling.txt")], &[]).unwrap(),
             runs: Vec::new(),
+            records: None,
         };
         let r = compare(&a, &c, &ops_of(&journal()), Some(&amb), None);
         assert!(r.ok, "{:#?}", r.differences);

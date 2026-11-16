@@ -9,6 +9,7 @@
 pub mod filesystem;
 pub mod fixture;
 pub mod live;
+pub mod metered;
 pub mod registry;
 pub mod snapfixture;
 pub mod system;

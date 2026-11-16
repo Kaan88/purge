@@ -1,4 +1,4 @@
-# Purge rig, M2: guest trap builder and trap manifest (ENGINE_PLAN.md section 10.2 "M2 traps", 11.2).
+﻿# Purge rig, M2: guest trap builder and trap manifest (ENGINE_PLAN.md section 10.2 "M2 traps", 11.2).
 # Windows PowerShell 5.1, 64-bit, elevated, inside the test VM only. Never run it on a real machine.
 #
 # Builds, inside the synthetic app root C:\Program Files\PurgeTrapApp, its keys HKLM\SOFTWARE\PurgeTrapApp
@@ -37,6 +37,7 @@
 # -DryRun (with build): no system change. Compiles the native helper, prints the static manifest (the
 # source of vm\truth\m2-traps.json) with placeholders {user-sid} and {localappdata}, writes it and the
 # targets files to -OutDir when given. -Library: only define the functions (dot-sourced by m2-fixtures.ps1).
+# -RebootSafe (build, m2-reboot): ph\cloud-tag.txt gets the OFFLINE attribute instead of the cloud reparse tag.
 #
 # Medium-IL steps run through riglib's LaunchMedium (one-shot task PurgeRigM2Medium), as a standard user
 # would act. Every file-system operation goes through \\?\ paths and never follows a reparse point when
@@ -53,8 +54,14 @@ param(
     [string]$Label = '',
     [int]$TimeoutSec = 300,
     [switch]$DryRun,
-    [switch]$Library
+    [switch]$Library,
+    # m2-reboot: the cloud reparse tag (IO_REPARSE_TAG_CLOUD_1 with no sync root behind it) does not survive a reboot
+    # (the file reads as ERROR_FILE_CORRUPT 1392 afterwards), so ph\cloud-tag.txt gets the OFFLINE placeholder
+    # attribute instead (the RECALL_* bits do not stick on m2-base), which survives it and is still a placeholder the
+    # engine must not touch or hydrate (G7).
+    [switch]$RebootSafe
 )
+$M2RebootSafe = [bool]$RebootSafe
 
 $ErrorActionPreference = 'Stop'
 
@@ -723,10 +730,29 @@ function Get-M2TrapTable([string]$Sid, [string]$LocalAppData) {
     $seg = 'segment-' + ('x' * 42)   # 50 characters
     $long = (1..5 | ForEach-Object { "$seg$_" }) -join '\'
     $canaryVals = { param($tag) @((V 'CanaryValue' $REG_SZ (BSz "PURGE-CANARY $tag")), (V 'CanaryDword' $REG_DWORD (BDword 0x5EC0DE)), (V 'CanaryBinary' $REG_BINARY (BHex 'DEADBEEF00FF'))) }
+    # FORGED by the M2 rig (forged-user-fp): a well-formed purge.fp/0 (purge-model Fingerprint) whose claims are lies a
+    # standard user can write: machine-scope roots and a canary as admin-trusted install roots, the canary key as a
+    # run entry's key. The engine must parse it and still never make those paths Safe or preselected (Rule T).
+    # os: the Inbound m2-base build (kb\baselines\EnterpriseSEval-26100.1742), fixed so the -DryRun manifest does not
+    # depend on the machine that prints it.
+    $osEd = 'EnterpriseSEval'; $osBuild = 26100; $osUbr = 1742
+    $fpRoot = { param($p) [ordered]@{ path = $p; kind = 'InstallRoot'; source = 'ArpInstallLocation'; trust = 'AdminOnly'; volume_serial = $null; parent_existed = $true } }
     $fp = [ordered]@{
-        schema = 'purge.fp/0'; note = 'FORGED by the M2 rig (m2-traps forged-user-fp); the user-store format is provisional (ENGINE_PLAN 6.2)'
-        app = 'PurgeTrapApp'; scope = 'machine'
-        roots = @($R, "$C\fp\victim"); keys = @($K, "$KC\FpVictim"); exe_names = @('purgetrapapp.exe')
+        schema = 'purge.fp/0'
+        app = [ordered]@{ program_id = 'HKLM|64|PurgeTrapApp'; display_name = 'PurgeTrapApp' }
+        identity = [ordered]@{ names = @('PurgeTrapApp', 'purgetrapapp.exe'); vendors = @('PurgeTrapApp'); tokens = @('purgetrapapp'); mega_vendor = $false }
+        roots = @((& $fpRoot $R), (& $fpRoot "$C\fp\victim"))
+        exes = @([ordered]@{ path = "$R\purgetrapapp.exe"; main = $true })
+        anchors = [ordered]@{ progids = @(); clsids = @(); appids = @(); typelibs = @(); aumids = @(); package_families = @(); package_full_names = @()
+            run_entries = @([ordered]@{ key = "$KC\FpVictim"; name = 'CanaryValue'; data = "`"$R\purgetrapapp.exe`"" }) }
+        tokens = @([ordered]@{ token = 'PurgeTrapApp'; source = 'arp:key' })
+        os = [ordered]@{ edition = $osEd; build = $osBuild; ubr = $osUbr }
+        user_sid = $Sid
+        # A completed uninstall window and a passed verify-gone (scan --mode post refuses a fingerprint without them);
+        # fixed times (2026-11-01) so the -DryRun manifest is stable.
+        window = [ordered]@{ install_time = [uint64]134064000000000000; t_start = [uint64]134064036000000000; t_end = [uint64]134064036600000000 }
+        verify_gone = [ordered]@{ arp_gone = $true; msi_unknown_all_ctx = $true; main_exes_gone = $true; passed = $true }
+        warnings = @('FORGED by the M2 rig (m2-traps forged-user-fp)')
     }
     $fpJson = ConvertTo-Json -InputObject $fp -Depth 5
 
@@ -800,6 +826,9 @@ function Get-M2TrapTable([string]$Sid, [string]$LocalAppData) {
         (O 'file' @{ path = "$R\long-dir\$long\deep.txt"; text = "deep`n" })
     ) @((TItem 'long-path-dir.dir' (TPath "$R\long-dir\$long") 'Quarantine' (EDone 'moved and restored at a path over 260 characters'))) @("$R\long-dir")
 
+    # M2 decision (RIG.md §11.3): the engine refuses a name ending in a dot or a space (deny rule
+    # canon.trailing-dot-or-space, Skipped/GateBlocked/DenyListed). That is the safe direction: the item stays where
+    # it is and the sibling a Win32-normalised name would hit stays intact.
     Add-Trap 'odd-names' 'G1' 'Trailing-dot and trailing-space names next to the siblings a Win32-normalised name would hit.' @(
         (O 'canary-file' @{ id = 'odd.sibling-file'; path = "$R\odd\name" }),
         (O 'canary-file' @{ id = 'odd.sibling-dir'; path = "$R\odd\dir\inner.txt" }),
@@ -807,9 +836,9 @@ function Get-M2TrapTable([string]$Sid, [string]$LocalAppData) {
         (O 'file' @{ path = "$R\odd\name "; text = "trailing space`n" }),
         (O 'file' @{ path = "$R\odd\dir.\inner.txt"; text = "inside a trailing-dot dir`n" })
     ) @(
-        (TItem 'odd-names.dot' (TPath "$R\odd\name.") 'Quarantine' (EDone "moved and restored under its exact name; sibling 'name' intact")),
-        (TItem 'odd-names.space' (TPath "$R\odd\name ") 'Quarantine' (EDone "moved and restored under its exact name; sibling 'name' intact")),
-        (TItem 'odd-names.dotdir' (TPath "$R\odd\dir.") 'Quarantine' (EDone "moved and restored under its exact name; sibling 'dir' intact"))
+        (TItem 'odd-names.dot' (TPath "$R\odd\name.") 'Quarantine' (EBlocked 'DenyListed')),
+        (TItem 'odd-names.space' (TPath "$R\odd\name ") 'Quarantine' (EBlocked 'DenyListed')),
+        (TItem 'odd-names.dotdir' (TPath "$R\odd\dir.") 'Quarantine' (EBlocked 'DenyListed'))
     ) @("$R\odd")
 
     Add-Trap 'attributes' 'G1' 'Read-only, hidden and system files and directories.' @(
@@ -1149,7 +1178,13 @@ function Invoke-M2Object($o, $Trap) {
     try {
         switch ($o.k) {
             'dir'         { $N::MkDirs($o.path) }
-            'file'        { & $parent $o.path; $b = $(if ($o.Contains('bytes')) { [byte[]]$o.bytes } else { $M2Utf8.GetBytes([string]$o.text) }); $N::WriteAll($o.path, $b) }
+            'file'        {
+                & $parent $o.path
+                # Plain assignments: $( ) would unroll an empty byte array (an empty file) to $null.
+                if ($o.Contains('bytes') -and $null -ne $o.bytes) { [byte[]]$b = $o.bytes } else { [byte[]]$b = $M2Utf8.GetBytes([string]$o.text) }
+                if ($null -eq $b) { $b = New-Object byte[] 0 }
+                $N::WriteAll($o.path, $b)
+            }
             'canary-file' { & $parent $o.path; $N::WriteAll($o.path, (Get-CanaryBytes $o.id)) }
             'stream'      { $N::WriteAll(($o.path + ':' + $o.stream), $M2Utf8.GetBytes([string]$o.text)) }
             'junction'    { & $parent $o.path; $N::Junction($o.path, $o.target) }
@@ -1157,7 +1192,8 @@ function Invoke-M2Object($o, $Trap) {
             'filesym'     { & $parent $o.path; $N::Symlink($o.path, $o.target, $false) }
             'hardlink'    { & $parent $o.path; $N::HardLink($o.path, $o.existing) }
             'attrs' {
-                $a = 0; foreach ($n in $o.attrs) { $a = $a -bor $M2Attr[$n] }
+                # (Not $n: variable names are case-insensitive, and $N is the native helper type.)
+                $a = 0; foreach ($an in $o.attrs) { $a = $a -bor $M2Attr[$an] }
                 # Keep what is there, minus DIRECTORY (0x10) and NORMAL (0x80), which SetFileAttributes rejects in a combination.
                 $cur = [int64]$N::Attributes($o.path)
                 $want = ($cur -band [int64]0xFFFFFF6F) -bor $a
@@ -1167,6 +1203,14 @@ function Invoke-M2Object($o, $Trap) {
                 } else { $N::SetAttributes($o.path, [uint32]$want); $st.detail = ('0x{0:X8}' -f $N::Attributes($o.path)) }
             }
             'cloud-tag' {
+                if ($script:M2RebootSafe) {
+                    # -RebootSafe: the reboot-proof placeholder kind (see the parameter).
+                    $cur = [int64]$N::Attributes($o.path)
+                    $d = $N::ForceAttributes($o.path, [uint32](($cur -band [int64]0xFFFFFF6F) -bor $M2Attr['Offline']))
+                    $st.ok = $d -like 'set:*'
+                    $st.detail = "reboot-safe: OFFLINE instead of IO_REPARSE_TAG_CLOUD_1 ($d)"
+                    break
+                }
                 $e = $N::SetCloudTag($o.path)
                 $st.ok = $e -eq 0
                 $st.detail = $(if ($e -eq 0) { 'set:IO_REPARSE_TAG_CLOUD_1' } else { "not-set:win32 error $e" })
@@ -1241,14 +1285,26 @@ function Reset-M2Trap($Trap, [switch]$Lenient) {
 }
 
 # path-segment objects (used by m2-fixtures): append one ';' segment to a list value, recording the data
-# before and after. Reset removes every occurrence of the segment again.
+# before and after. The original bytes are kept as they are (empty elements, a trailing ';', the terminating
+# NULs): the new data is <original body>;<segment><original NULs> (just <segment> for an empty body), and the
+# segment's index is the original element count. Removing the segment with one adjacent separator, which is
+# what the engine's EditSegment does (purge-exec regbackup: elements re-joined with ';', terminators kept),
+# then gives back the original value byte for byte, so the after-exec expectation is the before data. (The
+# earlier build dropped empty elements: `...WindowsApps;` became `...WindowsApps;<seg>`, and the engine's
+# correct result `...WindowsApps` could never match the expected `...WindowsApps;`.) Reset removes every
+# occurrence of the segment the same way, keeping every other element.
 function Get-M2RawValue([string]$Key, [string]$Name) {
     $v = @([PurgeRigM2.Native]::Values($Key) | Where-Object { $_ -and $_.Name -ceq $Name }) | Select-Object -First 1
     $v
 }
-function Split-M2Segments([byte[]]$Data) {
-    $s = [Text.Encoding]::Unicode.GetString($Data).TrimEnd([char]0)
-    @($s -split ';')
+# The ';' list body (trailing NULs cut) and the count of trailing NULs of a REG_SZ / REG_EXPAND_SZ value.
+function Split-M2ListData([byte[]]$Data) {
+    $s = [Text.Encoding]::Unicode.GetString($Data)
+    $body = $s.TrimEnd([char]0)
+    [pscustomobject]@{ body = $body; nuls = $s.Length - $body.Length }
+}
+function Join-M2ListData([string]$Body, [int]$Nuls) {
+    [Text.Encoding]::Unicode.GetBytes($Body + ([string][char]0) * $Nuls)
 }
 function Invoke-M2PathSegment($o) {
     $v = Get-M2RawValue $o.path $o.name
@@ -1259,21 +1315,20 @@ function Invoke-M2PathSegment($o) {
     Reset-M2PathSegment $o
     $v = Get-M2RawValue $o.path $o.name
     $before = [byte[]]$v.Data
-    $segs = @(Split-M2Segments $before | Where-Object { $_ -ne '' })
-    $index = $segs.Count
-    $new = ($segs + @($o.segment)) -join ';'
-    $after = [Text.Encoding]::Unicode.GetBytes($new + [char]0)
+    $l = Split-M2ListData $before
+    if ($l.body -eq '') { $index = 0; $body = $o.segment } else { $index = @($l.body -split ';').Count; $body = $l.body + ';' + $o.segment }
+    $after = Join-M2ListData $body $l.nuls
     [PurgeRigM2.Native]::SetValue($o.path, $o.name, $v.Type, $after)
     [ordered]@{ type = $v.Type; index = $index; before_b64 = (M2-B64 $before); after_b64 = (M2-B64 $after); before_sha256 = (Get-RegValueHash $v.Type $before); after_sha256 = (Get-RegValueHash $v.Type $after) }
 }
 function Reset-M2PathSegment($o) {
     $v = Get-M2RawValue $o.path $o.name
     if (-not $v) { return }
-    $segs = @(Split-M2Segments ([byte[]]$v.Data))
+    $l = Split-M2ListData ([byte[]]$v.Data)
+    $segs = @($l.body -split ';')
     $keep = @($segs | Where-Object { $_ -ine $o.segment })
     if ($keep.Count -eq $segs.Count) { return }
-    $keep = @($keep | Where-Object { $_ -ne '' })
-    [PurgeRigM2.Native]::SetValue($o.path, $o.name, $v.Type, [Text.Encoding]::Unicode.GetBytes(($keep -join ';') + [char]0))
+    [PurgeRigM2.Native]::SetValue($o.path, $o.name, $v.Type, (Join-M2ListData ($keep -join ';') $l.nuls))
 }
 
 # --------------------------------------------------------------------------------- documents / outputs
@@ -1325,8 +1380,23 @@ function Write-M2Targets($Table, [string]$Dir, [string]$Prefix, [string]$Source,
 function Invoke-M2Check($Doc, [string]$Label) {
     $built = @{}
     foreach ($t in @($Doc.traps)) { if ($t.build -and $t.build.ok) { $built[$t.id] = $true } }
+    # Item targets whose build condition is unmet (an optional attribute or reparse tag Windows would not set): the
+    # file there is an ordinary plan item, so its canary is not scored (same rule as rigtool execdiff).
+    $unmet = @(foreach ($t in @($Doc.traps)) {
+            if (-not $t.build) { continue }
+            foreach ($i in @($t.items)) {
+                if (-not $i -or -not $i.PSObject.Properties['condition'] -or -not $i.condition) { continue }
+                $tp = "$($i.target.path)".TrimEnd('\')
+                $rel = @(@($t.build.objects) | Where-Object { $_ -and @('attrs', 'cloud-tag') -contains "$($_.k)" -and ("$($_.path)" -ieq $tp -or "$($_.path)".StartsWith($tp + '\', [StringComparison]::OrdinalIgnoreCase)) })
+                if ($rel.Count -and @($rel | Where-Object { -not $_.ok }).Count) { $tp }
+            }
+        })
     $rows = @(foreach ($c in @($Doc.canaries)) {
             if (-not $built.ContainsKey($c.trap)) { continue }
+            if ($c.kind -eq 'file' -and @($unmet | Where-Object { "$($c.path)" -ieq $_ -or "$($c.path)".StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase) }).Count) {
+                [ordered]@{ id = $c.id; trap = $c.trap; kind = $c.kind; path = $c.path; expected_sha256 = $c.sha256; actual_sha256 = $null; present = $null; reparse = $null; same_file_id = $null; intact = $true; not_scored = 'build condition unmet: an ordinary plan item'; error = $null }
+                continue
+            }
             $m = Measure-M2Canary $c
             $was = $null
             if ($Doc.PSObject.Properties['measured'] -and $Doc.measured) { $was = @($Doc.measured | Where-Object { $_.id -eq $c.id }) | Select-Object -First 1 }

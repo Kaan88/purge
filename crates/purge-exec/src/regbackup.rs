@@ -30,10 +30,14 @@
 //!   ([`finish_delete_tree`]) that stops says how many keys an earlier, interrupted run had deleted and
 //!   are still missing ([`Rollback::PartialBefore`]); [`restore_missing`] puts exactly those back.
 //! - **Restore never forces.** [`restore_tree`] recreates keys with their recorded class and security
-//!   descriptor (applied atomically at creation), and follows the conflict rules of §7.8: an existing key
-//!   under `Installer`, `Services` or a COM root is a conflict, elsewhere an existing key is merged into only
-//!   when it is empty. A failure rolls back the keys created so far. An owner the token may not assign is
-//!   left to the token and reported ([`DifferenceKind::OwnerNotRestored`]); no privilege is enabled.
+//!   descriptor (applied at creation, then read back and, where creation lost something, set again through
+//!   the new key's handle: the DACL's auto-inherited and protected flags, inherited ACEs as inherited, and
+//!   an owner such as SYSTEM with `SeRestorePrivilege` for that one write when the token holds it), and
+//!   follows the conflict rules of §7.8: an existing key under `Installer`, `Services` or a COM root is a
+//!   conflict, elsewhere an existing key is merged into only when it is empty. A failure rolls back the keys
+//!   created so far. A descriptor that still reads back other than recorded is reported
+//!   ([`DifferenceKind::OwnerNotRestored`], [`DifferenceKind::SecurityDiffers`]; see
+//!   [`Difference::is_security`]).
 //! - **Segments** of `;` lists and `REG_MULTI_SZ` values are removed in one read-modify-write that keeps
 //!   type and terminators ([`plan_segment_removal`], [`apply_segment_removal`]) and put back only while the
 //!   value is what Purge wrote or merely lacks the segment ([`reinsert_segment`]).
@@ -41,7 +45,7 @@
 //! The last write time of a key cannot be set and is not compared. Every value is read through [`WKey`],
 //! whose reads are exact; the Win32 reads of `reg::Key` may change the last byte of odd-length strings.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 
 use purge_guard::live::KeyAddress;
@@ -60,6 +64,7 @@ use purge_win::reg_write::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::act_fs::owner_dacl_differences;
 use crate::fault;
 use crate::gate::{CheckedKeyParent, CheckedValueKey};
 use crate::storage::{SessionDir, StorageError, now};
@@ -374,12 +379,25 @@ pub struct Difference {
     pub kind: DifferenceKind,
 }
 
+impl Difference {
+    /// Whether the difference is in a key's security descriptor that the restore meant to put back
+    /// ([`DifferenceKind::OwnerNotRestored`], [`DifferenceKind::SecurityDiffers`]): the key is back, but
+    /// not as it was, and that needs attention. Kept security of an existing key that was merged into, or
+    /// left as it was, is not one.
+    pub fn is_security(&self) -> bool {
+        matches!(
+            self.kind,
+            DifferenceKind::OwnerNotRestored { .. } | DifferenceKind::SecurityDiffers
+        )
+    }
+}
+
 /// The kinds of [`Difference`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DifferenceKind {
-    /// The recorded owner could not be assigned by this token (`ERROR_INVALID_OWNER`, for example
-    /// TrustedInstaller); the key was created with the token's default owner and the recorded group and
-    /// DACL.
+    /// The recorded owner could not be assigned (`ERROR_INVALID_OWNER`: SYSTEM or TrustedInstaller by a
+    /// token without `SeRestorePrivilege`); the key has the token's default owner and the recorded group
+    /// and DACL.
     OwnerNotRestored {
         /// The owner part of the recorded SDDL (`S-1-5-80-…` or an alias such as `SY`).
         recorded_owner: String,
@@ -388,7 +406,8 @@ pub enum DifferenceKind {
     SecurityDiffers,
     /// The backup was merged into an existing empty root key, which keeps its own class.
     RootClassKept,
-    /// The backup was merged into an existing empty root key, which keeps its own security.
+    /// The backup was merged into an existing empty root key, which keeps its own security (owner and
+    /// DACL are the recorded ones, or there is no merge; the group or the DACL's text may differ).
     RootSecurityKept,
     /// A key that exists differs from its backup node ([`restore_missing`], which never changes an
     /// existing key): the first such key found, left as it is.
@@ -445,6 +464,10 @@ pub enum RestoreConflict {
     /// into it would leave the restored tree volatile (or stable) where it was not.
     #[error("the key exists again with another volatility")]
     VolatilityDiffers,
+    /// The root key exists again, empty, with another owner or DACL than the backup recorded for it:
+    /// whoever created it may control what is restored into it (F2 of the M2 fix-round review).
+    #[error("the key exists again with another owner or DACL")]
+    SecurityDiffers,
 }
 
 impl RestoreConflict {
@@ -454,7 +477,8 @@ impl RestoreConflict {
             Self::KeyExistsProtected
             | Self::KeyNotEmpty
             | Self::Diverged { .. }
-            | Self::VolatilityDiffers => UndoConflict::KeyExists,
+            | Self::VolatilityDiffers
+            | Self::SecurityDiffers => UndoConflict::KeyExists,
             Self::Link => UndoConflict::GateBlocked {
                 blocker: Blocker::RegLink,
             },
@@ -526,13 +550,12 @@ fn name_of(wide: &WideB64) -> Option<String> {
     String::from_utf16(&wide.0).ok()
 }
 
-/// The last component of a key path; `None` when it is empty.
+/// The last component of a key path: the text after the last `\`, exactly as
+/// `RegBackup::validate_for` takes it when the backup is read back; `None` when it is empty (a trailing
+/// backslash). One rule in both places, so that no backup is written whose root name the reader would
+/// not accept (review M2 final S6; the gate refuses such spellings before anything is read).
 fn leaf_name(key_path: &str) -> Option<&str> {
-    key_path
-        .trim_end_matches('\\')
-        .rsplit('\\')
-        .next()
-        .filter(|leaf| !leaf.is_empty())
+    key_path.rsplit('\\').next().filter(|leaf| !leaf.is_empty())
 }
 
 /// `parent\name`, or `name` below the root.
@@ -575,6 +598,16 @@ fn upcase_unit(unit: u16) -> u16 {
 /// A name folded for case-insensitive comparison.
 fn fold(units: &[u16]) -> Vec<u16> {
     units.iter().map(|&u| upcase_unit(u)).collect()
+}
+
+/// A key or value name folded as [`fold`] folds it.
+pub(crate) fn fold_str(name: &str) -> Vec<u16> {
+    name.encode_utf16().map(upcase_unit).collect()
+}
+
+/// [`fold`], for the crate.
+pub(crate) fn fold_units(units: &[u16]) -> Vec<u16> {
+    fold(units)
 }
 
 /// The direct children of every key, in stored order.
@@ -749,7 +782,9 @@ fn node_volatile(node: &KeyNode) -> bool {
 /// Captures the key behind `root` with its whole subtree as a `purge.regbackup/1` tree document.
 ///
 /// `root` is the handle the gate inspected (any access that includes reading). `key_path` is the item's
-/// canonical key path; its last component becomes the root key's name. Every subkey is opened from its
+/// canonical key path, recorded as the document's `key`; the root key's name is the name the registry
+/// stores for the key behind `root` ([`WKey::stored_name`]), so undo re-creates it in that spelling,
+/// whatever case the path spells it in. Every subkey is opened from its
 /// parent's handle with `REG_OPTION_OPEN_LINK`; a link anywhere ends the capture with
 /// [`CaptureError::RegLink`]. More than `limit` keys end it with [`CaptureError::TooLarge`] (pass
 /// [`DEFAULT_KEY_LIMIT`], or the counted size of an absorbing Safe parent). A subkey that disappears
@@ -801,17 +836,25 @@ fn capture_tree_within(
             Ok(())
         }
     };
-    let leaf = leaf_name(key_path).ok_or_else(|| {
-        CaptureError::Os(KeyOpError {
+    if leaf_name(key_path).is_none() {
+        return Err(CaptureError::Os(KeyOpError {
             at: String::new(),
             op: "read key path",
             error: Win32Error::INVALID_PARAMETER,
-        })
-    })?;
+        }));
+    }
     if limit == 0 {
         return Err(CaptureError::TooLarge { limit });
     }
-    let (root_node, root_subkeys) = match read_node(root, WideB64::from(leaf), None, "") {
+    // The root's name as the registry stores it, which undo re-creates (F7 of the M2 fix-round review:
+    // the plan's spelling of the leaf may differ in case). The plan's spelling stays in `key`; that the
+    // two name one key is checked where the backup is bound to its op (`RegBackup::validate_for`).
+    let stored = match root.stored_name() {
+        Ok(stored) => stored,
+        Err(e) if e == KEY_DELETED || e.is_not_found() => return Err(CaptureError::Vanished),
+        Err(e) => return Err(capture_err("", "query key name", e)),
+    };
+    let (root_node, root_subkeys) = match read_node(root, WideB64::from(stored), None, "") {
         Err(CaptureError::Os(e)) if e.error == KEY_DELETED || e.error.is_not_found() => {
             return Err(CaptureError::Vanished);
         }
@@ -901,10 +944,22 @@ pub fn capture_value(
     let Some(value) = value else {
         return Ok(None);
     };
+    value_backup(key_path, value).map(Some)
+}
+
+/// The value document of `value` (`name` as the caller read it), without reading it again: what
+/// [`capture_value`] builds from its own read, for a caller that already holds the value as the gate
+/// read and checked it on the acting handle (review M2 final M11: no second read whose result could
+/// differ from the checked one). Refuses a `REG_LINK` value and a name with a NUL; whether the key is a
+/// link is the caller's (the gate's) to have checked.
+pub fn value_backup(key_path: &str, value: RegValue) -> Result<RegBackup, CaptureError> {
+    if value.name.contains('\0') {
+        return Err(CaptureError::NameNotRepresentable { at: String::new() });
+    }
     if value.ty == REG_LINK {
         return Err(CaptureError::LinkValue { at: String::new() });
     }
-    Ok(Some(RegBackup {
+    Ok(RegBackup {
         schema: RegBackupSchema,
         key: key_path.to_owned(),
         captured: now(),
@@ -913,7 +968,128 @@ pub fn capture_value(
             value_type: value.ty,
             data_b64: BytesB64(value.data),
         }),
-    }))
+    })
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Tree digest
+// ---------------------------------------------------------------------------------------------------
+
+/// What one key holds as the tree digest sees it: its values by folded name (raw type and SHA-256 of
+/// the raw data) and its direct subkeys by folded name (their digests).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct KeyContent {
+    /// Values by folded name: raw type and SHA-256 of the raw data.
+    pub values: BTreeMap<Vec<u16>, (u32, [u8; 32])>,
+    /// Direct subkeys by folded name: their digests.
+    pub subkeys: BTreeMap<Vec<u16>, [u8; 32]>,
+}
+
+/// Feeds a length-prefixed run of UTF-16 units.
+fn digest_units(hasher: &mut Sha256, units: &[u16]) {
+    hasher.update((units.len() as u64).to_le_bytes());
+    for unit in units {
+        hasher.update(unit.to_le_bytes());
+    }
+}
+
+/// The digest of one key: its class, security descriptor, volatility and [`KeyContent`]. The key's own
+/// name and its last write time are not in it (the parent holds the name; a write that leaves the
+/// content as it was changes nothing the delete or the backup would see).
+fn key_digest(node: &KeyNode, content: &KeyContent) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"purge.keydigest/1\0");
+    digest_units(
+        &mut hasher,
+        node.class_b64.as_ref().map_or(&[][..], |class| &class.0),
+    );
+    hasher.update((node.sddl.len() as u64).to_le_bytes());
+    hasher.update(node.sddl.as_bytes());
+    hasher.update([u8::from(node.volatile), u8::from(node.link)]);
+    hasher.update((content.values.len() as u64).to_le_bytes());
+    for (name, (ty, sha)) in &content.values {
+        digest_units(&mut hasher, name);
+        hasher.update(ty.to_le_bytes());
+        hasher.update(sha);
+    }
+    hasher.update((content.subkeys.len() as u64).to_le_bytes());
+    for (name, digest) in &content.subkeys {
+        digest_units(&mut hasher, name);
+        hasher.update(digest);
+    }
+    hasher.finalize().into()
+}
+
+/// The digest of a whole tree ([`tree_digest_with`] with nothing adjusted): what the validate pass
+/// journals for a key to delete (`RegFacts::tree_sha256`), and what the act compares a fresh capture
+/// with. `None` for a tree that does not hang together (a parent after its child, a duplicate name).
+pub fn tree_digest(tree: &RegTree) -> Option<Sha256Hex> {
+    tree_digest_with(tree, |_, _| true)
+}
+
+/// The digest of `tree` with every key's content first handed to `adjust`, with the key's path below the
+/// root as folded names (empty for the root), the subkeys' digests already in it. `adjust` changes the
+/// content to what it stood for at another time (the gate puts back what the run's own completed ops
+/// removed or rewrote) and answers `false` when it cannot, which makes the whole digest `None`. Each key
+/// is hashed bottom-up: a key's digest holds its subkeys' digests by name, so the root's digest covers
+/// every key of the tree. `None` also for a tree that does not hang together.
+pub(crate) fn tree_digest_with(
+    tree: &RegTree,
+    mut adjust: impl FnMut(&[Vec<u16>], &mut KeyContent) -> bool,
+) -> Option<Sha256Hex> {
+    let n = tree.keys.len();
+    // Paths, parent first (a parent always comes before its subkeys).
+    let mut paths: Vec<Vec<Vec<u16>>> = Vec::with_capacity(n);
+    for (i, node) in tree.keys.iter().enumerate() {
+        let path = match node.parent.map(|p| p as usize) {
+            None if i == 0 => Vec::new(),
+            Some(p) if p < i => {
+                let mut path = paths.get(p)?.clone();
+                path.push(fold(&node.name_b64.0));
+                path
+            }
+            _ => return None,
+        };
+        paths.push(path);
+    }
+    let mut contents: Vec<KeyContent> = vec![KeyContent::default(); n];
+    for (i, node) in tree.keys.iter().enumerate() {
+        let content = contents.get_mut(i)?;
+        for value in &node.values {
+            let entry = (value.value_type, Sha256::digest(&value.data_b64.0).into());
+            if content
+                .values
+                .insert(fold(&value.name_b64.0), entry)
+                .is_some()
+            {
+                return None;
+            }
+        }
+    }
+    // Children have larger indexes than their parents: deepest first is plain reverse order.
+    let mut root = None;
+    for i in (0..n).rev() {
+        let node = tree.keys.get(i)?;
+        let mut content = std::mem::take(contents.get_mut(i)?);
+        if !adjust(paths.get(i)?, &mut content) {
+            return None;
+        }
+        let digest = key_digest(node, &content);
+        match node.parent.map(|p| p as usize) {
+            Some(p) => {
+                let parent = contents.get_mut(p)?;
+                if parent
+                    .subkeys
+                    .insert(fold(&node.name_b64.0), digest)
+                    .is_some()
+                {
+                    return None;
+                }
+            }
+            None => root = Some(digest),
+        }
+    }
+    root.map(Sha256Hex)
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -974,7 +1150,9 @@ fn check_doc(doc: &RegBackup) -> Result<(), String> {
         return Err("a key is flagged as a registry link".into());
     }
     let leaf = leaf_name(&doc.key).ok_or("the key path has no last component")?;
-    if tree.keys[0].name_b64 != WideB64::from(leaf) {
+    // The root holds the stored spelling of the name, the path the plan's (F7 of the M2 fix-round
+    // review): one key when they fold alike, as the registry compares names.
+    if !same_name(&tree.keys[0].name_b64.0, &WideB64::from(leaf).0) {
         return Err("the root key's name is not the last component of the key path".into());
     }
     let mut siblings = HashSet::new();
@@ -1405,32 +1583,81 @@ fn create_key(
         None => String::new(),
     };
     let volatile = node_volatile(node);
-    let (key, owner_dropped) = match parent.create_subkey(&name, &class, Some(&node.sddl), volatile)
-    {
-        Ok(key) => (key, false),
+    let key = match parent.create_subkey(&name, &class, Some(&node.sddl), volatile) {
+        Ok(key) => key,
         Err(e) if e == INVALID_OWNER => {
-            // The token may not assign the recorded owner; Purge enables no privilege to force it.
+            // Creation enables no privilege, so a recorded owner the token may not assign by itself
+            // (SYSTEM, TrustedInstaller) is refused here; `finish_key` sets it on the new key.
             let rest = without_owner(&node.sddl);
             let sddl = (!rest.is_empty()).then_some(rest);
-            let key = parent
+            parent
                 .create_subkey(&name, &class, sddl, volatile)
-                .map_err(|e| (fail("create key", e), None))?;
-            (key, true)
+                .map_err(|e| (fail("create key", e), None))?
         }
         Err(e) => return Err((fail("create key", e), None)),
     };
-    match finish_key(tree, &key, index, owner_dropped, differences) {
+    match finish_key(tree, &key, index, differences) {
         Ok(()) => Ok(key),
         Err(failure) => Err((failure, Some(key))),
     }
 }
 
-/// Security check and values of a key just created.
+/// Puts the recorded descriptor on a key just created, exactly, and reads it back: creation stores a
+/// DACL without its auto-inherited flag (`D:AI(...)` comes out as `D:(...)`) and refuses an owner the
+/// token may not assign without `SeRestorePrivilege`. When the descriptor read back is not the
+/// recorded one, the whole recorded descriptor is set once through the handle Purge created
+/// ([`CreatedKey::set_security`]: flags and inherited ACEs as recorded, the owner with
+/// `SeRestorePrivilege` when the token holds it); an owner that still cannot be assigned is retried
+/// without the owner part. What then still differs is reported, never accepted silently: only the
+/// owner as [`DifferenceKind::OwnerNotRestored`], anything else as [`DifferenceKind::SecurityDiffers`].
+fn restore_security(
+    key: &CreatedKey,
+    recorded: &str,
+    at: &str,
+    differences: &mut Vec<Difference>,
+) -> Result<(), KeyOpError> {
+    let fail = |op, error| KeyOpError {
+        at: at.to_owned(),
+        op,
+        error,
+    };
+    let mut live = key.security_sddl().map_err(|e| fail("read security", e))?;
+    if live != recorded {
+        // A failed write changes nothing; the read below says what the key holds either way.
+        let rest = without_owner(recorded);
+        if let Err(e) = key.set_security(recorded)
+            && e == INVALID_OWNER
+            && !rest.is_empty()
+            && rest != recorded
+        {
+            let _ = key.set_security(rest);
+        }
+        live = key.security_sddl().map_err(|e| fail("read security", e))?;
+    }
+    if live == recorded {
+        return Ok(());
+    }
+    let kind = if without_owner(&live) == without_owner(recorded) {
+        DifferenceKind::OwnerNotRestored {
+            recorded_owner: split_owner(recorded)
+                .map(|(owner, _)| owner.to_owned())
+                .unwrap_or_default(),
+        }
+    } else {
+        DifferenceKind::SecurityDiffers
+    };
+    differences.push(Difference {
+        at: at.to_owned(),
+        kind,
+    });
+    Ok(())
+}
+
+/// Security and values of a key just created.
 fn finish_key(
     tree: &RegTree,
     key: &CreatedKey,
     index: usize,
-    owner_dropped: bool,
     differences: &mut Vec<Difference>,
 ) -> Result<(), KeyOpError> {
     let node = &tree.keys[index];
@@ -1440,41 +1667,7 @@ fn finish_key(
         op,
         error,
     };
-    if owner_dropped {
-        differences.push(Difference {
-            at: at(),
-            kind: DifferenceKind::OwnerNotRestored {
-                recorded_owner: split_owner(&node.sddl)
-                    .map(|(owner, _)| owner.to_owned())
-                    .unwrap_or_default(),
-            },
-        });
-    }
-    let expected = if owner_dropped {
-        without_owner(&node.sddl)
-    } else {
-        node.sddl.as_str()
-    };
-    let matches = |live: &str| {
-        if owner_dropped {
-            without_owner(live) == expected
-        } else {
-            live == expected
-        }
-    };
-    let live = key.security_sddl().map_err(|e| fail("read security", e))?;
-    if !matches(&live) {
-        // One correction through the handle Purge created; a difference that remains is reported.
-        let fixed = !expected.is_empty()
-            && key.set_security(expected).is_ok()
-            && key.security_sddl().is_ok_and(|live| matches(&live));
-        if !fixed {
-            differences.push(Difference {
-                at: at(),
-                kind: DifferenceKind::SecurityDiffers,
-            });
-        }
-    }
+    restore_security(key, &node.sddl, &at(), differences)?;
     for value in &node.values {
         let name = name_of(&value.name_b64)
             .ok_or_else(|| fail("read value name", NAME_NOT_REPRESENTABLE))?;
@@ -1723,7 +1916,8 @@ pub fn probe_tree(
 ///   gate's canonical address): [`RestoreConflict::KeyExistsProtected`];
 /// - root present and empty: the backup is merged into it (its values and subkeys are added; the existing
 ///   key keeps its class and security, reported as differences); another volatility than recorded is
-///   [`RestoreConflict::VolatilityDiffers`];
+///   [`RestoreConflict::VolatilityDiffers`], another owner or DACL than recorded
+///   [`RestoreConflict::SecurityDiffers`];
 /// - root present with content: [`RestoreConflict::KeyNotEmpty`].
 ///
 /// A partly deleted tree (an interrupted delete) is a conflict here; recovery uses [`complete_tree`] or
@@ -1761,7 +1955,9 @@ pub fn restore_tree(
 
 /// Merges the backup into an existing, empty root key below the checked parent. The root must have
 /// the recorded volatility ([`RestoreConflict::VolatilityDiffers`]): the keys created below a volatile
-/// key would be volatile, below a stable key stable.
+/// key would be volatile, below a stable key stable. It must have the recorded owner and DACL
+/// ([`RestoreConflict::SecurityDiffers`]), as an existing directory must for a file undo: a key somebody
+/// else created there may let others read or write what is restored into it.
 fn merge_into_empty(
     parent: &CheckedKeyParent,
     tree: &RegTree,
@@ -1811,6 +2007,9 @@ fn merge_into_empty(
     let live_sddl = root
         .security_sddl()
         .map_err(|e| failed_early("", "read security", e))?;
+    if !owner_dacl_differences(&live_sddl, &node.sddl).is_empty() {
+        return Err(RestoreError::Conflict(RestoreConflict::SecurityDiffers));
+    }
     if live_sddl != node.sddl {
         differences.push(Difference {
             at: String::new(),
@@ -2624,11 +2823,55 @@ pub struct SegmentRemoval {
     pub written_value_hash: Sha256Hex,
 }
 
+/// The removal of `segment` from list data of type `ty`: the zero-based position of the element removed
+/// and the data to write. See [`plan_segment_removal`] for the rule.
+fn remove_segment(
+    ty: u32,
+    data: &[u8],
+    segment: &str,
+    index: Option<u32>,
+) -> Result<(u32, Vec<u8>), SegmentError> {
+    let list = List::parse(ty, data)?;
+    let units = segment_units(list.kind, segment)?;
+    let position = match index {
+        Some(i) if list.segments.get(i as usize) == Some(&units) => i as usize,
+        _ => list
+            .segments
+            .iter()
+            .position(|s| *s == units)
+            .ok_or(SegmentError::SegmentAbsent)?,
+    };
+    let mut edited = list;
+    edited.segments.remove(position);
+    let position = u32::try_from(position).map_err(|_| SegmentError::NotAList)?;
+    Ok((position, edited.render()))
+}
+
 /// Reads value `name` of `key` and plans the removal of `segment`: the element at `index` when it is the
-/// segment, else the first element equal to it (exact, case-sensitive match). Changes nothing.
+/// segment, else the first element equal to it (exact, case-sensitive match: `c:\x` is not `C:\x`).
+/// Changes nothing.
 ///
 /// `;` lists (`REG_SZ`, `REG_EXPAND_SZ`) and `REG_MULTI_SZ` keep their type, their empty elements and
 /// their terminating NULs exactly; other types are refused ([`SegmentError::NotAList`]).
+///
+/// **The rule.** The element is removed with exactly one adjacent separator: the one before it when it is
+/// not the first element, else the one after it (none when it is the only element). Nothing else changes:
+/// other empty elements, a leading or trailing separator and the terminating NULs stay. So the result is
+/// the value as it was before the element was appended or inserted with one separator, which is the one
+/// state derivable from the value alone:
+///
+/// | before | segment | after |
+/// |---|---|---|
+/// | `A;B` | `B` | `A` |
+/// | `A;;B` | `B` | `A;` |
+/// | `A;B;` | `B` | `A;` |
+/// | `B;A` | `B` | `A` |
+/// | `;B` | `B` | (empty) |
+/// | `B` | `B` | (empty) |
+///
+/// A value that ended with a separator before the element was appended *without* one more (`A;` +
+/// `B` = `A;B`) cannot be told apart from `A` + `;B`: it becomes `A`. The undo still writes back the
+/// exact data and type read before the edit (the value backup, see [`reinsert_segment`]).
 pub fn plan_segment_removal(
     key: &WKey,
     name: &str,
@@ -2651,23 +2894,11 @@ pub fn plan_segment_removal(
         .value(name)
         .map_err(os("read value"))?
         .ok_or(SegmentError::ValueAbsent)?;
-    let list = List::parse(value.ty, &value.data)?;
-    let units = segment_units(list.kind, segment)?;
-    let position = match index {
-        Some(i) if list.segments.get(i as usize) == Some(&units) => i as usize,
-        _ => list
-            .segments
-            .iter()
-            .position(|s| *s == units)
-            .ok_or(SegmentError::SegmentAbsent)?,
-    };
-    let mut edited = list.clone();
-    edited.segments.remove(position);
-    let written = edited.render();
+    let (index, written) = remove_segment(value.ty, &value.data, segment, index)?;
     Ok(SegmentRemoval {
         name: name.to_owned(),
         segment: segment.to_owned(),
-        index: u32::try_from(position).map_err(|_| SegmentError::NotAList)?,
+        index,
         original_value_hash: sha256(&value.data),
         original: ValueBackup {
             name_b64: WideB64::from(name),
@@ -3283,6 +3514,47 @@ mod tests {
         let again = restore_tree(&parent_of(&backup), &backup).unwrap();
         assert_eq!(again.outcome, RestoreOutcome::AlreadyRestored);
         assert_eq!(shape(&capture(&root, "Rich")), shape(&doc));
+    }
+
+    /// The digest a validation journals and an act is bound to (review M2 final S5): any value or subkey
+    /// change anywhere in the tree changes it; content written back as it was gives the same digest again.
+    /// A key path with an empty last segment is no capture (S6).
+    #[test]
+    fn the_tree_digest_follows_the_content_of_every_key() {
+        let root = TestRoot::new();
+        small_tree(&root);
+        let digest = || {
+            let doc = capture(&root, "T");
+            doc.tree().and_then(tree_digest).unwrap()
+        };
+        let before = digest();
+        assert_eq!(digest(), before);
+        let a1 = root.open(r"T\A\A1", KeyAccess::SET_VALUE);
+        let a2 = root.open(r"T\A\A2", KeyAccess::SET_VALUE);
+        let b = root.open(r"T\B", KeyAccess::CREATE_SUB_KEY);
+        // One change at a time, two levels down, each undone with the same content.
+        a1.set_value_raw("y", REG_BINARY, &[8]).unwrap();
+        assert_ne!(digest(), before);
+        a1.set_value_raw("y", REG_BINARY, &[7]).unwrap();
+        assert_eq!(digest(), before);
+        a1.set_value_raw("y", REG_DWORD, &[7, 0, 0, 0]).unwrap();
+        assert_ne!(digest(), before);
+        a1.set_value_raw("y", REG_BINARY, &[7]).unwrap();
+        a2.set_value_raw("new", REG_SZ, &utf16z("n")).unwrap();
+        assert_ne!(digest(), before);
+        a2.delete_value("new").unwrap();
+        assert_eq!(digest(), before);
+        b.create_subkey("Child", "", None, false).unwrap();
+        assert_ne!(digest(), before);
+        b.delete_subkey("Child").unwrap();
+        assert_eq!(digest(), before);
+
+        for spelled in [format!("{}\\", root.key_path("T")), String::new()] {
+            assert!(
+                capture_tree(&root.open("T", KeyAccess::READ), &spelled, 10_000).is_err(),
+                "{spelled:?}"
+            );
+        }
     }
 
     #[test]
@@ -4125,6 +4397,70 @@ mod tests {
         }
     }
 
+    /// F7 of the M2 fix-round review: a key the plan spells in another case is backed up under the name
+    /// the registry stores and re-created in that spelling. Before the fix it came back as the plan
+    /// spelled it (`MIXEDCASE`), with `Restored` and no difference.
+    #[test]
+    fn undo_re_creates_a_key_in_its_stored_spelling() {
+        let root = TestRoot::new();
+        root.key
+            .create_subkey("MixedCase", "", None, false)
+            .unwrap()
+            .set_value_raw("v", REG_DWORD, &[1, 0, 0, 0])
+            .unwrap();
+        let dir = TempDir::new();
+        let doc = capture(&root, "MIXEDCASE");
+        assert_eq!(
+            doc.key,
+            root.key_path("MIXEDCASE"),
+            "the plan's spelling stays"
+        );
+        let backup = save(&dir, 1, &doc);
+        delete_tree(&root.open("MIXEDCASE", KeyAccess::DELETE), &backup).unwrap();
+        assert!(!root.exists("MixedCase"));
+        let report = restore_tree(&parent_of(&backup), &backup).unwrap();
+        assert_eq!(report.outcome, RestoreOutcome::Restored);
+        assert_eq!(
+            root.open("", KeyAccess::READ).subkey_names().unwrap(),
+            vec!["MixedCase".to_owned()]
+        );
+    }
+
+    /// F2 of the M2 fix-round review: an empty key standing where a deleted one is to be restored is
+    /// merged into only with the recorded owner and DACL. Before the fix any empty key was adopted with
+    /// its own security and the values were restored into it.
+    #[test]
+    fn an_empty_key_with_another_dacl_is_not_merged_into() {
+        let root = TestRoot::new();
+        small_tree(&root);
+        let dir = TempDir::new();
+        let doc = capture(&root, "T");
+        let backup = save(&dir, 1, &doc);
+        let RegBackupBody::Tree(tree) = &doc.body else {
+            unreachable!("a tree capture")
+        };
+        let recorded = tree.keys[0].sddl.clone();
+        assert!(
+            recorded.contains("D:") && !recorded.contains("S:"),
+            "{recorded}"
+        );
+        delete_tree(&root.open("T", KeyAccess::DELETE), &backup).unwrap();
+
+        // Created again, empty, by somebody who lets Everyone write to it.
+        let open = format!("{recorded}(A;CI;KA;;;WD)");
+        root.key.create_subkey("T", "", Some(&open), false).unwrap();
+        assert_eq!(
+            restore_tree(&parent_of(&backup), &backup),
+            Err(RestoreError::Conflict(RestoreConflict::SecurityDiffers))
+        );
+        assert_eq!(
+            RestoreConflict::SecurityDiffers.undo_conflict(),
+            UndoConflict::KeyExists
+        );
+        let info = root.open("T", KeyAccess::READ).info().unwrap();
+        assert_eq!((info.n_values, info.n_subkeys), (0, 0), "nothing written");
+    }
+
     #[test]
     fn restore_conflicts_follow_the_rules() {
         let root = TestRoot::new();
@@ -4338,6 +4674,10 @@ mod tests {
         }
         let system_backup = save(&dir, 2, &system_owned);
         delete_tree(&root.open("O", KeyAccess::DELETE), &backup).unwrap();
+        if restore_privilege_held(&root) {
+            // Elevated: the owner is assigned; `elevated_restore_puts_back_a_system_owner` covers it.
+            return;
+        }
 
         let report = restore_tree(&parent_of(&system_backup), &system_backup).unwrap();
         assert_eq!(report.outcome, RestoreOutcome::Restored);
@@ -4365,6 +4705,155 @@ mod tests {
                 .outcome,
             RestoreOutcome::AlreadyRestored
         );
+    }
+
+    /// Whether the test process may assign SYSTEM as an owner (an elevated administrator's token holds
+    /// `SeRestorePrivilege`): tried on a scratch key below `root`, removed again.
+    fn restore_privilege_held(root: &TestRoot) -> bool {
+        let probe = root
+            .key
+            .create_subkey("privilege-probe", "", None, false)
+            .unwrap();
+        let held = probe.set_security("O:SY").is_ok();
+        drop(probe);
+        nuke(&root.key, "privilege-probe", &root.path).unwrap();
+        held
+    }
+
+    /// `O:<sid>G:<sid>` for the current user: an owner every token may assign.
+    fn own_owner_and_group() -> String {
+        let sid = current_user_sid().unwrap();
+        format!("O:{sid}G:{sid}")
+    }
+
+    /// Smoke run M2: keys restored from a backup lost the DACL's auto-inherited flag (`D:AI(...)` came
+    /// back as `D:(...)`): an empty key, a subkey, a name ending with a space and a non-ASCII name. The
+    /// restore puts back every descriptor exactly, flags and inherited ACEs included, with no difference
+    /// to report; also the put-back of a delete that stops.
+    #[test]
+    fn restore_puts_back_auto_inherited_and_protected_dacls_exactly() {
+        let root = TestRoot::new();
+        let sid = current_user_sid().unwrap();
+        let og = own_owner_and_group();
+        let inherited = format!("(A;CIID;KA;;;{sid})(A;CIID;KR;;;BU)(A;CIIOID;KA;;;CO)");
+        let keys = [
+            ("", format!("{og}D:PAI(A;CI;KA;;;{sid})(A;CI;KR;;;BU)")),
+            ("EmptySub", format!("{og}D:AI{inherited}")),
+            ("Sub1", format!("{og}D:AI(A;CI;KR;;;WD){inherited}")),
+            (r"Sub1\Sub2 trailing space ", format!("{og}D:AI{inherited}")),
+            ("\u{fc}-\u{540d}\u{524d}", format!("{og}D:AI{inherited}")),
+            (
+                "Protected",
+                format!("{og}D:P(A;CI;KA;;;{sid})(A;CIIO;GR;;;BU)"),
+            ),
+            ("Plain", format!("{og}D:(A;CIID;KA;;;{sid})(A;CI;KR;;;BU)")),
+        ];
+        for (rel, sddl) in &keys {
+            let (parent, leaf) = match rel.rsplit_once('\\') {
+                Some((parent, leaf)) => (format!(r"S\{parent}"), leaf),
+                None if rel.is_empty() => (String::new(), "S"),
+                None => ("S".to_owned(), *rel),
+            };
+            let opened;
+            let parent: &WKey = if parent.is_empty() {
+                &root.key
+            } else {
+                opened = root.open(&parent, KeyAccess::CREATE_SUB_KEY);
+                &opened
+            };
+            let key = parent.create_subkey(leaf, "", None, false).unwrap();
+            key.set_security(sddl).unwrap();
+            if *rel == "Sub1" {
+                key.set_value_raw("v", REG_DWORD, &[1, 0, 0, 0]).unwrap();
+            }
+        }
+        let doc = capture(&root, "S");
+        // The capture holds the descriptors as set: the flags are what the restore must keep.
+        let captured: Vec<String> = doc
+            .tree()
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.sddl.clone())
+            .collect();
+        for (_, sddl) in &keys {
+            assert!(captured.contains(sddl), "{sddl} not in {captured:#?}");
+        }
+
+        let dir = TempDir::new();
+        let backup = save(&dir, 1, &doc);
+        delete_tree(&root.open("S", KeyAccess::DELETE), &backup).unwrap();
+        let report = restore_tree(&parent_of(&backup), &backup).unwrap();
+        assert_eq!(report.outcome, RestoreOutcome::Restored);
+        assert_eq!(report.differences, []);
+        assert_eq!(shape(&capture(&root, "S")), shape(&doc));
+        assert_eq!(
+            probe_tree(&parent_of(&backup), &backup).unwrap(),
+            TreeState::Intact
+        );
+
+        // A delete that stops on a change at the root, after every subkey is gone, puts back what it
+        // deleted, exactly as well.
+        let key = root.open("S", KeyAccess::DELETE);
+        let mut hook = |index: usize| {
+            if index == 0 {
+                root.open("S", KeyAccess::SET_VALUE)
+                    .set_value_raw("late", REG_DWORD, &[2, 0, 0, 0])
+                    .unwrap();
+            }
+            true
+        };
+        let stopped = match delete_walk(&key, backup.tree().unwrap(), false, &mut hook) {
+            Err(stopped) => stopped,
+            Ok(_) => panic!("the delete went through a change"),
+        };
+        drop(key);
+        assert_eq!(
+            stopped.rollback,
+            Rollback::Done {
+                keys: 6,
+                differences: Vec::new()
+            },
+            "{stopped}"
+        );
+        root.open("S", KeyAccess::SET_VALUE)
+            .delete_value("late")
+            .unwrap();
+        assert_eq!(shape(&capture(&root, "S")), shape(&doc));
+    }
+
+    /// The SYSTEM owner of the smoke run (`O:SYG:SYD:P(...)` came back owned by BA): with
+    /// `SeRestorePrivilege`, which an elevated administrator holds, the restore assigns it. No script
+    /// runs it yet: run it by hand on the gate VM before the campaign and record the result (F4 of the
+    /// M2 fix-round review), `cargo test -p purge-exec --features fault-inject,test-support --lib --
+    /// --ignored elevated_restore_puts_back_a_system_owner`.
+    #[test]
+    #[ignore = "needs an elevated administrator (SeRestorePrivilege)"]
+    fn elevated_restore_puts_back_a_system_owner() {
+        let root = TestRoot::new();
+        assert!(restore_privilege_held(&root), "run elevated");
+        let sid = current_user_sid().unwrap();
+        let system =
+            format!("O:SYG:SYD:P(A;CI;KA;;;SY)(A;CI;KA;;;BA)(A;CI;KA;;;{sid})(A;CIIO;GR;;;BU)");
+        let inherited = format!("O:SYG:SYD:AI(A;CIID;KA;;;SY)(A;CIID;KA;;;{sid})");
+        let t = root.key.create_subkey("Sys", "", None, false).unwrap();
+        let sub = t.create_subkey("Sub1", "", None, false).unwrap();
+        sub.set_value_raw("v", REG_DWORD, &[1, 0, 0, 0]).unwrap();
+        let inner = sub.create_subkey("Inner", "", None, false).unwrap();
+        inner.set_security(&inherited).unwrap();
+        sub.set_security(&system).unwrap();
+        drop((t, sub, inner));
+        let doc = capture(&root, "Sys");
+        let dir = TempDir::new();
+        let backup = save(&dir, 1, &doc);
+        delete_tree(&root.open("Sys", KeyAccess::DELETE), &backup).unwrap();
+
+        let report = restore_tree(&parent_of(&backup), &backup).unwrap();
+        assert_eq!(report.outcome, RestoreOutcome::Restored);
+        assert_eq!(report.differences, []);
+        assert_eq!(shape(&capture(&root, "Sys")), shape(&doc));
+        let restored = capture(&root, r"Sys\Sub1");
+        assert_eq!(restored.tree().unwrap().keys[0].sddl, system);
     }
 
     #[test]
@@ -4646,23 +5135,83 @@ mod tests {
     /// Removes `segment` purely and checks that the re-insert of the written data restores the original
     /// exactly through the readings. Returns (index, written data as text).
     fn remove_and_back(ty: u32, data: &[u8], segment: &str, index: Option<u32>) -> (u32, Vec<u8>) {
-        let parsed = List::parse(ty, data).unwrap();
-        let units = segment_units(parsed.kind, segment).unwrap();
-        let pos = match index {
-            Some(i) if parsed.segments.get(i as usize) == Some(&units) => i as usize,
-            _ => parsed.segments.iter().position(|s| *s == units).unwrap(),
-        };
-        let mut edited = parsed.clone();
-        edited.segments.remove(pos);
-        let written = edited.render();
+        let (pos, written) = remove_segment(ty, data, segment, index).unwrap();
         let back = List::parse(ty, &written).unwrap();
+        let units = segment_units(back.kind, segment).unwrap();
         let restored = back
             .readings()
             .iter()
-            .map(|r| r.insert(pos as u32, &units).render())
+            .map(|r| r.insert(pos, &units).render())
             .find(|d| sha256(d) == sha256(data));
         assert_eq!(restored.as_deref(), Some(data), "re-insert of {segment:?}");
-        (pos as u32, written)
+        (pos, written)
+    }
+
+    /// Smoke run M2 (user PATH): the rule of [`plan_segment_removal`], one table. The run's value read
+    /// `...\WindowsApps;C:\Program Files\PurgeFixtureApp\bin` at scan time (the rig had dropped the
+    /// trailing `;` of `...\WindowsApps;` when it appended); removing the last segment gives
+    /// `...\WindowsApps`, the value as it was before that segment was added with one separator. The
+    /// trailing `;` the rig dropped is not in the value and cannot be derived.
+    #[test]
+    fn a_segment_goes_with_exactly_one_adjacent_separator() {
+        let apps = r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps";
+        let bin = r"C:\Program Files\PurgeFixtureApp\bin";
+        let smoke_before = format!("{apps};{bin}\0");
+        let smoke_after = format!("{apps}\0");
+        /// (type, data, segment, index asked for, index removed, data written).
+        type Case<'a> = (u32, String, &'a str, Option<u32>, u32, String);
+        let cases: Vec<Case<'_>> = [
+            (
+                REG_EXPAND_SZ,
+                smoke_before.as_str(),
+                bin,
+                Some(1),
+                1,
+                smoke_after.as_str(),
+            ),
+            // Last of two: the separator before it.
+            (REG_SZ, "A;B\0", "B", None, 1, "A\0"),
+            // First of two: the separator after it.
+            (REG_SZ, "B;A\0", "B", None, 0, "A\0"),
+            // Middle: the separator before it.
+            (REG_SZ, "A;B;C\0", "B", None, 1, "A;C\0"),
+            // Empty elements around it: only one separator goes, the empty element stays.
+            (REG_SZ, "A;;B\0", "B", None, 2, "A;\0"),
+            (REG_SZ, "A;;B;;C\0", "B", None, 2, "A;;;C\0"),
+            (REG_SZ, "B;;A\0", "B", None, 0, ";A\0"),
+            // Trailing and leading separators stay.
+            (REG_SZ, "A;B;\0", "B", None, 1, "A;\0"),
+            (REG_SZ, ";B\0", "B", None, 1, "\0"),
+            (REG_SZ, ";B;A\0", "B", None, 1, ";A\0"),
+            (REG_SZ, "B;\0", "B", None, 0, "\0"),
+            // A single segment: the value becomes empty, terminators kept.
+            (REG_EXPAND_SZ, "B\0", "B", None, 0, "\0"),
+            (REG_SZ, "B", "B", None, 0, ""),
+            // Duplicates: the one at the index, else the first; the other stays.
+            (REG_SZ, "B;A;B\0", "B", Some(2), 2, "B;A\0"),
+            (REG_SZ, "B;A;B\0", "B", None, 0, "A;B\0"),
+            (REG_SZ, "B;A;B\0", "B", Some(1), 0, "A;B\0"),
+            // Case: only the exact spelling is the segment.
+            (REG_SZ, "b;A;B\0", "B", None, 2, "b;A\0"),
+        ]
+        .into_iter()
+        .map(|(ty, data, seg, index, at, want)| {
+            (ty, data.to_owned(), seg, index, at, want.to_owned())
+        })
+        .collect();
+        for (ty, data, segment, index, want_index, want) in cases {
+            let bytes = list(&data);
+            assert_eq!(
+                remove_and_back(ty, &bytes, segment, index),
+                (want_index, list(&want)),
+                "{segment:?} from {data:?}"
+            );
+        }
+        // A spelling that differs only in case is not in the list.
+        assert_eq!(
+            remove_segment(REG_SZ, &list("a;C:\\x\0"), "c:\\X", None),
+            Err(SegmentError::SegmentAbsent)
+        );
     }
 
     /// (type, data, segment, index asked for, index removed, data written).
@@ -4793,6 +5342,14 @@ mod tests {
             ),
             ("only", REG_SZ, utf16z("only"), "only", None),
             ("unterminated", REG_SZ, utf16("a;b"), "b", None),
+            // The user PATH of the M2 smoke run: undo writes back these bytes and this type.
+            (
+                "userpath",
+                REG_EXPAND_SZ,
+                utf16z(r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Program Files\X\bin"),
+                r"C:\Program Files\X\bin",
+                Some(1),
+            ),
         ];
         for (name, ty, data, _, _) in &cases {
             s.set_value_raw(name, *ty, data).unwrap();

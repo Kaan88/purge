@@ -1,4 +1,4 @@
-<#
+﻿<#
 Bootstraps the rig agent in a freshly installed guest without a UAC click (vm\RIG.md §1, Clean-Pro).
 
 Preconditions (set by `VBoxManage unattended install ... --post-install-command`):

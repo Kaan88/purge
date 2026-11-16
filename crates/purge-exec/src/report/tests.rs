@@ -120,6 +120,7 @@ fn move_intent(n: u32, id: &str, p: &str, size: u64, tree_bytes: Option<u64>) ->
             original_path: p.to_owned(),
             file_id: facts.file_id,
             volume_serial: facts.volume_serial,
+            parent: None,
         },
         definition: None,
         pre: ItemFacts::File(facts),
@@ -419,6 +420,45 @@ fn an_unfinished_journal_is_reported_as_open_with_the_time_given() {
     assert!(report.items.iter().all(|i| i.outcome == not_attempted()));
     assert_eq!(summary(&state, &scan, None).finished, None);
     assert_eq!(backup_bytes(&state), 0);
+}
+
+/// Review M2 M24: a move whose verification failed may have put its item in quarantine (undo treats it
+/// as changed), so its bytes count toward the session and the volume's usage like a move that ended
+/// `Done`. A move that failed otherwise does not count.
+#[test]
+fn a_move_whose_verification_failed_counts_toward_the_volume() {
+    let store = Store::new("verifyfailed");
+    let scan = plan();
+    let mut journal = store.journal(&targets(&scan));
+    let token = journal
+        .intent(move_intent(1, "c-a", FILE_A, 100, None))
+        .unwrap();
+    let verify_failed = ItemOutcome::Failed {
+        code: FailCode::VerifyFailed,
+        os_error: None,
+        detail: "the item is at its path and in quarantine".into(),
+    };
+    journal.done(token, verify_failed).unwrap();
+    let token = journal
+        .intent(move_intent(2, "c-b", FILE_B, 40, None))
+        .unwrap();
+    let failed = ItemOutcome::Failed {
+        code: FailCode::Internal,
+        os_error: None,
+        detail: "nothing moved".into(),
+    };
+    journal.done(token, failed).unwrap();
+    let state = journal.state().clone();
+    assert_eq!(backup_bytes(&state), 100);
+    assert_eq!(held_bytes(&state), 100);
+    assert_eq!(
+        usage(&state, None),
+        [VolumeUsage {
+            serial: 7,
+            root: r"D:\".into(),
+            bytes: 100
+        }]
+    );
 }
 
 #[test]

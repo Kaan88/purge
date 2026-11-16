@@ -65,6 +65,9 @@ pub const FILE_ATTRIBUTE_UNPINNED: u32 = 0x0010_0000;
 /// `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`: a cloud placeholder whose data is fetched on read.
 pub const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
 
+/// The deny rule [`key_probe`] refuses a key path with an empty segment with.
+pub const EMPTY_SEGMENT_RULE: &str = "canon.empty-segment";
+
 /// The attribute bits that mark an item as managed by a sync provider (gate G7).
 pub const PLACEHOLDER_ATTRIBUTES: u32 = FILE_ATTRIBUTE_OFFLINE
     | FILE_ATTRIBUTE_RECALL_ON_OPEN
@@ -850,8 +853,24 @@ pub struct KeyProbe {
 /// flag, so the `WOW6432Node\Classes` link is not on it either ([`KeyAddress`]). `HKCR`, an unbound
 /// `HKCU` and every other spelling that does not canonicalise are refused with the `canon.*` rule; a hive
 /// root (`HKLM`) and a target that is not a registry target are refused too.
+///
+/// A spelling with an empty segment (a trailing or a doubled backslash; one leading backslash, as in
+/// `\REGISTRY\MACHINE\...`, is allowed) is refused with the rule [`EMPTY_SEGMENT_RULE`]: the key path is
+/// also the text a registry backup records, and every later derivation of the key's leaf from that text
+/// must give the leaf this probe opens (review M2 final S6: a key spelled `...\App\` was deleted and its
+/// backup could then not be read back as the backup of the op). Canonicalising alone would accept it.
 pub fn key_probe(target: &Target, env: &GuardEnv) -> Result<KeyProbe, Refusal> {
     let key_path = key_of(target).ok_or_else(|| Refusal::rule(reason::OP_TARGET_MISMATCH))?;
+    let body = key_path.strip_prefix(SEP).unwrap_or(key_path);
+    // An empty path is the canonicaliser's own refusal (`canon.empty`).
+    if !body.is_empty() && body.split(SEP).any(str::is_empty) {
+        return Err(Refusal::new(
+            Blocker::DenyListed {
+                rule: EMPTY_SEGMENT_RULE.to_owned(),
+            },
+            reason::KEY_NOT_CANONICAL,
+        ));
+    }
     let key = canon_key(key_path, None, env, None).map_err(|e| {
         Refusal::new(
             Blocker::DenyListed {

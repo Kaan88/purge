@@ -933,6 +933,7 @@ mod tests {
         let amb = AmbientSet {
             union: Matcher::new("u", &["P:C:\\Windows\\Prefetch\\X.pf".into(), "P:C:\\cr\\out".into()], &[]).unwrap(),
             runs: vec![],
+            records: None,
         };
         let lab = Labeler {
             rig: RigRules::new(&[]),

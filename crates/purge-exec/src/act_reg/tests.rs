@@ -14,7 +14,7 @@ use purge_model::exec::journal::{
     Header, ItemFacts, JournalSchema, Record, RegFacts, UndoConflict, UndoOutcome, Validated,
 };
 use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
-use purge_model::exec::regbackup::{RegBackup, RegTree};
+use purge_model::exec::regbackup::{RegBackup, RegBackupBody, RegTree, WideB64};
 use purge_model::exec::session::SessionId;
 use purge_model::{Blocker, CandidateId, FileTime, ScanMode};
 use purge_win::reg::{
@@ -476,7 +476,25 @@ impl Run {
                 is_link: false,
                 owner: "S-1-5-32-544".into(),
                 last_write_time: FileTime(133_000_000_000_000_000),
+                tree_sha256: None,
             }),
+            exemptions: gate::exemptions_to_journal(&Exemptions::default()),
+        };
+        self.ctx.record(&op, &forged, 5_000).unwrap();
+    }
+
+    /// Journals a `validated` record for op `n` with the key's facts as they are now and no tree digest:
+    /// what the validate pass would refuse, to reach the act's own checks.
+    fn forge_key_record_as_seen(&mut self, n: u32) {
+        let op = self.ops[n as usize - 1].clone();
+        let facts =
+            gate::key_facts_without_tree(&self.ctx, &GateItem::new(&op, Exemptions::default()))
+                .unwrap();
+        let forged = Validated {
+            op: OpId(n),
+            item: cid(n),
+            target: op.target(),
+            facts,
             exemptions: gate::exemptions_to_journal(&Exemptions::default()),
         };
         self.ctx.record(&op, &forged, 5_000).unwrap();
@@ -1140,6 +1158,18 @@ fn a_link_below_the_tree_is_refused_and_its_target_untouched() {
     k.create(r"Tree\Plain");
     k.link(r"Tree\Link", "Real");
     let mut run = Run::new("link-below", vec![tree_op(k.wire("Tree"))]);
+    // Refused when it is validated: the validate pass reads the whole tree for its digest.
+    let outcome = gate::validate(
+        &run.ctx,
+        &GateItem::new(&tree_op(k.wire("Tree")), Exemptions::default()),
+    );
+    assert_eq!(
+        outcome.refusal().map(|r| (r.blocker.clone(), r.reason)),
+        Some((Blocker::RegLink, gate::reason::TREE_NOT_READ))
+    );
+    assert!(!run.validated(1));
+    // And at the act, had a record been journalled: the capture refuses it before any backup.
+    run.forge_key_record_as_seen(1);
     let result = run.run(1);
     assert_outcome(&result, blocked(Blocker::RegLink));
     assert!(k.exists(r"Tree\Plain") && k.is_link(r"Tree\Link"));
@@ -1675,6 +1705,20 @@ fn a_key_the_earlier_items_empty_is_still_refused_after_outside_changes() {
     drop(run);
     drop(k);
 
+    // A subkey added by someone else before the run's own items (review M2 final: the outside change
+    // made before the own ops, not only after them).
+    let k = TestKey::new();
+    let ops = emptied_app(&k);
+    let mut run = Run::new("dep-empty-early", ops);
+    k.create(r"App\Early");
+    for n in 1..=3 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    assert_outcome(&run.run(4), skipped(SkipReason::NoLongerEmpty));
+    assert!(k.exists(r"App\Early"));
+    drop(run);
+    drop(k);
+
     // Replaced by another empty key after the run's own items.
     let k = TestKey::new();
     let ops = emptied_app(&k);
@@ -1770,6 +1814,29 @@ fn a_key_after_its_own_value_items_is_still_refused_after_outside_changes() {
     drop(run);
     drop(k);
 
+    // Someone else rewrites a value no item touches before the run's own items, keeping its size
+    // (review M2 final S4: the counts balance and the last write time is the own ops' after them).
+    let k = TestKey::new();
+    k.create("Env");
+    k.set("Env", "Path", REG_EXPAND_SZ, &utf16z(r"C:\a;C:\b"));
+    k.set("Env", "gone", REG_SZ, &utf16z("g"));
+    k.set("Env", "keep", REG_DWORD, &[1, 0, 0, 0]);
+    let ops = vec![
+        segment_op(k.wire("Env"), "Path", r"C:\b", None),
+        value_op(k.wire("Env"), "Path"),
+        value_op(k.wire("Env"), "gone"),
+        tree_op(k.wire("Env")),
+    ];
+    let mut run = Run::new("dep-value-early", ops);
+    k.set("Env", "keep", REG_DWORD, &[2, 0, 0, 0]);
+    for n in 1..=3 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    assert_outcome(&run.run(4), skipped(SkipReason::ChangedSinceScan));
+    assert_eq!(k.get("Env", "keep"), Some((REG_DWORD, vec![2, 0, 0, 0])));
+    drop(run);
+    drop(k);
+
     // Replaced by a key with the same values after the run's own items.
     let k = TestKey::new();
     k.create("Env");
@@ -1843,6 +1910,36 @@ fn a_tree_after_items_inside_it_is_still_refused_after_outside_changes() {
     drop(run);
     drop(k);
 
+    // Before the run's own items, someone else rewrites a value of the key (same size) or adds one to a
+    // subkey no item touches (review M2 final S4, S5).
+    type Change = fn(&TestKey);
+    let early: [Change; 2] = [
+        |k| k.set("App", "keep", REG_DWORD, &[2, 0, 0, 0]),
+        |k| k.set(r"App\Other", "late", REG_SZ, &utf16z("late")),
+    ];
+    for change in early {
+        let k = TestKey::new();
+        let ops = tree_with_items(&k);
+        let mut run = Run::new("dep-tree-early", ops);
+        change(&k);
+        let after = k.capture("App");
+        for n in 1..=2 {
+            assert_outcome(&run.run(n), ItemOutcome::Done);
+        }
+        assert_outcome(&run.run(3), skipped(SkipReason::ChangedSinceScan));
+        assert!(k.exists(r"App\Other"));
+        assert_eq!(
+            k.get("App", "keep"),
+            after
+                .tree()
+                .and_then(|t| t.keys[0]
+                    .values
+                    .iter()
+                    .find(|v| v.name_b64 == WideB64::from("keep")))
+                .map(|v| (v.value_type, v.data_b64.0.clone()))
+        );
+    }
+
     // Replaced by a link.
     let mut k = TestKey::new();
     k.create(r"Real\Kept");
@@ -1855,6 +1952,161 @@ fn a_tree_after_items_inside_it_is_still_refused_after_outside_changes() {
     k.link("App", "Real");
     assert_outcome(&run.run(3), blocked(Blocker::RegLink));
     assert!(k.is_link("App") && k.exists(r"Real\Kept"));
+}
+
+/// Review M2 final S4: a change by someone else made between the validation and the run's own op on the
+/// same key (here a value rewritten to data of the same size, so the counts still balance) was taken for
+/// the run's own and the key deleted. The tree is now bound to its validated digest with exactly what
+/// the own ops changed put back: refused, also with a context rebuilt from the journal, and the key and
+/// the changed value are left as they are.
+#[test]
+fn a_change_by_someone_else_before_an_own_op_on_the_key_is_refused() {
+    for rebuilt in [false, true] {
+        let k = TestKey::new();
+        k.create("App");
+        k.set("App", "a", REG_SZ, &utf16z("a"));
+        k.set("App", "keep", REG_DWORD, &[1, 0, 0, 0]);
+        let ops = vec![value_op(k.wire("App"), "a"), tree_op(k.wire("App"))];
+        let mut run = Run::new("own-before", ops);
+        assert!(run.validated(1) && run.validated(2));
+        k.set("App", "keep", REG_DWORD, &[2, 0, 0, 0]);
+        assert_outcome(&run.run(1), ItemOutcome::Done);
+        if rebuilt {
+            run.reopen_ctx();
+        }
+        assert_outcome(&run.run(2), skipped(SkipReason::ChangedSinceScan));
+        assert_eq!(k.get("App", "keep"), Some((REG_DWORD, vec![2, 0, 0, 0])));
+        assert!(!run.backup_path(2).exists(), "no backup, no intent");
+    }
+
+    // Without the change the same chain is deleted.
+    let k = TestKey::new();
+    k.create("App");
+    k.set("App", "a", REG_SZ, &utf16z("a"));
+    k.set("App", "keep", REG_DWORD, &[1, 0, 0, 0]);
+    let mut run = Run::new(
+        "own-before-none",
+        vec![value_op(k.wire("App"), "a"), tree_op(k.wire("App"))],
+    );
+    for n in 1..=2 {
+        assert_outcome(&run.run(n), ItemOutcome::Done);
+    }
+    assert!(!k.exists("App"));
+}
+
+/// Review M2 final S5: a tree delete was bound to the facts of its root key only; a change anywhere
+/// below it after the validation was backed up and deleted with it. Each change below is refused now,
+/// with the tree left whole.
+#[test]
+fn a_change_below_the_root_after_validation_is_refused() {
+    type Change = fn(&TestKey);
+    // Below the root key's own level: none of these moves the root's counts or last write time.
+    let changes: [(&str, Change); 4] = [
+        ("a value below rewritten (same size)", |k| {
+            k.set(r"App\Sub\Deep", "d", REG_SZ, &utf16z("e"));
+        }),
+        ("a value added below", |k| {
+            k.set(r"App\Sub\Deep", "late", REG_SZ, &utf16z("late"));
+        }),
+        ("a key created below the deepest key", |k| {
+            k.create(r"App\Sub\Deep\Leaf\Deeper");
+        }),
+        ("a key two levels down removed", |k| {
+            k.remove(r"App\Sub\Deep\Leaf");
+        }),
+    ];
+    for (what, change) in changes {
+        let k = TestKey::new();
+        k.create(r"App\Sub\Deep\Leaf");
+        k.set(r"App\Sub", "s", REG_SZ, &utf16z("s"));
+        k.set(r"App\Sub\Deep", "d", REG_SZ, &utf16z("d"));
+        let mut run = Run::new("below", vec![tree_op(k.wire(r"App\Sub"))]);
+        assert!(run.validated(1));
+        change(&k);
+        let after = k.capture("App");
+        let result = run.run(1);
+        assert_outcome(&result, skipped(SkipReason::ChangedSinceScan));
+        assert!(
+            result.detail.contains(gate::reason::TREE_CHANGED),
+            "{what}: {result:?}"
+        );
+        assert_eq!(shape(&k.capture("App")), shape(&after), "{what}");
+        assert!(!run.backup_path(1).exists(), "{what}");
+    }
+}
+
+/// Review M2 final S6: a key spelled with a trailing backslash validated, was deleted, and its backup was
+/// then refused by undo (the writer and the reader took the leaf in two ways). Such a spelling (and a
+/// doubled backslash) is refused at validation and at the act, and the key stays.
+#[test]
+fn a_key_spelled_with_an_empty_segment_is_refused_and_never_deleted() {
+    let k = TestKey::new();
+    k.create(r"Item\Sub");
+    k.create(r"Other\Sub");
+    let spelled = [
+        tree_op(format!(r"{}\", k.wire("Item"))),
+        tree_op(k.wire("Other").replace(r"\Other", r"\\Other")),
+    ];
+    let mut run = Run::new("spelling", spelled.to_vec());
+    for n in 1..=2 {
+        assert!(!run.validated(n), "op {n}");
+        // Had a record been journalled, the act refuses it too.
+        run.forge_key_record(n);
+        assert_outcome(
+            &run.run(n),
+            blocked(Blocker::DenyListed {
+                rule: purge_guard::live::EMPTY_SEGMENT_RULE.into(),
+            }),
+        );
+        assert!(!run.backup_path(n).exists());
+    }
+    assert!(k.exists(r"Item\Sub") && k.exists(r"Other\Sub"));
+}
+
+/// Review M2 final S6 and M11: before the backup is written, and again on the file as read back, the
+/// document must be the backup of this op as the gate opened it: the op's key text leading to the
+/// gate's address, a tree rooted at the address's leaf, a value equal to the one the gate read on the
+/// acting handle (the value is no longer read a second time for its backup).
+#[test]
+fn a_backup_that_is_not_the_ops_backup_is_refused() {
+    let k = TestKey::new();
+    k.create("Item");
+    k.create("Other");
+    k.set("Item", "v", REG_DWORD, &[1, 0, 0, 0]);
+    let tree = tree_op(k.wire("Item"));
+    let value = value_op(k.wire("Item"), "v");
+    let run = Run::new("not-ops", vec![tree.clone(), value.clone()]);
+
+    let tree_key = gate::open_and_check_key(&run.ctx, OpId(1)).pass().unwrap();
+    let doc = regbackup::capture_tree(tree_key.key(), &k.wire("Item"), 10).unwrap();
+    assert_eq!(backup_for_op(&run.ctx, &doc, &tree, &tree_key), Ok(()));
+    // Another key's text.
+    let other = RegBackup {
+        key: k.wire("Other"),
+        ..doc.clone()
+    };
+    assert!(backup_for_op(&run.ctx, &other, &tree, &tree_key).is_err());
+    // The op's text, a tree rooted at another name.
+    let mut renamed = doc.clone();
+    if let RegBackupBody::Tree(tree) = &mut renamed.body {
+        tree.keys[0].name_b64 = WideB64::from("Other");
+    }
+    assert!(backup_for_op(&run.ctx, &renamed, &tree, &tree_key).is_err());
+    drop(tree_key);
+
+    let value_key = gate::open_and_check_key(&run.ctx, OpId(2)).pass().unwrap();
+    let read = value_key.value().unwrap().clone();
+    let doc = regbackup::value_backup(&k.wire("Item"), read.clone()).unwrap();
+    assert_eq!(backup_for_op(&run.ctx, &doc, &value, &value_key), Ok(()));
+    let changed = regbackup::value_backup(
+        &k.wire("Item"),
+        purge_win::reg::RegValue {
+            data: vec![2, 0, 0, 0],
+            ..read
+        },
+    )
+    .unwrap();
+    assert!(backup_for_op(&run.ctx, &changed, &value, &value_key).is_err());
 }
 
 /// A run stopped in the middle of a chain continues with a context rebuilt from the journal alone: the
@@ -2096,4 +2348,230 @@ fn a_non_registry_op_is_an_internal_failure() {
     };
     run.ctx.record(&package, &forged, 5_000).unwrap();
     assert!(internal(&run), "a package op");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Smoke run M2
+// ---------------------------------------------------------------------------------------------------
+
+/// Smoke run M2: a delete-if-empty key that held a foreign value already when it was validated was
+/// reported `Skipped{ChangedSinceScan}`. It did not change, it is not empty: `Skipped{NoLongerEmpty}`,
+/// also for an item the validate pass refused (the executor reports it through [`gate_result`]).
+#[test]
+fn a_key_not_empty_at_validation_is_no_longer_empty_not_changed() {
+    let empty = ExecOp::DeleteKeyIfEmpty {
+        key: r"HKLM\SOFTWARE\Vendor\NotEmptyKey".into(),
+    };
+    let tree = ExecOp::DeleteKeyTree {
+        key: r"HKLM\SOFTWARE\Vendor\NotEmptyKey".into(),
+    };
+    let not_empty = GateOutcome::<()>::Refused(purge_guard::live::Refusal {
+        blocker: Blocker::ChangedSinceScan,
+        reason: purge_guard::live::reason::NOT_EMPTY,
+    });
+    let changed = GateOutcome::<()>::Refused(purge_guard::live::Refusal {
+        blocker: Blocker::ChangedSinceScan,
+        reason: gate::reason::KEY_CHANGED,
+    });
+    let link = GateOutcome::<()>::Refused(purge_guard::live::Refusal {
+        blocker: Blocker::RegLink,
+        reason: purge_guard::live::reason::KEY_IS_LINK,
+    });
+    let reason = |outcome: &GateOutcome<()>, op: &ExecOp| {
+        gate_result(outcome, op).map(|result| result.outcome)
+    };
+    let skipped = |reason| Some(ItemOutcome::Skipped { reason });
+    assert_eq!(
+        reason(&not_empty, &empty),
+        skipped(SkipReason::NoLongerEmpty)
+    );
+    assert_eq!(
+        reason(&changed, &empty),
+        skipped(SkipReason::ChangedSinceScan)
+    );
+    assert_eq!(
+        reason(&not_empty, &tree),
+        skipped(SkipReason::ChangedSinceScan)
+    );
+    assert_eq!(
+        reason(&link, &empty),
+        skipped(SkipReason::GateBlocked {
+            blocker: Blocker::RegLink
+        })
+    );
+    assert_eq!(
+        reason(&GateOutcome::<()>::Vanished, &empty),
+        Some(ItemOutcome::Vanished)
+    );
+    assert_eq!(reason(&GateOutcome::Pass(()), &empty), None);
+    assert!(matches!(
+        reason(
+            &GateOutcome::<()>::Failed(Win32Error::ACCESS_DENIED),
+            &empty
+        ),
+        Some(ItemOutcome::Failed {
+            code: FailCode::AccessDenied,
+            ..
+        })
+    ));
+}
+
+/// Smoke run M2: a restored key whose owner or DACL reads back other than recorded is not accepted as
+/// `Restored`: the undo says the verify failed and why. Differences of an existing key that was merged
+/// into keep the outcome.
+#[test]
+fn a_restore_that_could_not_put_security_back_is_not_restored() {
+    let report = |kind: DifferenceKind| RestoreReport {
+        outcome: RestoreOutcome::Restored,
+        keys_created: 2,
+        differences: vec![Difference {
+            at: "Sub1".into(),
+            kind,
+        }],
+    };
+    let owner = restore_result(
+        Ok(report(DifferenceKind::OwnerNotRestored {
+            recorded_owner: "SY".into(),
+        })),
+        "HKLM\\SOFTWARE\\Vendor",
+    );
+    match owner {
+        RegUndoResult::Done {
+            outcome:
+                UndoOutcome::Failed {
+                    code: FailCode::VerifyFailed,
+                    ..
+                },
+            detail,
+        } => assert!(detail.contains("Sub1: owner SY not restored"), "{detail}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        restore_result(Ok(report(DifferenceKind::SecurityDiffers)), "k"),
+        RegUndoResult::Done {
+            outcome: UndoOutcome::Failed {
+                code: FailCode::VerifyFailed,
+                ..
+            },
+            ..
+        }
+    ));
+    assert!(matches!(
+        restore_result(Ok(report(DifferenceKind::RootSecurityKept)), "k"),
+        RegUndoResult::Done {
+            outcome: UndoOutcome::Restored,
+            ..
+        }
+    ));
+
+    // The put-back of a stopped delete that lost security is a change, not a skip.
+    let stopped = DeleteError {
+        at: String::new(),
+        failure: DeleteFailure::Changed(Change::ValuesDiffer),
+        rollback: Rollback::Done {
+            keys: 1,
+            differences: vec![Difference {
+                at: "Sub1".into(),
+                kind: DifferenceKind::SecurityDiffers,
+            }],
+        },
+    };
+    assert!(matches!(
+        delete_stopped(&stopped, "k", false).outcome,
+        ItemOutcome::Failed {
+            code: FailCode::VerifyFailed,
+            ..
+        }
+    ));
+    let clean = DeleteError {
+        rollback: Rollback::Done {
+            keys: 1,
+            differences: Vec::new(),
+        },
+        ..stopped
+    };
+    assert_eq!(
+        delete_stopped(&clean, "k", false).outcome,
+        ItemOutcome::Skipped {
+            reason: SkipReason::ChangedSinceScan
+        }
+    );
+}
+
+/// F3 of the M2 fix-round review: recovery's resumed key delete that stopped and put keys back with
+/// another owner or DACL ends `Failed{VerifyFailed}`, as an ordinary run's does, whether the rollback or
+/// the put-back of the keys an interrupted run had deleted lost it. Before the fix it ended `Skipped`,
+/// which undo reads as nothing to undo.
+#[test]
+fn a_resumed_delete_whose_put_back_lost_security_is_not_a_skip() {
+    let lost = |kind| {
+        vec![Difference {
+            at: "Sub1".into(),
+            kind,
+        }]
+    };
+    let stopped = |rollback| DeleteError {
+        at: String::new(),
+        failure: DeleteFailure::Changed(Change::ValuesDiffer),
+        rollback,
+    };
+    let verify_failed = |result: RegResult| {
+        matches!(
+            result.outcome,
+            ItemOutcome::Failed {
+                code: FailCode::VerifyFailed,
+                ..
+            }
+        )
+    };
+
+    // The rollback alone made the key whole, with a key whose owner could not be assigned.
+    let rolled_back = stopped(Rollback::Done {
+        keys: 1,
+        differences: lost(DifferenceKind::OwnerNotRestored {
+            recorded_owner: "SY".into(),
+        }),
+    });
+    let result = completion_stopped(&rolled_back, None);
+    assert!(
+        result.detail.contains("Sub1: owner SY not restored"),
+        "{result:?}"
+    );
+    assert!(verify_failed(result));
+
+    // The keys an interrupted run had deleted came back with other security.
+    let partial = stopped(Rollback::PartialBefore {
+        missing: 2,
+        keys: 1,
+        differences: Vec::new(),
+    });
+    let put_back = RestoreReport {
+        outcome: RestoreOutcome::Restored,
+        keys_created: 2,
+        differences: lost(DifferenceKind::SecurityDiffers),
+    };
+    assert!(verify_failed(completion_stopped(
+        &partial,
+        Some(Ok(put_back))
+    )));
+
+    // Whole and exact: the change stopped the delete, a skip as before.
+    let exact = RestoreReport {
+        outcome: RestoreOutcome::Restored,
+        keys_created: 2,
+        differences: lost(DifferenceKind::RootSecurityKept),
+    };
+    assert_eq!(
+        completion_stopped(&partial, Some(Ok(exact))).outcome,
+        ItemOutcome::Skipped {
+            reason: SkipReason::ChangedSinceScan
+        }
+    );
+    // Not whole: as before.
+    assert!(verify_failed(completion_stopped(
+        &partial,
+        Some(Err(RestoreError::Conflict(
+            regbackup::RestoreConflict::Link
+        )))
+    )));
 }

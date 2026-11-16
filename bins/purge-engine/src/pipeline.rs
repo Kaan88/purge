@@ -51,7 +51,7 @@ use purge_harvest::harvest::{HarvestReport, harvest_report};
 use purge_harvest::refsnap::HarvestCtx;
 use purge_harvest::roots::guard_env;
 use purge_identity::kbdata::Kb;
-use purge_index::baseline::Baseline;
+use purge_index::baseline::{Baseline, RecordCounts};
 use purge_index::matcher::AnchorSet;
 use purge_inventory::arp::Inventory;
 use purge_inventory::runner::{ProcessHost, RunError, RunOptions, RunReport, RunRequest};
@@ -324,10 +324,24 @@ fn baseline_for(
     };
     step.say(&format!("loading the baseline {}", os.baseline_name()));
     let baseline = load_baseline(settings.baseline_dir.as_deref(), &os, warnings);
-    if baseline.is_some() {
-        step.done(&format!("baseline {} loaded", os.baseline_name()));
+    if let Some(b) = &baseline {
+        let timing = purge_source::metered::installed().is_some();
+        step.done(&baseline_loaded(&os.baseline_name(), b.counts(), timing));
     }
     baseline
+}
+
+/// The progress line of a loaded baseline: its record counts only when `PURGE_TIMING` is on, so the
+/// line stays what it was without it.
+fn baseline_loaded(name: &str, n: RecordCounts, timing: bool) -> String {
+    if timing {
+        format!(
+            "baseline {name} loaded: {} keys, {} values, {} dirs, {} files",
+            n.keys, n.values, n.dirs, n.files
+        )
+    } else {
+        format!("baseline {name} loaded")
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1179,6 +1193,26 @@ mod tests {
         );
         assert_eq!(dirs, [r"C:\cr\bin", r"C:\ProgramData\Purge"]);
         assert_eq!(warnings.len(), 2, "{warnings:?}");
+    }
+
+    /// Without `PURGE_TIMING` the line of a loaded baseline is the one the engine printed before the
+    /// timing counters existed (review M6); with it, the record counts follow.
+    #[test]
+    fn baseline_line_carries_counts_only_with_timing() {
+        let n = RecordCounts {
+            keys: 1,
+            values: 2,
+            dirs: 3,
+            files: 4,
+        };
+        assert_eq!(
+            baseline_loaded("Professional-1.2", n, false),
+            "baseline Professional-1.2 loaded"
+        );
+        assert_eq!(
+            baseline_loaded("Professional-1.2", n, true),
+            "baseline Professional-1.2 loaded: 1 keys, 2 values, 3 dirs, 4 files"
+        );
     }
 
     #[test]

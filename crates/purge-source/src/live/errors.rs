@@ -20,10 +20,14 @@ pub(crate) const ERROR_CANT_ACCESS_FILE: u32 = 1920;
 pub(crate) const ERROR_LINK_ON_PATH: u32 = 1921;
 /// `ERROR_PROCESS_ABORTED`: the shortcut worker thread is gone.
 pub(crate) const ERROR_WORKER_GONE: u32 = 1067;
+/// `ERROR_KEY_DELETED`: a read through a handle whose registry key was deleted meanwhile.
+pub(crate) const ERROR_KEY_DELETED: u32 = 1018;
 
 /// Maps a Win32 error code to a [`SourceError`].
 ///
 /// - `ERROR_FILE_NOT_FOUND` / `ERROR_PATH_NOT_FOUND` → [`SourceError::NotFound`];
+/// - `ERROR_KEY_DELETED` → [`SourceError::NotFound`]: the key was deleted after it was opened, so it
+///   is gone just as when the open itself had found nothing;
 /// - `ERROR_ACCESS_DENIED` → [`SourceError::AccessDenied`];
 /// - a registry path through a link key (`ERROR_CANT_RESOLVE_FILENAME`) and a refused name-surrogate
 ///   reparse point (`ERROR_CANT_ACCESS_FILE`) → [`SourceError::ReparsePoint`]: something the sources never
@@ -33,7 +37,7 @@ pub(crate) const ERROR_WORKER_GONE: u32 = 1067;
 ///   code.
 pub(crate) fn map_code(code: u32) -> SourceError {
     match code {
-        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => SourceError::NotFound,
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND | ERROR_KEY_DELETED => SourceError::NotFound,
         ERROR_ACCESS_DENIED => SourceError::AccessDenied,
         ERROR_LINK_ON_PATH | ERROR_CANT_ACCESS_FILE => SourceError::ReparsePoint,
         ERROR_DIRECTORY => SourceError::WrongKind,
@@ -107,6 +111,7 @@ mod tests {
         let table: &[(u32, SourceError)] = &[
             (2, SourceError::NotFound),
             (3, SourceError::NotFound),
+            (1018, SourceError::NotFound), // key deleted under an open handle
             (5, SourceError::AccessDenied),
             (1921, SourceError::ReparsePoint),
             (1920, SourceError::ReparsePoint),

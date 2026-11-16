@@ -1,4 +1,4 @@
-# Purge rig, M2: one executor run in the guest (vm\RIG.md §11; docs\M2_DESIGN.json M2-RIG-RUN, gate G0 / G1 / G2 /
+﻿# Purge rig, M2: one executor run in the guest (vm\RIG.md §11; docs\M2_DESIGN.json M2-RIG-RUN, gate G0 / G1 / G2 /
 # G5 / G6). Template: the host (rig.ps1 New-M2JobText) replaces __RUN__ (run name), __MODE__ (m2-install |
 # m2-traps | m2-fidelity), __STAGE__ (start, or app for a real-app round trip of m2-fidelity) and __OPTS__ (base64
 # JSON options) and submits it as an agent job (elevated, interactive user). Windows PowerShell 5.1.
@@ -37,6 +37,13 @@ $FixturesPs = Join-Path $RigGuestDir 'm2-fixtures.ps1'
 $Work = Join-Path $RigWork $Run
 New-Item -ItemType Directory -Force $Work | Out-Null
 $PhaseCount0 = $S.phases.Count
+# Null run (opts null = true; RIG.md §11.8): the mode's phases up to snap A / deep A exactly as in a real run, then an
+# idle wait of null_wait seconds where exec would run, snap B and deep B, and nothing after. diff(snap A, snap B) is
+# pure Windows churn of the exec window, the input of rigtool ambient --m2 (vm\truth\m2-ambient.json).
+$NullRun = [bool](Get-M2Opt $Opts 'null' $false)
+$NullWaitSec = [int](Get-M2Opt $Opts 'null_wait' 3)
+if ($NullRun -and ($Stage -ne 'start' -or @('m2-traps', 'm2-fidelity') -notcontains $Mode)) { Log "exec-run.ps1: a null run is for stage start of m2-traps / m2-fidelity only"; Save-M2Run $R -Finished; exit 2 }
+$S.null_run = [ordered]@{ null = $NullRun; wait_sec = $(if ($NullRun) { $NullWaitSec } else { $null }) }
 
 function Q([string]$s) { ConvertTo-EngineArg $s }
 function F([string]$n) { Join-Path $D $n }
@@ -57,11 +64,21 @@ function Start-M2SwapHelper([string]$TrapId) {
     Start-Native $exe ('-NoProfile -ExecutionPolicy Bypass -File ' + (Q $TrapsPs) + ' -Action swap -TrapId ' + $TrapId + ' -OutDir ' + (Q $D) + ' -TimeoutSec 300')
 }
 
-# A command line run at medium integrity (LaunchMedium task), for the attacker steps of G0.
-function Invoke-M2Medium([string]$CommandLine) {
-    $l = LaunchMedium (Join-Path $env:SystemRoot 'System32\cmd.exe') ('/c ' + $CommandLine)
-    Start-Sleep -Seconds 5
-    $null = Stop-Launch $l -GraceSec 1
+# A command line run at medium integrity (LaunchMedium task), for the attacker steps of G0. cmd.exe /c ends within
+# a second, so no process is waited for (LaunchMedium's process wait would miss it and sit out its timeout): the
+# step is done when $WaitPath (the file the command creates) is there, at most $WaitSec. Returns whether it is.
+function Invoke-M2Medium([string]$CommandLine, [string]$WaitPath = '', [int]$WaitSec = 30) {
+    $l = LaunchMedium (Join-Path $env:SystemRoot 'System32\cmd.exe') ('/c ' + $CommandLine) -StartTimeoutSec 0
+    $seen = $false
+    try {
+        for ($i = 0; $i -lt ($WaitSec * 4); $i++) {
+            if ($WaitPath -and (Test-Path -LiteralPath $WaitPath)) { $seen = $true; break }
+            Start-Sleep -Milliseconds 250
+        }
+        if ($seen) { Start-Sleep -Milliseconds 500 }   # the redirection that created the file writes its line
+        else { Log "  !! medium step: $WaitPath did not appear within $WaitSec s" }
+    } finally { Remove-LaunchTask $l }
+    $seen
 }
 
 # ------------------------------------------------------------------------------------------- building blocks
@@ -144,6 +161,14 @@ function Invoke-UndoRec($Rec, [string]$Tag, [string[]]$Items = @()) {
     $r
 }
 
+# The rest of a null run after deep A: the idle wait standing in for exec, snap B, deep B, the store.
+function Invoke-NullWindow([string[]]$DeepScopes) {
+    Phase 'null-wait' { Log "null run: idle $NullWaitSec s instead of exec"; Start-Sleep -Seconds $NullWaitSec } $S
+    Phase 'snap-b' { $null = Invoke-M2Snap (F "snap-$Run-b.tsv.gz") } $S
+    Phase 'deep-b' { $null = Invoke-M2Deep $DeepScopes (F 'deep-b.json') } $S
+    Phase 'store' { Set-M2Result $R 'store' (Save-M2Store $D 'final') } $S
+}
+
 function Get-ExecSummary($X, $Verdict) {
     [ordered]@{ session = $X.session; exec_exit = $X.exit; report = $(if ($X.report) { Split-Path -Leaf $X.report }); execdiff_ok = $(if ($Verdict) { $Verdict.ok } else { $null }) }
 }
@@ -163,6 +188,7 @@ function Get-TrapDef([string]$Manifest, [string]$Id = '', [string]$Group = '') {
 
 function Invoke-InstallMode {
     Phase 'edge-pause' { $S.edge_pause = Suspend-EdgeUpdate } $S
+    Phase 'telemetry-pause' { $S.telemetry_pause = Suspend-M2Telemetry } $S
     # The attacker pre-creates C:\ProgramData\Purge with planted junctions (trap pd-precreated) before the install.
     Phase 'traps-pre' { Invoke-TrapsScript '-Stage pre-install' 'pre' } $S
     # X:\.purge-q on the second volume, pre-created by a standard user: never adopted as a quarantine root.
@@ -171,7 +197,7 @@ function Invoke-InstallMode {
     $marker = Join-Path $dq 'user-marker.txt'
     Phase 'd-precreate' {
         if (-not $hasD) { Add-Result 'd_volume' 'present' $false; return }
-        Invoke-M2Medium ('mkdir ' + (Q $dq) + ' & echo planted-by-user> ' + (Q $marker))
+        $null = Invoke-M2Medium ('mkdir ' + (Q $dq) + ' & echo planted-by-user> ' + (Q $marker)) $marker
         Add-Result 'd_volume' 'present' $true
         Add-Result 'd_volume' 'precreated' (Test-Path -LiteralPath $marker)
     } $S
@@ -189,13 +215,23 @@ function Invoke-InstallMode {
         [IO.File]::WriteAllText($tf, (ConvertTo-Json -InputObject $doc -Depth 8), $RigUtf8)
         $rec = New-PlanRec 'd-volume' @($tf) 'main'
         $x = Invoke-ExecRec $rec
+        # Expected (engine ceb5999 on, which accepts NETWORK SERVICE, the owner Format-Volume leaves, as the owner
+        # of a volume root): exec 0, the payload moved to the engine's own D:\.purge-q\<session>\000001\payload.txt,
+        # the user's pre-created D:\.purge-q renamed aside to D:\.purge-q.rejected-<utc> with user-marker.txt
+        # unchanged inside, never adopted. An older engine skipped the item (D:\ owner not trusted).
         $userQ = @(Get-ChildItem -LiteralPath $dq -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'payload.txt' })
-        $aside = @(Get-ChildItem -LiteralPath $RigDRoot -Filter '.purge-q.rejected-*' -Force -ErrorAction SilentlyContinue)
+        $aside = @(Get-ChildItem -LiteralPath $RigDRoot -Filter '.purge-q.rejected-*' -Force -Directory -ErrorAction SilentlyContinue)
+        $asideMarker = @($aside | ForEach-Object { Join-Path $_.FullName 'user-marker.txt' } | Where-Object {
+                (Test-Path -LiteralPath $_) -and ([IO.File]::ReadAllText($_).Trim() -ceq 'planted-by-user') })
+        $inQueue = @(Get-ChildItem -LiteralPath $dq -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.FullName '000001\payload.txt' } |
+            Where-Object { Test-Path -LiteralPath $_ })
         Add-Result 'd_volume' 'exec_exit' $x.exit
         Add-Result 'd_volume' 'payload_gone' (-not (Test-Path -LiteralPath "$dir\payload.txt"))
         Add-Result 'd_volume' 'renamed_aside' ($aside.Count -gt 0)
-        Add-Result 'd_volume' 'user_marker_intact' ((Test-Path -LiteralPath $marker) -or $aside.Count -gt 0)
+        Add-Result 'd_volume' 'aside' @($aside | ForEach-Object { $_.FullName })
+        Add-Result 'd_volume' 'user_marker_intact' ($asideMarker.Count -gt 0)
         Add-Result 'd_volume' 'adopted' ($userQ.Count -gt 0 -and (Test-Path -LiteralPath $marker))
+        Add-Result 'd_volume' 'payload_in_queue' $(if ($inQueue.Count) { $inQueue[0] } else { $null })
     } $S
     Phase 'store' { Set-M2Result $R 'store' (Save-M2Store $D 'final') } $S
 }
@@ -205,15 +241,17 @@ function Invoke-InstallMode {
 function Invoke-TrapsMode {
     $TT = F 'm2-traps-targets.json'; $TM = F 'm2-traps-manifest.json'
     Phase 'edge-pause' { $S.edge_pause = Suspend-EdgeUpdate } $S
+    Phase 'telemetry-pause' { $S.telemetry_pause = Suspend-M2Telemetry } $S
     Phase 'traps-pre' { Invoke-TrapsScript '-Stage pre-install' 'pre' } $S
     Phase 'install' { Step-Install } $S
     Phase 'traps-build' { Invoke-TrapsScript '' 'build' } $S
     Phase 'traps-check-after-install' { Invoke-TrapsScript '-Action check -Label after-install' 'after-install' -Verdict } $S
     $script:Main = $null
     Phase 'plan-main' { $script:Main = New-PlanRec 'main' @($TT) 'main' } $S
-    Phase 'refusals' { Invoke-Refusals $script:Main $TT $TM } $S
+    if (-not $NullRun) { Phase 'refusals' { Invoke-Refusals $script:Main $TT $TM } $S }
     Phase 'snap-a' { $null = Invoke-M2Snap (F "snap-$Run-a.tsv.gz") } $S
     Phase 'deep-a' { $null = Invoke-M2Deep @($TM, $script:Main.targets) (F 'deep-a.json') } $S
+    if ($NullRun) { Invoke-NullWindow @($TM, $script:Main.targets); return }
     Phase 'exec-main' { $x = Invoke-ExecRec $script:Main; if (-not $x.report) { throw "exec main wrote no report (exit $($x.exit))" } } $S
     Phase 'snap-b' { $null = Invoke-M2Snap (F "snap-$Run-b.tsv.gz") } $S
     Phase 'deep-b' { $null = Invoke-M2Deep @($TM, $script:Main.targets) (F 'deep-b.json') } $S
@@ -233,7 +271,7 @@ function Invoke-TrapsMode {
         Add-Result 'undo' 'main' ([ordered]@{ exit = $u.exit; items = $keep.Count; kept_for_expiry = $expiryIds })
     } $S
     Phase 'deep-c' { $null = Invoke-M2Deep @($TM, $script:Main.targets) (F 'deep-c.json') } $S
-    Phase 'fidelity-main' { $v = Invoke-M2Fidelity (F 'deep-a.json') (F 'deep-c.json') $script:Main.journal (F 'fidelity-main.json'); Add-Result 'fidelity' 'main' $v.ok } $S
+    Phase 'fidelity-main' { $v = Invoke-M2Fidelity (F 'deep-a.json') (F 'deep-c.json') $script:Main.journal (F 'fidelity-main.json') -KeepItems $expiryIds; Add-Result 'fidelity' 'main' $v.ok } $S
     Phase 'expiry' { Invoke-Expiry $expiry } $S
     Phase 'traps-check-after-expiry' { Invoke-TrapsScript '-Action check -Label after-expiry' 'after-expiry' -Verdict } $S
     foreach ($g in 'race-a', 'race-b') { Phase $g { Invoke-Race $g $TT $TM } $S }
@@ -274,9 +312,19 @@ function Invoke-Refusals($Main, [string]$TT, [string]$TM) {
     # (Variable names are case-insensitive: nothing here may be called $d, $r or $s, which would hide $D / $R / $S.)
     $dr = Invoke-RigTool ('diff ' + (Q $a) + ' ' + (Q $b) + ' --json')
     [IO.File]::WriteAllText((F 'refuse-diff.json'), "$($dr.stdout)", $RigUtf8)
-    $n = $null
-    try { $j = "$($dr.stdout)" | ConvertFrom-Json; $n = @($j.added).Count + @($j.removed).Count + @($j.changed).Count } catch { }
+    $n = $null; $mt = $null
+    try {
+        $j = "$($dr.stdout)" | ConvertFrom-Json
+        # A directory whose only change is its LastWriteTime, with nothing added or removed anywhere: the snapshot
+        # reads directory times from the parent's index, which NTFS updates lazily (seen on the VM: 15 trap dirs
+        # whose time moved by ~2 ms between two snaps a second apart, with no engine call writing anything).
+        $mtOnly = @(@($j.changed) | Where-Object { $_ -and $_.rec -eq 'D' -and @(@($_.changes) | Where-Object { "$_" -notmatch '^mtime ' }).Count -eq 0 })
+        $mt = $mtOnly.Count
+        $n = @($j.added).Count + @($j.removed).Count + @($j.changed).Count
+        if ((@($j.added).Count + @($j.removed).Count) -eq 0) { $n -= $mt }
+    } catch { }
     $res.diff_records = $n
+    $res.dir_mtime_only = $mt
     $res.no_change = ($n -eq 0)
     Set-M2Result $R 'refusals' $res
 }
@@ -374,12 +422,14 @@ function New-FixtureRound([string]$Tag) {
 function Invoke-FidelityMode {
     $FT = F 'm2-fixtures-targets.json'; $FM = F 'm2-fixtures-manifest.json'
     Phase 'edge-pause' { $S.edge_pause = Suspend-EdgeUpdate } $S
+    Phase 'telemetry-pause' { $S.telemetry_pause = Suspend-M2Telemetry } $S
     Phase 'install' { Step-Install } $S
     Phase 'fixtures-build' { Invoke-FixturesScript '' $D } $S
     $script:Main = $null
     Phase 'plan-main' { $script:Main = New-PlanRec 'main' @($FT) 'main' } $S
     Phase 'snap-a' { $null = Invoke-M2Snap (F "snap-$Run-a.tsv.gz") } $S
     Phase 'deep-a' { $null = Invoke-M2Deep @($FM, $script:Main.targets) (F 'deep-a.json') } $S
+    if ($NullRun) { Invoke-NullWindow @($FM, $script:Main.targets); return }
     Phase 'exec-main' { $x = Invoke-ExecRec $script:Main; if (-not $x.report) { throw "exec main wrote no report (exit $($x.exit))" } } $S
     Phase 'snap-b' { $null = Invoke-M2Snap (F "snap-$Run-b.tsv.gz") } $S
     Phase 'deep-b' { $null = Invoke-M2Deep @($FM, $script:Main.targets) (F 'deep-b.json') } $S
@@ -436,7 +486,14 @@ function Invoke-FidelityMode {
                 if ($line -notmatch '"rec"\s*:\s*"intent"') { continue }
                 $j = $null; try { $j = $line | ConvertFrom-Json } catch { continue }
                 $bp = $null
-                foreach ($k in 'backup', 'definition') { if ($j.PSObject.Properties[$k] -and $j.$k -and $j.$k.path) { $bp = "$($j.$k.path)"; break } }
+                # The engine journal (purge.journal/1) carries the backup under the intent's inverse
+                # (RestoreKeyTree / RestoreValue / RecreateKey: inverse.backup.path, relative to the session dir).
+                $holders = @($j)
+                if ($j.PSObject.Properties['inverse'] -and $j.inverse) { $holders += $j.inverse }
+                foreach ($hd in $holders) {
+                    foreach ($k in 'backup', 'definition') { if ($hd.PSObject.Properties[$k] -and $hd.$k -and $hd.$k.path) { $bp = "$($hd.$k.path)"; break } }
+                    if ($bp) { break }
+                }
                 if ($bp) { $res.backup = $bp; $res.op = $j.op; $res.item = "$($j.item)"; break }
             }
         }
@@ -455,21 +512,52 @@ function Invoke-FidelityMode {
         Set-M2Result $R 'backup_tamper' $res
     } $S
 
-    # G6: a restore point with --restore-point always, then a second exec inside the throttle window.
+    # G6: a restore point with --restore-point always (m2-base: SystemRestorePointCreationFrequency 0, no throttle),
+    # then the throttling leg: the frequency set to rp_frequency minutes (default 1440, Windows' own default) and a
+    # second exec, which must report Throttled. The engine never touches the value; the rig sets it for the test.
     Phase 'restore-point' {
-        $res = [ordered]@{ snapshot = (Get-M2Opt $Opts 'snapshot' $null); before = $null; after = $null; first = $null; second = $null }
+        $res = [ordered]@{ snapshot = (Get-M2Opt $Opts 'snapshot' $null); frequency_before = (Get-RegRaw $RigSrKey 'SystemRestorePointCreationFrequency'); before = $null; after = $null; first = $null; second = $null }
         $res.before = @(Get-M2RestorePoints).Count
         $rec = New-FixtureRound 'rp1'
         $x = Invoke-ExecRec $rec -RestorePoint 'always'
         $res.first = [ordered]@{ exit = $x.exit; restore_point = $(if ($x.report) { (Read-Json $x.report).restore_point }) }
         $res.after = @(Get-M2RestorePoints).Count
+        # Undone before rp2 rebuilds the same fixture paths: undone after it, rp1's restore would occupy rp2's paths
+        # and rp2's undo would end in conflicts (seen on the VM: 11 conflicts, exit 11).
+        $null = Invoke-UndoRec $rec 'rp1'
+        $res.frequency_value = Set-M2RestoreFrequency ([int](Get-M2Opt $Opts 'rp_frequency' 1440))
         $rec2 = New-FixtureRound 'rp2'
         $x2 = Invoke-ExecRec $rec2 -RestorePoint 'always'
         $res.second = [ordered]@{ exit = $x2.exit; restore_point = $(if ($x2.report) { (Read-Json $x2.report).restore_point }) }
         $res.after_second = @(Get-M2RestorePoints).Count
-        $res.frequency_value = Get-RegRaw 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' 'SystemRestorePointCreationFrequency'
         Set-M2Result $R 'restore_point' $res
-        foreach ($t in 'rp1', 'rp2') { $null = Invoke-UndoRec $(if ($t -eq 'rp1') { $rec } else { $rec2 }) $t }
+        $null = Invoke-UndoRec $rec2 'rp2'
+    } $S
+
+    # G6 "System Protection off": protection on C: disabled, exec with --restore-point always; the engine reports the
+    # restore point Disabled with a warning and executes the plan anyway (docs\M2_DESIGN.json purge-exec prepare:
+    # "never blocks the batch on failure"). Protection is enabled again afterwards (the snapshot restore of the next
+    # run would undo it in any case).
+    Phase 'restore-point-off' {
+        $res = [ordered]@{ disabled = $false; before = $null; after = $null; exit = $null; restore_point = $null; warnings = @(); done = $null; reenabled = $null }
+        try {
+            $res.disabled = -not (Set-M2SystemProtection $false)
+            $res.before = @(Get-M2RestorePoints).Count
+            $rec = New-FixtureRound 'rp-off'
+            $x = Invoke-ExecRec $rec -RestorePoint 'always'
+            $res.exit = $x.exit
+            if ($x.report) {
+                $rp = Read-Json $x.report
+                $res.restore_point = $rp.restore_point
+                $res.warnings = @(@($rp.warnings) | Where-Object { "$_" -match 'restore' })
+                $res.done = $(if ($rp.counts) { $rp.counts.done } else { $null })
+            }
+            $res.after = @(Get-M2RestorePoints).Count
+            $null = Invoke-UndoRec $rec 'rp-off'
+        } finally {
+            try { $res.reenabled = Set-M2SystemProtection $true } catch { $res.reenabled = $false; Log "  !! enable system protection: $($_.Exception.Message)" }
+            Set-M2Result $R 'restore_point_off' $res
+        }
     } $S
     Phase 'store' { Set-M2Result $R 'store_final' (Save-M2Store $D 'final') } $S
 }
@@ -487,7 +575,19 @@ function Invoke-AppStage {
         $plan = F "plan-$tag.json"
         Copy-Item -LiteralPath $src -Destination $plan -Force
         Copy-Item -LiteralPath (Get-M2Sidecar $src) -Destination (Get-M2Sidecar $plan) -Force
-        $ids = @(Get-M2DefaultSelection $plan)
+        # Every item the plan offers for removal (bands app_bands, default Safe, Likely, Weak; Blocked never), ticked by
+        # default or not: --select is the full selection (RIG.md §11.7), so real app leftovers go through exec and undo
+        # even when the scan preselects nothing.
+        $wantBands = @(@(Get-M2Opt $Opts 'app_bands' @('Safe', 'Likely', 'Weak')) | ForEach-Object { "$_" } | Where-Object { $_ -and $_ -ne 'Blocked' })
+        $ids = @(Get-M2BandSelection $plan $wantBands)
+        $bands = @(@((Read-Json $plan).items) | Where-Object { $_ } | ForEach-Object { "$($_.band)/$($_.preselected)" } | Group-Object | ForEach-Object { "$($_.Name) x$($_.Count)" })
+        if (-not $ids.Count) {
+            # The engine refuses an empty selection (exit 6, "nothing is selected"): no round trip to measure. Recorded,
+            # not a failed phase; m2.sh then has no fidelity-app-<id>.json for this app.
+            Add-Result 'apps' $app ([ordered]@{ app_run = $appRun; selected = 0; bands = $wantBands; skipped = "no item of band $($wantBands -join '/') in the plan"; plan_items = $bands })
+            Log "  !! $tag`: the plan has no item of band $($wantBands -join '/') ($($bands -join ', ')); no round trip"
+            return
+        }
         $sc = Read-Json (Get-M2Sidecar $plan)
         $tg = @(@($sc.items) | ForEach-Object { $_ } | Where-Object { $_ -and $ids -contains "$($_.id)" } | ForEach-Object {
                 $act = $_.action; if ($act -and -not ($act -is [string])) { $act = "$(@($act.PSObject.Properties)[0].Name)" }
@@ -497,7 +597,7 @@ function Invoke-AppStage {
         $ph = Get-M2PlanHash $plan
         $script:AppRec = [pscustomobject][ordered]@{ tag = $tag; group = 'main'; targets = $t; plan = $plan; select = (Write-M2IdFile $ids (F "select-$tag.json")); ids = $ids
             plan_hash = $ph; confirm = (Get-M2Confirm $ph $ids); session = $null; exit = $null; crashed = $false; report = $null; journal = $null }
-        Add-Result 'apps' $app ([ordered]@{ app_run = $appRun; selected = $ids.Count })
+        Add-Result 'apps' $app ([ordered]@{ app_run = $appRun; selected = $ids.Count; bands = $wantBands; plan_items = $bands })
     } $S
     if (-not $script:AppRec) { return }
     $rec = $script:AppRec

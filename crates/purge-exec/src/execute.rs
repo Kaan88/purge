@@ -23,7 +23,7 @@
 //! | 3 | check the store; read the index; size cap over the plan's sizes | | | [`ExecError::Store`]; an unavailable index is a warning and the cap is then not checked |
 //! | 4 | create the session directory | | | [`ExecError::Store`] |
 //! | 5 | write the scan copy `plan.scan.json`, flushed with its directory | | | [`ExecError::ScanCopy`]; no journal exists, the session directory is removed |
-//! | 6 | journal header, then the run's settings | `header`, `settings` (flushed) | `journal.header` | [`ExecError::Journal`]; no item was looked at. Before the header the session directory is removed ([`SessionDir::remove_unstarted`]) |
+//! | 6 | journal header, then the run's settings and its selected ids | `header`, `settings` (flushed) | `journal.header` | [`ExecError::Journal`]; no item was looked at. Before the header the session directory is removed ([`SessionDir::remove_unstarted`]) |
 //! | 7 | validate every selected item, read-only; a path item whose candidate carries a scan-time identity (`item_fp`) must still be that object | one `validated` per item (an item that did not pass: `Refused` or `Absent` facts), flushed after the last | | abort `JournalWriteFailed` |
 //! | 8 | prepare: restore point (per setting), Restart Manager query | | | never: warnings |
 //! | 9 | every item in plan order ([`Run::run_item`]) | see below | see below | see "Aborts" |
@@ -118,7 +118,8 @@ use crate::prepare::{
 use crate::recover::{Probe, SettledOp};
 use crate::report::{self, DataVolume, RunNotes};
 use crate::storage::{
-    SCAN_FILE, SessionDir, StorageError, StorageRoots, VOLUME_QUARANTINE_DIR, cap_bytes, now,
+    QuarantineDir, SCAN_FILE, SessionDir, StorageError, StorageRoots, VOLUME_QUARANTINE_DIR,
+    cap_bytes, now,
 };
 
 #[cfg(test)]
@@ -311,6 +312,9 @@ pub struct ExecOutput {
     pub session: SessionId,
     /// The report, built from the journal.
     pub report: ExecReport,
+    /// Whether the journal holds the run's end (`commit` or `aborted`); `false` when the `aborted`
+    /// record could not be written, so the session still waits for recovery.
+    pub closed: bool,
     /// Whether `report.json` was written into the session.
     pub report_written: bool,
     /// Whether the session's entry in the index was written.
@@ -555,6 +559,27 @@ pub fn read_scan_copy(session: &SessionDir) -> Result<ScanDoc, ExecError> {
 // The journal and the notes: what every step writes through
 // ---------------------------------------------------------------------------------------------------
 
+/// The most bytes of a skip's detail a `done` record carries. The detail is engine text with a path or
+/// an SDDL string in it, both of which can be tens of kilobytes (F11 of the M2 fix-round review); the
+/// report keeps it whole.
+pub(crate) const MAX_DONE_DETAIL: usize = 2048;
+
+/// What a cut detail ends with.
+const DETAIL_CUT: &str = " [...]";
+
+/// `detail` as a `done` record carries it: whole up to [`MAX_DONE_DETAIL`] bytes, else cut at a character
+/// boundary so that, with [`DETAIL_CUT`] after it, it is at most that long.
+pub(crate) fn journal_detail(detail: &str) -> String {
+    if detail.len() <= MAX_DONE_DETAIL {
+        return detail.to_owned();
+    }
+    let mut end = MAX_DONE_DETAIL - DETAIL_CUT.len();
+    while end > 0 && !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{DETAIL_CUT}", detail.get(..end).unwrap_or_default())
+}
+
 /// The journal writer and the notes the journal has no place for. Every journal write of the per-item
 /// pipeline goes through here, and every failure of one becomes an [`Abort`].
 #[derive(Debug)]
@@ -564,10 +589,18 @@ struct Ledger {
 }
 
 impl Ledger {
-    fn note(&mut self, op: OpId, outcome: &ItemOutcome, detail: String) {
+    /// Keeps `detail` for the report, and returns what the `done` record carries: the detail of a
+    /// skipped item (why it was left untouched, e.g. the step that could not make a backup location),
+    /// empty for every other outcome.
+    fn note(&mut self, op: OpId, outcome: &ItemOutcome, detail: String) -> String {
+        let journalled = match outcome {
+            ItemOutcome::Skipped { .. } => journal_detail(&detail),
+            _ => String::new(),
+        };
         if !detail.is_empty() && !outcome.is_success() {
             self.notes.details.insert(op, detail);
         }
+        journalled
     }
 
     /// Writes and flushes an intent; the token proves it durable.
@@ -582,9 +615,9 @@ impl Ledger {
         outcome: ItemOutcome,
         detail: String,
     ) -> Result<ItemOutcome, Abort> {
-        self.note(token.op(), &outcome, detail);
+        let detail = self.note(token.op(), &outcome, detail);
         self.journal
-            .done(token, outcome.clone())
+            .done_noted(token, outcome.clone(), detail)
             .map_err(Abort::journal)?;
         Ok(outcome)
     }
@@ -606,9 +639,9 @@ impl Ledger {
                 detail: "an outcome that needs an intent was decided without one".into(),
             }
         };
-        self.note(op, &outcome, detail);
+        let detail = self.note(op, &outcome, detail);
         self.journal
-            .done_without_intent(op, outcome.clone())
+            .done_without_intent_noted(op, outcome.clone(), detail)
             .map_err(Abort::journal)?;
         Ok(outcome)
     }
@@ -722,6 +755,28 @@ fn run_ops(plan: &BoundPlan) -> Vec<(OpId, ExecOp)> {
         .collect()
 }
 
+/// The risk view of the selected items and their absorbed children (`prepare::risk_reasons`). A key
+/// item whose validation (`facts_of` its op) read the key counts its direct subkeys and itself
+/// (`RiskItem::with_subtree_keys`; review M2 M24): a lower bound of its tree, since deeper levels are
+/// not counted before the act. Without validated facts a key counts as one.
+fn risk_items<'p>(
+    plan: &'p BoundPlan,
+    facts_of: impl Fn(OpId) -> Option<ItemFacts>,
+) -> Vec<RiskItem<'p>> {
+    let mut items = Vec::new();
+    for item in plan.items() {
+        if let Some(candidate) = plan.candidate(item) {
+            let risk = RiskItem::from_candidate(candidate);
+            items.push(match facts_of(item.op) {
+                Some(ItemFacts::Key(key)) => risk.with_subtree_keys(u64::from(key.subkeys) + 1),
+                _ => risk,
+            });
+            items.extend(plan.children(candidate).map(RiskItem::from_candidate));
+        }
+    }
+    items
+}
+
 impl<'a> Run<'a> {
     /// Steps 2 to 6 of the run: the store, the session, the scan copy, the journal header and the
     /// run's settings. A failure before the header removes the session directory again
@@ -750,6 +805,7 @@ impl<'a> Run<'a> {
             let scope = env.roots.store_scope(session.id(), &volume_roots)?;
             let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
             ctx.set_run_ops(run_ops(&plan));
+            ctx.bind_user(request.settings.user_sid.as_deref());
             let header = Header {
                 schema: JournalSchema,
                 session: session.id().clone(),
@@ -764,11 +820,16 @@ impl<'a> Run<'a> {
                 allow_irreversible: plan.allow_irreversible(),
                 volumes: volume_records(env.roots, session.id(), &volumes),
             };
-            let journal = JournalWriter::create_with_settings(
-                &session,
-                header,
-                request.settings.to_journal(),
-            )?;
+            // The selected ids in op order go into the settings record, so that a run stopped in its
+            // validation is bound to its selection again without a search (`rebind_interrupted`).
+            let mut settings = request.settings.to_journal();
+            settings.selected = plan
+                .items()
+                .iter()
+                .filter_map(|item| plan.candidate(item))
+                .map(|candidate| candidate.id.clone())
+                .collect();
+            let journal = JournalWriter::create_with_settings(&session, header, settings)?;
             Ok((ctx, journal))
         })();
         let (ctx, journal) = match opened {
@@ -807,7 +868,8 @@ impl<'a> Run<'a> {
     ///
     /// A run that stopped before every item was validated (a crash at the header or in the validate
     /// pass) acted on nothing; it is continued as if it had not stopped. The plan is bound again with
-    /// the rest of its selection found from the header ([`plan_in::rebind_interrupted`]), the items
+    /// the selection the settings record holds (in an older journal: the rest of it found from the
+    /// header; [`plan_in::rebind_interrupted`]), the items
     /// without a `validated` record are validated now (step 7, for those items only: a journalled
     /// record is never written or validated again) and their records journalled and handed to the gate
     /// context. Step 8 is not repeated: no restore point is asked for (the report says so when the
@@ -847,6 +909,7 @@ impl<'a> Run<'a> {
         let scope = env.roots.store_scope(session.id(), &volume_roots)?;
         let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
         ctx.set_run_ops(run_ops(&plan));
+        ctx.bind_user(settings.user_sid.as_deref());
         let mut notes = RunNotes::default();
         let data_volume = report::data_volume(env.roots);
         let index = read_index_for_cap(env.roots, &mut notes.warnings)?;
@@ -958,14 +1021,16 @@ impl<'a> Run<'a> {
             })
     }
 
-    /// The gate's view of op `op` (`exec_op`) at validation: its exemptions ([`Run::exemptions`]) and
-    /// the scan-time identity its candidate carries (`Candidate::item_fp`), which the validate pass
-    /// compares with the identity it reads.
+    /// The gate's view of op `op` (`exec_op`) at validation: its exemptions ([`Run::exemptions`]), the
+    /// scan-time identity its candidate carries (`Candidate::item_fp`), which the validate pass
+    /// compares with the identity it reads, and the run's key limit, which the act applies too.
     fn gate_item<'e>(&self, op: OpId, exec_op: &'e ExecOp) -> GateItem<'e> {
         let scan_identity = self
             .op_candidate(op)
             .and_then(|candidate| candidate.item_fp);
-        GateItem::new(exec_op, self.exemptions(op)).with_scan_identity(scan_identity)
+        GateItem::new(exec_op, self.exemptions(op))
+            .with_scan_identity(scan_identity)
+            .with_key_limit(self.settings.key_limit)
     }
 
     /// Step 7: validates every selected item read-only, writes one `validated` record per item and
@@ -1061,13 +1126,10 @@ impl<'a> Run<'a> {
 
     /// Why the plan is high-risk, from its selected items and their absorbed children.
     fn risk_reasons(&self) -> Vec<prepare::RiskReason> {
-        let mut risk_items = Vec::new();
-        for item in self.plan.items() {
-            if let Some(candidate) = self.plan.candidate(item) {
-                risk_items.push(RiskItem::from_candidate(candidate));
-                risk_items.extend(self.plan.children(candidate).map(RiskItem::from_candidate));
-            }
-        }
+        let state = self.ledger.journal.state();
+        let risk_items = risk_items(&self.plan, |op| {
+            state.op(op).map(|journalled| journalled.validated().facts)
+        });
         prepare::risk_reasons(&risk_items, self.plan.scan().mode)
     }
 
@@ -1190,6 +1252,7 @@ impl<'a> Run<'a> {
             ExecOp::RemovePackage { .. } => {
                 let result = act_typed::complete_package(
                     self.env.packages,
+                    &self.ctx,
                     &self.session,
                     intent,
                     self.ledger.journal.state().header().allow_irreversible,
@@ -1249,8 +1312,13 @@ impl<'a> Run<'a> {
                 // The same view as the validate pass, scan-time identity included, so an item refused
                 // for its identity is reported as such again.
                 let look = gate::validate(&self.ctx, &self.gate_item(op, &exec_op));
-                match act_fs::gate_result(&look) {
-                    Some(result) => (result.outcome, result.detail),
+                let result = if exec_op.is_registry() {
+                    act_reg::gate_result(&look, &exec_op).map(|r| (r.outcome, r.detail))
+                } else {
+                    act_fs::gate_result(&look).map(|r| (r.outcome, r.detail))
+                };
+                match result {
+                    Some(result) => result,
                     None => (
                         ItemOutcome::Skipped {
                             reason: SkipReason::ChangedSinceScan,
@@ -1320,10 +1388,14 @@ impl<'a> Run<'a> {
     }
 
     /// The quarantine path of an item found locked: the one its intent recorded, or `<op dir>\<leaf>`
-    /// in an op directory made now for an item locked before any intent.
-    fn locked_destination(&self, locked: &act_fs::LockedItem) -> Result<String, StorageError> {
+    /// in an op directory made now for an item locked before any intent, which is returned too, so
+    /// that a ladder that decides without acting takes it away again (review M2 M5).
+    fn locked_destination(
+        &self,
+        locked: &act_fs::LockedItem,
+    ) -> Result<(String, Option<QuarantineDir>), StorageError> {
         if let Some(path) = &locked.quarantine_path {
-            return Ok(path.clone());
+            return Ok((path.clone(), None));
         }
         let source = Path::new(&locked.path);
         let leaf = source
@@ -1331,8 +1403,13 @@ impl<'a> Run<'a> {
             .map(|name| name.to_string_lossy().into_owned())
             .ok_or_else(|| StorageError::InvalidPath(locked.path.clone()))?;
         let serial = locked.locked.stamp.identity.volume_serial;
-        let dir = self.session.create_op_dir(source, serial, locked.op)?;
-        Ok(dir.item_path(&leaf).to_string_lossy().into_owned())
+        // An empty op directory left by a run that stopped before this op's intent is adopted, as the
+        // file action adopts one (review M2 M5); a directory that holds something still refuses.
+        let dir = act_fs::create_op_dir_for(&self.session, source, serial, locked.op)?;
+        Ok((
+            dir.item_path(&leaf).to_string_lossy().into_owned(),
+            Some(dir),
+        ))
     }
 
     /// The locked-file ladder for an item that stayed locked after its retries. `held` is the intent
@@ -1347,8 +1424,8 @@ impl<'a> Run<'a> {
             Some((intent, token)) => (Some(intent), Some(token)),
             None => (None, None),
         };
-        let destination = match self.locked_destination(&locked) {
-            Ok(path) => path,
+        let (destination, made) = match self.locked_destination(&locked) {
+            Ok(made) => made,
             Err(StorageError::CannotBackUp { reason, .. }) => {
                 let outcome = ItemOutcome::Skipped {
                     reason: SkipReason::GateBlocked {
@@ -1359,8 +1436,15 @@ impl<'a> Run<'a> {
             }
             Err(e) => return Err(Abort::store(&e)),
         };
+        // The op directory made for the ladder goes again, while empty, when nothing is acted on.
+        let discard = |made: Option<QuarantineDir>| {
+            if let Some(dir) = made {
+                act_fs::remove_empty_op_dir(dir);
+            }
+        };
         let Some(item) = locked::LockedItem::from_gate(&self.ctx, op, &locked.locked, destination)
         else {
+            discard(made);
             let (outcome, detail) = internal("a locked item without journalled file facts");
             return self.ledger.end(op, token, outcome, detail);
         };
@@ -1371,10 +1455,12 @@ impl<'a> Run<'a> {
         };
         let result = match ladder.prepare(&item, journalled.as_ref()) {
             LockPrepared::Decided(result) => {
+                discard(made);
                 Self::note_lockers(&mut self.ledger, op, &result);
                 return self.ledger.end(op, token, result.outcome, result.detail);
             }
             LockPrepared::Ready(action) => {
+                drop(made);
                 let token = match (token, action.intent_to_write()) {
                     (Some(token), _) => token,
                     (None, Some(intent)) => self.ledger.intent(intent.clone())?,
@@ -1625,6 +1711,7 @@ fn close(
     ExecOutput {
         session: session.id().clone(),
         report,
+        closed: durable,
         report_written,
         index_updated,
     }

@@ -1,4 +1,4 @@
-# Purge rig v2: one-time preparation of the clean VM before taking the 'rig-base' snapshots (vm\RIG.md §1).
+﻿# Purge rig v2: one-time preparation of the clean VM before taking the 'rig-base' snapshots (vm\RIG.md §1).
 # Run ONCE, elevated, through the agent (host: Push-Tools, then Invoke-SetupBase in rig.ps1). It:
 #   1. creates C:\cr\bin, C:\cr\guest, C:\cr\out, C:\cr\inst, C:\cr\jobs
 #   2. writes C:\cr\start-agent-direct.cmd and registers the logon task PurgeRigAgent

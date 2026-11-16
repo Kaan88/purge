@@ -181,10 +181,12 @@ fn rig_task_guids(snaps: &[&Snap]) -> Vec<String> {
     for s in snaps {
         for (k, r) in &s.keys {
             let ks = k.as_str();
-            if ks.len() <= tree.len() || !ks[..tree.len()].eq_ignore_ascii_case(&tree) {
+            // `get`: a key with non-ASCII text must not be cut inside a character.
+            let Some(rest) =
+                ks.get(tree.len()..).filter(|r| !r.is_empty() && ks[..tree.len()].eq_ignore_ascii_case(&tree))
+            else {
                 continue;
-            }
-            let rest = &ks[tree.len()..];
+            };
             if rest.contains('\\') || !name_re.is_match(rest) {
                 continue;
             }

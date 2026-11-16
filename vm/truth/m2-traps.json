@@ -832,10 +832,10 @@
           "action": "Quarantine",
           "group": "main",
           "expect": {
-            "outcome": "Done",
-            "reason": null,
-            "blocker": null,
-            "summary": "moved and restored under its exact name; sibling 'name' intact"
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "DenyListed",
+            "summary": "blocked: DenyListed"
           },
           "accept": [],
           "condition": null
@@ -849,10 +849,10 @@
           "action": "Quarantine",
           "group": "main",
           "expect": {
-            "outcome": "Done",
-            "reason": null,
-            "blocker": null,
-            "summary": "moved and restored under its exact name; sibling 'name' intact"
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "DenyListed",
+            "summary": "blocked: DenyListed"
           },
           "accept": [],
           "condition": null
@@ -866,10 +866,10 @@
           "action": "Quarantine",
           "group": "main",
           "expect": {
-            "outcome": "Done",
-            "reason": null,
-            "blocker": null,
-            "summary": "moved and restored under its exact name; sibling 'dir' intact"
+            "outcome": "Skipped",
+            "reason": "GateBlocked",
+            "blocker": "DenyListed",
+            "summary": "blocked: DenyListed"
           },
           "accept": [],
           "condition": null
@@ -2478,7 +2478,7 @@
             "mkdir fp": true,
             "write forged fingerprint": true
           },
-          "body": "Op 'mkdir fp' { New-Item -ItemType Directory -Force -Path '{localappdata}\\Purge\\fp' -ErrorAction Stop }\r\nOp 'write forged fingerprint' { [IO.File]::WriteAllText('{localappdata}\\Purge\\fp\\PurgeTrapApp.json', [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('ew0KICAgICJzY2hlbWEiOiAgInB1cmdlLmZwLzAiLA0KICAgICJub3RlIjogICJGT1JHRUQgYnkgdGhlIE0yIHJpZyAobTItdHJhcHMgZm9yZ2VkLXVzZXItZnApOyB0aGUgdXNlci1zdG9yZSBmb3JtYXQgaXMgcHJvdmlzaW9uYWwgKEVOR0lORV9QTEFOIDYuMikiLA0KICAgICJhcHAiOiAgIlB1cmdlVHJhcEFwcCIsDQogICAgInNjb3BlIjogICJtYWNoaW5lIiwNCiAgICAicm9vdHMiOiAgWw0KICAgICAgICAgICAgICAgICAgIkM6XFxQcm9ncmFtIEZpbGVzXFxQdXJnZVRyYXBBcHAiLA0KICAgICAgICAgICAgICAgICAgIkM6XFxQdXJnZUNhbmFyeVxcZnBcXHZpY3RpbSINCiAgICAgICAgICAgICAgXSwNCiAgICAia2V5cyI6ICBbDQogICAgICAgICAgICAgICAgICJIS0xNXFxTT0ZUV0FSRVxcUHVyZ2VUcmFwQXBwIiwNCiAgICAgICAgICAgICAgICAgIkhLTE1cXFNPRlRXQVJFXFxQdXJnZUNhbmFyeVxcRnBWaWN0aW0iDQogICAgICAgICAgICAgXSwNCiAgICAiZXhlX25hbWVzIjogIFsNCiAgICAgICAgICAgICAgICAgICAgICAicHVyZ2V0cmFwYXBwLmV4ZSINCiAgICAgICAgICAgICAgICAgIF0NCn0='))) }"
+          "body": "Op 'mkdir fp' { New-Item -ItemType Directory -Force -Path '{localappdata}\\Purge\\fp' -ErrorAction Stop }\r\nOp 'write forged fingerprint' { [IO.File]::WriteAllText('{localappdata}\\Purge\\fp\\PurgeTrapApp.json', [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('ew0KICAgICJzY2hlbWEiOiAgInB1cmdlLmZwLzAiLA0KICAgICJhcHAiOiAgew0KICAgICAgICAgICAgICAgICJwcm9ncmFtX2lkIjogICJIS0xNfDY0fFB1cmdlVHJhcEFwcCIsDQogICAgICAgICAgICAgICAgImRpc3BsYXlfbmFtZSI6ICAiUHVyZ2VUcmFwQXBwIg0KICAgICAgICAgICAgfSwNCiAgICAiaWRlbnRpdHkiOiAgew0KICAgICAgICAgICAgICAgICAgICAgIm5hbWVzIjogIFsNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIlB1cmdlVHJhcEFwcCIsDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICJwdXJnZXRyYXBhcHAuZXhlIg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF0sDQogICAgICAgICAgICAgICAgICAgICAidmVuZG9ycyI6ICBbDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIlB1cmdlVHJhcEFwcCINCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF0sDQogICAgICAgICAgICAgICAgICAgICAidG9rZW5zIjogIFsNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICJwdXJnZXRyYXBhcHAiDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF0sDQogICAgICAgICAgICAgICAgICAgICAibWVnYV92ZW5kb3IiOiAgZmFsc2UNCiAgICAgICAgICAgICAgICAgfSwNCiAgICAicm9vdHMiOiAgWw0KICAgICAgICAgICAgICAgICAgew0KICAgICAgICAgICAgICAgICAgICAgICJwYXRoIjogICJDOlxcUHJvZ3JhbSBGaWxlc1xcUHVyZ2VUcmFwQXBwIiwNCiAgICAgICAgICAgICAgICAgICAgICAia2luZCI6ICAiSW5zdGFsbFJvb3QiLA0KICAgICAgICAgICAgICAgICAgICAgICJzb3VyY2UiOiAgIkFycEluc3RhbGxMb2NhdGlvbiIsDQogICAgICAgICAgICAgICAgICAgICAgInRydXN0IjogICJBZG1pbk9ubHkiLA0KICAgICAgICAgICAgICAgICAgICAgICJ2b2x1bWVfc2VyaWFsIjogIG51bGwsDQogICAgICAgICAgICAgICAgICAgICAgInBhcmVudF9leGlzdGVkIjogIHRydWUNCiAgICAgICAgICAgICAgICAgIH0sDQogICAgICAgICAgICAgICAgICB7DQogICAgICAgICAgICAgICAgICAgICAgInBhdGgiOiAgIkM6XFxQdXJnZUNhbmFyeVxcZnBcXHZpY3RpbSIsDQogICAgICAgICAgICAgICAgICAgICAgImtpbmQiOiAgIkluc3RhbGxSb290IiwNCiAgICAgICAgICAgICAgICAgICAgICAic291cmNlIjogICJBcnBJbnN0YWxsTG9jYXRpb24iLA0KICAgICAgICAgICAgICAgICAgICAgICJ0cnVzdCI6ICAiQWRtaW5Pbmx5IiwNCiAgICAgICAgICAgICAgICAgICAgICAidm9sdW1lX3NlcmlhbCI6ICBudWxsLA0KICAgICAgICAgICAgICAgICAgICAgICJwYXJlbnRfZXhpc3RlZCI6ICB0cnVlDQogICAgICAgICAgICAgICAgICB9DQogICAgICAgICAgICAgIF0sDQogICAgImV4ZXMiOiAgWw0KICAgICAgICAgICAgICAgICB7DQogICAgICAgICAgICAgICAgICAgICAicGF0aCI6ICAiQzpcXFByb2dyYW0gRmlsZXNcXFB1cmdlVHJhcEFwcFxccHVyZ2V0cmFwYXBwLmV4ZSIsDQogICAgICAgICAgICAgICAgICAgICAibWFpbiI6ICB0cnVlDQogICAgICAgICAgICAgICAgIH0NCiAgICAgICAgICAgICBdLA0KICAgICJhbmNob3JzIjogIHsNCiAgICAgICAgICAgICAgICAgICAgInByb2dpZHMiOiAgWw0KDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF0sDQogICAgICAgICAgICAgICAgICAgICJjbHNpZHMiOiAgWw0KDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXSwNCiAgICAgICAgICAgICAgICAgICAgImFwcGlkcyI6ICBbDQoNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBdLA0KICAgICAgICAgICAgICAgICAgICAidHlwZWxpYnMiOiAgWw0KDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBdLA0KICAgICAgICAgICAgICAgICAgICAiYXVtaWRzIjogIFsNCg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF0sDQogICAgICAgICAgICAgICAgICAgICJwYWNrYWdlX2ZhbWlsaWVzIjogIFsNCg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBdLA0KICAgICAgICAgICAgICAgICAgICAicGFja2FnZV9mdWxsX25hbWVzIjogIFsNCg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF0sDQogICAgICAgICAgICAgICAgICAgICJydW5fZW50cmllcyI6ICBbDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgew0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAia2V5IjogICJIS0xNXFxTT0ZUV0FSRVxcUHVyZ2VDYW5hcnlcXEZwVmljdGltIiwNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAgIkNhbmFyeVZhbHVlIiwNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgImRhdGEiOiAgIlwiQzpcXFByb2dyYW0gRmlsZXNcXFB1cmdlVHJhcEFwcFxccHVyZ2V0cmFwYXBwLmV4ZVwiIg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIH0NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF0NCiAgICAgICAgICAgICAgICB9LA0KICAgICJ0b2tlbnMiOiAgWw0KICAgICAgICAgICAgICAgICAgIHsNCiAgICAgICAgICAgICAgICAgICAgICAgInRva2VuIjogICJQdXJnZVRyYXBBcHAiLA0KICAgICAgICAgICAgICAgICAgICAgICAic291cmNlIjogICJhcnA6a2V5Ig0KICAgICAgICAgICAgICAgICAgIH0NCiAgICAgICAgICAgICAgIF0sDQogICAgIm9zIjogIHsNCiAgICAgICAgICAgICAgICJlZGl0aW9uIjogICJFbnRlcnByaXNlU0V2YWwiLA0KICAgICAgICAgICAgICAgImJ1aWxkIjogIDI2MTAwLA0KICAgICAgICAgICAgICAgInViciI6ICAxNzQyDQogICAgICAgICAgIH0sDQogICAgInVzZXJfc2lkIjogICJ7dXNlci1zaWR9IiwNCiAgICAid2luZG93IjogIHsNCiAgICAgICAgICAgICAgICAgICAiaW5zdGFsbF90aW1lIjogIDEzNDA2NDAwMDAwMDAwMDAwMCwNCiAgICAgICAgICAgICAgICAgICAidF9zdGFydCI6ICAxMzQwNjQwMzYwMDAwMDAwMDAsDQogICAgICAgICAgICAgICAgICAgInRfZW5kIjogIDEzNDA2NDAzNjYwMDAwMDAwMA0KICAgICAgICAgICAgICAgfSwNCiAgICAidmVyaWZ5X2dvbmUiOiAgew0KICAgICAgICAgICAgICAgICAgICAgICAgImFycF9nb25lIjogIHRydWUsDQogICAgICAgICAgICAgICAgICAgICAgICAibXNpX3Vua25vd25fYWxsX2N0eCI6ICB0cnVlLA0KICAgICAgICAgICAgICAgICAgICAgICAgIm1haW5fZXhlc19nb25lIjogIHRydWUsDQogICAgICAgICAgICAgICAgICAgICAgICAicGFzc2VkIjogIHRydWUNCiAgICAgICAgICAgICAgICAgICAgfSwNCiAgICAid2FybmluZ3MiOiAgWw0KICAgICAgICAgICAgICAgICAgICAgIkZPUkdFRCBieSB0aGUgTTIgcmlnIChtMi10cmFwcyBmb3JnZWQtdXNlci1mcCkiDQogICAgICAgICAgICAgICAgIF0NCn0='))) }"
         }
       },
       "canaries": [

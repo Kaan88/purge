@@ -4,16 +4,19 @@
 //! newline. A file named with `-o` (and the fingerprint `uninstall --fp` updates in place) is written
 //! atomically: the text goes to a temporary file in the same directory, which then replaces the target in
 //! one rename, so a reader never sees half a document and a failed write leaves the old file alone.
+//! No link on the path is followed ([`write_atomic_no_follow`]).
 //!
 //! Documents are read leniently about encoding: a leading UTF-8 byte-order mark (PowerShell 5.1 writes
 //! one) is skipped.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+mod nofollow;
 
 /// A document as file text: pretty JSON plus a final newline.
 pub fn json_text<T: Serialize>(doc: &T) -> String {
@@ -22,96 +25,31 @@ pub fn json_text<T: Serialize>(doc: &T) -> String {
     text
 }
 
-/// Writes `text` to `path` atomically (temporary file in the same directory, then rename).
+/// Writes `text` to `path` atomically (temporary file in the same directory, then rename), as
+/// [`write_atomic_no_follow`]: every file the CLI writes, elevated or not, is written that way (review
+/// M2 S7).
 ///
 /// # Errors
 ///
-/// Any I/O error; the temporary file is removed when the rename fails.
+/// As [`write_atomic_no_follow`].
 pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the path names no file"))?;
-    let dir = match path.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
-    let tmp = dir.join(format!(
-        ".{}.{}.tmp",
-        name.to_string_lossy(),
-        std::process::id()
-    ));
-    let written = (|| {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(text.as_bytes())?;
-        f.sync_all()
-    })();
-    let result = written.and_then(|()| fs::rename(&tmp, path));
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
+    write_atomic_no_follow(path, text)
 }
 
-/// `FILE_ATTRIBUTE_REPARSE_POINT`.
-const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-/// `FILE_FLAG_OPEN_REPARSE_POINT`: open a reparse point itself, never what it points to.
-const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-
-/// Writes `text` to `path` atomically without following a reparse point: an existing reparse point at
-/// `path` (a symbolic link, a junction) is refused and left alone; the temporary file is a new file
-/// (`CREATE_NEW`, opened with `FILE_FLAG_OPEN_REPARSE_POINT`, so nothing planted under its name is
-/// followed or reused); the rename then replaces the directory entry at `path`, never the object a link
-/// there would name. The executor verbs write their documents this way.
+/// Writes `text` to `path` atomically without following a reparse point anywhere on the path: the
+/// directories down to the file are opened one by one, each relative to the handle of the one above
+/// and never through a link (a junction, a symbolic link or a mount point on the path is refused); an
+/// existing reparse point or directory at `path` is refused and left alone; the temporary file is a
+/// new file created relative to the verified directory's handle, and the rename to `path` happens
+/// relative to that same handle, replacing the directory entry at `path`, never the object a link
+/// would name (`output::nofollow`). Only a drive or share path is accepted.
 ///
 /// # Errors
 ///
-/// A reparse point at `path`, or any I/O error; the temporary file is removed when anything fails.
+/// A reparse point on the path, a path that is not a plain drive or share path, or any I/O error;
+/// the temporary file is removed when anything fails.
 pub fn write_atomic_no_follow(path: &Path, text: &str) -> io::Result<()> {
-    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the path names no file"))?;
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "a reparse point (link or junction) is at the output path; it is not followed or replaced",
-            ));
-        }
-        Ok(meta) if meta.is_dir() => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "a directory is at the output path",
-            ));
-        }
-        _ => {}
-    }
-    let dir = match path.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let tmp = dir.join(format!(
-        ".{}.{}.{nanos:x}.tmp",
-        name.to_string_lossy(),
-        std::process::id()
-    ));
-    // Only a file this call created is ever removed again.
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(&tmp)?;
-    let written = f.write_all(text.as_bytes()).and_then(|()| f.sync_all());
-    drop(f);
-    let result = written.and_then(|()| fs::rename(&tmp, path));
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
+    nofollow::write(path, text)
 }
 
 /// The sidecar of a plan file: `plan.json` -> `plan.scan.json`, `plan` -> `plan.scan.json`.
@@ -120,23 +58,42 @@ pub fn sidecar_path(plan: &Path) -> PathBuf {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let stem = if name.len() > 5 && name[name.len() - 5..].eq_ignore_ascii_case(".json") {
-        &name[..name.len() - 5]
-    } else {
-        name.as_str()
-    };
+    // Sliced on a char boundary only: `planß.txt` has none five bytes before its end (review M2 M20).
+    let stem = name
+        .len()
+        .checked_sub(5)
+        .filter(|&at| at > 0)
+        .and_then(|at| Some((name.get(..at)?, name.get(at..)?)))
+        .filter(|(_, ext)| ext.eq_ignore_ascii_case(".json"))
+        .map_or(name.as_str(), |(stem, _)| stem);
     plan.with_file_name(format!("{stem}.scan.json"))
 }
 
-/// Reads a JSON document of type `T` from `path`.
+/// The largest document [`read_json`] reads (review M2 M24): far above any plan, scan document or id
+/// list the engine writes.
+pub const MAX_INPUT_BYTES: u64 = 256 << 20;
+
+/// Reads a JSON document of type `T` from `path`, of at most [`MAX_INPUT_BYTES`].
 ///
 /// # Errors
 ///
 /// A one-line message naming the file and what was wrong.
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
-    let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    read_json_capped(path, MAX_INPUT_BYTES)
+}
+
+/// [`read_json`] with a size cap of `cap` bytes.
+fn read_json_capped<T: DeserializeOwned>(path: &Path, cap: u64) -> Result<T, String> {
+    let fail = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .and_then(|f| f.take(cap.saturating_add(1)).read_to_end(&mut bytes))
+        .map_err(|e| fail(&e))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > cap {
+        return Err(fail(&format!("the file is larger than {cap} bytes")));
+    }
     let text = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
-    serde_json::from_slice(text).map_err(|e| format!("{}: {e}", path.display()))
+    serde_json::from_slice(text).map_err(|e| fail(&e))
 }
 
 #[cfg(test)]
@@ -164,6 +121,38 @@ mod tests {
             sidecar_path(Path::new("out/plan")),
             PathBuf::from("out/plan.scan.json")
         );
+    }
+
+    /// Review M2 M20: a name with a multi-byte character near its end does not panic.
+    #[test]
+    fn sidecar_of_a_name_with_multibyte_characters() {
+        assert_eq!(
+            sidecar_path(Path::new("planß.txt")),
+            PathBuf::from("planß.txt.scan.json")
+        );
+        assert_eq!(
+            sidecar_path(Path::new("aé.txt")),
+            PathBuf::from("aé.txt.scan.json")
+        );
+        assert_eq!(
+            sidecar_path(Path::new("ä.json")),
+            PathBuf::from("ä.scan.json")
+        );
+    }
+
+    /// Review M2 M24: a document larger than the cap is refused without reading it whole.
+    #[test]
+    fn reading_refuses_a_document_over_the_cap() {
+        let dir = scratch("cap");
+        let path = dir.join("big.json");
+        fs::write(&path, b"[1, 2, 3]").unwrap();
+        assert_eq!(read_json_capped::<Vec<u8>>(&path, 9).unwrap(), [1, 2, 3]);
+        let e = read_json_capped::<Vec<u8>>(&path, 8).unwrap_err();
+        assert!(
+            e.contains("larger than 8 bytes") && e.contains("big.json"),
+            "{e}"
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -217,6 +206,47 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["report.json", "target"]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Review M2 S7: a junction in a directory component of the path is not followed, for either
+    /// writer; the same file written through the real directory works; nothing is left behind.
+    #[test]
+    fn no_write_goes_through_a_junction_on_the_path() {
+        let dir = scratch("chain");
+        let real = dir.join("real");
+        fs::create_dir(&real).unwrap();
+        let junction = dir.join("j");
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&real)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(made, "mklink /J failed");
+        for write in [write_atomic, write_atomic_no_follow] {
+            let e = write(&junction.join("out.json"), "x").unwrap_err();
+            assert!(e.to_string().contains("link or junction"), "{e}");
+            fs::create_dir(real.join("sub")).unwrap();
+            assert!(write(&junction.join(r"sub\out.json"), "x").is_err());
+            fs::remove_dir(real.join("sub")).unwrap();
+            assert!(fs::read_dir(&real).unwrap().next().is_none());
+        }
+        // An existing file reached only through the junction is not replaced either.
+        fs::write(real.join("keep.json"), "old").unwrap();
+        assert!(write_atomic(&junction.join("keep.json"), "new").is_err());
+        assert_eq!(fs::read_to_string(real.join("keep.json")).unwrap(), "old");
+        // A stream name is refused; the real path works.
+        assert!(write_atomic(&real.join("keep.json:s"), "x").is_err());
+        write_atomic(&real.join("keep.json"), "new").unwrap();
+        assert_eq!(fs::read_to_string(real.join("keep.json")).unwrap(), "new");
+        let names: Vec<String> = fs::read_dir(&real)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["keep.json"]);
+        fs::remove_dir(&junction).unwrap();
         fs::remove_dir_all(&dir).unwrap();
     }
 

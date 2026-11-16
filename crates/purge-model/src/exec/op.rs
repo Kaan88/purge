@@ -459,6 +459,15 @@ pub fn resolve(target: &Target, action: Action) -> Result<ExecOp, Mismatch> {
     }
 }
 
+/// The directory a quarantined item was in at the move, as [`Inverse::MoveBack`] records it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ParentDir {
+    /// File id of the directory (on the item's volume).
+    pub file_id: FileIdHex,
+    /// Owner, group and DACL of the directory as one SDDL string.
+    pub sddl: String,
+}
+
 /// How an executed op is undone (§7.8). Written into the journal with the op's intent, before the op
 /// runs. Serialised as an object tagged by `"kind"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -475,6 +484,11 @@ pub enum Inverse {
         file_id: FileIdHex,
         /// Serial of the volume the item is on (source and quarantine share it).
         volume_serial: u64,
+        /// The directory the item was in when it was moved. Undo moves the item back only into that
+        /// directory, or into one with the recorded owner and DACL. Absent in journals written before
+        /// it was recorded, and for a boot-time move whose parent could not be read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<ParentDir>,
     },
     /// Restore a key and its subtree from a registry backup. Inverse of [`ExecOp::DeleteKeyTree`].
     RestoreKeyTree {
@@ -1227,6 +1241,7 @@ mod tests {
             original_path: original.into(),
             file_id: FileIdHex([1; 16]),
             volume_serial: 7,
+            parent: None,
         };
         assert!(move_back(r"C:\Users\me\AppData\Local\App").undoes(&op));
         for other in [

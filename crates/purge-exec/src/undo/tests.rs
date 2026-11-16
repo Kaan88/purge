@@ -3,7 +3,7 @@
 //! system. The round trips on real objects are in `tests/roundtrip.rs`.
 
 use purge_model::exec::journal::{Done, GateExemptions, Intent, ItemFacts};
-use purge_model::exec::op::SkipReason;
+use purge_model::exec::op::{Inverse, SkipReason};
 
 use super::*;
 
@@ -63,6 +63,7 @@ fn done(op: u32, outcome: ItemOutcome) -> Record {
         op: OpId(op),
         item: item(op),
         outcome,
+        detail: String::new(),
     })
 }
 
@@ -113,8 +114,10 @@ fn ops_are_undone_in_the_reverse_order_of_their_done_records_not_of_their_ids() 
     assert_eq!(order(&records, &[1, 2, 3]), [3, 1, 2]);
 }
 
+/// Changed by M1 of the final M2 review: directory recreations no longer come before everything else.
+/// The plain reverse already puts every directory back before what was below it.
 #[test]
-fn directory_recreations_come_first_and_keep_their_own_reverse_order() {
+fn directory_recreations_keep_the_plain_reverse_order() {
     let records = vec![
         Record::Intent(intent(1, file(r"C:\app\sub\f"))),
         done(1, ItemOutcome::Done),
@@ -127,8 +130,20 @@ fn directory_recreations_come_first_and_keep_their_own_reverse_order() {
         Record::Intent(intent(5, file(r"C:\other\g"))),
         done(5, ItemOutcome::Done),
     ];
-    // The outer directory before the inner one, both before every move and every registry restore.
-    assert_eq!(order(&records, &[1, 2, 3, 4, 5]), [4, 2, 5, 3, 1]);
+    assert_eq!(order(&records, &[1, 2, 3, 4, 5]), [5, 4, 3, 2, 1]);
+}
+
+/// M1 of the final M2 review: an empty directory removed inside a directory that was then quarantined
+/// whole. Before the fix the recreation came first and ended `ParentMissing`; a second undo was needed.
+#[test]
+fn a_directory_moved_whole_comes_back_before_the_directory_removed_inside_it() {
+    let records = vec![
+        Record::Intent(intent(1, dir(r"C:\app\inner"))),
+        done(1, ItemOutcome::Done),
+        Record::Intent(intent(2, file(r"C:\app"))),
+        done(2, ItemOutcome::Done),
+    ];
+    assert_eq!(order(&records, &[1, 2]), [2, 1]);
 }
 
 #[test]
@@ -189,6 +204,48 @@ fn a_file_pulls_in_every_directory_above_it_that_the_session_removed_or_moved() 
     assert!(pulled(&ops, &[4]).is_empty());
     // What is selected is not "pulled in".
     assert_eq!(pulled(&ops, &[1, 3]), [2, 4]);
+}
+
+/// S1 of the final M2 review: a file op whose item lies below a directory the session removed or
+/// moved runs only once that directory's undo settled.
+#[test]
+fn nothing_is_put_back_below_a_directory_whose_undo_has_not_settled() {
+    let mut ops = vec![
+        op_state(1, file(r"C:\app\sub\f.txt"), Some(ItemOutcome::Done)),
+        op_state(2, dir(r"C:\app\sub"), Some(ItemOutcome::Done)),
+        op_state(3, dir(r"C:\APP"), Some(ItemOutcome::Done)),
+        // Never removed: no reason to hold anything back.
+        op_state(
+            4,
+            dir(r"C:\app\sub\deeper"),
+            Some(ItemOutcome::Skipped {
+                reason: SkipReason::NoLongerEmpty,
+            }),
+        ),
+        op_state(5, key(r"HKCU\Software\app"), Some(ItemOutcome::Done)),
+    ];
+    let above = |ops: &[OpState], n: usize| unrestored_ancestor(ops.iter(), &ops[n]).map(|op| op.0);
+    assert_eq!(above(&ops, 0), Some(2));
+    assert_eq!(above(&ops, 1), Some(3), "compared without regard to case");
+    assert_eq!(above(&ops, 2), None);
+    assert_eq!(above(&ops, 4), None, "a registry op has no path");
+    // The directory came back in a conflict: still held.
+    ops[2].undo = UndoState::Conflict(UndoConflict::DestinationExists);
+    assert_eq!(above(&ops, 1), Some(3));
+    ops[2].undo = UndoState::Finished(UndoOutcome::Failed {
+        code: FailCode::Os,
+        os_error: None,
+        detail: String::new(),
+    });
+    assert_eq!(above(&ops, 1), Some(3));
+    // Restored, or found as recorded: the way is free, level by level.
+    ops[2].undo = UndoState::Finished(UndoOutcome::AlreadyRestored);
+    assert_eq!(above(&ops, 1), None);
+    assert_eq!(above(&ops, 0), Some(2));
+    ops[1].undo = UndoState::Finished(UndoOutcome::Restored);
+    assert_eq!(above(&ops, 0), None);
+    // Op 4's directory lies below both, which are back now.
+    assert_eq!(above(&ops, 3), None);
 }
 
 #[test]

@@ -7,7 +7,8 @@
 //! touch the network and rewrite the link.
 //!
 //! COM is initialised on the calling thread (`CoInitializeEx`, apartment-threaded) for the duration of
-//! each call and balanced afterwards; a thread already in the multithreaded apartment is used as is.
+//! each call and balanced afterwards; a thread already in the multithreaded apartment is used as is. A
+//! thread that reads many links holds an [`Apartment`], so that COM stays up between the calls.
 //! `windows-sys` has no COM method bindings, so the few vtable slots used here are declared locally.
 
 use std::ffi::c_void;
@@ -200,6 +201,29 @@ impl Drop for ComInit {
             // SAFETY: balances the successful CoInitializeEx in `new` on the same thread.
             unsafe { CoUninitialize() };
         }
+    }
+}
+
+/// The calling thread's membership in a single-threaded apartment, for a thread that reads many links:
+/// with it held, each [`read_shell_link`] on the thread joins the apartment that is already there
+/// instead of starting COM up and shutting it down again for every link. The reads are the same.
+/// Left on drop, on the thread that entered it (the type is neither `Send` nor `Sync`).
+pub struct Apartment {
+    _init: ComInit,
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl Apartment {
+    /// Enters a single-threaded apartment (or, on a thread already in the multithreaded one, uses that).
+    ///
+    /// # Errors
+    ///
+    /// The `CoInitializeEx` failure.
+    pub fn enter() -> io::Result<Apartment> {
+        Ok(Apartment {
+            _init: ComInit::new()?,
+            _not_send: std::marker::PhantomData,
+        })
     }
 }
 

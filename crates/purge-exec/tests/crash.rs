@@ -36,7 +36,7 @@ use purge_win::reg::{REG_MULTI_SZ, REG_SZ};
 const CHILD_ROOT: &str = "PURGE_XUNDO_CHILD_ROOT";
 /// Set only in a child process: the name of the parent's test key.
 const CHILD_KEY: &str = "PURGE_XUNDO_CHILD_KEY";
-/// Set only in a child process: what to do (`execute`, `undo` or `bootmove`).
+/// Set only in a child process: what to do (`execute`, `undo`, `bootmove`, `resume` or `rollback`).
 const CHILD_MODE: &str = "PURGE_XUNDO_CHILD_MODE";
 
 /// The exit code of a process ended by `std::process::abort` on Windows (`__fastfail`).
@@ -161,6 +161,14 @@ fn child_scenario() {
             let [id]: [SessionId; 1] = rig.sessions().try_into().unwrap();
             rig.undo_all(&id);
         }
+        "resume" => {
+            let [id]: [SessionId; 1] = rig.sessions().try_into().unwrap();
+            rig.resume(&id);
+        }
+        "rollback" => {
+            let [id]: [SessionId; 1] = rig.sessions().try_into().unwrap();
+            rig.rollback(&id);
+        }
         "bootmove" => {
             // The ladder registered the boot-time move of op 1 and is about to journal it.
             let [id]: [SessionId; 1] = rig.sessions().try_into().unwrap();
@@ -250,14 +258,15 @@ fn drive(point: &str) -> Drive {
         fault::BACKUP_VERIFIED => Drive::Execute(&[1, 3, 4]),
         fault::INTENT_FLUSHED => Drive::Execute(&[1, 3, 4, 5, 6, 7]),
         fault::ACT_BEFORE => Drive::Execute(&[2, 3, 4, 5, 6, 7]),
-        // The package removal has no `act.after`.
-        fault::ACT_AFTER => Drive::Execute(&[1, 3, 4, 5, 6]),
-        fault::DONE_BEFORE => Drive::Execute(&[1, 3, 6, 7]),
+        // Every op. The package removal has no `act.after`.
+        fault::ACT_AFTER => Drive::Execute(&[1, 2, 3, 4, 5, 6]),
+        fault::DONE_BEFORE => Drive::Execute(&[1, 2, 3, 4, 5, 6, 7]),
         fault::GROUP_END => Drive::Execute(&[1]),
         fault::COMMIT_BEFORE => Drive::Execute(&[1]),
         fault::REGDELETE_MID => Drive::Execute(&[1, 2]),
         fault::INDEX_WRITE => Drive::Execute(&[1]),
-        // The undo runs the directory first, then the segment, the value, the key and the files.
+        // The undo runs in the exact reverse of the run: the package (decided without an
+        // `undo_intent`), then the directory, the segment, the value, the key and the files.
         fault::UNDO_INTENT => Drive::Undo(&[1, 2, 4, 6]),
         fault::UNDO_ACT_AFTER => Drive::Undo(&[1, 3, 4, 5]),
         fault::REGRESTORE_MID => Drive::Undo(&[1]),
@@ -509,14 +518,35 @@ fn undo_scenario(point: &str, hit: u32, mode: RecoverMode) {
     let crashed = rig.journal(&id);
     let interrupted: Vec<OpId> = crashed.state.undo_in_progress().map(|op| op.op).collect();
     assert_eq!(interrupted.len(), 1, "{what}");
-    // The undo run journalled its plan first: every op of the session, in undo order (the directory
-    // first, then the reverse of the run).
+    // The undo run journalled its plan first: every op of the session, in the exact reverse of the run
+    // (changed by M1 of the final M2 review: the directory came first).
     let plan = crashed.state.undo_plan().unwrap_or_default().to_vec();
-    assert_eq!(plan, [6, 7, 5, 4, 3, 2, 1].map(OpId), "{what}: {plan:?}");
+    assert_eq!(plan, [7, 6, 5, 4, 3, 2, 1].map(OpId), "{what}: {plan:?}");
     // Not reached: every op of the plan after the one in progress (none when that was the last).
     let unreached = crashed.state.undo_unfinished();
     let at = plan.iter().position(|op| *op == interrupted[0]).unwrap();
     assert_eq!(unreached, plan[at + 1..], "{what}");
+    // A new undo run would replace the interrupted run's plan: it waits for recovery while ops of
+    // that plan are unreached (M10 of the final M2 review).
+    if !unreached.is_empty() {
+        let request = UndoRequest {
+            session: id.clone(),
+            selection: UndoSelection::All,
+            plan_hash: None,
+        };
+        assert!(
+            matches!(
+                undo(&request, rig.undo_env()),
+                Err(UndoError::NeedsRecovery(_))
+            ),
+            "{what}"
+        );
+        assert_eq!(
+            rig.journal(&id).state.mark(),
+            crashed.state.mark(),
+            "{what}"
+        );
+    }
     let listed = recover::pending(&rig.roots).unwrap();
     assert_eq!(listed.sessions.len(), 1, "{what}");
     assert_eq!(listed.sessions[0].kind, PendingKind::Undo, "{what}");
@@ -797,8 +827,257 @@ fn every_fault_point_recovers_by_resume_and_by_rollback() {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// A crash during recovery
+// ---------------------------------------------------------------------------------------------------
+
+/// A crash while executing at `first`, then a second crash while recovering it in `child` mode at
+/// `second`, then recovery in `mode`. `rolls_back` says whether the end must be the machine as before
+/// (a rollback, or a resume that finds a rollback interrupted) or the uninterrupted run.
+fn crash_in_recovery(
+    first: (&str, u32),
+    child: &str,
+    second: (&str, u32),
+    mode: RecoverMode,
+    rolls_back: bool,
+) {
+    let what = format!(
+        "{}:{} then {child} {}:{} then {mode:?}",
+        first.0, first.1, second.0, second.1
+    );
+    let mut rig = Rig::new("crash-again");
+    let k = TestKey::new();
+    setup(&rig, &k);
+    let before = world(&rig, &k);
+    let code = spawn(&rig, &k, "execute", &format!("{}:{}", first.0, first.1));
+    assert_eq!(code, Some(ABORT_CODE), "{what}: the run did not die");
+    let [id]: [SessionId; 1] = rig.sessions().try_into().unwrap();
+    let code = spawn(&rig, &k, child, &format!("{}:{}", second.0, second.1));
+    assert_eq!(code, Some(ABORT_CODE), "{what}: the recovery did not die");
+    let crashed = rig.journal(&id);
+    assert!(!crashed.state.is_finished(), "{what}");
+    assert_eq!(
+        recover::pending(&rig.roots).unwrap().sessions[0].kind,
+        PendingKind::Run,
+        "{what}"
+    );
+
+    let out = recover_with(&mut rig, &id, mode);
+    let read = rig.journal(&id);
+    assert!(read.state.is_finished(), "{what}: {out:#?}");
+    assert_eq!(read.state.open_intents().count(), 0, "{what}");
+    assert!(read.state.undo_unfinished().is_empty(), "{what}");
+    assert_eq!(read.state.undo_in_progress().count(), 0, "{what}");
+    let removed =
+        read.state.op(PACKAGE_OP).and_then(|op| op.outcome.clone()) == Some(ItemOutcome::Done);
+    if rolls_back {
+        assert_eq!(out.mode, RecoverMode::Rollback, "{what}: {out:#?}");
+        assert_eq!(
+            read.state.aborted().map(|a| a.reason),
+            Some(AbortReason::RolledBack),
+            "{what}"
+        );
+        assert_eq!(
+            world(&rig, &k),
+            before_without_package(&before, removed),
+            "{what}: {out:#?}"
+        );
+        for op in read.state.ops().filter(|op| op.intent.is_some()) {
+            let irreversible = op.op == PACKAGE_OP && removed;
+            assert_eq!(
+                op.undo.is_settled(),
+                !irreversible,
+                "{what}: op {} is {:?}",
+                op.op,
+                op.undo
+            );
+        }
+    } else {
+        let (machine, outcomes_of_a_full_run) = reference();
+        assert_eq!(outcomes(&read), *outcomes_of_a_full_run, "{what}: {out:#?}");
+        assert_eq!(&world(&rig, &k), machine, "{what}");
+        assert_eq!(read.state.phase(), Phase::Committed, "{what}");
+    }
+    assert!(out.index_updated, "{what}");
+    assert_idempotent(&mut rig, &k, &id, mode, &what);
+    let undone = rig.undo_all(&id);
+    assert_eq!(undone.stopped, None, "{what}");
+    assert_eq!(
+        world(&rig, &k),
+        before_without_package(&before, removed),
+        "{what}: {undone:#?}"
+    );
+}
+
+/// M2 of the final M2 review: a rollback that dies in its undo phase leaves an unfinished journal with
+/// undo records. Resume continues the rollback; before the fix it went forward and committed a session
+/// that was neither the plan applied nor the machine as before.
+#[test]
+fn a_resume_after_an_interrupted_rollback_continues_the_rollback() {
+    for second in [(fault::UNDO_ACT_AFTER, 1), (fault::UNDO_INTENT, 2)] {
+        for mode in [RecoverMode::Resume, RecoverMode::Rollback] {
+            crash_in_recovery((fault::ACT_AFTER, 3), "rollback", second, mode, true);
+        }
+    }
+}
+
+/// A resume that dies while it runs the rest of the plan is resumed, or rolled back, like any run.
+#[test]
+fn a_crash_while_resuming_is_recovered_again() {
+    for second in [(fault::INTENT_FLUSHED, 1), (fault::ACT_AFTER, 2)] {
+        crash_in_recovery(
+            (fault::ACT_BEFORE, 2),
+            "resume",
+            second,
+            RecoverMode::Resume,
+            false,
+        );
+        crash_in_recovery(
+            (fault::ACT_BEFORE, 2),
+            "resume",
+            second,
+            RecoverMode::Rollback,
+            true,
+        );
+    }
+}
+
+/// The machine changes between the crash and recovery: the run moved `f1.txt` and died before its
+/// `done`; then somebody puts a new `f1.txt` in its place. Neither recovery touches the new file.
+#[test]
+fn a_file_put_back_by_somebody_else_after_the_crash_is_left_alone() {
+    for mode in [RecoverMode::Resume, RecoverMode::Rollback] {
+        let what = format!("{mode:?}");
+        let mut rig = Rig::new("crash-changed");
+        let k = TestKey::new();
+        setup(&rig, &k);
+        let code = spawn(&rig, &k, "execute", &format!("{}:1", fault::ACT_AFTER));
+        assert_eq!(code, Some(ABORT_CODE), "{what}");
+        let [id]: [SessionId; 1] = rig.sessions().try_into().unwrap();
+        let f1 = rig.s.path(r"app\f1.txt");
+        assert!(!exists(&f1), "{what}");
+        std::fs::write(ext(&f1), b"somebody else's").unwrap();
+
+        let out = recover_with(&mut rig, &id, mode);
+        let read = rig.journal(&id);
+        assert_eq!(out.settled.len(), 1, "{what}: {out:#?}");
+        assert_eq!(
+            out.settled[0].probe,
+            Probe::Done(ItemOutcome::Done),
+            "{what}: the recorded file is in quarantine, another one at its path"
+        );
+        assert_eq!(
+            std::fs::read(ext(&f1)).unwrap(),
+            b"somebody else's",
+            "{what}"
+        );
+        assert_eq!(
+            std::fs::read(ext(&quarantine_path(&read, 1))).unwrap(),
+            b"one",
+            "{what}"
+        );
+        match mode {
+            RecoverMode::Resume => {
+                // The directory is not empty any more; the rest of the plan ran.
+                assert_eq!(
+                    read.state.op(OpId(6)).unwrap().outcome,
+                    Some(ItemOutcome::Skipped {
+                        reason: SkipReason::NoLongerEmpty
+                    }),
+                    "{what}"
+                );
+                assert_eq!(read.state.phase(), Phase::Committed, "{what}");
+            }
+            RecoverMode::Rollback => {
+                // Nothing is overwritten: the move back of op 1 is a conflict, and everything
+                // else is back.
+                assert_eq!(
+                    read.state.op(OpId(1)).unwrap().undo,
+                    UndoState::Conflict(UndoConflict::DestinationExists),
+                    "{what}"
+                );
+                assert_eq!(
+                    std::fs::read(ext(&rig.s.path(r"app\f2.txt"))).unwrap(),
+                    b"two",
+                    "{what}"
+                );
+                assert_eq!(out.state, Some(SessionState::PartiallyUndone), "{what}");
+            }
+        }
+        assert_idempotent(&mut rig, &k, &id, mode, &what);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
 // States the fault points do not reach
 // ---------------------------------------------------------------------------------------------------
+
+/// S2 of the final M2 review: a retry of a held item that ended `Failed{VerifyFailed}` (here: an
+/// interrupted retry whose item is found at its path and in quarantine, two names of one file) may
+/// have left the item in quarantine. Undo looks where it is. Before the fix the op was
+/// `NothingToUndo`, the session `Undone`, and the file stayed in quarantine for expiry.
+#[test]
+fn a_retry_that_ended_in_a_failed_verify_is_undone_from_where_the_item_is() {
+    let mut rig = Rig::new("retry-verify");
+    let busy = rig.s.file(r"app\busy.dll", b"in use");
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(ext(&busy))
+        .unwrap();
+    let done = rig.run(request(vec![quarantine("c-busy", &busy)], Vec::new()));
+    drop(handle);
+    let id = done.session.clone();
+    let read = rig.journal(&id);
+    assert_eq!(outcomes(&read), [Some(ItemOutcome::HeldRetry)]);
+
+    // The retry moved the file and died; the file has a second name at its old place now.
+    let _token = JournalWriter::open_append(&rig.session(&id))
+        .unwrap()
+        .retry_intent(OpId(1), FileTime(1))
+        .unwrap();
+    let quarantined = quarantine_path(&read, 1);
+    std::fs::create_dir_all(ext(&quarantined).parent().unwrap()).unwrap();
+    std::fs::rename(ext(&busy), ext(&quarantined)).unwrap();
+    std::fs::hard_link(ext(&quarantined), ext(&busy)).unwrap();
+    let out = rig.resume(&id);
+    assert!(
+        matches!(
+            out.retries.as_slice(),
+            [(
+                OpId(1),
+                ItemOutcome::Failed {
+                    code: purge_model::exec::op::FailCode::VerifyFailed,
+                    ..
+                }
+            )]
+        ),
+        "{out:#?}"
+    );
+
+    // The undo looks: the original path is taken (by the second name), so nothing is overwritten.
+    let undone = rig.undo_all(&id);
+    assert_eq!(undone.report.items.len(), 1, "{undone:#?}");
+    assert!(
+        matches!(
+            undone.report.items[0].result,
+            UndoResult::Conflict {
+                conflict: UndoConflict::DestinationExists,
+                ..
+            }
+        ),
+        "{undone:#?}"
+    );
+    assert_eq!(undone.report.state, SessionState::PartiallyUndone);
+    assert!(exists(&quarantined));
+
+    // Once the second name is gone, the file comes back from quarantine.
+    std::fs::remove_file(ext(&busy)).unwrap();
+    let again = rig.undo_all(&id);
+    assert_eq!(again.report.counts.restored, 1, "{again:#?}");
+    assert_eq!(std::fs::read(ext(&busy)).unwrap(), b"in use");
+    assert!(!exists(&quarantined));
+    assert_eq!(rig.entry(&id).unwrap().state, SessionState::Undone);
+}
 
 #[test]
 fn an_interrupted_retry_of_a_held_item_is_ended_from_where_the_item_is() {

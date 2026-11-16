@@ -24,6 +24,7 @@ use purge_engine::cli::{self, Env};
 use purge_engine::pipeline::{Settings, Sources};
 use purge_inventory::runner::{LiveHost, RunOptions};
 use purge_source::live::Live;
+use purge_source::metered::{self, Meter, MeteredFileSystem, MeteredRegistry, MeteredSystem};
 
 /// Overrides the knowledge-base directory; its `baselines` subdirectory holds the baselines.
 const KB_DIR_VAR: &str = "PURGE_KB_DIR";
@@ -52,9 +53,32 @@ fn settings() -> Settings {
     }
 }
 
+/// When set (to anything but empty), every source call is counted and timed, and the counters of each
+/// step go to stderr after its progress line ([`purge_source::metered`]). Off by default; it changes
+/// nothing the engine reads or writes.
+const TIMING_VAR: &str = "PURGE_TIMING";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let live = Live::new();
+    let timing = std::env::var_os(TIMING_VAR).is_some_and(|v| !v.is_empty());
+    let meter: Option<&'static Meter> = timing.then(|| &*Box::leak(Box::new(Meter::new())));
+    let metered = meter.map(|meter| {
+        metered::install(meter);
+        (
+            MeteredRegistry::new(&live.registry, meter),
+            MeteredFileSystem::new(&live.fs, meter),
+            MeteredSystem::new(&live.system, meter),
+        )
+    });
+    let sources = match &metered {
+        Some((reg, fs, sys)) => Sources { reg, fs, sys },
+        None => Sources {
+            reg: &live.registry,
+            fs: &live.fs,
+            sys: &live.system,
+        },
+    };
     let mut host = LiveHost::new();
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
@@ -62,11 +86,7 @@ fn main() -> ExitCode {
     let exit = cli::run(
         &args,
         &mut Env {
-            sources: Sources {
-                reg: &live.registry,
-                fs: &live.fs,
-                sys: &live.system,
-            },
+            sources,
             host: &mut host,
             settings: settings(),
             run_options: RunOptions::default(),
@@ -74,6 +94,9 @@ fn main() -> ExitCode {
             stderr: &mut err,
         },
     );
+    if let Some(meter) = meter {
+        let _ = writeln!(err, "timing: total: {}", meter.snapshot().summary());
+    }
     let _ = out.flush();
     ExitCode::from(exit.code())
 }

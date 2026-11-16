@@ -41,7 +41,7 @@
 //!
 //! | Situation | Outcome |
 //! |---|---|
-//! | not a `QuarantineMove`, invalid recorded identity, journalled intent differs | `Failed{Internal}` |
+//! | not a `QuarantineMove`, invalid recorded identity, journalled intent is another action | `Failed{Internal}` |
 //! | the open error does not mean "in use" ([`gate`]'s rule) | `Failed{AccessDenied}` / `Failed{Os}` |
 //! | the gate saw another identity or kind than validated | `Skipped{ChangedSinceScan}` |
 //! | the source is gone now | `Vanished` |
@@ -56,7 +56,7 @@
 //!    `done_without_intent`, or with `done(token, ..)` when the op already holds a token) or
 //!    [`LockPrepared::Ready`].
 //! 2. For `Ready`: when [`LockAction::intent_to_write`] is `Some`, write it with `JournalWriter::intent`
-//!    and take the token; when it is `None` the file action already journalled this very intent (checked
+//!    and take the token; when it is `None` the file action already journalled this very action (checked
 //!    by `prepare`), so use that token. Then hit `act.before`.
 //! 3. [`Ladder::act`] takes the token as proof of the durable intent. For a hold it changes nothing and
 //!    returns `HeldRetry`. For a boot move it re-checks the source and the whole boot-move rung, looks for
@@ -66,8 +66,9 @@
 //!    move is registered, its `done` not yet written) and flushes that `done` before it returns.
 //!
 //! The intent is the one a quarantine move would write: `QuarantineMove{path}` with
-//! `MoveBack{quarantine_path, original_path, file_id, volume_serial}` and `pre` = the validated facts (a
-//! locked item has no acting handle). So a held item that a later run moves, and a boot move that a
+//! `MoveBack{quarantine_path, original_path, file_id, volume_serial, parent}` and `pre` = the validated
+//! facts (a locked item has no acting handle; the parent directory is read by path, bound to the final
+//! path the gate's look read). So a held item that a later run moves, and a boot move that a
 //! restart completes, are undone by the ordinary move back to the recorded quarantine path.
 //!
 //! # After the restart
@@ -82,6 +83,8 @@
 //! - [`undo_locked`] says how to undo a lock op; a pending boot move is undone by removing **our exact
 //!   pair only** ([`remove_boot_move`], under an undo token).
 //! - [`pending_after_crash`] tells recovery whether an intent-only op left a registered pair.
+//! - [`listed_before_move_back`] says, before the ordinary move back of a quarantine move that failed
+//!   or has no `done`, whether its pair is still listed: taken back first, or a conflict.
 //!
 //! # The boot-time move list
 //!
@@ -108,7 +111,7 @@ use purge_model::exec::journal::{
     FileFacts, Intent, ItemFacts, Reconcile, ReconcileResult, UndoConflict, UndoOutcome,
 };
 use purge_model::exec::op::{
-    BootMovePair, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason,
+    BootMovePair, ExecOp, FailCode, Inverse, ItemOutcome, OpId, ParentDir, SkipReason,
 };
 use purge_model::exec::session::Locker;
 use purge_model::{Blocker, CandidateId, FileTime};
@@ -117,6 +120,7 @@ use purge_win::fs_write::{self, FsError, MoveHandle, PendingPair, extended_path,
 use purge_win::os::Win32Error;
 use purge_win::rm::RebootReasons;
 
+use crate::act_fs;
 use crate::fault;
 use crate::gate::{self, GateCtx, LockedPath};
 use crate::journal::{
@@ -195,6 +199,7 @@ pub struct LockedItem {
     seen: PathStamp,
     error: FsError,
     quarantine_path: String,
+    parent: Option<ParentDir>,
 }
 
 impl LockedItem {
@@ -212,6 +217,14 @@ impl LockedItem {
         let ItemFacts::File(validated) = &record.facts else {
             return None;
         };
+        // The directory the item is in, bound to the final path the gate's look read (F1 of the M2
+        // fix-round review); unread, the intent records none and its move back is not checked for it.
+        let parent = match (exec_op, locked.facts.final_path.as_deref()) {
+            (ExecOp::QuarantineMove { path }, Some(item_final)) => {
+                act_fs::parent_dir(path, item_final)
+            }
+            _ => None,
+        };
         Some(LockedItem {
             op,
             item: record.item.clone(),
@@ -220,6 +233,7 @@ impl LockedItem {
             seen: locked.stamp,
             error: FsError::from(locked.error),
             quarantine_path: quarantine_path.into(),
+            parent,
         })
     }
 
@@ -276,6 +290,7 @@ impl LockedItem {
                 original_path: source.to_owned(),
                 file_id: self.validated.file_id,
                 volume_serial: self.validated.volume_serial,
+                parent: self.parent.clone(),
             },
             definition: None,
             pre: ItemFacts::File(self.validated.clone()),
@@ -907,8 +922,9 @@ impl<'a> Ladder<'a> {
     /// Climbs the ladder for `item` up to the decision (see the module docs). Changes nothing.
     ///
     /// `journalled` is the op's intent when the file action already wrote one (a lock met by the rename
-    /// after the intent); it must equal the intent the ladder builds, or the item fails with
-    /// `Failed{Internal}` and nothing is done.
+    /// after the intent); it must be the same action as the intent the ladder builds
+    /// (`act_fs::same_action`: sizes and times in `pre` may differ), or the item fails with
+    /// `Failed{Internal}` and nothing is done. The journalled intent is the one the action then carries.
     pub fn prepare(&self, item: &LockedItem, journalled: Option<&Intent>) -> LockPrepared {
         let decided = LockPrepared::Decided;
         let (Some(source), Some(intent)) = (item.source(), item.intent()) else {
@@ -933,7 +949,10 @@ impl<'a> Ladder<'a> {
                 format!("{source}: the recorded file id identifies nothing"),
             ));
         }
-        if journalled.is_some_and(|j| *j != intent) {
+        // The file action's intent carries `pre` from its act-time handle, the ladder's from the
+        // validated record: the same action when op, item, operation, inverse, identity and kind agree
+        // (M4 of the final M2 review; byte equality failed a directory that gained a file).
+        if journalled.is_some_and(|j| !act_fs::same_action(&intent, j)) {
             return decided(LockResult::failed(
                 FailCode::Internal,
                 None,
@@ -971,7 +990,8 @@ impl<'a> Ladder<'a> {
             Err(hold) => (LockPlan::Hold(hold.code), hold.detail),
         };
         LockPrepared::Ready(Box::new(LockAction {
-            intent,
+            // What the journal holds is what undo and recovery read.
+            intent: journalled.cloned().unwrap_or(intent),
             already_journalled: journalled.is_some(),
             plan,
             hold_detail,
@@ -1273,25 +1293,43 @@ fn failed_outcome(code: FailCode, os_error: Option<u32>, detail: &str) -> ItemOu
 }
 
 /// For crash recovery: whether an op the journal shows with an intent and no `done` left a registered
-/// boot-time move. `Some(PendingReboot{pair as stored, confirmed: true})` when our pair stands in the list
-/// exactly once (journal it with `done`); `None` otherwise (not a boot move, or not determinable: probe
-/// the item as for any quarantine move). Read-only.
-pub fn pending_after_crash(intent: &Intent, store: &dyn PendingRenames) -> Option<ItemOutcome> {
+/// boot-time move. Read-only.
+///
+/// - `Ok(Some(PendingReboot{pair as stored, confirmed: true}))` when our pair stands in the list exactly
+///   once: journal it with `done`.
+/// - `Ok(None)` when the intent is not a quarantine move, or our pair is not listed: probe the item as
+///   for any quarantine move.
+/// - `Err(why)` when the list cannot be read or holds our pair more than once: whether a restart will
+///   still move the item cannot be told, so nothing may move it by handle now (M7 of the final M2
+///   review); the op needs attention.
+pub fn pending_after_crash(
+    intent: &Intent,
+    store: &dyn PendingRenames,
+) -> Result<Option<ItemOutcome>, String> {
     let Inverse::MoveBack {
         quarantine_path,
         original_path,
         ..
     } = &intent.inverse
     else {
-        return None;
+        return Ok(None);
     };
-    let expected = expected_pair(original_path, quarantine_path).ok()?;
-    match occurrences(&store.list().ok()?, &expected).as_slice() {
-        [stored] => Some(ItemOutcome::PendingReboot {
+    let Ok(expected) = expected_pair(original_path, quarantine_path) else {
+        return Ok(None);
+    };
+    let list = store
+        .list()
+        .map_err(|e| format!("the boot-time move list cannot be read ({e})"))?;
+    match occurrences(&list, &expected).as_slice() {
+        [] => Ok(None),
+        [stored] => Ok(Some(ItemOutcome::PendingReboot {
             pair: model_pair(stored),
             confirmed: true,
-        }),
-        _ => None,
+        })),
+        more => Err(format!(
+            "the boot-time move of the item is registered {} times",
+            more.len()
+        )),
     }
 }
 
@@ -1320,7 +1358,13 @@ fn lock_state(op: &OpState) -> LockState {
     let of = |outcome: &ItemOutcome| match outcome {
         ItemOutcome::HeldRetry => LockState::Held,
         ItemOutcome::PendingReboot { pair, .. } => LockState::Pending(pair.clone()),
-        ItemOutcome::Done => LockState::Moved,
+        // A failed verify may have left the item in quarantine: the ordinary move back, in its
+        // completing form, looks where it is.
+        ItemOutcome::Done
+        | ItemOutcome::Failed {
+            code: FailCode::VerifyFailed,
+            ..
+        } => LockState::Moved,
         _ => LockState::Unchanged,
     };
     let mut state = match &op.outcome {
@@ -1418,6 +1462,66 @@ pub fn undo_locked(op: &OpState, store: &dyn PendingRenames) -> Option<LockUndo>
             },
             Ok(_) => LockUndo::RemovePair(PairRemoval { op: op.op, pair }),
         }),
+    }
+}
+
+/// The boot-time move a quarantine move may still have registered when its undo is the ordinary move
+/// back (review M2 M7): an op whose `done` is a failure (recovery journals `Failed{VerifyFailed}` when
+/// its probe could not tell whether a restart still moves the item) or that has no `done`. A pair left
+/// in the list would move the restored item into quarantine again at the next restart while the
+/// journal says it is back. Read-only; ops of any other kind or outcome are `None`, and so is a lock
+/// op, whose undo is [`undo_locked`]'s.
+///
+/// - `None`: our pair is not listed; the move back runs as usual.
+/// - [`LockUndo::RemovePair`]: our pair stands in the list once. Take it back with
+///   [`remove_boot_move`] under the op's undo token first; the move back runs only when that ends
+///   `Restored` or `AlreadyRestored`, so the op is never settled while the pair is listed.
+/// - [`LockUndo::Conflict`] (`GateBlocked{DenyListed{`[`reason::BOOT_MOVE_INDETERMINATE`]`}}`, which
+///   does not settle the op): the list cannot be read or holds our pair more than once. Nothing is
+///   moved; the detail names the pair.
+pub fn listed_before_move_back(op: &OpState, store: &dyn PendingRenames) -> Option<LockUndo> {
+    if !matches!(op.outcome, None | Some(ItemOutcome::Failed { .. })) {
+        return None;
+    }
+    let intent = op.intent.as_ref()?;
+    let (
+        ExecOp::QuarantineMove { .. },
+        Inverse::MoveBack {
+            quarantine_path,
+            original_path,
+            ..
+        },
+    ) = (&intent.exec_op, &intent.inverse)
+    else {
+        return None;
+    };
+    let expected = expected_pair(original_path, quarantine_path).ok()?;
+    let conflict = |detail: String| LockUndo::Conflict {
+        conflict: UndoConflict::GateBlocked {
+            blocker: Blocker::DenyListed {
+                rule: reason::BOOT_MOVE_INDETERMINATE.to_owned(),
+            },
+        },
+        detail,
+    };
+    let named = format!("{} -> {}", expected.src, expected.dst);
+    match store.list().map(|list| occurrences(&list, &expected)) {
+        Err(e) => Some(conflict(format!(
+            "the boot-time move list cannot be read ({e}); whether the boot-time move {named} is \
+             still registered cannot be told, so the item is not put back"
+        ))),
+        Ok(listed) => match listed.as_slice() {
+            [] => None,
+            [stored] => Some(LockUndo::RemovePair(PairRemoval {
+                op: op.op,
+                pair: model_pair(stored),
+            })),
+            many => Some(conflict(format!(
+                "the boot-time move {named} stands {} times in the list; Purge added it once, so \
+                 nothing is removed and the item is not put back",
+                many.len()
+            ))),
+        },
     }
 }
 
@@ -1667,6 +1771,7 @@ pub fn reconcile(
                 original_path,
                 file_id,
                 volume_serial,
+                ..
             } = &intent.inverse
             else {
                 return found(

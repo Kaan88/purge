@@ -11,8 +11,9 @@
 #                  record (recover must refuse and change nothing)
 # Iteration (point p, phase exec|undo, after resume|rollback): fresh fixtures, plan, deep A, scoped snap A; exec
 # (or exec then undo) with PURGE_FAULT_AT=p; `journal recover` twice (deep after each: the second must change
-# nothing); `journal resume --session` or `journal rollback --session`; resume: scoped snap B + execdiff, then
-# undo; deep C; fidelity A vs C; fixtures check after-undo. One crash-<tag>.json per iteration, all appended to
+# nothing); `journal resume --session` or `journal rollback --session`; resume of an exec-phase crash: scoped
+# snap B + execdiff, then undo; resume of an undo-phase crash: the session must be Undone (recovery finished the
+# undo; no second undo); deep C; fidelity A vs C; fixtures check after-undo. One crash-<tag>.json per iteration, all appended to
 # crash-matrix.json (purge.rig.crashmatrix/1).
 # Engine calls: journal fault-points | plan from-targets | exec ... (env PURGE_FAULT_AT=<p>) | undo --session <id>
 #   (env PURGE_FAULT_AT=<p> for undo-phase points) | journal recover | journal resume --session <id> |
@@ -132,10 +133,13 @@ function Complete-Round($Rec, $Row, [string]$After) {
             $u = Invoke-M2Engine -Step "undo-$tag" -Arguments (New-M2UndoArgs $Rec.session '' '' (F "undo-$tag.json")) -Calls $Calls -StdoutFile (F "undo-$tag.out") -NoThrow
             $Row.undo_exit = $u.exit
         } elseif ($Row.after_exit -eq 0) {
-            # Resume finishes only the undo ops the crash interrupted (M2-CLI); the rest of the session is
-            # still executed, so the undo is run again to bring everything back before deep C.
-            $u = Invoke-M2Engine -Step "undo-$tag" -Arguments (New-M2UndoArgs $Rec.session '' '' (F "undo-$tag.json")) -Calls $Calls -StdoutFile (F "undo-$tag.out") -NoThrow
-            $Row.undo_exit = $u.exit
+            # Resume finishes the interrupted undo itself (the ops in progress and the rest of its undo_plan):
+            # the session must be Undone now, and no second undo is run. A session the crash left already fully
+            # undone (index.write after the last op) passes the same way.
+            $st = $null
+            try { $o = Read-Json (F "journal-resume-$tag.out"); if ($o) { $st = "$(@($o.sessions)[0].state)" } } catch { $st = $null }
+            $Row.undone_by_recovery = ($st -eq 'Undone')
+            if (-not $Row.undone_by_recovery) { $Row.notes += "resume left the session '$st', not Undone" }
         }
     }
     $null = Copy-M2Session $Rec.session $D "sess-$tag"
@@ -151,15 +155,17 @@ function Complete-Round($Rec, $Row, [string]$After) {
 function New-Row([int]$N, [string]$Point, [string]$Phase, [string]$After, [string]$Kind = 'abort') {
     [ordered]@{ n = $N; kind = $Kind; point = $Point; phase = $Phase; after = $After; tag = $null; session = $null; hit = $false; fault_exit = $null; crashed = $false
         recover_exit = $null; recover2_exit = $null; recover_idempotent = $null; after_exit = $null; undo_exit = $null; execdiff_ok = $null
-        fidelity_ok = $null; fixtures_check_exit = $null; error = $null; notes = @(); pass = $false }
+        undone_by_recovery = $null; fidelity_ok = $null; fixtures_check_exit = $null; error = $null; notes = @(); pass = $false }
 }
 
 # Pass rule per row (m2.sh applies the same rule): a hit point crashed, recovered twice with the same state, the
-# resume / rollback exited 0, every verdict that ran is ok; a point not hit is recorded, not failed.
+# resume / rollback exited 0, an undo-phase resume left the session Undone, every verdict that ran is ok; a point
+# not hit is recorded, not failed.
 function Set-RowPass($Row) {
     if (-not $Row.hit) { $Row.pass = ($null -eq $Row.error); return }
     $Row.pass = ($null -eq $Row.error -and $Row.crashed -and $Row.recover_exit -eq 0 -and $Row.recover_idempotent -eq $true -and $Row.after_exit -eq 0 `
-            -and $Row.fidelity_ok -eq $true -and $Row.execdiff_ok -ne $false -and ($null -eq $Row.undo_exit -or $Row.undo_exit -eq 0) -and $Row.fixtures_check_exit -eq 0)
+            -and $Row.fidelity_ok -eq $true -and $Row.execdiff_ok -ne $false -and ($null -eq $Row.undo_exit -or $Row.undo_exit -eq 0) `
+            -and $Row.undone_by_recovery -ne $false -and $Row.fixtures_check_exit -eq 0)
 }
 
 function Invoke-Iteration($It) {
@@ -301,11 +307,13 @@ function Invoke-Torn {
             $bytes = [IO.File]::ReadAllBytes($rec.journal)
             $row.journal_bytes = $bytes.Length
             if ($v -eq 'tail') {
-                # The last record cut in half, as a power loss mid-append leaves it.
+                # Half of a record appended after the last whole one, as a power loss mid-append leaves it. (Not
+                # the last record cut: after act.after that is the flushed intent of an op that already acted, and
+                # a flushed record cannot be torn; cutting it leaves a quarantined object no record names.)
                 $end = $bytes.Length - 1; while ($end -gt 0 -and ($bytes[$end] -eq 10 -or $bytes[$end] -eq 13)) { $end-- }
                 $start = $end; while ($start -gt 0 -and $bytes[$start - 1] -ne 10) { $start-- }
-                $cut = $start + [int][Math]::Max(1, [Math]::Floor(($end - $start) / 2))
-                [IO.File]::WriteAllBytes($rec.journal, [byte[]]$bytes[0..($cut - 1)])
+                $half = [int][Math]::Max(1, [Math]::Floor(($end - $start) / 2))
+                [IO.File]::WriteAllBytes($rec.journal, [byte[]]($bytes + $bytes[$start..($start + $half - 1)]))
             } else {
                 # One byte inside a middle record changed: a record with a bad checksum before valid ones.
                 $lines = @(); $s0 = 0
@@ -354,6 +362,8 @@ try {
             $declared = @(ConvertFrom-M2FaultPoints ([IO.File]::ReadAllText((F 'fault-points.out'))))
             if (-not $declared.Count) { throw 'journal fault-points listed no point' }
             $want = @(Get-M2Opt $Opts 'points' @())
+            $unknown = @($want | Where-Object { $declared -notcontains $_ })
+            if ($unknown.Count) { throw "fault points the engine does not declare: $($unknown -join ', ')" }
             $points = $(if ($want.Count) { @($declared | Where-Object { $want -contains $_ }) } else { $declared })
             $its = New-Object System.Collections.ArrayList
             $n = 0

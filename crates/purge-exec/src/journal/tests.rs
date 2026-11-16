@@ -124,6 +124,7 @@ fn intent(n: u32) -> Intent {
             original_path: path_of(n),
             file_id: FileIdHex([n as u8; 16]),
             volume_serial: 7,
+            parent: None,
         },
         definition: None,
         pre: ItemFacts::File(FileFacts {
@@ -463,6 +464,7 @@ fn undo_is_refused_after_expiry_and_expiry_during_an_undo() {
             op: OpId(1),
             item: item(1),
             outcome: ItemOutcome::Done,
+            detail: String::new(),
         }),
         Record::GroupEnd(purge_model::exec::journal::GroupEnd { group: 1, ops: 1 }),
         Record::Commit(purge_model::exec::journal::Commit {
@@ -916,6 +918,7 @@ fn reader_refuses_rule_breaks() {
             op: OpId(n),
             item: item(n),
             outcome,
+            detail: String::new(),
         }))
     };
     let ok = |bodies: &[String]| parse(&chained(bodies)).unwrap();
@@ -1644,6 +1647,7 @@ fn run_settings() -> RunSettings {
         long_names_resolved: true,
         key_limit: 10_000,
         restore_point: RestorePointPolicy::HighRiskOnly,
+        selected: Vec::new(),
     }
 }
 

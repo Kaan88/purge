@@ -28,10 +28,12 @@
 //!   that resolves elsewhere is only refused.
 //! - Op directories are created by Purge only (create-new). `X:\.purge-q` is created with the `Store`
 //!   descriptor and marked hidden, system and not content indexed; one that fails the check (a user
-//!   pre-created it) is renamed aside and the volume is refused for the run ([`CannotBackUpReason`]).
-//!   It is created only at a drive root ([`CannotBackUpReason::MountedFolder`]) whose DACL lets
-//!   nobody but Administrators and SYSTEM rename it away or rewrite the root's DACL
-//!   ([`StorageError::VolumeRoot`], [`volume_root_verdict`]).
+//!   pre-created it) is never adopted: it is renamed aside and the store creates its own in its
+//!   place (create-new, once); when that fails the volume is refused for the run
+//!   ([`CannotBackUpReason`]). It is created only at a drive root
+//!   ([`CannotBackUpReason::MountedFolder`]) that nobody but Administrators, SYSTEM and the
+//!   built-in service accounts owns and whose DACL lets nobody else rename it away or rewrite the
+//!   root's DACL ([`StorageError::VolumeRoot`], [`volume_root_verdict`]).
 //! - Same volume is proven by the volume serial of the source handle against the quarantine op
 //!   directory's handle.
 //! - The size cap is min(10 GiB, 5 % of the volume) per volume ([`check_cap`]); a run that would exceed
@@ -159,7 +161,7 @@ pub enum StorageError {
     #[error(transparent)]
     Cap(Box<CapExceeded>),
     /// A file-system call failed.
-    #[error("{op} {}: {source}", .path.display())]
+    #[error("{op} {}: {}", .path.display(), fs_text(.source))]
     Io {
         /// What was being done.
         op: &'static str,
@@ -241,8 +243,16 @@ impl StorageError {
 fn aside_text(renamed_to: Option<&Path>, rename_error: Option<&FsError>) -> String {
     match (renamed_to, rename_error) {
         (Some(to), _) => format!("; renamed aside to {}", to.display()),
-        (None, Some(e)) => format!("; renaming it aside failed: {e}"),
+        (None, Some(e)) => format!("; renaming it aside failed: {}", fs_text(e)),
         (None, None) => String::new(),
+    }
+}
+
+/// A file-system error with the Win32 error code it stands for, so that a refusal names the status.
+fn fs_text(e: &FsError) -> String {
+    match e {
+        FsError::Other(_) => e.to_string(),
+        _ => format!("{e} (Win32 error {})", e.code()),
     }
 }
 
@@ -271,8 +281,9 @@ pub enum CannotBackUpReason {
         /// Serial of the quarantine op directory's handle.
         quarantine_serial: u64,
     },
-    /// The volume's quarantine directory failed its check (it was renamed aside when possible) or
-    /// could not be created or opened, or the volume root does not keep it safe
+    /// The volume's quarantine directory failed its check and could not be replaced (renaming it
+    /// aside failed, or the name was taken again) or could not be created or opened, or the volume
+    /// root does not keep it safe
     /// ([`StorageError::VolumeRoot`]).
     #[error("{0}")]
     Store(Box<StorageError>),
@@ -653,6 +664,40 @@ impl QuarantineDir {
     /// The serial of the volume the op directory is on.
     pub fn volume_serial(&self) -> u64 {
         self.dir.volume_serial()
+    }
+
+    /// Removes the op directory while it is empty, by handle: the directory is opened again relative
+    /// to its own checked handle (an empty name: this very object, whatever its path names now) with
+    /// `DELETE`, must still be the checked directory (same file id), and is marked for deletion
+    /// through that handle, which the file system refuses for a directory that holds anything
+    /// ([`FsError::DirNotEmpty`]). Nothing is recursed into. The name goes when this value's handles
+    /// close, which this does; nothing can be created in the directory meanwhile.
+    pub fn remove_if_empty(self) -> Result<(), StorageError> {
+        let path = self.dir.path.clone();
+        let handle = at::open_at(
+            &self.dir.handle,
+            "",
+            at::Open {
+                access: at::DELETE | at::FILE_READ_ATTRIBUTES,
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::Dir,
+            },
+        )
+        .map_err(|e| io("open", &path, e))?;
+        let facts = at::facts(&handle).map_err(|e| io("read the attributes of", &path, e))?;
+        if facts.file_id != self.dir.id || !facts.is_dir || facts.reparse_tag != 0 {
+            return Err(StorageError::Integrity {
+                path,
+                failure: IntegrityFailure::IdentityChanged,
+                renamed_to: None,
+                rename_error: None,
+            });
+        }
+        at::dispose(&handle).map_err(|e| io("remove", &path, e))?;
+        drop(handle);
+        drop(self);
+        Ok(())
     }
 
     /// Opens what sits at `leaf` in the op directory, relative to the directory's checked handle (one
@@ -1426,24 +1471,40 @@ impl StorageRoots {
     /// `<volume root>\.purge-q`, created when missing (and `create`), marked hidden, system and not
     /// content indexed, and checked: its final path must be the root's plus its name. Errors are the
     /// volume's, not the run's.
+    ///
+    /// With `create`, an existing `.purge-q` that fails its check (someone else made it) is never
+    /// adopted: it is renamed aside, and the store creates its own in its place, create-new, once.
+    /// When the rename fails, or the name is taken again before the store creates its own, the volume
+    /// is refused.
     fn volume_quarantine(&self, root: &Path, create: bool) -> Result<CheckedDir, StorageError> {
         let path = root.join(VOLUME_QUARANTINE_DIR);
         let (root_handle, root_final) = self.volume_root(root, create)?;
-        if create {
+        let make = || {
             self.make_dir_at(
                 &root_handle,
                 &path,
                 VOLUME_QUARANTINE_DIR,
                 ObjectKind::Store,
-            )?;
-        }
+            )
+        };
+        let created = create && make()?;
         let parent = Parent {
             handle: &root_handle,
             final_path: &root_final,
         };
-        let inspected = self
-            .inspect(&path, ObjectKind::Store, Some(parent))?
-            .ok_or_else(|| io("open", &path, FsError::NotFound))?;
+        let inspected = match self.inspect(&path, ObjectKind::Store, Some(parent)) {
+            Err(StorageError::Integrity {
+                renamed_to: Some(_),
+                ..
+            }) if create && !created => {
+                if !make()? {
+                    return Err(io("create", &path, FsError::AlreadyExists));
+                }
+                self.inspect(&path, ObjectKind::Store, Some(parent))?
+            }
+            other => other?,
+        }
+        .ok_or_else(|| io("open", &path, FsError::NotFound))?;
         let dir = checked(path, inspected);
         if dir.attributes & VOLUME_QUARANTINE_ATTRIBUTES != VOLUME_QUARANTINE_ATTRIBUTES {
             let mover = MoveHandle::open_with_attribute_write(&ext(&dir.path)?)

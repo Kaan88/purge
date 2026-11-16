@@ -16,7 +16,7 @@
 //! - `quarantine expiring` / `purge` with the clock offset, user-data confirmation included.
 //!
 //! With `sandbox-dev` (module `rig::sandbox_dev`): the rig's tests run with the Sandboxie check answered
-//! "inside"; destructive verbs outside Sandboxie answer 12; a round trip on the sandbox store.
+//! "inside"; destructive verbs outside Sandboxie answer 13; a round trip on the sandbox store.
 //!
 //! The registry is touched only below a fresh `HKU\<SID>\Software\PurgeTest-<unique>` key, removed on
 //! drop; every file lives in a scratch directory below the temp directory, removed on drop.
@@ -154,12 +154,12 @@ fn binary(cwd: &Path, args: &[&str]) -> (Option<i32>, String, String) {
 // Every build
 // ---------------------------------------------------------------------------------------------------
 
-/// The exit-code table: distinct numbers 0..=11, one line each in `--help` and one row each in
+/// The exit-code table: distinct numbers 0..=12, one line each in `--help` and one row each in
 /// vm/RIG.md §11.7, all with the same wording.
 #[test]
 fn exit_code_table() {
     let codes: Vec<u8> = Exit::ALL.iter().map(|e| e.code()).collect();
-    assert_eq!(codes, (0..=11).collect::<Vec<u8>>());
+    assert_eq!(codes, (0..=12).collect::<Vec<u8>>());
     let rig_md =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vm/RIG.md"))
             .unwrap()
@@ -178,6 +178,7 @@ fn exit_code_table() {
     assert_eq!(Exit::StoreIntegrity.code(), 9);
     assert_eq!(Exit::Partial.code(), 10);
     assert_eq!(Exit::UndoConflicts.code(), 11);
+    assert_eq!(Exit::Unrecorded.code(), 12);
 }
 
 /// Usage errors of every executor verb come back from the binary as exit code 2, with the usage text,
@@ -238,6 +239,10 @@ fn default_build_refuses_every_executor_verb_and_creates_nothing() {
         ("journal resume --session s1", "needs the consent dialog"),
         ("journal rollback --session s1", "needs the consent dialog"),
         ("journal show --session s1", "needs the consent dialog"),
+        (
+            "journal retry-held --session s1",
+            "needs the consent dialog",
+        ),
         ("quarantine expiring", "needs the consent dialog"),
         (
             "quarantine purge --ids s/1 s/2 --yes-irreversible",
@@ -260,6 +265,22 @@ fn default_build_refuses_every_executor_verb_and_creates_nothing() {
     let (code, out, _) = binary(&s.root, &["--version"]);
     assert_eq!(code, Some(0));
     assert!(!out.contains("rig-exec"), "{out}");
+}
+
+/// Review M2 M23: the binary of a normal build holds none of the executor's strings: not the rig-exec
+/// build marker, not the fault-injection variable, not the executor's journal schema. The same check in
+/// a rig-exec build finds them, so the strings are a valid witness.
+#[test]
+fn the_binary_holds_the_executor_strings_only_in_a_rig_exec_build() {
+    let exe = std::fs::read(env!("CARGO_BIN_EXE_purge-engine")).unwrap();
+    let holds = |text: &str| exe.windows(text.len()).any(|w| w == text.as_bytes());
+    for marker in [
+        "rig-exec build: executor verbs run headless",
+        "PURGE_FAULT_AT",
+        "purge.cli.recovered/1",
+    ] {
+        assert_eq!(holds(marker), cfg!(feature = "rig-exec"), "{marker}");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1159,12 +1180,158 @@ mod rig {
         assert!(s.names().is_empty(), "{:?}", s.names());
     }
 
+    /// Runs `exec` of the selected `ids` of `plan` without a restore point.
+    fn exec(f: &Fixture, plan: &Path, hash: &str, ids: &[&str]) -> Run {
+        let select = f.ids(&format!("select-{}.json", unique("sel")), ids);
+        cli(
+            &f.roots,
+            &args(&[
+                &"exec",
+                &"--plan",
+                &plan,
+                &"--confirm",
+                &confirm(hash, ids),
+                &"--select",
+                &select,
+                &"--restore-point",
+                &"off",
+            ]),
+        )
+    }
+
+    /// `journal retry-held --session`: an item in use during `exec` is held (exit 10); a retry while it
+    /// is still in use keeps it held (10); once released, the retry moves it (0) and a second retry has
+    /// nothing to do (0). Unelevated it is refused with 7, an unknown session with 2.
+    #[test]
+    fn journal_retry_held_moves_a_released_item() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let f = Fixture::new("retryheld");
+        let busy = f.s.file(r"work\busy.txt", "busy");
+        let (plan, hash) = f.plan("plan", json!([quarantine("busy", &busy)]));
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&busy)
+            .unwrap();
+        let run = exec(&f, &plan, &hash, &["busy"]);
+        assert_eq!(run.exit, Exit::Partial, "{}", run.err);
+        let report: ExecReport = serde_json::from_str(&run.out).unwrap();
+        assert_eq!(
+            report.items[0].outcome,
+            purge_model::exec::op::ItemOutcome::HeldRetry,
+            "{report:?}"
+        );
+        let session = report.session.to_string();
+        let retry = |elevated: bool| {
+            cli_with(
+                &f.roots,
+                &args(&[&"journal", &"retry-held", &"--session", &session]),
+                elevated,
+                Ok(0),
+            )
+        };
+        let run = retry(false);
+        assert_eq!(run.exit, Exit::NeedsElevation, "{}", run.err);
+        let run = retry(true);
+        assert_eq!(run.exit, Exit::Partial, "{}", run.err);
+        assert_eq!(
+            run.json()["retried"][0]["outcome"]["kind"],
+            "HeldRetry",
+            "{}",
+            run.out
+        );
+        assert!(busy.exists());
+
+        drop(lock);
+        let run = retry(true);
+        assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+        let doc = run.json();
+        assert_eq!(doc["schema"], "purge.cli.retried/1");
+        assert_eq!(doc["session"], session.as_str());
+        assert_eq!(
+            doc["retried"],
+            json!([{ "op": 1, "outcome": { "kind": "Done" } }]),
+            "{doc}"
+        );
+        assert_eq!(doc["index_updated"], true);
+        assert!(!busy.exists());
+        let run = retry(true);
+        assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+        assert_eq!(run.json()["retried"], json!([]));
+        let run = cli(
+            &f.roots,
+            &args(&[
+                &"journal",
+                &"retry-held",
+                &"--session",
+                &"20261115T101502Z-9f3a6c1d2b7e4a50",
+            ]),
+        );
+        assert_eq!(run.exit, Exit::Usage, "{}", run.err);
+    }
+
+    /// Review M2 M21: a run or an undo whose index entry cannot be written ends with 12, the document
+    /// still written; `journal resume` then brings the entry up to date and ends with 0.
+    #[test]
+    fn an_unwritten_index_entry_is_not_exit_zero() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let f = Fixture::new("unrecorded");
+        let a = f.s.file(r"work\a.txt", "a");
+        let b = f.s.file(r"work\b.txt", "b");
+        let (plan, hash) = f.plan("plan", json!([quarantine("a", &a), quarantine("b", &b)]));
+        let run = exec(&f, &plan, &hash, &["a"]);
+        assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+
+        // The index is held without delete sharing: it cannot be replaced.
+        let index = f.roots.index_path();
+        let hold = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&index)
+            .unwrap();
+        let run = exec(&f, &plan, &hash, &["b"]);
+        assert_eq!(run.exit, Exit::Unrecorded, "{}", run.err);
+        assert!(run.err.contains("index was not updated"), "{}", run.err);
+        let report: ExecReport = serde_json::from_str(&run.out).unwrap();
+        assert_eq!(report.state, SessionState::Committed);
+        assert!(!b.exists());
+        let session = report.session.to_string();
+        let run = cli(&f.roots, &args(&[&"undo", &"--session", &session]));
+        assert_eq!(run.exit, Exit::Unrecorded, "{}", run.err);
+        let undone: UndoReport = serde_json::from_str(&run.out).unwrap();
+        assert_eq!(undone.state, SessionState::Undone);
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "b");
+        let run = cli(
+            &f.roots,
+            &args(&[&"journal", &"resume", &"--session", &session]),
+        );
+        assert_eq!(run.exit, Exit::Unrecorded, "{}", run.err);
+
+        drop(hold);
+        let run = cli(
+            &f.roots,
+            &args(&[&"journal", &"resume", &"--session", &session]),
+        );
+        assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+        assert_eq!(
+            run.json()["sessions"][0]["index_updated"],
+            true,
+            "{}",
+            run.out
+        );
+        let run = cli(&f.roots, &args(&[&"journal", &"recover"]));
+        assert_eq!(run.exit, Exit::Ok, "{}", run.err);
+        assert_eq!(run.json()["sessions"], json!([]));
+    }
+
     // -----------------------------------------------------------------------------------------------
     // With sandbox-dev
     // -----------------------------------------------------------------------------------------------
 
     /// The `sandbox-dev` build (docs/SANDBOX_TEST.md): destructive verbs refused outside Sandboxie with
-    /// 12 before anything is read or created; the relaxed store of `cli::sandbox`; and a full plan ->
+    /// 13 before anything is read or created; the relaxed store of `cli::sandbox`; and a full plan ->
     /// exec -> undo on that store with the Sandboxie check answered "inside" by the test hook.
     #[cfg(feature = "sandbox-dev")]
     mod sandbox_dev {
@@ -1198,6 +1365,7 @@ mod rig {
                 args(&[&"undo", &"--session", &session]),
                 args(&[&"journal", &"resume"]),
                 args(&[&"journal", &"rollback", &"--session", &session]),
+                args(&[&"journal", &"retry-held", &"--session", &session]),
                 args(&[
                     &"quarantine",
                     &"purge",
@@ -1208,7 +1376,7 @@ mod rig {
             ] {
                 let run = outside(&f.roots, &line);
                 assert_eq!(run.exit, Exit::NotInSandbox, "{line:?}: {}", run.err);
-                assert_eq!(run.exit.code(), 12);
+                assert_eq!(run.exit.code(), 13);
                 assert!(run.out.is_empty(), "{line:?}");
                 assert!(
                     run.err.contains("not running inside Sandboxie"),
@@ -1237,7 +1405,7 @@ mod rig {
             assert_eq!(run.exit, Exit::Ok, "{}", run.err);
         }
 
-        /// The real binary: it names itself, and outside Sandboxie refuses `exec` with 12 before it reads
+        /// The real binary: it names itself, and outside Sandboxie refuses `exec` with 13 before it reads
         /// the plan or creates its store.
         #[test]
         fn the_sandbox_dev_binary_refuses_outside_sandboxie() {
@@ -1260,7 +1428,7 @@ mod rig {
                 .output()
                 .unwrap();
             let err = String::from_utf8_lossy(&out.stderr);
-            assert_eq!(out.status.code(), Some(12), "{err}");
+            assert_eq!(out.status.code(), Some(13), "{err}");
             assert!(err.contains("not running inside Sandboxie"), "{err}");
             assert!(!store.exists(), "the store was created");
             assert!(s.names().is_empty(), "{:?}", s.names());
