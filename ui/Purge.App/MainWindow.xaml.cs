@@ -54,6 +54,8 @@ public sealed partial class MainWindow : Window
 
         if (Program.Options.Page is { } page) Navigate(page);
         CompositionTarget.Rendering += OnFirstRendering;
+        // No engine outlives the window: the client ends what it runs and closes its kill-on-close job.
+        Closed += (_, _) => Program.Engine.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
     private async Task LoadWhenReadyAsync() => OnStartup(await Program.Startup);

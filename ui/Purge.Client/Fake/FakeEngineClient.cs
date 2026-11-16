@@ -62,10 +62,10 @@ public sealed class FakeEngineClient : IEngineClient
 
     public bool IsLive => false;
 
-    public Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind, IProgress<string>? progress = null,
+    public Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind, IProgress<EngineProgress>? progress = null,
         CancellationToken ct = default) => NotLive<LeftoverPlan>();
 
-    public Task<ExecResult> ExecAsync(LeftoverPlan plan, IReadOnlyList<string> selectedIds, IProgress<string>? progress = null,
+    public Task<ExecResult> ExecAsync(LeftoverPlan plan, IReadOnlyList<string> selectedIds, IProgress<EngineProgress>? progress = null,
         CancellationToken ct = default) => NotLive<ExecResult>();
 
     public Task<UndoResult> UndoSessionAsync(string sessionId, CancellationToken ct = default) => NotLive<UndoResult>();

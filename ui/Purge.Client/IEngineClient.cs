@@ -34,11 +34,11 @@ public interface IEngineClient : IAsyncDisposable
     /// Records a program, optionally runs its quiet uninstaller, and scans for its leftovers. Progress lines go to
     /// <paramref name="progress"/>.
     /// </summary>
-    Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind, IProgress<string>? progress = null,
+    Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind, IProgress<EngineProgress>? progress = null,
         CancellationToken ct = default);
 
     /// <summary>Moves the selected items of a plan to quarantine (removes registry entries with a backup).</summary>
-    Task<ExecResult> ExecAsync(LeftoverPlan plan, IReadOnlyList<string> selectedIds, IProgress<string>? progress = null,
+    Task<ExecResult> ExecAsync(LeftoverPlan plan, IReadOnlyList<string> selectedIds, IProgress<EngineProgress>? progress = null,
         CancellationToken ct = default);
 
     /// <summary>Puts back everything a session changed.</summary>

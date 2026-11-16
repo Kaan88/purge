@@ -17,15 +17,17 @@ It is `purge-engine` built with the Cargo feature `sandbox-dev`. Compared with a
   (it must be an absolute path), else `%LOCALAPPDATA%\PurgeSandboxDev`. `exec` creates it the first time.
 - It does not need administrator rights.
 - It **refuses every verb that changes something** unless the process runs inside Sandboxie. The verbs are
-  `uninstall`, `exec`, `undo`, `journal resume`, `journal rollback` and `quarantine purge`. The engine
+  `uninstall`, `exec`, `undo`, `journal resume`, `journal rollback`, `journal retry-held` and `quarantine purge`. The engine
   checks whether `SbieDll.dll` is loaded in its own process; Sandboxie loads that DLL into every process it
-  runs. Outside Sandboxie these verbs stop at once with exit code 12 and this message:
+  runs. Outside Sandboxie these verbs stop at once with exit code 13 and this message:
   `this is a SANDBOX DEV BUILD and the process is not running inside Sandboxie (SbieDll.dll is not loaded);
   start it in a Sandboxie box. Nothing was done.`
 - The read-only verbs (`inventory`, `harvest`, `scan`, `journal recover`, `journal show`,
   `quarantine expiring`) work anywhere.
-- `purge-engine --version` prints `SANDBOX DEV BUILD` on its last line. The app shows the same words in
-  its title bar and in Settings, About.
+- Exit code 12 means something else in every build: the session was not closed, or its report or index
+  entry was not written. The app then offers Resume to finish the record.
+- `purge-engine --version` prints `SANDBOX DEV BUILD` on its last line, and `--help` ends with code 13.
+  The app shows the same words in its title bar and in Settings, About.
 
 ## Build it
 
@@ -81,12 +83,17 @@ when that option is on.
    `PurgeTest`. A small Inno Setup, NSIS or MSI program is best. It then exists only in the box.
 2. **Programs.** Press Refresh. The list now has the test program. The list comes from the engine.
 3. **Uninstall.** Select the program and choose Uninstall. Purge asks first, then runs the program's own
-   uninstaller in quiet mode, then scans for leftovers. The scan takes several minutes.
+   uninstaller in quiet mode, then scans for leftovers. While it runs, the page shows the step (recording,
+   uninstalling, scanning) and the seconds spent, every second, with a Cancel button. A forced scan of
+   Notepad++ on a normal PC takes about 20 seconds (12 s recording, 9 s scanning); the uninstaller adds
+   its own time.
    "Force remove" skips the uninstaller and only scans.
 4. **Review.** The page shows each item with its band (safe, likely, weak, protected) and the engine's
    reason. The engine has ticked what it would remove. Tick or untick items.
 5. **Move to quarantine.** Press the move button. Purge says how many items it will move, that they go to
-   quarantine and that you can undo it. Confirm. The result says what was moved, skipped or failed.
+   quarantine and that you can undo it. Confirm. The page shows the seconds spent and a Stop button;
+   stopping a move leaves a journal, and the page then offers Resume or Roll back. The result says what was
+   moved, skipped or failed.
 6. **Vault.** Open the vault. The session is listed. Press Undo to put everything back.
 7. **Recovery.** If a run stopped half way (for example you ended the box during a move), the review page
    and the vault show a bar with "Resume it" and "Roll it back".
@@ -114,6 +121,8 @@ To start again from nothing, end all programs in the box and delete its contents
   the move to quarantine, the vault with Undo, and Resume or Roll back. Home, Queue, History, Footprint,
   Assistant and Startup show sample data and say so at the top.
 - Program sizes and space forecasts are not measured; they show as empty.
+- The app runs each engine call as a child process inside a job object that ends with the app. Closing
+  the window ends a running scan or move at once (a move then needs Resume or Roll back on the next start).
 - "Delete for good" in the vault is not available in this build.
 - There is no restore point and no consent dialog from the engine; the app's own confirmation is the only
   one.
@@ -139,9 +148,9 @@ the program. These points have not been tried inside a box yet and may fail or b
 - **Quarantine renames across redirected paths.** The move to quarantine is a rename on the same volume.
   When the source is a real-machine path and the store is in the box, the rename may become a copy or
   fail.
-- **Job objects for the uninstaller.** The engine runs the uninstaller in a job object so it can wait for
-  all its child processes. Sandboxie also puts sandboxed processes in its own job; nested jobs and the
-  wait for children are not tested.
+- **Job objects for the uninstaller.** The app puts the engine in a kill-on-close job, and the engine runs
+  the uninstaller in a job object of its own so it can wait for all its child processes. Sandboxie also
+  puts sandboxed processes in its own job; these nested jobs and the wait for children are not tested.
 
 If one of these fails, the engine should stop with a clear error and a journal you can roll back. Please
 note what happened and keep the box's store folder.

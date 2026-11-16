@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsAotCompatible>true</IsAotCompatible>
+    <!-- Cli\EngineJob.cs: LibraryImport of the job object calls. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Purge.Client</RootNamespace>
   </PropertyGroup>
   <ItemGroup>

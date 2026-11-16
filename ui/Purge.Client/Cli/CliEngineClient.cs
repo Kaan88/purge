@@ -103,22 +103,22 @@ public sealed class CliEngineClient : IEngineClient
     }
 
     public async Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind,
-        IProgress<string>? progress = null, CancellationToken ct = default)
+        IProgress<EngineProgress>? progress = null, CancellationToken ct = default)
     {
         var dir = NewWorkDir(programName);
         var fp = Path.Combine(dir, "fp.json");
         var plan = Path.Combine(dir, "plan.json");
 
-        progress?.Report($"Recording {programName}…");
+        progress?.Report(EngineProgress.Step($"Recording {programName}"));
         Expect(await RunAsync("harvest", ["harvest", programId, "-o", fp], progress, ct).ConfigureAwait(false), ExitCodes.Ok);
         if (kind == ScanKind.UninstallThenScan)
         {
-            progress?.Report($"Running the uninstaller of {programName} (quiet)…");
+            progress?.Report(EngineProgress.Step($"Running the uninstaller of {programName} (quiet)"));
             Expect(await RunAsync("uninstall",
                 ["uninstall", programId, "--quiet", "--fp", fp, "-o", Path.Combine(dir, "run.json")], progress, ct)
                 .ConfigureAwait(false), ExitCodes.Ok);
         }
-        progress?.Report("Scanning for leftovers…");
+        progress?.Report(EngineProgress.Step("Scanning for leftovers"));
         var mode = kind == ScanKind.UninstallThenScan ? "post" : "forced";
         var scan = await RunAsync("scan", ["scan", "--fp", fp, "--mode", mode, "-o", plan], progress, ct).ConfigureAwait(false);
         Expect(scan, ExitCodes.Ok);
@@ -127,24 +127,25 @@ public sealed class CliEngineClient : IEngineClient
     }
 
     public async Task<ExecResult> ExecAsync(LeftoverPlan plan, IReadOnlyList<string> selectedIds,
-        IProgress<string>? progress = null, CancellationToken ct = default)
+        IProgress<EngineProgress>? progress = null, CancellationToken ct = default)
     {
         var dir = Path.GetDirectoryName(plan.PlanPath) ?? WorkDir;
         var n = Interlocked.Increment(ref _counter).ToString(CultureInfo.InvariantCulture);
         var select = Path.Combine(dir, $"select-{n}.json");
         await File.WriteAllTextAsync(select, IdsJson(selectedIds), ct).ConfigureAwait(false);
         var confirm = ConfirmHash.Confirm(plan.PlanHash, selectedIds);
+        progress?.Report(EngineProgress.Step("Moving to quarantine"));
         var run = await RunAsync("exec",
             ["exec", "--plan", plan.PlanPath, "--confirm", confirm, "--select", select, "--restore-point", "off",
              "-o", Path.Combine(dir, $"report-{n}.json")], progress, ct).ConfigureAwait(false);
-        Expect(run, ExitCodes.Ok, ExitCodes.Partial);
+        Expect(run, ExitCodes.Ok, ExitCodes.Partial, ExitCodes.Unrecorded);
         return EngineDocs.ReadExec(run.Stdout, run.Code);
     }
 
     public async Task<UndoResult> UndoSessionAsync(string sessionId, CancellationToken ct = default)
     {
         var run = await RunAsync("undo", ["undo", "--session", sessionId], null, ct).ConfigureAwait(false);
-        Expect(run, ExitCodes.Ok, ExitCodes.Partial, ExitCodes.UndoConflicts);
+        Expect(run, ExitCodes.Ok, ExitCodes.Partial, ExitCodes.UndoConflicts, ExitCodes.Unrecorded);
         return EngineDocs.ReadUndo(run.Stdout, run.Code);
     }
 
@@ -161,13 +162,38 @@ public sealed class CliEngineClient : IEngineClient
     {
         var verb = rollback ? "rollback" : "resume";
         var run = await RunAsync("journal " + verb, ["journal", verb], null, ct).ConfigureAwait(false);
-        Expect(run, ExitCodes.Ok, ExitCodes.Partial, ExitCodes.UndoConflicts, ExitCodes.StoreIntegrity);
+        Expect(run, ExitCodes.Ok, ExitCodes.Partial, ExitCodes.UndoConflicts, ExitCodes.StoreIntegrity, ExitCodes.Unrecorded);
         return EngineDocs.ReadRecovered(run.Stdout, run.Code);
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    /// <summary>
+    /// Ends every engine still running (with what it started) and closes the job, so no engine outlives the app.
+    /// Called from the main window's Closed event; later calls fail with <see cref="ObjectDisposedException"/>.
+    /// </summary>
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return ValueTask.CompletedTask;
+        foreach (var process in _running.Values) KillTree(process);
+        _running.Clear();
+        _job?.Dispose();
+        return ValueTask.CompletedTask;
+    }
 
     // ---- the process ---------------------------------------------------------------------------------------
+
+    /// <summary>How long the output pipes may stay open after the engine exited (a process it started can hold them).</summary>
+    public static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(10);
+
+    // Every engine process goes in this job (kill on close) right after it starts, and is tracked until it ends.
+    private readonly EngineJob? _job = EngineJob.TryCreate();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, Process> _running = new();
+    private int _disposed;
+
+    /// <summary>The engine processes running now (tests, diagnostics).</summary>
+    public int RunningCount => _running.Count;
+
+    /// <summary>True when the engine processes are put in a kill-on-close job.</summary>
+    public bool HasJob => _job is not null;
 
     /// <summary>One finished engine run.</summary>
     public sealed record Run(string Verb, int Code, string Stdout, string Stderr);
@@ -175,9 +201,11 @@ public sealed class CliEngineClient : IEngineClient
     /// <summary>
     /// Runs the engine with <paramref name="args"/> and waits for it. Stderr lines go to <paramref name="progress"/>
     /// as they come. Cancelling kills the engine (and what it started) and throws <see cref="OperationCanceledException"/>.
+    /// After the engine exits its output is read for at most <see cref="DrainTimeout"/>.
     /// </summary>
-    public async Task<Run> RunAsync(string verb, IReadOnlyList<string> args, IProgress<string>? progress, CancellationToken ct)
+    public async Task<Run> RunAsync(string verb, IReadOnlyList<string> args, IProgress<EngineProgress>? progress, CancellationToken ct)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var psi = new ProcessStartInfo(EnginePath)
         {
             UseShellExecute = false,
@@ -189,36 +217,64 @@ public sealed class CliEngineClient : IEngineClient
             StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
+        // The engine's timing lines (PURGE_TIMING) are for benchmarks, not for this UI: keep them off.
+        psi.Environment.Remove("PURGE_TIMING");
         using var process = new Process { StartInfo = psi };
         try { process.Start(); }
         catch (Win32Exception e)
         {
             throw new EngineException(-1, verb, $"{ExitCodes.Describe(-1, "")} {EnginePath}: {e.Message}", "");
         }
-        process.StandardInput.Close();
-        var stdout = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        var stderr = new StringBuilder();
-        var stderrDone = Task.Run(async () =>
+        _job?.Assign(process);
+        _running[process.Id] = process;
+        try
         {
-            while (await process.StandardError.ReadLineAsync().ConfigureAwait(false) is { } line)
+            process.StandardInput.Close();
+            var stdout = new StringBuilder();
+            var stdoutDone = Task.Run(async () =>
             {
-                lock (stderr) stderr.AppendLine(line);
-                progress?.Report(line);
+                var buffer = new char[8192];
+                int n;
+                while ((n = await process.StandardOutput.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
+                    lock (stdout) stdout.Append(buffer, 0, n);
+            }, CancellationToken.None);
+            var stderr = new StringBuilder();
+            var stderrDone = Task.Run(async () =>
+            {
+                while (await process.StandardError.ReadLineAsync().ConfigureAwait(false) is { } line)
+                {
+                    lock (stderr) stderr.AppendLine(line);
+                    progress?.Report(EngineProgress.Line(line));
+                }
+            }, CancellationToken.None);
+            try { await process.WaitForExitAsync(ct).ConfigureAwait(false); }
+            catch (OperationCanceledException)
+            {
+                KillTree(process);
+                throw;
             }
-        }, CancellationToken.None);
-        try { await process.WaitForExitAsync(ct).ConfigureAwait(false); }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); }
-            catch (InvalidOperationException) { }
-            catch (Win32Exception) { }
-            throw;
+            // The engine has exited; a process it started may still hold the pipes open. Read what is there.
+            var drained = await Task.WhenAll(stdoutDone, stderrDone).WaitAsync(DrainTimeout, CancellationToken.None)
+                .ContinueWith(t => t.IsCompletedSuccessfully, TaskScheduler.Default).ConfigureAwait(false);
+            string text, err;
+            lock (stdout) text = stdout.ToString();
+            lock (stderr) err = stderr.ToString();
+            if (!drained)
+                err += $"warning: the engine's output stayed open {DrainTimeout.TotalSeconds:F0} s after it exited; what it printed until then is used{Environment.NewLine}";
+            return new Run(verb, process.ExitCode, text, err);
         }
-        var text = await stdout.ConfigureAwait(false);
-        await stderrDone.ConfigureAwait(false);
-        string err;
-        lock (stderr) err = stderr.ToString();
-        return new Run(verb, process.ExitCode, text, err);
+        finally
+        {
+            _running.TryRemove(process.Id, out _);
+        }
+    }
+
+    private static void KillTree(Process process)
+    {
+        try { process.Kill(entireProcessTree: true); }
+        catch (InvalidOperationException) { }
+        catch (Win32Exception) { }
+        catch (NotSupportedException) { }
     }
 
     /// <summary>Throws an <see cref="EngineException"/> unless the run ended with one of <paramref name="accepted"/>.</summary>

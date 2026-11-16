@@ -95,3 +95,13 @@ public sealed record PendingSession(string SessionId, string Kind, string App, s
 
 /// <summary>What <c>journal resume</c> / <c>rollback</c> did, per session.</summary>
 public sealed record RecoveryResult(int ExitCode, bool Rollback, List<string> Lines);
+
+/// <summary>
+/// What a running engine call reports: a step starting (<paramref name="IsStep"/>; <paramref name="Text"/> is its name,
+/// such as "Scanning for leftovers") or one line the engine printed on stderr.
+/// </summary>
+public sealed record EngineProgress(string Text, bool IsStep)
+{
+    public static EngineProgress Step(string name) => new(name, true);
+    public static EngineProgress Line(string text) => new(text, false);
+}

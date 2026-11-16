@@ -32,7 +32,8 @@ public static class ExitCodes
     public const int StoreIntegrity = 9;
     public const int Partial = 10;
     public const int UndoConflicts = 11;
-    public const int NotInSandbox = 12;
+    public const int Unrecorded = 12;
+    public const int NotInSandbox = 13;
 
     /// <summary>A sentence for the user; <paramref name="detail"/> is the engine's own error line, when there is one.</summary>
     public static string Describe(int code, string detail)
@@ -50,6 +51,7 @@ public static class ExitCodes
             StoreIntegrity => "Purge's quarantine store failed its integrity check. Nothing was done.",
             Partial => "Not every item ended as planned.",
             UndoConflicts => "Some items could not be put back.",
+            Unrecorded => "The engine did its work but could not finish recording the session (its report or the session list was not written). Resume it from the recovery bar to finish the record.",
             NotInSandbox => "Refused: this sandbox dev build removes and restores only inside Sandboxie. Start Purge in a Sandboxie box. Nothing was done.",
             -1 => "The engine could not be started.",
             _ => $"The engine stopped with exit code {code}.",

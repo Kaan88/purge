@@ -385,20 +385,18 @@ public sealed partial class ReviewView : UserControl
         TitleText.Text = $"Leftovers of {name}";
         SubtitleText.Text = kind == ScanKind.UninstallThenScan ? "Uninstalling, then scanning…" : "Scanning without an uninstaller…";
         using var cts = new CancellationTokenSource();
-        var bar = ShowInfo(InfoBarSeverity.Informational,
-            kind == ScanKind.UninstallThenScan ? $"Uninstalling {name}, then scanning." : $"Scanning for what {name} left.",
-            "This can take a few minutes.");
+        var bar = ShowInfo(InfoBarSeverity.Informational, "", "");
         bar.IsClosable = false;
         var cancel = new Button { Content = "Cancel" };
-        cancel.Click += (_, _) => { cts.Cancel(); cancel.IsEnabled = false; };
+        cancel.Click += (_, _) => { cts.Cancel(); cancel.IsEnabled = false; cancel.Content = "Stopping…"; };
         bar.ActionButton = cancel;
-        var progress = new Progress<string>(line => bar.Message = Shorten(line));
-        var started = DateTime.Now;
+        using var activity = new EngineActivity(bar, "Starting the engine");
         try
         {
-            var plan = await Program.Engine.ScanAsync(programId, name, kind, progress, cts.Token);
+            var plan = await Program.Engine.ScanAsync(programId, name, kind, activity.Progress, cts.Token);
+            activity.Dispose();
             LoadPlan(plan);
-            var seconds = (DateTime.Now - started).TotalSeconds.ToString("F0", CultureInfo.CurrentCulture);
+            var seconds = activity.Elapsed.TotalSeconds.ToString("F0", CultureInfo.CurrentCulture);
             SubtitleText.Text = (kind == ScanKind.UninstallThenScan ? "Uninstalled and scanned" : "Scanned without an uninstaller")
                                 + $" in {seconds} s · restorable for 30 days once moved";
             var ticked = _all.Count(r => r.Checked);
@@ -409,11 +407,12 @@ public sealed partial class ReviewView : UserControl
         catch (OperationCanceledException)
         {
             SubtitleText.Text = "Cancelled";
-            ShowInfo(InfoBarSeverity.Warning, "Cancelled.", "The engine was stopped. If the uninstaller had started, it may have finished part of its work.");
+            ShowInfo(InfoBarSeverity.Warning, $"Cancelled during \"{activity.StepName}\".",
+                "The engine was stopped. If the uninstaller had started, it may have finished part of its work.");
         }
         catch (Exception ex)
         {
-            SubtitleText.Text = "The scan did not finish";
+            SubtitleText.Text = $"The scan did not finish (step: {activity.StepName})";
             ShowError(ex);
         }
         finally
@@ -422,13 +421,6 @@ public sealed partial class ReviewView : UserControl
             UpdateCounts();
         }
         if (kind == ScanKind.UninstallThenScan) _ = MainWindow.Instance.Programs.ReloadAsync();
-    }
-
-    private static string Shorten(string line)
-    {
-        // Progress lines start with "[  1.234s] ".
-        var text = line.StartsWith('[') && line.IndexOf("] ", StringComparison.Ordinal) is var at and > 0 ? line[(at + 2)..] : line;
-        return text.Length > 160 ? text[..157] + "…" : text;
     }
 
     private static string GroupOf(LeftoverItem i) =>
@@ -501,12 +493,18 @@ public sealed partial class ReviewView : UserControl
         }
         _busy = true;
         MoveButton.IsEnabled = false;
-        var bar = ShowInfo(InfoBarSeverity.Informational, $"Moving {chosen.Count} {(chosen.Count == 1 ? "item" : "items")} to quarantine.", "");
+        using var cts = new CancellationTokenSource();
+        var bar = ShowInfo(InfoBarSeverity.Informational, "", "");
         bar.IsClosable = false;
-        var progress = new Progress<string>(line => bar.Message = Shorten(line));
+        // Stopping a move ends the engine mid-run; its journal then offers Resume or Roll back.
+        var stop = new Button { Content = "Stop" };
+        stop.Click += (_, _) => { cts.Cancel(); stop.IsEnabled = false; stop.Content = "Stopping…"; };
+        bar.ActionButton = stop;
+        using var activity = new EngineActivity(bar, $"Moving {chosen.Count} {(chosen.Count == 1 ? "item" : "items")} to quarantine");
         try
         {
-            var result = await Program.Engine.ExecAsync(plan, chosen.Select(c => c.Id).ToList(), progress);
+            var result = await Program.Engine.ExecAsync(plan, chosen.Select(c => c.Id).ToList(), activity.Progress, cts.Token);
+            activity.Dispose();
             ShowExecResult(result, chosen.Count);
             var finished = result.Items.Where(i => i.Complete).Select(i => i.Id).ToHashSet(StringComparer.Ordinal);
             _all = _all.Where(r => r.IsGroup || !finished.Contains(r.Id)).ToList();
@@ -517,6 +515,13 @@ public sealed partial class ReviewView : UserControl
         {
             InfoBarHost.Children.Clear();
             InfoBarHost.Children.Add(RecoveryBar.Create(ex.Message, () => { }));
+        }
+        catch (OperationCanceledException)
+        {
+            InfoBarHost.Children.Clear();
+            InfoBarHost.Children.Add(RecoveryBar.Create(
+                $"The move was stopped after {activity.Elapsed.TotalSeconds:F0} s. Resume it to finish, or roll it back to put everything back.",
+                () => { }));
         }
         catch (Exception ex)
         {
@@ -537,6 +542,7 @@ public sealed partial class ReviewView : UserControl
         if (r.HeldRetry > 0) parts.Add($"{r.HeldRetry} in use, left for a later run");
         if (r.PendingReboot > 0) parts.Add($"{r.PendingReboot} go at the next restart");
         if (r.Failed > 0) parts.Add($"{r.Failed} failed");
+        if (r.ExitCode == ExitCodes.Unrecorded) parts.Add(ExitCodes.Describe(ExitCodes.Unrecorded, ""));
         var notDone = r.Items.Where(i => !i.Complete).Take(4)
             .Select(i => $"{i.Display} ({i.Outcome}{(i.Detail.Length > 0 ? ": " + i.Detail : "")})").ToList();
         if (notDone.Count > 0) parts.Add("Not done: " + string.Join("; ", notDone));

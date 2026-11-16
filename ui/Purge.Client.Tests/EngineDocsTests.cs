@@ -175,12 +175,47 @@ public sealed class EngineDocsTests
         Assert.Contains("only inside Sandboxie", text);
         Assert.Contains("Nothing was done", text);
         Assert.Contains("Resume it or roll it back", ExitCodes.Describe(ExitCodes.NeedsRecovery, ""));
+        // The engine's codes: 12 is m2's unrecorded session, 13 the sandbox dev refusal.
+        Assert.Equal(12, ExitCodes.Unrecorded);
+        Assert.Equal(13, ExitCodes.NotInSandbox);
+        Assert.Contains("could not finish recording", ExitCodes.Describe(ExitCodes.Unrecorded, ""));
+        Assert.Contains("exit code 14", ExitCodes.Describe(14, ""));
         Assert.Contains("exit code 99", ExitCodes.Describe(99, ""));
         var e = Assert.Throws<EngineException>(() =>
             CliEngineClient.Expect(new CliEngineClient.Run("exec", 8, "", "purge-engine: error: session(s) x were interrupted"), 0, 10));
         Assert.True(e.NeedsRecovery);
         Assert.Contains("were interrupted", e.Message);
         CliEngineClient.Expect(new CliEngineClient.Run("exec", 10, "", ""), 0, 10);
+    }
+
+    [Fact]
+    public async Task EngineRunsAreTrackedAndDisposeEndsThem()
+    {
+        // A stand-in engine that sleeps: cmd.exe /c ping -n 30 127.0.0.1 (no engine is run here).
+        var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        var client = new CliEngineClient(cmd);
+        Assert.True(client.HasJob);
+        var run = client.RunAsync("sleep", ["/c", "ping -n 30 127.0.0.1 >nul"], null, CancellationToken.None);
+        for (var i = 0; i < 50 && client.RunningCount == 0; i++) await Task.Delay(100);
+        Assert.Equal(1, client.RunningCount);
+        var started = DateTime.UtcNow;
+        await client.DisposeAsync();
+        var done = await run.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.NotEqual(0, done.Code);
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(12));
+        Assert.Equal(0, client.RunningCount);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => client.RunAsync("x", [], null, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CancellingARunKillsIt()
+    {
+        var client = new CliEngineClient(Path.Combine(Environment.SystemDirectory, "cmd.exe"));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.RunAsync("sleep", ["/c", "ping -n 30 127.0.0.1 >nul"], null, cts.Token));
+        Assert.Equal(0, client.RunningCount);
+        await client.DisposeAsync();
     }
 
     [Fact]

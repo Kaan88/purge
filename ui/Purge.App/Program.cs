@@ -45,6 +45,7 @@ public static class Program
             {
                 var failed = Engine;
                 Engine = new FakeEngineClient();
+                await failed.DisposeAsync().ConfigureAwait(false);
                 var hello = await Engine.HelloAsync().ConfigureAwait(false);
                 var doc = await Engine.ListProgramsAsync().ConfigureAwait(false);
                 return new StartupData(hello, doc,
