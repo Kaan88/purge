@@ -2332,7 +2332,7 @@
       "id": "expiry-junction",
       "gate": "expiry",
       "stage": "post-install",
-      "summary": "After exec, a junction and a file symlink to canaries are planted inside the quarantined item; the expiry walk must delete the links and never descend.",
+      "summary": "After exec, a junction and a file symlink to canaries replace the two files of the quarantined item (entry count unchanged); the expiry walk must delete the links and never descend.",
       "objects": [
         {
           "k": "canary-file",

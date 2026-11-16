@@ -1452,7 +1452,11 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
 # Snapshot roots of the objects an m2 manifest describes (its `roots`: paths and keys), plus the store, the
 # Session Manager key (PATH, PendingFileRenameOperations) and the user's Environment key. For the crash loop and
 # the race runs, where a full default snap per iteration would take too long.
-function Get-M2SnapRoots([string[]]$Manifests) {
+# -BootStable (m2-crash power-off rounds, whose snap B is taken after a boot): the Session Manager key is replaced
+# by its Environment subkey, since Windows rewrites Executive, kernel\RNG, Memory Management(\PrefetchParameters)
+# and Power at every boot (gate run 2026-11-16: 12 to 20 collateral records per round, all boot churn); the
+# round compares PendingFileRenameOperations itself instead (Get-PfroList before and after).
+function Get-M2SnapRoots([string[]]$Manifests, [switch]$BootStable) {
     $set = New-Object System.Collections.ArrayList
     $add = { param($v) $s = "$v"; if ($s -match '^[A-Za-z]:\\' -or $s -match '^HK(LM|U)\\') { if (-not ($set -contains $s)) { [void]$set.Add($s) } } }
     foreach ($m in $Manifests) {
@@ -1460,7 +1464,8 @@ function Get-M2SnapRoots([string[]]$Manifests) {
         $d = [IO.File]::ReadAllText($m) | ConvertFrom-Json
         if ($d.roots) { foreach ($p in $d.roots.PSObject.Properties) { foreach ($v in @($p.Value)) { & $add $v } } }
     }
-    foreach ($x in @($RigPurgeData, $RigPfroKey, "HKU\$RigUserSid\Environment")) { & $add $x }
+    $sm = $(if ($BootStable) { "$RigPfroKey\Environment" } else { $RigPfroKey })
+    foreach ($x in @($RigPurgeData, $sm, "HKU\$RigUserSid\Environment")) { & $add $x }
     @($set)
 }
 
@@ -1629,6 +1634,43 @@ function Save-M2Run($R, [switch]$Finished) {
 }
 
 function Set-M2Result($R, [string]$Key, $Value) { $R.S.results[$Key] = $Value; Save-M2Run $R }
+
+# Hard power-off rounds (m2-crash -HardPowerOff), right before the paused exec starts: makes the state the round
+# built durable, so the power cut can only lose what the engine itself wrote afterwards. Flushes volume C: (every
+# file and the NTFS log; Write-VolumeCache) and the registry hives the fixtures live in (RegFlushKey, P/Invoke:
+# HKLM\SOFTWARE, HKLM\SYSTEM, HKU\<sid>, HKU\<sid>_Classes). Without it the gate run of 2026-11-16
+# lost the fixture keys created seconds before the cut (HKLM\SOFTWARE\PurgeFixtureApp gone after the boot, HKU keys
+# with older write times), and every power-off row failed on state the engine never touched. Elevated.
+function Save-RigDurableState([string]$Sid = $RigUserSid) {
+    $r = [ordered]@{ volume = $null; hives = [ordered]@{} }
+    if (-not ('PurgeRig.RegFlush' -as [type])) {
+        Add-Type -Namespace PurgeRig -Name RegFlush -MemberDefinition '[DllImport("advapi32.dll")] public static extern int RegFlushKey(Microsoft.Win32.SafeHandles.SafeRegistryHandle hKey);'
+    }
+    try { Write-VolumeCache -DriveLetter C -ErrorAction Stop; $r.volume = 'flushed' } catch { $r.volume = "failed: $($_.Exception.Message)" }
+    $hives = @(@([Microsoft.Win32.Registry]::LocalMachine, 'SOFTWARE'), @([Microsoft.Win32.Registry]::LocalMachine, 'SYSTEM'),
+        @([Microsoft.Win32.Registry]::Users, $Sid), @([Microsoft.Win32.Registry]::Users, "$Sid`_Classes"))
+    foreach ($h in $hives) {
+        $name = "$($h[0].Name)\$($h[1])"
+        # RegFlushKey itself: .NET's RegistryKey.Flush() calls it only for a key this process wrote through that object.
+        try { $k = $h[0].OpenSubKey($h[1], $false); if ($k) { try { $e = [PurgeRig.RegFlush]::RegFlushKey($k.Handle); $r.hives[$name] = $(if ($e -eq 0) { 'flushed' } else { "error $e" }) } finally { $k.Close() } } else { $r.hives[$name] = 'absent' } }
+        catch { $r.hives[$name] = "failed: $($_.Exception.Message)" }
+    }
+    Log "durable state before the paused exec: volume $($r.volume); hives $(@($r.hives.Keys | ForEach-Object { "$_ $($r.hives[$_])" }) -join ', ')"
+    $r
+}
+
+# Hard power-off rounds (m2-crash -HardPowerOff): the restored snapshot's boot entry ignores failed boots and has
+# no automatic recovery, so back-to-back power cuts do not end in WinRE. Elevated; throws when bcdedit fails.
+function Set-RigBootPolicyIgnoreFailures {
+    $out = [ordered]@{}
+    foreach ($a in @('/set {current} bootstatuspolicy IgnoreAllFailures', '/set {current} recoveryenabled No')) {
+        $b = Invoke-Native -Exe (Join-Path $env:SystemRoot 'System32\bcdedit.exe') -Arguments $a -TimeoutSec 60
+        Log "bcdedit $a`: exit $($b.exit)"
+        $out[$a] = $b.exit
+        if ($b.exit -ne 0) { throw "bcdedit $a exited $($b.exit)" }
+    }
+    $out
+}
 
 function Invoke-RigShutdown([int]$DelaySec, [string]$Reason) {
     $r = Invoke-Native -Exe (Join-Path $env:SystemRoot 'System32\shutdown.exe') -Arguments ('/r /t ' + $DelaySec + ' /d p:4:1 /c ' + (ConvertTo-EngineArg $Reason)) -TimeoutSec 60

@@ -67,7 +67,7 @@ function Add-MatrixRow($Row) {
 }
 
 # A fresh fixture tree in $Work\<tag>, planned (group main); deep A and a scoped snap A taken.
-function New-CrashRound([string]$Tag) {
+function New-CrashRound([string]$Tag, [switch]$BootStable) {
     $w = Join-Path $Work $Tag
     if (Test-Path -LiteralPath $w) { Remove-Item -LiteralPath $w -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force $w | Out-Null
@@ -82,7 +82,8 @@ function New-CrashRound([string]$Tag) {
     $null = Invoke-M2Engine -Step "plan-$Tag" -Arguments (New-M2PlanArgs $t $plan) -Calls $Calls
     $ph = Get-M2PlanHash $plan
     $rec = [pscustomobject][ordered]@{ tag = $Tag; work = $w; manifest = $man; targets = $t; plan = $plan; select = (Write-M2IdFile $ids (F "select-$Tag.json")); ids = $ids
-        plan_hash = $ph; confirm = (Get-M2Confirm $ph $ids); roots = @(Get-M2SnapRoots @($man)); session = $null; journal = $null; report = $null }
+        plan_hash = $ph; confirm = (Get-M2Confirm $ph $ids); roots = @(Get-M2SnapRoots @($man) -BootStable:$BootStable); session = $null; journal = $null; report = $null
+        pfro_before = $(if ($BootStable) { , @(Get-PfroList) } else { $null }) }
     $null = Invoke-M2Deep @($man, $t) (F "deep-$Tag-a.json")
     $null = Invoke-M2Snap (F "snap-$Run-$Tag-a.tsv.gz") $rec.roots
     $rec
@@ -216,10 +217,17 @@ function Start-PausedExec($Rec, [string]$Point) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = Get-M2EngineExe
     $psi.Arguments = New-M2ExecArgs $Rec.plan $Rec.confirm $Rec.select (F "report-$($Rec.tag).json")
-    $psi.UseShellExecute = $false
-    $psi.EnvironmentVariables['PURGE_FAULT_PAUSE'] = "$Point`:600000"
+    # Shell execute: CreateProcess without handle inheritance. With UseShellExecute $false the engine inherits the
+    # job's redirected output pipe (agent.ps1 `*> <job>.log`), so the agent waits for the engine, which sleeps
+    # 600 s at every hit of the point, and the job never ends to let the host power the VM off (gate run
+    # 2026-11-16). The pause variable reaches the engine through this process's environment, set just for the start.
+    $psi.UseShellExecute = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     Log "engine (detached): [PURGE_FAULT_PAUSE=$Point`:600000] `"$($psi.FileName)`" $($psi.Arguments)"
-    $p = [System.Diagnostics.Process]::Start($psi)
+    $Rec | Add-Member -NotePropertyName durable -NotePropertyValue (Save-RigDurableState) -Force
+    $oldPause = $env:PURGE_FAULT_PAUSE
+    $env:PURGE_FAULT_PAUSE = "$Point`:600000"
+    try { $p = [System.Diagnostics.Process]::Start($psi) } finally { $env:PURGE_FAULT_PAUSE = $oldPause }
     [void]$Calls.Add([ordered]@{ step = "exec-paused-$($Rec.tag)"; cmd = "`"$($psi.FileName)`" $($psi.Arguments)"; env = "PURGE_FAULT_PAUSE=$Point`:600000"; exit = $null; crashed = $false; timed_out = $false; pid = $p.Id; start = (NowIso); end = $null; stderr_tail = @() })
     $deadline = (Get-Date).AddSeconds(240); $last = -1; $stable = 0; $s = $null
     while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
@@ -247,7 +255,7 @@ function Request-NextPoweroff {
         $tag = ConvertTo-Tag ('p{0:000}-exec-{1}-poweroff' -f $n, $point)
         $rec = $null; $pz = $null
         try {
-            $rec = New-CrashRound $tag
+            $rec = New-CrashRound $tag -BootStable
             $pz = Start-PausedExec $rec $point
         } catch { Log "!! power-off $tag`: $($_.Exception.Message)" }
         if ($pz -and $pz.paused) {
@@ -283,8 +291,12 @@ function Complete-Poweroff {
         Invoke-RecoverTwice $rec $row
         Complete-Round $rec $row 'resume'
     } catch { $row.error = "$($_.Exception.Message)" }
+    # The scoped snaps of a power-off round leave the Session Manager key out (-BootStable): PFRO compared here.
+    $pb = @($rec.pfro_before | Where-Object { $null -ne $_ }); $pa = @(Get-PfroList | Where-Object { $null -ne $_ })
+    $row.pfro_unchanged = (($pb -join "`n") -ceq ($pa -join "`n"))
+    if (-not $row.pfro_unchanged) { $row.notes += "PendingFileRenameOperations changed: $($pb.Count) -> $($pa.Count) entries" }
     Set-RowPass $row
-    if (-not $row.boot_changed) { $row.pass = $false }
+    if (-not $row.boot_changed -or -not $row.pfro_unchanged) { $row.pass = $false }
     Write-JsonFile $row (F "crash-$($pd.tag).json") 8
     Add-MatrixRow $row
     $St.poweroff_done += "$($pd.point)"
@@ -374,6 +386,11 @@ try {
             $po = @()
             if ((Get-M2Opt $Opts 'hard_poweroff' $false) -eq $true) {
                 $po = @(@(Get-M2Opt $Opts 'poweroff_points' $DefaultPoweroffPoints) | Where-Object { $declared -contains $_ })
+                # Back-to-back power cuts within a minute of boot make Windows count failed boots and stop in WinRE
+                # ("It looks like Windows didn't load correctly"; gate run 2026-11-16, second power-off), so the agent
+                # never comes back. The boot status policy of this restored snapshot ignores them; the restore of the
+                # next run brings the snapshot's BCD back.
+                $S.boot_policy = Set-RigBootPolicyIgnoreFailures
             }
             $script:St = [ordered]@{ schema = 'purge.rig.crashstate/1'; points = $declared; todo = @($its); done = 0; poweroff_todo = $po; poweroff_done = @(); pending = $null; torn_done = $false }
             Save-State $script:St

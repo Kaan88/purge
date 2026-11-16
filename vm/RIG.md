@@ -704,8 +704,11 @@ item (engine ceb5999 on; absent with older engines).
   reverse order with the main confirm; scoped snaps before/after must not differ: `refuse-diff.json`), snap-a,
   deep-a, exec-main, snap-b, deep-b, execdiff-main (`--traps m2-traps-manifest.json --group main`, deep A/B),
   traps-check-after-exec, undo-main (every item but the expiry trap's), deep-c, fidelity-main, expiry
-  (plant-expiry-junction, `quarantine expiring` with the clock override env, `quarantine purge --ids` of the
-  entries naming the expiry item: `expiring.json`, `expiry-*` store), traps-check-after-expiry, race-a / race-b
+  (plant-expiry-junction: the junction and the file symlink replace the quarantined item's two own files, so the
+  item holds no more entries than the engine counted at the move and the purge reaches the walk; an item that
+  gained entries is refused before any walk, `Refused MoreEntriesThanCounted`, exit 10, which the gate run of
+  2026-11-16 met while the plant still added the links; `quarantine expiring` with the clock override env,
+  `quarantine purge --ids` of the entries naming the expiry item: `expiring.json`, `expiry-*` store), traps-check-after-expiry, race-a / race-b
   (each its own plan, exec with the manifest's `helper.env` PURGE_FAULT_PAUSE and the swap helper in the
   background, scoped snaps, deep, `execdiff-race-*.json`), forged-fp (`scan --fp <user-store fp> --mode post`
   -> `plan-forged.json`; no canary path Safe or preselected), traps-check-final, store.
@@ -738,7 +741,21 @@ item (engine ceb5999 on; absent with older engines).
   `crash-matrix.json` (`purge.rig.crashmatrix/1`). A point the plan never reaches is `hit: false` (recorded, not
   failed). `-HardPowerOff`: for intent.flushed, regdelete.mid, commit.before an exec is started detached with
   `PURGE_FAULT_PAUSE=<point>:600000`; once its journal is stable for 6 s the stage asks for a `poweroff`
-  continuation; `after-poweroff` checks the boot id changed, recovers twice, resumes, undoes, fidelity. Last, torn
+  continuation; `after-poweroff` checks the boot id changed, recovers twice, resumes, undoes, fidelity. Three
+  rig rules keep a power cut from testing the rig instead of the engine (gate run 2026-11-16): the paused exec is
+  started by shell execute, without handle inheritance (inheriting the job's output pipe kept the agent waiting
+  for the engine, which sleeps 600 s at every hit, so the job never ended); right before it starts, riglib
+  `Save-RigDurableState` flushes volume C: and the registry hives the fixtures live in (the cut otherwise lost
+  fixture keys created seconds earlier); before each `controlvm poweroff` the host's `Sync-GuestRunFiles` flushes
+  the files of `C:\cr\out\<run>` and `C:\cr\work\<run>` (the continuation marker read back as NULs after the
+  boot otherwise). The start stage also sets the boot entry to `bootstatuspolicy IgnoreAllFailures` and
+  `recoveryenabled No` (`Set-RigBootPolicyIgnoreFailures`): two cuts within a minute of boot otherwise stop the
+  guest in WinRE. The scoped snaps of a power-off round take `Session Manager\Environment` instead of the whole
+  Session Manager key (`Get-M2SnapRoots -BootStable`: Windows rewrites its Executive, kernel\RNG, Memory
+  Management and Power subkeys at every boot) and the row compares PendingFileRenameOperations itself
+  (`pfro_unchanged`, part of its pass). After the exec starts the rig flushes no registry hive and no file of the engine's store; the
+  run-file flush commits the NTFS log, though, so file-system metadata (the engine's renames) up to the cut is
+  durable in these rounds, while registry changes since the last lazy flush can be lost. Last, torn
   journals (`crash-torn.json`): after an act.after crash the journal's last record cut in half (recover must
   accept it, rollback, fidelity) and, separately, one byte of a middle record changed (recover must refuse and
   change nothing).
@@ -759,6 +776,8 @@ Trap expectations settled by the smoke run (2026-11-16): `odd-names.*` (`name.`,
 `Skipped/GateBlocked/DenyListed` (engine rule `canon.trailing-dot-or-space`): refusing a name Win32 would normalise
 onto a sibling is the safe direction for M2. Fixture after-undo check: a directory a RemoveDirIfEmpty item removed
 is recreated by undo with a new FileId by design, so `file_id` is not compared for it (every other field is).
+(Until the gate run of 2026-11-16 the after-undo check reused the list-value variable for its per-field diff and
+always reported `list values bad=1`, ok false, with no mismatch listed.)
 
 ### 11.4 Engine command lines (M2-CLI)
 
@@ -882,7 +901,13 @@ hidden only if Windows itself removed or changed that very object in a null run'
 trap and fixture manifests are in addition verified by content hash (deep snapshots), which no ambient rule
 touches. Records added (`+`) never fail the gate and are not part of the set.
 
-The set is tied to m2-base and the rig's timing; regenerate it when m2-base is rebuilt. Collateral that remains
+The set is tied to m2-base and the rig's timing; regenerate it when m2-base is rebuilt. The committed set was
+rebuilt in the gate run of 2026-11-16, the first with the telemetry pause before snap A, from 12 null runs of each
+mode (`n1-` to `n12-`). None of them saw `~F C:\WINDOWS\Prefetch\ReadyBoot\ReadyBoot.etl` (the boot trace,
+4 MB -> 20 MB about two minutes after boot), which one of the gate run's two m2-traps runs left as its only
+collateral record; a settle wait before snap A (boot trace finished) would take it out of the window. The real-app stage (`app`) has no null analog: its exec window follows an install, launch and
+uninstall, and the first gate run's npp round showed 20 records of shell churn there (AppModel HAM `LU`, bam
+UserSettings, VolatileNotifications, WER TermReason) that the repeat run did not. Collateral that remains
 after it is either churn the null runs did not see (add null runs) or a real finding: the execdiff report lists
 each record.
 

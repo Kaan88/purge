@@ -1009,6 +1009,8 @@ function Set-M2RestoreFrequency([int]$Minutes) { Ev "srfreq:$Minutes"; $Minutes 
 function Set-M2SystemProtection([bool]$On) { Ev "srprot:$On"; $On }
 function Get-RigBootId { [IO.File]::ReadAllText('@W@\bootid.txt').Trim() }
 function Invoke-RigShutdown([int]$DelaySec, [string]$Reason) { Ev "shutdown:$DelaySec" }
+function Set-RigBootPolicyIgnoreFailures { Ev 'boot-policy'; [ordered]@{ fake = 0 } }
+function Save-RigDurableState([string]$Sid = '') { Ev 'durable-state'; [ordered]@{ volume = 'fake'; hives = [ordered]@{} } }
 function Start-M2Locker([string[]]$Paths, [string]$WorkDir, [int]$TimeoutSec = 60) { Ev "lock:$($Paths -join ',')"; [pscustomobject]@{ pid = 4000003; paths = $Paths; ready = $true; stop_file = '@W@\stop' } }
 function Stop-M2Locker($Locker, [int]$WaitSec = 10) { Ev 'unlock' }
 function Get-PfroList { if (-not (Test-Path -LiteralPath '@W@\pfro.json')) { return $null }; $x = [IO.File]::ReadAllText('@W@\pfro.json') | ConvertFrom-Json; , @($x | ForEach-Object { "$_" }) }
@@ -1223,15 +1225,17 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     # --- hard power-off: marker kind poweroff without -HardPowerOff is an error, with it a power cycle
     $cont = Join-Path $W 'out\pw-run'
     New-Item -ItemType Directory -Force $cont | Out-Null
-    function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy) [IO.File]::WriteAllText($LogCopy, 'log'); $script:PwJobs++
+    $script:PwNames = New-Object System.Collections.ArrayList
+    function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy) [IO.File]::WriteAllText($LogCopy, 'log'); $script:PwJobs++; [void]$script:PwNames.Add($Name)
         if ($script:PwJobs -eq 1) { [IO.File]::WriteAllText((Join-Path $cont 'continue.json'), '{"schema":"purge.rig.continue/1","seq":1,"kind":"poweroff","next":"after-poweroff","boot_before":"boot-x"}') } else { Remove-Item -LiteralPath (Join-Path $cont 'continue.json') -Force -ErrorAction SilentlyContinue }
         [pscustomobject]@{ name = $Name; done = $true; seconds = 1; log = ''; log_file = $LogCopy } }
     $script:PwJobs = 0; $script:M2Guest.Clear()
     $r = Invoke-M2Job -Run 'pw-run' -Mode 'm2-crash'
     Check 'Invoke-M2Job: a poweroff continuation without -HardPowerOff stops with an error' ($r.error -match 'HardPowerOff' -and -not ($script:M2Guest -contains 'hard power cycle'))
-    $script:PwJobs = 0; $script:M2Guest.Clear()
+    $script:PwJobs = 0; $script:M2Guest.Clear(); $script:PwNames.Clear()
     $r = Invoke-M2Job -Run 'pw-run' -Mode 'm2-crash' -HardPowerOff
     Check 'Invoke-M2Job -HardPowerOff: power cycle, then stage after-poweroff' (-not $r.error -and $r.done -and ($script:M2Guest -contains 'hard power cycle') -and (@($r.stages | ForEach-Object { $_.stage }) -join ',') -eq 'start,after-poweroff')
+    Check 'Invoke-M2Job -HardPowerOff: the run files are synced to disk by a guest job before the power cycle' ((@($script:PwNames) -join ',') -eq 'pw-run-start,pw-run-sync,pw-run-after-poweroff') (@($script:PwNames) -join ',')
     function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy) [IO.File]::WriteAllText($LogCopy, 'log'); [IO.File]::WriteAllText((Join-Path $cont 'continue.json'), '{"seq":1,"kind":"reboot","next":"matrix","boot_before":"b"}'); [pscustomobject]@{ name = $Name; done = $true; seconds = 1; log = ''; log_file = $LogCopy } }
     $r = Invoke-M2Job -Run 'pw-run' -Mode 'm2-crash'
     Check 'Invoke-M2Job: a marker the next stage does not take (same seq twice) stops the loop' ($r.error -match 'seen twice' -and @($r.stages).Count -eq 2)

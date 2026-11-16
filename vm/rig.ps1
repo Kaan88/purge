@@ -783,6 +783,35 @@ function Wait-GuestReboot {
 
 # After a 'poweroff' continuation (-HardPowerOff): VBoxManage controlvm poweroff (no shutdown, no flush), then a
 # cold start and the agent.
+# Before a hard power-off: a guest job flushes (FlushFileBuffers) every file of the rig's own run directories,
+# C:\cr\out\<run> and C:\cr\work\<run>, so the marker, the stage state, run.json and the A snapshots written seconds
+# before survive the power cut. Without it the gate run of 2026-11-16 found continue.json filled with blanks after
+# the boot (Invalid JSON primitive). Only these directories: the engine's store (C:\ProgramData\Purge) is never
+# flushed by the rig, since its own durability is what the power-off rounds test. A failure is logged, not thrown.
+function Sync-GuestRunFiles {
+    param([Parameter(Mandatory)][string]$Run, [int]$TimeoutSec = 300)
+    if ($Run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$Run'" }
+    $text = @"
+`$ErrorActionPreference = 'Continue'
+`$n = 0; `$bad = 0
+foreach (`$d in @('C:\cr\out\$Run', 'C:\cr\work\$Run')) {
+    if (-not (Test-Path -LiteralPath `$d)) { continue }
+    foreach (`$f in @(Get-ChildItem -LiteralPath `$d -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        if ((`$f.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+        try { `$s = [IO.File]::Open(`$f.FullName, 'Open', 'ReadWrite', 'ReadWrite, Delete'); try { `$s.Flush(`$true) } finally { `$s.Dispose() }; `$n++ } catch { `$bad++ }
+    }
+}
+"RIGSYNC|`$n|`$bad"
+"@
+    $tmpDir = Join-Path (Get-HostTemp) 'vmjobs'
+    New-Item -ItemType Directory -Force $tmpDir | Out-Null
+    $j = Invoke-GuestJob -Text $text -Name "$Run-sync" -TimeoutSec $TimeoutSec -LogCopy (Join-Path $tmpDir ('{0}-sync-{1}.log' -f $Run, [guid]::NewGuid().ToString('N').Substring(0, 6)))
+    $m = @("$($j.log)" -split "`r?`n" | Where-Object { $_ -like 'RIGSYNC|*' }) | Select-Object -Last 1
+    if (-not $j.done -or -not $m) { Write-RigLog "  !! sync of the run files before the power-off did not report (done=$($j.done))"; return }
+    $p = $m -split '\|'
+    Write-RigLog "  synced $($p[1]) run file(s) to disk before the power-off$(if ([int]$p[2]) { "; $($p[2]) could not be opened" })"
+}
+
 function Invoke-HardPowerCycle {
     param([int]$AgentTimeoutSec = 600)
     Assert-RigVm
@@ -827,6 +856,7 @@ function Invoke-M2Job {
             if ($m.kind -eq 'reboot') { $null = Wait-GuestReboot -BootBefore "$($m.boot_before)" }
             elseif ($m.kind -eq 'poweroff') {
                 if (-not $HardPowerOff) { throw 'the guest asked for a hard power-off but -HardPowerOff is not set' }
+                Sync-GuestRunFiles -Run $Run
                 Invoke-HardPowerCycle
             } else { throw "unknown continuation kind '$($m.kind)'" }
         } catch { $res.error = "continuation $seq ($($m.kind)): $($_.Exception.Message)"; return [pscustomobject]$res }
@@ -1028,6 +1058,10 @@ function Invoke-M2ElevatedTests {
     $rows = @()
     try {
         $null = Get-PwFile
+        # Native stderr (cargo's progress, the test binaries' --list) must not turn into a terminating error when the
+        # caller runs with $ErrorActionPreference = 'Stop' (Windows PowerShell 5.1 wraps each stderr line in an
+        # ErrorRecord even with 2>$null); exit codes are checked below. Function scope only.
+        $ErrorActionPreference = 'Continue'
         # Host build, one cargo call per (crate, features).
         $exes = @{}
         foreach ($g in @($Tests | Group-Object { "$($_.crate)|$($_.features)" })) {
