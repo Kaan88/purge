@@ -934,7 +934,7 @@ function Get-M2ModeOpts {
 }
 
 # One M2 mode end to end (rig.ps1 -Mode ...): names and engine checked first, then Invoke-SnapshotJob. m2-fidelity
-# adds the real-app round trips (-Apps, default npp, 7zip): per app the M1a engine run <run>-<id> (run-app.ps1,
+# adds the real-app round trips (-Apps, default npp, firefox): per app the M1a engine run <run>-<id> (run-app.ps1,
 # installs, uninstalls, writes plan-purge.json) and then exec-run stage 'app' on its plan, in the same VM session.
 # Writes vm\runs\m2-<run>-<stamp>.log / .json.
 function Invoke-M2Mode {
@@ -950,7 +950,7 @@ function Invoke-M2Mode {
     $bands = @($AppBands | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($Mode -eq 'm2-fidelity' -and -not $NullRun) {
         $appIds = @($Apps | Where-Object { $_ })
-        if (-not $appIds.Count) { $appIds = @('npp', '7zip') }
+        if (-not $appIds.Count) { $appIds = @('npp', 'firefox') }
         if ($appIds -contains 'none') { $appIds = @() }
         foreach ($a in $appIds) { $null = Get-RunName -Id $a -RunPrefix "$run-" -Engine }
     }

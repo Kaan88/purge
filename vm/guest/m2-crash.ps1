@@ -32,6 +32,15 @@ if (@('start', 'matrix', 'after-poweroff') -cnotcontains $Stage) { Write-Host ("
 # that neither exec nor undo reaches are listed as not_hit).
 $UndoPoints = @('undo.intent', 'undo.act.after', 'regrestore.mid', 'index.write')
 $DefaultPoweroffPoints = @('intent.flushed', 'regdelete.mid', 'commit.before')
+# Points that need their own scenario: expiry.mid (a `quarantine purge` of a quarantined directory under the clock
+# override) and bootmove.registered (a fixture file held open without FILE_SHARE_DELETE, so the move is
+# registered for boot time).
+$ExpiryPoint = 'expiry.mid'
+$BootmovePoint = 'bootmove.registered'
+$BootmoveItem = 'file-ads.file'
+$BootmoveFile = 'C:\Program Files\PurgeFixtureApp\ads\ads.bin'
+$ExpiryItem = 'nested-dirs.dir'
+$ExpiryPath = 'C:\Program Files\PurgeFixtureApp\tree'
 
 $Opts = ConvertFrom-M2Opts $OptsB64
 $R = Open-M2Run $Run $Mode $Stage
@@ -164,15 +173,152 @@ function New-Row([int]$N, [string]$Point, [string]$Phase, [string]$After, [strin
 # not hit is recorded, not failed.
 function Set-RowPass($Row) {
     if (-not $Row.hit) { $Row.pass = ($null -eq $Row.error); return }
+    if ($Row.point -eq $ExpiryPoint) {
+        $Row.pass = ($null -eq $Row.error -and $Row.crashed -and $Row.partial_left -eq $true -and $Row.recover_exit -eq 0 -and $Row.recover_idempotent -eq $true `
+                -and $Row.listed_unfinished -eq $true -and $Row.after_exit -eq 0 -and $Row.repurge_outcome -eq 'Purged' -and $Row.second_expire_record -eq $false `
+                -and $Row.item_gone -eq $true -and @($Row.outside_store).Count -eq 0)
+        return
+    }
+    if ($Row.point -eq $BootmovePoint) {
+        # A resumed session whose item waits for the boot exits 10 (PendingReboot is not "done", RIG.md §11.7).
+        $wantExit = $(if ($Row.after -eq 'rollback') { 0 } else { 10 })
+        $Row.pass = ($null -eq $Row.error -and $Row.crashed -and $Row.pfro_after_crash.ok -eq $true -and $Row.recover_exit -eq 0 -and $Row.recover_idempotent -eq $true `
+                -and $Row.after_exit -eq $wantExit -and $Row.pfro_restored -eq $true -and $Row.fidelity_ok -eq $true -and $Row.fixtures_check_exit -eq 0 `
+                -and ($Row.after -eq 'rollback' -or ($Row.bootmove_confirmed -eq $true -and $Row.pfro_after_recovery.ok -eq $true -and $Row.undo_exit -eq 0)))
+        return
+    }
     $Row.pass = ($null -eq $Row.error -and $Row.crashed -and $Row.recover_exit -eq 0 -and $Row.recover_idempotent -eq $true -and $Row.after_exit -eq 0 `
             -and $Row.fidelity_ok -eq $true -and $Row.execdiff_ok -ne $false -and ($null -eq $Row.undo_exit -or $Row.undo_exit -eq 0) `
             -and $Row.undone_by_recovery -ne $false -and $Row.fixtures_check_exit -eq 0)
+}
+
+# Narrows a round's selection to $Ids (the plan keeps every fixture item; --select is the full selection).
+function Set-RecSelection($Rec, [string[]]$Ids) {
+    $Rec.ids = @($Ids)
+    $Rec.select = Write-M2IdFile @($Ids) (F "select-$($Rec.tag).json")
+    $Rec.confirm = Get-M2Confirm $Rec.plan_hash @($Ids)
+}
+
+# rigtool diff A B --json: the removed and changed records whose path is not under $AllowedPrefix.
+function Get-DiffOutside([string]$A, [string]$B, [string]$AllowedPrefix, [string]$Out) {
+    $r = Invoke-Native -Exe $RigTool -Arguments ('diff ' + (Q $A) + ' ' + (Q $B) + ' --json') -TimeoutSec 600
+    if ($r.exit -ne 0) { throw "rigtool diff exited $($r.exit)" }
+    [IO.File]::WriteAllText($Out, "$($r.stdout)", $RigUtf8)
+    $d = "$($r.stdout)" | ConvertFrom-Json
+    $recs = @(@($d.removed) + @($d.changed) | Where-Object { $_ })
+    @($recs | Where-Object { -not "$($_.path)".StartsWith($AllowedPrefix, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { "$($_.op)$($_.rec) $($_.path)" })
+}
+
+# Row expiry.mid: exec of the expiry item alone, `quarantine expiring` (clock override), scoped snap X, then
+# `quarantine purge --ids <id>` with PURGE_FAULT_AT=expiry.mid:2 (the second listing of the walk: the first level
+# deleted, a subdirectory not). Recovery checks: the purge crashed with part of the item still in quarantine;
+# `journal recover` twice changes nothing; `quarantine expiring` lists the item as unfinished; a second purge
+# (no fault) ends Purged without a second expire record and the item is gone; between snap X and snap Y nothing
+# outside the store was removed or changed (canaries and every other fixture untouched).
+function Invoke-ExpiryIteration($It, $Row, [string]$Tag) {
+    $rec = New-CrashRound $Tag
+    Set-RecSelection $rec @($ExpiryItem)
+    $x0 = Invoke-CrashExec $rec
+    $Row.session = $rec.session
+    if ($x0.exit -ne 0) { throw "exec of $ExpiryItem exited $($x0.exit)" }
+    $xenv = @{ PURGE_RIG_NOW_OFFSET_DAYS = '400' }
+    $e = Invoke-M2Engine -Step "quarantine-expiring-$Tag" -Arguments (New-M2QuarantineArgs 'expiring') -Calls $Calls -Environment $xenv -StdoutFile (F "expiring-$Tag.json") -NoThrow
+    if ($e.exit -ne 0) { throw "quarantine expiring exited $($e.exit)" }
+    $ids = @(Find-M2ExpiryIds ([IO.File]::ReadAllText((F "expiring-$Tag.json"))) $ExpiryPath)
+    if ($ids.Count -ne 1) { throw "quarantine expiring lists $($ids.Count) entries for $ExpiryPath" }
+    $Row.expiry_id = $ids[0]
+    $entry = @((Read-Json (F "expiring-$Tag.json")).items | Where-Object { "$($_.id)" -eq $ids[0] })[0]
+    $qpath = "$($entry.quarantine_path)"
+    $null = Invoke-M2Snap (F "snap-$Run-$Tag-x.tsv.gz") $rec.roots
+    $fenv = @{ PURGE_RIG_NOW_OFFSET_DAYS = '400'; PURGE_FAULT_AT = "$ExpiryPoint`:2" }
+    $p = Invoke-M2Engine -Step "quarantine-purge-fault-$Tag" -Arguments (New-M2QuarantineArgs 'purge' $ids) -Calls $Calls -Environment $fenv -StdoutFile (F "purge-fault-$Tag.out") -NoThrow
+    $Row.fault_exit = $p.exit
+    $Row.crashed = [bool]$p.crashed
+    $Row.hit = $Row.crashed
+    if (-not $Row.hit) { $Row.notes += "point not reached (exit $($p.exit))"; return }
+    $Row.partial_left = (Test-Path -LiteralPath $qpath)
+    Invoke-RecoverTwice $rec $Row
+    $e2 = Invoke-M2Engine -Step "quarantine-expiring2-$Tag" -Arguments (New-M2QuarantineArgs 'expiring') -Calls $Calls -Environment $xenv -StdoutFile (F "expiring2-$Tag.json") -NoThrow
+    $again = @((Read-Json (F "expiring2-$Tag.json")).items | Where-Object { "$($_.id)" -eq $ids[0] })
+    $Row.listed_unfinished = ($e2.exit -eq 0 -and $again.Count -eq 1 -and $again[0].unfinished -eq $true)
+    $p2 = Invoke-M2Engine -Step "quarantine-purge-$Tag" -Arguments (New-M2QuarantineArgs 'purge' $ids) -Calls $Calls -Environment $xenv -StdoutFile (F "purge-$Tag.out") -NoThrow
+    $Row.after_exit = $p2.exit
+    $pr = @((Read-Json (F "purge-$Tag.out")).items | Where-Object { "$($_.id)" -eq $ids[0] })
+    $Row.repurge_outcome = $(if ($pr.Count) { "$($pr[0].outcome)" } else { $null })
+    $Row.second_expire_record = $(if ($pr.Count) { [bool]$pr[0].expire_recorded } else { $null })
+    $Row.item_gone = -not (Test-Path -LiteralPath $qpath)
+    $null = Invoke-M2Snap (F "snap-$Run-$Tag-y.tsv.gz") $rec.roots
+    $Row.outside_store = @(Get-DiffOutside (F "snap-$Run-$Tag-x.tsv.gz") (F "snap-$Run-$Tag-y.tsv.gz") $RigPurgeData (F "diff-$Tag-xy.json"))
+    $null = Copy-M2Session $rec.session $D "sess-$Tag"
+}
+
+# Row bootmove.registered (after resume | rollback): the admin fixture file held open without FILE_SHARE_DELETE,
+# exec of that item alone with PURGE_FAULT_AT=bootmove.registered: the move is registered in
+# PendingFileRenameOperations and the process dies before its `done`. Recovery checks: the pair is in PFRO after
+# the crash; `journal recover` twice changes nothing; resume ends with the item PendingReboot (confirmed: true, the
+# pair still there once), then undo before any reboot takes the pair out again; rollback takes it out itself.
+# Either way PFRO ends as before, the file is unchanged (fidelity A vs C) and every fixture as built.
+function Invoke-BootmoveIteration($It, $Row, [string]$Tag) {
+    $rec = New-CrashRound $Tag
+    Set-RecSelection $rec @($BootmoveItem)
+    $pb = Get-PfroList
+    $lk = Start-M2Locker @($BootmoveFile) (Join-Path $Work "$Tag-lock")
+    try {
+        if (-not $lk.ready) { throw 'the locker did not take the file' }
+        $x = Invoke-CrashExec $rec @{ PURGE_FAULT_AT = $BootmovePoint }
+        $Row.session = $rec.session
+        $Row.fault_exit = $x.exit
+        $Row.crashed = [bool]$x.crashed
+        $Row.hit = $Row.crashed
+        $null = Copy-M2Session $rec.session $D "sess-$Tag-crash"
+        if (-not $Row.hit) {
+            $Row.notes += "point not reached (exit $($x.exit))"
+            if ($x.exit -eq 0 -or $x.exit -eq 10) { $null = Invoke-M2Engine -Step "undo-$Tag" -Arguments (New-M2UndoArgs $rec.session '' '' (F "undo-$Tag.json")) -Calls $Calls -StdoutFile (F "undo-$Tag.out") -NoThrow }
+            return
+        }
+        $Row.pfro_after_crash = Compare-PfroLists $pb (Get-PfroList) @($BootmoveFile)
+        Invoke-RecoverTwice $rec $Row
+        if ($It.after -eq 'rollback') {
+            $Row.after_exit = (Invoke-Journal 'rollback' $rec.session $Tag).exit
+        } else {
+            $Row.after_exit = (Invoke-Journal 'resume' $rec.session $Tag).exit
+            $o = "$(if (Test-Path -LiteralPath (F "journal-resume-$Tag.out")) { [IO.File]::ReadAllText((F "journal-resume-$Tag.out")) })"
+            $Row.bootmove_confirmed = ($o -match '"kind":\s*"PendingReboot"' -and $o -match '"confirmed":\s*true' -and $o -notmatch '"confirmed":\s*false')
+            $Row.pfro_after_recovery = Compare-PfroLists $pb (Get-PfroList) @($BootmoveFile)
+            $u = Invoke-M2Engine -Step "undo-$Tag" -Arguments (New-M2UndoArgs $rec.session '' '' (F "undo-$Tag.json")) -Calls $Calls -StdoutFile (F "undo-$Tag.out") -NoThrow
+            $Row.undo_exit = $u.exit
+        }
+        $pa = Get-PfroList
+        $Row.pfro_restored = ((@($pb | Where-Object { $null -ne $_ }) -join "`n") -ceq (@($pa | Where-Object { $null -ne $_ }) -join "`n"))
+    } finally { Stop-M2Locker $lk }
+    $Row.notes += 'execdiff not run: a single locked item whose move waits for a boot; PFRO and fidelity checked instead'
+    $null = Copy-M2Session $rec.session $D "sess-$Tag"
+    $null = Invoke-M2Deep @($rec.manifest, $rec.targets) (F "deep-$Tag-c.json")
+    $f = Invoke-M2Fidelity (F "deep-$Tag-a.json") (F "deep-$Tag-c.json") $rec.journal (F "fidelity-$Tag.json")
+    $Row.fidelity_ok = $f.ok
+    $c = Invoke-M2Script $FixturesPs ('-Action check -Phase after-undo -OutDir ' + (Q $rec.work))
+    $Row.fixtures_check_exit = $c.exit
+    $cf = Join-Path $rec.work 'm2-fixtures-check-after-undo.json'
+    if (Test-Path -LiteralPath $cf) { Copy-Item -LiteralPath $cf -Destination (F "check-$Tag.json") -Force }
 }
 
 function Invoke-Iteration($It) {
     $row = New-Row $It.n $It.point $It.phase $It.after
     $tag = ConvertTo-Tag ('c{0:000}-{1}-{2}-{3}' -f $It.n, $It.phase, $It.point, $It.after)
     $row.tag = $tag
+    if ($It.point -eq $ExpiryPoint -or $It.point -eq $BootmovePoint) {
+        try {
+            if ($It.point -eq $ExpiryPoint) { Invoke-ExpiryIteration $It $row $tag } else { Invoke-BootmoveIteration $It $row $tag }
+        } catch {
+            $row.error = "$($_.Exception.Message)"
+            Log "!! iteration $tag`: $($row.error)"
+        }
+        Set-RowPass $row
+        Write-JsonFile $row (F "crash-$tag.json") 8
+        Add-MatrixRow $row
+        Log ("iteration {0}: hit={1} pass={2}" -f $tag, $row.hit, $row.pass)
+        return
+    }
     try {
         $rec = New-CrashRound $tag
         $fault = @{ PURGE_FAULT_AT = $It.point }
@@ -381,6 +527,8 @@ try {
             $n = 0
             foreach ($p in $points) {
                 if ($UndoPoints -contains $p) { [void]$its.Add([ordered]@{ n = ++$n; point = $p; phase = 'undo'; after = 'resume' }) }
+                # expiry.mid fires in `quarantine purge`, not in a run: one row, finished by the next purge.
+                elseif ($p -eq $ExpiryPoint) { [void]$its.Add([ordered]@{ n = ++$n; point = $p; phase = 'expiry'; after = 'repurge' }) }
                 else { foreach ($a in 'resume', 'rollback') { [void]$its.Add([ordered]@{ n = ++$n; point = $p; phase = 'exec'; after = $a }) } }
             }
             $po = @()

@@ -249,6 +249,7 @@ function Invoke-TrapsMode {
     $script:Main = $null
     Phase 'plan-main' { $script:Main = New-PlanRec 'main' @($TT) 'main' } $S
     if (-not $NullRun) { Phase 'refusals' { Invoke-Refusals $script:Main $TT $TM } $S }
+    Phase 'settle' { Add-Result 'settle' 'start' (Wait-M2BootSettle -MaxSec ([int](Get-M2Opt $Opts 'settle_max' 300))) } $S
     Phase 'snap-a' { $null = Invoke-M2Snap (F "snap-$Run-a.tsv.gz") } $S
     Phase 'deep-a' { $null = Invoke-M2Deep @($TM, $script:Main.targets) (F 'deep-a.json') } $S
     if ($NullRun) { Invoke-NullWindow @($TM, $script:Main.targets); return }
@@ -427,6 +428,7 @@ function Invoke-FidelityMode {
     Phase 'fixtures-build' { Invoke-FixturesScript '' $D } $S
     $script:Main = $null
     Phase 'plan-main' { $script:Main = New-PlanRec 'main' @($FT) 'main' } $S
+    Phase 'settle' { Add-Result 'settle' 'start' (Wait-M2BootSettle -MaxSec ([int](Get-M2Opt $Opts 'settle_max' 300))) } $S
     Phase 'snap-a' { $null = Invoke-M2Snap (F "snap-$Run-a.tsv.gz") } $S
     Phase 'deep-a' { $null = Invoke-M2Deep @($FM, $script:Main.targets) (F 'deep-a.json') } $S
     if ($NullRun) { Invoke-NullWindow @($FM, $script:Main.targets); return }
@@ -601,6 +603,7 @@ function Invoke-AppStage {
     } $S
     if (-not $script:AppRec) { return }
     $rec = $script:AppRec
+    Phase "$tag-settle" { Add-Result 'settle' $tag (Wait-M2BootSettle -MaxSec ([int](Get-M2Opt $Opts 'settle_max' 300))) } $S
     Phase "$tag-snap-a" { $null = Invoke-M2Snap (F "snap-$Run-$tag-a.tsv.gz") } $S
     Phase "$tag-deep-a" { $null = Invoke-M2Deep @($rec.targets) (F "deep-$tag-a.json") } $S
     Phase "$tag-exec" { $x = Invoke-ExecRec $rec; if (-not $x.report) { throw "exec $tag wrote no report (exit $($x.exit))" } } $S

@@ -627,7 +627,7 @@ fixture plants one, the expected outcome is "untouched" (fidelity rows `DeleteSe
     $env:VMPWFILE = '<guest password file>'
     .\vm\rig.ps1 -Mode m2-install
     .\vm\rig.ps1 -Mode m2-traps
-    .\vm\rig.ps1 -Mode m2-fidelity -Apps npp,7zip
+    .\vm\rig.ps1 -Mode m2-fidelity -Apps npp,firefox
     .\vm\rig.ps1 -Mode m2-crash -HardPowerOff [-FaultPoints act.after,intent.flushed] [-BatchSize 10]
     .\vm\rig.ps1 -Mode m2-reboot
     bash truth/m2.sh                       # from vm/: results/m2-gate.json + .md
@@ -722,12 +722,15 @@ item (engine ceb5999 on; absent with older engines).
   report Throttled; the engine never touches the value), restore-point-off (G6 "System Protection off": protection
   on C: disabled, an exec with `--restore-point always` must report the restore point Disabled and still execute
   the plan, per docs\M2_DESIGN.json "never blocks the batch on failure"; undone, protection enabled again:
-  `results.restore_point_off`). Per app (`-Apps`, default npp, 7zip): the M1a engine run `<run>-<id>` (run-app.ps1
+  `results.restore_point_off`). Per app (`-Apps`, default npp, firefox): the M1a engine run `<run>-<id>` (run-app.ps1
   installs, uninstalls, scans), then stage `app`: its `plan-purge.json` with every item the plan offers for removal
   selected (bands `app_bands`, default Safe, Likely and Weak, preselected or not; Blocked never), so real leftovers
   go through exec and undo even when the scan ticks nothing; snap/deep A, exec, snap B, execdiff, undo, deep C,
-  fidelity (`*-app-<id>.*`). A plan with no such item is recorded as skipped (7-Zip's post scan was empty on
-  m2-base in the smoke run).
+  fidelity (`*-app-<id>.*`). A plan with no such item is recorded as skipped. 7-Zip (until 2026-11-16 the
+  second default app) is always skipped: its MSI writes no InstallLocation and no DisplayIcon, so the engine's
+  harvest finds no root and no exe (`0 roots, 0 exes`) and the post scan offers nothing, though the uninstall
+  leaves `HKU\<sid>\Software\7-Zip` (the frozen M1a score has purge recall 0/3 for 7zip). Firefox (NSIS, official
+  download, frozen M1a: 20 items offered) replaced it.
 - **null runs** (`-Null`, m2-traps / m2-fidelity, stage `start` only; §11.8): the mode's phases up to snap A /
   deep A, then `null-wait` (opts `null_wait`, default 3 s, where exec would run), snap B, deep B, store; no exec,
   undo, execdiff, refusals or app stage, no ambient set pushed.
@@ -739,7 +742,16 @@ item (engine ceb5999 on; absent with older engines).
   each (the second must change nothing); `journal resume --session` (then scoped snap B, execdiff, undo) or
   `journal rollback --session`; deep C, fidelity A/C, fixtures check. `crash-<tag>.json` per iteration, all in
   `crash-matrix.json` (`purge.rig.crashmatrix/1`). A point the plan never reaches is `hit: false` (recorded, not
-  failed). `-HardPowerOff`: for intent.flushed, regdelete.mid, commit.before an exec is started detached with
+  failed). Two points have their own rows (since 2026-11-16; before, both were never hit): `expiry.mid` (phase
+  `expiry`, one row): exec of `nested-dirs.dir` alone, `quarantine expiring` with the clock override, scoped snap X,
+  `quarantine purge --ids` with `PURGE_FAULT_AT=expiry.mid:2`; passes when it crashed with part of the item left,
+  recover twice changes nothing, `expiring` lists the item `unfinished`, a second purge ends `Purged` without a
+  second expire record, the item is gone and nothing outside `C:\ProgramData\Purge` was removed or changed between
+  snap X and snap Y (`diff-<tag>-xy.json`). `bootmove.registered` (x {resume, rollback}): `file-ads.file` alone, its
+  file held by the locker (no FILE_SHARE_DELETE), exec with the fault; passes when the pair is in PFRO after the
+  crash, recover twice changes nothing, resume reports `PendingReboot` with `confirmed: true` (pair still there once)
+  and undo before any reboot exits 0, or rollback exits 0; PFRO as before, fidelity A/C and the fixtures check pass.
+  No execdiff for these rows (a move waiting for a boot). `-HardPowerOff`: for intent.flushed, regdelete.mid, commit.before an exec is started detached with
   `PURGE_FAULT_PAUSE=<point>:600000`; once its journal is stable for 6 s the stage asks for a `poweroff`
   continuation; `after-poweroff` checks the boot id changed, recovers twice, resumes, undoes, fidelity. Three
   rig rules keep a power cut from testing the rig instead of the engine (gate run 2026-11-16): the paused exec is
@@ -880,6 +892,11 @@ key. Two rules cover them without narrowing the snapshots:
   run.json `telemetry_pause`). Its occasional upload rewrote `HKLM\...\Diagnostics\DiagTrack` (LastSuccessful*
   UploadTime) inside an exec window while none of 12 null runs saw it; the source is removed rather than given a
   hand-written ambient entry. The snapshot restore undoes the pause.
+- **settle wait** (since 2026-11-16): right before snap A (m2-traps, m2-fidelity, their null runs, and each app
+  stage) riglib `Wait-M2BootSettle` waits until the ReadyBoot ETW session (`logman query ReadyBoot -ets`) has
+  stopped, at most `settle_max` seconds (opts, default 300), then 5 s more (run.json `results.settle.<start | app-<id>>`). The boot trace
+  grows `C:\WINDOWS\Prefetch\ReadyBoot\ReadyBoot.etl` when it stops, about two minutes after boot; inside an exec
+  window that was m2-traps collateral no null run had seen.
 - **engine-rp** (allowed side effect): keys and values at or under
   `HKLM\SYSTEM\<CurrentControlSet|ControlSetNNN>\Services\VSS\Diag` that changed or were added, which the Volume
   Shadow Copy service writes when the engine creates its restore point in the exec window. A removal there is

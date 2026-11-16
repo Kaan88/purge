@@ -628,6 +628,35 @@ function Suspend-M2Telemetry {
     $rec
 }
 
+# M2 settle wait (RIG.md §11.8), right before snap A of every exec-run job (null runs included): waits until the
+# ReadyBoot ETW session (`logman query ReadyBoot -ets`) has stopped, or $MaxSec, whichever comes first, then
+# $AfterSec more for the trace file to be written. The boot trace grows C:\WINDOWS\Prefetch\ReadyBoot\ReadyBoot.etl
+# (4 MB -> 20 MB) when it stops, about two minutes after boot; inside an exec window that was m2-traps collateral
+# in the gate run of 2026-11-16. Never throws; returns the record for run.json `settle`.
+function Wait-M2BootSettle([int]$MaxSec = 300, [int]$AfterSec = 5, [int]$PollSec = 3) {
+    $t0 = Get-Date
+    $rec = [ordered]@{ session = 'ReadyBoot'; active_at_start = $null; first_query = $null; stopped = $false; bounded = $false; waited_sec = $null; uptime_sec = $null; error = $null }
+    try {
+        $logman = Join-Path $env:SystemRoot 'System32\logman.exe'
+        while ($true) {
+            $q = Invoke-Native -Exe $logman -Arguments 'query ReadyBoot -ets' -TimeoutSec 30
+            $active = ($q.exit -eq 0)
+            if ($null -eq $rec.active_at_start) {
+                $rec.active_at_start = $active
+                $rec.first_query = [ordered]@{ exit = $q.exit; out = @("$($q.stdout)$($q.stderr)" -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 6) }
+            }
+            if (-not $active) { $rec.stopped = $true; break }
+            if (((Get-Date) - $t0).TotalSeconds -ge $MaxSec) { $rec.bounded = $true; break }
+            Start-Sleep -Seconds $PollSec
+        }
+        if ($rec.stopped -and $rec.active_at_start) { Start-Sleep -Seconds $AfterSec }
+        $rec.uptime_sec = [int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds
+    } catch { $rec.error = $_.Exception.Message }
+    $rec.waited_sec = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+    Log "settle: ReadyBoot session $(if ($rec.active_at_start) { 'was active' } else { 'not active' }); $(if ($rec.bounded) { "still active after the $MaxSec s bound" } else { 'stopped' }); waited $($rec.waited_sec) s; uptime $($rec.uptime_sec) s$(if ($rec.error) { ' !! ' + $rec.error })"
+    $rec
+}
+
 # Deletes the launch task of a short-lived medium-IL command that ended by itself (nothing to close or kill).
 function Remove-LaunchTask($Launch) {
     if ($Launch -and $Launch.task) { Unregister-ScheduledTask -TaskName $Launch.task -Confirm:$false -ErrorAction SilentlyContinue }
