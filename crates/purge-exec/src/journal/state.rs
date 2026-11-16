@@ -361,6 +361,9 @@ pub struct JournalState {
     /// The ops of the last `undo_plan`, in order, and those of them an undo record was written for
     /// since.
     undo_plan: Option<(Vec<OpId>, BTreeSet<OpId>)>,
+    /// Registry ops whose `done` (`Done`) came after the last `group_end` that vouches for the
+    /// registry (`registry_flushed`), `commit` or `aborted`: see [`JournalState::unconfirmed`].
+    unconfirmed: BTreeSet<OpId>,
 }
 
 impl JournalState {
@@ -381,6 +384,7 @@ impl JournalState {
             counts: OutcomeCounts::default(),
             conflict_details: BTreeMap::new(),
             undo_plan: None,
+            unconfirmed: BTreeSet::new(),
         }
     }
 
@@ -532,6 +536,21 @@ impl JournalState {
         self.ops
             .values()
             .filter(|s| s.undo == UndoState::InProgress)
+    }
+
+    /// The registry ops whose `done` says `Done` and whose change the journal does not vouch for yet,
+    /// in op order: their `done` came after the last `group_end` marked `registry_flushed` (none in a
+    /// journal written before the mark existed) and the run has not ended. Windows writes registry
+    /// changes lazily, so after an unclean stop such a change may be gone although its `done` is on
+    /// disk; recovery probes these ops again ([`crate::durable`]). Empty once the run ended: the writer
+    /// flushes the hives before `commit` and `aborted`.
+    pub fn unconfirmed(&self) -> impl Iterator<Item = &OpState> + '_ {
+        self.unconfirmed.iter().filter_map(|op| self.ops.get(op))
+    }
+
+    /// Whether op `op` is one of [`JournalState::unconfirmed`].
+    pub fn is_unconfirmed(&self, op: OpId) -> bool {
+        self.unconfirmed.contains(&op)
     }
 
     /// How many items ended in each outcome, from the `done` records.
@@ -807,24 +826,36 @@ impl JournalState {
             Record::Done(d) => {
                 let s = self.known_mut(d.op);
                 let had_intent = s.intent.is_some();
+                let registry = s
+                    .intent
+                    .as_ref()
+                    .is_some_and(|intent| intent.exec_op.is_registry());
                 s.outcome = Some(d.outcome.clone());
                 self.phase = Phase::Running;
                 self.counts.record(&d.outcome);
                 if had_intent {
                     self.open_intents -= 1;
                 }
+                if registry && d.outcome == ItemOutcome::Done {
+                    self.unconfirmed.insert(d.op);
+                }
             }
-            Record::GroupEnd(_) => {
+            Record::GroupEnd(g) => {
                 self.groups_closed += 1;
                 self.open_group_intents = 0;
+                if g.registry_flushed {
+                    self.unconfirmed.clear();
+                }
             }
             Record::Commit(c) => {
                 self.commit = Some(c.clone());
                 self.phase = Phase::Committed;
+                self.unconfirmed.clear();
             }
             Record::Aborted(a) => {
                 self.aborted = Some(a.clone());
                 self.phase = Phase::Aborted;
+                self.unconfirmed.clear();
             }
             Record::UndoIntent(u) => {
                 let s = self.known_mut(u.op);

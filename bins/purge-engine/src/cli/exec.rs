@@ -1013,7 +1013,7 @@ fn journal_recover<R>(env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> Exit {
     let probing: Vec<SessionId> = list
         .sessions
         .iter()
-        .filter(|s| !s.open_intents.is_empty())
+        .filter(|s| !s.open_intents.is_empty() || !s.unconfirmed.is_empty())
         .map(|s| s.session.clone())
         .collect();
     let deny = if probing.is_empty() {
@@ -1037,7 +1037,7 @@ fn journal_recover<R>(env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> Exit {
                 host.lockers,
                 &mut *host.pending_renames,
             );
-            for &op in &s.open_intents {
+            for &op in s.open_intents.iter().chain(&s.unconfirmed) {
                 probes.push(match recover::probe(&s.session, op, &probe_env) {
                     Ok(p) => json!({ "op": op, "result": probe_json(&p) }),
                     Err(e) => json!({ "op": op, "error": e.to_string() }),
@@ -1065,6 +1065,7 @@ fn journal_recover<R>(env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> Exit {
             "open_intents": s.open_intents,
             "undo_in_progress": s.undo_in_progress,
             "retries_in_flight": s.retries_in_flight,
+            "unconfirmed": s.unconfirmed,
             "detail": s.detail,
             "probes": probes,
         }));
@@ -1110,6 +1111,13 @@ fn recovered_json(out: &RecoverOutput) -> Value {
             "probe": probe_json(&s.probe),
             "outcome": to_json(&s.outcome),
         })).collect::<Vec<_>>(),
+        "reprobed": out.reprobed.iter().map(|r| json!({
+            "op": r.op,
+            "probe": probe_json(&r.probe),
+            "redone": r.redone.as_ref().map(to_json),
+            "matches_journal": r.matches_journal(),
+            "detail": r.detail,
+        })).collect::<Vec<_>>(),
         "report": out.report.as_ref().map(to_json),
         "report_written": out.report_written,
         "undone": out.undone.iter().map(to_json).collect::<Vec<_>>(),
@@ -1151,6 +1159,10 @@ fn recovered_items_exit(out: &RecoverOutput) -> Exit {
         exit = worse(exit, report_exit(report));
     }
     if out.retries.iter().any(|(_, outcome)| !complete(outcome)) {
+        exit = worse(exit, Exit::Partial);
+    }
+    // A resumed run whose journal says a registry change was made that the machine does not show.
+    if out.mode == RecoverMode::Resume && out.reprobed.iter().any(|r| !r.matches_journal()) {
         exit = worse(exit, Exit::Partial);
     }
     exit
@@ -1774,6 +1786,7 @@ mod tests {
                 state,
                 removed,
                 settled: Vec::new(),
+                reprobed: Vec::new(),
                 report: None,
                 report_written: false,
                 undone: Vec::new(),
@@ -1798,6 +1811,20 @@ mod tests {
         ] {
             assert_eq!(recovered_exit(&out, report), Exit::Unrecorded, "{out:?}");
         }
+        // Gate case p902: a resumed run whose journal says a registry change was made that the
+        // machine does not show, and that could not be made again, is not a clean recovery.
+        let mut lost = recovered(committed, false, true);
+        lost.reprobed.push(recover::ReprobedOp {
+            op: purge_model::exec::op::OpId(3),
+            probe: recover::Probe::NotDone,
+            redone: Some(purge_model::exec::op::ItemOutcome::Skipped {
+                reason: purge_model::exec::op::SkipReason::ChangedSinceScan,
+            }),
+            detail: String::new(),
+        });
+        assert_eq!(recovered_exit(&lost, true), Exit::Partial);
+        lost.reprobed[0].redone = Some(purge_model::exec::op::ItemOutcome::Done);
+        assert_eq!(recovered_exit(&lost, true), Exit::Ok);
     }
 
     /// Review M2 M21: exit 0 of a run means it closed and wrote its report and index entry.

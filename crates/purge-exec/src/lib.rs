@@ -10,6 +10,7 @@
 pub mod act_fs;
 pub mod act_reg;
 pub mod act_typed;
+pub mod durable;
 pub mod execute;
 pub mod expiry;
 pub mod fault;

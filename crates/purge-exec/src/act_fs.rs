@@ -128,7 +128,7 @@ use crate::gate::{self, CheckedDest, CheckedPath, GateCtx, GateOutcome, LockedPa
 use crate::journal::{IntentToken, OpState, RetryToken, UndoToken};
 use crate::locked::{self, PendingRenames, RetryAttempt, RetryMove};
 use crate::recover::{self, Probe, Seen};
-use crate::storage::{QuarantineDir, SessionDir, StorageError};
+use crate::storage::{QuarantineDir, QuarantineRoot, SessionDir, StorageError};
 
 #[cfg(test)]
 mod tests;
@@ -386,7 +386,11 @@ enum ActKind {
         dest: CheckedDest,
         op_dir: Box<QuarantineDir>,
     },
-    RemoveDir,
+    /// `flush_parent` is the directory above the one removed, when it is on another volume than the
+    /// journal: it is flushed after the removal ([`crate::durable`]).
+    RemoveDir {
+        flush_parent: Option<std::path::PathBuf>,
+    },
 }
 
 impl FsAction {
@@ -401,7 +405,7 @@ impl FsAction {
     pub fn quarantine_path(&self) -> Option<&str> {
         match &self.kind {
             ActKind::Move { dest, .. } => Some(dest.path()),
-            ActKind::RemoveDir => None,
+            ActKind::RemoveDir { .. } => None,
         }
     }
 }
@@ -596,7 +600,11 @@ pub fn prepare_fs(
                 creation_time: Some(FileTime(meta.creation_time)),
                 last_write_time: Some(FileTime(meta.last_write_time)),
             },
-            ActKind::RemoveDir,
+            ActKind::RemoveDir {
+                flush_parent: off_journal_volume(session, checked.stamp().identity.volume_serial)
+                    .then(|| Path::new(path).parent().map(Path::to_path_buf))
+                    .flatten(),
+            },
         )
     };
     let intent = Intent {
@@ -839,7 +847,21 @@ fn act_checked(action: Box<FsAction>, retry: &Retry) -> FsActed {
                     },
                 );
             match result {
-                Ok(Ok(())) => {}
+                Ok(Ok(())) => {
+                    // The journal's flushes commit the log of its own volume only.
+                    if matches!(op_dir.root(), QuarantineRoot::Volume { .. })
+                        && let Err(e) = op_dir.sync()
+                    {
+                        return FsActed::Finished(FsResult::failed(
+                            FailCode::VerifyFailed,
+                            None,
+                            format!(
+                                "{path} was moved into quarantine, but the quarantine directory \
+                                 could not be flushed: {e}"
+                            ),
+                        ));
+                    }
+                }
                 Ok(Err(e)) => {
                     // Refused without a change: nothing will land in the op directory.
                     drop(dest);
@@ -873,7 +895,7 @@ fn act_checked(action: Box<FsAction>, retry: &Retry) -> FsActed {
             fault::point(fault::ACT_AFTER);
             FsActed::Finished(verify_moved(&checked, &dest, &path))
         }
-        ActKind::RemoveDir => {
+        ActKind::RemoveDir { flush_parent } => {
             let (result, attempts) = retry.run(|| match checked.handle().remove_dir_if_empty() {
                 Err(e) if in_use(e, false) => Err(e),
                 other => Ok(other),
@@ -919,7 +941,22 @@ fn act_checked(action: Box<FsAction>, retry: &Retry) -> FsActed {
             fault::point(fault::ACT_AFTER);
             // Without POSIX delete semantics the name goes only when the last handle closes.
             drop(checked);
-            FsActed::Finished(verify_gone(&path, stamp.identity, "removed"))
+            let gone = verify_gone(&path, stamp.identity, "removed");
+            if gone.outcome == ItemOutcome::Done
+                && let Some(parent) = flush_parent
+                && let Err(e) = extended_path(&parent)
+                    .map_err(|e| e.to_string())
+                    .and_then(|p| purge_win::fs_write::flush_dir(&p).map_err(|e| e.to_string()))
+            {
+                return FsActed::Finished(FsResult::failed(
+                    FailCode::VerifyFailed,
+                    None,
+                    format!(
+                        "{path} was removed, but its parent directory could not be flushed: {e}"
+                    ),
+                ));
+            }
+            FsActed::Finished(gone)
         }
     }
 }
@@ -948,6 +985,15 @@ fn verify_moved(checked: &CheckedPath, dest: &CheckedDest, path: &str) -> FsResu
         );
     }
     verify_gone(path, stamp.identity, "moved")
+}
+
+/// Whether an item on the volume with serial `serial` is on another volume than the session's journal
+/// (the store's data root), or that cannot be told. A change on the journal's volume is on disk once a
+/// later journal record is flushed, since `FlushFileBuffers` commits the volume's file system log up to
+/// that record, and the change was logged before it; a change on another volume is not
+/// ([`crate::durable`]).
+fn off_journal_volume(session: &SessionDir, serial: u64) -> bool {
+    crate::report::volume_serial(session.roots().data_root()) != Some(serial)
 }
 
 /// Verify that `path` no longer holds the object `identity`: not found, or another object.
@@ -1238,42 +1284,80 @@ pub fn undo_fs(
             format!("op {op} has no journalled validated record in this undo run; nothing done"),
         ));
     };
-    match kind {
+    let (undone, serial, put_into) = match kind {
         UndoKind::MoveBack {
             quarantine_path,
             original_path,
             stamp,
             parent,
-        } => move_back(
-            ctx,
-            session,
-            op,
-            MoveBackPaths {
-                quarantine_path: &quarantine_path,
-                original: &original_path,
-                parent: parent.as_ref(),
-            },
-            stamp,
-            exemptions,
-            retry,
-        ),
+        } => {
+            let serial = stamp.identity.volume_serial;
+            let undone = move_back(
+                ctx,
+                session,
+                op,
+                MoveBackPaths {
+                    quarantine_path: &quarantine_path,
+                    original: &original_path,
+                    parent: parent.as_ref(),
+                },
+                stamp,
+                exemptions,
+                retry,
+            )?;
+            (undone, serial, original_path)
+        }
         UndoKind::RecreateDir {
             path,
             attributes,
             sddl,
             times,
             volume_serial,
-        } => Ok(recreate_dir(
-            ctx,
-            &path,
-            Recorded {
-                attributes,
-                sddl: &sddl,
-                times,
-            },
-            volume_serial,
-            exemptions,
-        )),
+        } => {
+            let undone = recreate_dir(
+                ctx,
+                &path,
+                Recorded {
+                    attributes,
+                    sddl: &sddl,
+                    times,
+                },
+                volume_serial,
+                exemptions,
+            );
+            (undone, volume_serial, path)
+        }
+    };
+    Ok(durable_restore(session, undone, serial, &put_into))
+}
+
+/// A restore that put `path` back on another volume than the journal's is flushed (its parent
+/// directory) before the `undo_done` that records it is written: the journal's own flushes do not
+/// commit that volume's file system log ([`crate::durable`]). A flush that fails turns `Restored`
+/// into `Failed{VerifyFailed}`, which a later undo runs again in its completing form.
+fn durable_restore(session: &SessionDir, undone: FsUndo, serial: u64, path: &str) -> FsUndo {
+    let restored = matches!(
+        undone,
+        FsUndo::Done {
+            outcome: UndoOutcome::Restored,
+            ..
+        }
+    );
+    if !restored || !off_journal_volume(session, serial) {
+        return undone;
+    }
+    let flushed = Path::new(path)
+        .parent()
+        .ok_or_else(|| "it has no parent directory".to_owned())
+        .and_then(|parent| extended_path(parent).map_err(|e| e.to_string()))
+        .and_then(|parent| purge_win::fs_write::flush_dir(&parent).map_err(|e| e.to_string()));
+    match flushed {
+        Ok(()) => undone,
+        Err(e) => FsUndo::failed(
+            FailCode::VerifyFailed,
+            None,
+            format!("{path} was put back, but its parent directory could not be flushed: {e}"),
+        ),
     }
 }
 

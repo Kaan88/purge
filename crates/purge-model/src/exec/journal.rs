@@ -344,6 +344,12 @@ pub struct GroupEnd {
     #[serde(deserialize_with = "group_count")]
     #[schemars(range(min = 1, max = 64))]
     pub ops: u32,
+    /// The writer flushed the registry hives the journal's registry ops act on (`RegFlushKey`) before
+    /// it wrote this record: every registry change a `done` before it claims is durable. Written as
+    /// `true` only; absent (`false`) in journals written before the field existed, whose registry
+    /// `done` records recovery therefore does not take on trust after an unclean stop.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub registry_flushed: bool,
 }
 
 /// Reads a group number: at least 1.
@@ -771,7 +777,46 @@ mod tests {
             r#"{"rec":"undo_conflict","op":2,"conflict":{"kind":"ParentMissing"},"detail":"C:\\A is gone"}"#.to_owned(),
             r#"{"rec":"undo_plan","at":5,"ops":[6,2,1]}"#.to_owned(),
             r#"{"rec":"undo_plan","at":6,"ops":[]}"#.to_owned(),
+            r#"{"rec":"group_end","group":2,"ops":64,"registry_flushed":true}"#.to_owned(),
         ]
+    }
+
+    /// The `registry_flushed` mark of `group_end`: absent in older lines (read as `false`, which is
+    /// written as before), `true` written and read back; an older reader that does not know the field
+    /// ignores it, since records do not refuse unknown members.
+    #[test]
+    fn group_end_registry_mark_reads_both_ways() {
+        let old: Record = serde_json::from_str(r#"{"rec":"group_end","group":1,"ops":3}"#).unwrap();
+        assert_eq!(
+            old,
+            Record::GroupEnd(GroupEnd {
+                group: 1,
+                ops: 3,
+                registry_flushed: false
+            })
+        );
+        assert_eq!(
+            serde_json::to_string(&old).unwrap(),
+            r#"{"rec":"group_end","group":1,"ops":3}"#
+        );
+        let new = Record::GroupEnd(GroupEnd {
+            group: 2,
+            ops: 1,
+            registry_flushed: true,
+        });
+        let line = serde_json::to_string(&new).unwrap();
+        assert_eq!(
+            line,
+            r#"{"rec":"group_end","group":2,"ops":1,"registry_flushed":true}"#
+        );
+        assert_eq!(serde_json::from_str::<Record>(&line).unwrap(), new);
+        #[derive(serde::Deserialize)]
+        struct OldGroupEnd {
+            group: u32,
+            ops: u32,
+        }
+        let read: OldGroupEnd = serde_json::from_str(&line).unwrap();
+        assert_eq!((read.group, read.ops), (2, 1));
     }
 
     /// Documents written before the additions read unchanged, and the additions round-trip without

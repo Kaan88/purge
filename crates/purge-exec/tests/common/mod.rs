@@ -417,6 +417,29 @@ impl TestKey {
         out
     }
 
+    /// Puts the test key back to `snap` (a [`TestKey::snap`] of it): every key below it is removed and
+    /// its values deleted, then the keys of the snapshot are created again, parent-first, with their
+    /// class and volatility and inherited security (as [`TestKey::create`] leaves it), and every key's
+    /// values set.
+    pub fn restore_snap(&self, snap: &[KeySnap]) {
+        let root = self.open("", KeyAccess::DELETE | KeyAccess::SET_VALUE);
+        for sub in root.subkey_names().unwrap() {
+            Self::nuke(&root.open_subkey(&sub, KeyAccess::DELETE).unwrap());
+        }
+        for value in root.values().unwrap() {
+            root.delete_value(&value.name).unwrap();
+        }
+        for key in snap {
+            if !key.rel.is_empty() {
+                let (parent, leaf) = key.rel.rsplit_once('\\').unwrap_or(("", &key.rel));
+                self.create_with(parent, leaf, &key.class, None, key.volatile);
+            }
+            for (name, ty, data) in &key.values {
+                self.set(&key.rel, name, *ty, data);
+            }
+        }
+    }
+
     fn nuke(key: &WKey) {
         for sub in key.subkey_names().unwrap_or_default() {
             if let Ok(child) = key.open_subkey(&sub, KeyAccess::DELETE) {
@@ -436,6 +459,37 @@ impl Drop for TestKey {
             Self::nuke(&root);
         }
     }
+}
+
+/// A registry snapshot as JSON, for a child process to hand to its parent.
+pub fn snap_json(snap: &[KeySnap]) -> String {
+    let keys: Vec<serde_json::Value> = snap
+        .iter()
+        .map(|key| {
+            serde_json::json!({
+                "rel": key.rel,
+                "class": key.class,
+                "volatile": key.volatile,
+                "sddl": key.sddl,
+                "values": key.values,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(keys).to_string()
+}
+
+/// The snapshot [`snap_json`] wrote.
+pub fn snap_from_json(text: &str) -> Vec<KeySnap> {
+    let keys: Vec<serde_json::Value> = serde_json::from_str(text).unwrap();
+    keys.into_iter()
+        .map(|key| KeySnap {
+            rel: key["rel"].as_str().unwrap().to_owned(),
+            class: key["class"].as_str().unwrap().to_owned(),
+            volatile: key["volatile"].as_bool().unwrap(),
+            sddl: key["sddl"].as_str().unwrap().to_owned(),
+            values: serde_json::from_value(key["values"].clone()).unwrap(),
+        })
+        .collect()
 }
 
 /// The bytes of a NUL-terminated UTF-16 string.

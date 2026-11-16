@@ -40,6 +40,25 @@
 //! | package | listed | `NotDone` |
 //! | package | the listing failed | `Attention` |
 //!
+//! # Registry changes the journal does not vouch for yet
+//!
+//! Windows writes registry changes lazily, and a run flushes the hives only before `group_end`,
+//! `commit` and `aborted` ([`crate::durable`]). After an unclean stop (a power loss), a registry op
+//! whose `done` says `Done` may therefore have lost its change; those after the last `group_end`
+//! marked `registry_flushed` are [`JournalState::unconfirmed`] (all of them in a journal written
+//! before the mark existed). Recovery does not take them on trust:
+//!
+//! | Recovery | Unconfirmed op, probed again in op order |
+//! |---|---|
+//! | resume, probe `Done` | nothing to do: the change is there |
+//! | resume, probe `NotDone` or `Partial` | the change is made again ([`act_reg::complete_reg`], bound to the journalled intent and backup) and flushed before the run ends; the journal already holds its `done` |
+//! | resume, probe `Attention`, and a later key delete of the run took the key the change lies in | counted as there: the value or key went with that key |
+//! | resume, probe `Attention` otherwise, or the change cannot be made again | left as it is, reported ([`RecoverOutput::reprobed`] and a warning in the report) |
+//! | rollback | probed and reported; its undo runs in the completing form (a key tree is completed from its backup, nothing existing changed), so a lost change is `AlreadyRestored`, not a conflict |
+//!
+//! [`pending`] lists them ([`PendingSession::unconfirmed`]) and [`probe`] probes them like an open
+//! intent.
+//!
 //! # Resume
 //!
 //! | The session | What resume does |
@@ -48,6 +67,7 @@
 //! | no journal, one without a complete header, or an empty one | removes the directory by handle when it holds nothing but the scan copy and that journal ([`SessionDir::remove_unstarted`]; [`RecoverError::Unstarted`] otherwise) |
 //! | a journal without a `settings` record (written before the record existed) and validation incomplete | nothing was acted on: writes `aborted` (`Cancelled`) |
 //! | the run stopped before every item was validated | continued as if never interrupted ([`Run::resume`]): the items without a `validated` record are validated now, a journalled record is never validated again |
+//! | unconfirmed registry `done` records | probed again first, in op order, and their change made again where it is missing ([`Run::reprobe_unconfirmed`]; see above) |
 //! | an open intent, probe `Done` | writes the missing `done` |
 //! | an open intent, probe `NotDone` | runs the action now, bound to the journalled intent, and writes its `done`; a file in use goes to the locked-file ladder ([`Run::settle_open`]) |
 //! | an open intent, probe `Partial` | finishes the key delete from the backup ([`act_reg::complete_reg`]) |
@@ -227,6 +247,9 @@ pub struct PendingSession {
     pub undo_in_progress: Vec<OpId>,
     /// Ops whose retry was interrupted.
     pub retries_in_flight: Vec<OpId>,
+    /// Registry ops whose `done` no hive flush vouches for ([`JournalState::unconfirmed`]); recovery
+    /// probes them again.
+    pub unconfirmed: Vec<OpId>,
     /// Text for the user; the error for [`PendingKind::Damaged`].
     pub detail: String,
 }
@@ -270,6 +293,7 @@ pub fn pending(roots: &StorageRoots) -> Result<PendingList, StorageError> {
             open_intents: Vec::new(),
             undo_in_progress: Vec::new(),
             retries_in_flight: Vec::new(),
+            unconfirmed: Vec::new(),
             detail,
         };
         let session = match roots.open_session(&id) {
@@ -356,6 +380,7 @@ pub fn pending(roots: &StorageRoots) -> Result<PendingList, StorageError> {
             open_intents: ids(&mut state.open_intents()),
             undo_in_progress: undoing,
             retries_in_flight,
+            unconfirmed: ids(&mut state.unconfirmed()),
             ..found(kind, detail)
         });
     }
@@ -502,15 +527,17 @@ pub(crate) fn probe_intent(
 }
 
 /// Probes op `op` of `session` (see the module's table). An op with a `done` is `Done` with that
-/// outcome; one with neither intent nor `done` is `NotDone`. Changes nothing.
+/// outcome, unless it is an unconfirmed registry op ([`JournalState::unconfirmed`]), which is probed
+/// like an open intent; one with neither intent nor `done` is `NotDone`. Changes nothing.
 pub fn probe(session: &SessionId, op: OpId, env: &RecoverEnv<'_>) -> Result<Probe, RecoverError> {
     env.roots.check()?;
     let dir = env.roots.open_session(session)?;
     let read = journal::read(&dir)?;
     let state = read.state.op(op).ok_or(RecoverError::UnknownOp(op))?;
+    let unconfirmed = read.state.is_unconfirmed(op);
     match (state.status(), &state.intent) {
-        (OpStatus::Done(outcome), _) => Ok(Probe::Done(outcome.clone())),
-        (OpStatus::IntentOnly, Some(intent)) => {
+        (OpStatus::Done(outcome), _) if !unconfirmed => Ok(Probe::Done(outcome.clone())),
+        (OpStatus::IntentOnly | OpStatus::Done(_), Some(intent)) => {
             let mut warnings = Vec::new();
             let ctx = undo::gate_ctx(env.roots, env.deny, &dir, &read.state, &mut warnings)?;
             Ok(probe_intent(
@@ -549,6 +576,58 @@ pub struct SettledOp {
     pub outcome: ItemOutcome,
 }
 
+/// A registry op whose `done` says `Done` but no hive flush vouched for ([`JournalState::unconfirmed`]),
+/// probed again by recovery, and what recovery did about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReprobedOp {
+    /// The op.
+    pub op: OpId,
+    /// What the probe found. An op whose key a later key delete of the run took counts as `Done`.
+    pub probe: Probe,
+    /// The outcome of making the change again, when the probe found it missing (resume only); `Done`
+    /// when the machine now matches the journal.
+    pub redone: Option<ItemOutcome>,
+    /// For the report: why it counts as done, or what stands in the way; may be empty.
+    pub detail: String,
+}
+
+impl ReprobedOp {
+    /// Whether the machine matches the journal's `Done` for the op after recovery: the probe found the
+    /// change, or it was made again.
+    pub fn matches_journal(&self) -> bool {
+        match &self.redone {
+            Some(outcome) => *outcome == ItemOutcome::Done,
+            None => matches!(self.probe, Probe::Done(_)),
+        }
+    }
+}
+
+/// Whether the change of registry op `op` lies in a key a later key delete of the run took, and that key
+/// is gone now: a value deleted from a key (or a key deleted below one) that a later op of the same run
+/// deleted whole cannot be probed by itself, since the key it is checked in is missing, but it is gone
+/// as the journal says.
+pub(crate) fn removed_with_later_key(
+    ctx: &GateCtx,
+    session: &SessionDir,
+    state: &JournalState,
+    op: &OpState,
+) -> bool {
+    let Some(intent) = &op.intent else {
+        return false;
+    };
+    state
+        .ops()
+        .filter(|later| later.op > op.op && later.outcome == Some(ItemOutcome::Done))
+        .filter_map(|later| later.intent.as_ref())
+        .filter(|later| {
+            matches!(
+                later.exec_op,
+                ExecOp::DeleteKeyTree { .. } | ExecOp::DeleteKeyIfEmpty { .. }
+            ) && undo::depends_on(&intent.exec_op, &later.exec_op)
+        })
+        .any(|later| act_reg::probe_reg(ctx, session, later) == Probe::Done(ItemOutcome::Done))
+}
+
 /// What a recovery did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoverOutput {
@@ -563,6 +642,8 @@ pub struct RecoverOutput {
     pub removed: bool,
     /// The ops whose intent had no `done`.
     pub settled: Vec<SettledOp>,
+    /// The registry ops whose `done` no hive flush vouched for, probed again ([`JournalState::unconfirmed`]).
+    pub reprobed: Vec<ReprobedOp>,
     /// The report of the run recovery ended (`commit` after a resume, `aborted` after a rollback).
     pub report: Option<ExecReport>,
     /// Whether that report was written as the session's `report.json`.
@@ -614,6 +695,7 @@ fn recover(
         state: None,
         removed: false,
         settled: Vec::new(),
+        reprobed: Vec::new(),
         report: None,
         report_written: false,
         undone: Vec::new(),
@@ -696,6 +778,9 @@ fn resume_run(
 ) -> Result<(), RecoverError> {
     let scan = execute::read_scan_copy(&session)?;
     let mut run = Run::resume(exec_env(env), session, &scan)?;
+    // Registry changes a power loss may have taken first, in op order: a later op's backup holds its
+    // key as the earlier ops left it.
+    out.reprobed = run.reprobe_unconfirmed();
     let open: Vec<OpId> = run.state().open_intents().map(|op| op.op).collect();
     let mut aborted = None;
     for op in open {
@@ -783,6 +868,23 @@ fn rollback_run(
         });
     }
     journal.sync()?;
+
+    // Registry `done` records no flush vouched for: probed and reported; their undo runs in the
+    // completing form (`undo::Driver`), so a change that did not survive is not a conflict.
+    let opened: BTreeSet<OpId> = open.iter().map(|op| op.op).collect();
+    for op in journal.state().unconfirmed() {
+        let Some(intent) = op.intent.as_ref().filter(|_| !opened.contains(&op.op)) else {
+            continue;
+        };
+        out.reprobed.push(ReprobedOp {
+            op: op.op,
+            probe: act_reg::probe_reg(&ctx, &session, intent),
+            redone: None,
+            detail:
+                "rolled back: its undo puts back what is missing and changes nothing that exists"
+                    .to_owned(),
+        });
+    }
 
     let all: BTreeSet<OpId> = journal
         .state()

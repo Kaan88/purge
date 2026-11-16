@@ -301,7 +301,7 @@ fn place(op: &ExecOp) -> Option<Place<'_>> {
 }
 
 /// Whether the restore of `of` needs what `dependency` removed to be back first.
-fn depends_on(of: &ExecOp, dependency: &ExecOp) -> bool {
+pub(crate) fn depends_on(of: &ExecOp, dependency: &ExecOp) -> bool {
     match (place(of), place(dependency)) {
         (Some(Place::Path(path)), Some(Place::Path(above))) => prefix::is_ancestor(above, path),
         (Some(Place::Key(key)), Some(Place::Key(above))) => prefix::is_ancestor(above, key),
@@ -801,6 +801,7 @@ impl Driver<'_> {
                     Some(LockUndo::RemovePair(removal)) => {
                         let outcome =
                             locked::remove_boot_move(removal, step.token()?, &mut *self.pending);
+                        step.journal.touch_boot_moves();
                         return step.done(
                             outcome,
                             "the registered boot-time move was taken back".to_owned(),
@@ -812,7 +813,10 @@ impl Driver<'_> {
                 // put back, and an op whose pair cannot be told stays unsettled (review M2 M7).
                 match locked::listed_before_move_back(op, &*self.pending) {
                     Some(LockUndo::RemovePair(removal)) => {
-                        match locked::remove_boot_move(removal, step.token()?, &mut *self.pending) {
+                        let removed =
+                            locked::remove_boot_move(removal, step.token()?, &mut *self.pending);
+                        step.journal.touch_boot_moves();
+                        match removed {
                             UndoOutcome::Restored | UndoOutcome::AlreadyRestored => {}
                             outcome => {
                                 return step.done(
@@ -886,8 +890,14 @@ impl Driver<'_> {
             | ExecOp::DeleteKeyIfEmpty { .. }
             | ExecOp::DeleteValue { .. }
             | ExecOp::EditSegment { .. } => {
+                // A `done` no flush vouches for yet (a run that stopped uncleanly; `crate::durable`)
+                // may name a change that did not survive: the inverse runs in its completing form,
+                // which puts back what is missing and changes nothing that exists, so a key whose
+                // delete was lost, also one that still holds what other ops of the session removed
+                // from it, is not a conflict.
+                let unconfirmed = step.journal.state().is_unconfirmed(op.op);
                 let done = match &op.outcome {
-                    Some(ItemOutcome::Done) if again => None,
+                    Some(ItemOutcome::Done) if again || unconfirmed => None,
                     other => other.as_ref(),
                 };
                 match act_reg::prepare_undo_reg(self.ctx, self.session, intent, done) {
