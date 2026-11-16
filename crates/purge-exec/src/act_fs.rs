@@ -1376,10 +1376,10 @@ fn parent_differs(original: &str, dest: &CheckedDest, recorded: &ParentDir) -> O
         Ok(facts) => facts.file_id,
         Err(e) => return Some(unreadable(e.code())),
     };
-    if now.id == recorded.file_id.0 {
-        return None;
-    }
-    // Another directory: its descriptor, read on a handle that is the checked directory itself.
+    // A file id alone is not proof of the same directory: NTFS reissues ids (S1 of the adoption rule
+    // review), so the owner is judged on this branch too; only the DACL comparison is left out.
+    let same_id = now.id == recorded.file_id.0;
+    // The descriptor, read on a handle that is the checked directory itself.
     let parent = Path::new(original).parent()?;
     let security = extended_path(parent)
         .and_then(|p| open_for_security(&p))
@@ -1400,6 +1400,9 @@ fn parent_differs(original: &str, dest: &CheckedDest, recorded: &ParentDir) -> O
     let mut differs = owner_dacl_differences(&sddl, &recorded.sddl);
     if sddl_part(&sddl, b'O').is_some_and(admin_only_owner) {
         differs.retain(|what| *what != "owner");
+    }
+    if same_id {
+        differs.retain(|what| *what == "owner");
     }
     (!differs.is_empty()).then(|| {
         FsUndo::conflict(
