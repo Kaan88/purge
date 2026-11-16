@@ -964,6 +964,8 @@ $EnginePhases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1
     Check 'Release engine file untouched by the M2 checks' ((Get-Content -Raw $rel) -eq 'MZ release')
     $m = $null; try { Assert-RigVm 'Some-Other-VM' } catch { $m = $_.Exception.Message }
     Check 'Assert-RigVm: only the two rig VMs' ($m -match 'not a rig VM' -and $null -eq (Assert-RigVm 'Purge-CleanPro') -and $null -eq (Assert-RigVm 'Inbound-Win11-Test'))
+    $m = $null; try { $null = Get-M2AmbientFile 'Some-Other-VM' } catch { $m = $_.Exception.Message }
+    Check 'Get-M2AmbientFile: one ambient set per rig VM, none for another VM' ((Split-Path -Leaf (Get-M2AmbientFile 'Inbound-Win11-Test')) -ceq 'm2-ambient.json' -and (Split-Path -Leaf (Get-M2AmbientFile 'Purge-CleanPro')) -ceq 'm2-ambient-cleanpro.json' -and $m -match 'no M2 ambient set') $m
     Check 'Get-M2Template: exec-run / m2-crash / m2-reboot' ((Get-M2Template 'm2-traps') -eq 'exec-run.ps1' -and (Get-M2Template 'm2-install') -eq 'exec-run.ps1' -and (Get-M2Template 'm2-crash') -eq 'm2-crash.ps1' -and (Get-M2Template 'm2-reboot') -eq 'm2-reboot.ps1')
     $mo = Get-M2ModeOpts -Mode 'm2-crash' -HardPowerOff -FaultPoints @('act.after')
     Check 'Get-M2ModeOpts m2-crash: batch 10 by default, hard_poweroff, points' ($mo.opts.batch -eq 10 -and $mo.opts.hard_poweroff -eq $true -and (@($mo.opts.points) -join ',') -eq 'act.after')

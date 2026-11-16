@@ -54,6 +54,12 @@ Principles:
   not replace the LTSC `null1` that `truth/ambient.json` uses) gives the `Professional-26340.9882` baseline. **It matches the host only when the host runs build 26340**: the host
   was on 26300.9974 when it was built, so until the host moves, the engine on the host still has no
   matching baseline (values-only + X-SYSTIDY, ENGINE_PLAN §5.7.1).
+  Snapshot `m2-base` on Purge-CleanPro (offline, child of `rig-base`, built 2026-11-16 by
+  `vm\setup-m2-base.ps1 -VmName Purge-CleanPro -NoDataDisk`): `rig-base` + System Restore on C: (shadow storage on
+  C:, 10 %) + the rig-only `SystemRestorePointCreationFrequency` = 0, as on Inbound, but **no data disk and no D:**
+  (`-NoDataDisk`: setup-m2.ps1 skips the D: part and its check). It serves m2-traps and m2-fidelity (and their null
+  runs, §11.8); m2-install's D: stage is not supported there. Its own M2 ambient set is
+  `truth\m2-ambient-cleanpro.json` (§11.8).
 - Rig-owned paths, excluded from truth and baselines (label `rig`): `C:\cr\**`, `C:\ut\**`,
   scheduled tasks `PurgeRigAgent`, `PurgeRigLaunch`, `PurgeRigInstall`, `agentstart`, `elev*`, `crshot*`, `utrun`,
   `PurgeSetup`, and their `TaskCache` entries, `%TEMP%\vmjobs\**`, and the Prefetch files of the rig's own tools
@@ -619,7 +625,9 @@ passed / 0 failed unelevated (Medium) and 961 / 0 elevated with --include-ignore
 ## 11. M2 executor runs (`rig.ps1 -Mode m2-*`, docs/M2_DESIGN.json gate G0-G6)
 
 Five modes, each one run from a fresh restore of `m2-base` (§1; `-Snapshot` overrides, e.g. `rig-base` for the
-G6 "System Protection off" leg or Clean-Pro, which has no `m2-base`). Only file, registry and AppX items are
+G6 "System Protection off" leg). Clean-Pro has its own `m2-base` without D: (§1; m2-traps and m2-fidelity only):
+`.\vm\rig.ps1 -VmName Purge-CleanPro -Mode m2-traps -RunPrefix cp-`. `rig-base` alone does not serve m2-fidelity:
+its G6 legs need System Restore on with the frequency value 0. Only file, registry and AppX items are
 executed in v1; service, scheduled-task and firewall items are planned but deferred, so wherever a trap or
 fixture plants one, the expected outcome is "untouched" (fidelity rows `DeleteService`, `DeleteTask`,
 `DeleteFirewallRule` with ops 0; the gate fails if one has ops).
@@ -911,7 +919,11 @@ key. Two rules cover them without narrowing the snapshots:
   to snap A, an idle wait instead of exec, snap B) and `rigtool ambient --m2 --null <run dirs>` records every
   removed or changed record of `diff(snap A, snap B)` as a key `<op><kind>:<path>[|<value>]`, plus a pattern where
   the key holds a random token (a GUID seen varying, a hex run of 16+, a number of 6+ digits). rig.ps1 pushes it to
-  `C:\cr\bin\m2-ambient.json`; riglib passes it to every execdiff as `--ambient`.
+  `C:\cr\bin\m2-ambient.json`; riglib passes it to every execdiff as `--ambient`. **One set per VM**
+  (rig.ps1 `Get-M2AmbientFile`, chosen by `-VmName`): Inbound `truth\m2-ambient.json`, Purge-CleanPro
+  `truth\m2-ambient-cleanpro.json` (another Windows build churns differently). `Invoke-M2NullCampaign` writes the
+  VM's own file by default; `-RunPrefix` (default `n`) names the null runs `<prefix><k>-<mode>`. For Clean-Pro:
+  `. .\vm\rig.ps1 -VmName Purge-CleanPro; Invoke-M2NullCampaign -Count 6 -RunPrefix cpn -Engine <rig-exec engine>`.
 
 Why a real collateral delete still fails the gate: the snapshots stay machine-wide, so any delete or change the
 engine makes outside its ops shows as a record. An M2 ambient entry matches one record only: the same op, the same
