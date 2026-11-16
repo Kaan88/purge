@@ -141,6 +141,7 @@ fn a_registered_boot_move_is_found_before_the_item_is_looked_at() {
             original_path: original.to_owned(),
             file_id: purge_model::exec::op::FileIdHex([7; 16]),
             volume_serial: 1,
+            parent: None,
         },
         definition: None,
         pre: ItemFacts::Absent,

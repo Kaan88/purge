@@ -66,8 +66,9 @@
 //!    move is registered, its `done` not yet written) and flushes that `done` before it returns.
 //!
 //! The intent is the one a quarantine move would write: `QuarantineMove{path}` with
-//! `MoveBack{quarantine_path, original_path, file_id, volume_serial}` and `pre` = the validated facts (a
-//! locked item has no acting handle). So a held item that a later run moves, and a boot move that a
+//! `MoveBack{quarantine_path, original_path, file_id, volume_serial, parent}` and `pre` = the validated
+//! facts (a locked item has no acting handle; the parent directory is read by path, bound to the final
+//! path the gate's look read). So a held item that a later run moves, and a boot move that a
 //! restart completes, are undone by the ordinary move back to the recorded quarantine path.
 //!
 //! # After the restart
@@ -110,7 +111,7 @@ use purge_model::exec::journal::{
     FileFacts, Intent, ItemFacts, Reconcile, ReconcileResult, UndoConflict, UndoOutcome,
 };
 use purge_model::exec::op::{
-    BootMovePair, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason,
+    BootMovePair, ExecOp, FailCode, Inverse, ItemOutcome, OpId, ParentDir, SkipReason,
 };
 use purge_model::exec::session::Locker;
 use purge_model::{Blocker, CandidateId, FileTime};
@@ -198,6 +199,7 @@ pub struct LockedItem {
     seen: PathStamp,
     error: FsError,
     quarantine_path: String,
+    parent: Option<ParentDir>,
 }
 
 impl LockedItem {
@@ -215,6 +217,14 @@ impl LockedItem {
         let ItemFacts::File(validated) = &record.facts else {
             return None;
         };
+        // The directory the item is in, bound to the final path the gate's look read (F1 of the M2
+        // fix-round review); unread, the intent records none and its move back is not checked for it.
+        let parent = match (exec_op, locked.facts.final_path.as_deref()) {
+            (ExecOp::QuarantineMove { path }, Some(item_final)) => {
+                act_fs::parent_dir(path, item_final)
+            }
+            _ => None,
+        };
         Some(LockedItem {
             op,
             item: record.item.clone(),
@@ -223,6 +233,7 @@ impl LockedItem {
             seen: locked.stamp,
             error: FsError::from(locked.error),
             quarantine_path: quarantine_path.into(),
+            parent,
         })
     }
 
@@ -279,6 +290,7 @@ impl LockedItem {
                 original_path: source.to_owned(),
                 file_id: self.validated.file_id,
                 volume_serial: self.validated.volume_serial,
+                parent: self.parent.clone(),
             },
             definition: None,
             pre: ItemFacts::File(self.validated.clone()),
@@ -1759,6 +1771,7 @@ pub fn reconcile(
                 original_path,
                 file_id,
                 volume_serial,
+                ..
             } = &intent.inverse
             else {
                 return found(

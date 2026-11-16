@@ -24,7 +24,11 @@
 //! | 9 | `StoreIntegrity` | the store or a journal failed its integrity check |
 //! | 10 | `Partial` | the run did not commit, or an item did not end done; a purge item was not deleted (the document is written) |
 //! | 11 | `UndoConflicts` | an undo (or a rollback) ended with conflicts or failures (the document is written) |
-//! | 12 | `Unrecorded` | the session was not closed (a later recovery finishes it), or its report or index entry could not be written (the document is written) |
+//! | 12 | `Unrecorded` | the session was not closed (a later recovery finishes it), or its report or index entry could not be written; a purge whose index entry was not updated (the document is written) |
+//!
+//! When several apply, the higher code is returned: 12 takes precedence over 10 and 11. The document
+//! still states the outcome (the run's state and item outcomes, the undo's counts, each purge result),
+//! and a `warning:` line on stderr names the code 12 hides.
 //!
 //! Being unelevated is never an error for the M1a verbs: `harvest` and `scan` warn and go on with what
 //! they can read.
@@ -147,7 +151,7 @@ impl Exit {
                 "undo ended with conflicts or failures (the document is still written)"
             }
             Exit::Unrecorded => {
-                "session not closed, or its report or index entry not written (the document is still written)"
+                "session not closed, or its report or index entry not written (the document is still written; takes precedence over 10 and 11, which stderr then names)"
             }
         }
     }

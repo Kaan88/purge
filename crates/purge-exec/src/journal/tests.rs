@@ -124,6 +124,7 @@ fn intent(n: u32) -> Intent {
             original_path: path_of(n),
             file_id: FileIdHex([n as u8; 16]),
             volume_serial: 7,
+            parent: None,
         },
         definition: None,
         pre: ItemFacts::File(FileFacts {

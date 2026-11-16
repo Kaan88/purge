@@ -1058,6 +1058,7 @@ mod tests {
                 original_path: original.into(),
                 file_id: FileIdHex([3; 16]),
                 volume_serial: 9,
+                parent: None,
             },
             definition: None,
             pre,

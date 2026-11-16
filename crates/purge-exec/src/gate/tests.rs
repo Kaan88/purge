@@ -2037,6 +2037,25 @@ fn the_undo_key_check_hands_out_the_key_it_checked() {
     );
 }
 
+/// F6 of the M2 fix-round review: the validate pass reads a key tree with the run's key limit, the one
+/// the act's backup applies, not with the file limit (5,000 by default, which let a tree of 3 keys pass
+/// a key limit of 2 here).
+#[test]
+fn the_validate_pass_reads_a_key_tree_with_the_key_limit() {
+    let k = TestKey::new();
+    k.create(r"Vendor\App\One");
+    k.create(r"Vendor\App\Two");
+    let op = ExecOp::DeleteKeyTree {
+        key: k.wire(r"Vendor\App"),
+    };
+    let item = GateItem::new(&op, long()).with_key_limit(2);
+    assert!(item.max_files > 3);
+    let outcome = validate(&ctx(&[]), &item);
+    assert_refused(&outcome, Blocker::TooLarge, reason::TREE_NOT_READ);
+    let item = GateItem::new(&op, long()).with_key_limit(3);
+    assert!(matches!(validate(&ctx(&[]), &item), GateOutcome::Pass(_)));
+}
+
 /// Review finding S5, part 2: a key action was re-checked at act time with `Binding::Capture`, so a key
 /// that changed after validation passed. Now the act compares the facts of the acting handle with the
 /// journal record: a new subkey, a new value, or only a moved last write time (a value set and

@@ -559,6 +559,27 @@ pub fn read_scan_copy(session: &SessionDir) -> Result<ScanDoc, ExecError> {
 // The journal and the notes: what every step writes through
 // ---------------------------------------------------------------------------------------------------
 
+/// The most bytes of a skip's detail a `done` record carries. The detail is engine text with a path or
+/// an SDDL string in it, both of which can be tens of kilobytes (F11 of the M2 fix-round review); the
+/// report keeps it whole.
+pub(crate) const MAX_DONE_DETAIL: usize = 2048;
+
+/// What a cut detail ends with.
+const DETAIL_CUT: &str = " [...]";
+
+/// `detail` as a `done` record carries it: whole up to [`MAX_DONE_DETAIL`] bytes, else cut at a character
+/// boundary so that, with [`DETAIL_CUT`] after it, it is at most that long.
+pub(crate) fn journal_detail(detail: &str) -> String {
+    if detail.len() <= MAX_DONE_DETAIL {
+        return detail.to_owned();
+    }
+    let mut end = MAX_DONE_DETAIL - DETAIL_CUT.len();
+    while end > 0 && !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{DETAIL_CUT}", detail.get(..end).unwrap_or_default())
+}
+
 /// The journal writer and the notes the journal has no place for. Every journal write of the per-item
 /// pipeline goes through here, and every failure of one becomes an [`Abort`].
 #[derive(Debug)]
@@ -573,7 +594,7 @@ impl Ledger {
     /// empty for every other outcome.
     fn note(&mut self, op: OpId, outcome: &ItemOutcome, detail: String) -> String {
         let journalled = match outcome {
-            ItemOutcome::Skipped { .. } => detail.clone(),
+            ItemOutcome::Skipped { .. } => journal_detail(&detail),
             _ => String::new(),
         };
         if !detail.is_empty() && !outcome.is_success() {
@@ -1000,14 +1021,16 @@ impl<'a> Run<'a> {
             })
     }
 
-    /// The gate's view of op `op` (`exec_op`) at validation: its exemptions ([`Run::exemptions`]) and
-    /// the scan-time identity its candidate carries (`Candidate::item_fp`), which the validate pass
-    /// compares with the identity it reads.
+    /// The gate's view of op `op` (`exec_op`) at validation: its exemptions ([`Run::exemptions`]), the
+    /// scan-time identity its candidate carries (`Candidate::item_fp`), which the validate pass
+    /// compares with the identity it reads, and the run's key limit, which the act applies too.
     fn gate_item<'e>(&self, op: OpId, exec_op: &'e ExecOp) -> GateItem<'e> {
         let scan_identity = self
             .op_candidate(op)
             .and_then(|candidate| candidate.item_fp);
-        GateItem::new(exec_op, self.exemptions(op)).with_scan_identity(scan_identity)
+        GateItem::new(exec_op, self.exemptions(op))
+            .with_scan_identity(scan_identity)
+            .with_key_limit(self.settings.key_limit)
     }
 
     /// Step 7: validates every selected item read-only, writes one `validated` record per item and

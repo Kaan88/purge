@@ -559,10 +559,12 @@ impl Recorded {
     fn item(&self) -> GateItem<'_> {
         // The act is bound to the recorded stamp, which the validate pass already compared with the
         // scan-time identity; the act-time gate does not compare again.
+        // The key limit is not used at act time: the act's capture takes the run's limit itself.
         GateItem {
             op: &self.op,
             exemptions: self.exemptions,
             max_files: self.max_files,
+            max_keys: regbackup::DEFAULT_KEY_LIMIT,
             scan_identity: None,
         }
     }
@@ -958,6 +960,10 @@ pub struct GateItem<'a> {
     /// hold; more is refused with [`Blocker::TooLarge`]. The plan's limit: 5,000, or 50,000 for a
     /// manifest-backed install root.
     pub max_files: u32,
+    /// The most keys the tree of a key delete may hold, the run's key limit (`RunSettings::key_limit`)
+    /// that the act's backup capture applies too; more is refused with [`Blocker::TooLarge`]. The
+    /// validate pass reads the tree with it (F6 of the M2 fix-round review: it used `max_files`).
+    pub max_keys: usize,
     /// The identity the scan read for the item (the candidate's `item_fp`), when it has one. For a
     /// file-system op the validate pass compares it with the file id and volume serial read from the
     /// handle its facts come from; any difference, or a volume serial of 0 on either side, is refused
@@ -968,15 +974,22 @@ pub struct GateItem<'a> {
 }
 
 impl<'a> GateItem<'a> {
-    /// An item with the default blast-radius limit (`purge_plan::decide::Limits::default().max_files`)
-    /// and no scan-time identity.
+    /// An item with the default blast-radius limit (`purge_plan::decide::Limits::default().max_files`),
+    /// the default key limit ([`regbackup::DEFAULT_KEY_LIMIT`]) and no scan-time identity.
     pub fn new(op: &'a ExecOp, exemptions: Exemptions) -> GateItem<'a> {
         GateItem {
             op,
             exemptions,
             max_files: purge_plan::decide::Limits::default().max_files,
+            max_keys: regbackup::DEFAULT_KEY_LIMIT,
             scan_identity: None,
         }
+    }
+
+    /// The item with the key limit `max_keys` ([`GateItem::max_keys`]).
+    #[must_use]
+    pub fn with_key_limit(self, max_keys: usize) -> GateItem<'a> {
+        GateItem { max_keys, ..self }
     }
 
     /// The item with the scan-time identity `scan_identity` ([`GateItem::scan_identity`]).
@@ -2264,7 +2277,7 @@ pub(crate) fn key_facts_without_tree(ctx: &GateCtx, item: &GateItem<'_>) -> Opti
 }
 
 /// The digest of the whole tree of a key to delete, read through the validate pass's handle `key` the
-/// way its backup will be read ([`regbackup::capture_tree`], at most [`GateItem::max_files`] keys): what
+/// way its backup will be read ([`regbackup::capture_tree`], at most [`GateItem::max_keys`] keys): what
 /// the act is bound to ([`bind_tree`]; review M2 final S5). A tree that cannot be read whole is refused
 /// here with the capture's blocker (a link, a volatile key, a `REG_LINK` value, a name the backup cannot
 /// hold, too many keys or bytes): the act would refuse it the same way. A key gone meanwhile is
@@ -2275,8 +2288,7 @@ fn validated_tree<T>(key: &WKey, item: &GateItem<'_>) -> Result<Sha256Hex, Box<G
     else {
         return Err(Box::new(GateOutcome::Refused(rule(reason::OP_KIND))));
     };
-    let limit = usize::try_from(item.max_files).unwrap_or(usize::MAX);
-    let doc = match regbackup::capture_tree(key, spelled, limit) {
+    let doc = match regbackup::capture_tree(key, spelled, item.max_keys) {
         Ok(doc) => doc,
         Err(regbackup::CaptureError::Vanished) => return Err(Box::new(GateOutcome::Vanished)),
         Err(e) => {

@@ -120,6 +120,7 @@ fn move_intent(n: u32, id: &str, p: &str, size: u64, tree_bytes: Option<u64>) ->
             original_path: p.to_owned(),
             file_id: facts.file_id,
             volume_serial: facts.volume_serial,
+            parent: None,
         },
         definition: None,
         pre: ItemFacts::File(facts),

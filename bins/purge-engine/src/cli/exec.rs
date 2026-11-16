@@ -46,8 +46,10 @@
 //! directory or key holds something counts as carried out); `undo` and recovery that undid ops end with
 //! [`Exit::UndoConflicts`] when an op ended in a conflict or failed. Exit 0 also needs the session's
 //! record complete: a run or recovery that left the session open, or could not write its report or
-//! index entry, and an undo or retry that could not update the index entry, end with
-//! [`Exit::Unrecorded`] (review M2 M21). The document is written either way.
+//! index entry, and an undo, retry or `quarantine purge` that could not update the index entry, end with
+//! [`Exit::Unrecorded`] (review M2 M21). The document is written either way. [`Exit::Unrecorded`] takes
+//! precedence over [`Exit::Partial`] and [`Exit::UndoConflicts`]; a `warning:` line then names the
+//! code it hides, and the document states the outcome (F8 of the M2 fix-round review).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -317,6 +319,24 @@ fn report_exit(report: &ExecReport) -> Exit {
 /// The worse of two exit codes (the higher number; [`Exit::Ok`] is the best).
 fn worse(a: Exit, b: Exit) -> Exit {
     if b.code() > a.code() { b } else { a }
+}
+
+/// The code of a verb whose items ended as `outcome` ([`Exit::Ok`], [`Exit::Partial`] or
+/// [`Exit::UndoConflicts`]) and whose session record ended as `recorded` ([`Exit::Ok`] or
+/// [`Exit::Unrecorded`]): the worse of the two. [`Exit::Unrecorded`] takes precedence, so a `warning:`
+/// line then names the code it hides; the document states the outcome too (F8 of the M2 fix-round
+/// review).
+fn with_record(env: &mut Env<'_>, what: &str, outcome: Exit, recorded: Exit) -> Exit {
+    let exit = worse(outcome, recorded);
+    if exit == Exit::Unrecorded && outcome != Exit::Ok && outcome != exit {
+        env.warnings(&[format!(
+            "{what}: exit code {} ({}) also applies; {} is returned because the record is incomplete",
+            outcome.code(),
+            outcome.meaning(),
+            exit.code()
+        )]);
+    }
+    exit
 }
 
 /// The current time as a FILETIME, shifted by `offset_days`.
@@ -765,7 +785,10 @@ fn exec<R: RestorePointBackend + Clone>(
         report.pending_reboot
     ));
     let written = emit_doc(env, a.out.as_deref(), &output::json_text(report), "report");
-    worse(worse(written, report_exit(report)), recorded)
+    worse(
+        written,
+        with_record(env, "exec", report_exit(report), recorded),
+    )
 }
 
 /// [`Exit::Unrecorded`], with a warning for each part missing, unless the run's session is closed
@@ -917,17 +940,18 @@ fn undo_verb<R>(a: &UndoArgs, env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> 
         ));
     }
     let recorded = exec_recorded(env, true, true, out.index_updated);
-    let mut exit = emit_doc(
+    let written = emit_doc(
         env,
         a.out.as_deref(),
         &output::json_text(report),
         "undo report",
     );
+    let mut outcome = undo_exit(&counts);
     if let Some(stopped) = &out.stopped {
         env.error(&format!("undo stopped early: {stopped}"));
-        exit = worse(exit, Exit::Partial);
+        outcome = worse(outcome, Exit::Partial);
     }
-    worse(worse(exit, undo_exit(&counts)), recorded)
+    worse(written, with_record(env, "undo", outcome, recorded))
 }
 
 /// [`Exit::UndoConflicts`] when an op ended in a conflict or failed.
@@ -1227,6 +1251,12 @@ fn journal_recover_run<R>(
                     env.warnings(&[format!(
                         "{verb} {id}: the session is not closed, or its report or index entry is missing"
                     )]);
+                    with_record(
+                        env,
+                        &format!("{verb} {id}"),
+                        recovered_items_exit(&out),
+                        code,
+                    );
                 }
                 exit = worse(exit, code);
                 results.push(recovered_json(&out));
@@ -1422,12 +1452,10 @@ fn journal_retry_held<R>(session: &str, env: &mut Env<'_>, host: &mut ExecHost<'
     } else {
         exec_recorded(env, true, true, out.index_updated)
     };
+    let written = emit_doc(env, None, &output::json_text(&doc), "retry result");
     worse(
-        worse(
-            emit_doc(env, None, &output::json_text(&doc), "retry result"),
-            retried_exit(&out),
-        ),
-        recorded,
+        written,
+        with_record(env, verb, retried_exit(&out), recorded),
     )
 }
 
@@ -1669,6 +1697,7 @@ fn quarantine_purge<R>(a: &PurgeArgs, env: &mut Env<'_>, host: &mut ExecHost<'_,
             format!("Failed: {e}")
         }
     };
+    let recorded = purge_recorded(&report.index);
     let doc = json!({
         "schema": "purge.cli.purge/1",
         "now": now,
@@ -1680,10 +1709,20 @@ fn quarantine_purge<R>(a: &PurgeArgs, env: &mut Env<'_>, host: &mut ExecHost<'_,
         })).collect::<Vec<_>>(),
         "index": index,
     });
+    let written = emit_doc(env, None, &output::json_text(&doc), "purge result");
     worse(
-        emit_doc(env, None, &output::json_text(&doc), "purge result"),
-        exit,
+        written,
+        with_record(env, "quarantine purge", exit, recorded),
     )
+}
+
+/// [`Exit::Unrecorded`] for a purge whose index entry was not updated (the index unavailable, or the
+/// write failed), as for every other verb that changes a session (F8 of the M2 fix-round review, M21).
+fn purge_recorded(index: &IndexUpdate) -> Exit {
+    match index {
+        IndexUpdate::NotNeeded | IndexUpdate::Updated => Exit::Ok,
+        IndexUpdate::Unavailable(_) | IndexUpdate::Failed(_) => Exit::Unrecorded,
+    }
 }
 
 #[cfg(test)]
@@ -1793,6 +1832,69 @@ mod tests {
         }
         let err = String::from_utf8(err).unwrap();
         assert!(err.contains("not closed") && err.contains("report.json") && err.contains("index"));
+    }
+
+    /// F8 of the M2 fix-round review: 12 stays the code when the record is incomplete, but stderr names
+    /// the partial (10) or conflict (11) code it hides; and a purge whose index entry was not updated is
+    /// 12, not 0 or 10.
+    #[test]
+    fn twelve_names_the_code_it_hides_and_a_purge_without_its_index_is_twelve() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut host = purge_inventory::runner::LiveHost::new();
+        let live = purge_source::live::Live::new();
+        let mut env = Env {
+            sources: pipeline::Sources {
+                reg: &live.registry,
+                fs: &live.fs,
+                sys: &live.system,
+            },
+            host: &mut host,
+            settings: pipeline::Settings::default(),
+            run_options: purge_inventory::runner::RunOptions::default(),
+            stdout: &mut out,
+            stderr: &mut err,
+        };
+        assert_eq!(
+            with_record(&mut env, "undo", Exit::UndoConflicts, Exit::Unrecorded),
+            Exit::Unrecorded
+        );
+        assert_eq!(
+            with_record(&mut env, "exec", Exit::Partial, Exit::Unrecorded),
+            Exit::Unrecorded
+        );
+        // Nothing hidden: no line.
+        assert_eq!(
+            with_record(&mut env, "retry", Exit::Ok, Exit::Unrecorded),
+            Exit::Unrecorded
+        );
+        assert_eq!(
+            with_record(&mut env, "purge", Exit::Partial, Exit::Ok),
+            Exit::Partial
+        );
+        let err = String::from_utf8(err).unwrap();
+        let lines: Vec<&str> = err.lines().collect();
+        assert_eq!(lines.len(), 2, "{err}");
+        assert!(
+            lines[0].starts_with("warning: undo: exit code 11 "),
+            "{err}"
+        );
+        assert!(
+            lines[1].starts_with("warning: exec: exit code 10 "),
+            "{err}"
+        );
+
+        let unavailable = StorageError::NotInstalled("x".into());
+        assert_eq!(purge_recorded(&IndexUpdate::NotNeeded), Exit::Ok);
+        assert_eq!(purge_recorded(&IndexUpdate::Updated), Exit::Ok);
+        assert_eq!(
+            purge_recorded(&IndexUpdate::Unavailable(unavailable.clone())),
+            Exit::Unrecorded
+        );
+        assert_eq!(
+            purge_recorded(&IndexUpdate::Failed(unavailable)),
+            Exit::Unrecorded
+        );
     }
 
     #[test]

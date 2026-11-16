@@ -35,6 +35,7 @@ verbs:
 
   <program_id> is an inventory id (HKLM|64|Git_is1) or the Uninstall key name of exactly one entry.
   scan also writes the sidecar <plan>.scan.json next to the plan.
+  -o never writes through a junction, symbolic link or mount point anywhere on its path.
 
 executor verbs (headless, without the consent dialog: only a rig-exec build of the VM rig runs them;
 a normal build refuses them with exit code 5):
@@ -70,7 +71,7 @@ exit codes:
    9  store or journal integrity failure
   10  partial: not every item ended done (the document is still written)
   11  undo ended with conflicts or failures (the document is still written)
-  12  session not closed, or its report or index entry not written (the document is still written)
+  12  session not closed, or its report or index entry not written (the document is still written; takes precedence over 10 and 11, which stderr then names)
 
   --version, -V                             print the version
   --help, -h                                print this help

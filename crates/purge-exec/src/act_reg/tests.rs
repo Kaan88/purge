@@ -2497,3 +2497,81 @@ fn a_restore_that_could_not_put_security_back_is_not_restored() {
         }
     );
 }
+
+/// F3 of the M2 fix-round review: recovery's resumed key delete that stopped and put keys back with
+/// another owner or DACL ends `Failed{VerifyFailed}`, as an ordinary run's does, whether the rollback or
+/// the put-back of the keys an interrupted run had deleted lost it. Before the fix it ended `Skipped`,
+/// which undo reads as nothing to undo.
+#[test]
+fn a_resumed_delete_whose_put_back_lost_security_is_not_a_skip() {
+    let lost = |kind| {
+        vec![Difference {
+            at: "Sub1".into(),
+            kind,
+        }]
+    };
+    let stopped = |rollback| DeleteError {
+        at: String::new(),
+        failure: DeleteFailure::Changed(Change::ValuesDiffer),
+        rollback,
+    };
+    let verify_failed = |result: RegResult| {
+        matches!(
+            result.outcome,
+            ItemOutcome::Failed {
+                code: FailCode::VerifyFailed,
+                ..
+            }
+        )
+    };
+
+    // The rollback alone made the key whole, with a key whose owner could not be assigned.
+    let rolled_back = stopped(Rollback::Done {
+        keys: 1,
+        differences: lost(DifferenceKind::OwnerNotRestored {
+            recorded_owner: "SY".into(),
+        }),
+    });
+    let result = completion_stopped(&rolled_back, None);
+    assert!(
+        result.detail.contains("Sub1: owner SY not restored"),
+        "{result:?}"
+    );
+    assert!(verify_failed(result));
+
+    // The keys an interrupted run had deleted came back with other security.
+    let partial = stopped(Rollback::PartialBefore {
+        missing: 2,
+        keys: 1,
+        differences: Vec::new(),
+    });
+    let put_back = RestoreReport {
+        outcome: RestoreOutcome::Restored,
+        keys_created: 2,
+        differences: lost(DifferenceKind::SecurityDiffers),
+    };
+    assert!(verify_failed(completion_stopped(
+        &partial,
+        Some(Ok(put_back))
+    )));
+
+    // Whole and exact: the change stopped the delete, a skip as before.
+    let exact = RestoreReport {
+        outcome: RestoreOutcome::Restored,
+        keys_created: 2,
+        differences: lost(DifferenceKind::RootSecurityKept),
+    };
+    assert_eq!(
+        completion_stopped(&partial, Some(Ok(exact))).outcome,
+        ItemOutcome::Skipped {
+            reason: SkipReason::ChangedSinceScan
+        }
+    );
+    // Not whole: as before.
+    assert!(verify_failed(completion_stopped(
+        &partial,
+        Some(Err(RestoreError::Conflict(
+            regbackup::RestoreConflict::Link
+        )))
+    )));
+}

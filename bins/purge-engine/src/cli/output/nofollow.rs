@@ -71,6 +71,13 @@ const NT_FILE_DISPOSITION_INFORMATION: i32 = 13;
 /// Offset of `FileName` in `FILE_RENAME_INFORMATION` on 64-bit Windows.
 const RENAME_NAME_OFFSET: usize = 20;
 
+// The offset above and the hand-written `FILE_RENAME_INFORMATION` hold for 64-bit Windows only (F10 of
+// the M2 fix-round review).
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!(
+    "the no-follow writer's FILE_RENAME_INFORMATION layout is written for 64-bit Windows"
+);
+
 #[repr(C)]
 struct UnicodeString {
     length: u16,

@@ -461,13 +461,17 @@ impl Drop for Token {
     }
 }
 
-/// Ends the current thread's impersonation on drop (also on unwind).
+/// Ends the current thread's impersonation on drop (also on unwind). A revert that fails stops the
+/// process: the thread would go on with `SeRestorePrivilege` enabled, and Windows documents that a
+/// process must not continue then (F5 of the M2 fix-round review).
 struct Impersonation;
 
 impl Drop for Impersonation {
     fn drop(&mut self) {
         // SAFETY: takes no arguments; the thread impersonates since `SetThreadToken` succeeded.
-        unsafe { RevertToSelf() };
+        if unsafe { RevertToSelf() } == 0 {
+            std::process::abort();
+        }
     }
 }
 
@@ -624,6 +628,48 @@ impl WKey {
             link: info.key_flags & KEY_FLAG_LINK != 0,
             volatile: info.key_flags & KEY_FLAG_VOLATILE != 0,
         })
+    }
+
+    /// The key's own name as its key node stores it, whatever spelling opened it (`NtQueryKey`,
+    /// `KeyBasicInformation`), as UTF-16 code units. The kernel's full name
+    /// (`KeyNameInformation`) is not used: it gave the spelling the key was opened with.
+    pub fn stored_name(&self) -> Result<Vec<u16>, Win32Error> {
+        const KEY_BASIC_INFORMATION_CLASS: i32 = 0;
+        // KEY_BASIC_INFORMATION: LARGE_INTEGER LastWriteTime, ULONG TitleIndex, ULONG NameLength
+        // (bytes), then the name: the name starts at the fifth 32-bit word. A key name is at most
+        // 255 characters, so this buffer always holds it.
+        const NAME_AT: usize = 4;
+        let mut buf = vec![0u32; NAME_AT + 1024];
+        let mut len = 0u32;
+        // SAFETY: `buf` is a writable, 8-byte-multiple, 4-byte aligned buffer of the byte length
+        // passed (the struct's LARGE_INTEGER is only read here as two u32); `len` is a valid
+        // out-pointer; `hkey` is live for the borrow.
+        let status = unsafe {
+            NtQueryKey(
+                self.hkey,
+                KEY_BASIC_INFORMATION_CLASS,
+                buf.as_mut_ptr().cast(),
+                (buf.len() * 4) as u32,
+                &mut len,
+            )
+        };
+        nt(status)?;
+        let name_bytes = buf.get(NAME_AT - 1).copied().unwrap_or(0) as usize;
+        let units = name_bytes / 2;
+        if name_bytes == 0 || name_bytes % 2 != 0 || NAME_AT * 4 + name_bytes > len as usize {
+            return Err(Win32Error::INVALID_DATA);
+        }
+        let name: Vec<u16> = buf
+            .get(NAME_AT..)
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|w| [*w as u16, (*w >> 16) as u16])
+            .take(units)
+            .collect();
+        if name.len() != units {
+            return Err(Win32Error::INVALID_DATA);
+        }
+        Ok(name)
     }
 
     /// The target of a registry symbolic link: the `REG_LINK` data of `SymbolicLinkValue` (an NT
@@ -2073,7 +2119,8 @@ mod tests {
     }
 
     /// The SYSTEM owner case of the smoke run (`O:SYG:SYD:P...` came back owned by BA): needs an
-    /// elevated administrator, whose token holds `SeRestorePrivilege`. The rig runs it with
+    /// elevated administrator, whose token holds `SeRestorePrivilege`. No script runs it yet: run it by
+    /// hand on the gate VM before the campaign and record the result (F4 of the M2 fix-round review),
     /// `cargo test -p purge-win --features write --lib -- --ignored elevated_set_security_assigns_system_owner`.
     #[test]
     #[ignore = "needs an elevated administrator (SeRestorePrivilege)"]

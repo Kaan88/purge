@@ -812,6 +812,7 @@ impl QuarantineRecord {
             original_path,
             file_id,
             volume_serial,
+            ..
         } = &intent.inverse
         else {
             return None;

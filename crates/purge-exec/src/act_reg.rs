@@ -1080,13 +1080,8 @@ fn delete_stopped(error: &DeleteError, at: &str, empty: bool) -> RegResult {
         rollback_text(&error.rollback)
     );
     // Keys put back with another owner or DACL than they had are a change Purge made: not a skip.
-    let security_lost = match &error.rollback {
-        Rollback::Done { differences, .. } | Rollback::PartialBefore { differences, .. } => {
-            differences.iter().any(Difference::is_security)
-        }
-        Rollback::NotNeeded | Rollback::Incomplete { .. } => false,
-    };
-    if !error.rollback.is_complete() || security_lost {
+    let lost = !security_lost(&error.rollback).is_empty();
+    if !error.rollback.is_complete() || lost {
         let os_error = match &error.rollback {
             Rollback::Incomplete { failure, .. } => Some(failure.error.code()),
             _ => None,
@@ -1799,21 +1794,65 @@ fn complete_key(ctx: &GateCtx, session: &SessionDir, intent: &Intent) -> RegResu
         }
         Err(stopped) => stopped,
     };
-    let whole =
-        stopped.rollback.is_complete() || regbackup::restore_missing(&parent, &backup).is_ok();
-    if !whole {
+    let missing =
+        (!stopped.rollback.is_complete()).then(|| regbackup::restore_missing(&parent, &backup));
+    completion_stopped(&stopped, missing)
+}
+
+/// The security differences of a rollback: keys put back with another owner or DACL than they had.
+fn security_lost(rollback: &Rollback) -> Vec<Difference> {
+    match rollback {
+        Rollback::Done { differences, .. } | Rollback::PartialBefore { differences, .. } => {
+            differences
+                .iter()
+                .filter(|d| d.is_security())
+                .cloned()
+                .collect()
+        }
+        Rollback::NotNeeded | Rollback::Incomplete { .. } => Vec::new(),
+    }
+}
+
+/// The result of a resumed key delete ([`complete_key`]) that stopped. `missing` is the put-back of the
+/// keys still missing after the rollback ([`regbackup::restore_missing`]), `None` when the rollback alone
+/// made the key whole. The key must be whole, and put back with the recorded owners and DACLs, as
+/// [`delete_stopped`] requires of an ordinary run; otherwise `Failed{VerifyFailed}`, which undo reads as
+/// a change to look at (F3 of the M2 fix-round review: it was `Skipped`, "nothing to undo").
+fn completion_stopped(
+    stopped: &DeleteError,
+    missing: Option<Result<RestoreReport, RestoreError>>,
+) -> RegResult {
+    let mut lost = security_lost(&stopped.rollback);
+    match missing {
+        Some(Err(_)) => {
+            return RegResult::failed(
+                FailCode::VerifyFailed,
+                None,
+                format!(
+                    "the key delete stopped ({stopped}) and the key could not be put back whole"
+                ),
+            );
+        }
+        Some(Ok(report)) => lost.extend(report.differences.into_iter().filter(|d| d.is_security())),
+        None => {}
+    }
+    if !lost.is_empty() {
         return RegResult::failed(
             FailCode::VerifyFailed,
             None,
-            format!("the key delete stopped ({stopped}) and the key could not be put back whole"),
+            format!(
+                "the key delete stopped ({stopped}); the key is whole, but keys were put back with \
+                 differences: {}",
+                differences_text(&lost)
+            ),
         );
     }
-    match stopped.failure {
+    match &stopped.failure {
         DeleteFailure::Changed(_) => changed_since_scan(format!(
             "the key delete stopped: {stopped}; the key is whole"
         )),
         DeleteFailure::Os { error, .. } => {
-            RegResult::os(error, format!("the key delete stopped: {stopped}"))
+            RegResult::os(*error, format!("the key delete stopped: {stopped}"))
         }
         DeleteFailure::WrongBackupKind | DeleteFailure::NotThisKey => RegResult::failed(
             FailCode::Internal,

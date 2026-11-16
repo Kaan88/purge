@@ -836,7 +836,7 @@ nothing. Exit codes (also in `purge-engine --help`):
 | 9 | store or journal integrity failure |
 | 10 | partial: not every item ended done (the document is still written) |
 | 11 | undo ended with conflicts or failures (the document is still written) |
-| 12 | session not closed, or its report or index entry not written (the document is still written) |
+| 12 | session not closed, or its report or index entry not written (the document is still written; takes precedence over 10 and 11, which stderr then names) |
 
 An item "ended done" when it is `Done`, `Vanished` or `Skipped(NoLongerEmpty)` (a remove-if-empty whose object
 holds something). So the fixture runs exit 0 and the trap runs exit 10 (deferred and blocked items); the rig

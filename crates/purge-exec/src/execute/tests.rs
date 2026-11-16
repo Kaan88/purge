@@ -3212,3 +3212,18 @@ fn a_move_back_never_settles_while_its_boot_move_is_listed() {
     );
     assert_eq!(std::fs::read(ext(&file)).unwrap(), b"b");
 }
+
+/// F11 of the M2 fix-round review: the detail a `done` record carries is cut at a fixed length (at a
+/// character boundary, marked); a short one is kept whole. Before the fix it had no bound.
+#[test]
+fn a_done_detail_is_cut_at_a_fixed_length() {
+    assert_eq!(journal_detail("short"), "short");
+    let exact = "x".repeat(MAX_DONE_DETAIL);
+    assert_eq!(journal_detail(&exact), exact);
+    // A path of two-byte characters, longer than the bound by far.
+    let long = format!(r"C:\{}", "é".repeat(40_000));
+    let cut = journal_detail(&long);
+    assert!(cut.len() <= MAX_DONE_DETAIL, "{}", cut.len());
+    assert!(cut.ends_with(" [...]"));
+    assert!(long.starts_with(cut.trim_end_matches(" [...]")));
+}

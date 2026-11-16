@@ -64,6 +64,7 @@ use purge_win::reg_write::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::act_fs::owner_dacl_differences;
 use crate::fault;
 use crate::gate::{CheckedKeyParent, CheckedValueKey};
 use crate::storage::{SessionDir, StorageError, now};
@@ -405,7 +406,8 @@ pub enum DifferenceKind {
     SecurityDiffers,
     /// The backup was merged into an existing empty root key, which keeps its own class.
     RootClassKept,
-    /// The backup was merged into an existing empty root key, which keeps its own security.
+    /// The backup was merged into an existing empty root key, which keeps its own security (owner and
+    /// DACL are the recorded ones, or there is no merge; the group or the DACL's text may differ).
     RootSecurityKept,
     /// A key that exists differs from its backup node ([`restore_missing`], which never changes an
     /// existing key): the first such key found, left as it is.
@@ -462,6 +464,10 @@ pub enum RestoreConflict {
     /// into it would leave the restored tree volatile (or stable) where it was not.
     #[error("the key exists again with another volatility")]
     VolatilityDiffers,
+    /// The root key exists again, empty, with another owner or DACL than the backup recorded for it:
+    /// whoever created it may control what is restored into it (F2 of the M2 fix-round review).
+    #[error("the key exists again with another owner or DACL")]
+    SecurityDiffers,
 }
 
 impl RestoreConflict {
@@ -471,7 +477,8 @@ impl RestoreConflict {
             Self::KeyExistsProtected
             | Self::KeyNotEmpty
             | Self::Diverged { .. }
-            | Self::VolatilityDiffers => UndoConflict::KeyExists,
+            | Self::VolatilityDiffers
+            | Self::SecurityDiffers => UndoConflict::KeyExists,
             Self::Link => UndoConflict::GateBlocked {
                 blocker: Blocker::RegLink,
             },
@@ -775,7 +782,9 @@ fn node_volatile(node: &KeyNode) -> bool {
 /// Captures the key behind `root` with its whole subtree as a `purge.regbackup/1` tree document.
 ///
 /// `root` is the handle the gate inspected (any access that includes reading). `key_path` is the item's
-/// canonical key path; its last component becomes the root key's name. Every subkey is opened from its
+/// canonical key path, recorded as the document's `key`; the root key's name is the name the registry
+/// stores for the key behind `root` ([`WKey::stored_name`]), so undo re-creates it in that spelling,
+/// whatever case the path spells it in. Every subkey is opened from its
 /// parent's handle with `REG_OPTION_OPEN_LINK`; a link anywhere ends the capture with
 /// [`CaptureError::RegLink`]. More than `limit` keys end it with [`CaptureError::TooLarge`] (pass
 /// [`DEFAULT_KEY_LIMIT`], or the counted size of an absorbing Safe parent). A subkey that disappears
@@ -827,17 +836,25 @@ fn capture_tree_within(
             Ok(())
         }
     };
-    let leaf = leaf_name(key_path).ok_or_else(|| {
-        CaptureError::Os(KeyOpError {
+    if leaf_name(key_path).is_none() {
+        return Err(CaptureError::Os(KeyOpError {
             at: String::new(),
             op: "read key path",
             error: Win32Error::INVALID_PARAMETER,
-        })
-    })?;
+        }));
+    }
     if limit == 0 {
         return Err(CaptureError::TooLarge { limit });
     }
-    let (root_node, root_subkeys) = match read_node(root, WideB64::from(leaf), None, "") {
+    // The root's name as the registry stores it, which undo re-creates (F7 of the M2 fix-round review:
+    // the plan's spelling of the leaf may differ in case). The plan's spelling stays in `key`; that the
+    // two name one key is checked where the backup is bound to its op (`RegBackup::validate_for`).
+    let stored = match root.stored_name() {
+        Ok(stored) => stored,
+        Err(e) if e == KEY_DELETED || e.is_not_found() => return Err(CaptureError::Vanished),
+        Err(e) => return Err(capture_err("", "query key name", e)),
+    };
+    let (root_node, root_subkeys) = match read_node(root, WideB64::from(stored), None, "") {
         Err(CaptureError::Os(e)) if e.error == KEY_DELETED || e.error.is_not_found() => {
             return Err(CaptureError::Vanished);
         }
@@ -1133,7 +1150,9 @@ fn check_doc(doc: &RegBackup) -> Result<(), String> {
         return Err("a key is flagged as a registry link".into());
     }
     let leaf = leaf_name(&doc.key).ok_or("the key path has no last component")?;
-    if tree.keys[0].name_b64 != WideB64::from(leaf) {
+    // The root holds the stored spelling of the name, the path the plan's (F7 of the M2 fix-round
+    // review): one key when they fold alike, as the registry compares names.
+    if !same_name(&tree.keys[0].name_b64.0, &WideB64::from(leaf).0) {
         return Err("the root key's name is not the last component of the key path".into());
     }
     let mut siblings = HashSet::new();
@@ -1897,7 +1916,8 @@ pub fn probe_tree(
 ///   gate's canonical address): [`RestoreConflict::KeyExistsProtected`];
 /// - root present and empty: the backup is merged into it (its values and subkeys are added; the existing
 ///   key keeps its class and security, reported as differences); another volatility than recorded is
-///   [`RestoreConflict::VolatilityDiffers`];
+///   [`RestoreConflict::VolatilityDiffers`], another owner or DACL than recorded
+///   [`RestoreConflict::SecurityDiffers`];
 /// - root present with content: [`RestoreConflict::KeyNotEmpty`].
 ///
 /// A partly deleted tree (an interrupted delete) is a conflict here; recovery uses [`complete_tree`] or
@@ -1935,7 +1955,9 @@ pub fn restore_tree(
 
 /// Merges the backup into an existing, empty root key below the checked parent. The root must have
 /// the recorded volatility ([`RestoreConflict::VolatilityDiffers`]): the keys created below a volatile
-/// key would be volatile, below a stable key stable.
+/// key would be volatile, below a stable key stable. It must have the recorded owner and DACL
+/// ([`RestoreConflict::SecurityDiffers`]), as an existing directory must for a file undo: a key somebody
+/// else created there may let others read or write what is restored into it.
 fn merge_into_empty(
     parent: &CheckedKeyParent,
     tree: &RegTree,
@@ -1985,6 +2007,9 @@ fn merge_into_empty(
     let live_sddl = root
         .security_sddl()
         .map_err(|e| failed_early("", "read security", e))?;
+    if !owner_dacl_differences(&live_sddl, &node.sddl).is_empty() {
+        return Err(RestoreError::Conflict(RestoreConflict::SecurityDiffers));
+    }
     if live_sddl != node.sddl {
         differences.push(Difference {
             at: String::new(),
@@ -4372,6 +4397,70 @@ mod tests {
         }
     }
 
+    /// F7 of the M2 fix-round review: a key the plan spells in another case is backed up under the name
+    /// the registry stores and re-created in that spelling. Before the fix it came back as the plan
+    /// spelled it (`MIXEDCASE`), with `Restored` and no difference.
+    #[test]
+    fn undo_re_creates_a_key_in_its_stored_spelling() {
+        let root = TestRoot::new();
+        root.key
+            .create_subkey("MixedCase", "", None, false)
+            .unwrap()
+            .set_value_raw("v", REG_DWORD, &[1, 0, 0, 0])
+            .unwrap();
+        let dir = TempDir::new();
+        let doc = capture(&root, "MIXEDCASE");
+        assert_eq!(
+            doc.key,
+            root.key_path("MIXEDCASE"),
+            "the plan's spelling stays"
+        );
+        let backup = save(&dir, 1, &doc);
+        delete_tree(&root.open("MIXEDCASE", KeyAccess::DELETE), &backup).unwrap();
+        assert!(!root.exists("MixedCase"));
+        let report = restore_tree(&parent_of(&backup), &backup).unwrap();
+        assert_eq!(report.outcome, RestoreOutcome::Restored);
+        assert_eq!(
+            root.open("", KeyAccess::READ).subkey_names().unwrap(),
+            vec!["MixedCase".to_owned()]
+        );
+    }
+
+    /// F2 of the M2 fix-round review: an empty key standing where a deleted one is to be restored is
+    /// merged into only with the recorded owner and DACL. Before the fix any empty key was adopted with
+    /// its own security and the values were restored into it.
+    #[test]
+    fn an_empty_key_with_another_dacl_is_not_merged_into() {
+        let root = TestRoot::new();
+        small_tree(&root);
+        let dir = TempDir::new();
+        let doc = capture(&root, "T");
+        let backup = save(&dir, 1, &doc);
+        let RegBackupBody::Tree(tree) = &doc.body else {
+            unreachable!("a tree capture")
+        };
+        let recorded = tree.keys[0].sddl.clone();
+        assert!(
+            recorded.contains("D:") && !recorded.contains("S:"),
+            "{recorded}"
+        );
+        delete_tree(&root.open("T", KeyAccess::DELETE), &backup).unwrap();
+
+        // Created again, empty, by somebody who lets Everyone write to it.
+        let open = format!("{recorded}(A;CI;KA;;;WD)");
+        root.key.create_subkey("T", "", Some(&open), false).unwrap();
+        assert_eq!(
+            restore_tree(&parent_of(&backup), &backup),
+            Err(RestoreError::Conflict(RestoreConflict::SecurityDiffers))
+        );
+        assert_eq!(
+            RestoreConflict::SecurityDiffers.undo_conflict(),
+            UndoConflict::KeyExists
+        );
+        let info = root.open("T", KeyAccess::READ).info().unwrap();
+        assert_eq!((info.n_values, info.n_subkeys), (0, 0), "nothing written");
+    }
+
     #[test]
     fn restore_conflicts_follow_the_rules() {
         let root = TestRoot::new();
@@ -4734,9 +4823,10 @@ mod tests {
     }
 
     /// The SYSTEM owner of the smoke run (`O:SYG:SYD:P(...)` came back owned by BA): with
-    /// `SeRestorePrivilege`, which an elevated administrator holds, the restore assigns it. Run by the
-    /// rig: `cargo test -p purge-exec --features <ci set> --lib -- --ignored
-    /// elevated_restore_puts_back_a_system_owner`.
+    /// `SeRestorePrivilege`, which an elevated administrator holds, the restore assigns it. No script
+    /// runs it yet: run it by hand on the gate VM before the campaign and record the result (F4 of the
+    /// M2 fix-round review), `cargo test -p purge-exec --features fault-inject,test-support --lib --
+    /// --ignored elevated_restore_puts_back_a_system_owner`.
     #[test]
     #[ignore = "needs an elevated administrator (SeRestorePrivilege)"]
     fn elevated_restore_puts_back_a_system_owner() {

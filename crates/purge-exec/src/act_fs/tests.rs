@@ -563,6 +563,7 @@ fn a_read_only_hidden_file_with_streams_comes_back_unchanged() {
         original_path,
         file_id,
         volume_serial,
+        ..
     } = &intent.inverse
     else {
         panic!("{intent:?}");
@@ -1160,6 +1161,60 @@ fn an_existing_directory_counts_as_restored_only_with_the_recorded_owner_and_dac
     ));
 }
 
+/// F1 of the M2 fix-round review: the directory a quarantined file was in is removed by something
+/// other than the session and created again by somebody else. The file goes back only into a
+/// directory with the recorded owner and DACL; before the fix it went into any plain directory there.
+#[test]
+fn a_move_back_goes_only_into_a_parent_with_the_recorded_owner_and_dacl() {
+    let s = Scratch::new("parent");
+    let f = s.file(r"src\App\helper.exe", b"helper");
+    let keep = s.file(r"src\App\keep.txt", b"not the session's");
+    let app = s.path(r"src\App");
+    let mut env = Env::new(s, vec![mv(&f)]);
+    assert_done(&env.run(1));
+    let Inverse::MoveBack {
+        parent: Some(parent),
+        ..
+    } = &env.intents[&1].inverse
+    else {
+        panic!("{:?}", env.intents[&1].inverse);
+    };
+    assert!(parent.sddl.contains("D:"), "{}", parent.sddl);
+
+    // Something else removes the directory; somebody creates it again and lets Everyone write to it.
+    std::fs::remove_file(&keep).unwrap();
+    std::fs::remove_dir(&app).unwrap();
+    std::fs::create_dir(&app).unwrap();
+    let status = Command::new("icacls")
+        .args([app.as_str(), "/grant", "*S-1-1-0:(OI)(CI)F", "/q"])
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let undo = env.undo(1);
+    let FsUndo::Conflict {
+        conflict: UndoConflict::DestinationExists,
+        detail,
+    } = &undo
+    else {
+        panic!("{undo:?}");
+    };
+    assert!(detail.contains("DACL"), "{detail}");
+    assert!(!exists(&f), "a conflict moves nothing");
+    assert_eq!(std::fs::read(env.quarantine_path(1)).unwrap(), b"helper");
+
+    // Created again with the inherited descriptor only: the recorded owner and DACL, so it goes back.
+    std::fs::remove_dir(&app).unwrap();
+    std::fs::create_dir(&app).unwrap();
+    assert_restored(&env.undo(1));
+    assert_eq!(std::fs::read(&f).unwrap(), b"helper");
+
+    // An owner no standard user can set passes in place of the recorded one (what undo's own
+    // recreate leaves when SYSTEM cannot be assigned); a user's does not.
+    assert!(admin_only_owner("BA") && admin_only_owner("SY") && admin_only_owner("S-1-5-18"));
+    assert!(!admin_only_owner(&current_user_sid().unwrap()) && !admin_only_owner("BU"));
+}
+
 #[test]
 fn sddl_parts_are_cut_at_the_next_part() {
     let full = "O:S-1-5-21-1-2-3-1001G:S-1-5-21-1-2-3-513D:AI(A;OICIID;FA;;;SY)S:(ML;;NW;;;LW)";
@@ -1443,6 +1498,7 @@ fn volume_serial_zero_is_unknown_and_other_volumes_are_never_copied() {
             original_path: r"C:\x\a.txt".into(),
             file_id: FileIdHex([1; 16]),
             volume_serial: 0,
+            parent: None,
         },
         definition: None,
         pre: ItemFacts::File(pre.clone()),
@@ -1488,6 +1544,7 @@ fn volume_serial_zero_is_unknown_and_other_volumes_are_never_copied() {
         original_path: r"C:\Windows\a.txt".into(),
         file_id: FileIdHex([1; 16]),
         volume_serial: 5,
+        parent: None,
     };
     assert!(matches!(
         plan_undo_fs(&skewed, Some(&ItemOutcome::Done)),
