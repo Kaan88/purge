@@ -29,7 +29,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::{FILETIME, RtlNtStatusToDosError, UNICODE_STRING};
 use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
@@ -301,15 +301,16 @@ pub struct Key {
     hkey: HKEY,
     owned: bool,
     view: RegView,
-    /// Whether this key is a symbolic link, computed once when a path descends through it.
-    link: OnceLock<Result<bool, Win32Error>>,
+    /// Set once this key is proven not to be a symbolic link for as long as the handle lives (see
+    /// [`Key::link_target_with_info`]); opens below it then skip the link check. Never reset.
+    not_link: AtomicBool,
 }
 
 // SAFETY: a registry key handle is a kernel handle, not tied to the thread that opened it; the
 // registry API is safe to call concurrently on one handle.
 unsafe impl Send for Key {}
 // SAFETY: every method takes `&self` and only issues read calls, which the registry serialises;
-// the only interior state is a `OnceLock`, which is itself `Sync`.
+// the only interior state is an `AtomicBool`, which is itself `Sync`.
 unsafe impl Sync for Key {}
 
 impl Drop for Key {
@@ -328,7 +329,7 @@ impl Key {
             hkey,
             owned,
             view,
-            link: OnceLock::new(),
+            not_link: AtomicBool::new(false),
         }
     }
 
@@ -369,8 +370,9 @@ impl Key {
     /// `KEY_QUERY_VALUE` (enough to descend further) otherwise.
     ///
     /// A caller that keeps the keys of a path open and opens further paths below them step by step
-    /// (`purge-source`'s registry walker) opens exactly what [`Key::open`] of the whole path opens.
-    /// Whether this key is a link is read once per handle.
+    /// (`purge-source`'s registry walker) opens exactly what [`Key::open`] of the whole path opens:
+    /// whether this key is a link is asked on every call, unless [`Key::link_target_with_info`]
+    /// proved through this handle that it is none and stays none.
     pub fn open_component(&self, name: &str, last: bool) -> Result<Key, Win32Error> {
         self.ensure_not_link()?;
         let access = if last { KEY_READ } else { KEY_QUERY_VALUE };
@@ -379,13 +381,13 @@ impl Key {
 
     /// Refuses to descend below a link key (predefined roots are never links).
     fn ensure_not_link(&self) -> Result<(), Win32Error> {
-        if !self.owned {
+        if !self.owned || self.not_link.load(Ordering::Relaxed) {
             return Ok(());
         }
-        match *self.link.get_or_init(|| self.is_link()) {
-            Ok(false) => Ok(()),
-            Ok(true) => Err(Win32Error::LINK_ON_PATH),
-            Err(e) => Err(e),
+        if self.is_link()? {
+            Err(Win32Error::LINK_ON_PATH)
+        } else {
+            Ok(())
         }
     }
 
@@ -736,38 +738,43 @@ impl Key {
 
     /// The target of a registry symbolic link, if this key is one: the `REG_LINK` data of its
     /// `SymbolicLinkValue` (an NT path such as `\REGISTRY\USER\S-1-5-21-..._Classes`). The link is
-    /// never followed.
+    /// never followed. The answer is not remembered: a later open below this handle asks again.
     pub fn link_target(&self) -> Result<Option<String>, Win32Error> {
-        let target = self.read_link_target();
-        // Remembered as what `is_link` answers for this handle, so that descending below the key does
-        // not ask again. (Never from inside `ensure_not_link`'s initialisation, which reads through
-        // `is_link` and `read_link_target`.)
-        if self.owned {
-            let _ = self
-                .link
-                .set(target.as_ref().map(Option::is_some).map_err(|e| *e));
-        }
-        target
-    }
-
-    fn read_link_target(&self) -> Result<Option<String>, Win32Error> {
         Ok(self
             .value(SYMBOLIC_LINK_VALUE)?
             .filter(|v| v.ty == REG_LINK)
             .and_then(|v| v.as_string()))
     }
 
-    /// Whether this key is a registry symbolic link.
-    pub fn is_link(&self) -> Result<bool, Win32Error> {
-        Ok(self.read_link_target()?.is_some())
+    /// [`Key::link_target`] for a caller that holds `info`, this key's [`Key::info`] read through this
+    /// handle: a key without values has no `SymbolicLinkValue`, so it is not asked.
+    ///
+    /// When the key has subkeys of its own and no link target, the answer "no link" is remembered on
+    /// this handle and later opens below it ([`Key::open_component`]) skip the check. That answer
+    /// cannot go stale: a link key never holds subkeys (opens and creates below it resolve in its
+    /// target), and a key made without `REG_OPTION_CREATE_LINK` never becomes a link. A key without
+    /// subkeys proves nothing (a link key exists without its target for a moment each time a link is
+    /// made), so nothing is remembered for it.
+    ///
+    /// One case the remembered answer reads differently from a fresh [`Key::open`]: an ordinary key
+    /// that gets a `REG_LINK` `SymbolicLinkValue` after this call. The kernel does not treat it as a
+    /// link and opens below this handle read its real subkeys; a fresh open refuses them as below a
+    /// link.
+    pub fn link_target_with_info(&self, info: &KeyInfo) -> Result<Option<String>, Win32Error> {
+        let target = if info.n_values == 0 {
+            Ok(None)
+        } else {
+            self.link_target()
+        };
+        if self.owned && info.n_subkeys > 0 && matches!(target, Ok(None)) {
+            self.not_link.store(true, Ordering::Relaxed);
+        }
+        target
     }
 
-    /// Records that this key is not a link, known from its having no values (a link's target is its
-    /// `SymbolicLinkValue`), so that descending below it does not ask.
-    pub fn note_no_values(&self) {
-        if self.owned {
-            let _ = self.link.set(Ok(false));
-        }
+    /// Whether this key is a registry symbolic link.
+    pub fn is_link(&self) -> Result<bool, Win32Error> {
+        Ok(self.link_target()?.is_some())
     }
 
     /// Owner SID and TrustedInstaller DACL flag (`RegGetKeySecurity`).
@@ -997,12 +1004,119 @@ mod tests {
         matches!(v.ty, REG_SZ | REG_EXPAND_SZ | REG_MULTI_SZ) && v.data.len() % 2 == 1
     }
 
+    /// Why [`compare_reads`] did not confirm a key.
+    #[derive(Debug)]
+    enum ReadDiff {
+        /// The key was deleted while it was read.
+        Gone,
+        /// The reads differ (or the key changed between them).
+        Differs(String),
+    }
+
+    /// `ERROR_KEY_DELETED`: a read through the handle of a key deleted meanwhile.
+    const KEY_DELETED: Win32Error = Win32Error(1018);
+
+    fn os(what: &str) -> impl Fn(Win32Error) -> ReadDiff + '_ {
+        move |e| {
+            if e == KEY_DELETED {
+                ReadDiff::Gone
+            } else {
+                panic!("{what}: {e}")
+            }
+        }
+    }
+
+    /// Reads the values of `k` through the NT calls and through the Win32 calls (with the buffers the
+    /// reader passed before the NT reads) and compares them: equal for well-formed data; a value of
+    /// odd-length string data differs at most in its last byte, which the Win32 read zeroed. Returns the
+    /// number of values compared and of odd-length strings among them.
+    fn compare_reads(k: &Key) -> Result<(usize, usize), ReadDiff> {
+        let nt = k.values().map_err(os("NT enumeration"))?;
+        let info = k.info().map_err(os("info"))?;
+        let win32 = k
+            .values_with_capacity(
+                info.max_value_name_len as usize + 1,
+                info.max_value_len as usize,
+            )
+            .map_err(os("Win32 enumeration"))?;
+        if nt.len() != win32.len() {
+            return Err(ReadDiff::Differs(format!(
+                "{} values by NT, {} by Win32",
+                nt.len(),
+                win32.len()
+            )));
+        }
+        let mut odd = 0;
+        for (n, w) in nt.iter().zip(&win32) {
+            let differs = |what: &str| Err(ReadDiff::Differs(format!("{:?}: {what}", n.name)));
+            let Some(q) = k
+                .value_with_capacity(&n.name, 256)
+                .map_err(os("Win32 query"))?
+            else {
+                return differs("gone for the Win32 query");
+            };
+            if k.value(&n.name).map_err(os("NT query"))?.as_ref() != Some(n) {
+                return differs("NT query differs from NT enumeration");
+            }
+            for old in [w, &q] {
+                if (&n.name, n.ty, n.data.len()) != (&old.name, old.ty, old.data.len()) {
+                    return differs("name, type or length differ");
+                }
+                let same = if odd_string(n) {
+                    let last = n.data.len() - 1;
+                    n.data[..last] == old.data[..last]
+                        && (old.data[last] == 0 || old.data[last] == n.data[last])
+                } else {
+                    n == old
+                };
+                if !same {
+                    return differs("data differ");
+                }
+            }
+            if odd_string(n) {
+                odd += 1;
+            }
+        }
+        Ok((nt.len(), odd))
+    }
+
     /// The NT reads report what the Win32 reads reported for every well-formed value (the scan output
-    /// for such data cannot change), over the uninstall keys of both views and the keys below them,
-    /// `CurrentVersion` and the current user's `Software` subkeys. A value of odd-length string data
-    /// differs at most in its last byte, which the Win32 read zeroed.
+    /// for such data cannot change): exactly, on the first read, under a scratch key the test writes;
+    /// and over the uninstall keys of both views and the keys below them, `CurrentVersion` and the
+    /// current user's `Software` subkeys. Those are live keys other processes write: a key whose reads
+    /// differ is read again (up to five times), since a difference of the reads themselves repeats on
+    /// unchanging data while a concurrent write does not; a key deleted meanwhile is skipped.
     #[test]
     fn nt_reads_equal_win32_reads_for_well_formed_data() {
+        let scratch = Scratch::new();
+        let k = scratch.create("Values");
+        let utf16z = |s: &str| -> Vec<u8> {
+            s.encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes)
+                .collect()
+        };
+        let big: Vec<u8> = (0..100_000u32).map(|i| (i * 7) as u8).collect();
+        let cases: Vec<(&str, u32, Vec<u8>)> = vec![
+            ("", REG_SZ, utf16z("default")),
+            ("sz", REG_SZ, utf16z(r"C:\Program Files\Purge test\a.exe")),
+            ("sz-empty", REG_SZ, Vec::new()),
+            ("expand", REG_EXPAND_SZ, utf16z(r"%ProgramFiles%\x")),
+            ("multi", REG_MULTI_SZ, utf16z("a\0\0bc\0")),
+            ("binary", REG_BINARY, vec![1, 2, 3]),
+            ("binary-big", REG_BINARY, big),
+            ("dword", REG_DWORD, 7u32.to_le_bytes().to_vec()),
+            ("dword-be", REG_DWORD_BIG_ENDIAN, vec![0, 0, 1, 2]),
+            ("qword", REG_QWORD, 9u64.to_le_bytes().to_vec()),
+            ("none", REG_NONE, vec![9; 5]),
+            ("n\u{e4}me \u{263a}", REG_SZ, utf16z("non-ASCII name")),
+        ];
+        for (name, ty, data) in &cases {
+            k.set(name, *ty, data);
+        }
+        let ro = Key::open(RegRoot::Hku, &scratch.path("Values"), RegView::K64).unwrap();
+        assert_eq!(compare_reads(&ro).unwrap(), (cases.len(), 0));
+
         let sid = crate::sid::current_user_sid().unwrap();
         let mut keys: Vec<Key> = Vec::new();
         for view in [RegView::K64, RegView::K32] {
@@ -1028,44 +1142,239 @@ mod tests {
                 keys.push(k);
             }
         }
-        let (mut compared, mut odd) = (0usize, 0usize);
-        for k in &keys {
-            let nt = k.values().unwrap();
-            // The Win32 reads with the buffers the reader passed before the fix.
-            let info = k.info().unwrap();
-            let win32 = k
-                .values_with_capacity(
-                    info.max_value_name_len as usize + 1,
-                    info.max_value_len as usize,
-                )
-                .unwrap();
-            assert_eq!(nt.len(), win32.len());
-            for (n, w) in nt.iter().zip(&win32) {
-                compared += 1;
-                let q = k.value_with_capacity(&n.name, 256).unwrap().unwrap();
-                assert_eq!(k.value(&n.name).unwrap().as_ref(), Some(n));
-                for old in [w, &q] {
-                    assert_eq!(
-                        (&n.name, n.ty, n.data.len()),
-                        (&old.name, old.ty, old.data.len())
-                    );
-                    if odd_string(n) {
-                        let last = n.data.len() - 1;
-                        assert_eq!(n.data[..last], old.data[..last], "{}", n.name);
-                        assert!(old.data[last] == 0 || old.data[last] == n.data[last]);
-                    } else {
-                        assert_eq!(n, old);
+        let (mut compared, mut odd, mut retried, mut gone) = (0usize, 0usize, 0usize, 0usize);
+        for (i, k) in keys.iter().enumerate() {
+            let mut tries = 0;
+            loop {
+                tries += 1;
+                match compare_reads(k) {
+                    Ok((values, odd_strings)) => {
+                        compared += values;
+                        odd += odd_strings;
+                        break;
                     }
-                }
-                if odd_string(n) {
-                    odd += 1;
+                    Err(ReadDiff::Gone) => {
+                        gone += 1;
+                        break;
+                    }
+                    Err(ReadDiff::Differs(why)) if tries < 5 => {
+                        eprintln!("key {i}: {why}; reading it again");
+                        retried += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Err(ReadDiff::Differs(why)) => panic!("key {i}: {why} on {tries} reads"),
                 }
             }
         }
         assert!(compared > 100, "only {compared} values compared");
         eprintln!(
-            "compared {compared} values in {} keys, {odd} odd-length strings",
+            "compared {compared} values in {} keys, {odd} odd-length strings; {retried} reads \
+             repeated, {gone} keys deleted meanwhile",
             keys.len()
+        );
+    }
+
+    // The scratch trees below are written with raw calls: links included, which the `write`
+    // feature's API does not make, and without that feature.
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtDeleteKey(key: HKEY) -> i32;
+    }
+
+    /// `DELETE` access.
+    const DELETE_ACCESS: u32 = 0x1_0000;
+
+    /// A key handle from `RegCreateKeyExW` with all access, closed on drop.
+    struct RawKey(HKEY);
+
+    impl Drop for RawKey {
+        fn drop(&mut self) {
+            // SAFETY: the handle came from `RegCreateKeyExW` and is closed once.
+            unsafe { RegCloseKey(self.0) };
+        }
+    }
+
+    impl RawKey {
+        /// Sets value `name` to `ty` and exactly `data`.
+        fn set(&self, name: &str, ty: u32, data: &[u8]) {
+            let name = wide(name);
+            // SAFETY: live handle; `name` is NUL-terminated; `data` has the stated length.
+            let rc = unsafe {
+                windows_sys::Win32::System::Registry::RegSetValueExW(
+                    self.0,
+                    name.as_ptr(),
+                    0,
+                    ty,
+                    data.as_ptr(),
+                    data.len() as u32,
+                )
+            };
+            assert_eq!(rc, 0, "set value");
+        }
+
+        /// Writes a link target: a `REG_LINK` `SymbolicLinkValue` with the NT path `target`.
+        fn set_link_target(&self, target: &str) {
+            let data: Vec<u8> = target.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            self.set(SYMBOLIC_LINK_VALUE, REG_LINK, &data);
+        }
+    }
+
+    /// A fresh `HKU\<SID>\Software\PurgeTest-<random>` key written with raw calls, removed on drop
+    /// (also on panic): link keys first, as links, then the tree.
+    struct Scratch {
+        /// `<SID>\Software\PurgeTest-…`, relative to `HKU`.
+        rel: String,
+        links: Vec<String>,
+    }
+
+    impl Scratch {
+        fn new() -> Scratch {
+            use std::sync::atomic::AtomicU32;
+            use std::time::{SystemTime, UNIX_EPOCH};
+            static COUNTER: AtomicU32 = AtomicU32::new(0);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let sid = crate::sid::current_user_sid().unwrap();
+            let s = Scratch {
+                rel: format!(
+                    r"{sid}\Software\PurgeTest-{:x}-{nanos:x}-{}",
+                    std::process::id(),
+                    COUNTER.fetch_add(1, Ordering::Relaxed)
+                ),
+                links: Vec::new(),
+            };
+            drop(s.raw_create("", 0));
+            s
+        }
+
+        /// `sub` below the scratch root, relative to `HKU`.
+        fn path(&self, sub: &str) -> String {
+            if sub.is_empty() {
+                self.rel.clone()
+            } else {
+                format!(r"{}\{sub}", self.rel)
+            }
+        }
+
+        /// The NT path of `sub`, as a link target.
+        fn nt_path(&self, sub: &str) -> String {
+            format!(r"\REGISTRY\USER\{}", self.path(sub))
+        }
+
+        fn raw_create(&self, sub: &str, options: u32) -> RawKey {
+            use windows_sys::Win32::System::Registry::{KEY_ALL_ACCESS, RegCreateKeyExW};
+            let name = wide(self.path(sub));
+            let mut out: HKEY = ptr::null_mut();
+            // SAFETY: `name` is NUL-terminated; class, security attributes and disposition are
+            // null; `out` is a valid out-pointer.
+            let rc = unsafe {
+                RegCreateKeyExW(
+                    HKEY_USERS,
+                    name.as_ptr(),
+                    0,
+                    ptr::null(),
+                    options,
+                    KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+                    ptr::null(),
+                    &mut out,
+                    ptr::null_mut(),
+                )
+            };
+            assert_eq!(rc, 0, "create {sub}");
+            RawKey(out)
+        }
+
+        /// Creates the ordinary key `sub` (and the keys above it).
+        fn create(&self, sub: &str) -> RawKey {
+            self.raw_create(sub, 0)
+        }
+
+        /// Creates `sub` as a link key without its target: the first of the two steps of making a
+        /// link.
+        fn link(&mut self, sub: &str) -> RawKey {
+            use windows_sys::Win32::System::Registry::REG_OPTION_CREATE_LINK;
+            self.links.push(sub.to_owned());
+            self.raw_create(sub, REG_OPTION_CREATE_LINK)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            for link in self.links.iter().rev() {
+                let name = wide(self.path(link));
+                let mut key: HKEY = ptr::null_mut();
+                // SAFETY: `name` is NUL-terminated; `key` is a valid out-pointer.
+                let rc = unsafe {
+                    RegOpenKeyExW(
+                        HKEY_USERS,
+                        name.as_ptr(),
+                        REG_OPTION_OPEN_LINK,
+                        DELETE_ACCESS | KEY_WOW64_64KEY,
+                        &mut key,
+                    )
+                };
+                if rc == 0 {
+                    let key = RawKey(key);
+                    // SAFETY: a live handle opened with DELETE; the link key itself is deleted.
+                    unsafe { NtDeleteKey(key.0) };
+                }
+            }
+            let name = wide(&self.rel);
+            // SAFETY: `name` is NUL-terminated; with a subkey name the call deletes that key too.
+            let rc = unsafe {
+                windows_sys::Win32::System::Registry::RegDeleteTreeW(HKEY_USERS, name.as_ptr())
+            };
+            if !std::thread::panicking() {
+                assert_eq!(rc, 0, "scratch key removed");
+            }
+        }
+    }
+
+    /// `Key::link_target` remembers nothing, and "no link" is remembered on a handle only for a key
+    /// with subkeys of its own: a link key read before its target was written (a link is made in two
+    /// steps) is asked again before an open below it, never resolved into its target (review S1).
+    #[test]
+    fn link_status_is_remembered_only_for_a_key_with_subkeys_of_its_own() {
+        let mut s = Scratch::new();
+        s.create("T").set(SYMBOLIC_LINK_VALUE, REG_SZ, &[0x41, 0]);
+        drop(s.create(r"T\Sub"));
+        let plain_raw = s.create("Plain");
+        drop(s.create(r"Plain\Sub"));
+        let link = s.link("L");
+
+        let l = Key::open(RegRoot::Hku, &s.path("L"), RegView::K64).unwrap();
+        assert_eq!(l.link_target().unwrap(), None);
+        let info = l.info().unwrap();
+        assert_eq!((info.n_values, info.n_subkeys), (0, 0));
+        assert_eq!(l.link_target_with_info(&info).unwrap(), None);
+        link.set_link_target(&s.nt_path("T"));
+        // The handle read "no link" twice; an open below it still asks and refuses.
+        assert_eq!(
+            l.open_component("Sub", true).unwrap_err(),
+            Win32Error::LINK_ON_PATH
+        );
+        assert_eq!(l.open_subkey("Sub").unwrap_err(), Win32Error::LINK_ON_PATH);
+        assert_eq!(l.link_target().unwrap(), Some(s.nt_path("T")));
+        // A `SymbolicLinkValue` of another type makes no link.
+        let t = Key::open(RegRoot::Hku, &s.path("T"), RegView::K64).unwrap();
+        assert!(t.open_component("Sub", true).is_ok());
+
+        // An ordinary key with subkeys is remembered as no link. The one case where that reads
+        // differently from a fresh open (review M2): a `REG_LINK` `SymbolicLinkValue` written on it
+        // afterwards. The kernel does not follow it and the handle reads the real subkey; a fresh open
+        // refuses it as a path through a link.
+        let plain = Key::open(RegRoot::Hku, &s.path("Plain"), RegView::K64).unwrap();
+        let info = plain.info().unwrap();
+        assert_eq!((info.n_values, info.n_subkeys), (0, 1));
+        assert_eq!(plain.link_target_with_info(&info).unwrap(), None);
+        plain_raw.set_link_target(&s.nt_path("T"));
+        let sub = plain.open_component("Sub", true).unwrap();
+        assert_eq!(sub.info().unwrap().n_values, 0, "the real Plain\\Sub");
+        assert_eq!(
+            Key::open(RegRoot::Hku, &s.path(r"Plain\Sub"), RegView::K64).unwrap_err(),
+            Win32Error::LINK_ON_PATH
         );
     }
 

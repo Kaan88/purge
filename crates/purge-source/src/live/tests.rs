@@ -14,6 +14,7 @@ use purge_win::{fs, msi, os, shelllink, sid};
 
 use super::filesystem::{to_dir_entry, to_file_meta, to_volume_info};
 use super::registry::to_reg_value;
+use super::test_ffi;
 use super::*;
 use crate::filesystem::FileSystemSource;
 use crate::registry::RegistrySource;
@@ -323,6 +324,61 @@ fn walker_reads_through_a_deleted_and_recreated_ancestor_as_a_fresh_open() {
     );
     agree(&live, walker.as_mut(), &format!(r"{base}\A\B"));
     agree(&live, walker.as_mut(), &format!(r"{base}\A\B\D"));
+}
+
+/// A link key entered while it has no target yet (a link is made in two steps: the key, then its
+/// `SymbolicLinkValue`) is asked again when the walker goes below it, also for a path the walker never
+/// listed: refused as a path through a link, never read in the target (review S1, experiment E4b).
+/// (Writes and removes `HKU\<SID>\Software\PurgeTest-<random>`.)
+#[test]
+fn walker_refuses_a_path_below_a_link_that_got_its_target_after_it_was_entered() {
+    let mut scratch = test_ffi::Scratch::new(&me());
+    scratch.create(r"T\Sub").set_sz("x", "in the target only");
+    scratch.create(r"Plain\Sub").set_sz("y", "plain");
+    let link = scratch.link("L");
+    let live = LiveRegistry::new();
+    let mut walker = live.walker();
+
+    let info = walker.enter(&scratch.canon("L")).unwrap();
+    assert_eq!((info.n_values, info.n_subkeys, info.is_link), (0, 0, false));
+    link.set_link_target(&scratch.nt_path("T"));
+    let below = scratch.canon(r"L\Sub");
+    assert_eq!(walker.enter(&below), Err(SourceError::ReparsePoint));
+    assert_eq!(live.key_info(&below), Err(SourceError::ReparsePoint));
+    // Entered again, the link reports its target and nothing below it reads.
+    let again = walker.enter(&scratch.canon("L")).unwrap();
+    assert_eq!(
+        again.link_target.as_deref(),
+        Some(scratch.nt_path("T").as_str())
+    );
+    assert_eq!(walker.enter(&below), Err(SourceError::ReparsePoint));
+    // An ordinary key with subkeys is passed as before, and the target reads by its own path.
+    agree(&live, walker.as_mut(), &scratch.canon("Plain"));
+    agree(&live, walker.as_mut(), &scratch.canon(r"Plain\Sub"));
+    assert_eq!(walker.values().unwrap()[0].name, "y");
+    agree(&live, walker.as_mut(), &scratch.canon(r"T\Sub"));
+    assert_eq!(walker.values().unwrap()[0].name, "x");
+}
+
+/// A key deleted after the walker entered it reads as gone ([`SourceError::NotFound`]), as reading it by
+/// path does, not as unreadable (review S2: `ERROR_KEY_DELETED` through the kept handle). (Writes and
+/// removes `HKU\<SID>\Software\PurgeTest-<random>`.)
+#[test]
+fn walker_reads_a_key_deleted_after_it_was_entered_as_not_found() {
+    let scratch = test_ffi::Scratch::new(&me());
+    scratch.create("Gone").set_sz("a", "b");
+    scratch.create(r"Gone\Child");
+    let live = LiveRegistry::new();
+    let mut walker = live.walker();
+    let key = scratch.canon("Gone");
+    let info = walker.enter(&key).unwrap();
+    assert_eq!((info.n_values, info.n_subkeys), (1, 1));
+    scratch.delete(r"Gone\Child").unwrap();
+    scratch.delete("Gone").unwrap();
+    assert_eq!(walker.values(), Err(SourceError::NotFound));
+    assert_eq!(walker.subkeys(), Err(SourceError::NotFound));
+    assert_eq!(live.values(&key), Err(SourceError::NotFound));
+    assert_eq!(live.key_exists(&key), ExistsState::Absent);
 }
 
 // -----------------------------------------------------------------------------------------------------

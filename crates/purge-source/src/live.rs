@@ -41,6 +41,8 @@ mod shortcut;
 mod system;
 
 #[cfg(test)]
+mod test_ffi;
+#[cfg(test)]
 mod tests;
 
 pub use filesystem::LiveFileSystem;

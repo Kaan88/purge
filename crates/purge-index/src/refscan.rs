@@ -658,13 +658,15 @@ pub(crate) fn sort_names(names: &mut [String]) {
 struct Tally {
     scan: RefScan,
     raw_unreadable: Option<Vec<Unreadable>>,
+    /// The key [`Tally::count_unreadable`] counted last.
+    last_unreadable: Option<String>,
 }
 
 impl Tally {
     fn for_part() -> Self {
         Self {
-            scan: RefScan::default(),
             raw_unreadable: Some(Vec::new()),
+            ..Self::default()
         }
     }
 
@@ -674,7 +676,25 @@ impl Tally {
                 key: key.to_string(),
                 error,
             }),
-            None => list_unreadable(&mut self.scan.stats, key, error),
+            None => self.count_unreadable(key, error),
+        }
+    }
+
+    /// Counts an unreadable key and lists it, once per key in a row and at most
+    /// [`MAX_UNREADABLE_LISTED`] in all. "In a row" is judged by the key counted last, not by the
+    /// last listed one, which stops changing once the listing is full.
+    fn count_unreadable(&mut self, key: &str, error: SourceError) {
+        if self.last_unreadable.as_deref() == Some(key) {
+            return;
+        }
+        self.last_unreadable = Some(key.to_string());
+        let stats = &mut self.scan.stats;
+        stats.unreadable_total += 1;
+        if stats.unreadable.len() < MAX_UNREADABLE_LISTED {
+            stats.unreadable.push(Unreadable {
+                key: key.to_string(),
+                error,
+            });
         }
     }
 
@@ -683,6 +703,7 @@ impl Tally {
         let Tally {
             scan,
             raw_unreadable,
+            last_unreadable: _,
         } = part;
         let (stats, from) = (&mut self.scan.stats, scan.stats);
         self.scan.hits.extend(scan.hits);
@@ -694,27 +715,12 @@ impl Tally {
         stats.links_skipped += from.links_skipped;
         stats.roots_missing.extend(from.roots_missing);
         for u in raw_unreadable.unwrap_or_default() {
-            list_unreadable(stats, &u.key, u.error);
+            self.count_unreadable(&u.key, u.error);
         }
         // A part's own listing (when it kept none raw) follows the same rules.
         for u in from.unreadable {
-            list_unreadable(stats, &u.key, u.error);
+            self.count_unreadable(&u.key, u.error);
         }
-    }
-}
-
-/// Counts an unreadable key and lists it, once per key in a row and at most
-/// [`MAX_UNREADABLE_LISTED`] in all.
-fn list_unreadable(stats: &mut RefScanStats, key: &str, error: SourceError) {
-    if stats.unreadable.last().is_some_and(|u| u.key == key) {
-        return;
-    }
-    stats.unreadable_total += 1;
-    if stats.unreadable.len() < MAX_UNREADABLE_LISTED {
-        stats.unreadable.push(Unreadable {
-            key: key.to_string(),
-            error,
-        });
     }
 }
 
@@ -915,8 +921,21 @@ fn default_threads() -> usize {
         .clamp(1, MAX_THREADS)
 }
 
+/// Starts one worker of [`parallel_map`]; `Err` when the system refuses the thread.
+fn spawn_worker<'scope, R: Send + 'scope>(
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    work: impl FnOnce() -> R + Send + 'scope,
+) -> std::io::Result<std::thread::ScopedJoinHandle<'scope, R>> {
+    #[cfg(test)]
+    if tests::spawn_refused() {
+        return Err(std::io::Error::other("thread refused by the test"));
+    }
+    std::thread::Builder::new().spawn_scoped(scope, work)
+}
+
 /// `f` over `items` on at most `threads` threads, each with its own `W` from `init`; the results in the
-/// order of `items`.
+/// order of `items`. When the system refuses a thread, no more are started and the calling thread
+/// works through the items with the ones that did start (alone if none did).
 fn parallel_map<T, W, R>(
     items: Vec<T>,
     threads: usize,
@@ -939,36 +958,45 @@ where
         .map(|item| std::sync::Mutex::new(Some(item)))
         .collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
+    // Takes items off the queue until it is empty; the results with their positions.
+    let work = || {
+        let mut w = init();
+        let mut out = Vec::new();
+        loop {
+            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let Some(slot) = queue.get(i) else {
+                break;
+            };
+            let item = slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(item) = item {
+                out.push((i, f(&mut w, item)));
+            }
+        }
+        out
+    };
     let mut done: Vec<(usize, R)> = std::thread::scope(|s| {
-        let workers: Vec<_> = (0..threads)
-            .map(|_| {
-                s.spawn(|| {
-                    let mut w = init();
-                    let mut out = Vec::new();
-                    loop {
-                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(slot) = queue.get(i) else {
-                            break;
-                        };
-                        let item = slot
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .take();
-                        if let Some(item) = item {
-                            out.push((i, f(&mut w, item)));
-                        }
-                    }
-                    out
-                })
-            })
-            .collect();
-        workers
-            .into_iter()
-            .flat_map(|w| match w.join() {
-                Ok(out) => out,
+        let mut workers = Vec::with_capacity(threads);
+        for _ in 0..threads {
+            match spawn_worker(s, work) {
+                Ok(worker) => workers.push(worker),
+                Err(_) => break,
+            }
+        }
+        let mut done = if workers.len() < threads {
+            work()
+        } else {
+            Vec::new()
+        };
+        for worker in workers {
+            match worker.join() {
+                Ok(out) => done.extend(out),
                 Err(panic) => std::panic::resume_unwind(panic),
-            })
-            .collect()
+            }
+        }
+        done
     });
     done.sort_by_key(|(i, _)| *i);
     debug_assert_eq!(done.len(), n);
@@ -1106,6 +1134,9 @@ pub fn scan_standard(reg: &dyn RegistrySource, matcher: &RefMatcher) -> SourceRe
     let scope = Scope::standard(reg)?;
     Ok(scan(reg, matcher, &scope, &RefScanOptions::default(), None))
 }
+
+#[cfg(test)]
+mod test_ffi;
 
 #[cfg(test)]
 mod tests {
@@ -2215,5 +2246,226 @@ mod tests {
         let threads = seen.lock().unwrap().len();
         assert!((1..=4).contains(&threads), "{threads}");
         assert!(parallel_map(Vec::<u32>::new(), 4, || (), |(), i| i).is_empty());
+    }
+
+    thread_local! {
+        /// How many more threads [`spawn_worker`] starts for this thread before it refuses them, as
+        /// the system does when it runs out of threads (`None`: no limit).
+        static SPAWN_BUDGET: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Whether [`spawn_worker`] refuses the next thread (see [`SPAWN_BUDGET`]).
+    pub(super) fn spawn_refused() -> bool {
+        SPAWN_BUDGET.with(|budget| match budget.get() {
+            None => false,
+            Some(0) => true,
+            Some(n) => {
+                budget.set(Some(n - 1));
+                false
+            }
+        })
+    }
+
+    /// Runs `f` with [`spawn_worker`] starting at most `threads` threads.
+    fn with_spawn_budget<T>(threads: usize, f: impl FnOnce() -> T) -> T {
+        SPAWN_BUDGET.with(|b| b.set(Some(threads)));
+        let out = f();
+        SPAWN_BUDGET.with(|b| b.set(None));
+        out
+    }
+
+    /// A thread the system refuses does not end the scan: the threads that started and the calling
+    /// thread map every item, in order; with none started the calling thread maps them alone, and a
+    /// whole scan comes out as the sequential walk (review M3).
+    #[test]
+    fn refused_threads_leave_the_work_to_the_threads_that_started() {
+        let me = std::thread::current().id();
+        for started in [0, 1, 3] {
+            let seen = std::sync::Mutex::new(std::collections::HashSet::new());
+            let out = with_spawn_budget(started, || {
+                parallel_map(
+                    (0..500u32).collect(),
+                    4,
+                    || std::thread::current().id(),
+                    |id, i| {
+                        seen.lock().unwrap().insert(*id);
+                        i * 2
+                    },
+                )
+            });
+            assert_eq!(out, (0..500u32).map(|i| i * 2).collect::<Vec<_>>());
+            let seen = seen.into_inner().unwrap();
+            assert!(seen.len() <= started + 1, "{started}: {seen:?}");
+            if started == 0 {
+                assert_eq!(seen, [me].into_iter().collect());
+            }
+        }
+        let f = big_tree(40);
+        let source = Flaky(&f);
+        let scope = Scope::standard(&f).unwrap();
+        let options = RefScanOptions::default();
+        let one = scan_with_threads(&source, &matcher(), &scope, &options, None, 1);
+        for started in [0, 2] {
+            let many = with_spawn_budget(started, || {
+                scan_with_threads(&source, &matcher(), &scope, &options, None, 8)
+            });
+            assert_eq!((&many.hits, &many.stats), (&one.hits, &one.stats));
+        }
+    }
+
+    /// A key whose values and subkeys both fail counts once in `unreadable_total`, also once the
+    /// listing is full (review M5), on one thread and on several.
+    #[test]
+    fn an_unreadable_key_counts_once_past_the_listing_cap() {
+        let m = matcher();
+        let options = RefScanOptions::default();
+        let small = big_tree(40);
+        let scope = Scope::standard(&small).unwrap();
+        let few = scan_with_threads(&Flaky(&small), &m, &scope, &options, None, 1);
+        assert_eq!(
+            few.stats.unreadable_total,
+            few.stats.unreadable.len() as u64
+        );
+        let denied = few.stats.unreadable.len() - 40;
+        assert!(denied > 0);
+
+        let flaky = MAX_UNREADABLE_LISTED + 77;
+        let big = big_tree(flaky);
+        let scope = Scope::standard(&big).unwrap();
+        for threads in [1, 4] {
+            let scan = scan_with_threads(&Flaky(&big), &m, &scope, &options, None, threads);
+            assert_eq!(scan.stats.unreadable.len(), MAX_UNREADABLE_LISTED);
+            assert_eq!(
+                scan.stats.unreadable_total,
+                (flaky + denied) as u64,
+                "{threads} threads"
+            );
+        }
+    }
+
+    /// Forwards the six path calls of a source and nothing else, so walks go through the default
+    /// walker: the old reads, one open per call.
+    struct PathCalls<'a>(&'a dyn RegistrySource);
+
+    impl RegistrySource for PathCalls<'_> {
+        fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+            self.0.key_info(key)
+        }
+        fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+            self.0.subkeys(key)
+        }
+        fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+            self.0.values(key)
+        }
+        fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+            self.0.value(key, name)
+        }
+        fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+            self.0.loaded_user_sids()
+        }
+        fn current_control_set(&self) -> SourceResult<u32> {
+            self.0.current_control_set()
+        }
+    }
+
+    /// The live walker, on several threads as it ships, finds exactly what the old path reads find on
+    /// one thread, over a scratch tree with hits, decoys, a link, a pruned key, keys refused for
+    /// reading, a scope root below a key readable only for `KEY_QUERY_VALUE` and a missing root (review
+    /// M4). Compared: the path reads, the walker on one thread, on four threads, with the thread count
+    /// the public entry point picks, and with a progress callback. (Writes and removes
+    /// `HKU\<SID>\Software\PurgeTest-<random>`.)
+    #[test]
+    fn live_walker_in_parallel_equals_the_path_reads() {
+        use purge_source::live::Live;
+        use purge_source::system::SystemSource;
+
+        let live = Live::new();
+        let sid = live.system.user_sid().unwrap();
+        let mut tree = test_ffi::Scratch::new(&sid);
+        let hit = format!(r"{FF}\firefox.exe");
+        for v in 0..48 {
+            let vendor = format!(r"A\Vendor{v:02}");
+            tree.create(&vendor)
+                .set_sz("InstallDir", &format!(r"C:\Other\v{v}"));
+            for p in 0..3 {
+                let product = format!(r"{vendor}\Product{p}");
+                let key = tree.create(&product);
+                key.set_sz("Path", &format!(r"C:\Elsewhere\{v}\{p}"));
+                if (v + p) % 5 == 0 {
+                    key.set_sz("Exe", &hit);
+                }
+                tree.create(&format!(r"{product}\Deep\Er"))
+                    .set_sz(&format!("{TOKEN}-{v}-{p}"), "named after the token")
+                    .set_sz("Other", "nothing");
+            }
+        }
+        tree.create(r"A\N\u{e4}me \u{263a}\Sub").set_sz("x", &hit);
+        tree.link(r"A\Vendor07\Link", r"A\Vendor08");
+        tree.create(r"A\Vendor09\Denied\Inner").set_sz("x", &hit);
+        tree.restrict(r"A\Vendor09\Denied", "SD");
+        tree.create(r"A\Vendor10\NoEnum").set_sz("x", &hit);
+        tree.restrict(r"A\Vendor10\NoEnum", "0x10001");
+        tree.create(r"B\QueryOnly\Inner").set_sz("x", &hit);
+        tree.restrict(r"B\QueryOnly", "0x10001");
+
+        let scope = Scope::custom(
+            [
+                tree.canon("A"),
+                tree.canon(r"B\QueryOnly\Inner"),
+                tree.canon("Missing"),
+            ],
+            [tree.canon(r"A\Vendor11")],
+        );
+        let m = matcher();
+        let options = RefScanOptions::default();
+        let reg: &dyn RegistrySource = &live.registry;
+        let old = scan_with_threads(&PathCalls(reg), &m, &scope, &options, None, 1);
+        assert!(old.hits.len() > 25, "{}", old.hits.len());
+        assert!(old.stats.keys_visited > 400, "{}", old.stats.keys_visited);
+        assert_eq!(
+            (old.stats.links_skipped, old.stats.pruned),
+            (1, 1),
+            "{:?}",
+            old.stats
+        );
+        assert_eq!(old.stats.roots_missing, [tree.canon("Missing")]);
+        assert_eq!(
+            old.stats.unreadable,
+            [
+                Unreadable {
+                    key: tree.canon(r"A\Vendor09\Denied"),
+                    error: SourceError::AccessDenied
+                },
+                Unreadable {
+                    key: tree.canon(r"A\Vendor10\NoEnum"),
+                    error: SourceError::AccessDenied
+                },
+            ]
+        );
+        assert!(
+            old.hits
+                .iter()
+                .any(|h| h.key == tree.canon(r"B\QueryOnly\Inner"))
+        );
+
+        let walker_one = scan_with_threads(reg, &m, &scope, &options, None, 1);
+        let walker_four = scan_with_threads(reg, &m, &scope, &options, None, 4);
+        let shipped = scan(reg, &m, &scope, &options, None);
+        let mut reports = 0;
+        let mut progress = |_: &RefScanProgress<'_>| {
+            reports += 1;
+            ControlFlow::Continue(())
+        };
+        let with_progress = scan(reg, &m, &scope, &options, Some(&mut progress));
+        assert!(reports >= 3);
+        for (what, scan) in [
+            ("walker, 1 thread", &walker_one),
+            ("walker, 4 threads", &walker_four),
+            ("scan(None)", &shipped),
+            ("scan(progress)", &with_progress),
+        ] {
+            assert_eq!(scan.hits, old.hits, "{what}");
+            assert_eq!(scan.stats, old.stats, "{what}");
+        }
     }
 }

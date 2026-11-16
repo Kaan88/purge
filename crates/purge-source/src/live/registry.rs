@@ -134,8 +134,13 @@ struct Chain {
 /// Only a whole component that is spelled exactly the same is reused, and only as an ancestor: the key
 /// itself is always opened anew, for reading. When an open below a kept key fails, the key is opened
 /// again from its root and that result counts, so a kept key that was deleted meanwhile reads exactly
-/// as a fresh open would. The walker lives for one walk (a kept key that was renamed during the walk
-/// reads as it was before the rename, the same snapshot inconsistency any non-atomic walk has).
+/// as a fresh open would. The link check of a kept key is skipped only when the key was entered with
+/// subkeys of its own (`Key::link_target_with_info`), which no link key has; every other kept key is
+/// asked again before a path goes below it, whatever the caller entered or listed before. The walker
+/// lives for one walk. Two differences from fresh opens remain, both from changes made during the walk:
+/// a kept key that was renamed reads as it was before the rename (the same snapshot inconsistency any
+/// non-atomic walk has), and an entered ordinary key that gets a `REG_LINK` `SymbolicLinkValue` is
+/// still read below (the kernel does not follow it either; a fresh open refuses it as a link).
 struct LiveWalker<'a> {
     registry: &'a LiveRegistry,
     chain: Option<Chain>,
@@ -231,14 +236,10 @@ impl KeyWalker for LiveWalker<'_> {
         }
         let k = self.current()?;
         let info = k.info().map_err(map_win32)?;
-        // As `LiveRegistry::key_info`. A key without values has no `SymbolicLinkValue`, so it is no
-        // link and nothing needs asking.
-        let link_target = if info.n_values == 0 {
-            k.note_no_values();
-            None
-        } else {
-            k.link_target().ok().flatten()
-        };
+        // As `LiveRegistry::key_info` (a key without values is not asked). "No link" is remembered on
+        // the handle only for a key with subkeys of its own, which no link key has, so a link key
+        // entered before its target was written is asked again when a path goes below it.
+        let link_target = k.link_target_with_info(&info).ok().flatten();
         self.info = Some(info);
         Ok(KeyInfo {
             lwt: FileTime(info.last_write_time),

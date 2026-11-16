@@ -59,7 +59,8 @@ pub trait RegistrySource: Send + Sync {
 ///
 /// A walker may keep the keys above the last one it entered open and open the next key below them,
 /// instead of opening every key from its hive root; a source makes sure that this reads the same
-/// keys as a fresh open (see `live::LiveRegistry`). It lives for one walk on one thread and is
+/// keys as a fresh open, with the same refusal of a path through a link, for any key a caller enters
+/// next, listed before or not (see `live::LiveRegistry`). It lives for one walk on one thread and is
 /// dropped with it.
 pub trait KeyWalker {
     /// Opens `key` and reads its metadata, as [`RegistrySource::key_info`].
