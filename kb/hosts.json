@@ -1,0 +1,20 @@
+{
+  "interpreters": [
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "rundll32.exe",
+    "regsvr32.exe",
+    "msiexec.exe",
+    "svchost.exe",
+    "dllhost.exe",
+    "conhost.exe",
+    "java.exe",
+    "javaw.exe",
+    "python.exe",
+    "pythonw.exe",
+    "node.exe"
+  ]
+}

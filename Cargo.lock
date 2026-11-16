@@ -172,6 +172,7 @@ dependencies = [
 name = "purge-guard"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "purge-model",
  "serde",
  "serde_json",

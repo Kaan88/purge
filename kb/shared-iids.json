@@ -1,1 +1,171 @@
-[]
+{
+  "iids": [
+    {
+      "iid": "{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+      "name": "ISimpleDOMNode",
+      "why": "Gecko accessibility interface: Firefox, Thunderbird and Zotero each register it, pointing its proxy {1814CEEB-...} at their own AccessibleMarshal.dll; the last installer wins (dirty-base: Zotero)."
+    },
+    {
+      "iid": "{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}",
+      "name": "ISimpleDOMDocument",
+      "why": "Gecko accessibility interface, marshalled by the shared AccessibleMarshal proxy {1814CEEB-...} that every Gecko product registers."
+    },
+    {
+      "iid": "{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}",
+      "name": "ISimpleDOMText",
+      "why": "Gecko accessibility interface, marshalled by the shared AccessibleMarshal proxy {1814CEEB-...} that every Gecko product registers."
+    },
+    {
+      "iid": "{E89F726E-C4F4-4C19-BB19-B647D7FA8478}",
+      "name": "IAccessible2",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{6C9430E9-299D-4E6F-BD01-A82A1E88D3FF}",
+      "name": "IAccessible2_2",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{B70D9F59-3B5A-4DBA-AB9E-22012F607DF5}",
+      "name": "IAccessibleAction",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{C48C7FCF-4AB5-4056-AFA6-902D6E1D1149}",
+      "name": "IAccessibleAction",
+      "why": "Second IAccessible2 interface key whose registered name is IAccessibleAction; Windows registers it in both views with the ia2comproxy.dll proxy {01C20F2B-...}."
+    },
+    {
+      "iid": "{D49DED83-5B25-43F4-9B95-93B44595979E}",
+      "name": "IAccessibleApplication",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{1546D4B0-4C98-4BDA-89AE-9A64748BDDE4}",
+      "name": "IAccessibleComponent",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{A59AA09A-7011-4B65-939D-32B1FB5547E3}",
+      "name": "IAccessibleEditableText",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{01C20F2B-3DD2-400F-949F-AD00BDAB1D41}",
+      "name": "IAccessibleHyperlink",
+      "why": "IAccessible2 interface whose IID is also the CLSID of the IAccessible2 proxy; Windows registers both in both views (ia2comproxy.dll), so no single app owns it."
+    },
+    {
+      "iid": "{6B4F8BBF-F1F2-418A-B35E-A195BC4103B9}",
+      "name": "IAccessibleHypertext",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{CF64D89F-8287-4B44-8501-A827453A6077}",
+      "name": "IAccessibleHypertext2",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{FE5ABB3D-615E-4F7B-909F-5F0EDA9E8DDE}",
+      "name": "IAccessibleImage",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{7CDF86EE-C3DA-496A-BDA4-281B336E1FDC}",
+      "name": "IAccessibleRelation",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{35AD8070-C20C-4FB4-B094-F4F7275DD469}",
+      "name": "IAccessibleTable",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{6167F295-06F0-4CDD-A1FA-02E25153D869}",
+      "name": "IAccessibleTable2",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{594116B1-C99F-4847-AD06-0A7A86ECE645}",
+      "name": "IAccessibleTableCell",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{24FD2FFB-3AAD-4A08-8335-A3AD89C0FB4B}",
+      "name": "IAccessibleText",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{9690A9CC-5C80-4DF5-852E-2D5AE4189A54}",
+      "name": "IAccessibleText2",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{35855B5B-C566-4FD0-A7B1-E65465600394}",
+      "name": "IAccessibleValue",
+      "why": "IAccessible2 interface (the screen-reader API of Firefox, Thunderbird, Chrome and NVDA); Windows registers it in both views with its ia2comproxy.dll proxy {01C20F2B-...}, so no single app owns it."
+    },
+    {
+      "iid": "{1C2056CC-5EF4-101B-8BC8-00AA003E3B29}",
+      "name": "IOleInPlaceObjectWindowless",
+      "why": "Standard OLE control interface (ocidl) that ActiveX installers register in both views with Windows' oleaut32 proxy {B196B286-...}; absent from the clean baseline, so the baseline rule does not cover it."
+    },
+    {
+      "iid": "{922EADA0-3424-11CF-B670-00AA004CD6D8}",
+      "name": "IOleInPlaceSiteWindowless",
+      "why": "Standard OLE control interface (ocidl) that ActiveX installers register in both views with Windows' oleaut32 proxy {B196B286-...}; absent from the clean baseline, so the baseline rule does not cover it."
+    },
+    {
+      "iid": "{3AF24292-0C96-11CE-A0CF-00AA00600AB8}",
+      "name": "IViewObjectEx",
+      "why": "Standard OLE control interface (ocidl) that ActiveX installers register in both views with Windows' oleaut32 proxy {B196B286-...}; absent from the clean baseline, so the baseline rule does not cover it."
+    }
+  ],
+  "shared_proxy_clsids": [
+    {
+      "clsid": "{00020424-0000-0000-C000-000000000046}",
+      "name": "PSOAInterface",
+      "why": "The universal (type-library) marshaler in Windows' oleaut32.dll; 6,745 Interface keys of the dirty-base snap, of Windows and of every product, name it as ProxyStubClsid32."
+    },
+    {
+      "clsid": "{00020420-0000-0000-C000-000000000046}",
+      "name": "PSDispatch",
+      "why": "The automation (IDispatch) proxy in Windows' oleaut32.dll, named by dispatch interfaces of every product."
+    },
+    {
+      "clsid": "{00020421-0000-0000-C000-000000000046}",
+      "name": "PSEnumVariant",
+      "why": "Automation proxy in Windows' oleaut32.dll, named by interfaces of many products."
+    },
+    {
+      "clsid": "{00020422-0000-0000-C000-000000000046}",
+      "name": "PSTypeInfo",
+      "why": "Automation proxy in Windows' oleaut32.dll, named by interfaces of many products."
+    },
+    {
+      "clsid": "{00020423-0000-0000-C000-000000000046}",
+      "name": "PSTypeLib",
+      "why": "Automation proxy in Windows' oleaut32.dll, named by interfaces of many products."
+    },
+    {
+      "clsid": "{00020425-0000-0000-C000-000000000046}",
+      "name": "PSTypeComp",
+      "why": "Automation proxy in Windows' oleaut32.dll, named by interfaces of many products."
+    },
+    {
+      "clsid": "{B196B286-BAB4-101A-B69C-00AA00341D07}",
+      "name": "PSFactoryBuffer",
+      "why": "OLE control proxy in Windows' oleaut32.dll; 76 Interface keys of the dirty-base snap (both views) name it, from Windows and from installers (IViewObjectEx and friends)."
+    },
+    {
+      "clsid": "{01C20F2B-3DD2-400F-949F-AD00BDAB1D41}",
+      "name": "PSFactoryBuffer",
+      "why": "The IAccessible2 proxy (Windows' ia2comproxy.dll); all 18 IAccessible2 interfaces of the dirty-base snap name it in both views, so it is never one app's registration."
+    },
+    {
+      "clsid": "{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+      "name": "PSFactoryBuffer",
+      "why": "Gecko's AccessibleMarshal proxy: Firefox, Thunderbird and Zotero each re-point it to their own AccessibleMarshal.dll, so whoever registered it last is not its only user."
+    }
+  ]
+}
