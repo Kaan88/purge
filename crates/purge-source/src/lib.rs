@@ -12,5 +12,6 @@ pub mod live;
 pub mod metered;
 pub mod registry;
 pub mod snapfixture;
+pub mod sysobj;
 pub mod system;
 pub mod types;

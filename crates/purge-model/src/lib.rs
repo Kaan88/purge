@@ -28,8 +28,10 @@ mod candidate;
 mod evidence;
 pub mod exec;
 mod fingerprint;
+mod fingerprint_m1b;
 mod ids;
 mod inventory;
+pub mod object;
 mod plan;
 mod root;
 mod run;
@@ -50,6 +52,9 @@ pub use ids::{CandidateId, FileTime, ProgramId, ProgramIdError, SourceId};
 pub use inventory::{
     InstallScope, InstallTimeEvidence, InstallTimeSource, InstallerKind, InventoryDoc,
     InventoryEntry, InventorySchema, MsiContext, MsiInfo, MsiOnlyRow, RawFlags, WritableBy,
+};
+pub use object::{
+    FirewallIdentity, ObjectFp, ObjectKind, ServiceIdentity, TaskAction, TaskIdentity,
 };
 pub use plan::{Band, Category, Plan, PlanItem, PlanSchema, ScanMode, Tool};
 pub use root::{Root, RootKind, RootSource, SourceTrust};

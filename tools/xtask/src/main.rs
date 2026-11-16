@@ -14,6 +14,7 @@
 
 mod check_deps;
 mod lex;
+mod no_new_walks;
 mod replay;
 mod scanner_coverage;
 mod ui_strings;

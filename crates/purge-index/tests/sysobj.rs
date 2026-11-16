@@ -1,0 +1,1 @@
+//! System-object index tests.

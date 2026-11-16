@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 use crate::canon::{CanonKey, GuardEnv, canon_key, canon_path};
 use crate::prefix::fold;
 
+mod objects;
 pub(crate) mod pattern;
 mod rules;
 mod shared;

@@ -23,11 +23,14 @@ pub mod appx;
 pub mod appx_write;
 pub mod cmdline;
 pub mod env;
+#[cfg(feature = "write")]
+pub mod firewall;
 pub mod fs;
 #[cfg(feature = "write")]
 pub mod fs_write;
 pub mod known_folders;
 pub mod msi;
+pub mod msi_db;
 pub mod os;
 pub mod process;
 pub mod reg;
@@ -35,10 +38,12 @@ pub mod reg;
 pub mod reg_write;
 #[cfg(feature = "write")]
 pub mod rm;
+pub mod scm;
 pub mod secure;
 pub mod shelllink;
 pub mod sid;
 pub mod signer;
 #[cfg(feature = "write")]
 pub mod sr;
+pub mod taskschd;
 pub mod versioninfo;

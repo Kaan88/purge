@@ -19,6 +19,7 @@ mod jsonio;
 mod score;
 mod snap;
 mod target;
+mod traps;
 #[cfg(test)]
 mod testutil;
 mod truth;
