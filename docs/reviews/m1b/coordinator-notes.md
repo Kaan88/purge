@@ -158,3 +158,10 @@ S-PRIVACY (wave 4, for R3):
 - FeatureUsage known-folder GUID names never decoded (framework decoder) -> recall
 - MsiPackageUnreadable can stop Program Files traces (R2a S11)
 - MSI apps have no recorded shortcuts -> SHC slots never offered
+
+S-DIAG (wave 4, for R3):
+- local generic-stem list ("setup", "unins000" not in kb/generic-tokens.json)
+- WER evidence PointsIntoInstallRoot with Value scope on a Path target (no fitting evidence kind)
+- Windows EventLog source whose message file was re-pointed into the app root, host without baseline -> can reach Likely
+- ProgramData WER reports emitted but guard-denied; source key not checked for subkeys (budget)
+- S-PRIVACY, S-DIAG (and S-APPX) were written before the scan-warning channel: they mark `// warning:` spots; SCAN-INTEG must wire them
