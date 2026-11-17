@@ -1,0 +1,325 @@
+{
+  "summary": "Local baseline built from the host's own Windows files, merged with the nearest shipped baselines in a BaselineView with four trust levels (Exact, Merged, Local, None). Presence may come from any set; absence below Exact is 'inferred' and capped: soft blocker BaselineInferred, seal check, policy rule P-BL-1. Never Safe, never preselected. Design text: docs/BASELINE_LOCAL_DESIGN.md.",
+  "starts_after": "M1b gate",
+  "model_routing": "critical: Fable medium, or Opus high with a Fable review; high: Opus high; medium: Opus medium; gates: scripts under a Haiku babysitter, judged in review.",
+  "invariants": [
+    "L1 Additive sources: every source and neighbour only adds to 'Windows' own'; nothing is subtracted at hash level.",
+    "L2 Complete or unused: an incomplete local baseline is used for presence only.",
+    "L3 Exact is untouched: with an exact shipped baseline the plans are byte-identical to the M1b gate plans; the local baseline is not built or read.",
+    "L4 The cap: absence below Exact never yields Safe and never preselects.",
+    "L5 Monotone: preselected(non-exact) is a subset of preselected(none); Blocked(non-exact) is a superset of Blocked(none).",
+    "L6 A local file is never accepted as an exact baseline (header tag, directory, name).",
+    "L7 Advice only lowers a band."
+  ],
+  "budgets": [
+    "Cold build, background priority, parallel: <= 30 s on the 591-program host, <= 120 s on a 2-vCPU VM. Phases baseline.local.list, .expand, .parse, .hive, .appx, .write.",
+    "Peak memory of the build <= 300 MB; cache file <= 15 MB.",
+    "Source-id check <= 0.3 s per engine start.",
+    "Warm load of the view (local + 2 neighbours) <= 1.5 s, <= 80 MB resident.",
+    "A scan never waits for the build: it runs with trust None and a warning."
+  ],
+  "packages": [
+    {
+      "id": "BL-WIN-SXS",
+      "title": "purge-win: expand WinSxS component manifests",
+      "importance": "medium",
+      "wave": 1,
+      "depends_on": [],
+      "est_size": "S",
+      "crates_files": ["crates/purge-win/src/sxs.rs (new)", "crates/purge-win/src/lib.rs (mod line)", "crates/purge-win/Cargo.toml (windows-sys features if needed)"],
+      "scope": "Read feature only. find_base(): newest WinSxS\\amd64_microsoft-windows-servicingstack_* directory, wcp.dll loaded as a data file, resource type 0x266 id 1. expand(bytes, base): 'DCM\\x01' -> msdelta ApplyDeltaB(0, base, bytes[4..]), output freed with DeltaFree; plain XML returned as is; 'DCN\\x01' (delta without a base) and 'DCS\\x01' (LZMS) handled or reported as Unsupported with a count. list(): names, sizes and write times of WinSxS\\Manifests in one directory pass.",
+      "rules": [
+        "No write API, no process spawn. The base is read once per build.",
+        "A failed expansion is an error value per file, never a panic; the caller counts it (seal).",
+        "Output size cap per manifest 64 MB; larger is an error.",
+        "Document whether ApplyDeltaB is called from several threads; if the spike shows it is not safe, a mutex and the budget is re-measured."
+      ],
+      "tests": [
+        "win-unit (real Windows): base found; 200 manifests expand to text starting with '<?xml'; a truncated DCM file is an error; a plain XML file passes through.",
+        "Unit: header detection for DCM, DCN, DCS, plain, empty."
+      ],
+      "acceptance": "win-unit passes on both rig VMs and the host; 0 failures over all manifests of the three machines, or every failure explained."
+    },
+    {
+      "id": "BL-WIN-OFFREG",
+      "title": "purge-win: read-only offline hive walk",
+      "importance": "medium",
+      "wave": 1,
+      "depends_on": [],
+      "est_size": "S",
+      "crates_files": ["crates/purge-win/src/offreg.rs (new)", "crates/purge-win/src/lib.rs (mod line)"],
+      "scope": "offreg.dll loaded from System32 by full path: OROpenHive on a file opened with shared read, OREnumKey, OREnumValue (names and types only), ORCloseHive. A walker that yields key paths and value names depth-first with caps (depth 64, 2,000,000 keys).",
+      "rules": [
+        "Never RegLoadKey, RegLoadAppKey or any call that mounts the hive.",
+        "No ORSaveHive, no create or set call is bound.",
+        "Transaction logs are not replayed; the doc comment says so."
+      ],
+      "tests": [
+        "win-unit: C:\\Users\\Default\\NTUSER.DAT opens unelevated and yields 'Software\\Microsoft\\Windows\\CurrentVersion\\Run' or its parent; a missing file and a non-hive file are errors.",
+        "check-deps: the forbidden-identifier list gains the offreg write calls."
+      ],
+      "acceptance": "win-unit passes on both VMs and the host."
+    },
+    {
+      "id": "BL-MANIFEST",
+      "title": "Pure parser: component manifest to baseline records",
+      "importance": "high",
+      "wave": 1,
+      "depends_on": [],
+      "est_size": "M",
+      "crates_files": ["crates/purge-index/src/local_baseline/manifest.rs (new)", "crates/purge-index/src/local_baseline/macros.rs (new)", "crates/purge-index/tests/fixtures/manifests/*.manifest (hand-written)"],
+      "scope": "parse(xml, &mut Records) -> ManifestStats. Streaming XML, elements matched by local name (registryKey and asm:registryKey alike). Mapping rules of design section 3.2: roots, ancestors, 32-bit view doubling for wow64 and x86, value names with hash 0, file and directory destinations through the macro table, unknown macros skipped and counted, publicKeyToken recorded in the stats.",
+      "rules": [
+        "Pure: no I/O, no Windows call; runs on Linux CI.",
+        "Records are text (escaped as kb/baselines/README.md says); hashing happens only in the loader.",
+        "Never drops a key because another manifest version lacks it; the union over all files is the result.",
+        "Malformed XML is an error for that file; no partial records from it are kept.",
+        "No real Microsoft manifest is committed."
+      ],
+      "tests": [
+        "Fixtures: HKCR CLSID with subkeys; asm: prefixed elements; HKEY_CURRENT_USER key (both spellings recorded); wow64 manifest (both views); key name with a known macro, with an unknown macro; file and directory with each macro; malformed XML; a manifest without registry keys.",
+        "Property: every recorded key's parent is recorded; records are a superset when a second manifest is added.",
+        "Round trip: records written to a file and loaded through the baseline normaliser answer has_key for every spelling the existing tests use (HKCR, WOW6432Node link, HKCU)."
+      ],
+      "acceptance": "All tests pass; the macro list found on the three machines (BL-MEASURE) is covered or each gap is listed."
+    },
+    {
+      "id": "BL-SOURCES",
+      "title": "Default hive, HKU\\.DEFAULT and inbox package manifests to records",
+      "importance": "medium",
+      "wave": 1,
+      "depends_on": ["BL-WIN-OFFREG"],
+      "est_size": "M",
+      "crates_files": ["crates/purge-index/src/local_baseline/hive.rs (new)", "crates/purge-index/src/local_baseline/appx.rs (new)", "crates/purge-source/src/local_baseline.rs (new: trait LocalSources)", "crates/purge-source/src/live/local_baseline.rs (new)", "crates/purge-source/src/fixture.rs (LocalSources for fixtures)"],
+      "scope": "trait LocalSources { manifests() -> iterator of (name, bytes or error); default_hive() -> key and value-name walk; system_default() -> walk of HKU\\.DEFAULT through RegistrySource; inbox_packages() -> (full name, AppxManifest.xml text, repository ProgIDs) }. hive.rs maps the default hive to HKU\\S-1-5-21-0-0-0-1000\\<path>. appx.rs parses file type, protocol, COM class, interface and ProgID declarations into Classes keys. Live implementation: purge-win sxs, offreg, appx. Inbox means signature kind System, or Microsoft-published and provisioned.",
+      "rules": [
+        "Read only. Package directories are read file by file; WindowsApps is never listed.",
+        "A package whose manifest cannot be read is counted, not fatal (seal floor in BL-BUILD).",
+        "Third-party packages are never included: their keys are another app's, not Windows'."
+      ],
+      "tests": [
+        "Fixture hive walk to records; SID placeholder check through the normaliser.",
+        "AppX manifest fixtures (hand-written): file type association, protocol, comServer, comInterface.",
+        "win-unit: live sources return non-empty data on a clean VM."
+      ],
+      "acceptance": "Tests pass; the spike note in the package report answers which repository values name generated AppX ProgIDs, or S4 is reduced to declared names."
+    },
+    {
+      "id": "BL-BUILD",
+      "title": "Local baseline build, seal, file format, reader, CLI",
+      "importance": "high",
+      "wave": 2,
+      "depends_on": ["BL-WIN-SXS", "BL-MANIFEST", "BL-SOURCES"],
+      "est_size": "M",
+      "crates_files": ["crates/purge-index/src/local_baseline.rs (new: build, LocalBaseline)", "crates/purge-index/src/local_baseline/file.rs (new)", "crates/purge-index/src/baseline.rs (shared record parser made reusable; header handling unchanged)", "bins/purge-engine/src/cli/args.rs, cli.rs (verbs baseline build, baseline info)"],
+      "scope": "build(sources, os, opts) -> LocalBaselineFile: parallel expand and parse (rayon or scoped threads, background priority), de-duplicated sorted records, #src lines, completeness seal (design 3.4), header '#purge-baseline-local 1' with builder version and source id, '#end' line with record count and SHA-256. LocalBaseline::from_bytes reads it into the same hashed sets as Baseline and exposes complete(), sources(), id(). CLI: 'baseline build --out <file>' and 'baseline info <file>'.",
+      "rules": [
+        "Baseline::from_bytes keeps refusing the local header; LocalBaseline::from_bytes refuses the shipped header (L6).",
+        "A file without a correct #end line, with another builder version, or over 64 MB is a miss, never partial data.",
+        "Output is deterministic for the same inputs (sorted, no times in the body) so two builds can be compared.",
+        "The CLI verb writes only the named output file."
+      ],
+      "tests": [
+        "Fixture build: expected records, #src counts, deterministic bytes.",
+        "Seal: each floor violated in turn gives complete() = false with the reason; an unreadable source likewise.",
+        "Truncated file, wrong #end hash, swapped header tags: all misses.",
+        "Budget test (ignored by default, run on the rig): timing lines present."
+      ],
+      "acceptance": "Tests pass; 'baseline build' completes on both VMs and the host inside the budgets or the measured numbers are reported for gate M."
+    },
+    {
+      "id": "BL-RIG-DIFF",
+      "title": "rigtool baseline-diff, area table, replay with an injected view",
+      "importance": "medium",
+      "wave": 2,
+      "depends_on": ["BL-BUILD"],
+      "est_size": "M",
+      "crates_files": ["vm/rigtool/src/baseline_diff.rs (new)", "vm/rigtool/src/main.rs (subcommand)", "kb/baselines/view.json (new: areas with merged/local flags, neighbour limit)", "vm/RIG.md (new section 8a)", "tools/linux/campaigns/baseline-local-*.sh (new)", "tools/xtask/src/replay.rs (--baseline-view, --local, --neighbour; wave 5 completes it)"],
+      "scope": "baseline-diff as in design 8.1: per area and total: truth, covered local, covered merged, false absent local and merged, extra, per-source share, shared-container-shape count, first 200 false-absent keys per area; JSON report 'purge.baseline-diff/1'. Compares normalised text keys inside the capture scope only. Campaign scripts for R1, R2, R5.",
+      "rules": [
+        "The diff works on names, not hashes.",
+        "Area matching is by normalised prefix and by leaf shape; the area list is data in view.json.",
+        "VM rig rules: clean snapshots only; official downloads only; nothing installed for R1 and R2."
+      ],
+      "tests": [
+        "Synthetic truth, local and neighbour files with known counts per area.",
+        "Shape classifier unit tests (.ext, OpenWithProgids, shell, shellex, ProgID, vendor depth 1 and 2)."
+      ],
+      "acceptance": "Self-test passes; R1 report is produced end to end by the script."
+    },
+    {
+      "id": "BL-MEASURE",
+      "title": "Gate M: measure the local baseline on both VMs and the host",
+      "importance": "gate",
+      "wave": 3,
+      "depends_on": ["BL-RIG-DIFF"],
+      "est_size": "S",
+      "crates_files": ["vm/truth/baseline-local/*.json (reports)", "docs/BASELINE_LOCAL_REPORT.md (written at the gate)", "kb/baselines/view.json (flags set from the reports)"],
+      "scope": "Runs R1, R2, R5 of design 8.2. Fills view.json: an area is marked merged when S2 holds for it on both VMs, local when S3 holds. Reports W1, W4 and the estimates of design 8.2 against the measured numbers. Decides: wave 4 starts (W1 met), or the feature ships presence-only, or S5 (INF) is added first.",
+      "rules": [
+        "No engine behaviour changes before this gate passes review.",
+        "Every false-absent key of a shared-container shape is listed by name in the report, with the source that should have had it."
+      ],
+      "tests": [],
+      "acceptance": "Report reviewed (Fable). W1: merged coverage >= 99.0% of truth keys in scope and >= 99.8% in merged areas on both VMs. S2 and S3 per area as in design 8.3. W4 budgets."
+    },
+    {
+      "id": "BL-VIEW",
+      "title": "BaselineView: trust levels, neighbour selection, areas",
+      "importance": "critical",
+      "wave": 4,
+      "depends_on": ["BL-MEASURE"],
+      "est_size": "M",
+      "crates_files": ["crates/purge-index/src/baseline_view.rs (new)", "crates/purge-index/src/lib.rs (mod, re-exports)", "crates/purge-kb or purge-index: reader of kb/baselines/view.json"],
+      "scope": "BaselineTrust, BaselineView, Absence as in design 4.3. Constructors: exact(Baseline), merged(LocalBaseline, Vec<Baseline>, Areas), local(LocalBaseline, Areas), none(presence sets). select_neighbours(dir, os, limit) by the rule of design 4.1. P methods are unions; key_absent applies scope, areas and trust; exact_value answers only from Exact.",
+      "rules": [
+        "Exact view: every method returns exactly what Baseline returns today (L3); the local baseline is not consulted.",
+        "key_absent never returns Proven below Exact and never returns Inferred for trust None, an incomplete local baseline, a key out of scope or an area not flagged.",
+        "has_key_exact_view on a union: present when any set has that very spelling or, for shared subtrees, the twin, as today per set.",
+        "No set difference, no negative cache (design section 6).",
+        "A neighbour whose header and name disagree is skipped with a warning, as an exact file would be."
+      ],
+      "tests": [
+        "Truth table: trust x (in local, in neighbour, in scope, area flag) -> Absence.",
+        "Neighbour selection: same build other ubr; nearest below and above; limit 1000; tie on edition; at most three; none.",
+        "Exact view equals Baseline on the synthetic fixture for every public method.",
+        "Property: adding a set never turns Present into anything else.",
+        "Incomplete local baseline gives trust None and still answers presence."
+      ],
+      "acceptance": "Tests pass; Fable review of the truth table and the selection rule."
+    },
+    {
+      "id": "BL-POLICY",
+      "title": "Model and policy: BaselineInferred, P-BL-1, notes, templates, fingerprint field",
+      "importance": "critical",
+      "wave": 4,
+      "depends_on": ["BL-MEASURE"],
+      "est_size": "M",
+      "crates_files": ["crates/purge-model/src/blocker.rs", "crates/purge-model/src/fingerprint.rs (baseline_view field, optional, serde default)", "crates/purge-policy/src/band.rs", "crates/purge-policy/src/explain.rs", "crates/purge-policy/tests/golden.rs"],
+      "scope": "Blocker::BaselineInferred (soft). PolicyCtx::baseline_trust. Rule P-BL-1 in decide: with Merged or Local and a RegKey target, evidence of an absence-dependent kind (ProvenOwnedSkeleton, ComKeyOwnership, HarvestedToken, key-scope InstallerManifest, key-scope ChainedRef) does not support Safe; Note::BaselineInferred. Explanation templates of design 4.4. POLICY_VERSION bump. Fingerprint field baseline_view {name, trust, local_id}; old fingerprints read as before.",
+      "rules": [
+        "With trust Exact or None the decision of every existing golden row is unchanged.",
+        "The new blocker is soft in is_hard(), has a stable name and sort rank, and old plans still deserialize.",
+        "P-BL-1 holds without the blocker being present (backstop), and the blocker alone is enough (carrier).",
+        "Ai rule 7 is not touched."
+      ],
+      "tests": [
+        "Golden rows: each absence-dependent kind x trust (Exact, Merged, Local, None) x blocker present or absent.",
+        "A RegKey with UninstallerArtifact or AppNamedKeyWithRootRef evidence stays Safe under Merged (not absence-dependent).",
+        "Explain: both templates; schema round trip of the fingerprint with and without the field."
+      ],
+      "acceptance": "Golden tests pass; replay with exact baselines byte-identical to the M1b gate plans apart from the policy version string."
+    },
+    {
+      "id": "BL-FRAMEWORK",
+      "title": "Scan and harvest: classify every baseline use as presence or absence",
+      "importance": "critical",
+      "wave": 5,
+      "integration_package": true,
+      "depends_on": ["BL-VIEW", "BL-POLICY"],
+      "est_size": "L",
+      "crates_files": ["crates/purge-scan/src/framework.rs", "crates/purge-scan/src/framework/m1b.rs", "crates/purge-scan/src/skeleton.rs", "crates/purge-scan/src/cls_progid.rs", "crates/purge-scan/src/cls_assoc.rs", "crates/purge-scan/src/cls_assoc/handler.rs", "crates/purge-scan/src/com_class.rs", "crates/purge-scan/src/com_shellex.rs", "crates/purge-scan/src/reg_software.rs", "crates/purge-scan/src/fs_vendorparent.rs", "crates/purge-harvest/src/{anchors,tokens,subtree,assoc,msi,sysobj,coproducts,refsnap,harvest}.rs", "tools/xtask/src/baseline_sites.rs (new)", "crates/purge-scan/tests/** (worlds take a view)"],
+      "scope": "ScanCtx::baseline and the harvest contexts become &BaselineView. Every site is rewritten per the table of design 4.3. CandidateBuilder::absence adds the detail facts and the blocker. The seal in ctx.run refuses an absence-dependent RegKey candidate without the blocker when the view is below Exact. Fingerprint absence facts are read with min(harvest trust, scan trust). testkit::baseline returns an Exact view; a new testkit::merged_view. xtask baseline-sites.",
+      "rules": [
+        "No site keeps a hand-written 'not has_key' test: absence is asked only through key_absent.",
+        "Unknown takes exactly today's no-baseline path at each site (X-SYSTIDY, Tier B, no token evidence).",
+        "restore_source uses exact_value only.",
+        "No new registry or file walk (no-new-walks stays green)."
+      ],
+      "tests": [
+        "Per A site: Inferred gives evidence + blocker + band Likely + not preselected; Unknown gives today's result; Proven gives today's exact result.",
+        "Golden cls_assoc_vscode_merged.txt; the existing baseline and no_baseline goldens unchanged.",
+        "Seal test: a candidate built without the blocker is dropped and reported.",
+        "L5 property test over the scanner test worlds: preselected subset, Blocked superset.",
+        "Existing tests named in design 4.6 pass unchanged in meaning."
+      ],
+      "acceptance": "cargo test, clippy, xtask check-deps, scanner-coverage, no-new-walks, baseline-sites all pass; Fable review of the site table against the code."
+    },
+    {
+      "id": "BL-CACHE",
+      "title": "Cache directory, source id, invalidation, pipeline wiring",
+      "importance": "critical",
+      "wave": 5,
+      "depends_on": ["BL-VIEW", "BL-BUILD"],
+      "est_size": "M",
+      "crates_files": ["crates/purge-index/src/local_baseline/cache.rs (new)", "bins/purge-engine/src/pipeline.rs", "bins/purge-engine/src/main.rs (Settings: local_baseline_dir)", "install/install.ps1 (only if the data root needs the subdirectory)", "crates/purge-rpc (engine.hello: baseline_trust, baseline_view)"],
+      "scope": "LocalCache::open(dir, fs): the DiskTableCache directory rule. source_id(sources). load(os, builder version, source id) -> Option<LocalBaseline>. store() through a temporary file and rename, only elevated, then removal of older files (keep two). Pipeline: exact match -> Exact view and nothing else happens; otherwise open the cache, start a background build when elevated and missing, select neighbours, build the view; warnings name the trust and the reason. When elevated, kb\\baselines must be admin-only writable or no shipped baseline is used. PolicyCtx gets the view's trust. engine.hello reports baseline_trust beside baseline_available.",
+      "rules": [
+        "Unelevated: read an accepted cache, never write, never build.",
+        "A cache directory that fails the rule is ignored (trust None), never repaired.",
+        "The build never blocks a scan; a scan that starts first runs with trust None and says so.",
+        "A fingerprint harvested with one view and scanned with another uses the weaker trust.",
+        "pipeline test baselines_are_only_used_for_an_exact_match stays as the test of the exact loader."
+      ],
+      "tests": [
+        "Fixture file system: user-owned directory, inherited Users write ACE, reparse point, protected DACL: only the last is accepted.",
+        "Invalidation: new ubr, changed manifest directory stamp, changed package list, new builder version: each a miss; old files removed after a store.",
+        "Pipeline: exact host builds nothing and reads no cache (metered sources); unelevated without a cache gives None with the warning; elevated kb directory writable by Users gives no shipped baseline.",
+        "Crash safety: a temporary file left behind is ignored and removed."
+      ],
+      "acceptance": "Tests pass; Fable security review: can a standard user plant, poison, downgrade or delay the cache to gain a delete."
+    },
+    {
+      "id": "BL-RESIDUE",
+      "title": "Residue output and advice types (interface only)",
+      "importance": "medium",
+      "wave": 6,
+      "depends_on": ["BL-FRAMEWORK"],
+      "est_size": "S",
+      "crates_files": ["crates/purge-model/src/residue.rs (new: purge.residue/1, purge.advice/1)", "crates/purge-scan/src/framework.rs (collect Unknown answers per site)", "bins/purge-engine/src/pipeline.rs (residue in the scan result)", "docs/schemas (generated)"],
+      "scope": "Scan result carries the residue list of design section 7. Advice types with validation (lengths, enums, binding to scan_id, id, item_fp) and the mapping to Ai evidence: 'windows' negative, 'app' and 'unknown' note only. No reader of advice files, no model, no MCP tool: M6.",
+      "rules": [
+        "No value data, no file content in the residue.",
+        "Advice can never add a candidate, remove a blocker, raise a band or preselect (unit-tested at the mapping).",
+        "Residue is capped (1,000 items) with a count of the rest."
+      ],
+      "tests": [
+        "Schema round trips; validation rejects oversize and unknown fields.",
+        "Mapping: each verdict against each band; BaselineInferred survives; stale item_fp dropped."
+      ],
+      "acceptance": "Tests pass; schema files generated."
+    },
+    {
+      "id": "BL-GATE",
+      "title": "Gate: replay and rig campaign with the exact baseline hidden",
+      "importance": "gate",
+      "wave": 6,
+      "depends_on": ["BL-FRAMEWORK", "BL-CACHE"],
+      "est_size": "M",
+      "crates_files": ["vm/rig.ps1 (mode flag: hide the exact baseline)", "vm/truth/bl.sh (new gate script)", "tools/xtask/src/replay.rs", "docs/BASELINE_LOCAL_GATE.md (written at the gate)"],
+      "scope": "Runs R3 and R4 of design 8.2 and checks S1 to S5 and W1 to W5 of design 8.3 and 8.4.",
+      "rules": [
+        "The M1b gate criteria stay in force for the exact runs.",
+        "A flip (inferred-absent candidate whose key is in the truth baseline) fails the gate at count 1."
+      ],
+      "tests": [],
+      "acceptance": "S1 flips = 0, danger_listed = 0, traps met, both VMs, merged and local. S4: L3 and L5 over the replay corpus. W2 >= 80% of the exact-only key candidates offered as Likely (below 50%: ship presence-only). W3 <= 1% recall cost. W5 reported for the host."
+    }
+  ],
+  "waves": [
+    ["BL-WIN-SXS", "BL-WIN-OFFREG", "BL-MANIFEST", "BL-SOURCES"],
+    ["BL-BUILD", "BL-RIG-DIFF"],
+    ["BL-MEASURE"],
+    ["BL-VIEW", "BL-POLICY"],
+    ["BL-FRAMEWORK", "BL-CACHE"],
+    ["BL-RESIDUE", "BL-GATE"]
+  ],
+  "review_points": [
+    {"after_wave": 3, "id": "BL-RM", "reviewer": "Fable", "attack": "Are the false-absent lists complete and honestly classified? Is any area marked that should not be? Do the leave-one-out pairs say anything about the host's case?"},
+    {"after_wave": 5, "id": "BL-R1", "reviewer": "Fable", "attack": "Find an A site that reaches Safe below Exact; find a P site used negated; plant or poison the cache or the shipped directory as a standard user; make the view claim Exact for a local file; break L5 with a fixture."}
+  ],
+  "cut_or_move": [
+    "S5 INF source: built only if gate M shows a need.",
+    "Automated release-build baseline packs: future maintenance.",
+    "The advisory model and the reader of advice: M6.",
+    "Lifting the cap per area (design 8.5): needs a user decision and at least three leave-one-out pairs."
+  ],
+  "open_questions": [
+    "Q1 Unelevated runs without a cache: trust None with a warning (default), or an in-memory build each run?",
+    "Q2 Local-only level: presence-only unless an area passes S3 (default), or never any inferred absence?",
+    "Q3 Trust None still blocks from neighbours: accept that today's no-baseline plans gain Blocked items?",
+    "Q4 R4 needs a rig mode that hides the exact baseline; a drift test needs a Windows Update on a rig VM: wanted?",
+    "Q5 PURGE_KB_DIR: honoured only unelevated once the shipped directory must be admin-only?",
+    "Q6 Keep the later cap lift as an option, or rule it out?"
+  ]
+}

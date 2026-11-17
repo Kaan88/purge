@@ -117,6 +117,12 @@ what would reverse it. Decisions the user made themselves are marked (user).
 | 2026-11-17 | Review R4b S2/S3: m1b.sh checks RUN (finished, every phase ok) and BIND (rig.ps1 writes `<run>\m1b-build.json`: engine SHA-256 before and after, HEAD, clean sources incl. kb and rust-toolchain.toml, run.json SHA-256; one engine and commit over all runs and the budgets; the committed trap and label files). An empty plan fails K1-K6. Any non-default list, label map or `--evaluate` exits 3 (not a gate score), never 0 | The scan gate scored whatever was in the evidence dir, from any engine or label override | — |
 | 2026-11-17 | Review R4b S5: K5 n>=29 is kept. The labels show python312-with-313 reaches 0 of the 29 kept launcher/container objects in its diff (all exist at snap0: 3.13 and the launcher are installed first and the 3.12 bundle skips the older launcher); python313-with-312 likely stays below 29. K5 for the pairs is expected to FAIL until the design's n is revisited | The brief forbids lowering the minimum; the count is a design question for the gate owner | The design changes K5's n |
 
+## Post-M1b
+
+| Date | Decision | Why | Reverse if |
+|---|---|---|---|
+| 2026-11-17 | (user) Local baseline from the host + nearest-build union with a trust cap; AI advisory for the residue later; release baseline packs = future maintenance. Design: `docs/BASELINE_LOCAL_DESIGN.md`, packages `docs/BASELINE_LOCAL_DESIGN.json`. Absence that is not from an exact shipped baseline never makes an item Safe or preselected | Windows builds change constantly, so an exact (edition, build, ubr) baseline rarely matches and key deletes lose their proof; the cap means a missing baseline entry costs a tick, not a wrong default delete | The measurement (gate M) shows false-absent keys of a shared-container shape in the accepted areas, or the merged view recovers under half of the exact-only key candidates (then presence-only) |
+
 ## Standing
 
 - Local commits on `m1a` are made as needed; nothing is pushed or merged without asking.
