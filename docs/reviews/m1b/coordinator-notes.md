@@ -113,3 +113,10 @@ S-FIREWALL (wave 4, for R3):
 - recreate_refusal copies purge-win map_rule (checked equal on 400k generated rules); undo root check copied too -> keep in sync
 - App outside InstallRoot -> ReversibilityNone (soft, never preselected); None vs Partial?
 - recorded-but-unresolved-now fallback; no scanner warning API
+
+S-COM (wave 4, for R3):
+- no scan-warning channel; only walked users scanned (HKU\<SID>_Classes)
+- ComKeyOwnership / DanglingRef added through evidence_also (no constructor)
+- TypeLib-only interface found only via MSI/Inno rows; AppID with no referring class -> no candidate
+- blocked proxy class still attributes its interface (ISimpleDOMNode listed Protected); relates to R2a S10 (Firefox K6/K16)
+- interface MSI-row check is own path matching, not framework code
