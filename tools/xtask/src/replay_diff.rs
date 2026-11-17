@@ -6,15 +6,20 @@
 //! cargo xtask replay-diff --write-reference <dir with <id>.scan.json>
 //! ```
 //!
-//! The reference is `vm/truth/m1a6-replay.json`: for each M0 run ([`M0_RUNS`]) every item of the m1a.6
+//! The reference is `vm/truth/m1a6-replay.json`: for each frozen run ([`DIFF_RUNS`]: the M0 runs and 7-Zip,
+//! the one app M1b set out to change, review R4 S9) every item of the m1a.6
 //! engine's replay (commit `622c64d`, `cargo xtask replay` over the same run), top-level and absorbed,
 //! with its band, preselection, scanner and blocker names. `--write-reference` builds it from the scan
 //! sidecars of such a replay.
 //!
 //! The diff replays each run with this build (as `replay` does, into a temporary directory), keys every
-//! item by its target, and writes one row for each target whose band, preselection, absorption or
-//! scanner differs, or that is on one side only, to `vm/truth/m1b-replay-diff.json`. Each row carries a
-//! reason ([`reason`]):
+//! item by its target, and writes one row for each target whose band, preselection, absorption,
+//! scanner or blockers differ, or that is on one side only, to `vm/truth/m1b-replay-diff.json`. Each row
+//! carries a reason ([`reason`]):
+//!
+//! - a **promotion** (the band rose toward Safe, or the item became preselected; [`is_promotion`]) is
+//!   explained by nothing above: it is `promotion_justified` when [`JUSTIFIED_PROMOTIONS`] names it with
+//!   a written cause, else `unexplained` (review R4 S9: no reason may carry an item from Blocked to Safe);
 //!
 //! - `new_scanner`: the item is now listed under an M1b scanner (new, or merged into an M1b scanner's
 //!   candidate);
@@ -25,7 +30,8 @@
 //! - `policy_m1b`: it now carries an object blocker M1b added (`Driver`, `HasDependents`,
 //!   `ObjectChangedSinceHarvest`, `ReversibilityPartial`, `ProgramUnresolved`).
 //!
-//! A row none of these explains is `unexplained`, and the command fails (after writing the file).
+//! A row none of these explains is `unexplained`, and the command fails (after writing the file). The
+//! file also counts the promotions and the new items offered Safe, so a reader sees them at once.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -35,7 +41,14 @@ use purge_guard::prefix;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::replay::{self, M0_RUNS, RUNS_DIR_VAR, ReplayOpts};
+use crate::replay::{self, RUNS_DIR_VAR, ReplayOpts};
+
+/// The frozen runs the diff replays: the M0 runs and 7-Zip (`vm/runs/7zip`, `vm/truth/m1a-frozen-7zip.json`).
+pub const DIFF_RUNS: &[&str] = &["vscode", "git", "firefox", "npp", "7zip"];
+
+/// Promotions with a written cause: (run, target JSON as the sidecar writes it, cause). A promotion not
+/// listed here is unexplained. Empty: M1b justifies none.
+pub const JUSTIFIED_PROMOTIONS: &[(&str, &str, &str)] = &[];
 
 const USAGE: &str = "usage: cargo xtask replay-diff [--runs <vm/runs>] [-o <diff.json>] | \
                      --write-reference <dir with <id>.scan.json>";
@@ -46,12 +59,16 @@ pub const REFERENCE: &str = "vm/truth/m1a6-replay.json";
 pub const DIFF: &str = "vm/truth/m1b-replay-diff.json";
 
 /// The reasons a row may carry.
-pub const REASONS: [&str; 4] = [
+pub const REASONS: [&str; 5] = [
     "new_scanner",
     "msi_blocker_added",
     "msi_root_added",
     "policy_m1b",
+    PROMOTION_JUSTIFIED,
 ];
+
+/// The reason of a promotion [`JUSTIFIED_PROMOTIONS`] names.
+pub const PROMOTION_JUSTIFIED: &str = "promotion_justified";
 
 /// The reason of a row no allowed reason explains.
 pub const UNEXPLAINED: &str = "unexplained";
@@ -127,9 +144,13 @@ pub struct Row {
 struct DiffDoc<'a> {
     schema: &'static str,
     reference: &'a str,
-    reasons: [&'static str; 4],
+    reasons: [&'static str; 5],
     apps: BTreeMap<String, (usize, usize)>,
     unexplained: usize,
+    /// Rows whose band rose or that became preselected (justified or not).
+    promotions: usize,
+    /// Items on this side only that are offered Safe.
+    new_safe: usize,
     rows: Vec<Row>,
 }
 
@@ -222,12 +243,30 @@ fn by_target(items: &[Item]) -> BTreeMap<String, &Item> {
     out
 }
 
-/// Whether two items of the same target differ for the diff.
+/// Whether two items of the same target differ for the diff (blockers included, review R4 S9).
 fn differs(a: &Item, b: &Item) -> bool {
     a.band != b.band
         || a.preselected != b.preselected
         || a.absorbed != b.absorbed
         || a.scanner != b.scanner
+        || a.blockers != b.blockers
+}
+
+/// A band's rank: Blocked 0, Weak 1, Likely 2, Safe 3 (an unknown band ranks highest, so a change to it
+/// counts as a promotion).
+fn band_rank(band: &str) -> u8 {
+    match band {
+        "Blocked" => 0,
+        "Weak" => 1,
+        "Likely" => 2,
+        "Safe" => 3,
+        _ => 4,
+    }
+}
+
+/// Whether the item went up toward Safe: a higher band, or newly preselected.
+pub fn is_promotion(before: &Item, after: &Item) -> bool {
+    band_rank(&after.band) > band_rank(&before.band) || (after.preselected && !before.preselected)
 }
 
 /// The M1b scanners: the catalog after the M1a nineteen.
@@ -251,6 +290,11 @@ pub fn reason(
     m1b: &[&str],
 ) -> Option<&'static str> {
     let after = after?;
+    // No reason explains a promotion: a new scanner, an added blocker or a new MSI root never makes an
+    // item safer (review R4 S9). JUSTIFIED_PROMOTIONS is checked by the caller.
+    if before.is_some_and(|b| is_promotion(b, after)) {
+        return None;
+    }
     let added = |names: &[&str]| {
         after
             .blockers
@@ -297,12 +341,24 @@ pub fn diff_rows(app: &str, before: &[Item], after: &[Item], msi_roots: &[String
             continue;
         }
         let target = y.or(x).map(|i| i.target.clone()).unwrap_or(Value::Null);
+        let promoted = matches!((x, y), (Some(x), Some(y)) if is_promotion(x, y));
+        let justified = promoted
+            && JUSTIFIED_PROMOTIONS.iter().any(|(a, t, why)| {
+                *a == app
+                    && !why.trim().is_empty()
+                    && target_key(&serde_json::from_str(t).unwrap_or(Value::Null)) == *key
+            });
+        let reason = if justified {
+            PROMOTION_JUSTIFIED
+        } else {
+            reason(x, y, msi_roots, m1b_scanners()).unwrap_or(UNEXPLAINED)
+        };
         rows.push(Row {
             app: app.to_owned(),
             target,
             before: x.cloned(),
             after: y.cloned(),
-            reason: reason(x, y, msi_roots, m1b_scanners()).unwrap_or(UNEXPLAINED),
+            reason,
         });
     }
     rows
@@ -349,7 +405,7 @@ pub fn run(root: &Path, args: &[String]) -> Result<bool> {
     let temp = std::env::temp_dir().join(format!("purge-replay-diff-{}", std::process::id()));
     let mut rows = Vec::new();
     let mut apps = BTreeMap::new();
-    for id in M0_RUNS {
+    for id in DIFF_RUNS {
         let before = reference
             .apps
             .get(*id)
@@ -377,12 +433,22 @@ pub fn run(root: &Path, args: &[String]) -> Result<bool> {
     let _ = std::fs::remove_dir_all(&temp);
 
     let unexplained = rows.iter().filter(|r| r.reason == UNEXPLAINED).count();
+    let promotions = rows
+        .iter()
+        .filter(|r| matches!((&r.before, &r.after), (Some(b), Some(a)) if is_promotion(b, a)))
+        .count();
+    let new_safe = rows
+        .iter()
+        .filter(|r| r.before.is_none() && r.after.as_ref().is_some_and(|a| a.band == "Safe"))
+        .count();
     let doc = DiffDoc {
-        schema: "purge.replay-diff/1",
+        schema: "purge.replay-diff/2",
         reference: REFERENCE_ENGINE,
         reasons: REASONS,
         apps,
         unexplained,
+        promotions,
+        new_safe,
         rows,
     };
     let text = serde_json::to_string_pretty(&doc)? + "\n";
@@ -403,7 +469,7 @@ pub fn run(root: &Path, args: &[String]) -> Result<bool> {
         );
     }
     println!(
-        "replay-diff: {} differing row(s), {unexplained} unexplained -> {}",
+        "replay-diff: {} differing row(s), {unexplained} unexplained, {promotions} promotion(s), {new_safe} new Safe item(s) -> {}",
         doc.rows.len(),
         out.display()
     );
@@ -414,10 +480,10 @@ fn star(i: &Item) -> &'static str {
     if i.preselected { "*" } else { "" }
 }
 
-/// Writes [`REFERENCE`] from `<dir>/<id>.scan.json` of every M0 run.
+/// Writes [`REFERENCE`] from `<dir>/<id>.scan.json` of every run of [`DIFF_RUNS`].
 fn write_reference_file(root: &Path, dir: &Path) -> Result<()> {
     let mut apps = BTreeMap::new();
-    for id in M0_RUNS {
+    for id in DIFF_RUNS {
         let path = dir.join(format!("{id}.scan.json"));
         let doc: Value = serde_json::from_str(
             &std::fs::read_to_string(&path)
@@ -440,6 +506,7 @@ fn write_reference_file(root: &Path, dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::replay::M0_RUNS;
     use serde_json::json;
 
     fn item(target: Value, band: &str, scanner: &str, blockers: &[&str]) -> Item {
@@ -472,10 +539,88 @@ mod tests {
         let fw = item(rule.clone(), "Likely", "SYS-FIREWALL", &[]);
         assert_eq!(reason(None, Some(&fw), &[], m1b), Some("new_scanner"));
         let old = item(path(r"C:\x"), "Weak", "FS-APPDATA", &[]);
-        let merged = item(path(r"C:\x"), "Likely", "FS-WER", &[]);
+        let merged = item(path(r"C:\x"), "Weak", "FS-WER", &[]);
         assert_eq!(
             reason(Some(&old), Some(&merged), &[], m1b),
             Some("new_scanner")
+        );
+
+        // A promotion is explained by no reason (review R4 S9): a band that rose under an M1b scanner, a
+        // Blocked item made Safe and preselected under one, an item newly preselected, a band that rose
+        // while an MSI or M1b blocker was added.
+        let raised = item(path(r"C:\x"), "Likely", "FS-WER", &[]);
+        assert!(is_promotion(&old, &raised));
+        assert_eq!(reason(Some(&old), Some(&raised), &[], m1b), None);
+        let blocked_before = item(
+            json!({"type": "FirewallRule", "id": "{B}"}),
+            "Blocked",
+            "REF-ANY",
+            &["Driver"],
+        );
+        let safe_now = item(
+            json!({"type": "FirewallRule", "id": "{B}"}),
+            "Safe",
+            "SYS-FIREWALL",
+            &[],
+        );
+        assert_eq!(
+            reason(Some(&blocked_before), Some(&safe_now), &[], m1b),
+            None
+        );
+        let mut ticked = item(path(r"C:\z"), "Likely", "FS-APPDATA", &[]);
+        ticked.preselected = false;
+        let mut ticked_now = ticked.clone();
+        ticked_now.preselected = true;
+        ticked_now.scanner = "FS-WER".into();
+        assert!(is_promotion(&ticked, &ticked_now));
+        assert_eq!(reason(Some(&ticked), Some(&ticked_now), &[], m1b), None);
+        let weak = item(path(r"C:\w"), "Weak", "FS-INSTALLDIR", &[]);
+        let up_blocked = item(
+            path(r"C:\w"),
+            "Likely",
+            "FS-INSTALLDIR",
+            &["SharedRefcount", "Driver"],
+        );
+        assert_eq!(reason(Some(&weak), Some(&up_blocked), &[], m1b), None);
+        let rows = diff_rows(
+            "t",
+            std::slice::from_ref(&blocked_before),
+            std::slice::from_ref(&safe_now),
+            &[],
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].reason, UNEXPLAINED);
+        // A demotion keeps its reason; a blocker change alone is a row.
+        assert!(!is_promotion(&safe_now, &blocked_before));
+        let more = item(
+            path(r"C:\v"),
+            "Blocked",
+            "FS-INSTALLDIR",
+            &["Driver", "SharedRefcount"],
+        );
+        let less = item(
+            path(r"C:\v"),
+            "Blocked",
+            "FS-INSTALLDIR",
+            &["SharedRefcount"],
+        );
+        let rows = diff_rows(
+            "t",
+            std::slice::from_ref(&less),
+            std::slice::from_ref(&more),
+            &[],
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].reason, "policy_m1b");
+        let rows = diff_rows(
+            "t",
+            std::slice::from_ref(&more),
+            std::slice::from_ref(&less),
+            &[],
+        );
+        assert_eq!(
+            rows[0].reason, UNEXPLAINED,
+            "a blocker dropped is not explained"
         );
 
         // A new MSI blocker on an M1a item.
@@ -568,7 +713,20 @@ mod tests {
             let r = row["reason"].as_str().unwrap();
             assert!(REASONS.contains(&r), "{row}");
         }
-        // The committed reference parses and holds the four runs.
+        // Every run of the diff is in it, 7-Zip included.
+        for id in DIFF_RUNS {
+            assert!(
+                doc["apps"].get(*id).is_some(),
+                "{id} not in the committed diff"
+            );
+        }
+        assert!(
+            JUSTIFIED_PROMOTIONS
+                .iter()
+                .all(|(_, _, why)| !why.trim().is_empty())
+        );
+        // The committed reference parses and holds the runs: the M0 runs with items, 7-Zip (m1a.6
+        // offered nothing for it).
         let reference: Reference = serde_json::from_str(
             &std::fs::read_to_string(crate::workspace_root().join(REFERENCE)).unwrap(),
         )
@@ -576,5 +734,7 @@ mod tests {
         for id in M0_RUNS {
             assert!(!reference.apps[*id].is_empty(), "{id}");
         }
+        assert!(reference.apps.contains_key("7zip"));
+        assert_eq!(DIFF_RUNS.len(), M0_RUNS.len() + 1);
     }
 }

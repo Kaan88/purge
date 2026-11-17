@@ -1,13 +1,18 @@
 {
-  "schema": "purge.replay-diff/1",
+  "schema": "purge.replay-diff/2",
   "reference": "m1a.6 (622c64d), cargo xtask replay without overlay",
   "reasons": [
     "new_scanner",
     "msi_blocker_added",
     "msi_root_added",
-    "policy_m1b"
+    "policy_m1b",
+    "promotion_justified"
   ],
   "apps": {
+    "7zip": [
+      0,
+      1
+    ],
     "firefox": [
       27,
       28
@@ -26,6 +31,8 @@
     ]
   },
   "unexplained": 0,
+  "promotions": 0,
+  "new_safe": 1,
   "rows": [
     {
       "app": "firefox",
@@ -68,6 +75,26 @@
         "blockers": []
       },
       "reason": "new_scanner"
+    },
+    {
+      "app": "7zip",
+      "target": {
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip",
+        "type": "RegKey"
+      },
+      "before": null,
+      "after": {
+        "target": {
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": false,
+        "blockers": []
+      },
+      "reason": "msi_root_added"
     }
   ]
 }

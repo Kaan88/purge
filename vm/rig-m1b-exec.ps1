@@ -29,7 +29,15 @@
                       and a mirror of their package dirs copied to the guest, run by the elevated agent with
                       --include-ignored; writes vm\runs\<prefix>m1b-x-elevated\elevated-tests.json.
     m1b-x-selftest    no VM: exec_sh_fails_on_missing_input, exec_cases_json_lists_every_fault_point_per_kind,
-                      crash_script_reports_unreached_point_as_failure (and positive controls). Exit 1 on a failure.
+                      crash_script_reports_unreached_point_as_failure (and positive controls), the power-off journal
+                      proof, and the bad-run controls (review R4 S7): truth\m1b-exec.sh on a synthetic good run set
+                      (truth\m1b-exec-fixture.py) must PASS with the gate's figures, and on each one-field mutation of
+                      it must FAIL on the named criterion. Needs Python 3 ($env:PYTHON or python). Exit 1 on a failure.
+
+  Binding (review R4 S4, S6): each VM run gets opts.engine_build (engine SHA-256, repo HEAD, whether crates/bins/
+  tools/Cargo.* differ from HEAD) and records it with the SHA-256 the guest measures of the staged and installed
+  engine and of the cases bytes; m1b-x-elevated records the cases SHA-256 and the commit. truth\m1b-exec.sh requires
+  one engine, one commit, clean sources and the scored cases file in every run.
 #>
 [CmdletBinding()]
 param(
@@ -90,6 +98,27 @@ function Get-XBash {
     if ($c) { return $c.Source }
     throw 'Git Bash not found (truth\m1b-exec.sh needs bash)'
 }
+
+# The build a run is bound to (review R4 S6): the engine file's SHA-256 (lower-case hex; $null without -Path), the
+# repository's HEAD and whether its sources (crates, bins, tools, Cargo.toml, Cargo.lock) differ from HEAD. Read-only
+# git calls. The score requires one engine and one commit over all runs, and clean sources.
+function Get-XBuildInfo([string]$Path = '') {
+    $sha = $null
+    if ($Path) { $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
+    $commit = $null; $dirty = $null
+    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        $c = @(& git -C $XRepo rev-parse HEAD 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $c.Count) { $commit = "$($c[0])".Trim() }
+        $d = @(& git -C $XRepo status --porcelain --untracked-files=no -- crates bins tools Cargo.toml Cargo.lock 2>$null)
+        if ($LASTEXITCODE -eq 0) { $dirty = [bool]($d | Where-Object { "$_".Trim() }) }
+    } finally { $ErrorActionPreference = $old }
+    [ordered]@{ path = $Path; sha256 = $sha; commit = $commit; source_dirty = $dirty }
+}
+
+function Get-XSha256File([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
+
+function Get-XPython { if ($env:PYTHON) { $env:PYTHON } else { 'python' } }
 
 # The libtest result lines of one binary's output: {name, result} (ok, FAILED, ignored).
 function ConvertFrom-XLibtest([string[]]$Lines) {
@@ -155,7 +184,7 @@ function Invoke-XSelftest {
             param($Point, [bool]$Hit)
             $r = New-XRow 1 'service' $Point 'exec' 'resume'
             $r.hit = $Hit; $r.crashed = $Hit
-            if ($Hit) { $r.recover_exit = 0; $r.recover2_exit = 0; $r.recover_idempotent = $true; $r.after_exit = 0; $r.execdiff_ok = $true; $r.undo_exit = 0; $r.fidelity_ok = $true; $r.object_restored = $true }
+            if ($Hit) { $r.recover_exit = 0; $r.recover2_exit = 0; $r.recover_idempotent = $true; $r.after_exit = 0; $r.execdiff_ok = $true; $r.execdiff_unexplained = 0; $r.undo_exit = 0; $r.fidelity_ok = $true; $r.object_restored = $true }
             Set-XRowPass $r
             [pscustomobject]$r
         }
@@ -173,16 +202,99 @@ function Invoke-XSelftest {
         # A hit row whose recovery left a difference fails.
         $bad = & $mk 'act.after' $true; $bad.fidelity_ok = $false; Set-XRowPass $bad
         & $add 'crash_row_with_inexact_undo_fails' (-not $bad.pass) "pass $($bad.pass)"
-        # The real plan: every kind, every reachable point; svcrestore / fwrestore only for their kind.
+        # An exec/resume row whose execdiff saw an added record nothing authorises fails (R4 S2).
+        $bad2 = & $mk 'act.after' $true; $bad2.execdiff_unexplained = 1; Set-XRowPass $bad2
+        $bad3 = & $mk 'act.after' $true; $bad3.execdiff_unexplained = $null; Set-XRowPass $bad3
+        & $add 'crash_row_with_unexplained_record_fails' (-not $bad2.pass -and -not $bad3.pass) "pass $($bad2.pass) / no count $($bad3.pass)"
+        # A power-off row passes only with the cut proven inside the run (R4 S1).
+        $po1 = New-XRow 901 'service' 'act.before' 'exec' 'resume' 'poweroff'
+        foreach ($k in 'recover_exit', 'recover2_exit', 'after_exit', 'undo_exit', 'execdiff_unexplained') { $po1[$k] = 0 }
+        $po1.hit = $true; $po1.crashed = $true; $po1.recover_idempotent = $true; $po1.execdiff_ok = $true; $po1.fidelity_ok = $true; $po1.object_restored = $true
+        $po1.boot_changed = $true; $po1.pfro_unchanged = $true; $po1.cut_mid_run = $true
+        Set-XRowPass $po1; $poOk = $po1.pass
+        $po1.cut_mid_run = $false; Set-XRowPass $po1
+        & $add 'poweroff_row_needs_cut_mid_run' ($poOk -and -not $po1.pass) "with cut $poOk, without $($po1.pass)"
+        # Repeated rounds: one failing row fails the key even when another passed (R4 M7).
+        $rep1 = & $mk 'act.after' $true; $rep2 = & $mk 'act.after' $true; $rep2.fidelity_ok = $false; Set-XRowPass $rep2
+        $sumRep = Get-XCrashSummary $fake @($rep1, $rep2, (& $mk 'rig.fake' $true)) @('service')
+        & $add 'crash_summary_fails_a_repeated_failing_round' (-not $sumRep.pass -and @($sumRep.failed) -contains 'service/act.after/exec/resume') "failed [$($sumRep.failed -join ',')]"
+        # The real plan: every kind, every reachable point; svcrestore / fwrestore only for their kind; index.write
+        # in undo (resume) and in exec (resume only, R4 S4). 10 exec points x 3 kinds x 2 + 3 exec index.write
+        # + 3 undo points x 3 + 2 = 74 = m1b-exec.sh GATE_ROUNDS.
         $full = @(Get-XCrashPlan $cases)
         $svcOnly = @($full | Where-Object { $_.point -eq 'svcrestore.mid' } | ForEach-Object { $_.kind } | Select-Object -Unique)
         $fwOnly = @($full | Where-Object { $_.point -eq 'fwrestore.mid' } | ForEach-Object { $_.kind } | Select-Object -Unique)
-        & $add 'crash_plan_covers_kinds' ($full.Count -ge 60 -and ($svcOnly -join ',') -eq 'service' -and ($fwOnly -join ',') -eq 'firewall') "rounds $($full.Count)"
+        $iw = @($full | Where-Object { $_.point -eq 'index.write' } | ForEach-Object { "$($_.kind)/$($_.phase)/$($_.after)" } | Sort-Object)
+        & $add 'crash_plan_covers_kinds' ($full.Count -eq 74 -and ($svcOnly -join ',') -eq 'service' -and ($fwOnly -join ',') -eq 'firewall' -and $iw.Count -eq 6 -and -not @($iw | Where-Object { $_ -like '*/exec/rollback' }).Count) "rounds $($full.Count); index.write [$($iw -join ',')]"
         $po = @(Get-XPoweroffPlan $cases 'm1b-x-crash')
         $po2 = @(Get-XPoweroffPlan $cases 'm1b-x-crash')
         $firsts = @($CrashKinds | ForEach-Object { $k = $_; @($po | Where-Object { $_.kind -eq $k })[0].point })
         & $add 'poweroff_plan_is_15_seeded_rounds' ($po.Count -eq 15 -and (($po | ForEach-Object { "$($_.kind)/$($_.point)" }) -join ',') -eq (($po2 | ForEach-Object { "$($_.kind)/$($_.point)" }) -join ',') -and -not @($firsts | Where-Object { $_ -ne 'objdelete.after' }).Count) "rounds $($po.Count)"
     } catch { & $add 'crash_script_reports_unreached_point_as_failure' $false $_.Exception.Message }
+
+    # The power-off proof (R4 S1): journal facts and the mid-run verdict on hand-made journals.
+    try {
+        $j = { param([string[]]$Recs, [string]$Tail = '') (($Recs | ForEach-Object { $_ + "`n" }) -join '') + $Tail }
+        $hdr = '{"rec":"header"}', '{"rec":"validated","op":1}'
+        $open = & $j ($hdr + '{"rec":"intent","op":1}')
+        $done = & $j ($hdr + '{"rec":"intent","op":1}', '{"rec":"done","op":1}', '{"rec":"group_end"}')
+        $committed = & $j ($hdr + '{"rec":"intent","op":1}', '{"rec":"done","op":1}', '{"rec":"group_end"}', '{"rec":"commit"}')
+        $undoOpen = & $j ($hdr + '{"rec":"intent","op":1}', '{"rec":"done","op":1}', '{"rec":"commit"}', '{"rec":"undo_plan"}', '{"rec":"undo_intent","op":1}')
+        $undoDone = & $j ($hdr + '{"rec":"intent","op":1}', '{"rec":"done","op":1}', '{"rec":"commit"}', '{"rec":"undo_intent","op":1}', '{"rec":"undo_done","op":1}')
+        $torn = & $j ($hdr + '{"rec":"intent","op":1}') '{"rec":"done","op'
+        $v = { param($t, $ph, $p) (Test-XCutMidRun (Get-XJournalFacts $t) $ph $p).ok }
+        $ok = ((& $v $open 'exec' 'act.before') -and (& $v $done 'exec' 'commit.before') -and -not (& $v $done 'exec' 'act.after') `
+                -and -not (& $v $committed 'exec' 'commit.before') -and -not (& $v $committed 'exec' 'act.before') `
+                -and (& $v $undoOpen 'undo' 'undo.act.after') -and -not (& $v $undoDone 'undo' 'undo.act.after') -and -not (& $v $committed 'undo' 'undo.intent') `
+                -and (& $v $torn 'exec' 'done.before') -and (Get-XJournalFacts $torn).torn_tail -and -not (& $v $null 'exec' 'act.before') `
+                -and -not (& $v ($open + "garbage`n") 'exec' 'act.before'))
+        & $add 'poweroff_cut_mid_run_reads_the_journal' $ok ''
+    } catch { & $add 'poweroff_cut_mid_run_reads_the_journal' $false $_.Exception.Message }
+
+    # Bad-run controls (R4 S7): m1b-exec.sh on a synthetic run set in which every criterion holds (built by
+    # truth\m1b-exec-fixture.py from the cases file) must PASS with the gate's figures; each one-field mutation must
+    # FAIL on the criterion it names. A mutation the scorer lets through is a scorer that passes too easily.
+    try {
+        $py = Get-XPython
+        $bash = Get-XBash
+        $fx = Join-Path $XRigDir 'truth\m1b-exec-fixture.py'
+        $ErrorActionPreference = 'Continue'
+        $list = @(& $py -I $fx --cases $XCasesFile --out . --list 2>&1)
+        $ErrorActionPreference = 'Stop'
+        $muts = @($list | ForEach-Object { "$_" } | Where-Object { $_ -match "`t" } | ForEach-Object { $p = $_ -split "`t"; [pscustomobject]@{ name = $p[0]; crit = $p[1]; what = $p[2] } })
+        # The mutations the review asked for must be among them (a fixture that lost one would weaken the test).
+        $required = @('collateral', 'unexplained', 'trap-deleted', 'impostor-overwritten', 'unreached-point', 'poweroff-14', 'poweroff-not-mid-run',
+            'svc-running-restarted', 'twin-base-not-done', 'cases-min-full', 'cases-drop-trap', 'cases-drop-point', 'engine-differs', 'cases-sha')
+        $lost = @($required | Where-Object { @($muts | ForEach-Object { $_.name }) -notcontains $_ })
+        & $add 'bad_run_controls_listed' (-not $lost.Count -and $muts.Count -ge $required.Count) "$($muts.Count) mutation(s); missing [$($lost -join ',')]"
+        $score = {
+            param([string]$Mutation)
+            $d = Join-Path ([IO.Path]::GetTempPath()) ('m1b-exec-fx-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+            try {
+                $ErrorActionPreference = 'Continue'
+                $a = @('-I', $fx, '--cases', $XCasesFile, '--out', $d); if ($Mutation) { $a += @('--mutate', $Mutation) }
+                $null = & $py @a 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "fixture $Mutation exited $LASTEXITCODE" }
+                $old = @{ R = $env:M1B_RUNS; O = $env:M1B_OUT; C = $env:M1B_CASES }
+                $env:M1B_RUNS = (Join-Path $d 'runs') -replace '\\', '/'; $env:M1B_OUT = $d -replace '\\', '/'; $env:M1B_CASES = (Join-Path $d 'cases.json') -replace '\\', '/'
+                try { $null = & $bash ($XExecSh -replace '\\', '/') 2>&1; $code = $LASTEXITCODE } finally { $env:M1B_RUNS = $old.R; $env:M1B_OUT = $old.O; $env:M1B_CASES = $old.C }
+                $ErrorActionPreference = 'Stop'
+                $sf = Join-Path $d 'm1b-exec-score.json'
+                [pscustomobject]@{ code = $code; score = $(if (Test-Path -LiteralPath $sf) { [IO.File]::ReadAllText($sf) | ConvertFrom-Json } else { $null }) }
+            } finally { $ErrorActionPreference = 'Stop'; Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+        $base = & $score ''
+        $c = $base.score.criteria
+        $figures = ($c.K13.planned -eq 74 -and $c.K13.poweroff_total_want -eq 15 -and $c.K12.act_skipped -eq 5 -and $c.K12.act_twin_untouched -eq 1 `
+                -and $c.K12.undo_conflicts -eq 4 -and $c.K11.full_passing.service -ge 2 -and $c.K11.full_passing.task -ge 4 -and $c.K11.full_passing.firewall -ge 3 `
+                -and $c.K11.min_full.service -eq 2 -and $c.K11.min_full.task -eq 4 -and $c.K11.min_full.firewall -eq 3 -and @($c.E1.targets).Count -eq 6)
+        & $add 'exec_sh_passes_a_good_run_set' ($base.code -eq 0 -and $base.score.verdict -eq 'PASS' -and $figures) ("exit $($base.code); verdict $($base.score.verdict); failing [$(@($base.score.failing) -join ',')]; figures $figures")
+        foreach ($m in $muts) {
+            $r = & $score $m.name
+            $ok = ($r.code -eq 1 -and $r.score -and $r.score.verdict -eq 'FAIL' -and @($r.score.failing) -contains $m.crit)
+            & $add "exec_sh_fails_bad_run_$($m.name)" $ok ("exit $($r.code); failing [$(@($r.score.failing) -join ',')], want $($m.crit): $($m.what)")
+        }
+    } catch { & $add 'exec_sh_bad_run_controls' $false $_.Exception.Message }
 
     # Guest pure helpers: plan rows and outcomes.
     try {
@@ -240,7 +352,7 @@ function Invoke-XGuestMode {
     $run = Get-XRunName $X.mode
     $eng = Get-M2Engine -Engine $X.engine
     $casesB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($XCasesFile))
-    $opts = [ordered]@{ mode = $X.mode; snapshot = $X.snapshot; cases_b64 = $casesB64 }
+    $opts = [ordered]@{ mode = $X.mode; snapshot = $X.snapshot; cases_b64 = $casesB64; engine_build = (Get-XBuildInfo $eng) }
     $tpl = 'm1b-exec.ps1'; $to = 7200
     if ($X.mode -eq 'm1b-x-crash') {
         $tpl = 'm1b-crash.ps1'; $to = 14400
@@ -283,7 +395,8 @@ function Invoke-XElevated {
     New-Item -ItemType Directory -Force $dst | Out-Null
     $script:RigLogFile = Join-Path $dst 'rig.log'
     $doc = [ordered]@{ schema = 'purge.rig.m1b-elevated/1'; run = $run; snapshot = $X.snapshot; vm = $script:VmName; start = (Get-Date).ToString('o'); end = $null
-        method = 'host cargo test --release --no-run; binaries and package mirrors copied to the guest; run by the elevated agent'; admin = $false; targets = @(); error = $null; pass = $false }
+        method = 'host cargo test --release --no-run; binaries and package mirrors copied to the guest; run by the elevated agent'; admin = $false; targets = @(); error = $null; pass = $false
+        cases_sha256 = (Get-XSha256File $XCasesFile); build = (Get-XBuildInfo) }
     $rows = @()
     $stage = Join-Path (Get-HostTemp) ('m1bel-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     try {

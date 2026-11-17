@@ -195,6 +195,27 @@ function Get-ExSha([string]$Text) {
     try { -join @($h.ComputeHash((New-Object System.Text.UTF8Encoding($false)).GetBytes($Text)) | ForEach-Object { $_.ToString('x2') }) } finally { $h.Dispose() }
 }
 
+function Get-ExBytesSha([byte[]]$Bytes) {
+    $h = [Security.Cryptography.SHA256]::Create()
+    try { -join @($h.ComputeHash($Bytes) | ForEach-Object { $_.ToString('x2') }) } finally { $h.Dispose() }
+}
+
+# SHA-256 (lower-case hex) of the cases bytes as the host sent them (opts.cases_b64): the score compares it with the
+# file it scores (review R4 S4).
+function Get-ExCasesSha($Opts) {
+    if (-not $Opts -or -not $Opts.PSObject.Properties['cases_b64'] -or -not "$($Opts.cases_b64)") { return $null }
+    Get-ExBytesSha ([Convert]::FromBase64String("$($Opts.cases_b64)"))
+}
+
+# The engine build a run used (review R4 S6): what the host declared (opts.engine_build: sha256, commit,
+# source_dirty) and the SHA-256 the guest measures of the staged and of the installed engine. The score requires the
+# three equal and one build across the runs.
+function Get-ExEngineBuild($Opts, [string]$Staged, [string]$Installed) {
+    $decl = $(if ($Opts -and $Opts.PSObject.Properties['engine_build']) { $Opts.engine_build } else { $null })
+    $f = { param($p) if ($p -and (Test-Path -LiteralPath $p -PathType Leaf)) { Get-ExBytesSha ([IO.File]::ReadAllBytes($p)) } else { $null } }
+    [ordered]@{ declared = $decl; staged = $Staged; staged_sha256 = (& $f $Staged); installed = $Installed; installed_sha256 = (& $f $Installed) }
+}
+
 # ------------------------------------------------------------------------------------------ guest helpers
 # (need riglib.ps1: Log, Invoke-Native, Get-RegRaw, Test-RegKey, Invoke-M2Engine, ...)
 
@@ -321,6 +342,14 @@ function Get-ExObjectState([string]$Kind, [string]$Name) {
         }
         default { throw "unknown object kind '$Kind'" }
     }
+}
+
+# The service as the SCM sees it: {state, pid, start_mode}; $null when there is no such service. The svc-running trap
+# compares it before and after exec: the service must still run, as the same process (review R4 S3).
+function Get-ExScmState([string]$Name) {
+    $s = Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f ($Name -replace "'", "''")) -ErrorAction SilentlyContinue
+    if (-not $s) { return $null }
+    [ordered]@{ state = "$($s.State)"; pid = [int]$s.ProcessId; start_mode = "$($s.StartMode)" }
 }
 
 function Get-ExStateRecord([string]$Kind, [string]$Name) {
@@ -551,6 +580,7 @@ function Step-Install {
     $r1 = Invoke-M2Script $RigInstallScript ('-Engine ' + (Q $RigEngine) + ' -ReportPath ' + (Q (F 'install.json')))
     Set-M2Result $R 'install' ([ordered]@{ exit = $r1.exit })
     $S.engine.exe = Get-M2EngineExe
+    Set-M2Result $R 'engine_build' (Get-ExEngineBuild $Opts $RigEngine $RigEngineInstalled)
     if ($r1.exit -ne 0) { throw "install.ps1 exited $($r1.exit)" }
 }
 
@@ -725,6 +755,7 @@ function Invoke-TrapsMode {
                         Copy-Item -LiteralPath (Get-ExHelper exe) -Destination $exe -Force
                         Start-Service -Name $t.name -ErrorAction Stop
                         (Get-Service -Name $t.name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+                        $t.scm_after_change = Get-ExScmState $t.name
                     }
                     'imagepath' { $null = Invoke-ExSc ('config ' + $t.name + ' binPath= "' + $c.to + '"') }
                     'add-dependent' {
@@ -764,12 +795,16 @@ function Invoke-TrapsMode {
             $t.exec = $(if ($t.offered -and $script:X -and $script:X.doc) { Get-ExOutcome $script:X.doc $t.offered.id } else { $null })
             $t.after_exec = Get-ExStateRecord $t.kind $t.name
             if ($t.twin) { $t.twin_after = Get-ExStateRecord 'firewall' $t.twin }
-            # The guest's reading; m1b-exec.sh judges again from these fields.
+            if ($t.change -eq 'start') { $t.scm_after_exec = Get-ExScmState $t.name }
+            # The guest's reading; m1b-exec.sh judges again from these fields (with its own gate constants).
             if ($t.expect -eq 'twin-untouched') {
-                $t.pass = [bool]($t.changed -and $t.twin_before.present -and $t.twin_after.present -and $t.twin_after.sha256 -eq $t.twin_before.sha256 -and $t.exec -and $t.exec.kind -ne 'Failed')
+                # The planned rule deleted by its own id, the twin with the same display name untouched (review R4 S5).
+                $t.pass = [bool]($t.changed -and $t.twin_before.present -and $t.twin_after.present -and $t.twin_after.sha256 -eq $t.twin_before.sha256 -and $t.exec -and $t.exec.kind -eq 'Done' -and -not $t.after_exec.present)
             } else {
                 $okReason = ($t.exec -and $t.exec.kind -eq 'Skipped' -and @($t.reasons) -contains $t.exec.reason -and (-not $t.blocker -or $t.exec.reason -ne 'GateBlocked' -or "$($t.exec.blocker)" -match [regex]::Escape("$($t.blocker)")))
                 $t.pass = [bool]($t.changed -and $okReason -and $t.after_exec.present -and $t.after_exec.sha256 -eq $t.after_change.sha256)
+                # A running service must still run as the same process (review R4 S3).
+                if ($t.change -eq 'start') { $t.pass = [bool]($t.pass -and $t.scm_after_change -and $t.scm_after_exec -and $t.scm_after_change.state -eq 'Running' -and $t.scm_after_exec.state -eq 'Running' -and $t.scm_after_change.pid -gt 0 -and $t.scm_after_exec.pid -eq $t.scm_after_change.pid) }
             }
         }
         Set-M2Result $R 'act_traps' @($script:Traps)
@@ -890,7 +925,7 @@ try {
     Phase 'cases' {
         $script:Cases = Read-ExCases $Opts
         Write-JsonFile $script:Cases (F 'm1b-exec-cases.json') 20
-        Set-M2Result $R 'cases' ([ordered]@{ schema = "$($script:Cases.schema)"; variants = @($script:Cases.fidelity.variants).Count; act_traps = @($script:Cases.act_traps.cases).Count; undo_traps = @($script:Cases.undo_traps.cases).Count })
+        Set-M2Result $R 'cases' ([ordered]@{ schema = "$($script:Cases.schema)"; sha256 = (Get-ExCasesSha $Opts); variants = @($script:Cases.fidelity.variants).Count; act_traps = @($script:Cases.act_traps.cases).Count; undo_traps = @($script:Cases.undo_traps.cases).Count })
     } $S
     $Cases = $script:Cases
     if ($Cases) {

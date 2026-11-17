@@ -15,6 +15,9 @@
 # exec-phase crash: scoped snap B + execdiff, then undo; resume of an undo-phase crash: the session must be Undone;
 # deep C; fidelity A vs C; the object's own state (Get-ExObjectState) equal to the planted one.
 # Unlike M2, a declared point that is not hit FAILS its row and the matrix (K13: 0 unreached).
+# A power-off round is hit only when the session journal, read after the boot and before recovery, shows the cut
+# inside the run (Test-XCutMidRun, review R4 S1): exec: no commit / aborted, and an open intent at the points between
+# intent and done; undo: an undo_intent without its end. An exec/resume round also needs execdiff unexplained = 0.
 # Engine calls: journal fault-points | harvest | scan --mode external | exec --fp (env PURGE_FAULT_AT) | undo
 # --session (env PURGE_FAULT_AT for undo points) | journal recover | journal resume --session | journal rollback
 # --session; power-off: exec or undo detached with PURGE_FAULT_PAUSE=<p>:600000.
@@ -31,21 +34,99 @@ $CrashKinds = @('service', 'task', 'firewall')
 
 # ------------------------------------------------------------------------------------------ pure helpers
 
-# The rounds the cases file asks for: per kind, per point reachable for it, per after. Each: {kind, point, phase,
-# after}. $Kinds / $Points narrow it (a subset run); the full list is what K13 judges.
+# The phases a fault point is run in: {phase, afters}. `phase` with the cases' exec_afters / undo_afters, then each
+# `more_phases` entry ({phase, afters, why}: a point also hit in another phase, e.g. index.write after an exec's
+# commit, which has no rollback). None for a point without a phase.
+function Get-XPointPhases($Cases, $Fp) {
+    $out = New-Object System.Collections.ArrayList
+    $def = { param($ph) if ("$ph" -eq 'undo') { @($Cases.crash.undo_afters) } else { @($Cases.crash.exec_afters) } }
+    if ($Fp.phase) { [void]$out.Add([pscustomobject]@{ phase = "$($Fp.phase)"; afters = @(& $def $Fp.phase) }) }
+    if ($Fp.PSObject.Properties['more_phases']) {
+        foreach ($m in @($Fp.more_phases)) {
+            if (-not $m -or -not $m.phase) { continue }
+            $af = $(if ($m.PSObject.Properties['afters'] -and @($m.afters).Count) { @($m.afters) } else { @(& $def $m.phase) })
+            [void]$out.Add([pscustomobject]@{ phase = "$($m.phase)"; afters = $af })
+        }
+    }
+    @($out)
+}
+
+# The rounds the cases file asks for: per kind, per point reachable for it, per phase, per after. Each: {kind,
+# point, phase, after}. $Kinds / $Points narrow it (a subset run). What K13 judges is m1b-exec.sh GATE_ROUNDS, not
+# this list: a cases file that drops a round leaves a gate round unreached.
 function Get-XCrashPlan($Cases, [string[]]$Kinds = @(), [string[]]$Points = @()) {
     $out = New-Object System.Collections.ArrayList
     $ks = $(if ($Kinds.Count) { $Kinds } else { $CrashKinds })
     foreach ($k in $ks) {
         foreach ($fp in @($Cases.crash.fault_points)) {
-            if (-not $fp -or -not $fp.phase) { continue }
+            if (-not $fp) { continue }
             if (@($fp.kinds) -notcontains $k) { continue }
             if ($Points.Count -and $Points -notcontains "$($fp.point)") { continue }
-            $afters = $(if ("$($fp.phase)" -eq 'undo') { @($Cases.crash.undo_afters) } else { @($Cases.crash.exec_afters) })
-            foreach ($a in $afters) { [void]$out.Add([pscustomobject][ordered]@{ kind = $k; point = "$($fp.point)"; phase = "$($fp.phase)"; after = "$a" }) }
+            foreach ($ph in @(Get-XPointPhases $Cases $fp)) {
+                foreach ($a in @($ph.afters)) { [void]$out.Add([pscustomobject][ordered]@{ kind = $k; point = "$($fp.point)"; phase = $ph.phase; after = "$a" }) }
+            }
         }
     }
     @($out)
+}
+
+# What a session journal (journal.jsonl text) says about where its run stood: record counts, whether the run ended
+# (commit / aborted), the ops with an intent and no done, the ops with an undo_intent and no undo_done /
+# undo_conflict. Only `\n`-terminated lines count (a torn tail is ignored, as the engine's reader does); a line that
+# does not parse is counted in bad_lines.
+function Get-XJournalFacts([string]$Text) {
+    $f = [ordered]@{ lines = 0; bad_lines = 0; torn_tail = $false; recs = [ordered]@{}; commit = $false; aborted = $false
+        open_intents = @(); open_undo = @(); last = $null }
+    if ($null -eq $Text) { return $null }
+    $cut = $Text.LastIndexOf("`n")
+    $f.torn_tail = ($cut -lt $Text.Length - 1)
+    if ($cut -lt 0) { return [pscustomobject]$f }
+    $intent = @{}; $done = @{}; $uintent = @{}; $uend = @{}
+    foreach ($line in $Text.Substring(0, $cut).Split("`n")) {
+        if (-not $line.Trim()) { continue }
+        $f.lines++
+        $j = $null; try { $j = $line | ConvertFrom-Json } catch { $j = $null }
+        if (-not $j -or -not $j.rec) { $f.bad_lines++; continue }
+        $r = "$($j.rec)"; $f.last = $r
+        if ($f.recs.Contains($r)) { $f.recs[$r]++ } else { $f.recs[$r] = 1 }
+        $op = "$($j.op)"
+        switch ($r) {
+            'commit' { $f.commit = $true }
+            'aborted' { $f.aborted = $true }
+            'intent' { $intent[$op] = $true }
+            'done' { $done[$op] = $true }
+            'undo_intent' { $uintent[$op] = $true }
+            { $_ -eq 'undo_done' -or $_ -eq 'undo_conflict' } { $uend[$op] = $true }
+        }
+    }
+    $f.open_intents = @($intent.Keys | Where-Object { -not $done.ContainsKey($_) } | Sort-Object)
+    $f.open_undo = @($uintent.Keys | Where-Object { -not $uend.ContainsKey($_) } | Sort-Object)
+    [pscustomobject]$f
+}
+
+# The exec points a paused run sits at with an intent and no done yet.
+$CrashOpenIntentPoints = @('intent.flushed', 'act.before', 'act.after', 'objdelete.after', 'done.before')
+
+# Whether the journal facts show the run cut mid-way at $Point (review R4 S1): exec phase: no commit, no aborted, an
+# intent written, and at a point between intent and done an op still open; undo phase: an undo_intent without its
+# undo_done / undo_conflict. Returns {ok, why}.
+function Test-XCutMidRun($Facts, [string]$Phase, [string]$Point) {
+    if (-not $Facts) { return [pscustomobject]@{ ok = $false; why = 'no journal' } }
+    if ($Facts.bad_lines) { return [pscustomobject]@{ ok = $false; why = "$($Facts.bad_lines) unreadable journal line(s)" } }
+    if ($Phase -eq 'undo') {
+        if (-not @($Facts.open_undo).Count) { return [pscustomobject]@{ ok = $false; why = 'no open undo_intent: the undo had finished (or not started) at the cut' } }
+        return [pscustomobject]@{ ok = $true; why = "undo op(s) $(@($Facts.open_undo) -join ',') open" }
+    }
+    if ($Facts.commit -or $Facts.aborted) { return [pscustomobject]@{ ok = $false; why = "the run had ended (commit $($Facts.commit), aborted $($Facts.aborted)) before the cut" } }
+    if (-not $Facts.recs.Contains('intent')) { return [pscustomobject]@{ ok = $false; why = 'no intent in the journal' } }
+    if ($CrashOpenIntentPoints -contains $Point -and -not @($Facts.open_intents).Count) { return [pscustomobject]@{ ok = $false; why = "no open intent at $Point" } }
+    [pscustomobject]@{ ok = $true; why = "no commit; open intent(s) [$(@($Facts.open_intents) -join ',')]" }
+}
+
+function Read-XJournalText([string]$Path) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    $fs = New-Object IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try { $sr = New-Object IO.StreamReader($fs, (New-Object System.Text.UTF8Encoding($false))); $sr.ReadToEnd() } finally { $fs.Dispose() }
 }
 
 # Compares the engine's declared points (`journal fault-points`) with the cases file: every declared point listed
@@ -63,7 +144,7 @@ function Test-XCasesCoverPoints($Cases, [string[]]$Declared) {
             $reach = (@($fp.kinds) -contains $k)
             $why = $null
             if ($fp.PSObject.Properties['not_reachable'] -and $fp.not_reachable -and $fp.not_reachable.PSObject.Properties[$k]) { $why = "$($fp.not_reachable.$k)" }
-            if ($reach -and -not $fp.phase) { $noReason += "$($fp.point)/$k (reachable without a phase)" }
+            if ($reach -and -not @(Get-XPointPhases $Cases $fp).Count) { $noReason += "$($fp.point)/$k (reachable without a phase)" }
             if (-not $reach -and -not $why) { $noReason += "$($fp.point)/$k" }
             if ($reach -and $why) { $noReason += "$($fp.point)/$k (both reachable and a reason)" }
         }
@@ -79,9 +160,10 @@ function Set-XRowPass($Row) {
     if (-not $Row.hit) { $Row.pass = $false; return }
     $Row.pass = ($null -eq $Row.error -and $Row.crashed -and $Row.recover_exit -eq 0 -and $Row.recover2_exit -eq 0 -and $Row.recover_idempotent -eq $true `
             -and $Row.after_exit -eq 0 -and $Row.fidelity_ok -eq $true -and $Row.object_restored -eq $true `
-            -and ($Row.phase -ne 'exec' -or $Row.after -ne 'resume' -or ($Row.execdiff_ok -eq $true -and $Row.undo_exit -eq 0)) `
+            -and ($Row.phase -ne 'exec' -or $Row.after -ne 'resume' -or ($Row.execdiff_ok -eq $true -and $Row.execdiff_unexplained -is [int] -and $Row.execdiff_unexplained -eq 0 -and $Row.undo_exit -eq 0)) `
             -and ($Row.phase -ne 'undo' -or $Row.undone_by_recovery -eq $true))
-    if ($Row.kind -eq 'poweroff') { $Row.pass = ($Row.pass -and $Row.boot_changed -eq $true -and $Row.pfro_unchanged -eq $true) }
+    # A power-off round counts only when the journal read after the boot shows the cut inside the run (review R4 S1).
+    if ($Row.kind -eq 'poweroff') { $Row.pass = ($Row.pass -and $Row.boot_changed -eq $true -and $Row.pfro_unchanged -eq $true -and $Row.cut_mid_run -eq $true) }
 }
 
 # The matrix summary (K13) from the rows and the plan: each planned (kind, point, phase, after) must have a row that
@@ -95,8 +177,8 @@ function Get-XCrashSummary($Cases, $Rows, [string[]]$Kinds = @(), [string[]]$Poi
     foreach ($p in $plan) {
         $r = @($abort | Where-Object { "$($_.object_kind)" -eq $p.kind -and "$($_.point)" -eq $p.point -and "$($_.phase)" -eq $p.phase -and "$($_.after)" -eq $p.after })
         $id = "$($p.kind)/$($p.point)/$($p.phase)/$($p.after)"
-        if (-not $r.Count -or -not ($r | Where-Object { $_.hit })) { [void]$unreached.Add($id); continue }
-        if (-not ($r | Where-Object { $_.pass })) { [void]$failed.Add($id) }
+        if (-not $r.Count -or ($r | Where-Object { -not $_.hit })) { [void]$unreached.Add($id); continue }
+        if ($r | Where-Object { -not $_.pass }) { [void]$failed.Add($id) }
     }
     $po = @($rows | Where-Object { "$($_.kind)" -eq 'poweroff' })
     $poKinds = [ordered]@{}
@@ -147,7 +229,7 @@ function New-XRoundDef($Cases, [string]$Kind, [int]$N) {
 function New-XRow([int]$N, [string]$ObjectKind, [string]$Point, [string]$Phase, [string]$After, [string]$Kind = 'abort') {
     [ordered]@{ n = $N; kind = $Kind; object_kind = $ObjectKind; point = $Point; phase = $Phase; after = $After; tag = $null; object = $null; item = $null; band = $null
         session = $null; hit = $false; fault_exit = $null; crashed = $false; recover_exit = $null; recover2_exit = $null; recover_idempotent = $null; after_exit = $null
-        undo_exit = $null; execdiff_ok = $null; undone_by_recovery = $null; fidelity_ok = $null; object_restored = $null; boot_changed = $null; pfro_unchanged = $null
+        undo_exit = $null; execdiff_ok = $null; execdiff_unexplained = $null; execdiff_collateral = $null; cut_mid_run = $null; cut = $null; cut_at_pause = $null; undone_by_recovery = $null; fidelity_ok = $null; object_restored = $null; boot_changed = $null; pfro_unchanged = $null
         error = $null; notes = @(); pass = $false }
 }
 
@@ -285,6 +367,12 @@ function Complete-XRound($Rec, $Row, [string]$After) {
             if ($Rec.report -and $Rec.journal) {
                 $v = Invoke-M2Execdiff -Before (F "snap-$Run-$tag-a.tsv.gz") -After (F "snap-$Run-$tag-b.tsv.gz") -Journal $Rec.journal -Report $Rec.report -Out (F "execdiff-$tag.json")
                 $Row.execdiff_ok = $v.ok
+                # An added record nothing authorises fails the row (review R4 S2); the counts come from the verdict file.
+                $ed = Read-Json (F "execdiff-$tag.json")
+                if ($ed -and $ed.counts) {
+                    if ($null -ne $ed.counts.unexplained) { $Row.execdiff_unexplained = [int]$ed.counts.unexplained }
+                    if ($null -ne $ed.counts.collateral) { $Row.execdiff_collateral = [int]$ed.counts.collateral }
+                }
             } else { $Row.execdiff_ok = $null; $Row.notes += 'no report after resume: execdiff not run' }
             $u = Invoke-M2Engine -Step "undo-$tag" -Arguments (New-M2UndoArgs $Rec.session '' '' (F "undo-$tag.json")) -Calls $Calls -StdoutFile (F "undo-$tag.out") -NoThrow
             $Row.undo_exit = $u.exit
@@ -392,8 +480,14 @@ function Request-XPoweroff {
             }
             $pz = Start-XPaused $rec "$($po.point)" "$($po.phase)"
         } catch { $err = "$($_.Exception.Message)"; Log "!! power-off $tag`: $err" }
+        $atPause = $null
         if ($pz -and $pz.paused) {
-            $St.pending = [ordered]@{ n = $n; kind = "$($po.kind)"; point = "$($po.point)"; phase = "$($po.phase)"; tag = $tag; rec = $rec }
+            # Where the paused run stands (diagnostic; the proof is the journal read after the boot).
+            $fa = Get-XJournalFacts (Read-XJournalText $rec.journal)
+            $atPause = [ordered]@{ facts = $fa; verdict = (Test-XCutMidRun $fa "$($po.phase)" "$($po.point)"); pid = $pz.process.Id; exited = $pz.process.HasExited }
+        }
+        if ($pz -and $pz.paused) {
+            $St.pending = [ordered]@{ n = $n; kind = "$($po.kind)"; point = "$($po.point)"; phase = "$($po.phase)"; tag = $tag; rec = $rec; at_pause = $atPause }
             Save-State $St
             $null = Request-RigContinuation $Run 'poweroff' 'after-poweroff' ([ordered]@{ point = "$($po.point)"; kind = "$($po.kind)"; tag = $tag; session = $rec.session; pid = $pz.process.Id })
             return $true
@@ -419,9 +513,21 @@ function Complete-XPoweroff {
     $rec = $pd.rec
     $row = New-XRow ([int]$pd.n) "$($pd.kind)" "$($pd.point)" "$($pd.phase)" 'resume' 'poweroff'
     $row.tag = $pd.tag; $row.session = $rec.session; $row.object = $rec.name; $row.item = $rec.item; $row.band = $rec.band
-    $row.hit = $true; $row.crashed = $true
     $row.boot_changed = [bool]($m -and $m.boot_before -and $m.boot_after -and $m.boot_before -ne $m.boot_after)
     if (-not $row.boot_changed) { $row.notes += 'boot id unchanged: the VM was not powered off' }
+    $row.cut_at_pause = $pd.at_pause
+    # Proof that the cut landed inside the run (review R4 S1): the session journal as the boot found it, read before
+    # recovery touches it. An exec that had committed, or an undo with no open undo_intent, is not a power-off round.
+    $cut = $null
+    try {
+        $facts = Get-XJournalFacts (Read-XJournalText $rec.journal)
+        $cut = Test-XCutMidRun $facts "$($pd.phase)" "$($pd.point)"
+        $row.cut = [ordered]@{ journal = $rec.journal; facts = $facts; ok = $cut.ok; why = $cut.why }
+    } catch { $row.cut = [ordered]@{ journal = $rec.journal; ok = $false; why = "journal not read: $($_.Exception.Message)" } }
+    $row.cut_mid_run = [bool]($cut -and $cut.ok)
+    if (-not $row.cut_mid_run) { $row.notes += "cut not inside the run: $($row.cut.why)" }
+    $row.hit = $row.cut_mid_run
+    $row.crashed = $row.boot_changed
     try {
         Invoke-RecoverTwice $rec $row
         Complete-XRound $rec $row 'resume'
@@ -450,9 +556,11 @@ try {
             Set-M2Result $R 'install' ([ordered]@{ exit = $r1.exit })
             if ($r1.exit -ne 0) { throw "install.ps1 exited $($r1.exit)" }
             $S.engine.exe = Get-M2EngineExe
+            Set-M2Result $R 'engine_build' (Get-ExEngineBuild $Opts $RigEngine $RigEngineInstalled)
         } $S
         Phase 'fault-points' {
             Write-JsonFile $script:Cases (F 'm1b-exec-cases.json') 20
+            Set-M2Result $R 'cases' ([ordered]@{ schema = "$($script:Cases.schema)"; sha256 = (Get-ExCasesSha $Opts) })
             $null = Invoke-M2Engine -Step 'fault-points' -Arguments (New-M2JournalArgs 'fault-points') -Calls $Calls -StdoutFile (F 'fault-points.out')
             $declared = @(ConvertFrom-M2FaultPoints ([IO.File]::ReadAllText((F 'fault-points.out'))))
             if (-not $declared.Count) { throw 'journal fault-points listed no point' }

@@ -1,6 +1,6 @@
 {
   "schema": "purge.rig.m1b-exec-cases/1",
-  "about": "M1b executor rig (docs/M1B_DESIGN.json M1B-RIG-EXEC, gates G5 and G6; usage in vm/rig-m1b-exec.ps1). The guest scripts vm/guest/m1b-exec.ps1 and vm/guest/m1b-crash.ps1 plant from this file and vm/truth/m1b-exec.sh scores against it. Object names are rig-owned (PurgeExec*); the app is the fabricated PurgeExecApp under C:\\Program Files\\PurgeExecApp with its own ARP key.",
+  "about": "M1b executor rig (docs/M1B_DESIGN.json M1B-RIG-EXEC, gates G5 and G6; usage in vm/rig-m1b-exec.ps1). The guest scripts vm/guest/m1b-exec.ps1 and vm/guest/m1b-crash.ps1 plant from this file and vm/truth/m1b-exec.sh scores against it. Object names are rig-owned (PurgeExec*); the app is the fabricated PurgeExecApp under C:\\Program Files\\PurgeExecApp with its own ARP key. This file says what the guest plants; the gate's minimums (full variants per kind, the act-time and undo traps with their outcomes, the crash rounds, the power-off rounds, the elevated targets) are constants in vm/truth/m1b-exec.sh (review R4 S4), so lowering a number here cannot pass the gate. Each run records this file's SHA-256 and the score requires it equal to the file it scores.",
   "requires": "the engine must run the SYS-SERVICE, SYS-TASK and SYS-FIREWALL scanners (M1B-SCAN-INTEG adds them to purge-scan catalog.rs); without them scan offers no typed object and every mode but m1b-x-elevated fails at select (smoke run 2026-11-17 on 5e2cf69).",
   "kinds": ["service", "task", "firewall"],
   "fidelity": {
@@ -31,7 +31,7 @@
     ]
   },
   "act_traps": {
-    "about": "m1b-x-traps: planted and scanned like fidelity; after the scan and before exec the rig changes the world. Each changed planted object must end Skipped with one of the reasons and must not be deleted; fw-same-name: the planned rule is unchanged (its own id), the twin with the same display name must be present and byte-equal. Exit code 10 (partial) by the M2 precedence.",
+    "about": "m1b-x-traps: planted and scanned like fidelity; after the scan and before exec the rig changes the world. Each changed planted object must end Skipped with one of the reasons and must not be deleted; svc-running: the service must also still run as the same process (SCM state and PID before and after exec). fw-same-name: the planned rule (its own id, unchanged) must be Done and gone, the twin with the same display name present and byte-equal; the score reports 5 skipped + 1 twin untouched. Exit code 10 (partial) by the M2 precedence.",
     "exec_exit": [10],
     "cases": [
       { "id": "svc-running", "kind": "service", "name": "PurgeExecTrapSvcRun", "change": "start", "expect": "skipped", "reasons": ["GateBlocked", "ChangedSinceScan"], "blocker": "InUse" },
@@ -73,7 +73,8 @@
         "not_reachable": { "service": "undo re-creates through CreateServiceW and writes the extra values itself; no regbackup restore walk", "task": "undo re-registers the XML; no key-tree restore", "firewall": "undo re-creates through WMI; no key-tree restore" } },
       { "point": "undo.intent", "phase": "undo", "kinds": ["service", "task", "firewall"] },
       { "point": "undo.act.after", "phase": "undo", "kinds": ["service", "task", "firewall"] },
-      { "point": "index.write", "phase": "undo", "kinds": ["service", "task", "firewall"] },
+      { "point": "index.write", "phase": "undo", "kinds": ["service", "task", "firewall"],
+        "more_phases": [ { "phase": "exec", "afters": ["resume"], "why": "exec also hits index.write, after commit (crates/purge-exec/src/execute.rs step 11; review R4 S4); a committed run has no rollback, so resume only (then undo and fidelity as every exec resume round)" } ] },
       { "point": "expiry.mid", "phase": null, "kinds": [],
         "not_reachable": { "service": "fires only in the expiry walk of a quarantined directory (quarantine purge); a typed op quarantines no directory", "task": "as service", "firewall": "as service" } },
       { "point": "bootmove.registered", "phase": null, "kinds": [],

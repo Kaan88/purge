@@ -2,6 +2,7 @@
   "schema": "purge.replay-ref/1",
   "engine": "m1a.6 (622c64d), cargo xtask replay without overlay",
   "apps": {
+    "7zip": [],
     "firefox": [
       {
         "target": {
