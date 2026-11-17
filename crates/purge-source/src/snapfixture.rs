@@ -19,15 +19,47 @@
 //!   interactive user's SID, MSI products, AppX packages and processes; without lists those are
 //!   `NotCaptured`. Profiles, environment and known folders are derived from the captured registry
 //!   ([`Fixture::derive_system_facts`]). The rig agent runs elevated, so the fixture is `elevated`.
+//!
+//! # M1b: scheduled tasks and MSI tables
+//!
+//! - **Tasks** come from the lists' `tasks` section when it has the M1b fields (RIG.md §3:
+//!   `actions_detail`, `hidden`, `logon_type`, `has_stored_password`). [`SystemSource::tasks`] answers
+//!   [`SourceError::NotCaptured`] (unknown, never "no tasks") for: lists without a `tasks` section, an
+//!   M0/M1a/M2 list (no entry has `actions_detail`), an empty section (Windows always has tasks, and an
+//!   empty section cannot tell an old list from a new one), and a list whose `errors` name the `tasks`
+//!   section (the rig then writes an empty section). A section in which only some entries have
+//!   `actions_detail`, or with an entry that does not have the documented shape, fails the load. The
+//!   rig does not capture the author or the principal's user id (`None`); `stored_password` is set when
+//!   `has_stored_password` is, and also when the logon type is missing or not one of the names known to
+//!   hold no password (the cautious side, as the live source). Another action's kind is the CIM class
+//!   name, with the two known ones written as the live source writes them (`send_email`,
+//!   `show_message`).
+//! - **MSI tables** come from an optional file beside the snapshot, `msi-tables-<run>-<phase>.json`
+//!   (plain or gzip) for `snap-<run>-<phase>.tsv[.gz]` ([`msi_tables_file_for`]), written by the rig:
+//!   `{"schema": "purge.rig.msi_tables/1", "packages": {"<LocalPackage>": <MsiTables>, ...}}`, where
+//!   `<MsiTables>` has the fixture's `msi_tables` shape. Unknown fields are rejected at every depth; a
+//!   package listed twice (in any case or slash form) fails the load. A package the rig could not read
+//!   is written with `"truncated": true` (the caller treats it as unreadable); a package absent from a
+//!   present file is `NotFound`. Without the file, [`SystemSource::msi_tables`] answers `NotCaptured`.
+//!
+//! An old snapshot (no M1b fields, no tables file) loads exactly as before.
+//!
+//! [`SystemSource::tasks`]: crate::system::SystemSource::tasks
+//! [`SystemSource::msi_tables`]: crate::system::SystemSource::msi_tables
+//! [`SourceError::NotCaptured`]: crate::types::SourceError::NotCaptured
 
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use flate2::read::MultiGzDecoder;
+use purge_model::object::{TaskAction, TaskIdentity};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::fixture::{Coverage, CoverageRoot, Fixture, FixtureError};
 use crate::registry::is_registry_path;
+use crate::sysobj::{MsiTables, TaskInfo};
+use crate::system::SystemSource;
 use crate::types::{
     FILE_ATTRIBUTE_DIRECTORY, FileMeta, FileTime, FileTimes, MsiContext, MsiProduct, OsInfo,
     PackageInfo, ProcessInfo, REG_DWORD, REG_EXPAND_SZ, REG_LINK, REG_MULTI_SZ, REG_QWORD, REG_SZ,
@@ -256,7 +288,11 @@ impl Fixture {
             Some(p) => Some(std::fs::read_to_string(p).map_err(io(p))?),
             None => None,
         };
-        Self::from_snap_parts(reader, lists_text.as_deref(), overlay_dir)
+        let mut f = Self::from_snap_parts(reader, lists_text.as_deref(), overlay_dir)?;
+        if let Some(tables) = msi_tables_file_for(snap).filter(|p| p.is_file()) {
+            f.apply_msi_tables_json(&read_maybe_gz(&tables).map_err(io(&tables))?)?;
+        }
+        Ok(f)
     }
 
     /// [`Fixture::from_snap`] over already opened (decompressed) snapshot text and lists JSON text.
@@ -533,7 +569,236 @@ impl Fixture {
                 .collect();
             self.system_mut().processes = Some(processes);
         }
+        // M1b: tasks only from a list that carries the M1b fields (module docs); otherwise unchanged.
+        if let Some(tasks) = tasks_from_lists(&v)? {
+            self.set_tasks(Some(tasks));
+        }
         Ok(())
+    }
+
+    /// Applies an MSI tables document (`purge.rig.msi_tables/1`, see the module documentation): the
+    /// tables become captured, each listed package is set, and every other package is `NotFound`.
+    /// Nothing is changed when the document is refused.
+    pub fn apply_msi_tables_json(&mut self, json: &str) -> Result<(), FixtureError> {
+        let doc: MsiTablesDoc = serde_json::from_str(json.trim_start_matches('\u{feff}'))?;
+        if doc.schema != MSI_TABLES_SCHEMA {
+            // Not `FixtureError::Schema`, whose message names the fixture schema.
+            return Err(FixtureError::Invalid(format!(
+                "msi tables: unsupported schema {:?} (want {MSI_TABLES_SCHEMA})",
+                doc.schema
+            )));
+        }
+        // Built aside first, so a refused document changes nothing.
+        let mut staged = Fixture::new();
+        staged.set_msi_tables_captured(true);
+        for (path, tables) in &doc.packages.0 {
+            if staged.msi_tables(path).is_ok() {
+                return Err(FixtureError::Invalid(format!(
+                    "msi tables: package {path:?} listed twice"
+                )));
+            }
+            if !staged.set_msi_tables(path, tables.clone()) {
+                return Err(FixtureError::Invalid(format!(
+                    "msi tables: bad package path {path:?}"
+                )));
+            }
+        }
+        self.set_msi_tables_captured(true);
+        for (path, tables) in doc.packages.0 {
+            self.set_msi_tables(&path, tables);
+        }
+        Ok(())
+    }
+}
+
+/// The schema id of the MSI tables file beside a snapshot.
+pub const MSI_TABLES_SCHEMA: &str = "purge.rig.msi_tables/1";
+
+/// The MSI tables file of a snapshot: `msi-tables-<run>-<phase>.json` in the snapshot's directory for
+/// `snap-<run>-<phase>.tsv.gz` or `.tsv`; `None` for a snapshot not named that way.
+pub fn msi_tables_file_for(snap: &Path) -> Option<PathBuf> {
+    let name = snap.file_name()?.to_str()?;
+    let stem = name.strip_prefix("snap-")?;
+    let stem = stem
+        .strip_suffix(".tsv.gz")
+        .or_else(|| stem.strip_suffix(".tsv"))?;
+    if stem.is_empty() {
+        return None;
+    }
+    Some(snap.with_file_name(format!("msi-tables-{stem}.json")))
+}
+
+/// A file's text, decompressed when it starts with the gzip magic.
+fn read_maybe_gz(path: &Path) -> std::io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        let mut text = String::new();
+        MultiGzDecoder::new(bytes.as_slice()).read_to_string(&mut text)?;
+        Ok(text)
+    } else {
+        String::from_utf8(bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+}
+
+/// The MSI tables document.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MsiTablesDoc {
+    schema: String,
+    packages: Packages,
+}
+
+/// `packages` in document order, with every key kept (a JSON map would keep only the last of two
+/// equal keys, hiding the duplicate).
+struct Packages(Vec<(String, MsiTables)>);
+
+impl<'de> Deserialize<'de> for Packages {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visit;
+        impl<'de> serde::de::Visitor<'de> for Visit {
+            type Value = Packages;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object mapping LocalPackage paths to MSI tables")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Packages, A::Error> {
+                let mut out = Vec::new();
+                while let Some(entry) = map.next_entry::<String, MsiTables>()? {
+                    out.push(entry);
+                }
+                Ok(Packages(out))
+            }
+        }
+        d.deserialize_map(Visit)
+    }
+}
+
+/// Logon type names (the `ScheduledTasks` module's `LogonType`) that never hold a stored password.
+const NO_PASSWORD_LOGON_TYPES: [&str; 5] =
+    ["None", "S4U", "Interactive", "Group", "ServiceAccount"];
+
+/// The tasks of a lists document, or `None` when the document does not capture them (module docs).
+fn tasks_from_lists(v: &Value) -> Result<Option<Vec<TaskInfo>>, FixtureError> {
+    let section_failed = v
+        .get("errors")
+        .and_then(Value::as_array)
+        .is_some_and(|errs| {
+            errs.iter()
+                .filter_map(Value::as_str)
+                .any(|e| e.trim_start().starts_with("tasks:"))
+        });
+    if section_failed {
+        return Ok(None);
+    }
+    let Some(rows) = v.get("tasks").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    let with_detail = rows
+        .iter()
+        .filter(|r| r.get("actions_detail").is_some())
+        .count();
+    if rows.is_empty() || with_detail == 0 {
+        return Ok(None);
+    }
+    if with_detail != rows.len() {
+        return Err(FixtureError::Invalid(format!(
+            "lists: {} of {} tasks have no actions_detail",
+            rows.len() - with_detail,
+            rows.len()
+        )));
+    }
+    rows.iter()
+        .enumerate()
+        .map(|(i, r)| {
+            task_from_row(r).map_err(|e| FixtureError::Invalid(format!("lists: tasks[{i}]: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// One `tasks[]` entry of an M1b lists document.
+fn task_from_row(r: &Value) -> Result<TaskInfo, String> {
+    let path = r.get("path").and_then(Value::as_str).ok_or("no path")?;
+    if !path.starts_with('\\') {
+        return Err(format!("path {path:?} does not start with a backslash"));
+    }
+    let flag = |k: &str| -> Result<bool, String> {
+        match r.get(k) {
+            Some(Value::Bool(b)) => Ok(*b),
+            Some(Value::Null) | None => Ok(false),
+            Some(other) => Err(format!("{k} is not a boolean: {other}")),
+        }
+    };
+    let logon_type = match r.get("logon_type") {
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(Value::Null) | None => None,
+        Some(other) => return Err(format!("logon_type is not a string: {other}")),
+    };
+    let no_password = logon_type.is_some_and(|t| NO_PASSWORD_LOGON_TYPES.contains(&t));
+    let actions = match r.get("actions_detail") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .enumerate()
+            .map(|(j, a)| action_from_row(a).map_err(|e| format!("actions_detail[{j}]: {e}")))
+            .collect::<Result<Vec<_>, _>>()?,
+        // PowerShell writes a one-element array as the element itself in some versions.
+        Some(one @ Value::Object(_)) => {
+            vec![action_from_row(one).map_err(|e| format!("actions_detail: {e}"))?]
+        }
+        // No action list: kept as a task whose actions are unknown.
+        Some(Value::Null) => Vec::new(),
+        Some(other) => return Err(format!("actions_detail is not a list: {other}")),
+        None => return Err("no actions_detail".into()),
+    };
+    Ok(TaskInfo {
+        identity: TaskIdentity {
+            path: path.to_string(),
+            actions,
+        },
+        enabled: flag("enabled")?,
+        hidden: flag("hidden")?,
+        author: None,
+        stored_password: flag("has_stored_password")? || !no_password,
+        run_as: None,
+    })
+}
+
+/// One `actions_detail[]` record.
+fn action_from_row(a: &Value) -> Result<TaskAction, String> {
+    let text = |k: &str| -> Result<Option<String>, String> {
+        match a.get(k) {
+            Some(Value::String(s)) => Ok(Some(s.clone())),
+            Some(Value::Null) | None => Ok(None),
+            Some(other) => Err(format!("{k} is not a string: {other}")),
+        }
+    };
+    // Task Scheduler stores an empty optional field as nothing; the live source reads it as `None`.
+    let optional = |k: &str| text(k).map(|s| s.filter(|s| !s.is_empty()));
+    match a.get("kind").and_then(Value::as_str) {
+        Some("exec") => Ok(TaskAction::Exec {
+            path: text("path")?.unwrap_or_default(),
+            arguments: optional("arguments")?,
+            working_dir: optional("working_dir")?,
+        }),
+        Some("com_handler") => Ok(TaskAction::ComHandler {
+            clsid: text("clsid")?.unwrap_or_default(),
+            data: optional("data")?,
+        }),
+        Some("other") => {
+            let class = text("data")?.unwrap_or_default();
+            let kind = match class.as_str() {
+                "MSFT_TaskSendEmailAction" => "send_email".to_string(),
+                "MSFT_TaskShowMessageAction" => "show_message".to_string(),
+                "" => "unknown".to_string(),
+                _ => class,
+            };
+            Ok(TaskAction::Other { kind })
+        }
+        Some(other) => Err(format!("unknown action kind {other:?}")),
+        None => Err("no action kind".into()),
     }
 }
 
