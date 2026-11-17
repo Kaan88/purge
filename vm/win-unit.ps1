@@ -17,13 +17,15 @@ param(
     [string]$Filter = '',
     [switch]$Elevated,
     [string]$ElevatedArgs = '--include-ignored',
+    # NAME=value pairs set in the elevated pass only (e.g. PURGE_TEST_TASK_RIG=1 for purge-exec act_task's rig test)
+    [string[]]$ElevatedEnv = @(),
     [int]$TimeoutBin = 1800,
     # cold boot + autologon of the offline rig-base can stall for minutes on a loaded Linux host (RIG.md section 9)
     [int]$AgentTimeoutSec = 900,
     [string]$ExecutionEngine = $(if ($env:RIG_VM_EXECUTION_ENGINE) { $env:RIG_VM_EXECUTION_ENGINE } else { 'default' })
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'rig.ps1') -VmName $VmName
+. (Join-Path $PSScriptRoot 'rig.ps1') -VmName $VmName -Snapshot $Snapshot   # rig.ps1's own -Snapshot default would replace ours
 
 # Guest side (Windows PowerShell 5.1). One pass: unpack once, then every binary of the manifest with its mirrored
 # package dir as working directory; libtest output -> out\<pass>\<name>.txt, exit codes -> out\<pass>\results.json.
@@ -138,7 +140,8 @@ Set-Content -LiteralPath 'C:\cr\wu\unpacked' -Value (Get-Date -Format o)
         $p2 = Write-PassConfig 'p2-elevated' @($ElevatedArgs -split '\s+') $(if ($ElevatedArgs -match 'include-ignored') { $skip } else { @() })
         Copy-ToGuest @($p2)
         Write-RigLog "pass p2-elevated (rig agent, $ElevatedArgs)"
-        $j = Invoke-GuestJob -Text "& 'C:\cr\wu\runner.ps1' -Pass 'p2-elevated'" -Name 'win-unit-p2' -TimeoutSec $budget
+        $envText = ($ElevatedEnv | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*=[^'']*$' } | ForEach-Object { $k, $v = $_ -split '=', 2; "`$env:$k = '$v'; " }) -join ''
+        $j = Invoke-GuestJob -Text "$envText& 'C:\cr\wu\runner.ps1' -Pass 'p2-elevated'" -Name 'win-unit-p2' -TimeoutSec $budget
         Write-RigLog "pass p2-elevated: done=$($j.done), $($j.seconds) s"
         if (-not $j.done) { $code = 1 }
     }

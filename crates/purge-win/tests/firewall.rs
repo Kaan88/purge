@@ -138,7 +138,8 @@ mod rig {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use purge_win::firewall::{
-        IdError, MAX_ID_UNITS, WinError, create_with_instance_id, delete_by_instance_id, parse_rule,
+        IdError, MAX_ID_UNITS, WinError, create_with_instance_id, delete_by_instance_id, map_rule,
+        parse_rule,
     };
 
     use super::{all_rules, rules_key};
@@ -403,6 +404,26 @@ mod rig {
                 "remote-range",
                 "v2.33|Action=Allow|Active=FALSE|Dir=Out|Protocol=6|RPort2_10=8554-8558|Name=PurgeTest remote range|",
             ),
+            (
+                "lsm-out",
+                r"v2.33|Action=Allow|Active=FALSE|Dir=Out|Protocol=17|App=C:\Program Files\PurgeTest\lsmout.exe|Name=PurgeTest lsm out|LSM=TRUE|",
+            ),
+            (
+                "lom",
+                r"v2.33|Action=Allow|Active=FALSE|Dir=In|Protocol=17|App=C:\Program Files\PurgeTest\lom.exe|Name=PurgeTest lom|LOM=TRUE|",
+            ),
+            (
+                "domain",
+                r"v2.33|Action=Allow|Active=FALSE|Dir=In|Profile=Domain|App=C:\Program Files\PurgeTest\domain.exe|Name=PurgeTest domain|",
+            ),
+            (
+                "iftype-lan",
+                r"v2.33|Action=Allow|Active=FALSE|Dir=In|IFType=Lan|App=C:\Program Files\PurgeTest\lan.exe|Name=PurgeTest lan|",
+            ),
+            (
+                "proto-47",
+                "v2.33|Action=Allow|Active=FALSE|Dir=In|Protocol=47|Name=PurgeTest proto 47|",
+            ),
         ]);
     }
 
@@ -455,5 +476,96 @@ mod rig {
         assert_eq!(wait_rule(&id, false), None);
         assert_eq!(read_rule(&near).as_deref(), Some(near_rule.as_str()));
         assert_untouched(&before, &[id.as_str()]);
+    }
+    /// One shape per rule, created natively by `New-NetFirewallRule` (as a vendor installer would), then
+    /// deleted and re-created through `create_with_instance_id` from the stored string's fields. Prints one
+    /// `SHAPE` line per case; passes only when every re-created string is byte-equal to the native one.
+    #[test]
+    #[ignore = "rig VM only, elevated: creates and deletes firewall rules (spawns New-NetFirewallRule)"]
+    fn native_rules_recreate_byte_equal() {
+        let app = r"C:\Program Files\PurgeTest\native.exe";
+        let cases: Vec<(&str, String)> = vec![
+            ("edge", format!("-Direction Inbound -Protocol UDP -Program '{app}' -EdgeTraversalPolicy Allow")),
+            ("defer-app", format!("-Direction Inbound -Protocol UDP -Program '{app}' -EdgeTraversalPolicy DeferToApp")),
+            ("lsm-out", format!("-Direction Outbound -Protocol UDP -Program '{app}' -LooseSourceMapping $true")),
+            ("lom", format!("-Direction Inbound -Protocol UDP -Program '{app}' -LocalOnlyMapping $true")),
+            ("icmp4", "-Direction Inbound -Protocol ICMPv4 -IcmpType 8,'3:4'".to_owned()),
+            ("icmp6", "-Direction Inbound -Protocol ICMPv6 -IcmpType 128".to_owned()),
+            ("local-address", "-Direction Inbound -Protocol TCP -LocalPort 7000 -LocalAddress 10.0.0.5,'fe80::/64'".to_owned()),
+            ("domain", format!("-Direction Inbound -Profile Domain -Program '{app}'")),
+            ("remote-range", "-Direction Outbound -Protocol TCP -RemotePort '8554-8558'".to_owned()),
+            ("iftype-lan", format!("-Direction Inbound -InterfaceType Wired -Program '{app}'")),
+            ("proto-47", "-Direction Inbound -Protocol 47".to_owned()),
+        ];
+        let mut failures = Vec::new();
+        for (tag, params) in &cases {
+            let id = unique_id(&format!("native-{tag}"));
+            let _clean = Cleanup(vec![id.clone()]);
+            let cmd = format!(
+                "$ErrorActionPreference='Stop'; New-NetFirewallRule -Name '{id}' -DisplayName 'PurgeTest native {tag}' -Enabled False -Action Allow {params} | Out-Null"
+            );
+            let out = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &cmd])
+                .output()
+                .expect("spawn powershell");
+            if !out.status.success() {
+                let e = format!(
+                    "{tag}: New-NetFirewallRule failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+                eprintln!("SHAPE {e}");
+                failures.push(e);
+                continue;
+            }
+            let Some(s0) = wait_rule(&id, true) else {
+                failures.push(format!("{tag}: no stored rule after New-NetFirewallRule"));
+                continue;
+            };
+            let f0 = fields(&s0);
+            let shapes = match map_rule(&f0) {
+                Ok(m) => m
+                    .shapes
+                    .iter()
+                    .map(|s| s.name())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                Err(why) => {
+                    let e = format!("{tag}: map_rule refused {s0:?}: {why:?}");
+                    eprintln!("SHAPE {e}");
+                    failures.push(e);
+                    continue;
+                }
+            };
+            match delete_by_instance_id(&id) {
+                Ok(1) => {}
+                other => {
+                    failures.push(format!("{tag}: delete: {other:?}"));
+                    continue;
+                }
+            }
+            if wait_rule(&id, false).is_some() {
+                failures.push(format!("{tag}: still stored after delete"));
+                continue;
+            }
+            let s1 = match create_with_instance_id(&id, &f0) {
+                Ok(()) => wait_rule(&id, true),
+                Err(e) => {
+                    let e = format!("{tag}: re-create: {e}");
+                    eprintln!("SHAPE {e} (native {s0:?})");
+                    failures.push(e);
+                    continue;
+                }
+            };
+            let s1 = s1.unwrap_or_default();
+            let same = same_rule(&f0, &fields(&s1));
+            eprintln!(
+                "SHAPE {tag}: shapes=[{shapes}] exact={} same_rule={same}\n  native   {s0}\n  recreate {s1}",
+                s0 == s1
+            );
+            if s0 != s1 {
+                failures.push(format!("{tag}: native {s0:?} re-created {s1:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 }
