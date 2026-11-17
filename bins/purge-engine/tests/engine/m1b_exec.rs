@@ -313,16 +313,43 @@ impl Rig {
         (plan, confirm.to_string())
     }
 
-    /// The fingerprint of the rig's owner with the vendor's install root, for `exec --fp`.
+    /// The fingerprint of the rig's owner with the vendor's install root and the three objects as the
+    /// harvest records them (`sys`), for `exec --fp`.
     fn fingerprint(&self, owner: &str) -> PathBuf {
+        self.fingerprint_with(owner, &[ROOT], true)
+    }
+
+    /// [`Rig::fingerprint`] with `roots` as its install roots; `sys` false leaves the objects out.
+    fn fingerprint_with(&self, owner: &str, roots: &[&str], sys: bool) -> PathBuf {
         let base = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../crates/purge-model/testdata/m1a-7zip.fp.json");
         let mut fp: Value = serde_json::from_slice(&std::fs::read(base).unwrap()).unwrap();
         fp["app"]["program_id"] = json!(owner);
-        fp["roots"] = json!([{
-            "path": ROOT, "kind": "InstallRoot", "source": "ArpInstallLocation",
-            "trust": "AdminOnly", "volume_serial": null, "parent_existed": true
-        }]);
+        fp["roots"] = roots
+            .iter()
+            .map(|root| {
+                json!({
+                    "path": root, "kind": "InstallRoot", "source": "ArpInstallLocation",
+                    "trust": "AdminOnly", "volume_serial": null, "parent_existed": true
+                })
+            })
+            .collect();
+        if sys {
+            fp["sys"] = json!({
+                "services": [{
+                    "identity": vendor_service().identity(),
+                    "program": EXE, "why": "program_in_root"
+                }],
+                "tasks": [{
+                    "identity": vendor_task().0.identity,
+                    "program": EXE, "why": "program_in_root"
+                }],
+                "firewall_rules": [{
+                    "identity": FirewallIdentity { id: FW.into(), rule: RULE.into() },
+                    "program": null, "why": "program_in_root"
+                }],
+            });
+        }
         let path = self.path(&format!(
             "fp-{}.json",
             self.roots.list_sessions().unwrap().sessions.len()
@@ -393,6 +420,55 @@ fn engine_cli_executes_and_undoes_fixture_plan_with_three_typed_items() {
     );
     assert_eq!(objects.tasks.get(TASK), Some(vendor_task()));
     assert_eq!(objects.firewall.rule(FW).as_deref(), Some(RULE));
+
+    // `journal show` lists each op with the note of the undo that restored it (none here).
+    let ran = rig.cli(&["journal", "show", "--session", &session], None, true);
+    assert_eq!(ran.exit, Exit::Ok, "{}", ran.err);
+    let shown: Value = serde_json::from_str(&ran.out).unwrap();
+    for op in shown["ops"].as_array().unwrap() {
+        assert_eq!(op.get("undo_note"), Some(&Value::Null), "{op}");
+    }
+}
+
+/// Review R3b S3: the fingerprint is bound to the selected objects (owner, and each object recorded
+/// in `sys` with the plan's digest), and its roots pass the guard's root rule before they are
+/// journalled.
+#[test]
+fn fingerprint_is_bound_to_the_objects_and_its_roots_are_checked() {
+    let rig = Rig::new("fpbind");
+    let objects = Objects::new();
+    let sessions = rig.roots.list_sessions().unwrap().sessions.len();
+    // No `sys` records: not the fingerprint the objects were scanned from. Refused before any session.
+    let bare = rig.fingerprint_with(RIG_OWNER, &[ROOT], false);
+    let ran = rig.exec(&objects, Some(&bare), true);
+    assert_eq!(ran.exit, Exit::PlanRefused, "{}", ran.err);
+    assert!(ran.err.contains("svc"), "{}", ran.err);
+    assert_eq!(rig.roots.list_sessions().unwrap().sessions.len(), sessions);
+    assert_eq!(objects.present(), [true; 3]);
+
+    // `C:\Program Files` itself as the root: dropped with a warning; with no root left every object
+    // is refused (review R3b S2), nothing is deleted.
+    let wide = rig.fingerprint_with(RIG_OWNER, &[r"C:\Program Files"], true);
+    let ran = rig.exec(&objects, Some(&wide), true);
+    assert_eq!(ran.exit, Exit::Partial, "{}", ran.err);
+    let report: ExecReport = serde_json::from_str(&ran.out).unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("was not recorded for the run")),
+        "{report:?}"
+    );
+    assert!(
+        report.items.iter().all(|i| !i.outcome.is_success()),
+        "{report:?}"
+    );
+    assert_eq!(objects.present(), [true; 3]);
+    let session = report.session.to_string();
+    let ran = rig.cli(&["journal", "show", "--session", &session], None, true);
+    let shown: Value = serde_json::from_str(&ran.out).unwrap();
+    // No root recorded: the field is left out, as for a run without object ops.
+    assert_eq!(shown["header"].get("program_roots"), None, "{shown}");
 }
 
 /// Typed items count in the exit code as every other item: one not carried out is `Partial` (10); an

@@ -66,7 +66,9 @@
 //! validate pass reads it (its digest against the candidate's `object_fp`), the item writes its
 //! definition, journals the intent, re-reads and gates it at act time and deletes it. Only the roots of
 //! the journal header (`Header::program_roots`, from [`ExecSettings::program_roots`]) count as the
-//! app's: a service or task whose program, or a rule whose `App`, is outside them is not deleted. A
+//! app's: a service or task whose program, or a rule whose `App`, is outside them is not deleted, and
+//! with no roots no object is deleted at all. A root the guard refuses as an app's root
+//! (`gate::root_refusal`) is dropped with a warning before the header is written (review R3b S3). A
 //! process without object backends (not elevated) cannot run a plan that selects one: the run is
 //! refused before its session exists ([`ExecError::NeedsElevation`]). Nothing is stopped or ended: a
 //! running service or task is `Skipped{GateBlocked{InUse}}`. A service another handle keeps open is
@@ -837,6 +839,30 @@ fn no_backends(exec_op: &ExecOp) -> TypedResult {
     TypedResult { outcome, detail }
 }
 
+/// The program roots of a new run's journal header: `roots` (the caller's, from the app's fingerprint)
+/// without every root that [`gate::root_refusal`] refuses (review R3b S3), each dropped with a warning
+/// in the report. The executor does not take the fingerprint's word for its roots: a root such as
+/// `C:\Program Files` itself would make every program below it "inside a root".
+fn checked_roots(
+    roots: &[String],
+    deny: &DenyList,
+    user_sid: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for root in roots {
+        match gate::root_refusal(root, deny, user_sid) {
+            Some(why) => warnings.push(format!(
+                "program root {root:?} was not recorded for the run: {why}; no service, task or \
+                 firewall rule counts as inside it"
+            )),
+            None if kept.contains(root) => {}
+            None => kept.push(root.clone()),
+        }
+    }
+    kept
+}
+
 /// The program roots of the journal header of `state` (`Header::program_roots`).
 fn header_roots(state: &JournalState) -> Vec<String> {
     state.header().program_roots.clone()
@@ -1038,6 +1064,18 @@ impl<'a> Run<'a> {
         let volumes = plan_volumes(env.roots, &plan);
         let mut notes = RunNotes::default();
         let budget = preflight_cap(env.roots, &volumes, &mut notes.warnings)?;
+        // Recorded only for a run that selects an object op, so that every other run's header stays as
+        // M2 wrote it; a root the guard refuses as an app's root is dropped first (review R3b S3).
+        let program_roots = if objects > 0 {
+            checked_roots(
+                &request.settings.program_roots,
+                env.deny,
+                request.settings.user_sid.as_deref(),
+                &mut notes.warnings,
+            )
+        } else {
+            Vec::new()
+        };
 
         let session = env.roots.create_session()?;
         let items = u32::try_from(plan.items().len()).unwrap_or(u32::MAX);
@@ -1069,13 +1107,7 @@ impl<'a> Run<'a> {
                 items,
                 allow_irreversible: plan.allow_irreversible(),
                 volumes: volume_records(env.roots, session.id(), &volumes),
-                // Recorded only for a run that selects an object op, so that every other run's header
-                // stays as M2 wrote it.
-                program_roots: if objects > 0 {
-                    request.settings.program_roots.clone()
-                } else {
-                    Vec::new()
-                },
+                program_roots,
             };
             // The selected ids in op order go into the settings record, so that a run stopped in its
             // validation is bound to its selection again without a search (`rebind_interrupted`).
@@ -1218,6 +1250,19 @@ impl<'a> Run<'a> {
             stopped: None,
         };
         if unvalidated {
+            // The gone lists were judged on the day the run started; an item validated now must not
+            // lean on them (the product may have been installed again since): the resumed run works
+            // without them, and what needs them is refused (review R3b M2).
+            let empty = crate::plan_in::GoneLists::default();
+            if run.settings.gone != empty {
+                run.ctx.set_gone(&empty);
+                run.ledger.notes.warnings.push(
+                    "the run's M1b exemption lists (gone MSI products, Package Cache folders, Burn \
+                     records) were not used: the run stopped before its items were validated and \
+                     was resumed"
+                        .to_owned(),
+                );
+            }
             if let Err(abort) = run.validate() {
                 run.stopped = Some(abort);
             } else if run.settings.restore_point.requests(&run.risk_reasons()) {

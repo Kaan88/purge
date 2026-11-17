@@ -33,9 +33,13 @@
 //! The spike re-created six rule shapes byte for byte (program with `Defer=User`, local ports with a
 //! `LPort2_10` range, remote address list with `LocalSubnet`, service, profiles with interface types,
 //! group with description); the other mappings (`Edge`, `Defer=App`, ICMP types, `LSM`, `LOM`, local
-//! addresses, `Profile=Domain`, `RPort2_10`, `IFType=Lan`, protocols other than 6 and 17) are inferred:
-//! [`map_rule`] names them in [`RuleMap::shapes`] so that a caller can refuse them until the
-//! `#[ignore]`d rig tests in tests/firewall.rs have proven them on the VM.
+//! addresses, `Profile=Domain`, `RPort2_10`, `IFType=Lan`, protocols other than 6 and 17) were
+//! inferred: [`map_rule`] names them in [`RuleShape`]s so that a caller can refuse them until the
+//! `#[ignore]`d rig tests in tests/firewall.rs have proven them on the VM. The VM run of 2026-11-17
+//! (build 26100) proved `Edge`, `Defer=App`, `LOM`, local addresses, `Profile=Domain`, `RPort2_10`,
+//! `IFType=Lan`, protocol 47 and outbound `LSM`; the ICMP mapping failed and is refused by
+//! [`map_rule`] itself ([`ICMP_MAPPING_PROVEN`]). Which shapes a caller still refuses is
+//! `purge_model::FIREWALL_UNPROVEN_SHAPES`.
 //!
 //! What this module never does: it writes no registry value, starts no process, never uses the
 //! `INetFw*` COM objects, never removes a rule by name, and never addresses any policy store other than
@@ -346,7 +350,7 @@ pub enum RuleShape {
     RemotePortRange,
     /// `IFType=Lan`.
     LanInterface,
-    /// `Protocol` other than 6 or 17.
+    /// `Protocol` other than 6, 17 or 47 (47 proven on the VM, 2026-11-17).
     OtherProtocol,
 }
 
@@ -363,7 +367,7 @@ impl RuleShape {
             RuleShape::DomainProfile => "Profile=Domain",
             RuleShape::RemotePortRange => "RPort2_10",
             RuleShape::LanInterface => "IFType=Lan",
-            RuleShape::OtherProtocol => "Protocol other than 6 or 17",
+            RuleShape::OtherProtocol => "Protocol other than 6, 17 or 47",
         }
     }
 }
@@ -401,6 +405,12 @@ const SINGLE: &[&str] = &[
     "SVC",
 ];
 
+/// Whether the `ICMP4` / `ICMP6` mapping (context value `IcmpType`) has been proven by a VM round trip.
+/// False: on build 26100 the provider refused every create with it (`PutInstance` 0x80041001,
+/// docs/reviews/m1b/vm-objects-run.md), and [`map_rule`] refuses every rule with ICMP entries. Turned
+/// true only with a fixed mapping and a passing rig round trip, own and native.
+pub const ICMP_MAPPING_PROVEN: bool = false;
+
 /// Maps a stored rule's fields to the instance properties and context values that re-create it with
 /// the same fields (C-OBJECT `same_rule`). Keys compare ASCII case-insensitively; values compare exactly
 /// as stored.
@@ -410,7 +420,8 @@ const SINGLE: &[&str] = &[
 /// `Defer=App`), `LSM=TRUE`, `LOM=TRUE`, `Protocol` (decimal), `LPort` / `RPort` (decimal) and
 /// `LPort2_10` / `RPort2_10` (decimal ranges) into `LocalPort` / `RemotePort`, `LA4`/`LA6`/`RA4`/`RA6`
 /// (literal addresses in their family's key, and `LocalSubnet` present in both families), `App`, `Svc`,
-/// `IFType` (Lan, Wireless, RemoteAccess), `ICMP4` (with `Protocol=1`) and `ICMP6` (with `Protocol=58`).
+/// `IFType` (Lan, Wireless, RemoteAccess). `ICMP4` (with `Protocol=1`) and `ICMP6` (with `Protocol=58`)
+/// are parsed but refused while [`ICMP_MAPPING_PROVEN`] is false: their mapping failed on the VM.
 ///
 /// Everything else is refused, and so are repeats of a single-valued key or of a list value, empty
 /// values, values with a NUL, port keywords (`RPC`, `IPHTTPSIn`, ...), address keywords other than
@@ -647,6 +658,16 @@ pub fn map_rule(fields: &[(String, String)]) -> Result<RuleMap, Vec<String>> {
                 protocol.unwrap_or("-")
             ));
         }
+        // The VM run of 2026-11-17 (build 26100): `PutInstance` refused every rule with this mapping
+        // (0x80041001), own and native, so a deleted ICMP rule could not come back. The defect (value
+        // form of `IcmpType` or its context type) is not yet found; refused here, not only by the shape
+        // list, until a fixed mapping is proven by the rig (M1b review R3b).
+        if !ICMP_MAPPING_PROVEN {
+            bad.push(format!(
+                "ICMP4/ICMP6 ({}: no proven re-create mapping, the provider refused it on the VM)",
+                icmp.join(",")
+            ));
+        }
     }
     if !bad.is_empty() {
         return Err(bad);
@@ -673,7 +694,7 @@ pub fn map_rule(fields: &[(String, String)]) -> Result<RuleMap, Vec<String>> {
     );
     shape(iftype & 1 != 0, RuleShape::LanInterface);
     shape(
-        protocol.is_some_and(|p| p != "6" && p != "17"),
+        protocol.is_some_and(|p| p != "6" && p != "17" && p != "47"),
         RuleShape::OtherProtocol,
     );
 
@@ -1549,22 +1570,22 @@ mod tests {
 
     #[test]
     fn map_rule_icmp_needs_matching_protocol() {
-        let m = map_rule(&full(&[
-            ("Name", "x"),
-            ("Protocol", "1"),
-            ("ICMP4", "8:*"),
-            ("ICMP4", "3:4"),
-        ]))
-        .unwrap();
-        assert_eq!(ctx(&m, "IcmpType"), Some(&list(&["8:*", "3:4"])));
-        assert!(
-            map_rule(&full(&[
-                ("Name", "x"),
-                ("Protocol", "58"),
-                ("ICMP6", "128:*")
-            ]))
-            .is_ok()
-        );
+        // The mapping failed on the VM (review R3b): every ICMP rule is refused, also a well-formed one.
+        const { assert!(!ICMP_MAPPING_PROVEN) };
+        for good in [
+            [("Protocol", "1"), ("ICMP4", "8:*"), ("ICMP4", "3:4")].as_slice(),
+            [("Protocol", "58"), ("ICMP6", "128:*")].as_slice(),
+        ] {
+            let mut f = vec![("Name", "x")];
+            f.extend_from_slice(good);
+            let why = map_rule(&full(&f)).unwrap_err();
+            assert_eq!(why.len(), 1, "{why:?}");
+            assert!(why[0].contains("no proven re-create mapping"), "{why:?}");
+        }
+        // Protocol 1 or 58 without ICMP entries maps (an unproven shape for the caller).
+        let m = map_rule(&full(&[("Name", "x"), ("Protocol", "1")])).unwrap();
+        assert_eq!(m.shapes, [RuleShape::OtherProtocol]);
+        assert_eq!(ctx(&m, "IcmpType"), None);
         assert!(
             map_rule(&full(&[
                 ("Name", "x"),
@@ -1718,10 +1739,7 @@ mod tests {
                 vec![RuleShape::EdgeTraversal, RuleShape::DeferApp],
             ),
             (vec![("Defer", "User")], vec![]),
-            (
-                vec![("Protocol", "1"), ("ICMP4", "8:*")],
-                vec![RuleShape::IcmpTypes, RuleShape::OtherProtocol],
-            ),
+            (vec![("Protocol", "1")], vec![RuleShape::OtherProtocol]),
             (
                 vec![("Protocol", "17"), ("RPort2_10", "1-9")],
                 vec![RuleShape::RemotePortRange],
@@ -1730,7 +1748,8 @@ mod tests {
             (vec![("IFType", "Lan")], vec![RuleShape::LanInterface]),
             (vec![("IFType", "Wireless")], vec![]),
             (vec![("Profile", "Private")], vec![]),
-            (vec![("Protocol", "47")], vec![RuleShape::OtherProtocol]),
+            // Protocol 47 was proven on the VM (review R3b S4).
+            (vec![("Protocol", "47")], vec![]),
         ] {
             let mut all = vec![("Name", "x")];
             all.extend(pairs.iter().copied());

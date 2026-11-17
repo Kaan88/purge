@@ -60,8 +60,9 @@ pub const FIREWALL_RESTORE_EXACT: bool = true;
 /// `Active`, `Dir`, `Protocol` 6 and 17, `App`, `Svc`, `Name`, `Desc`, `EmbedCtxt`, `Defer=User`,
 /// `LPort`, `LPort2_10`, `RPort`, `RA4`/`RA6` (literal addresses, subnets, ranges, `LocalSubnet` in both
 /// families), `Profile` Private and Public, `IFType` Wireless and RemoteAccess. The mapping of the forms
-/// below (`purge_win::firewall::map_rule`) is inferred from the provider's value tables only (M1b
-/// reviews R1 S3, R2b S2).
+/// below (`purge_win::firewall::map_rule`) was inferred from the provider's value tables only (M1b
+/// reviews R1 S3, R2b S2); the VM run of 2026-11-17 (build 26100, `docs/reviews/m1b/vm-objects-run.md`)
+/// proved seven of them and protocol 47, own and native rules byte-equal ([`FIREWALL_UNPROVEN_SHAPES`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FirewallShape {
     /// `Edge=TRUE` (edge traversal), alone or with `Defer=App`.
@@ -82,25 +83,25 @@ pub enum FirewallShape {
     RemotePortRange,
     /// `IFType=Lan`.
     LanInterface,
-    /// `Protocol` other than 6 (TCP) or 17 (UDP).
+    /// `Protocol` other than 6 (TCP), 17 (UDP) or 47 (GRE, proven on the VM). Protocols 1 and 58 were
+    /// made on the VM only with ICMP entries, which failed; without them they are not measured.
     OtherProtocol,
 }
 
 /// The [`FirewallShape`]s not yet proven by a VM round trip (`create_with_instance_id` and a byte-equal
 /// read back). A rule that uses one is not deleted: the executor's gate and the scanner both refuse it
 /// (`CannotBackUp`), because a wrong mapping shows only at undo, when the half-made rule is deleted again
-/// and the original is lost. The one list both read: when M1B-RIG-EXEC proves a shape on the VM, its
-/// line is removed here.
+/// and the original is lost. The one list both read: when a VM round trip proves a shape, its line is
+/// removed here.
+///
+/// Lifted after the VM run of 2026-11-17 (build 26100; M1b review R3b S4): `Edge`, `Defer=App`, `LOM`,
+/// local addresses, `Profile=Domain`, `RPort2_10`, `IFType=Lan`, and protocol 47 (by narrowing
+/// [`FirewallShape::OtherProtocol`]). Still refused: `LSM` (proven outbound only; the provider cannot
+/// make an inbound one, so a stored inbound one could not come back), ICMP entries (the re-create
+/// failed; `map_rule` refuses them itself too), and every other protocol number.
 pub const FIREWALL_UNPROVEN_SHAPES: &[FirewallShape] = &[
-    FirewallShape::EdgeTraversal,
-    FirewallShape::DeferApp,
     FirewallShape::LooseSourceMapping,
-    FirewallShape::LocalOnlyMapping,
     FirewallShape::IcmpTypes,
-    FirewallShape::LocalAddresses,
-    FirewallShape::DomainProfile,
-    FirewallShape::RemotePortRange,
-    FirewallShape::LanInterface,
     FirewallShape::OtherProtocol,
 ];
 
@@ -131,7 +132,7 @@ impl FirewallShape {
             FirewallShape::DomainProfile => "Profile=Domain",
             FirewallShape::RemotePortRange => "RPort2_10",
             FirewallShape::LanInterface => "IFType=Lan",
-            FirewallShape::OtherProtocol => "Protocol other than 6 or 17",
+            FirewallShape::OtherProtocol => "Protocol other than 6, 17 or 47",
         }
     }
 
@@ -156,7 +157,9 @@ impl FirewallShape {
                 FirewallShape::DomainProfile => k == "PROFILE" && v == "Domain",
                 FirewallShape::RemotePortRange => k == "RPORT2_10",
                 FirewallShape::LanInterface => k == "IFTYPE" && v == "Lan",
-                FirewallShape::OtherProtocol => k == "PROTOCOL" && v != "6" && v != "17",
+                FirewallShape::OtherProtocol => {
+                    k == "PROTOCOL" && v != "6" && v != "17" && v != "47"
+                }
             }
         })
     }
@@ -1416,20 +1419,44 @@ mod tests {
             ("v2.33|Profile=Domain|", FirewallShape::DomainProfile),
             ("v2.33|RPort2_10=1-2|", FirewallShape::RemotePortRange),
             ("v2.33|IFType=Lan|", FirewallShape::LanInterface),
-            ("v2.33|Protocol=47|", FirewallShape::OtherProtocol),
+            ("v2.33|Protocol=1|", FirewallShape::OtherProtocol),
+            ("v2.33|Protocol=58|", FirewallShape::OtherProtocol),
+            ("v2.33|Protocol=2|", FirewallShape::OtherProtocol),
         ] {
             let fields = parse_firewall_rule(raw).unwrap().fields;
             assert!(FirewallShape::of(&fields).contains(&want), "{raw}");
-            assert!(!want.is_proven());
-            assert!(FirewallShape::unproven_in(&fields).contains(&want), "{raw}");
+            // The VM run of 2026-11-17 (review R3b S4): LSM, ICMP and every protocol but 6, 17 and
+            // 47 stay unproven; the other seven are lifted.
+            let unproven = matches!(
+                want,
+                FirewallShape::LooseSourceMapping
+                    | FirewallShape::IcmpTypes
+                    | FirewallShape::OtherProtocol
+            );
+            assert_eq!(!want.is_proven(), unproven, "{raw}");
+            assert_eq!(
+                FirewallShape::unproven_in(&fields).contains(&want),
+                unproven,
+                "{raw}"
+            );
         }
-        // Defer=User, Profile=Private, IFType=Wireless, Protocol 6 and 17: proven forms.
-        let fields =
-            parse_firewall_rule("v2.33|Defer=User|Profile=Private|IFType=Wireless|Protocol=17|")
-                .unwrap()
-                .fields;
-        assert_eq!(FirewallShape::of(&fields), []);
-        assert_eq!(FIREWALL_UNPROVEN_SHAPES.len(), FirewallShape::ALL.len());
+        // Defer=User, Profile=Private, IFType=Wireless, Protocol 6, 17 and 47: proven forms, and
+        // protocol 47 is no shape at all.
+        for raw in [
+            "v2.33|Defer=User|Profile=Private|IFType=Wireless|Protocol=17|",
+            "v2.33|Protocol=47|",
+        ] {
+            let fields = parse_firewall_rule(raw).unwrap().fields;
+            assert_eq!(FirewallShape::of(&fields), [], "{raw}");
+        }
+        assert_eq!(
+            FIREWALL_UNPROVEN_SHAPES,
+            [
+                FirewallShape::LooseSourceMapping,
+                FirewallShape::IcmpTypes,
+                FirewallShape::OtherProtocol
+            ]
+        );
     }
 
     #[test]

@@ -34,7 +34,8 @@
 //!    than `SERVICE_STOPPED`. It hands back [`Stamp::Object`] and [`ItemFacts::Object`].
 //! 2. [`prepare`]: the whole `Services\<name>` tree is captured and its identity compared with the stamp;
 //!    a program outside the journal header's `program_roots` is `GateBlocked{CannotBackUp}` before any
-//!    backup (undo would refuse it with `ProgramOutsideRoot`); the SCM definition is read and the
+//!    backup (undo would refuse it with `ProgramOutsideRoot`), and with no roots at all every service
+//!    is, by the same rule as tasks and rules (review R3b S2); the SCM definition is read and the
 //!    identity once more (another digest: `Skipped{ChangedSinceScan}`); what undo is certain to refuse
 //!    ([`restore_refusal`]: `CreateServiceW` arguments the SCM wrapper refuses, config2 items that cannot
 //!    be applied) is `CannotBackUp`; then the tree is written as the op's verified registry backup
@@ -1049,6 +1050,19 @@ fn adopt_key_backup(session: &SessionDir, rel: &str, doc: &RegBackup) -> Option<
     (found.doc() == &fresh).then_some(found)
 }
 
+/// The refusal of every delete of a run whose journal header records no program roots (review R3b
+/// S2). [`program_outside_roots`] refuses such a service anyway; this says why in one form for the
+/// three kinds.
+fn no_roots(name: &str) -> TypedResult {
+    blocked(
+        Blocker::CannotBackUp,
+        format!(
+            "service {name}: the run recorded no program roots ({}); left untouched",
+            gate::reason::NO_ROOTS
+        ),
+    )
+}
+
 /// The `Reversibility::Full` plan of a service whose account holds a stored password: refused.
 fn partial_refusal(name: &str, account: Option<&str>) -> TypedResult {
     blocked(
@@ -1128,7 +1142,11 @@ pub fn prepare(
     if !identity.account_builtin() && args.planned == Reversibility::Full {
         return decided(partial_refusal(name, identity.object_name.as_deref()));
     }
-    // The second lock, before any backup: a program outside the run's roots is never created again.
+    // The second lock, before any backup: a program outside the run's roots is never created again,
+    // and a run without roots deletes no service at all (review R3b S2).
+    if gate::no_program_roots(args.program_roots) {
+        return decided(no_roots(name));
+    }
     if let Some(program) = program_outside_roots(&identity, args.env, args.program_roots) {
         return decided(blocked(
             Blocker::CannotBackUp,
@@ -1188,7 +1206,18 @@ pub fn prepare(
         key_backup: key_backup.reference().clone(),
         account_builtin: builtin,
     };
-    let definition = write_def(session, args.op, &def)?;
+    let definition = match write_def(session, args.op, &def) {
+        Ok(definition) => definition,
+        Err(e) => {
+            // The item is skipped without an intent, so no record would name the key backup: it is
+            // removed again through the store (review R3b M6). Not on a storage integrity failure,
+            // which aborts the run with the store left as it is.
+            if !e.is_storage_integrity() {
+                let _ = session.delete_backup_file(&key_backup.reference().path);
+            }
+            return Err(e.into());
+        }
+    };
     let intent = Intent {
         op: args.op,
         item: args.item.clone(),
@@ -1349,6 +1378,9 @@ pub fn act(
     if let Some((blocker, why)) = gate_blocker(deny, &live) {
         return blocked(blocker, format!("{why}; left untouched"));
     }
+    if gate::no_program_roots(program_roots) {
+        return no_roots(&name);
+    }
     if let Err(r) =
         check_backup_binding(backend, session, &intent, &name, deny.env(), program_roots)
     {
@@ -1398,7 +1430,8 @@ pub fn act(
 
 /// The verdict on a delete of `name` from a fresh read: gone is `Done`, present with `DeleteFlag` is
 /// `PendingDelete` (another handle keeps it; it goes when that closes, at the latest at restart),
-/// present without is `Failed{ObjectApi}`, a failed read is `Failed{VerifyFailed}`.
+/// present without is `Failed{VerifyFailed}` (the delete call reported success, so the `done` must not
+/// say "nothing changed"; review R3b M4), a failed read is `Failed{VerifyFailed}`.
 pub fn complete(backend: &dyn ServiceBackend, name: &str) -> TypedResult {
     match backend.read(name) {
         Ok(None) => result(ItemOutcome::Done, ""),
@@ -1409,10 +1442,15 @@ pub fn complete(backend: &dyn ServiceBackend, name: &str) -> TypedResult {
                  when that handle closes (at the latest at restart)"
             ),
         ),
+        // The delete call returned success: what it did is not known, so the `done` must not read as
+        // "nothing changed" (`ObjectApi` settles undo as `NothingToUndo`; review R3b M4).
         Ok(Some(_)) => failed(
-            FailCode::ObjectApi,
+            FailCode::VerifyFailed,
             None,
-            format!("service {name} is still there after the delete and is not marked for delete"),
+            format!(
+                "service {name} is still there after a delete the SCM reported done, and is not \
+                 marked for delete"
+            ),
         ),
         Err(e) => failed(
             FailCode::VerifyFailed,

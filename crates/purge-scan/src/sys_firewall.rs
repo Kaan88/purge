@@ -668,6 +668,15 @@ mod tests {
             r"v2.33|Action=Allow|Active=TRUE|Dir=Out|App=C:\x\b.exe|Name=C|Desc=d, e|EmbedCtxt=G|",
             r"v2.33|Action=Block|Active=FALSE|Dir=In|Profile=Private|Profile=Public|IFType=Wireless|IFType=RemoteAccess|Name=D|",
             r"v2.33|Action=Block|Active=TRUE|Dir=Out|Protocol=17|RPort=53|RA4=LocalSubnet|RA6=LocalSubnet|RA4=10.0.0.1|RA6=fe80::1|Name=E|",
+            // Proven by the VM run of 2026-11-17 (M1b review R3b S4).
+            r"v2.33|Action=Block|Active=FALSE|Dir=In|Profile=Domain|Profile=Public|Name=D|",
+            r"v2.33|Action=Block|Active=FALSE|Dir=In|Name=D|Edge=TRUE|",
+            r"v2.33|Action=Block|Active=FALSE|Dir=In|Name=D|Edge=TRUE|Defer=App|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=E|LA4=10.0.0.1|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|IFType=Lan|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|LOM=TRUE|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=17|RPort2_10=1-9|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=47|Name=F|",
         ] {
             assert_eq!(refusal(raw), None, "{raw}");
         }
@@ -678,16 +687,11 @@ mod tests {
     #[test]
     fn unproven_service_and_incomplete_rules_are_refused() {
         for raw in [
-            r"v2.33|Action=Block|Active=FALSE|Dir=In|Profile=Domain|Profile=Public|Name=D|",
-            r"v2.33|Action=Block|Active=FALSE|Dir=In|Name=D|Edge=TRUE|",
-            r"v2.33|Action=Block|Active=FALSE|Dir=In|Name=D|Edge=TRUE|Defer=App|",
             r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=1|ICMP4=8:*|Name=E|",
-            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=E|LA4=10.0.0.1|",
-            r"v2.33|Action=Allow|Active=TRUE|Dir=In|IFType=Lan|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=58|ICMP6=128:*|Name=E|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=1|Name=E|",
             r"v2.33|Action=Allow|Active=TRUE|Dir=In|LSM=TRUE|Name=F|",
-            r"v2.33|Action=Allow|Active=TRUE|Dir=In|LOM=TRUE|Name=F|",
-            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=17|RPort2_10=1-9|Name=F|",
-            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=47|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=Out|Protocol=17|LSM=TRUE|Name=F|",
             r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=9000|App=%SystemRoot%\System32\svchost.exe|Svc=S1|Name=G|",
             r"v2.33|Action=Allow|Dir=In|Name=H|",
             r"v2.33|Active=TRUE|Dir=In|Name=H|",

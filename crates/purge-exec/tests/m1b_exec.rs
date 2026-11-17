@@ -1023,6 +1023,13 @@ fn undo_without_header_roots_refuses_recreate() {
 /// For each kind and each place: the crash, then recovery (`resume`), then the undo, and the object
 /// is as before the run. A clean run and undo of each kind first: every module fault point reachable
 /// for the kind is hit.
+///
+/// Narrower than its name (M1b review R3b M7): the "crash" is a panic in the mock at six backend-call
+/// boundaries per kind, and a panic unwinds where a kill does not; `backup.written`,
+/// `backup.verified`, `intent.flushed`, `done.before`, `group.end`, `commit.before` and
+/// `journal.header` are not stopped at for an object op. It is a unit test of the recovery paths, not
+/// the crash matrix: it does not count toward K13, which needs the rig mode `m1b-x-crash`
+/// (M1B-RIG-EXEC) killing the process at each real `fault::point`.
 #[test]
 fn crash_matrix_unit() {
     thread_local! {

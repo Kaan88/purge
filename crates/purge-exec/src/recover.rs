@@ -1075,6 +1075,21 @@ fn rollback_run(
             continue;
         };
         let outcome = match &probe {
+            // An object found gone: its hive is flushed before the `done` says so, as the module's
+            // act does (review R3b M3); object ops are not in the run's group flush of unconfirmed
+            // ops. A task's file directory is not flushed here.
+            Probe::Done(ItemOutcome::Done) if intent.exec_op.is_object() => {
+                match durable::flush_op_hive(&intent.exec_op) {
+                    Ok(()) => ItemOutcome::Done,
+                    Err(e) => failed(
+                        FailCode::VerifyFailed,
+                        None,
+                        format!(
+                            "the object is gone, but {e}; whether that survives a restart is not known"
+                        ),
+                    ),
+                }
+            }
             Probe::Done(outcome) => outcome.clone(),
             Probe::NotDone => ItemOutcome::Skipped {
                 reason: SkipReason::NotAttempted,

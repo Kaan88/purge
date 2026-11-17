@@ -374,8 +374,9 @@ mod rig {
     #[test]
     #[ignore = "rig VM only, elevated: creates and deletes firewall rules"]
     fn create_with_instance_id_round_trips_unproven_fields() {
-        // Mappings map_rule has that the spike did not exercise.
-        round_trip_all(&[
+        // ICMP: the provider refused the re-create on the VM (2026-11-17); map_rule now refuses it, so
+        // the create fails before WMI is touched and no rule is made (review R3b).
+        for (tag, rule) in [
             (
                 "icmp4",
                 "v2.33|Action=Allow|Active=FALSE|Dir=In|Protocol=1|ICMP4=8:*|ICMP4=3:4|Name=PurgeTest icmp4|",
@@ -384,6 +385,22 @@ mod rig {
                 "icmp6",
                 "v2.33|Action=Allow|Active=FALSE|Dir=In|Protocol=58|ICMP6=128:*|Name=PurgeTest icmp6|",
             ),
+        ] {
+            let id = unique_id(tag);
+            let _clean = Cleanup(vec![id.clone()]);
+            assert!(
+                matches!(
+                    create_with_instance_id(&id, &fields(rule)),
+                    Err(WinError::Unmapped(_))
+                ),
+                "{tag}"
+            );
+            assert_eq!(read_rule(&id), None, "{tag}");
+        }
+        // Mappings map_rule has that the spike did not exercise. No inbound LSM case: the provider
+        // cannot make one at all (0x80041001; New-NetFirewallRule refuses it too), see
+        // docs/reviews/m1b/vm-objects-run.md.
+        round_trip_all(&[
             (
                 "edge",
                 r"v2.33|Action=Allow|Active=FALSE|Dir=In|Protocol=17|App=C:\Program Files\PurgeTest\edge.exe|Name=PurgeTest edge|Edge=TRUE|",
@@ -391,10 +408,6 @@ mod rig {
             (
                 "defer-app",
                 r"v2.33|Action=Allow|Active=FALSE|Dir=In|Protocol=17|App=C:\Program Files\PurgeTest\defer.exe|Name=PurgeTest defer app|Edge=TRUE|Defer=App|",
-            ),
-            (
-                "lsm-domain",
-                r"v2.33|Action=Allow|Active=FALSE|Dir=In|Profile=Domain|Protocol=17|App=C:\Program Files\PurgeTest\lsm.exe|Name=PurgeTest lsm|LSM=TRUE|",
             ),
             (
                 "local-address",
@@ -522,6 +535,17 @@ mod rig {
                 continue;
             };
             let f0 = fields(&s0);
+            // ICMP: map_rule refuses it since this test lost the native rule on the VM (review R3b),
+            // so the native rule is not deleted here; Cleanup removes it.
+            if tag.starts_with("icmp") {
+                match map_rule(&f0) {
+                    Err(why) => {
+                        eprintln!("SHAPE {tag}: refused as expected: {why:?}\n  native   {s0}")
+                    }
+                    Ok(_) => failures.push(format!("{tag}: map_rule accepted ICMP {s0:?}")),
+                }
+                continue;
+            }
             let shapes = match map_rule(&f0) {
                 Ok(m) => m
                     .shapes

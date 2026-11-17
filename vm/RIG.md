@@ -822,6 +822,12 @@ the selected ids, de-duplicated, sorted ordinally, joined with LF (riglib Get-M2
 files are JSON arrays of candidate ids. The session is `report.session`, else the new directory under
 `C:\ProgramData\Purge\sessions`; its `journal.jsonl` and `report.json` are read from there.
 
+M1b system objects (services, tasks, firewall rules): `plan from-targets` makes no object plan (its candidates
+carry no object digest, so `exec` skips them "no object fingerprint"), and `exec --fp` needs a fingerprint that is
+the owner of every selected object and records each in `sys` with the plan's digest; its install roots pass the
+guard's root rule or are dropped. A rig mode with objects (`m1b-x-crash`, M1B-RIG-EXEC) therefore drives harvest
+and scan, never `plan from-targets` (M1b reviews R3b M9, S3).
+
 ### 11.5 Gate report (`truth/m2.sh`)
 
 `bash truth/m2.sh` (env `M2_RUNS`, `M2_PREFIX`, `M2_OUT`, `PYTHON`) reads the five runs and writes

@@ -920,6 +920,60 @@ fn prepare_refuses_a_program_outside_the_roots() {
     }
 }
 
+/// Review R3b S2: a task of COM handlers only has no program, so the per-program check passes it for
+/// any roots; with no roots it is refused all the same, at prepare and at the act.
+#[test]
+fn no_roots_refuses_a_com_handler_task() {
+    let com = task(
+        PATH,
+        vec![TaskAction::ComHandler {
+            clsid: "{0B7AC2E8-3A6B-4C1D-9E58-7F7B2B1E7A10}".into(),
+            data: None,
+        }],
+    );
+    let ident = com.live.identity.clone();
+    let mut b = Bench::new("noroots-com");
+    let fake = Fake::with(vec![com.clone()]);
+    b.validate(
+        &fake,
+        PATH,
+        &candidate(PATH, Some(&ident), Reversibility::Full),
+    );
+    let TaskPrepared::Decided(d) =
+        prepare_task(&fake, &b.ctx, &b.session, OP, Reversibility::Full, &[]).unwrap()
+    else {
+        panic!("ready");
+    };
+    assert_eq!(d.result.outcome, gate_blocked(Blocker::CannotBackUp));
+    assert!(
+        d.result.detail.contains("gate.no-program-roots"),
+        "{}",
+        d.result.detail
+    );
+    assert!(
+        !b.session
+            .path()
+            .join(backup_rel(BackupKind::Definition, OP))
+            .exists()
+    );
+    // Prepared with roots (the COM task passes them), acted with none: refused, nothing deleted.
+    let TaskPrepared::Ready(ready) = b.prepare(&fake, Reversibility::Full) else {
+        panic!("decided");
+    };
+    let intent = ready.intent().clone();
+    let token = b.journal.intent(intent.clone()).unwrap();
+    let result = act_task(&fake, &b.ctx, &b.session, &intent, &token, &[]).unwrap_err();
+    assert_eq!(result.outcome, gate_blocked(Blocker::CannotBackUp));
+    assert!(
+        result.detail.contains("gate.no-program-roots"),
+        "{}",
+        result.detail
+    );
+    assert_eq!(fake.deletes.get(), 0);
+    assert_eq!(fake.get(PATH), Some(com));
+    b.journal.done(token, result.outcome).unwrap();
+}
+
 #[test]
 fn act_done_and_flush_order() {
     let mut b = Bench::new("act-order");
@@ -973,6 +1027,23 @@ fn act_done_and_flush_order() {
             result.outcome,
             ItemOutcome::Failed {
                 code: FailCode::ObjectApi,
+                ..
+            }
+        ),
+        "{result:?}"
+    );
+    // Still there after this process's delete call reported success: VerifyFailed, never "nothing
+    // changed" (review R3b M4).
+    let ok = Acted {
+        delete_error: None,
+        flush_error: None,
+    };
+    let result = complete_task(&fake, &intent, Some(&ok));
+    assert!(
+        matches!(
+            result.outcome,
+            ItemOutcome::Failed {
+                code: FailCode::VerifyFailed,
                 ..
             }
         ),

@@ -750,11 +750,12 @@ fn act_with_token_of_another_op_does_nothing() {
 
 #[test]
 fn complete_present_without_flag_is_failed() {
+    // After a delete call that reported success: not "nothing changed" (review R3b M4).
     let w = world("svc-a-complete", vendor_service());
     assert!(matches!(
         complete(&w.fake, NAME).outcome,
         ItemOutcome::Failed {
-            code: FailCode::ObjectApi,
+            code: FailCode::VerifyFailed,
             ..
         }
     ));
@@ -1527,9 +1528,21 @@ mod inject {
 // ---------------------------------------------------------------------------------------------------
 
 /// Reads a built-in service through the live backend: identity as the scanner builds it, its tree, its
-/// definition. Changes nothing.
+/// definition. Changes nothing. Needs elevation (`EventLog\Security` is not readable at Medium
+/// integrity; only the elevated executor calls `capture_key`): skipped otherwise, as
+/// purge-win/tests/scm.rs does, so `cargo xtask ci` passes unelevated (review R3b S1).
 #[test]
 fn live_read_of_a_builtin_service_is_consistent() {
+    match purge_win::sid::is_elevated() {
+        Ok(true) => {}
+        other => {
+            println!(
+                "SKIPPED live_read_of_a_builtin_service_is_consistent: needs an elevated \
+                 administrator; elevation check: {other:?}"
+            );
+            return;
+        }
+    }
     let live = LiveServices;
     let Some(svc) = live.read("EventLog").unwrap() else {
         panic!("EventLog is not installed");

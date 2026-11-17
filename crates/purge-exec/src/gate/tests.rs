@@ -2653,3 +2653,41 @@ fn exemptions_survive_the_journal_round_trip() {
         assert_eq!(exemptions_from_journal(&read), guard);
     }
 }
+
+/// Review R3b S3: a program root of a run passes the guard's root rule, as the harvest's roots do;
+/// S2: no roots (or only blank ones) is "no roots".
+#[test]
+fn root_refusal_applies_the_guards_root_rule() {
+    let deny = DenyList::compile(&GuardEnv::sample());
+    for root in [
+        r"C:\Program Files",
+        r"C:\Program Files\",
+        r"C:\Program Files (x86)",
+        r"C:\ProgramData",
+        r"C:\Windows",
+        r"C:\Windows\System32\Vendor",
+        r"C:\",
+        "C:",
+        r"C:\Program Files\..\Windows",
+        r"C:\PROGRA~1\Vendor",
+        r"Vendor\app",
+        "",
+        "  ",
+    ] {
+        assert!(
+            root_refusal(root, &deny, None).is_some(),
+            "{root:?} accepted"
+        );
+    }
+    for root in [
+        r"C:\Program Files\Vendor",
+        r#""C:\Program Files\Vendor""#,
+        r"C:\Program Files (x86)\Vendor App",
+        r"D:\Apps\Tool",
+    ] {
+        assert_eq!(root_refusal(root, &deny, None), None, "{root:?}");
+    }
+    assert!(no_program_roots(&[]));
+    assert!(no_program_roots(&[" ".to_owned()]));
+    assert!(!no_program_roots(&[r"C:\Program Files\Vendor".to_owned()]));
+}

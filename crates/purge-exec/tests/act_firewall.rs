@@ -484,17 +484,14 @@ fn validate_unparseable_blocked() {
 #[test]
 fn unproven_forms_and_service_rules_are_refused() {
     let base = r"v2.33|Action=Allow|Active=TRUE|Dir=In|App=C:\Program Files\Vendor\app.exe|Name=Vendor App|";
+    // Still unproven after the VM run of 2026-11-17 (review R3b S4): LSM, ICMP, protocols other than
+    // 6, 17 and 47.
     let mut rules: Vec<String> = [
-        "Edge=TRUE|",
-        "Edge=TRUE|Defer=App|",
         "LSM=TRUE|",
-        "LOM=TRUE|",
         "Protocol=1|ICMP4=8:*|",
-        "LA4=10.0.0.1|",
-        "Profile=Domain|",
-        "Protocol=6|RPort=80|RPort2_10=81-82|",
-        "IFType=Lan|",
-        "Protocol=47|",
+        "Protocol=58|ICMP6=128:*|",
+        "Protocol=1|",
+        "Protocol=2|",
     ]
     .iter()
     .map(|extra| format!("{base}{extra}"))
@@ -530,6 +527,68 @@ fn unproven_forms_and_service_rules_are_refused() {
         );
         assert!(deletes(&w.fake.log()).is_empty());
     }
+}
+
+/// Review R3b S4: the seven shapes and protocol 47 the VM proved (own and native rules re-created
+/// byte-equal) are deleted and created again like every other rule.
+#[test]
+fn shapes_the_vm_proved_are_deleted_and_restored() {
+    let base = r"v2.33|Action=Allow|Active=TRUE|Dir=In|App=C:\Program Files\Vendor\app.exe|Name=Vendor App|";
+    for extra in [
+        "Protocol=17|Edge=TRUE|",
+        "Protocol=17|Edge=TRUE|Defer=App|",
+        "Protocol=17|LOM=TRUE|",
+        "Protocol=6|LPort=7000|LA4=10.0.0.5|LA6=fe80::/64|",
+        "Profile=Domain|",
+        "Protocol=6|RPort2_10=8554-8558|",
+        "IFType=Lan|",
+        "Protocol=47|",
+    ] {
+        let rule = format!("{base}{extra}");
+        let mut w = world("fw-proven", &rule);
+        let (outcome, intent) = w.run();
+        assert_eq!(outcome, ItemOutcome::Done, "{rule}");
+        assert_eq!(w.fake.rule(ID), None, "{rule}");
+        let r = w.undo(&intent, &outcome);
+        assert_eq!(done_outcome(&r), &UndoOutcome::Restored, "{rule}");
+        assert_eq!(w.fake.rule(ID).as_deref(), Some(rule.as_str()), "{rule}");
+    }
+}
+
+/// Review R3b S2: with no program roots every rule is refused at prepare and at the act, a port rule
+/// without `App` too (it passes the per-program check vacuously).
+#[test]
+fn no_roots_refuses_rules_without_a_program() {
+    let port_rule = "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=9000|Name=Vendor App|";
+    for rule in [port_rule, RULE] {
+        let mut w = world("fw-noroots", rule);
+        w.program_roots = Vec::new();
+        let (outcome, detail) = w.run_decided();
+        assert_eq!(
+            skip_reason(&outcome),
+            &SkipReason::GateBlocked {
+                blocker: Blocker::CannotBackUp
+            },
+            "{rule}: {detail}"
+        );
+        assert!(detail.contains("gate.no-program-roots"), "{detail}");
+        assert!(deletes(&w.fake.log()).is_empty());
+    }
+    // Prepared with roots (a port rule passes them), acted with none: refused at the act.
+    let mut w = world("fw-noroots-act", port_rule);
+    let (removal, intent) = w.ready();
+    let token = w.journal.intent(intent).unwrap();
+    let r = act(&w.fake, &w.deny, &w.session, removal, &token, &[]);
+    assert_eq!(
+        skip_reason(&r.outcome),
+        &SkipReason::GateBlocked {
+            blocker: Blocker::CannotBackUp
+        },
+        "{}",
+        r.detail
+    );
+    assert!(r.detail.contains("gate.no-program-roots"), "{}", r.detail);
+    assert_eq!(w.fake.rule(ID).as_deref(), Some(port_rule));
 }
 
 /// Review R2b B1: an `App` outside the roots is refused at prepare and, with the roots of a resumed

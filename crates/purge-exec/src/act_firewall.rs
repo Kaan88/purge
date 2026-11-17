@@ -32,7 +32,8 @@
 //!    `Svc` (a service's rule runs the service host, outside every root of an app: undo could never
 //!    bring it back, review R2b B1). All `CannotBackUp`.
 //! 2. [`prepare`]: one read, bound to the validated stamp and judged again by [`rule_blocker`]; an
-//!    `App` outside the journal header's `program_roots` is `CannotBackUp` (the check undo makes);
+//!    `App` outside the journal header's `program_roots` is `CannotBackUp` (the check undo makes), and
+//!    with no roots at all every rule is, a rule without `App` too (review R3b S2);
 //!    `purge.fwdef/1` is written from that same read. The intent carries
 //!    [`Inverse::RecreateFirewallRule`].
 //! 3. The executor journals the intent and hits `act.before`.
@@ -326,7 +327,8 @@ pub fn rule_blocker(
 /// Why undo would refuse to create the rule of `fields` again, judged before the delete (review R2b
 /// B1): a backed-up `App` that is not a file inside the journal header's `program_roots`
 /// ([`gate::file_in_roots`], the one root check of the object ops). A rule without a program (`App`
-/// absent or `System`) passes. Undo applies exactly this ([`UndoConflict::ProgramOutsideRoot`]).
+/// absent or `System`) passes; prepare and the act refuse it anyway when the run has no roots at all
+/// ([`gate::no_program_roots`]). Undo applies exactly this ([`UndoConflict::ProgramOutsideRoot`]).
 fn program_refusal(
     fields: &FirewallRuleFields,
     env: &GuardEnv,
@@ -337,6 +339,18 @@ fn program_refusal(
         RuleProgram::File(file) if gate::file_in_roots(&file, roots, env, None) => None,
         RuleProgram::File(text) | RuleProgram::Unresolved(text) => Some(text),
     }
+}
+
+/// The refusal of every delete of a run whose journal header records no program roots (review R3b
+/// S2): also a rule without a program, which [`program_refusal`] lets through.
+fn no_roots(id: &str) -> TypedResult {
+    blocked(
+        Blocker::CannotBackUp,
+        format!(
+            "firewall rule {id}: the run recorded no program roots ({}); left untouched",
+            gate::reason::NO_ROOTS
+        ),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -693,6 +707,9 @@ pub fn prepare(
         Ok(fields) => fields,
         Err((blocker, why)) => return decided(blocked(blocker, format!("{why}; left untouched"))),
     };
+    if gate::no_program_roots(args.program_roots) {
+        return decided(no_roots(id));
+    }
     if let Some(program) = program_refusal(&fields, deny.env(), args.program_roots) {
         return decided(blocked(
             Blocker::CannotBackUp,
@@ -796,6 +813,9 @@ pub fn act(
     match rule_blocker(deny, &live) {
         Err((blocker, why)) => return blocked(blocker, format!("{why}; left untouched")),
         Ok(fields) => {
+            if gate::no_program_roots(program_roots) {
+                return no_roots(&id);
+            }
             if let Some(program) = program_refusal(&fields, deny.env(), program_roots) {
                 return blocked(
                     Blocker::CannotBackUp,
@@ -1767,8 +1787,8 @@ mod tests {
             "Edge=TRUE|Defer=App|",
             "Defer=User|",
             "LSM=TRUE|LOM=TRUE|",
-            "Protocol=1|ICMP4=8:*|",
-            "Protocol=58|ICMP6=128:*|",
+            "Protocol=1|",
+            "Protocol=58|",
             "Protocol=6|LPort=80|LPort2_10=81-82|",
             "Protocol=17|RPort=53|RPort2_10=1-9|",
             "LA4=10.0.0.1|LA6=fe80::1|",
@@ -1791,6 +1811,17 @@ mod tests {
                 .map(|s| s.name())
                 .collect();
             assert_eq!(win, model, "{raw}");
+        }
+        // ICMP entries: map_rule itself refuses them (the VM re-create failed), and the model still
+        // names the shape as unproven, so the refusal does not hang on one list line (review R3b).
+        for extra in ["Protocol=1|ICMP4=8:*|", "Protocol=58|ICMP6=128:*|"] {
+            let raw = format!("{base}{extra}");
+            let f = fields(&raw);
+            assert!(fw::map_rule(&f.fields).is_err(), "{raw}");
+            assert!(
+                FirewallShape::unproven_in(&f.fields).contains(&FirewallShape::IcmpTypes),
+                "{raw}"
+            );
         }
     }
 

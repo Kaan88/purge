@@ -307,16 +307,18 @@ mod elevated {
         }
         let (svc, def) = TestSvc::create("ex", |_| {});
         assert_eq!(create(&def), Err(WinError::Exists));
-        // The same display name under another service name is its own error.
+        // The same display name under another service name is never `Exists`. Build 26100 creates it
+        // (docs/reviews/m1b/vm-objects-run.md); `DuplicateName` is allowed where Windows still refuses
+        // it. No executor path depends on that error (review R3b).
         let other = ScmCreate {
             name: format!("{}_2", svc.name),
             ..def.clone()
         };
         let r = create(&other);
         if r.is_ok() {
-            let _ = delete(&other.name);
+            assert_eq!(delete(&other.name).map(|_| ()), Ok(()));
         }
-        assert_eq!(r, Err(WinError::DuplicateName));
+        assert!(matches!(r, Ok(()) | Err(WinError::DuplicateName)), "{r:?}");
         assert_eq!(query(&other.name), Ok(None));
     }
 

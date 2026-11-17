@@ -25,7 +25,7 @@
 //! | `journal recover` | `purge.cli.recover/1` | the sessions that need recovery, with a probe of each open intent; no session is changed (the store's integrity check may rename a rejected session directory aside, as every verb's does) |
 //! | `journal resume` / `rollback` | `purge.cli.recovered/1` | per session what recovery settled, undid and reported |
 //! | `journal retry-held` | `purge.cli.retried/1` | each held item tried again, with its outcome |
-//! | `journal show` | `purge.cli.journal/1` | the header, the state, the ops and every record of a journal |
+//! | `journal show` | `purge.cli.journal/1` | the header, the state, the ops (with the note of the undo that restored each) and every record of a journal |
 //! | `quarantine expiring` | `purge.cli.expiring/1` | items and backup files due at the (offset) clock, `id` = `session/op` |
 //! | `quarantine purge` | `purge.cli.purge/1` | one result per requested id |
 //!
@@ -39,8 +39,11 @@
 //! header's program roots (a service, task or firewall rule whose program lies outside them is neither
 //! deleted nor created again), and its MSI and Burn records give the run's M1b exemption lists, judged
 //! now by [`pipeline::m1b_lists`] over a fresh inventory (never taken from the plan). The fingerprint
-//! must be of an owner of the plan's items. Without `--fp` the roots and lists are empty: every object
-//! delete is refused and those exemptions stay closed.
+//! must be of an owner of the plan's items, of the owner of every selected system object, and must
+//! record each of them in `sys` with the digest the plan holds ([`unbound_objects`]); the executor
+//! drops every root the guard refuses as an app's root (review R3b S3). Without `--fp` the roots and
+//! lists are empty: every object delete is refused, one without a program too (review R3b S2), and
+//! those exemptions stay closed.
 //!
 //! # The rig's targets
 //!
@@ -737,10 +740,10 @@ fn exec<R: RestorePointBackend + Clone>(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let (program_roots, gone) = match &a.fp {
-        None => (Vec::new(), GoneLists::default()),
+    let (fingerprint, program_roots, gone) = match &a.fp {
+        None => (None, Vec::new(), GoneLists::default()),
         Some(path) => match app_facts(env, path, &owners) {
-            Ok(facts) => facts,
+            Ok((fp, roots, gone)) => (Some(fp), roots, gone),
             Err(exit) => return exit,
         },
     };
@@ -764,11 +767,28 @@ fn exec<R: RestorePointBackend + Clone>(
         },
     };
     // Every refusal of the request comes before the store is touched.
-    if let Err(refusal) = plan_in::bind(&request) {
-        env.error(&format!(
-            "the plan was refused: {refusal}; nothing was done"
-        ));
-        return Exit::PlanRefused;
+    let bound = match plan_in::bind(&request) {
+        Ok(bound) => bound,
+        Err(refusal) => {
+            env.error(&format!(
+                "the plan was refused: {refusal}; nothing was done"
+            ));
+            return Exit::PlanRefused;
+        }
+    };
+    if let Some(fp) = &fingerprint {
+        let unbound = unbound_objects(&bound, fp);
+        if !unbound.is_empty() {
+            env.error(&format!(
+                "the fingerprint of {} does not record the selected system object(s) {} as the \
+                 app's with the digest the plan holds (another owner, an older or another harvest, \
+                 or an object the harvest did not prove); deselect them or scan again from this \
+                 fingerprint; nothing was done",
+                fp.app.program_id,
+                unbound.join(", ")
+            ));
+            return Exit::PlanRefused;
+        }
     }
     let roots = match roots_of(env, host, "exec") {
         Ok(r) => r,
@@ -837,7 +857,7 @@ fn app_facts(
     env: &mut Env<'_>,
     path: &Path,
     owners: &[ProgramId],
-) -> Result<(Vec<String>, GoneLists), Exit> {
+) -> Result<(Fingerprint, Vec<String>, GoneLists), Exit> {
     let fp: Fingerprint = output::read_json(path).map_err(|e| {
         env.error(&format!("cannot read the fingerprint: {e}"));
         Exit::Usage
@@ -867,7 +887,49 @@ fn app_facts(
         lists.gone_cache_dirs().len(),
         lists.gone_burn().len()
     ));
-    Ok((roots, GoneLists::from_decide(&lists)))
+    Ok((fp, roots, GoneLists::from_decide(&lists)))
+}
+
+/// The selected system objects of `bound` that `fp` does not vouch for (review R3b S3): an object op
+/// whose candidate is owned by another program, or whose target and scan-time digest (`object_fp`)
+/// are not recorded in `fp.sys` (the record the scan's `OwnedSystemObject` rests on). The roots of
+/// `fp` become the run's roots; this ties them to the objects they are to judge, so that a
+/// fingerprint of another harvest of the app, or an edited one, cannot lend its roots to them. The
+/// fuller binding (the fingerprint's hash in the sidecar) comes with the M3 broker (DECISIONS.md, M1b).
+fn unbound_objects(bound: &plan_in::BoundPlan, fp: &Fingerprint) -> Vec<String> {
+    let eq = purge_guard::prefix::eq_ci;
+    bound
+        .items()
+        .iter()
+        .filter(|item| item.exec_op.as_ref().is_some_and(|op| op.is_object()))
+        .filter_map(|item| bound.candidate(item))
+        .filter(|candidate| {
+            let Some(digest) = candidate.object_fp.as_ref() else {
+                return true;
+            };
+            let same = |recorded: purge_model::object::ObjectFp| *digest == recorded;
+            let recorded = match &candidate.target {
+                Target::Service { name } => fp
+                    .sys
+                    .services
+                    .iter()
+                    .any(|s| eq(&s.identity.name, name) && same(s.identity.fp())),
+                Target::Task { path } => fp
+                    .sys
+                    .tasks
+                    .iter()
+                    .any(|t| eq(&t.identity.path, path) && same(t.identity.fp())),
+                Target::FirewallRule { id } => fp
+                    .sys
+                    .firewall_rules
+                    .iter()
+                    .any(|r| r.identity.id == *id && same(r.identity.fp())),
+                _ => false,
+            };
+            candidate.owner.program_id != fp.app.program_id || !recorded
+        })
+        .map(|candidate| candidate.id.0.clone())
+        .collect()
 }
 
 /// [`Exit::Unrecorded`], with a warning for each part missing, unless the run's session is closed
@@ -1451,6 +1513,9 @@ fn journal_show<R>(session: &str, env: &mut Env<'_>, host: &mut ExecHost<'_, R>)
             "item": o.item,
             "target": to_json(&o.target),
             "outcome": o.outcome.as_ref().map(to_json),
+            // The note of the undo that restored the op, such as a service created again without
+            // its stored password (M1b reviews R2b S6, R3b M5); null when there is none.
+            "undo_note": state.undo_done_detail(o.op).filter(|note| !note.is_empty()),
         })).collect::<Vec<_>>(),
         "journal": read.records.iter().map(to_json).collect::<Vec<_>>(),
     });

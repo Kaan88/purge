@@ -23,7 +23,8 @@
 //!    the definition ([`objdef::write_def`]). The [`TaskDelete::intent`] it returns names
 //!    [`Inverse::RecreateTask`].
 //!    A task with an exec program outside the journal header's `program_roots` is refused before
-//!    anything is read further (`CannotBackUp`): undo would refuse to register it again.
+//!    anything is read further (`CannotBackUp`): undo would refuse to register it again. With no roots
+//!    at all every task is refused there, one of COM handlers only too (review R3b S2).
 //! 3. [`act_task`]: with the token of the durable intent: the act-time gate (the identity read now must
 //!    have the validated digest, the guard must still pass, the task must not run, its programs must be
 //!    inside the roots, and its XML, SDDL and Enabled setting must be exactly those of the definition
@@ -31,7 +32,8 @@
 //!    `ITaskFolder::DeleteTask`, fault point `objdelete.after`, the flush of `HKLM\SOFTWARE` (TaskCache)
 //!    and of the task file's directory, fault point `act.after`.
 //! 4. [`complete_task`]: the outcome for the `done` record: the task gone is `Done`, still there is
-//!    `Failed{ObjectApi}`. The now empty task folder is left alone. [`delete_task`] runs 3 and 4.
+//!    `Failed{ObjectApi}`, or `Failed{VerifyFailed}` after a delete call that reported success. The
+//!    now empty task folder is left alone. [`delete_task`] runs 3 and 4.
 //! 5. [`probe_task`]: recovery's probe of an intent without `done`: absent `Done`, present with the
 //!    recorded digest `NotDone`, anything else `Attention`. Changes nothing.
 //! 6. [`prepare_undo_task`] and [`run_undo_task`]: the undo (see below).
@@ -779,6 +781,18 @@ fn program_outside_roots<'a>(
     })
 }
 
+/// The refusal of every delete of a run whose journal header records no program roots (review R3b
+/// S2): also a task without an exec action, which [`program_outside_roots`] lets through.
+fn no_roots(path: &str) -> TypedResult {
+    blocked(
+        Blocker::CannotBackUp,
+        format!(
+            "scheduled task {path}: the run recorded no program roots ({}); left untouched",
+            gate::reason::NO_ROOTS
+        ),
+    )
+}
+
 fn task_path(exec_op: &ExecOp) -> Option<&str> {
     match exec_op {
         ExecOp::DeleteTask { path } => Some(path),
@@ -1048,6 +1062,10 @@ pub fn prepare_task(
         Ok(live) => live,
         Err(decision) => return Ok(TaskPrepared::Decided(decision)),
     };
+    // No roots: refused with a program or without one (a task of COM handlers only), review R3b S2.
+    if gate::no_program_roots(program_roots) {
+        return decided(no_roots(path), gate::reason::NO_ROOTS);
+    }
     if let Some(program) = program_outside_roots(
         &first.identity.actions,
         ctx.deny().env(),
@@ -1259,6 +1277,9 @@ pub fn act_task(
         )));
     }
     let live = read_gated(backend, ctx, path, stamp, "at the act").map_err(|d| d.result)?;
+    if gate::no_program_roots(program_roots) {
+        return Err(no_roots(path));
+    }
     if let Some(program) = program_outside_roots(
         &live.identity.actions,
         ctx.deny().env(),
@@ -1287,7 +1308,8 @@ pub fn act_task(
 
 /// The outcome of the delete of `intent`'s task, from a read now: gone is `Done`, or
 /// `Failed{VerifyFailed}` when the flush after the delete failed (the delete may not survive a power
-/// loss); still there is `Failed{ObjectApi}` (or `AccessDenied`, with the delete call's code); a read
+/// loss); still there is `Failed{ObjectApi}` (or `AccessDenied`, with the delete call's code), and
+/// `Failed{VerifyFailed}` when this process's delete call reported success (review R3b M4); a read
 /// that fails is `Failed{VerifyFailed}`. `acted` is what [`act_task`] returned, `None` when the delete
 /// ran in an earlier process (recovery). The task's folder is left alone, empty or not.
 pub fn complete_task(
@@ -1328,12 +1350,20 @@ pub fn complete_task(
                 e.code(),
                 format!("deleting scheduled task {path} failed: {e}; it is still there"),
             ),
-            None => failed(
-                FailCode::ObjectApi,
+            // The delete call of this process reported success: what it did is not known, so the
+            // `done` must not read as "nothing changed" (review R3b M4). Without a call of this
+            // process (recovery) the task is simply there.
+            None if acted.is_some() => failed(
+                FailCode::VerifyFailed,
                 None,
                 format!(
                     "Task Scheduler reported scheduled task {path} deleted, but it is still there"
                 ),
+            ),
+            None => failed(
+                FailCode::ObjectApi,
+                None,
+                format!("scheduled task {path} is still there"),
             ),
         },
         Err(e) => failed(

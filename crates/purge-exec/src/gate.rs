@@ -148,6 +148,9 @@ pub mod reason {
     pub const OBJECT_GONE: &str = "gate.object-gone";
     /// Detail of a skipped object: the op's validated record holds no object stamp.
     pub const OBJECT_NOT_VALIDATED: &str = "gate.object-not-validated";
+    /// Detail of a refused object delete: the journal header records no program roots (review R3b
+    /// S2). Every service, task and firewall delete is then refused, with a program or without one.
+    pub const NO_ROOTS: &str = "gate.no-program-roots";
 }
 
 /// A refusal for which no dedicated blocker exists: reported as a deny rule named after the reason, as
@@ -1257,6 +1260,45 @@ pub fn file_in_roots(
                     && prefix::is_inside(&file.path, &root.path)
             })
     })
+}
+
+/// Whether `roots`, the program roots of the journal header, hold no root at all (review R3b S2). The
+/// service, task and firewall modules refuse every delete then (`GateBlocked{CannotBackUp}`,
+/// [`reason::NO_ROOTS`]) before their per-program check: an object without a program (a port rule, a
+/// task of COM handlers only) passes that check vacuously, and "no roots" must not leave it to the
+/// scanner's attribution alone. Undo does not apply this: it re-creates only what a run deleted.
+pub fn no_program_roots(roots: &[String]) -> bool {
+    roots.iter().all(|root| root.trim().is_empty())
+}
+
+/// Why `root` cannot be a program root of a run (review R3b S3): it does not canonicalise to an
+/// absolute path of depth two or more without 8.3 resolution (a root [`file_in_roots`] counts for
+/// nothing), or the guard refuses it as the root of an app ([`DenyList::root_rejection`]: `%WINDIR%`,
+/// `C:\Program Files` itself, `C:\ProgramData`, a Package Cache, another app's root, ...), as the
+/// harvest does. `None`: the root may be journalled. `Run::start` drops every root this refuses
+/// before the journal header is written, whoever wrote the fingerprint the roots came from.
+pub fn root_refusal(root: &str, deny: &DenyList, user_sid: Option<&str>) -> Option<String> {
+    let root = root.trim();
+    let root = root
+        .strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .unwrap_or(root)
+        .trim();
+    if root.is_empty() || prefix::steps_back(root) {
+        return Some("it is not an absolute path".to_owned());
+    }
+    match purge_guard::canon::canon_path(root, deny.env(), user_sid) {
+        Err(_) => return Some("it does not canonicalise".to_owned()),
+        Ok(canon) if canon.needs_long_name => {
+            return Some("it needs 8.3 name resolution".to_owned());
+        }
+        Ok(canon) if prefix::depth(&canon.path) < 2 => {
+            return Some("it is a drive root".to_owned());
+        }
+        Ok(_) => {}
+    }
+    deny.root_rejection(root, true)
+        .map(|rule| format!("the guard refuses it as an app's root ({rule})"))
 }
 
 /// The act-time check of an object: `live` is the fingerprint of the identity the act module has just
