@@ -256,6 +256,7 @@ impl World {
             &self.fp,
             &app,
             inventory,
+            &[],
             None,
             OwnershipLimits::default(),
         );
