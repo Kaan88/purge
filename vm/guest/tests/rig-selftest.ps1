@@ -128,6 +128,16 @@ Check 'a settings set built with -Priority 4 has Priority=4 (not registered)' ($
     $msg = $null; try { $null = Get-M1bRunPrefix -Base 'm2-base' } catch { $msg = $_.Exception.Message }
     Check 'M1b: a base other than rig-base / dirty-base refused' ($msg -match 'rig-base or dirty-base')
     Check 'M1b: the gate list has the 8 apps' (@(Get-M1bGateApps).Count -eq 8 -and (Get-M1bGateApps) -contains 'python313-with-312')
+    # review R4c S3: the build record carries the rig inputs' hashes (read-only git and file reads)
+    $in = Get-M1bRigInputs -RepoRoot (Split-Path -Parent $Vm)
+    $trapSha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Vm 'truth\m1b-traps.json')).Hash.ToLowerInvariant()
+    $nLab = @(Get-ChildItem -LiteralPath (Join-Path $Vm 'truth\labels') -Filter '*.json' -File).Count
+    Check 'M1b: rig inputs hash the trap file, every label file, the guest scripts and rig.ps1' (
+        $in['vm/truth/m1b-traps.json'] -ceq $trapSha -and $in.Contains('vm/rig.ps1') -and $in.Contains('vm/guest/m1b-traps.ps1') -and
+        @($in.Keys | Where-Object { $_ -like 'vm/truth/labels/*.json' }).Count -eq $nLab -and
+        -not @($in.Keys | Where-Object { $_ -like 'vm/guest/tests/*' }).Count) "keys: $(@($in.Keys).Count)"
+    $bi = Get-M1bBuildInfo -Path '' -RepoRoot (Split-Path -Parent $Vm)
+    Check 'M1b: the build record has inputs and inputs_dirty' ($bi.inputs.Count -eq $in.Count -and $bi.Contains('inputs_dirty')) "inputs_dirty=$($bi.inputs_dirty)"
 }
 
 # --------------------------------------------------- rig.ps1: run directories never mix two runs

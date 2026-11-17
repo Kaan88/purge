@@ -402,7 +402,7 @@
             "type": "RegKey",
             "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000"
           },
-          "verdict": "absent",
+          "verdict": "not_preselected",
           "blocker": null
         }
       ]

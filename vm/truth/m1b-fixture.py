@@ -6,6 +6,11 @@ configuration, and the bad-run mutations that must make it fail. Not a VM captur
                                                           of powershell and temurin
     python -I m1b-fixture.py labelmap                     the "run=label-id ..." map collect would write
     python -I m1b-fixture.py mutate <dir> <name>          one bad-run control (names: MUTATIONS below)
+    python -I m1b-fixture.py nullmap                      the null runs collect would hand to the manifest
+    python -I m1b-fixture.py replayruns <dir> [<skip id>] five fake frozen runs for `m1b.sh replay` (review R4c S2)
+    python -I m1b-fixture.py xtask <vm/truth> <args...>   stub of `cargo xtask replay-diff | replay` for that step
+    python -I m1b-fixture.py rigtool <args...>            stub of `rigtool score` for that step
+    python -I m1b-fixture.py git <args...>                stub of git for that step (HEAD = COMMIT, clean)
 
 The manifest is written by m1b.sh itself (pyeval manifest), as collect writes it. The replay diff is the committed
 vm/truth/m1b-replay-diff.json, so the selftest fails when the scorer and the committed diff disagree (R4b B1).
@@ -23,6 +28,9 @@ PREFIX = {'clean': 'm1b', 'dirty': 'm1bd', 'cp': 'm1bcp'}
 TRAP_RUNS = ['m1b-traps-7zip', 'm1bd-traps-7zip', 'm1bcp-traps-7zip']
 ENGINE = 'e' * 64
 COMMIT = 'c' * 40
+REPLAY_IDS = ['vscode', 'git', 'firefox', 'npp', '7zip']
+FROZEN_IDS = ['powershell', 'temurin', '7zip'] + REPLAY_IDS[:4]   # fixture frozen truths (FROZEN, SANITY, replay)
+NULL_RUNS = [f'{PREFIX[s]}-null{n}' for s in ('clean', 'dirty', 'cp') for n in (1, 2, 3)]
 
 
 def wj(path, doc):
@@ -106,14 +114,38 @@ def planted_doc(traps):
             'updated': '2026-11-17T10:30:00+01:00', 'cases': cases}
 
 
-def run_doc(run, phases):
+def run_doc(run, phases, inputs):
     sha = hashlib.sha256(('run.json of ' + run).encode()).hexdigest()
     return {'schema': 'purge.rig.m1b-run/1', 'run': run, 'run_json_sha256': sha,
             'run_json': {'run': run, 'started': '2026-11-17T09:00:00+01:00', 'finished': '2026-11-17T09:40:00+01:00',
                          'phases': [{'name': p, 'ok': True, 'error': None} for p in phases]},
-            'build': {'schema': 'purge.rig.m1b-build/1', 'run': run, 'run_json_sha256': sha, 'engine': 'purge-engine.exe',
-                      'engine_sha256': ENGINE, 'engine_sha256_after': ENGINE, 'commit': COMMIT, 'source_dirty': False},
+            'build': None if inputs is None else {
+                'schema': 'purge.rig.m1b-build/1', 'run': run, 'run_json_sha256': sha, 'engine': 'purge-engine.exe',
+                'engine_sha256': ENGINE, 'engine_sha256_after': ENGINE, 'commit': COMMIT, 'source_dirty': False,
+                'inputs': dict(inputs), 'inputs_after': dict(inputs), 'inputs_dirty': False},
             'plan_items': 2}
+
+
+def sha_file(p):
+    with open(p, 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def rig_inputs(truth):
+    """The rig input hashes rig.ps1 (Get-M1bRigInputs) would record for the fixture's truth copy (review R4c S3)."""
+    out = {'vm/truth/m1b-traps.json': sha_file(os.path.join(truth, 'm1b-traps.json')),
+           'vm/rig.ps1': 'a' * 64, 'vm/guest/m1b-traps.ps1': 'b' * 64, 'vm/guest/run-app.ps1': 'd' * 64}
+    for f in sorted(os.listdir(os.path.join(truth, 'labels'))):
+        if f.endswith('.json'):
+            out['vm/truth/labels/' + f] = sha_file(os.path.join(truth, 'labels', f))
+    return out
+
+
+def frozen_truth(a):
+    """A fixture frozen truth: one leftover, one ambient item."""
+    return {'schema': 'fixture', 'id': a, 'items': [
+        {'target': {'type': 'RegKey', 'path': f'HKLM\\SOFTWARE\\Fixture\\{a}'}, 'label': 'leftover', 'rule': 'default'},
+        {'target': {'type': 'Path', 'path': 'C:\\ProgramData\\Microsoft\\Windows\\WER\\Temp\\x.etl'}, 'label': 'ambient', 'rule': 'ambient:exact'}]}
 
 
 APP_PHASES = ['setup', 'install', 'launch', 'lists1', 'engine-inventory-1', 'snap1', 'msi-tables-1', 'engine-harvest',
@@ -146,8 +178,14 @@ def write(d, here):
     for f in os.listdir(os.path.join(here, 'labels')):
         if f.endswith('.json'):
             shutil.copy(os.path.join(here, 'labels', f), os.path.join(d, 'truth', 'labels', f))
-    for a in ('powershell', 'temurin'):
-        wj(os.path.join(d, 'truth', 'frozen', a, 'truth.json'), {'schema': 'fixture', 'app': a, 'items': []})
+    shutil.copy(os.path.join(here, 'deny.json'), os.path.join(d, 'truth', 'deny.json'))
+    for a in FROZEN_IDS:
+        wj(os.path.join(d, 'truth', 'frozen', a, 'truth.json'), frozen_truth(a))
+    # the rig-base run truths SANITY compares with the frozen ones (review R4c S4)
+    for a in FROZEN_IDS:
+        if a in APPS:
+            wj(os.path.join(d, f'truth-clean-{a}.json'), frozen_truth(a))
+    inputs = rig_inputs(os.path.join(d, 'truth'))
     # scores
     for s in ('clean', 'dirty', 'cp'):
         wj(os.path.join(d, f'score-{s}.json'),
@@ -161,7 +199,7 @@ def write(d, here):
     wj(os.path.join(d, 'replay-score.json'), {'apps': [
         {'id': a, 'tools': [{'tool': 'purge', 'danger_listed': 0, 'precision_safe': 1.0,
                              'items': [item(f'K:HKU\\{SID}\\Software\\7-Zip')] if a == '7zip' else []}]}
-        for a in ('vscode', 'git', 'firefox', 'npp', '7zip')]})
+        for a in REPLAY_IDS], 'replay': replay_block(os.path.join(d, 'truth'))})
     shutil.copy(os.path.join(here, 'm1b-replay-diff.json'), os.path.join(d, 'replay-diff.json'))
     # traps
     traps = rj(os.path.join(here, 'm1b-traps.json'))
@@ -170,9 +208,11 @@ def write(d, here):
         wj(os.path.join(d, f'traps-planted-{run}.json'), planted_doc(traps))
     # run records
     for _, _, run in app_runs():
-        wj(os.path.join(d, 'runs', f'{run}.json'), run_doc(run, APP_PHASES))
+        wj(os.path.join(d, 'runs', f'{run}.json'), run_doc(run, APP_PHASES, inputs))
     for run in TRAP_RUNS:
-        wj(os.path.join(d, 'runs', f'{run}.json'), run_doc(run, TRAP_PHASES))
+        wj(os.path.join(d, 'runs', f'{run}.json'), run_doc(run, TRAP_PHASES, inputs))
+    for run in NULL_RUNS:
+        wj(os.path.join(d, 'runs', f'{run}.json'), run_doc(run, ['setup', 'snap0', 'wait', 'snap1', 'snap2'], None))
     # budgets (G7)
     runs = []
     os.makedirs(os.path.join(d, 'budgets'), exist_ok=True)
@@ -191,6 +231,12 @@ def write(d, here):
 
 def labelmap():
     return ' '.join(f'{run}={a}' for _, a, run in app_runs())
+
+
+def replay_block(truth):
+    """The block `m1b.sh replay` (pyeval replaybind) adds to the replay score."""
+    return {'schema': 'purge.rig.m1b-replay/1', 'runs': list(REPLAY_IDS), 'commit': COMMIT, 'source_dirty': False,
+            'frozen': {a: sha_file(os.path.join(truth, 'frozen', a, 'truth.json')) for a in REPLAY_IDS}}
 
 
 # ------------------------------------------------------------------------------------------- mutations
@@ -232,6 +278,28 @@ def planted_case(d, run, fn):
 
 def build(run, fn):
     return lambda d: edit(d, f'runs/{run}.json', lambda doc: fn(doc['build']))
+
+
+def all_builds(fn):
+    def go(d):
+        for f in os.listdir(os.path.join(d, 'runs')):
+            doc = rj(os.path.join(d, 'runs', f))
+            if doc.get('build'):
+                fn(doc['build'])
+                wj(os.path.join(d, 'runs', f), doc)
+    return go
+
+
+def set_input(key, val, after_only=False):
+    def fn(b):
+        if not after_only:
+            b['inputs'][key] = val
+        b['inputs_after'][key] = val
+    return fn
+
+
+def relabel(label):
+    return lambda doc: doc['items'][0].update(label=label)
 
 
 def budget_runs(fn):
@@ -302,6 +370,31 @@ MUTATIONS = {
     'no_safe_7zip': lambda d: edit(d, 'score-clean.json', lambda doc: (
         [i.update(band='Likely', preselected=False) for i in app_tool(doc, '7zip')['items']],
         app_tool(doc, '7zip').update(precision_safe=None))),
+    # review R4c S2: the replay score holds the five runs and is bound to the gate's commit
+    'replay_score_run_missing': lambda d: edit(d, 'replay-score.json', lambda doc: doc.update(
+        apps=[a for a in doc['apps'] if a['id'] != 'npp'])),
+    'replay_score_7zip_only': lambda d: edit(d, 'replay-score.json', lambda doc: doc.update(
+        apps=[a for a in doc['apps'] if a['id'] == '7zip'])),
+    'replay_score_no_block': lambda d: edit(d, 'replay-score.json', lambda doc: doc.pop('replay')),
+    'replay_score_other_commit': lambda d: edit(d, 'replay-score.json', lambda doc: doc['replay'].update(commit='d' * 40)),
+    'replay_score_dirty': lambda d: edit(d, 'replay-score.json', lambda doc: doc['replay'].update(source_dirty=None)),
+    'replay_score_frozen_changed': append_ws('truth/frozen/npp/truth.json'),
+    # review R4c S3: trap, label and guest files bound per run
+    'inputs_missing': build('m1b-node', lambda b: b.pop('inputs')),
+    'inputs_dirty': build('m1bcp-traps-7zip', lambda b: b.update(inputs_dirty=True)),
+    'inputs_two_sets': build('m1bd-python', set_input('vm/guest/run-app.ps1', '1' * 64)),
+    'inputs_changed_in_campaign': build('m1b-vcredist', set_input('vm/guest/m1b-traps.ps1', '2' * 64, after_only=True)),
+    'inputs_traps_edited_before': all_builds(set_input('vm/truth/m1b-traps.json', '3' * 64)),
+    'inputs_label_edited_before': all_builds(set_input('vm/truth/labels/node.json', '4' * 64)),
+    # review R4c S4: run truth against frozen truth
+    'sanity_relabelled': lambda d: edit(d, 'truth-clean-powershell.json', relabel('ambient')),
+    'sanity_truth_missing': lambda d: os.remove(os.path.join(d, 'truth-clean-7zip.json')),
+    'sanity_run_only': lambda d: edit(d, 'truth-clean-temurin.json', lambda doc: doc['items'].append(
+        {'target': {'type': 'Path', 'path': 'C:\\Users\\rig\\.java'}, 'label': 'leftover', 'rule': 'default'})),
+    'sanity_frozen_only': lambda d: edit(d, 'truth-clean-7zip.json', lambda doc: doc['items'].pop(0)),
+    # the null runs (R4b S2 rest)
+    'nulls_too_few': lambda d: edit(d, 'manifest.json', lambda doc: doc['nulls'].update(dirty=['m1bd-null1'])),
+    'null_phase_failed': lambda d: edit(d, 'runs/m1bcp-null2.json', lambda doc: doc['run_json']['phases'][2].update(ok=False)),
 }
 
 
@@ -388,7 +481,85 @@ def prestate(d, here):
     shutil.copy(os.path.join(here, 'labels', 'python312-with-313.json'), os.path.join(d, 'labels.json'))
 
 
+# ------------------------------------------------------------------------------------------- replay step stubs
+# `m1b.sh replay` (review R4c S2) with stub commands: the frozen runs, cargo xtask, rigtool score and git.
+def replayruns(d, skip=None):
+    if os.path.exists(d):
+        shutil.rmtree(d)
+    for a in REPLAY_IDS:
+        if a == skip:
+            continue
+        rd = os.path.join(d, a)
+        wj(os.path.join(rd, 'run.json'), {'schema': 'purge.rig.run/1', 'id': a, 'run': a})
+        wj(os.path.join(rd, f'lists-{a}-0.json'), {'uninstall': []})
+        for ph in ('0', '2'):
+            snap(os.path.join(rd, f'snap-{a}-{ph}.tsv.gz'), [])
+        os.makedirs(os.path.join(rd, 'plans'))   # the frozen run's own plans: the step must not write here
+
+
+def opt(args, name):
+    return args[args.index(name) + 1] if name in args else None
+
+
+def xtask(here, args):
+    if args[0] == 'replay-diff':
+        shutil.copy(os.path.join(here, 'm1b-replay-diff.json'), opt(args, '-o'))
+    elif args[0] == 'replay':
+        run, app, out = opt(args, '--run'), opt(args, '--app'), opt(args, '-o')
+        if not os.path.isfile(os.path.join(run, 'run.json')):
+            raise SystemExit(f'xtask stub: no run {run}')
+        t = {'type': 'RegKey', 'path': f'HKU\\{SID}\\Software\\7-Zip' if app == '7zip' else f'HKLM\\SOFTWARE\\Fixture\\{app}'}
+        wj(out, {'app': app, 'items': [{'target': t, 'band': 'Safe', 'preselected': True}]})
+        wj(out[:-5] + '.scan.json', {'items': [{'target': t, 'action': 'DeleteKey'}]})
+    else:
+        raise SystemExit(f'xtask stub: {args}')
+
+
+def rigtool(args):
+    """rigtool score --set <dirs> ... --json J: one purge score per dir, needing truth.json, both snaps and plans
+    with actions (the step's plan_actions ran)."""
+    if args[0] != 'score':
+        raise SystemExit(f'rigtool stub: {args}')
+    dirs = args[args.index('--set') + 1:]
+    dirs = dirs[:next((i for i, x in enumerate(dirs) if x.startswith('--')), len(dirs))]
+    apps = []
+    for d in dirs:
+        a = os.path.basename(os.path.normpath(d))
+        for f in ('truth.json', f'snap-{a}-0.tsv.gz', f'snap-{a}-2.tsv.gz', 'plans/purge.json'):
+            if not os.path.isfile(os.path.join(d, f)):
+                raise SystemExit(f'rigtool stub: {d}: no {f}')
+        if len(os.listdir(os.path.join(d, 'plans'))) != 1:
+            raise SystemExit(f'rigtool stub: {d}: plans/ holds more than the purge plan')
+        plan = rj(os.path.join(d, 'plans', 'purge.json'))
+        if any(not i.get('action') for i in plan['items']):
+            raise SystemExit(f'rigtool stub: {d}: a plan item without its sidecar action')
+        items = [{'target': 'K:' + i['target']['path'], 'band': i['band'], 'preselected': i['preselected'], 'outcome': 'hit'}
+                 for i in plan['items']]
+        apps.append({'id': rj(os.path.join(d, 'truth.json')).get('id') or a, 'dir': d,
+                     'tools': [{'tool': 'purge', 'danger_listed': 0, 'precision_safe': 1.0, 'items': items}]})
+    wj(opt(args, '--json'), {'apps': apps})
+
+
+def git(args):
+    if 'rev-parse' in args:
+        print(COMMIT)
+    elif 'status' not in args:
+        raise SystemExit(f'git stub: {args}')
+
+
 def main(argv):
+    if len(argv) >= 3 and argv[1] == 'xtask':
+        xtask(argv[2], argv[3:])
+        return
+    if len(argv) >= 2 and argv[1] in ('rigtool', 'git'):
+        (rigtool if argv[1] == 'rigtool' else git)(argv[2:])
+        return
+    if len(argv) in (3, 4) and argv[1] == 'replayruns':
+        replayruns(argv[2], argv[3] if len(argv) == 4 else None)
+        return
+    if len(argv) == 2 and argv[1] == 'nullmap':
+        print(' '.join(NULL_RUNS))
+        return
     if len(argv) == 4 and argv[1] == 'write':
         write(argv[2], argv[3])
     elif len(argv) == 4 and argv[1] == 'churn':

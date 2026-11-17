@@ -1038,7 +1038,10 @@ M0/M1a run. When options are given, run.json gets an `m1b` block and run-app add
     `traps-planted-<run>.json` for K9.
 - **Build record.** rig.ps1 writes `<run>\m1b-build.json` (`purge.rig.m1b-build/1`) for each app run: the engine's SHA-256
   before and after the campaign, HEAD, whether crates/bins/tools/kb/Cargo.*/rust-toolchain.toml differ from HEAD, and the
-  SHA-256 of the pulled run.json. It does not hash the guest's copy of the engine.
+  SHA-256 of the pulled run.json. It does not hash the guest's copy of the engine. Since review R4c S3 it also holds
+  the rig inputs (`Get-M1bRigInputs`): the SHA-256 of `truth/m1b-traps.json`, every `truth/labels/*.json`, every file
+  of `guest/` (not `guest/tests`) and `rig.ps1`, before (`inputs`) and after (`inputs_after`) the campaign, and
+  whether they differ from HEAD, untracked files included (`inputs_dirty`).
 
 ### 12.3 Trap expectations (`truth/m1b-traps.json`)
 
@@ -1086,16 +1089,24 @@ What each finding turned out to be:
   - The plants copy PurgeTrap*.exe and *.dll files into `C:\Program Files\7-Zip`, and the vendor uninstall does not
     remove them. So the root survives, and so do the service exe and the COM dll themselves.
   - Likely is therefore the right answer. Safe needs a plant whose root is removed completely (not done).
+  - `listed` passes at Weak too, so K9's note reports the band of the four (`owned bands: ...`) for the gate report.
+    Ruling: docs/DECISIONS.md, M1b, review R4c S1.
 - **wer-twins, 7zFM report (design rule, now `protected` with `DenyListed`).** Reports under `%ProgramData%` are
   denied by `fs.programdata.microsoft`, as the FS-WER module documents. The plan lists the report Blocked.
-- **msi-remnants (design rule, now `absent`).**
+- **msi-remnants (engine recall limit, now `not_preselected`; review R4c S1 corrected the smoke fix's `absent`).**
   - The plant writes `UserData\S-1-5-18\Products\<P>\InstallProperties` (with `LocalPackage`) and a Components value.
   - A read-only probe of the guest after the scan (`after\msi-state-probe.log`, WindowsInstaller COM
     `ProductState`) returned 2 (`INSTALLSTATE_ABSENT`, "installed for a different user") for both 7-Zip's code and the
     foreign code. `Products` does not list either code.
   - REG-ARP-MSI offers a product's registration only when Windows Installer reports it unknown in every context
     (`ScanCtx::product_known`). A product another user may have installed is never treated as gone. So nothing is
-    offered, and nothing may be.
+    offered.
+  - **Known limit (REG-ARP-MSI recall).** The plant is the remnant the scanner is for, and its usual shape: that key
+    with its `InstallProperties` is enough for Windows Installer to report any code as installed for another user.
+    So REG-ARP-MSI never offers it. This is safe, but it is a gap of the engine, not a design rule (docs/DECISIONS.md,
+    M1b, review R4c S1).
+  - `absent` would score a later engine that offers the app's own remnant (not preselected) as an escape, and made the
+    case the same as msi-remnants-foreign. `not_preselected` allows that offer and still fails a Safe or preselected one.
   - To test the Safe path, the plant would have to leave a registration that Windows Installer reports as unknown
     (not done).
 
@@ -1152,6 +1163,14 @@ had nothing to count (0 of 29). The design labels them kept_owner, so the truth 
 
 ### 12.5 Gate script (`truth/m1b.sh`) and budgets
 
+**G1 first (review R4c S2).** `bash truth/m1b.sh replay` (from `vm/`, on the host, at the gate's commit) writes the
+two G1 inputs: it rewrites `truth/m1b-replay-diff.json` (`cargo xtask replay-diff`), replays the five frozen runs
+(vscode, git, firefox, npp, 7zip from `$PURGE_RUNS_DIR`, else `runs/`) with `cargo xtask replay` into
+`runs/m1b-replay/<id>/` (copies of the run's snaps, lists-0 and run.json, the committed `truth/frozen/<id>/truth.json`,
+the plan with its sidecar actions; the frozen run directory is not written), scores them with `rigtool score --classes`
+and writes `truth/m1b-replay-score.json` (+ `.md`) with a `replay` block (`purge.rig.m1b-replay/1`: runs, HEAD, engine
+sources clean, frozen truth SHA-256). Exit 1 when a run could not be replayed or the diff has unexplained rows.
+
 `bash truth/m1b.sh` (run from `vm/`) has two stages.
 
 **Collect.** It writes everything into `truth/m1b-evidence/`:
@@ -1162,18 +1181,29 @@ had nothing to count (0 of 29). The design labels them kept_owner, so the truth 
 - `rigtool traps` per trap run
 - the budgets dir, the replay diff and the replay score
 
-Collect also copies each run's run.json subset and build record to `runs/<run>.json` and writes `manifest.json`
-(`purge.rig.m1b-evidence/2`: config, trap file and label digests, frozen truths, rigtool).
+Collect also copies each run's run.json subset and build record to `runs/<run>.json` (null runs too), each run's
+truth to `truth-<set>-<id>.json`, and writes `manifest.json` (`purge.rig.m1b-evidence/2`: config, trap file and label
+digests, frozen truths, rigtool, the null runs per set).
 
-**Evaluate.** It checks RUN, BIND, FROZEN, K1-K9, K14 and K16:
+**Evaluate.** It checks RUN, BIND, FROZEN, SANITY, K1-K9, K14 and K16:
 - It prints one line per criterion and app, with value, limit and PASS/FAIL.
 - It writes `truth/m1b-score.json` (`purge.rig.m1b-score/2`, with `gate` and `not_gate_because`).
 - A missing input gives a FAIL line; nothing is skipped.
-- **RUN**: every app and trap run finished, every phase ok.
+- **RUN**: every app and trap run finished, every phase ok; each set has at least 2 null runs for its ambient set, each
+  finished with every phase ok (R4b S2 rest).
 - **BIND**: each run's build record names its run.json (SHA-256), the engine did not change during the campaign, the
   sources were clean, one engine and one commit over all runs, the budgets' M1b engine is that engine, and the trap file
-  and label files are the committed ones with each run's label id equal to its app id.
+  and label files are the committed ones with each run's label id equal to its app id. Review R4c S3: every run holds
+  the same rig input hashes (12.2), unchanged during the campaign, clean against HEAD, and their trap and label files
+  are the files scored with. Review R4c S2: the replay score has its `replay` block for the five runs, the runs'
+  commit, clean engine sources and the current frozen truths.
 - **FROZEN**: `truth/frozen/<app>/truth.json` exists for powershell and temurin.
+- **SANITY** (review R4c S4, as m1a.sh's sanity step): each rig-base run's truth against `truth/frozen/<id>/truth.json`
+  where one exists (7zip, python, node, vcredist, powershell, temurin), items keyed with random names normalised as the
+  freeze compares them. A frozen leftover or user_data item that the run labels otherwise fails. Items on one side only
+  (a launch that did nothing, an uninstall that removed more or less) are counted and listed in the note for the gate
+  report, not failed. The dirty and Clean-Pro sets have no frozen truth.
+- **K4/K7 G1**: the replay score must hold a purge score for each of the five runs (one row each); another app fails.
 - **K1-K6** fail on an empty plan (truth items but nothing offered) or a score without counts.
 - **K9** needs every case and `com-shared-class#between` planted ok, every expectation target among the planted objects
   (an object that already existed counts and is reported; a note-only or missing one fails), TrapA 7zip and TrapB node.
@@ -1189,8 +1219,11 @@ Options:
 - `--evaluate DIR` runs only the evaluate stage on DIR (exit 3 at best).
 - `--selftest` builds a SYNTHETIC passing evidence dir (`truth/m1b-fixture.py`) and checks that it exits 0, that each
   bad-run control (missing plant, failed plant phase, empty plan, unbound or rebuilt engine, dirty sources, two commits,
-  changed traps or labels, label override, budget exit/rounds/cache, unexplained or unlisted promotion...) fails on its
-  named criterion, and that every non-default setting gives exit 3.
+  changed traps or labels, label override, budget exit/rounds/cache, unexplained or unlisted promotion; since R4c a
+  replay score short of a run or unbound, rig inputs missing, dirty, differing between runs or edited before the
+  campaign, a frozen leftover relabelled, a missing run truth, too few or broken null runs...) fails on its named
+  criterion, that every non-default setting gives exit 3, and that `replay` with stub cargo xtask, rigtool and git
+  writes a score the gate passes with (and fails K4 G1 when a run is missing).
 
 `m1b-budgets` runs on the host and only reads:
 - For each engine it runs `harvest <program>` and then `scan --mode forced` with `PURGE_TIMING=1`, for 3 rounds. Round 1 is cold; rounds 2 and 3 are warm.

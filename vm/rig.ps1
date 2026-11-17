@@ -1232,22 +1232,44 @@ function Get-M1bBuildInfo {
     param([string]$Path = '', [string]$RepoRoot = $script:RepoRoot)
     $sha = $null
     if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) { $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
-    $commit = $null; $dirty = $null
+    $commit = $null; $dirty = $null; $inDirty = $null
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try {
         $c = @(& git -C $RepoRoot rev-parse HEAD 2>$null)
         if ($LASTEXITCODE -eq 0 -and $c.Count) { $commit = "$($c[0])".Trim() }
         $d = @(& git -C $RepoRoot status --porcelain --untracked-files=no -- crates bins tools kb Cargo.toml Cargo.lock rust-toolchain.toml 2>$null)
         if ($LASTEXITCODE -eq 0) { $dirty = [bool]($d | Where-Object { "$_".Trim() }) }
+        # review R4c S3: the rig inputs (untracked files count: a new label file is hashed too)
+        $d = @(& git -C $RepoRoot status --porcelain -- vm/truth/m1b-traps.json vm/truth/labels vm/guest vm/rig.ps1 2>$null)
+        if ($LASTEXITCODE -eq 0) { $inDirty = [bool]($d | Where-Object { "$_".Trim() }) } else { $inDirty = $null }
     } finally { $ErrorActionPreference = $old }
-    [ordered]@{ path = $Path; sha256 = $sha; commit = $commit; source_dirty = $dirty }
+    [ordered]@{ path = $Path; sha256 = $sha; commit = $commit; source_dirty = $dirty
+        inputs = (Get-M1bRigInputs -RepoRoot $RepoRoot); inputs_dirty = $inDirty }
+}
+
+# The rig inputs an M1b run depends on (review R4c S3): the SHA-256 (lower-case hex) of the trap file, every label
+# file, every file of vm\guest (not its tests) and rig.ps1, keyed by the path from the repository root
+# ('vm/guest/run-app.ps1'). truth\m1b.sh (BIND) requires one set over all runs, unchanged during the campaign and clean
+# against HEAD, whose trap and label files are those it scores with.
+function Get-M1bRigInputs {
+    param([string]$RepoRoot = $script:RepoRoot)
+    $vm = Join-Path $RepoRoot 'vm'
+    $files = @(Get-Item -LiteralPath (Join-Path $vm 'truth\m1b-traps.json'), (Join-Path $vm 'rig.ps1') -ErrorAction SilentlyContinue)
+    $files += @(Get-ChildItem -LiteralPath (Join-Path $vm 'truth\labels') -Filter '*.json' -File -ErrorAction SilentlyContinue)
+    $files += @(Get-ChildItem -LiteralPath (Join-Path $vm 'guest') -File -ErrorAction SilentlyContinue)
+    $out = [ordered]@{}
+    foreach ($f in @($files | Sort-Object FullName)) {
+        $rel = 'vm/' + $f.FullName.Substring($vm.Length).TrimStart('\').Replace('\', '/')
+        $out[$rel] = (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLowerInvariant()
+    }
+    $out
 }
 
 # Writes <run>\m1b-build.json (purge.rig.m1b-build/1) for each app run of a campaign (review R4b S2): the build
 # declared before the campaign, the engine's SHA-256 again after it (a rebuild in between shows) and the SHA-256 of
 # the run.json pulled for that run, so a record left beside an older or newer run.json does not bind it.
 function Save-M1bBuildRecords {
-    param($Records, $Build, [string]$ShaAfter, [string]$Mode, [string]$Base)
+    param($Records, $Build, [string]$ShaAfter, $InputsAfter, [string]$Mode, [string]$Base)
     foreach ($rec in @($Records)) {
         if (-not $rec -or -not $rec.id) { continue }    # null runs run no engine
         $dir = Join-Path $script:RunsDir $rec.run
@@ -1257,7 +1279,8 @@ function Save-M1bBuildRecords {
         if (Test-Path -LiteralPath $rj -PathType Leaf) { $rjSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $rj).Hash.ToLowerInvariant() }
         $doc = [ordered]@{ schema = 'purge.rig.m1b-build/1'; run = $rec.run; mode = $Mode; base = $Base; vm = $script:VmName
             run_json_sha256 = $rjSha; engine = $Build.path; engine_sha256 = $Build.sha256; engine_sha256_after = $ShaAfter
-            commit = $Build.commit; source_dirty = $Build.source_dirty; campaign_ok = [bool]$rec.ok; written = (Get-Date).ToString('o') }
+            commit = $Build.commit; source_dirty = $Build.source_dirty; campaign_ok = [bool]$rec.ok; written = (Get-Date).ToString('o')
+            inputs = $Build.inputs; inputs_after = $InputsAfter; inputs_dirty = $Build.inputs_dirty }
         [IO.File]::WriteAllText((Join-Path $dir 'm1b-build.json'), (ConvertTo-Json -InputObject $doc -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
     }
 }
@@ -1267,8 +1290,10 @@ function Invoke-M1bEngineCampaign {
     param([Parameter(Mandatory)][string]$Mode, [Parameter(Mandatory)][string]$Engine, [string]$Base, [hashtable]$Campaign)
     $build = Get-M1bBuildInfo -Path $Engine
     if ($build.source_dirty -ne $false) { Write-RigLog "!! sources differ from HEAD $($build.commit) (or git failed): truth\m1b.sh will not bind these runs" }
+    if ($build.inputs_dirty -ne $false) { Write-RigLog "!! trap, label or guest files or rig.ps1 differ from HEAD (or git failed): truth\m1b.sh will not bind these runs" }
     $res = @(Invoke-Campaign @Campaign -Engine $Engine)
-    Save-M1bBuildRecords -Records $res -Build $build -ShaAfter (Get-M1bBuildInfo -Path $Engine).sha256 -Mode $Mode -Base $Base
+    $after = Get-M1bBuildInfo -Path $Engine
+    Save-M1bBuildRecords -Records $res -Build $build -ShaAfter $after.sha256 -InputsAfter $after.inputs -Mode $Mode -Base $Base
     $res
 }
 
