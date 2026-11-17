@@ -1,5 +1,5 @@
 plan tidynotes: tool purge, mode post, 16 item(s) (6 preselected)
-hash 6fb1a6fe4ced9e494aac758bda7afbe1d91a0ee129b2742e92174c2594c86ee1 (policy m1a.6)
+hash 5a3f55c6506fc0b7353a4f1db360326c463a1125eef6b91735701929fe03a161 (policy m1b.1)
 
 Safe (6)
   [x] RegValue HKLM\SOFTWARE\Classes\TidyNotes.Document\shell\open\command : (default)
