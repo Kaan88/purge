@@ -151,3 +151,10 @@ S-SHELLEX (wave 4, for R3):
 - guard lists only `Approved` as value container; Cached/ShellExecuteHooks/SharedTaskScheduler kept only by deny rules
 - PropertySystem\PropertyHandlers not covered (not in design)
 - non-walked user hive holding the class blocks the candidate; ProgID/extension handler keys found only through hits
+
+S-PRIVACY (wave 4, for R3):
+- UFH\SHC only Likely (framework treats store as shared); required test renamed ufh_shc_all_strings_owned_safe -> ..._offered_likely
+- cautious additions: per-user app traces only in own hive; no profile-token decoding in other hives / machine Layers; UserAssist Count over budget skipped (// warning:)
+- FeatureUsage known-folder GUID names never decoded (framework decoder) -> recall
+- MsiPackageUnreadable can stop Program Files traces (R2a S11)
+- MSI apps have no recorded shortcuts -> SHC slots never offered
