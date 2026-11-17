@@ -55,5 +55,91 @@
       "why": "The removed 3.12's own PythonCore subkey.",
       "gen": true
     }
-  ]
+  ],
+  "prestate": {
+    "note": "M1b K5 (review R4b S5, ruling 2026-11-17): the Python Launcher stays installed and the removed Python used it too. Its objects that existed before snap 0 and are still there after the uninstall are not in the diff, so truth/m1b.sh (prestate) adds every such object these rules match as a kept_owner truth item (top-most match; never one that holds a leftover or user_data truth item). Product rules expand per ARP entry named by `products` that is in lists-0 and lists-2 with the same key and product code. Hand-written; mk_labels.py keeps it.",
+    "products": "^Python Launcher$",
+    "rules": [
+      {
+        "label": "kept_owner",
+        "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\\\.(py|pyc|pyd|pyo|pyw|pyz|pyzw)(\\\\[^|]*)?(\\|.*)?$",
+        "why": ".py* extension keys of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\Python\\.(File|NoConFile|CompiledFile|ArchiveFile|NoConArchiveFile|Extension)(\\\\[^|]*)?(\\|.*)?$",
+        "why": "Python.* ProgIDs of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\CLSID\\\\\\{BEA218D2-6950-497B-9434-61683EC065FE\\}(\\\\[^|]*)?(\\|.*)?$",
+        "why": "Shell drop handler class of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\WOW6432Node\\\\Python(\\\\[^|]*)?(\\|.*)?$",
+        "why": "PyLauncher keys (32-bit view) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^P:C:\\\\Windows\\\\(pyw?\\.exe|pyshellext\\.amd64\\.dll)$",
+        "why": "py.exe, pyw.exe and the shell extension of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^P:C:\\\\ProgramData\\\\Package Cache$",
+        "why": "Burn's shared package cache root; it holds the cached package of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^K:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer\\\\(Products|Features|UpgradeCodes)$",
+        "why": "Windows Installer registration containers that hold the still-installed MSI products' registration (the launcher's among them); counted as in the M0 python truth."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^K:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\(Folders|UpgradeCodes|UserData)$",
+        "why": "Windows Installer machine-state containers that hold the still-installed MSI products' state (the launcher's among them); counted as in the M0 python truth."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\\\{{CODE}\\}(\\\\[^|]*)?(\\|.*)?$",
+        "why": "ARP entry of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer\\\\(Products|Features)\\\\{PACKED}(\\\\[^|]*)?(\\|.*)?$",
+        "why": "MSI product and feature registration of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\UserData\\\\S-1-5-18\\\\Products\\\\{PACKED}(\\\\[^|]*)?(\\|.*)?$",
+        "why": "MSI per-machine product state of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^V:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\UserData\\\\S-1-5-18\\\\Components\\\\[0-9A-F]{32}\\|{PACKED}$",
+        "why": "MSI component client values (the product code as client) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^V:HKLM\\\\SOFTWARE\\\\(Classes\\\\Installer|Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer)\\\\UpgradeCodes\\\\[0-9A-F]{32}\\|{PACKED}$",
+        "why": "Upgrade-code membership of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer\\\\Dependencies\\\\{DEPKEY}(\\\\[^|]*)?(\\|.*)?$",
+        "why": "Dependency provider key (default value = its product code) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^P:C:\\\\Windows\\\\Installer\\\\(\\{{CODE}\\}|SourceHash\\{{CODE}\\}|{LOCALPACKAGE})$",
+        "why": "Windows Installer's cached package (LocalPackage), icon folder and source hash of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      },
+      {
+        "label": "kept_owner",
+        "match": "^P:C:\\\\ProgramData\\\\Package Cache\\\\\\{{CODE}\\}v[0-9.]+$",
+        "why": "Burn's cache folder of the package of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10)."
+      }
+    ]
+  }
 }

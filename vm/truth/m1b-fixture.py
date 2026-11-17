@@ -305,9 +305,96 @@ MUTATIONS = {
 }
 
 
+# ------------------------------------------------------------------------------------------- freeze / prestate fixtures
+# Synthetic inputs of `m1b.sh freeze`'s comparison (pyeval freezecmp) and of the pre-state kept_owner step (pyeval
+# prestate), for the churn and K5 controls of the selftest (RIG.md sections 12.4, 12.6).
+WU = 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Orchestrator\\UScheduler'
+
+
+def whole_run(run):
+    return {'run': run, 'phases': [{'name': 'install', 'ok': True}, {'name': 'uninstall', 'ok': True}],
+            'install': {'exit': 0, 'timed_out': False}, 'uninstall': {'exit': 0, 'timed_out': False, 'entry_gone': True},
+            'main': {'key': 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{F1X}', 'name': 'Fixture'}}
+
+
+def churn(d, variant):
+    """Two freeze runs of app 'fx': a leftover in both (with a random temp name), Windows churn labelled leftover in
+    one run only, ambient churn in one run only. Variants: ok, mismatch (the shared leftover labelled ambient in fz2),
+    broken (fz1's ARP entry was not removed)."""
+    if os.path.exists(d):
+        shutil.rmtree(d)
+    lo = {'target': {'type': 'RegKey', 'path': f'HKU\\{SID}\\Software\\Fixture'}, 'label': 'leftover', 'rule': 'default'}
+    tmp = lambda r: {'target': {'type': 'Path', 'path': f'C:\\Users\\rig\\AppData\\Local\\Temp\\MSI{r}.LOG'}, 'label': 'leftover', 'rule': 'default'}
+    wu = {'target': {'type': 'RegValue', 'path': WU, 'name': 'UpdateModelVersion'}, 'label': 'leftover', 'rule': 'default'}
+    amb = {'target': {'type': 'Path', 'path': 'C:\\ProgramData\\Microsoft\\Windows\\WER\\Temp\\x.etl'}, 'label': 'ambient', 'rule': 'ambient:exact'}
+    t1 = {'id': 'fx', 'items': [lo, tmp('1a2b3')]}
+    t2 = {'id': 'fx', 'items': [dict(lo, label='ambient', rule='x') if variant == 'mismatch' else lo, tmp('9z8y7'), wu, amb]}
+    r1, r2 = whole_run('m1b-fz1-fx'), whole_run('m1b-fz2-fx')
+    if variant == 'broken':
+        r1['uninstall']['entry_gone'] = False
+    for k, t, r in ((1, t1, r1), (2, t2, r2)):
+        wj(os.path.join(d, f'm1b-fz{k}-fx', 'truth.json'), t)
+        wj(os.path.join(d, f'm1b-fz{k}-fx', 'run.json'), r)
+
+
+def snap(path, recs):
+    import gzip
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    esc = lambda s: s.replace('\\', '\\\\').replace('\t', '\\t')
+    with gzip.open(path, 'wt', encoding='utf-8', newline='\n') as f:
+        f.write('#purge-snap 1\t2026-11-17T00:00:00\tFIXTURE\tEnterpriseS\t26100.1\n')
+        for r in recs:
+            f.write('\t'.join([r[0]] + [esc(x) for x in r[1:]]) + '\n')
+
+
+def prestate(d, here):
+    """A python312-with-313 run whose Python Launcher (and 3.13) were installed before snap 0, with the committed
+    label file: launcher objects in both snaps, one .py key that holds a leftover value, an object gone by snap 2."""
+    if os.path.exists(d):
+        shutil.rmtree(d)
+    code, packed = '1A2B3C4D-0000-1111-2222-333344445555', 'D4C3B2A1000011112222333344445555'   # MSI packed form
+    C = 'HKLM\\SOFTWARE\\Classes\\'
+    UD = 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\'
+    un = 'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{' + code + '}'
+    k = lambda p: ('K', p, '1', '0', '0')
+    v = lambda p, n, pv='': ('V', p, n, '1', '2', '0', pv)
+    f = lambda p: ('F', p, '1', '20', '1', '0')
+    both = [k(C + '.py'), v(C + '.py', '', 'Python.File'), k(C + '.py\\ShellNew'), k(C + '.pyw'), k(C + 'Python.File'),
+            f('C:\\Windows\\py.exe'), f('C:\\Windows\\pyw.exe'), k(un), v(un, 'DisplayName', 'Python Launcher'),
+            k(C + 'Installer\\Products\\' + packed), k(UD + 'Products\\' + packed + '\\InstallProperties'),
+            v(UD + 'Products\\' + packed + '\\InstallProperties', 'LocalPackage', 'C:\\Windows\\Installer\\4f2a.msi'),
+            f('C:\\Windows\\Installer\\4f2a.msi'), v(UD + 'Components\\0123456789ABCDEF0123456789ABCDEF', packed, 'C:\\Windows\\py.exe'),
+            k(C + 'Installer\\Dependencies\\CPython-3.13_launcher'), v(C + 'Installer\\Dependencies\\CPython-3.13_launcher', '', '{' + code + '}'),
+            f('C:\\Windows\\Installer\\9999.msi'), k('HKLM\\SOFTWARE\\Python\\PythonCore\\3.13')]
+    s0 = both + [k(C + '.pyz')]                       # .pyz is gone by snap 2: not kept
+    # a new value under .pyw (a leftover truth item inside it); Windows Installer's temp packages: 7777.msi (a leftover)
+    # and 8888.msi (kept_owner by a generic cached-package rule) are listed, and so is the launcher's live LocalPackage
+    TP = 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\TempPackages'
+    s2 = both + [v(C + '.pyw', 'Stale312', 'x'), f('C:\\Windows\\Installer\\7777.msi'), f('C:\\Windows\\Installer\\8888.msi'), k(TP),
+                 v(TP, 'C:\\WINDOWS\\Installer\\7777.msi', '0'), v(TP, 'C:\\WINDOWS\\Installer\\8888.msi', '0'),
+                 v(TP, 'C:\\Windows\\Installer\\4f2a.msi', '0')]
+    run = 'm1b-python312-with-313'
+    rd = os.path.join(d, run)
+    snap(os.path.join(rd, f'snap-{run}-0.tsv.gz'), s0)
+    snap(os.path.join(rd, f'snap-{run}-2.tsv.gz'), s2)
+    ent = {'key': un, 'name': 'Python Launcher', 'version': '3.13.17', 'msi': '{' + code + '}'}
+    gone = {'key': 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{DEAD}', 'name': 'Python Launcher', 'msi': '{DEADBEEF-0000-0000-0000-000000000000}'}
+    wj(os.path.join(rd, f'lists-{run}-0.json'), {'uninstall': [ent, gone]})
+    wj(os.path.join(rd, f'lists-{run}-2.json'), {'uninstall': [ent]})
+    wj(os.path.join(rd, 'truth.json'), {'id': 'python312-with-313', 'counts': {'leftover': 1}, 'items': [
+        {'target': {'type': 'RegValue', 'path': C + '.pyw', 'name': 'Stale312'}, 'label': 'leftover', 'rule': 'default'},
+        {'target': {'type': 'Path', 'path': 'C:\\WINDOWS\\Installer\\7777.msi'}, 'label': 'leftover', 'rule': 'default'},
+        {'target': {'type': 'Path', 'path': 'C:\\WINDOWS\\Installer\\8888.msi'}, 'label': 'kept_owner', 'rule': 'labels: generic'}]})
+    shutil.copy(os.path.join(here, 'labels', 'python312-with-313.json'), os.path.join(d, 'labels.json'))
+
+
 def main(argv):
     if len(argv) == 4 and argv[1] == 'write':
         write(argv[2], argv[3])
+    elif len(argv) == 4 and argv[1] == 'churn':
+        churn(argv[2], argv[3])
+    elif len(argv) == 4 and argv[1] == 'prestate':
+        prestate(argv[2], argv[3])
     elif len(argv) == 2 and argv[1] == 'labelmap':
         print(labelmap())
     elif len(argv) == 4 and argv[1] == 'mutate':

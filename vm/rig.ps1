@@ -1305,9 +1305,13 @@ function Invoke-M1bMode {
             # Frozen truth is Inbound rig-base truth (FROZEN.md): the M0 method, vendor uninstall, no engine.
             if ($script:VmName -cne 'Inbound-Win11-Test' -or $Base -ne 'rig-base') { throw 'm1b-freeze runs on Inbound-Win11-Test, rig-base only (the frozen truth is Inbound rig-base truth)' }
             if (-not $ids.Count) { $ids = @(Get-M1bFreezeApps) }
+            # One null run per round (default; -Nulls n for more), m1b-fz<k>-null<n>: truth\m1b.sh freeze builds the
+            # ambient set of the freeze from them (with truth\ambient.json), as M0 and M1a built theirs from the null
+            # runs of the same campaign (RIG.md section 12.6).
+            $nn = $(if ($Nulls -lt 0) { 1 } else { $Nulls })
             $all = @()
             foreach ($k in 1, 2) {
-                $all += @(Invoke-Campaign -Ids $ids -Nulls 0 -Snapshot 'rig-base' -RunPrefix (Get-M1bRunPrefix -Freeze $k -RunPrefix $RunPrefix) -M1b @{ msi_tables = $true } @common)
+                $all += @(Invoke-Campaign -Ids $ids -Nulls $nn -Snapshot 'rig-base' -RunPrefix (Get-M1bRunPrefix -Freeze $k -RunPrefix $RunPrefix) -M1b @{ msi_tables = $true } @common)
             }
             return $all
         }

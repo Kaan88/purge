@@ -51,8 +51,13 @@
     {
       "label": "kept_owner",
       "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\WindowsUpdate\\\\Services\\\\(Pending\\\\)?7971F918-A847-4430-9279-4A52D1EFE18D(\\\\[^|]*)?(\\|.*)?$",
-      "why": "Review R4b S4 (suspected, from the MSI defaults USE_MU=1 / ENABLE_MU=1): the install opts the machine into Microsoft Update (service 7971F918-...). Windows state that other products' updates use; the uninstall leaves it and it must stay. UNSURE until the m1b-freeze runs show it. Not frozen."
+      "why": "Review R4b S4: the MSI defaults (USE_MU=1 / ENABLE_MU=1) opt the machine into Microsoft Update (service 7971F918-...). Windows Update state that other products' updates use; the uninstall leaves it and it must stay. Seen in both m1b-freeze runs (2026-11-17)."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\WindowsUpdate\\\\Services\\|DefaultService$",
+      "why": "Windows Update's default-service value, written with the Microsoft Update opt-in above and left by the uninstall (both m1b-freeze runs, 2026-11-17): Windows Update state, must stay."
     }
   ],
-  "note": "PowerShell 7.6.10 LTS x64 MSI (M1b, M1B-RIG-HOST). Launched once (pwsh.exe -NoLogo). Hand rules: the MSI containers and the per-user PowerShell folders that hold user data. Not frozen until the two m1b-freeze runs are reviewed (vm/RIG.md section 12). R4b S4: the Microsoft Update opt-in is kept_owner (suspected, unfrozen)."
+  "note": "PowerShell 7.6.10 LTS x64 MSI (M1b, M1B-RIG-HOST). Launched once (pwsh.exe -NoLogo). Hand rules: the MSI containers and the per-user PowerShell folders that hold user data. Frozen 2026-11-17 (truth/frozen/powershell). R4b S4: the Microsoft Update opt-in (service key and DefaultService) is kept_owner, seen in both m1b-freeze runs (2026-11-17)."
 }

@@ -25,5 +25,5 @@
       "why": "SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state."
     }
   ],
-  "note": "Eclipse Temurin JDK 21.0.13+9 x64 MSI, default features (M1b, M1B-RIG-HOST). Not launched (no GUI exe). Hand rules: the MSI containers only. Not frozen until the two m1b-freeze runs are reviewed."
+  "note": "Eclipse Temurin JDK 21.0.13+9 x64 MSI, default features (M1b, M1B-RIG-HOST). Not launched (no GUI exe). Hand rules: the MSI containers only. Frozen 2026-11-17 (truth/frozen/temurin): the MSI uninstall removes every file and key the install wrote; no leftover remains."
 }

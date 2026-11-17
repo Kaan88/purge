@@ -67,6 +67,9 @@ TRAP_RUNS=${M1B_TRAP_RUNS:-$DEF_TRAPS}
 BUDGETS=${M1B_BUDGETS:-$RUNS/m1b-budgets}
 REPLAY_DIFF=${M1B_REPLAY_DIFF:-truth/m1b-replay-diff.json}
 REPLAY_SCORE=${M1B_REPLAY_SCORE:-truth/m1b-replay-score.json}
+# Label files every M1b truth adds to the app's own (collect and freeze): the M1a servicing rules and the M1b noise
+# list of Windows-owned churn areas (labels/_m1b-noise.json, RIG.md section 12.6). Both only label ambient.
+M1B_TRUTH_LABELS=(--labels truth/labels/_os-servicing.json --labels truth/labels/_m1b-noise.json)
 
 # The default of each gate input (see the header); an unset variable, or one equal to its default, is the default.
 def_of() {
@@ -126,7 +129,8 @@ def sha256_file(p):
 
 
 def label_digest(labels_dir, lid):
-    """SHA-256 over a label file, every file it includes (recursively) and _os-servicing.json; None if one is missing."""
+    """SHA-256 over a label file, every file it includes (recursively), _os-servicing.json and _m1b-noise.json; None
+    if one is missing."""
     seen = {}
 
     def walk(name, depth):
@@ -145,6 +149,7 @@ def label_digest(labels_dir, lid):
             walk(i, depth + 1)
     walk(lid + '.json', 0)
     walk('_os-servicing.json', 0)
+    walk('_m1b-noise.json', 0)
     if any(h is None for h in seen.values()):
         return None
     return hashlib.sha256(''.join(f'{n} {h}\n' for n, h in sorted(seen.items())).encode()).hexdigest()
@@ -194,6 +199,381 @@ if MODE == 'manifest':
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, 'w', encoding='utf-8') as f:
         json.dump(doc, f, indent=2, ensure_ascii=False)
+    sys.exit(0)
+
+
+# ------------------------------------------------------------------------------------------- pre-state kept_owner
+# prestate <truth.json> <snap0> <snap2> <lists0> <lists2> <label file>: review R4b S5, ruling 2026-11-17 (RIG.md
+# section 12.4). A product that stays installed and that the removed app shared (the Python Launcher of the two Python
+# pairs) was installed before snap 0, so the diff never sees its objects and K5 has nothing to count. The label file's
+# `prestate` block names them: every object in snap 0 AND snap 2 that one of its rules matches becomes a kept_owner
+# truth item (`prestate: true`), top-most per rule, never one that is or holds a leftover / user_data truth item (such
+# a match is opened to its matching children instead, and reported). Product rules ({CODE}, {PACKED},
+# {LOCALPACKAGE}, {DEPKEY}) expand per ARP entry named by `products` that is in lists-0 and lists-2 under the same key
+# with the same product code. Rewrites truth.json (counts too) and adds a `prestate` summary. Before that, for every
+# app: Windows Installer temp packages are relabelled ambient (temp_packages below, RIG.md section 12.6).
+def unesc(s):
+    if '\\' not in s:
+        return s
+    out, i = [], 0
+    while i < len(s):
+        c = s[i]
+        if c == '\\' and i + 1 < len(s):
+            n = s[i + 1]
+            out.append({'\\': '\\', 't': '\t', 'n': '\n', 'r': '\r', '0': '\0'}.get(n, n))
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+
+def snap_objects(p, want, values_of=None):
+    """{folded canon: canon} of the snapshot's records whose canon string `want` matches; values_of collects
+    {folded key: [(name, preview)]} of every V record under keys whose folded name starts with one of its prefixes."""
+    import gzip
+    out = {}
+    with gzip.open(p, 'rt', encoding='utf-8', errors='replace', newline='\n') as f:
+        for line in f:
+            if not line or line[0] not in 'DFKV':
+                continue
+            fl = line.rstrip('\n').rstrip('\r').split('\t')
+            r = fl[0]
+            if r in ('D', 'F'):
+                c = 'P:' + unesc(fl[1])
+            elif r == 'K':
+                c = 'K:' + unesc(fl[1])
+            elif r == 'V' and len(fl) >= 3:
+                k = unesc(fl[1])
+                c = 'V:' + k + '|' + unesc(fl[2])
+                if values_of is not None:
+                    kl = k.lower()
+                    if any(kl.startswith(x) for x in values_of['prefixes']):
+                        values_of['vals'].setdefault(kl, []).append((unesc(fl[2]), unesc(fl[6]) if len(fl) > 6 else ''))
+            else:
+                continue
+            if want.search(c):
+                out[c.lower()] = c
+    return out
+
+
+def packed_guid(g):
+    h = re.sub(r'[^0-9A-Fa-f]', '', g).upper()
+    if len(h) != 32:
+        return None
+    return h[0:8][::-1] + h[8:12][::-1] + h[12:16][::-1] + ''.join(h[i:i + 2][::-1] for i in range(16, 32, 2))
+
+
+def parent_of(c):
+    t, rest = c[:2], c[2:]
+    if t == 'v:':
+        return 'k:' + rest.rsplit('|', 1)[0]
+    return t + rest.rsplit('\\', 1)[0] if '\\' in rest else None
+
+
+def under_c(x, c):
+    """x is c or inside c (folded canon strings; a value is inside its key)."""
+    if x == c:
+        return True
+    tx, tc = x[:2], c[:2]
+    if tc == 'p:':
+        return tx == 'p:' and x[2:].startswith(c[2:] + '\\')
+    if tc == 'k:' and tx in ('k:', 'v:', 'c:'):
+        body = x[2:].rsplit('|', 1)[0] if tx != 'k:' else x[2:]
+        return body == c[2:] or body.startswith(c[2:] + '\\')
+    if tc == 'v:' and tx == 'c:':
+        return x[2:] == c[2:]
+    return False
+
+
+def target_of(c):
+    t, rest = c[:2], c[2:]
+    if t == 'P:':
+        return {'type': 'Path', 'path': rest}
+    if t == 'K:':
+        return {'type': 'RegKey', 'path': rest}
+    k, n = rest.rsplit('|', 1)
+    return {'type': 'RegValue', 'path': k, 'name': n}
+
+
+def canon_of(t):
+    ty = t.get('type')
+    pre = {'Path': 'P:', 'RegKey': 'K:', 'RegValue': 'V:', 'RegValueChanged': 'C:'}.get(ty)
+    if not pre:
+        return None
+    return pre + str(t.get('path', '')) + (('|' + str(t.get('name') or '')) if pre in ('V:', 'C:') else '')
+
+
+def prestate_blocks(lab_path, depth=0):
+    """The `prestate` blocks of a label file and the files it includes."""
+    j = read_json(lab_path) or {}
+    out = []
+    if depth < 5:
+        for inc in j.get('include') or []:
+            out += prestate_blocks(os.path.join(os.path.dirname(lab_path), inc), depth + 1)
+    if isinstance(j.get('prestate'), dict):
+        out.append(j['prestate'])
+    return out
+
+
+def kept_products(lists0, lists2, name_re):
+    """ARP entries named by name_re that are in lists-0 and lists-2 under the same key with the same product code."""
+    def by_key(l):
+        return {str(e.get('key') or '').lower(): e for e in ((l or {}).get('uninstall') or []) if isinstance(e, dict)}
+    a, b = by_key(lists0), by_key(lists2)
+    out = []
+    for k, e in a.items():
+        f = b.get(k)
+        code = str(e.get('msi') or '')
+        if f and code and re.search(name_re, str(e.get('name') or ''), re.I) and str(f.get('msi') or '').lower() == code.lower():
+            out.append({'key': e.get('key'), 'name': e.get('name'), 'version': e.get('version'), 'code': code.strip('{}').upper()})
+    return out
+
+
+TEMP_PKGS = 'hklm\\software\\microsoft\\windows\\currentversion\\installer\\temppackages'
+
+
+def temp_packages(truth, s2p):
+    """Windows Installer's temp packages (RIG.md section 12.6): a leftover `C:\\Windows\\Installer\\<x>.msi` that snap 2's
+    Installer\\TempPackages key names is the package copy msiexec keeps during a transaction and deletes itself later
+    (msiexec's own state, present in some runs only): relabelled ambient. So is a kept_owner one that a generic cached-
+    package rule labelled (python.json's `[0-9a-f]{4,8}.msi`), unless snap 2 names it as an installed product's
+    LocalPackage. Returns the relabelled paths."""
+    ud = 'hklm\\software\\microsoft\\windows\\currentversion\\installer\\userdata\\'
+    vals = {'prefixes': [TEMP_PKGS, ud], 'vals': {}}
+    snap_objects(s2p, re.compile(r'(?!)'), vals)
+    listed = {n.lower() for n, _ in vals['vals'].get(TEMP_PKGS, [])}
+    live = {v.lower() for k, vs in vals['vals'].items() if k.startswith(ud) and k.endswith('\\installproperties')
+            for n, v in vs if n.lower() == 'localpackage'}
+    out = []
+    for it in truth.get('items') or []:
+        t = it.get('target') or {}
+        p = str(t.get('path') or '')
+        if it.get('label') in ('leftover', 'kept_owner') and not it.get('prestate') and t.get('type') == 'Path' \
+                and p.lower() in listed and p.lower() not in live \
+                and re.fullmatch(r'c:\\windows\\installer\\[0-9a-f]{1,8}\.msi', p, re.I):
+            it['label'], it['rule'] = 'ambient', 'temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)'
+            out.append(p)
+    return out
+
+
+if MODE == 'prestate':
+    tpath, s0p, s2p, l0p, l2p, labp = A
+    truth = read_json(tpath)
+    if truth is None:
+        print(f'm1b prestate: cannot read {tpath}', file=sys.stderr)
+        sys.exit(2)
+    tp = temp_packages(truth, s2p)
+    blocks = prestate_blocks(labp)
+    if not blocks:
+        if tp:
+            c = {}
+            for i in truth['items']:
+                c[i.get('label')] = c.get(i.get('label'), 0) + 1
+            truth['counts'] = dict(sorted(c.items()))
+            truth['temp_packages'] = tp
+            with open(tpath, 'w', encoding='utf-8') as f:
+                json.dump(truth, f, indent=2, ensure_ascii=False)
+            print(f'm1b prestate: {len(tp)} Windows Installer temp package(s) relabelled ambient', file=sys.stderr)
+        sys.exit(0)
+    truth['temp_packages'] = tp
+    lists0, lists2 = read_json(l0p), read_json(l2p)
+    if lists0 is None or lists2 is None:
+        print('m1b prestate: lists-0 / lists-2 missing: the kept products cannot be told', file=sys.stderr)
+        sys.exit(2)
+    UD = 'hklm\\software\\microsoft\\windows\\currentversion\\installer\\userdata\\s-1-5-18\\products\\'
+    DEP = 'hklm\\software\\classes\\installer\\dependencies\\'
+    vals = {'prefixes': [UD, DEP], 'vals': {}}
+    # pass 1 over snap 0: the values that resolve the product placeholders (LocalPackage, dependency provider)
+    snap_objects(s0p, re.compile(r'(?!)'), vals)
+    rules, products, skipped = [], [], []
+    for bi, b in enumerate(blocks):
+        prods = kept_products(lists0, lists2, b.get('products') or r'(?!)') if b.get('products') else []
+        for pr in prods:
+            pk = packed_guid(pr['code'])
+            pr['packed'] = pk
+            lp = [v for n, v in vals['vals'].get(f'{UD}{pk.lower()}\\installproperties', []) if n.lower() == 'localpackage']
+            pr['local_package'] = lp[0].rsplit('\\', 1)[-1] if lp and lp[0] else None
+            dep = sorted({k[len(DEP):].split('\\')[0] for k, vs in vals['vals'].items() if k.startswith(DEP) and '\\' not in k[len(DEP):]
+                          for n, v in vs if n == '' and v.strip('{}').upper() == pr['code']})
+            pr['dependency_keys'] = dep
+            products.append(pr)
+        for r in b.get('rules') or []:
+            if r.get('label') != 'kept_owner':
+                print(f"m1b prestate: rule label {r.get('label')} (only kept_owner): {r.get('match')}", file=sys.stderr)
+                sys.exit(2)
+            m = r['match']
+            if not re.search(r'\{(CODE|PACKED|LOCALPACKAGE|DEPKEY)\}', m):
+                rules.append((re.compile(m, re.I), r.get('why', ''), None))
+                continue
+            for pr in prods:
+                subs = {'{CODE}': [pr['code']], '{PACKED}': [pr['packed']],
+                        '{LOCALPACKAGE}': [pr['local_package']] if pr['local_package'] else [],
+                        '{DEPKEY}': pr['dependency_keys']}
+                exp = [m]
+                for ph, vs in subs.items():
+                    if ph in m:
+                        exp = [x.replace(ph, re.escape(v)) for x in exp for v in vs]
+                if not exp:
+                    skipped.append(f"{m} for {pr['name']} (placeholder not resolved)")
+                for x in exp:
+                    rules.append((re.compile(x, re.I), r.get('why', ''), pr['code']))
+            if not prods:
+                skipped.append(f'{m} (no kept product in lists-0 and lists-2)')
+    if not rules:
+        print('m1b prestate: no rule to apply', file=sys.stderr)
+    want = re.compile('|'.join(f'(?:{r[0].pattern})' for r in rules) or r'(?!)', re.I)
+    s0 = snap_objects(s0p, want) if rules else {}
+    s2 = snap_objects(s2p, want) if rules else {}
+    cand = {k: c for k, c in s0.items() if k in s2}
+    rule_of = {k: [i for i, r in enumerate(rules) if r[0].search(c)] for k, c in cand.items()}
+    items = truth.get('items') or []
+    folded = [(canon_of(i.get('target') or {}) or '').lower() for i in items]
+    blockers = [f for f, i in zip(folded, items) if f and i.get('label') in ('leftover', 'user_data')]
+    known = set(folded) | {'v:' + f[2:] for f in folded if f.startswith('c:')}
+    # top-most per rule: a match whose parent is matched by the same rule is part of the parent's item
+    tops = [k for k in cand if not (parent_of(k) in cand and set(rule_of[k]) & set(rule_of[parent_of(k)]))]
+    children = {}
+    for k in cand:
+        p = parent_of(k)
+        if p in cand:
+            children.setdefault(p, []).append(k)
+    added, opened, dup = [], [], []
+    todo = sorted(tops)
+    while todo:
+        k = todo.pop(0)
+        if k in known:
+            dup.append(cand[k])
+            continue
+        inner = [x for x in blockers if under_c(x, k)]
+        if inner:
+            opened.append({'object': cand[k], 'holds': inner[:5]})
+            todo += sorted(c for c in children.get(k, []) if c not in todo)
+            continue
+        ri = rule_of[k][0]
+        added.append({'target': target_of(cand[k]), 'label': 'kept_owner', 'rule': 'prestate: ' + rules[ri][1],
+                      'prestate': True, **({'product': '{' + rules[ri][2] + '}'} if rules[ri][2] else {})})
+    items += added
+    truth['items'] = items
+    counts = {}
+    for i in items:
+        counts[i.get('label')] = counts.get(i.get('label'), 0) + 1
+    truth['counts'] = dict(sorted(counts.items()))
+    truth['prestate'] = {'note': 'vm/truth/m1b.sh prestate (RIG.md section 12.4)', 'label_file': labp, 'products': products,
+                         'rules': len(rules), 'matched_before_and_after': len(cand), 'added': len(added),
+                         'opened': opened, 'already_in_truth': dup, 'skipped_rules': skipped}
+    with open(tpath, 'w', encoding='utf-8') as f:
+        json.dump(truth, f, indent=2, ensure_ascii=False)
+    print(f"m1b prestate: {os.path.basename(os.path.dirname(os.path.abspath(tpath)))}: {len(added)} kept_owner item(s) from the "
+          f"pre-state ({len(products)} kept product(s), {len(opened)} opened, {len(skipped)} rule(s) skipped)", file=sys.stderr)
+    sys.exit(0)
+
+
+# ------------------------------------------------------------------------------------------- freeze comparison
+# freezecmp <app> <fz1 dir> <fz2 dir> <out dir> <ambient sources>: the M1b freeze rule (RIG.md section 12.6, ruling
+# 2026-11-17). Both runs must be whole (every phase ok, install and uninstall exit 0 or 3010, the ARP entry gone), and
+# an item the two runs both have must carry the same label in both; else exit 1. Items are compared with random
+# names normalised (GUIDs, numbers of 6+ digits, the random part of %TEMP% names), as m1a.sh's sanity step does. An
+# item present in ONE run only is churn or chance: it is EXCLUDED from the frozen truth and listed under
+# freeze.excluded with the label it had, never kept as a leftover. Writes <out>/truth.json (run 1's truth, the items
+# of both runs only), <out>/truth-fz2.json and <out>/run.json.
+FZ_GUID = re.compile(r'\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?')
+FZ_NUM = re.compile(r'(?<![0-9a-z])[0-9]{6,}(?![0-9a-z])|(?<=-)[0-9]{6,}(?=\.)')
+FZ_TEMP = re.compile(r'(\\appdata\\local\\temp\\)([^\\|]+)')
+FZ_RND = re.compile(r'[a-z0-9]{4,}')
+
+
+def fz_norm(t):
+    k = re.sub(r's-1-5-21-[0-9-]+', '<sid>', (canon_of(t) or json.dumps(t, sort_keys=True)).lower())
+    k = FZ_GUID.sub('<guid>', k)
+    k = FZ_NUM.sub('<n>', k)
+    return FZ_TEMP.sub(lambda m: m.group(1) + FZ_RND.sub(lambda r: '<rnd>' if re.search('[0-9]', r.group(0)) else r.group(0), m.group(2)), k)
+
+
+def run_whole(rj):
+    """Problems that make a raw freeze run unusable (empty list: the run is whole)."""
+    if not isinstance(rj, dict):
+        return ['no run.json']
+    p = [f"phase {x.get('name')} failed: {x.get('error')}" for x in rj.get('phases') or [] if not x.get('ok')]
+    if not rj.get('phases'):
+        p.append('no phases')
+    ins, un = rj.get('install') or {}, rj.get('uninstall') or {}
+    if ins.get('exit') not in (0, 3010) or ins.get('timed_out'):
+        p.append(f"install exit {ins.get('exit')} timed_out {ins.get('timed_out')}")
+    if un.get('exit') not in (0, 3010) or un.get('timed_out') or un.get('entry_gone') is not True:
+        p.append(f"uninstall exit {un.get('exit')} timed_out {un.get('timed_out')} entry_gone {un.get('entry_gone')}")
+    if not rj.get('main'):
+        p.append('no main ARP entry')
+    return p
+
+
+if MODE == 'freezecmp':
+    app, d1, d2, outd, amb_src = A
+    t1, t2 = read_json(os.path.join(d1, 'truth.json')), read_json(os.path.join(d2, 'truth.json'))
+    r1, r2 = read_json(os.path.join(d1, 'run.json')), read_json(os.path.join(d2, 'run.json'))
+    bad = [f'fz1: {x}' for x in run_whole(r1)] + [f'fz2: {x}' for x in run_whole(r2)]
+    if t1 is None or t2 is None:
+        bad.append('no truth.json for both runs')
+    if bad:
+        for x in bad:
+            print('freeze: run not whole:', x)
+        print(f'freeze {app}: refused (a run is not whole: re-run m1b-freeze)')
+        sys.exit(1)
+
+    def keyed(t):
+        out = {}
+        for it in t.get('items') or []:
+            out.setdefault(fz_norm(it.get('target') or {}), []).append(it)
+        return out
+    a, b = keyed(t1), keyed(t2)
+    mism, excl = [], []
+    keep1, keep2 = [], []
+    for k in sorted(set(a) | set(b)):
+        la = sorted({i.get('label') for i in a.get(k, [])})
+        lb = sorted({i.get('label') for i in b.get(k, [])})
+        if k in a and k in b:
+            if la != lb:
+                mism.append({'item': k, 'fz1': la, 'fz2': lb})
+            keep1 += a[k]
+            keep2 += b[k]
+        else:
+            run, its = ('fz1', a[k]) if k in a else ('fz2', b[k])
+            for i in its:
+                if i.get('label') in ('ambient', 'rig'):
+                    (keep1 if run == 'fz1' else keep2).append(i)   # ambient either way: kept as reported
+                else:
+                    excl.append({'run': run, 'target': i.get('target'), 'label_in_run': i.get('label'), 'rule': i.get('rule')})
+
+    def counts(items):
+        c = {}
+        for i in items:
+            c[i.get('label')] = c.get(i.get('label'), 0) + 1
+        return dict(sorted(c.items()))
+    na = {k for k, v in a.items() if any(i.get('label') not in ('ambient', 'rig') for i in v)}
+    nb = {k for k, v in b.items() if any(i.get('label') not in ('ambient', 'rig') for i in v)}
+    print(f'freeze {app}: fz1 {len(na)} non-ambient items, fz2 {len(nb)}, in both {len(na & nb)}, '
+          f'excluded (one run only) {len(excl)}, label mismatches {len(mism)}')
+    for e in excl:
+        print(f"freeze:   excluded, only in {e['run']} (was {e['label_in_run']}): {canon_of(e['target']) or e['target']}")
+    for m in mism:
+        print(f"freeze:   LABEL MISMATCH {m['item']}: fz1 {m['fz1']} fz2 {m['fz2']}")
+    if mism:
+        print(f'freeze {app}: refused (the same item has different labels in the two runs: fix the labels)')
+        sys.exit(1)
+    os.makedirs(outd, exist_ok=True)
+    rule = 'present in one freeze run only (Windows churn or chance): excluded from the frozen truth, never a leftover'
+    for t, keep, other in ((t1, keep1, 'fz2'), (t2, keep2, 'fz1')):
+        t['items'] = keep
+        t['counts'] = counts(keep)
+        t['freeze'] = {'schema': 'purge.rig.m1b-freeze/1', 'app': app, 'runs': [os.path.basename(os.path.normpath(d1)), os.path.basename(os.path.normpath(d2))],
+                       'ambient': amb_src, 'rule': rule, 'compared_with': other, 'excluded': excl}
+    with open(os.path.join(outd, 'truth.json'), 'w', encoding='utf-8') as f:
+        json.dump(t1, f, indent=2, ensure_ascii=False)
+    with open(os.path.join(outd, 'truth-fz2.json'), 'w', encoding='utf-8') as f:
+        json.dump(t2, f, indent=2, ensure_ascii=False)
+    with open(os.path.join(outd, 'run.json'), 'w', encoding='utf-8') as f:
+        json.dump(r1, f, indent=2, ensure_ascii=False)
+    print(f"freeze {app}: frozen {counts(keep1)} -> {outd}")
     sys.exit(0)
 
 # ------------------------------------------------------------------------------------------- stage 2
@@ -731,7 +1111,6 @@ collect() {
   mkdir -p "$EVID" "$EVID/budgets" "$EVID/runs"
   rm -f "$EVID"/score-*.json "$EVID"/traps-*.json "$EVID"/*-fp.json "$EVID"/*-scan.json "$EVID"/replay-*.json "$EVID"/budgets/* \
         "$EVID"/runs/*.json "$EVID"/manifest.json
-  local labels_extra=(--labels truth/labels/_os-servicing.json)
   local s id run d lid p n lmap=""
   for s in $SETS; do
     p=$(prefix_of "$s")
@@ -753,8 +1132,13 @@ collect() {
       if [ ! -f "truth/labels/$lid.json" ]; then echo "m1b: $run: no label file truth/labels/$lid.json" >&2; continue; fi
       if ! "$R" truth --s0 "$d/snap-$run-0.tsv.gz" --s1 "$d/snap-$run-1.tsv.gz" --s2 "$d/snap-$run-2.tsv.gz" \
           --lists0 "$d/lists-$run-0.json" --lists2 "$d/lists-$run-2.json" --run "$d/run.json" \
-          --ambient "$amb" --labels "truth/labels/$lid.json" "${labels_extra[@]}" --deny truth/deny.json -o "$d/truth.json" >&2; then
+          --ambient "$amb" --labels "truth/labels/$lid.json" "${M1B_TRUTH_LABELS[@]}" --deny truth/deny.json -o "$d/truth.json" >&2; then
         echo "m1b: $run: rigtool truth failed" >&2; continue
+      fi
+      # the kept product's objects from before snap 0 (label file `prestate`; RIG.md section 12.4)
+      if ! pyeval prestate "$d/truth.json" "$d/snap-$run-0.tsv.gz" "$d/snap-$run-2.tsv.gz" "$d/lists-$run-0.json" \
+          "$d/lists-$run-2.json" "truth/labels/$lid.json"; then
+        echo "m1b: $run: prestate failed" >&2; rm -f "$d/truth.json"; continue
       fi
       mkdir -p "$d/plans"
       if [ -f "$d/plan-purge.json" ]; then
@@ -889,6 +1273,83 @@ assert not d['gate'] and not d['pass']
     if [ "$got" = default ]; then ok_ "config_$v (custom when changed, default when equal)"; else no_ "config_$v" "equal: got '$got'"; fi
   done
 
+  # Churn rule (RIG.md section 12.6): an item in one freeze run only is excluded from the frozen truth and reported,
+  # never frozen as a leftover; a label that differs between the runs and a run that is not whole refuse the freeze.
+  "$PY" -I "$fx" churn "$tmp/ch" ok && pyeval freezecmp fx "$tmp/ch/m1b-fz1-fx" "$tmp/ch/m1b-fz2-fx" "$tmp/ch/out" fixture >"$tmp/ch.txt" 2>&1; rc=$?
+  if [ $rc -eq 0 ] && "$PY" -I - "$tmp/ch/out/truth.json" "$tmp/ch/out/truth-fz2.json" <<'EOF'
+import json, sys
+t1, t2 = (json.load(open(p, encoding='utf-8')) for p in sys.argv[1:3])
+WU = 'windowsupdate\\orchestrator'
+for t in (t1, t2):
+    labs = {i['target']['path'].lower(): i['label'] for i in t['items']}
+    assert not any(WU in k for k in labs), 'the one-run Windows churn item is still in a frozen truth'
+    assert any(k.endswith('software\\fixture') and v == 'leftover' for k, v in labs.items()), 'the leftover of both runs is lost'
+    assert any('\\temp\\msi' in k for k in labs), 'the random-named temp leftover (normalised) is lost'
+    ex = t['freeze']['excluded']
+    assert len(ex) == 1 and WU in ex[0]['target']['path'].lower() and ex[0]['label_in_run'] == 'leftover', ex
+    assert t['counts'].get('leftover') == 2, t['counts']
+EOF
+  then ok_ churn_one_run_item_excluded_not_leftover; else no_ churn_one_run_item_excluded_not_leftover "exit $rc: $(tail -2 "$tmp/ch.txt")"; fi
+  local v_
+  for v_ in mismatch broken; do
+    "$PY" -I "$fx" churn "$tmp/ch" "$v_" && pyeval freezecmp fx "$tmp/ch/m1b-fz1-fx" "$tmp/ch/m1b-fz2-fx" "$tmp/ch/out" fixture >"$tmp/ch.txt" 2>&1; rc=$?
+    if [ $rc -eq 1 ] && [ ! -e "$tmp/ch/out" ]; then ok_ "churn_freeze_refuses_$v_"; else no_ "churn_freeze_refuses_$v_" "exit $rc"; fi
+  done
+  # The noise list labels ambient only, under Windows-owned roots, matches the churn it was written for, and no
+  # leftover / user_data / kept_owner item of any frozen truth (M0 and M1b) or a prefetch / jump-list rule of the apps.
+  if "$PY" -I - "$HERE/labels/_m1b-noise.json" "$HERE/frozen" <<'EOF'
+import glob, json, os, re, sys
+noise = json.load(open(sys.argv[1], encoding='utf-8'))
+rules = noise['rules']
+assert rules and noise.get('samples'), 'no rules or no recorded churn samples'
+# the rule body after its kind prefix (^[KVC]: / ^P: ...) must start under one of these Windows-owned roots
+ROOTS = (r'HKLM\\SOFTWARE\\Microsoft\\', r'HKLM\\SOFTWARE\\(WOW6432Node\\)?Microsoft\\', r'HKLM\\SYSTEM\\CurrentControlSet\\Control\\',
+         r'HKU\\(?:S-1-5-21-[0-9-]+_Classes|\.DEFAULT\\Software\\Classes)\\Local Settings\\MuiCache\\',
+         r'HKU\\[^\\]+\\Software\\Microsoft\\Windows\\', r'HKU\\[^\\]+_Classes\\Local Settings\\Software\\Microsoft\\Windows\\',
+         r'C:\\ProgramData\\Microsoft\\', r'C:\\Windows\\')
+for r in rules:
+    assert r['label'] == 'ambient' and not r.get('first') and not r.get('split'), r
+    body = re.sub(r'^\^(\[[KVCP]+\]|[KVCP]):', '', r['match'])
+    assert body != r['match'] and any(body.startswith(x) for x in ROOTS), f"not under a Windows-owned root: {r['match']}"
+rx = [re.compile(r['match'], re.I) for r in rules]
+miss = [s for s in noise['samples'] if not any(x.search(s) for x in rx)]
+assert not miss, f'churn samples no noise rule matches: {miss[:3]}'
+hit = []
+for p in glob.glob(os.path.join(sys.argv[2], '*', 'truth.json')):
+    t = json.load(open(p, encoding='utf-8-sig'))
+    for i in t.get('items', []):
+        if i.get('label') in ('leftover', 'user_data', 'kept_owner'):
+            ty, tg = i['target'].get('type'), i['target']
+            c = {'Path': 'P:', 'RegKey': 'K:', 'RegValue': 'V:', 'RegValueChanged': 'C:'}.get(ty, '?:') + tg.get('path', '') + (('|' + (tg.get('name') or '')) if ty in ('RegValue', 'RegValueChanged') else '')
+            if any(x.search(c) for x in rx):
+                hit.append(f'{os.path.basename(os.path.dirname(p))}: {c}')
+assert not hit, f'noise rules match real truth items: {hit[:3]}'
+for c in ('P:C:\\Windows\\Prefetch\\PWSH.EXE-0A1B2C3D.pf', 'P:C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          'K:HKLM\\SOFTWARE\\Microsoft\\PowerShellCore', 'P:C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.13.9-hotspot',
+          'K:HKLM\\SOFTWARE\\Eclipse Adoptium', 'P:C:\\Users\\rig\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\9d5f66f86ab736a4.automaticDestinations-ms'):
+    assert not any(x.search(c) for x in rx), f'a noise rule matches an app object: {c}'
+EOF
+  then ok_ churn_noise_list_windows_owned_and_never_an_app_item; else no_ churn_noise_list_windows_owned_and_never_an_app_item; fi
+
+  # K5 pre-state (RIG.md section 12.4): the kept launcher's objects from before snap 0 become kept_owner truth items,
+  # top-most, never one that holds a leftover, never one gone by snap 2, product rules only for a launcher in both lists.
+  "$PY" -I "$fx" prestate "$tmp/ps" "$HERE" && pyeval prestate "$tmp/ps/m1b-python312-with-313/truth.json" \
+    "$tmp/ps/m1b-python312-with-313/snap-m1b-python312-with-313-0.tsv.gz" "$tmp/ps/m1b-python312-with-313/snap-m1b-python312-with-313-2.tsv.gz" \
+    "$tmp/ps/m1b-python312-with-313/lists-m1b-python312-with-313-0.json" "$tmp/ps/m1b-python312-with-313/lists-m1b-python312-with-313-2.json" \
+    "$tmp/ps/labels.json" >"$tmp/ps.txt" 2>&1; rc=$?
+  if [ $rc -eq 0 ] && "$PY" -I - "$tmp/ps/m1b-python312-with-313/truth.json" <<'EOF'
+import json, sys
+t = json.load(open(sys.argv[1], encoding='utf-8'))
+kept = sorted(i['target']['path'].lower() for i in t['items'] if i['label'] == 'kept_owner')
+assert t['counts'] == {'ambient': 2, 'kept_owner': 10, 'leftover': 1}, t['counts']
+assert sorted(p.lower() for p in t['temp_packages']) == ['c:\\windows\\installer\\7777.msi', 'c:\\windows\\installer\\8888.msi'], t['temp_packages']
+assert not any('.pyw' in k or '.pyz' in k or '9999.msi' in k or 'pythoncore' in k for k in kept), kept
+assert any(k.endswith('installer\\dependencies\\cpython-3.13_launcher') for k in kept) and any('4f2a.msi' in k for k in kept), kept
+assert [o['object'] for o in t['prestate']['opened']] == ['K:HKLM\\SOFTWARE\\Classes\\.pyw'], t['prestate']['opened']
+assert [p['code'] for p in t['prestate']['products']] == ['1A2B3C4D-0000-1111-2222-333344445555']
+EOF
+  then ok_ k5_prestate_counts_kept_launcher; else no_ k5_prestate_counts_kept_launcher "exit $rc: $(tail -2 "$tmp/ps.txt")"; fi
+
   # traps_json_every_case_has_expectation
   if "$PY" -I - "$HERE/m1b-traps.json" <<'EOF'
 import json, sys
@@ -940,36 +1401,43 @@ EOF
 # two runs must agree on the item set of every label but ambient (else exit 1: look at the diff, fix the labels,
 # re-run); run 1 is copied to truth/frozen/<app>/{truth.json, run.json} and the fz2 truth beside it as truth-fz2.json.
 freeze() {
-  local app=$1 k d run lid; lid=$(label_of "$app")
+  local app=$1 k d run lid n amb src; lid=$(label_of "$app")
   [ -f "truth/labels/$lid.json" ] || { echo "m1b freeze: no truth/labels/$lid.json" >&2; return 2; }
+  # The freeze's ambient set: the M0 set truth/ambient.json plus the null runs of the freeze itself
+  # (m1b-fz<k>-null<n>, rig.ps1 -Mode m1b-freeze), as M0 and M1a built theirs from the null runs of the same campaign.
+  local nulls=()
+  for d in "$RUNS"/m1b-fz[12]-null*; do
+    run=$(basename "$d")
+    if [ -f "$d/run.json" ] && ls "$d/snap-$run-0.tsv.gz" "$d/snap-$run-2.tsv.gz" >/dev/null 2>&1; then nulls+=("$d"); fi
+  done
+  amb="$RUNS/m1b-fz-ambient.json"; src="truth/ambient.json"
+  if [ ${#nulls[@]} -gt 0 ]; then
+    "$R" ambient --null "${nulls[@]}" -o "$RUNS/m1b-fz-ambient-nulls.json" >&2 || { echo "m1b freeze: rigtool ambient failed" >&2; return 2; }
+    "$PY" -I - truth/ambient.json "$RUNS/m1b-fz-ambient-nulls.json" "$amb" <<'EOF' || return 2
+import json, sys
+a, b, out = sys.argv[1:4]
+A, B = (json.load(open(p, encoding='utf-8-sig')) for p in (a, b))
+doc = {'schema': A.get('schema'), 'runs': A['runs'] + B['runs'], 'exact': sorted(set(A['exact']) | set(B['exact'])),
+       'patterns': sorted(set(A['patterns']) | set(B['patterns']))}
+json.dump(doc, open(out, 'w', encoding='utf-8'), indent=1)
+EOF
+    src="truth/ambient.json + $(for x in "${nulls[@]}"; do printf '%s ' "$(basename "$x")"; done)"; src=${src% }
+  else
+    echo "m1b freeze: no freeze null runs ($RUNS/m1b-fz<k>-null<n>): ambient = truth/ambient.json only" >&2
+    cp truth/ambient.json "$amb"
+  fi
   for k in 1 2; do
     run="m1b-fz$k-$app"; d="$RUNS/$run"
     [ -f "$d/run.json" ] || { echo "m1b freeze: no run $d (rig.ps1 -Mode m1b-freeze)" >&2; return 2; }
     "$R" truth --s0 "$d/snap-$run-0.tsv.gz" --s1 "$d/snap-$run-1.tsv.gz" --s2 "$d/snap-$run-2.tsv.gz" \
       --lists0 "$d/lists-$run-0.json" --lists2 "$d/lists-$run-2.json" --run "$d/run.json" \
-      --ambient truth/ambient.json --labels "truth/labels/$lid.json" --labels truth/labels/_os-servicing.json \
+      --ambient "$amb" --labels "truth/labels/$lid.json" "${M1B_TRUTH_LABELS[@]}" \
       --deny truth/deny.json -o "$d/truth.json" >&2 \
       || { echo "m1b freeze: rigtool truth failed for $run" >&2; return 2; }
+    pyeval prestate "$d/truth.json" "$d/snap-$run-0.tsv.gz" "$d/snap-$run-2.tsv.gz" "$d/lists-$run-0.json" \
+      "$d/lists-$run-2.json" "truth/labels/$lid.json" || return 2
   done
-  "$PY" -I - "$RUNS/m1b-fz1-$app/truth.json" "$RUNS/m1b-fz2-$app/truth.json" <<'EOF' || return 1
-import json, re, sys
-def items(p):
-    d = json.load(open(p, encoding='utf-8-sig'))
-    out = set()
-    for it in d.get('items', []):
-        if it.get('label') == 'ambient':
-            continue
-        out.add((it.get('label'), re.sub(r'S-1-5-21-[0-9-]+', '<sid>', json.dumps(it.get('target'), sort_keys=True)).lower()))
-    return out
-a, b = items(sys.argv[1]), items(sys.argv[2])
-for x in sorted(a - b)[:20]: print('only fz1:', *x)
-for x in sorted(b - a)[:20]: print('only fz2:', *x)
-print(f'freeze: fz1 {len(a)} items, fz2 {len(b)} items, {len(a ^ b)} differ')
-sys.exit(1 if a ^ b else 0)
-EOF
-  mkdir -p "truth/frozen/$app"
-  cp "$RUNS/m1b-fz1-$app/truth.json" "$RUNS/m1b-fz1-$app/run.json" "truth/frozen/$app/"
-  cp "$RUNS/m1b-fz2-$app/truth.json" "truth/frozen/$app/truth-fz2.json"
+  pyeval freezecmp "$app" "$RUNS/m1b-fz1-$app" "$RUNS/m1b-fz2-$app" "truth/frozen/$app" "$src" || return 1
   echo "m1b freeze: truth/frozen/$app written; describe it in truth/FROZEN.md (M1b section)"
 }
 

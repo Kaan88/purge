@@ -1117,6 +1117,39 @@ powershell and temurin stay unfrozen; no VM run was made for R4b.
 
 Check them against the frozen and gate captures.
 
+Checked on 2026-11-17 (m1b-freeze, 12.6): the Microsoft Update opt-in is real (service key plus
+`WindowsUpdate\Services|DefaultService`, both kept_owner now); the pwsh jump list and the two PowerShell user_data rules
+matched nothing (a bare launch writes neither). powershell and temurin are frozen (FROZEN.md).
+
+**Pre-state kept_owner (review R4b S5, ruling 2026-11-17).** A product that stays installed and that the removed app
+shared can predate snap 0: in python312-with-313 the 3.13 bundle installs the Python Launcher before snap 0, and in
+python313-with-312 the 3.12 bundle does (the 3.13 install then upgrades it). A diff never sees those objects, so K5
+had nothing to count (0 of 29). The design labels them kept_owner, so the truth now takes them from the pre-state:
+- A label file may hold a hand-written top-level `prestate` block (`mk_labels.py` keeps it):
+  `{"products": "<ARP name regex>", "rules": [{"label": "kept_owner", "match", "why"}]}`. The two Python pair files
+  have one for the launcher (the same object families as the M0 python truth's 29: `.py*` classes, `Python.*`
+  ProgIDs, the drop-handler CLSID, `WOW6432Node\Python`, `py.exe`, `pyw.exe`, the shell extension, the Package Cache
+  root, the three `Classes\Installer` and three `CurrentVersion\Installer` containers, and the launcher's own MSI
+  registration).
+- `m1b.sh` (collect and freeze, after `rigtool truth`; pyeval `prestate`) adds every object that is in snap 0 **and**
+  in snap 2 and that a rule matches as a kept_owner truth item (`"prestate": true`): top-most per rule (a match whose
+  parent the same rule matches is part of the parent's item), never an object that already is a truth item, and
+  never one that is or holds a leftover or user_data truth item (that object is opened to its matching children and
+  listed under `prestate.opened`). An object gone by snap 2 is not kept and not added.
+- Product rules use `{CODE}`, `{PACKED}`, `{LOCALPACKAGE}` (the cached package named by the product's
+  `InstallProperties|LocalPackage`) and `{DEPKEY}` (the `Classes\Installer\Dependencies` key whose default value is
+  the product code). They expand for each ARP entry the `products` regex names that is in lists-0 and lists-2 under
+  the same key with the same product code. In python313-with-312 the launcher changes product code inside the run, so
+  only the code-free rules apply there; its new registration is in the diff (the generic S4 rules above).
+- truth.json gets a `prestate` summary (products, rules, matches, added, opened, skipped rules).
+- The selftest checks it on a synthetic run (`k5_prestate_counts_kept_launcher`).
+- First pair runs (2026-11-17, campaign `campaign-20261117-125320`, engine mode, clean set, ambient = M0 set +
+  `m1b-null1`): python312-with-313 has **42** kept_owner items, all from the pre-state (36 of the launcher's own objects
+  and 6 shared containers); python313-with-312 has **44**: 20 from the diff (the upgraded launcher's new MSI
+  registration and cached packages, generic S4 rules) plus 24 code-free pre-state objects. Both meet K5's 29. A
+  Windows Installer temp package (`ad01.msi` and the like) that a generic cached-package rule labelled kept_owner is
+  ambient now unless snap 2 names it as an installed product's `LocalPackage`.
+
 ### 12.5 Gate script (`truth/m1b.sh`) and budgets
 
 `bash truth/m1b.sh` (run from `vm/`) has two stages.
@@ -1167,10 +1200,9 @@ Options:
 - The warm figure is the median of the warm rounds, compared with the M2 head measured in the same session.
 
 Notes on individual criteria:
-- **K5** needs n >= 29 for each of the two Python pairs (not lowered). Count from the labels (R4b S5): python312-with-313
-  reaches 0 of the 29 kept launcher/container objects in its diff, because 3.13 and the launcher are installed before
-  snap0 and the 3.12 bundle skips the older launcher; python313-with-312 has only the new launcher product's objects and
-  changed values, probably below 29. K5 for the pairs is expected to fail until the design's n is revisited.
+- **K5** needs n >= 29 for each of the two Python pairs (not lowered). Before 2026-11-17 python312-with-313 reached 0 of
+  the 29 (R4b S5): 3.13 and the launcher are installed before snap 0, so the diff never saw them. The truth now adds
+  the kept launcher's pre-state objects (section 12.4, `prestate`); the counts of the first pair runs are in 12.4.
 - **K6** (review R4b B2, following the M1a gate): a mismatch is an item whose band would offer or preselect it wrongly:
   preselected below Safe, a band the policy does not have, user data preselected, or a protected truth item listed below
   Protected. A true leftover listed Weak or Blocked is a recall miss, as the M1a gate counted it (recall_visible_nd covers
@@ -1179,9 +1211,32 @@ Notes on individual criteria:
 
 ### 12.6 Freeze
 
-1. Run `rig.ps1 -Mode m1b-freeze` (4 VM runs).
+1. Run `rig.ps1 -Mode m1b-freeze` (6 VM runs: per round one null run `m1b-fz<k>-null1`, then the two apps; `-Nulls n`
+   for more null runs).
 2. Run `bash truth/m1b.sh freeze powershell`, then `bash truth/m1b.sh freeze temurin`. For each app this:
-   - computes the truth of both runs with `truth/ambient.json`, the label file and `_os-servicing.json`
-   - checks that the non-ambient item sets of the two runs agree. If they do not, it exits 1 and prints the diff.
-   - copies run 1 to `truth/frozen/<id>/{truth.json, run.json}` and run 2's truth to `truth-fz2.json`
+   - builds the freeze's ambient set: `truth/ambient.json` plus the freeze null runs (`rigtool ambient`), as M0 and M1a
+     built theirs from the null runs of the same campaign (the M0 set alone is stale: the first attempt on 2026-11-17
+     differed in 35 and 26 items, all Windows churn)
+   - computes the truth of both runs with that set, the label file, `_os-servicing.json` and `_m1b-noise.json`, then
+     the m1b.sh post step (temp packages, `prestate`)
+   - applies the freeze rule (pyeval `freezecmp`): both runs must be whole (every phase ok, install and uninstall exit 0
+     or 3010, ARP entry gone) and give the same label to every item they share, compared with random names normalised
+     (GUIDs, numbers of 6+ digits, the random part of `%TEMP%` names, as m1a.sh's sanity step); else exit 1. An item
+     present in **one run only** is churn or chance: it is excluded from the frozen truth and listed under
+     `freeze.excluded` with the label it had. It is never frozen as a leftover.
+   - writes `truth/frozen/<id>/{truth.json, truth-fz2.json, run.json}` (the truths carry a `freeze` block)
 3. Describe the result in FROZEN.md.
+
+**Noise list** (`truth/labels/_m1b-noise.json`, hand-written, ruling 2026-11-17). Windows-owned areas whose state
+changes on Windows' own schedule or belongs to a Windows store, seen in the freeze captures: WNS channel backups and
+SystemAppData activity of inbox Windows components (`MicrosoftWindows.*_cw5n1h2txyewy` only; an app's own channel stays
+the app's), IRIS, Desktop Spotlight, the rules engine, the shell's component-category cache and `TaskbarStateLastRun`,
+the font cache, BitLocker telemetry, the hive defrag counter, Security Center provider state, DiagTrack downloaded
+settings, `Installer\TempPackages`, the Windows Update SLS cache and the .NET servicing `BreadcrumbStore`. Every rule is
+`ambient` (never `first`), so it can only take an item out of the leftover set. m1b.sh passes it to every M1b truth
+(collect and freeze) and hashes it into each run's label digest (BIND). A leftover `C:\Windows\Installer\<x>.msi`
+that snap 2's `Installer\TempPackages` names (msiexec deletes it itself) is relabelled ambient by m1b.sh. A
+`kept_owner` rule cannot be overridden by it in practice: the selftest
+(`churn_noise_list_windows_owned_and_never_an_app_item`) checks that every rule lies under a Windows-owned root, matches
+its recorded churn samples, and matches no leftover, user_data or kept_owner item of any frozen truth (M0 and M1b), nor
+a PowerShell or Temurin object. The selftest's `churn_*` controls check the freeze rule on synthetic runs.

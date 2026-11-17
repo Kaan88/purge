@@ -1,0 +1,111 @@
+{
+  "id": "_m1b-noise",
+  "note": "M1b noise list (RIG.md section 12.6, ruling 2026-11-17). Hand-written from the m1b-freeze captures of 2026-11-17; mk_labels.py does not generate it. vm/truth/m1b.sh passes it as an extra --labels file to every M1b truth (collect and freeze) and hashes it into each run's label digest. Windows-owned areas whose state changes on Windows' own schedule or belongs to a Windows store: every rule is ambient and anchored under a Windows-owned root (checked by the selftest, which also checks that no rule matches a leftover, user_data or kept_owner item of any frozen truth). Churn is never labelled leftover: what this list misses and only one freeze run shows is excluded from the frozen truth by the freeze rule.",
+  "rules": [
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKU\\\\[^\\\\]+\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\PushNotifications\\\\Backup\\\\MicrosoftWindows\\.[^\\\\|]*_cw5n1h2txyewy![^\\\\|]*(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Windows Push Notification Services (WNS) channel backup of an inbox Windows component (MicrosoftWindows.*_cw5n1h2txyewy, e.g. the IRIS client): channel ids, creation and expiry times renewed on the service's schedule. Windows' own channels only: an app's channel (Notepad++ in the M0 truth) stays the app's."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKU\\\\[^\\\\]+\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\IrisService(\\\\[^|]*)?(\\|.*)?$",
+      "why": "IRIS (Windows content delivery: Spotlight, tips) state per user: action creatives, timers, WNS channel status refreshed on its own schedule."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKU\\\\[^\\\\]+_Classes\\\\Local Settings\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\AppModel\\\\SystemAppData\\\\MicrosoftWindows\\.[^\\\\|]*_cw5n1h2txyewy(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Activity state (HAM) of inbox Windows components (MicrosoftWindows.*_cw5n1h2txyewy: Spotlight, IRIS, Windows Backup) per user. Windows' own packages only."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKU\\\\[^\\\\]+\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\RulesEngine(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Windows rules-engine background report stamps per user (ReportStateTimestamp)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKU\\\\[^\\\\]+\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\DesktopSpotlight(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Windows Spotlight desktop state per user (IRIS content timers)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKU\\\\[^\\\\]+\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\Discardable\\\\PostSetup\\\\Component Categories(64)?(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Explorer's discardable COM component-category cache per user, rebuilt by the shell."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKU\\\\[^\\\\]+\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\Advanced\\|TaskbarStateLastRun$",
+      "why": "Taskbar state stamp the shell rewrites at every refresh."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKU\\\\[^\\\\]+\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\FontCache\\\\SystemFontProvider(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Font cache service (LocalService profile) configuration expiry, renewed on its own schedule."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\BitLocker\\\\Telemetry(\\\\[^|]*)?(\\|.*)?$",
+      "why": "BitLocker telemetry check stamps (AADBackupCheckTimestamp), written by the BitLocker service on its schedule."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Session Manager\\\\Configuration Manager\\\\Defrag(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Registry hive defragmentation counter of the configuration manager (kernel)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Security Center\\\\Provider(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Windows Security Center provider state (Defender AV state flags), updated by Defender."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\ProgramData\\\\Microsoft\\\\Diagnosis\\\\DownloadedSettings(\\\\.*)?$",
+      "why": "Connected User Experiences and Telemetry (DiagTrack) downloaded settings and their .bk copies."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\TempPackages(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Windows Installer's list of temp packages it deletes itself after a transaction (the .msi files it names are relabelled by m1b.sh temp_packages)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\WindowsUpdate\\\\SLS(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Windows Update service-locator (SLS) cache, e.g. of the Microsoft Update service an MSI opts the machine into; Windows Update state."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows NT\\\\CurrentVersion\\\\SystemRestore\\|SRInitDone$",
+      "why": "System Restore initialisation flag msiexec sets at its first restore-point check (the SystemRestore key itself is ambient in the app label files); Windows state."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKU\\\\(?:S-1-5-21-[0-9-]+_Classes|\\.DEFAULT\\\\Software\\\\Classes)\\\\Local Settings\\\\MuiCache\\\\[0-9A-Fa-f]+(\\\\[^|]*)?(\\|.*)?$",
+      "why": "MUI resource-string cache generation key with a hex name (1a); _os.json covers the decimal ones only. Not the shell MuiCache of exe names (Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache)."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\ProgramData\\\\Microsoft\\\\NetFramework\\\\BreadcrumbStore(\\\\.*)?$",
+      "why": ".NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target."
+    }
+  ],
+  "samples": [
+    "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications\\Backup\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy!Global.IrisService|channelExpiry",
+    "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService|State",
+    "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\DesktopSpotlight|UpdateTimer",
+    "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Discardable\\PostSetup\\Component Categories64\\{00021492-0000-0000-C000-000000000046}\\Enum|Implementing",
+    "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced|TaskbarStateLastRun",
+    "C:HKU\\S-1-5-19\\Software\\Microsoft\\Windows\\CurrentVersion\\FontCache\\SystemFontProvider|ConfigExpiration",
+    "C:HKLM\\SYSTEM\\CurrentControlSet\\Control\\BitLocker\\Telemetry|AADBackupCheckTimestamp",
+    "C:HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Configuration Manager\\Defrag|TotalBytesSaved",
+    "C:HKLM\\SOFTWARE\\Microsoft\\Security Center\\Provider\\Av\\{D68DDC3A-831F-4fae-9E44-DA132C1ACF46}|STATE",
+    "P:C:\\ProgramData\\Microsoft\\Diagnosis\\DownloadedSettings\\utc.cert.json.bk",
+    "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\TempPackages",
+    "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\SLS\\{7971F918-A847-4430-9279-4A52D1EFE18D}",
+    "P:C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Newtonsoft.Json,13.0.4",
+    "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData|ReportStateTimestamp",
+    "V:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore|SRInitDone",
+    "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\MuiCache\\1a",
+    "K:HKU\\.DEFAULT\\Software\\Classes\\Local Settings\\MuiCache\\1a",
+    "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.IrisService\\V1\\LU|PCT"
+  ]
+}
