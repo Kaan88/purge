@@ -16,8 +16,9 @@
 //!
 //! # What is offered
 //!
-//! For every recorded provider key `P` (each package's, and the bundle's own), in the machine's Classes
-//! and in the Classes of every loaded user hive ([`dependency_roots`]):
+//! For every recorded provider key `P` (each package's, and the bundle's own), in the bundle's own roots
+//! ([`dependency_roots`], R3a S4: the machine's Classes, and for a per-user bundle its own user's; a
+//! machine bundle also reads every loaded user's Classes, but only to find other dependents there):
 //!
 //! - **(a)** each subkey `Dependents\<B>` of a package's `P` whose name is the bundle id or the bundle's
 //!   provider key: `RegKey`, `DeleteKey`, `Category::Registration`, `InstallerManifest(Burn)` (Tier A,
@@ -44,7 +45,7 @@
 //! # Reads
 //!
 //! Per recorded provider key and root: one `subkeys()` of `P` and, when `P` has a `Dependents` subkey,
-//! one `subkeys()` of it. Once per scan: the loaded user hives. The candidates' common blockers add one
+//! one `subkeys()` of it. Once per scan, for a machine bundle: the loaded user hives. The candidates' common blockers add one
 //! `key_info()` each. Everything else (the other apps, the MSI ownership index, the product state)
 //! needs no key open.
 
@@ -222,23 +223,48 @@ pub(crate) fn index_other_dependents(
     )
 }
 
-/// The dependency roots looked at: the machine's, then the Classes of every loaded user hive, in the
-/// guard's canonical spelling. `Err` stands for a root that is not known (the user hives could not be
-/// listed, or a user root does not canonicalise).
-fn dependency_roots(ctx: &ScanCtx<'_>) -> Vec<Result<String, String>> {
-    let mut roots = vec![Ok(MACHINE_DEPENDENCIES.to_owned())];
-    match ctx.reg.loaded_user_sids() {
-        Ok(sids) => {
-            for sid in sids {
-                let input = format!(r"HKU\{sid}\Software\Classes\Installer\Dependencies");
-                roots.push(
-                    canon_key(&input, None, ctx.guard, None)
-                        .map(|k| k.key_path())
-                        .map_err(|e| format!("{input}: {e}")),
-                );
-            }
+/// One dependency root looked at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DepRoot {
+    /// The root in the guard's canonical spelling; `Err` for a root that is not known (the user hives
+    /// could not be listed, or a user root does not canonicalise).
+    path: Result<String, String>,
+    /// Whether the bundle's records there may be offered. A root read only to find other dependents
+    /// (another user's, for a machine bundle) never is: an entry named after the bundle there is that
+    /// user's own install, and counts as another dependent.
+    offer: bool,
+}
+
+/// The dependency roots (R3a S4), in the guard's canonical spelling:
+///
+/// - a **per-user** bundle (its entry in a user's hive): the machine's and that user's own, both offered;
+///   no other user's hive is read (another user's records of the same bundle are that user's install);
+/// - a **machine** bundle: the machine's, offered; then the Classes of every loaded user hive, read only
+///   to find other dependents.
+fn dependency_roots(ctx: &ScanCtx<'_>) -> Vec<DepRoot> {
+    let user_root = |sid: &str, offer: bool| {
+        let input = format!(r"HKU\{sid}\Software\Classes\Installer\Dependencies");
+        DepRoot {
+            path: canon_key(&input, None, ctx.guard, None)
+                .map(|k| k.key_path())
+                .map_err(|e| format!("{input}: {e}")),
+            offer,
         }
-        Err(e) => roots.push(Err(format!("loaded user hives: {e}"))),
+    };
+    let mut roots = vec![DepRoot {
+        path: Ok(MACHINE_DEPENDENCIES.to_owned()),
+        offer: true,
+    }];
+    if let Some(own) = ctx.fp.app.program_id.hive_sid() {
+        roots.push(user_root(own.trim(), true));
+        return roots;
+    }
+    match ctx.reg.loaded_user_sids() {
+        Ok(sids) => roots.extend(sids.iter().map(|sid| user_root(sid, false))),
+        Err(e) => roots.push(DepRoot {
+            path: Err(format!("loaded user hives: {e}")),
+            offer: false,
+        }),
     }
     roots
 }
@@ -285,7 +311,7 @@ impl ProviderState {
 fn provider_state(
     ctx: &ScanCtx<'_>,
     burn: &BurnFacts,
-    roots: &[Result<String, String>],
+    roots: &[DepRoot],
     provider: &str,
 ) -> ProviderState {
     let mut state = ProviderState::default();
@@ -294,8 +320,8 @@ fn provider_state(
             others.push(name.to_owned());
         }
     };
-    for root in roots {
-        let Ok(root) = root else {
+    for DepRoot { path, offer } in roots {
+        let Ok(root) = path else {
             state.unknown = true;
             continue;
         };
@@ -318,7 +344,7 @@ fn provider_state(
             match ctx.reg.subkeys(&key) {
                 Ok(entries) => {
                     for entry in entries {
-                        if is_ours(burn, &entry) && valid_name(&entry) {
+                        if *offer && is_ours(burn, &entry) && valid_name(&entry) {
                             here.ours.push(format!(r"{key}\{entry}"));
                         } else {
                             note_other(&mut state.others, &entry);
@@ -329,7 +355,10 @@ fn provider_state(
                 Err(_) => state.unknown = true,
             }
         }
-        state.roots.push(here);
+        // A root read only for other dependents: its key is never offered.
+        if *offer {
+            state.roots.push(here);
+        }
     }
     match index_other_dependents(ctx, burn, provider) {
         Some(others) => {

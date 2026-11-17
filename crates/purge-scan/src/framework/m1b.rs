@@ -47,8 +47,8 @@ use purge_index::sysobj::{self, ProgramRef, SERVICES_KEY, SysObjectIndex};
 use purge_model::object::TaskAction;
 use purge_model::{
     Blocker, Candidate, EvidenceKind, Facts, Fingerprint, Hive, InventoryEntry, ManifestKind,
-    MsiFacts, MsiKeyPath, MsiOnlyRow, ObjectFp, ObjectKind, ObjectWhy, ProgramId, Scope, Target,
-    Tier,
+    MsiContext, MsiFacts, MsiKeyPath, MsiOnlyRow, ObjectFp, ObjectKind, ObjectWhy, ProgramId,
+    Scope, Target, Tier,
 };
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
@@ -78,6 +78,9 @@ pub struct ScanExt {
     pub sysobj: SysObjectIndex,
     /// The app whose anchors and hives the walk of `ref_hits` used.
     hits_app: Option<ProgramId>,
+    /// Whether the walk of `ref_hits` read every key of its scope (`RefScan::is_complete`: not cut by a
+    /// budget, every key readable). An incomplete walk may have missed a referrer (R3a S3).
+    ref_complete: bool,
     /// Scanner faults found while sealing, for the scan's warnings.
     faults: Mutex<Vec<String>>,
     /// What scanners could not read (a source answering `NotCaptured` or `AccessDenied`, an object the
@@ -132,19 +135,35 @@ impl ScanExt {
             ownership,
             sysobj,
             hits_app: None,
+            ref_complete: true,
             faults: Mutex::new(Vec::new()),
             warnings: Mutex::new(Vec::new()),
             unknown_ownership: Mutex::new(BTreeSet::new()),
         }
     }
 
-    /// The same data with `hits`, the result of the reference walk run for the app `app`
+    /// The same data with `hits`, the result of a complete reference walk run for the app `app`
     /// (`ref_any::walk` with that app's fingerprint and anchors).
     #[must_use]
-    pub fn with_ref_hits(mut self, app: &ProgramId, hits: Vec<RefHit>) -> ScanExt {
+    pub fn with_ref_hits(self, app: &ProgramId, hits: Vec<RefHit>) -> ScanExt {
+        self.with_ref_walk(app, hits, true)
+    }
+
+    /// [`ScanExt::with_ref_hits`] for a walk that may be incomplete: `complete` is the walk's
+    /// `RefScan::is_complete`.
+    #[must_use]
+    pub fn with_ref_walk(mut self, app: &ProgramId, hits: Vec<RefHit>, complete: bool) -> ScanExt {
         self.ref_hits = Some(hits);
         self.hits_app = Some(app.clone());
+        self.ref_complete = complete;
         self
+    }
+
+    /// Whether the reference walk read every key of its scope (R3a S3). A scanner that concludes "no
+    /// other referrer" from the walk's hits must not reach Tier A when this is false: unknown never
+    /// removes a blocker. `true` when no walk is held (nothing is concluded from it then).
+    pub fn ref_walk_complete(&self) -> bool {
+        self.ref_complete
     }
 
     /// The reference hits when the walk was run for `app`; `None` otherwise (no walk, or the walk of
@@ -175,10 +194,12 @@ impl ScanExt {
     ) -> ScanExt {
         let phase = Phase::start("refscan");
         // REF-ANY makes no walk for an app without anchors; nothing can refer to it.
-        let hits = if app.anchors.is_empty() {
-            Vec::new()
+        let (hits, complete) = if app.anchors.is_empty() {
+            (Vec::new(), true)
         } else {
-            crate::ref_any::walk(reg, fp, &app.refs).hits
+            let scan = crate::ref_any::walk(reg, fp, &app.refs);
+            let complete = scan.is_complete();
+            (scan.hits, complete)
         };
         phase.end();
         let ownership = OwnershipIndex::build_with_limits(
@@ -196,7 +217,7 @@ impl ScanExt {
         let phase = Phase::start("ext.sysobj");
         let sysobj = sysobj::build(reg, sys);
         phase.end();
-        ScanExt::new(ownership, sysobj).with_ref_hits(&fp.app.program_id, hits)
+        ScanExt::new(ownership, sysobj).with_ref_walk(&fp.app.program_id, hits, complete)
     }
 
     /// Records a scanner fault.
@@ -532,15 +553,91 @@ fn unquote(path: &str) -> &str {
         .trim()
 }
 
-/// [`ScanCtx::product_known`] over a system source: one `msi_product_state_all` query. Public for the
-/// pipeline (and, at act time, the executor), which need the same answer outside a scan context.
-pub fn product_known_in(sys: &dyn SystemSource, product_code: &str) -> Option<bool> {
-    let code = packed_code(product_code).and_then(|p| unpack_guid(&p))?;
-    match sys.msi_product_state_all(&code) {
-        Ok(states) if states.is_empty() => None,
-        Ok(states) => Some(!states.iter().all(|s| s.state.is_unknown())),
-        Err(_) => None,
+/// [`ScanCtx::product_known`] outside a scan context: for the pipeline (and, at act time, the executor),
+/// which need the same answer. `listed(packed)` says whether the fresh inventory lists the product
+/// (packed code) as installed in any context for any user ([`inventory_lists_product`]; in a scan, the
+/// ownership index, which is built from the same inventory).
+///
+/// `msi_product_state_all` asks Windows Installer for the **calling** user only, in each context; a
+/// per-user install of the same ProductCode by another user is invisible to it (R3a B1). So:
+///
+/// - `Some(true)`: Windows Installer knows the product in some context, or the inventory lists it;
+/// - `Some(false)`: all of these hold: Windows Installer answers for at least one context and every
+///   answer is unknown; the inventory lists the product in no context for no user; and for every record
+///   of the product in the fingerprint (`fp.msi`), the product is per-machine, or it is per-user and its
+///   user is the user the scan is for ([`SystemSource::user_sid`]). A product the fingerprint does not
+///   record (a Burn package) follows the app's entry: per-machine, or the entry's own user;
+/// - `None` otherwise: a source error, an empty answer, a code that is no GUID, a per-user product of
+///   an unknown user or of another user than the scan's.
+///
+/// The inventory check covers the case where the engine runs as another account than the interactive
+/// user (an elevated administrator): an elevated inventory enumerates every user's products.
+pub fn product_known_in(
+    sys: &dyn SystemSource,
+    fp: &Fingerprint,
+    listed: &dyn Fn(&str) -> bool,
+    product_code: &str,
+) -> Option<bool> {
+    let packed = packed_code(product_code)?;
+    let code = unpack_guid(&packed)?;
+    let states = sys.msi_product_state_all(&code).ok()?;
+    if states.is_empty() {
+        return None;
     }
+    if !states.iter().all(|s| s.state.is_unknown()) || listed(&packed) {
+        return Some(true);
+    }
+    // Whose product it was: only that user's state was asked when it is per-user.
+    let records: Vec<&MsiFacts> = fp
+        .msi
+        .iter()
+        .filter(|m| packed_code(&m.product_code).as_deref() == Some(packed.as_str()))
+        .collect();
+    let mut users: Vec<Option<&str>> = Vec::new();
+    if records.is_empty() {
+        users.push(fp.app.program_id.hive_sid());
+    }
+    for record in records {
+        users.push(match record.context {
+            MsiContext::Machine => None,
+            MsiContext::UserManaged | MsiContext::UserUnmanaged => Some(
+                record
+                    .user_sid
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())?,
+            ),
+        });
+    }
+    if users.iter().all(Option::is_none) {
+        return Some(false);
+    }
+    let me = sys.user_sid().ok()?;
+    users
+        .iter()
+        .flatten()
+        .all(|sid| prefix::eq_ci(sid.trim(), me.trim()))
+        .then_some(false)
+}
+
+/// Whether the fresh inventory lists the product (`{GUID}` or packed) as installed in any context and
+/// for any user: an entry Windows Installer's product list was attached to (`InventoryEntry::msi`), or a
+/// product without an Uninstall key (`msi_only`). The `listed` of [`product_known_in`].
+pub fn inventory_lists_product(
+    entries: &[InventoryEntry],
+    msi_only: &[MsiOnlyRow],
+    product_code: &str,
+) -> bool {
+    let Some(want) = packed_code(product_code) else {
+        return false;
+    };
+    let same = |code: &str| packed_code(code).as_deref() == Some(want.as_str());
+    entries
+        .iter()
+        .filter(|e| e.msi.is_some())
+        .filter_map(|e| e.product_code.as_deref())
+        .chain(msi_only.iter().map(|r| r.product_code.as_str()))
+        .any(same)
 }
 
 /// The packed form of a product code given as `{GUID}` or packed (32 hex digits), upper case.
@@ -687,19 +784,55 @@ impl<'a> ScanCtx<'a> {
         own.then_some(ObjectWhy::ProgramIsAppExe)
     }
 
-    /// Whether Windows Installer positively knows the product (`{GUID}` or packed) in no context:
-    /// [`SystemSource::msi_product_state_all`] answers with at least one context and all are unknown.
-    /// A source error, an empty answer and a code that is no GUID are "not gone".
+    /// Whether the product (`{GUID}` or packed) is known gone: [`ScanCtx::product_known`] is
+    /// `Some(false)`. A source error, an empty answer, a code that is no GUID and a per-user product of
+    /// another user are "not gone".
     pub fn product_gone(&self, product_code: &str) -> bool {
         self.product_known(product_code) == Some(false)
     }
 
-    /// Whether Windows Installer knows the product (`{GUID}` or packed) now: `Some(true)` in some
-    /// context, `Some(false)` in none (an answer with at least one context, all unknown), `None` when
-    /// that cannot be told (a source error, an empty answer, a code that is no GUID). The
-    /// `product_known` of `purge_plan::decide::M1bDecide::from_facts`.
+    /// Whether the product (`{GUID}` or packed) is installed now ([`product_known_in`], with the
+    /// ownership index as the inventory's list of installed products): `Some(true)` in some context for
+    /// some user, `Some(false)` in none, `None` when that cannot be told. The `product_known` of
+    /// `purge_plan::decide::M1bDecide::from_facts`.
     pub fn product_known(&self, product_code: &str) -> Option<bool> {
-        product_known_in(self.sys, product_code)
+        let ix = &self.ext.ownership;
+        product_known_in(
+            self.sys,
+            self.fp,
+            &|packed| ix.installed(packed).is_some(),
+            product_code,
+        )
+    }
+
+    /// Whether a system object's program file (a service's, a task action's, a firewall rule's) is
+    /// proven gone (R3a S1), with the same proof the framework's dangling rule asks for:
+    ///
+    /// - a file in an InstallRoot of the app: the full dangling rule ([`ScanCtx::dangling`]: the whole
+    ///   root gone, absence proven on a fixed NTFS or ReFS volume with the serial recorded at harvest);
+    /// - any other file (one of the app's exe or outside-root files, outside every InstallRoot): absent,
+    ///   on a fixed NTFS or ReFS volume ([`VolumeInfo::proves_absence`]); a missing or removable volume
+    ///   proves nothing.
+    ///
+    /// A path that does not canonicalise is not gone.
+    ///
+    /// [`VolumeInfo::proves_absence`]: purge_source::types::VolumeInfo::proves_absence
+    pub fn program_gone(&self, file: &str) -> bool {
+        let Some(file) = canon_path(file, self.guard, None)
+            .ok()
+            .filter(|c| !c.needs_long_name)
+            .map(|c| c.path)
+        else {
+            return false;
+        };
+        if self.inside_install_root(&file).is_some() {
+            return self.dangling(&file).is_some();
+        }
+        self.fs.exists(&file).is_absent()
+            && self
+                .fs
+                .volume_info(&file)
+                .is_ok_and(|volume| volume.proves_absence())
     }
 
     /// The app's MSI product (of `fp.msi`) with this code (`{GUID}` or packed).
@@ -1360,6 +1493,26 @@ impl CandidateBuilder<'_> {
         self
     }
 
+    /// Adds the fact `key = value` to the detail of every piece of evidence of `kind` recorded so far
+    /// (R3a M8: a fact belongs in the candidate before it is built, not written into it afterwards).
+    pub fn evidence_fact(
+        &mut self,
+        kind: EvidenceKind,
+        key: &str,
+        value: impl Into<String>,
+    ) -> &mut Self {
+        let value = value.into();
+        for e in self
+            .candidate
+            .evidence
+            .iter_mut()
+            .filter(|e| e.kind == kind)
+        {
+            e.detail = std::mem::take(&mut e.detail).with(key, value.clone());
+        }
+        self
+    }
+
     /// Records the object's scan-time digest (C-OBJECT). Refused (nothing recorded, and the sealing then
     /// drops the candidate) when the target is not a system object of the digest's kind or the digest
     /// is not 64 lower-case hex digits.
@@ -1375,6 +1528,13 @@ impl CandidateBuilder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unquote_is_the_executors() {
+        assert_eq!(unquote(r#" "C:\A b\x.exe" "#), r"C:\A b\x.exe");
+        assert_eq!(unquote(r#""C:\x.exe"#), r#""C:\x.exe"#);
+        assert_eq!(unquote(r"C:\x.exe"), r"C:\x.exe");
+    }
 
     /// Every store pattern is a guard value container spelled exactly as the guard spells it, so that
     /// `path_keyed_store` can find the store from the guard's answer.

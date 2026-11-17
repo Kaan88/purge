@@ -212,9 +212,27 @@ fn provider_key_kept_when_other_bundle_depends() {
     assert!(find(&run(&w), &key(format!(r"{DEPS}\{TRAP_PROVIDER}"))).is_none());
 }
 
+/// R3a S4 (two users, one bundle): for a machine bundle a user's Classes are read only to find other
+/// dependents; the records named after the bundle there are that user's own install and never offered.
+#[test]
+fn machine_bundle_never_offers_user_records() {
+    let w = World::new();
+    let found = run(&w);
+    let deps = user_deps();
+    assert!(
+        found.iter().all(|c| !format!("{:?}", c.target)
+            .to_lowercase()
+            .contains(&deps.to_lowercase())),
+        "{found:?}"
+    );
+    // The machine's own records still go.
+    assert!(find(&found, &dependents_entry("AppBundle_Core")).is_some());
+}
+
 #[test]
 fn provider_in_hku_classes_found() {
-    let w = World::new();
+    // A per-user bundle: its own user's Classes are its root.
+    let w = World::new().per_user();
     let found = run(&w);
     let deps = user_deps();
     let entry = find(

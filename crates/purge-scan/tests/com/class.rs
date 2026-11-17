@@ -29,6 +29,52 @@ fn clsid_dangling_inproc_in_root_safe() {
     assert_eq!(band(c), Band::Safe);
 }
 
+/// R3a S3: "no other class emulates it, no shared interface uses it" is read from the walk's hits; an
+/// incomplete walk proves no "none": Likely, with one scan warning.
+#[test]
+fn clsid_incomplete_walk_likely() {
+    let mut world = one_class(HKLM_CLASSES, "InprocServer32", &app_file("a.dll")).ready(&[]);
+    let app = world.fp.app.program_id.clone();
+    let hits = world.ext.ref_hits_for(&app).unwrap().to_vec();
+    world.ext = purge_scan::framework::ScanExt::new(Default::default(), Default::default())
+        .with_ref_walk(&app, hits, false);
+    assert!(!world.ext.ref_walk_complete());
+    let found = world.classes();
+    let c = get(&found, &clsid_key(HKLM_CLASSES, CLS_A));
+    assert!(!has(c, EvidenceKind::DanglingRef, Tier::A), "{c:#?}");
+    assert_eq!(band(c), Band::Likely);
+    let warnings = world.ext.take_warnings();
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|w| w.contains("did not read every key"))
+            .count(),
+        1,
+        "{warnings:?}"
+    );
+}
+
+/// R3a S3: a machine class while another user's hive is loaded but was not walked: a class there may
+/// emulate it (`TreatAs`). Likely.
+#[test]
+fn clsid_machine_class_with_unwalked_user_hive_likely() {
+    let mut fx = machine();
+    class(
+        &mut fx,
+        HKLM_CLASSES,
+        CLS_A,
+        "InprocServer32",
+        &app_file("a.dll"),
+    );
+    fx.add_key(r"HKU\S-1-5-21-1000000000-2000000000-3000000000-1002\Software");
+    let mut world = World::new(fx);
+    world.fp.anchors.clsids = vec![CLS_A.into()];
+    let world = world.ready(&[]);
+    let found = world.classes();
+    let c = get(&found, &clsid_key(HKLM_CLASSES, CLS_A));
+    assert_eq!(band(c), Band::Likely, "{c:#?}");
+}
+
 #[test]
 fn clsid_server_present_likely() {
     let mut world = one_class(HKLM_CLASSES, "InprocServer32", &app_file("a.dll"));

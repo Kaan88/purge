@@ -3,9 +3,10 @@
 //!
 //! # Which products
 //!
-//! Only the products of the fingerprint (`fp.msi`), each only when [`ScanCtx::product_gone`] says that
-//! Windows Installer knows its ProductCode in no context (a source error, an empty answer or any known
-//! context is "not gone": nothing is offered for that product). An entry whose recorded packed code is
+//! Only the products of the fingerprint (`fp.msi`), each only when [`ScanCtx::product_known`] says that
+//! the product is installed in no context for no user (a source error, an empty answer, any known
+//! context, a product the fresh inventory still lists for some user, or a per-user product of another
+//! user than the scan's is "not gone": nothing is offered for that product). An entry whose recorded packed code is
 //! not the packed form of its ProductCode is skipped, as the plan skips it when it opens the guard. The
 //! packed codes are computed with `purge_index::ownership::pack_guid` from the fingerprint's codes,
 //! never found by matching a product name in `InstallProperties` or anywhere else.
@@ -15,7 +16,9 @@
 //! Exactly the MSI shapes the guard's `reg.installer` rule lets through for a gone product (C-GUARD),
 //! each only when it exists now, with `P` the packed ProductCode:
 //!
-//! - keys `...\Installer\UserData\<sid>\Products\<P>` for every `<sid>` under `UserData`;
+//! - the key `...\Installer\UserData\<sid>\Products\<P>` of the product's own `<sid>` (`S-1-5-18` for a
+//!   per-machine product, the user's for a per-user one; R3a B1: the same code under another SID is
+//!   another user's install);
 //! - keys `HKLM\SOFTWARE\Classes\Installer\Products\<P>` and `...\Classes\Installer\Features\<P>`;
 //! - for a per-user product, the key `HKU\<sid>\Software\Microsoft\Installer\Products\<P>` of its user;
 //! - values named `<P>` under `...\Installer\UpgradeCodes\<U>` and
@@ -123,8 +126,9 @@ impl Scanner for RegArpMsi {
                     ctx.ext.warn(
                         ID,
                         format!(
-                            "{}: Windows Installer's state of the product could not be read; \
-                             its registration is not offered",
+                            "{}: whether the product is still installed could not be told (its \
+                             state could not be read, or it is a per-user product of another \
+                             user than the scan's); its registration is not offered",
                             msi.product_code
                         ),
                     );
@@ -195,9 +199,12 @@ fn product_candidates(
     let mut out = Vec::new();
     let code = msi.product_code.as_str();
 
-    // Keys.
+    // Keys. `UserData\<sid>\Products\<P>` only under the product's own SID (R3a B1): the same ProductCode
+    // under another SID is another user's install, which "gone" was never asked about.
+    let own_sid = context_sid(msi);
     let mut keys: Vec<(String, &'static str)> = sids
         .iter()
+        .filter(|sid| own_sid.is_some_and(|own| prefix::eq_ci(sid, own)))
         .map(|sid| {
             (
                 format!(r"{USERDATA}\{sid}\Products\{packed}"),

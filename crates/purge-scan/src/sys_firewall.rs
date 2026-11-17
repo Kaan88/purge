@@ -9,7 +9,7 @@
 //! local (persistent) store in `ctx.ext.sysobj.firewall` (one `values()` of `FirewallRules`, C-SYSOBJ),
 //! and the rules the harvest recorded as the app's (`fp.sys.firewall_rules`). The scanner opens no
 //! registry key of its own (budget: 0 key opens); the group-policy store is never read. The only other
-//! source call is one `exists` per candidate's program file.
+//! source calls prove a recorded rule's program file gone (`exists` and `volume_info`).
 //!
 //! When the rule list could not be read (`NotCaptured`, `AccessDenied`, anything else) the index carries
 //! one line in its errors (the scan's warning) and an empty list, and this scanner emits nothing.
@@ -40,9 +40,10 @@
 //! `Category::System`, harm Low, `object_fp` = the digest of (id, raw rule string). Then:
 //!
 //! - **recorded** with an equal digest: [`CandidateBuilder::owned_system_object`] with the harvest
-//!   record, which can make the rule Safe (D10) only when the program file is gone now (the source
-//!   says `Absent`); a program still present (or whose state is unknown) leaves the rule Likely
-//!   (evidence capped at Tier B);
+//!   record, which can make the rule Safe (D10) only when the program file is proven gone now
+//!   ([`ScanCtx::program_gone`], R3a S1: in an InstallRoot, the whole root gone on the volume the
+//!   harvest recorded; elsewhere, absent on a fixed NTFS or ReFS volume); a program still present (or
+//!   whose state is unknown) leaves the rule Likely (evidence capped at Tier B);
 //! - **recorded** with another digest: `ObjectChangedSinceHarvest` (hard). A rule whose program is no
 //!   longer the app's is not offered at all: the id was reused for something else;
 //! - **not recorded**: the program alone, which is never Tier A for an object (at most Likely).
@@ -69,12 +70,12 @@
 use std::collections::BTreeMap;
 
 use purge_guard::canon::{GuardEnv, canon_path};
-use purge_guard::deny::{DenyList, ObjectGuardFacts};
+use purge_guard::deny::DenyList;
 use purge_guard::prefix::{self, expand_env};
-use purge_index::sysobj::{self, FIREWALL_RULES_KEY, FirewallFacts, ProgramRef};
+use purge_index::sysobj::{self, FirewallFacts, ProgramRef};
 use purge_model::{
     Action, Blocker, Candidate, Category, FIREWALL_RESTORE_EXACT, FirewallRuleFields,
-    FirewallShape, Harm, ObjectKind, ObjectWhy, Reversibility, SysFirewallRule, Target,
+    FirewallShape, Harm, ObjectWhy, Reversibility, SysFirewallRule, Target,
 };
 
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner};
@@ -219,30 +220,19 @@ impl SysFirewall {
             _ => return None,
         };
 
-        // The guard first: package-bound, resource-named and baseline rules are never emitted.
-        let facts = ObjectGuardFacts {
-            name_or_path_or_id: id,
-            program: rule.program.file(),
-            package_bound: rule.package_bound,
-            resource_name: rule.resource_name || resource_named(&rule.fields),
-            in_baseline: ctx
-                .baseline
-                .is_some_and(|b| b.has_value(FIREWALL_RULES_KEY, id)),
-            ..ObjectGuardFacts::default()
-        };
-        if deny
-            .check_object(ObjectKind::FirewallRule, &facts)
+        // The guard first: package-bound, resource-named and baseline rules are never emitted. The
+        // facts are the framework's (R3a M5: one place); the index's first rule of this id is `rule`.
+        let target = Target::FirewallRule { id: id.to_owned() };
+        if ctx
+            .object_guard(deny, &target, Some(&digest))
+            .ok()
+            .flatten()
             .is_some()
         {
             return None;
         }
 
-        let mut b = ctx.candidate(
-            ID,
-            Target::FirewallRule { id: id.to_owned() },
-            Action::DeleteKey,
-            Category::System,
-        );
+        let mut b = ctx.candidate(ID, target, Action::DeleteKey, Category::System);
         b = b.object_fp(digest);
         b.harm(Harm::Low);
 
@@ -254,9 +244,10 @@ impl SysFirewall {
 
         if unchanged {
             b = b.owned_system_object(why, true);
-            let gone = program.is_some_and(|p| ctx.fs.exists(p).is_absent());
+            // R3a S1: the dangling rule's proof, not a bare "absent".
+            let gone = program.is_some_and(|p| ctx.program_gone(p));
             if !gone {
-                b.cap_at_tier_b("the rule's program file is still present");
+                b.cap_at_tier_b("the rule's program file is not proven gone");
             }
         } else {
             b = b.owned_system_object(why, false);
@@ -306,17 +297,6 @@ impl SysFirewall {
 fn recorded<'a>(ctx: &ScanCtx<'a>, id: &str) -> Option<&'a SysFirewallRule> {
     let fp = ctx.fp;
     fp.sys.firewall_rules.iter().find(|r| r.identity.id == id)
-}
-
-/// Whether any `Name` or `EmbedCtxt` of the rule is a resource reference (`@...`): Windows' own rule
-/// groups. The index looks at `Name` only; the executor's gate at both.
-fn resource_named(fields: &FirewallRuleFields) -> bool {
-    ["Name", "EmbedCtxt"].iter().any(|key| {
-        fields
-            .get_all(key)
-            .iter()
-            .any(|v| v.trim_start().starts_with('@'))
-    })
 }
 
 // ---------------------------------------------------------------------------------------------------------

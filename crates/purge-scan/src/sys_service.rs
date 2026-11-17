@@ -31,8 +31,10 @@
 //!    Not recorded: the program alone speaks for it.
 //! 4. `OwnedSystemObject` (Tier A, Object scope) only when the service was recorded with an equal
 //!    digest, its program is still the app's and resolves to the file the harvest recorded, and that
-//!    file is proven gone now (absent on a fixed NTFS or ReFS volume, with the serial the root recorded
-//!    at harvest). Otherwise `PointsIntoInstallRoot` only (Value scope, weight 6: at most Likely).
+//!    file is proven gone now ([`ScanCtx::program_gone`]: in an InstallRoot, the dangling rule's proof,
+//!    the whole root gone on a fixed NTFS or ReFS volume with the serial the root recorded at harvest;
+//!    elsewhere, absent on a fixed NTFS or ReFS volume). Otherwise `PointsIntoInstallRoot` only (Value
+//!    scope, weight 6: at most Likely).
 //! 5. A recorded service whose program does not resolve to one file now: the soft `ProgramUnresolved`.
 //! 6. Any other service listing this one in `DependOnService`: the hard `HasDependents`, even when the
 //!    dependent is the app's own (a second run removes it once the dependent is gone). While a service
@@ -46,11 +48,11 @@
 //! The scanner does not know whether a service is running; the executor skips a running one (`InUse`).
 //! The values under `Services\<name>` are not this scanner's (REF-ANY keeps them).
 
-use purge_guard::deny::{DenyList, ObjectGuardFacts};
+use purge_guard::deny::DenyList;
 use purge_guard::prefix;
-use purge_index::sysobj::{ProgramRef, SERVICES_KEY, ServiceFacts};
+use purge_index::sysobj::{ProgramRef, ServiceFacts};
 use purge_model::{
-    Action, Blocker, Candidate, Category, Harm, ObjectKind, ObjectWhy, Reversibility,
+    Action, Blocker, Candidate, Category, Harm, ObjectWhy, Reversibility,
     SysService as ServiceRecord, Target,
 };
 
@@ -65,10 +67,6 @@ const ROOTS: &[RootSpec] = &[RootSpec::reg(
     r"HKLM\SYSTEM\CurrentControlSet\Services",
     Some(2),
 )];
-
-/// Service type bits the guard knows a service by: the driver bits and the two Win32 process kinds.
-/// A type with none of them (absent, or 0) is unknown and handed to the guard as such (`sys.driver`).
-const KNOWN_TYPE_BITS: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20;
 
 /// The prefix of the index's error line for one service it could not read (`purge_index::sysobj`).
 const UNREADABLE_SERVICE: &str = "sysobj: service ";
@@ -169,36 +167,20 @@ fn service_candidate(
     }
 
     let program = facts.program.file();
-    let known_type =
-        (identity.service_type & KNOWN_TYPE_BITS != 0).then_some(identity.service_type);
-    let guard_facts = ObjectGuardFacts {
-        name_or_path_or_id: name,
-        program,
-        service_type: known_type,
-        delete_flag: facts.delete_flag,
-        per_user_template: facts.per_user_template,
-        package_bound: false,
-        resource_name: false,
-        in_baseline: ctx
-            .baseline
-            .is_some_and(|b| b.has_key(&format!(r"{SERVICES_KEY}\{name}"))),
+    let now = identity.fp();
+    let target = Target::Service {
+        name: name.to_owned(),
     };
-    let denied = deny.check_object(ObjectKind::Service, &guard_facts);
+    // The guard's object rules with the facts the framework judges them from (R3a M5: one place).
+    // `facts` is the index's first service of this name, which the framework looks up too.
+    let denied = ctx.object_guard(deny, &target, Some(&now)).ok().flatten();
     if denied.is_some() && recorded.is_none() {
         return None;
     }
 
-    let now = identity.fp();
     let same_digest = recorded.is_some_and(|r| r.identity.fp() == now);
 
-    let mut b = ctx.candidate(
-        ID,
-        Target::Service {
-            name: name.to_owned(),
-        },
-        Action::DeleteKey,
-        Category::System,
-    );
+    let mut b = ctx.candidate(ID, target, Action::DeleteKey, Category::System);
     b = b.object_fp(now);
     b.harm(Harm::Low);
 
@@ -216,7 +198,7 @@ fn service_candidate(
     if let Some(owner) = owner {
         let gone = same_digest
             && recorded.is_some_and(|r| same_program(r, program))
-            && program.is_some_and(|file| program_gone(ctx, file));
+            && program.is_some_and(|file| ctx.program_gone(file));
         match recorded {
             Some(r) if gone => b = b.owned_system_object(r.why, true),
             // Not proven gone: the program's word only, which the builder keeps at Tier B.
@@ -303,28 +285,6 @@ fn same_program(recorded: &ServiceRecord, now: Option<&str>) -> bool {
     match (recorded.program.as_deref(), now) {
         (Some(then), Some(now)) => prefix::is_same(then, now),
         _ => false,
-    }
-}
-
-/// Whether the program file is proven gone: absent (never "unknown" or "access denied"), on a fixed
-/// NTFS or ReFS volume, and, when the file lies in an InstallRoot whose volume serial the harvest
-/// recorded, on a volume with that serial (not another disk under the same letter).
-fn program_gone(ctx: &ScanCtx<'_>, file: &str) -> bool {
-    if !ctx.fs.exists(file).is_absent() {
-        return false;
-    }
-    let Ok(volume) = ctx.fs.volume_info(file) else {
-        return false;
-    };
-    if !volume.proves_absence() {
-        return false;
-    }
-    match ctx
-        .inside_install_root(file)
-        .and_then(|root| root.volume_serial)
-    {
-        Some(serial) => volume.serial == Some(serial),
-        None => true,
     }
 }
 

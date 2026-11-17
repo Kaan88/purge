@@ -203,6 +203,64 @@ fn iface_other_view_foreign_makes_likely() {
     );
 }
 
+/// R3a S2 (hostile): a sibling product registered the app's type library again, to its own existing
+/// file, after the harvest. The interface that names the library (marshalled by `oleaut32`) is in use
+/// by that product: no candidate. With the app's own proxy class it is listed, blocked by the other
+/// app.
+#[test]
+fn iface_typelib_reregistered_by_other_product_protected() {
+    let reregistered = |world: &mut World| {
+        sz(
+            &mut world.fixture,
+            &format!(r"{HKLM_CLASSES}\TypeLib\{TLB}\1.0\0\win32"),
+            &format!(r"{OTHER_ROOT}\other.dll"),
+        );
+        world.fp.anchors.typelibs = vec![TLB.into()];
+    };
+    let mut world = proxy_world(false);
+    interface(&mut world.fixture, HKLM_CLASSES, IID_1, PSOA, Some(TLB));
+    reregistered(&mut world);
+    world
+        .fp
+        .msi
+        .push(own_msi(&[iface_key(HKLM_CLASSES, IID_1)]));
+    let found = world.ready(&[]).interfaces();
+    assert!(
+        find(&found, &iface_key(HKLM_CLASSES, IID_1)).is_none(),
+        "{found:#?}"
+    );
+
+    let mut world = proxy_world(false);
+    interface(&mut world.fixture, HKLM_CLASSES, IID_1, PROXY, Some(TLB));
+    reregistered(&mut world);
+    world
+        .fp
+        .msi
+        .push(own_msi(&[iface_key(HKLM_CLASSES, IID_1)]));
+    let found = world.ready(&[]).interfaces();
+    let c = get(&found, &iface_key(HKLM_CLASSES, IID_1));
+    assert!(
+        blocked_by(c, |b| matches!(b, Blocker::ReferencedByOtherApp { .. })),
+        "{c:#?}"
+    );
+    assert_eq!(band(c), Band::Blocked);
+    // The type library is not a chain anchor any more.
+    assert!(c.evidence.iter().all(|e| e.kind != EvidenceKind::ChainedRef
+        || !e.detail.get("anchor").unwrap_or_default().contains(TLB)));
+}
+
+/// R3a M7: an interface key with a subkey COM does not define is never Safe.
+#[test]
+fn iface_unknown_subkey_likely() {
+    let key = iface_key(HKLM_CLASSES, IID_1);
+    let mut world = proxy_world(false);
+    interface(&mut world.fixture, HKLM_CLASSES, IID_1, PROXY, None);
+    sz(&mut world.fixture, &format!(r"{key}\VendorData"), "x");
+    world.fp.msi.push(own_msi(std::slice::from_ref(&key)));
+    let found = world.ready(&[]).interfaces();
+    assert_eq!(band(get(&found, &key)), Band::Likely);
+}
+
 #[test]
 fn iface_proxy_clsid_likely_then_iface_likely() {
     let mut world = proxy_world(true);

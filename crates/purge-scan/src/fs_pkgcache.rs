@@ -5,8 +5,9 @@
 //! (`%ProgramData%\Package Cache` or, per user, `%LOCALAPPDATA%\Package Cache`), one directory per bundle
 //! or package. The scanner never lists a Package Cache: it looks only at directories the harvest recorded
 //! for the app (`fp.burn.cache_path`, `fp.burn.packages[].cache_dir`, `fp.msi[].source_dirs`), and of
-//! those only at one that is, in the guard's canonical form, a **direct child** of a Package Cache root of
-//! this machine. A Package Cache root itself is never a candidate, and neither is anything deeper. The
+//! those only at one that is, in the guard's canonical form, a **direct child** of the app's own Package
+//! Cache root (R3a S4: `%ProgramData%\Package Cache` for a machine entry, the entry user's
+//! `%LOCALAPPDATA%\Package Cache` for a per-user one). A Package Cache root itself is never a candidate, and neither is anything deeper. The
 //! directory's name must also be the owner's own (R2a S7): the bundle id for `cache_path`, the
 //! ProductCode (alone or followed by `v<version>`) for a package's or product's directory; a recorded
 //! path naming another bundle's or product's folder gives nothing.
@@ -240,15 +241,22 @@ fn is_package_folder(leaf: &str, product_code: &str) -> bool {
     head.eq_ignore_ascii_case(code) && (rest.is_empty() || rest.starts_with(['v', 'V']))
 }
 
-/// The Package Cache roots of this machine, canonical: `%ProgramData%\Package Cache` and the
-/// `%LOCALAPPDATA%\Package Cache` of every profile the guard knows.
+/// The Package Cache root of the app's own entry, canonical (R3a S4, the harvest's rule,
+/// `purge_harvest::burn`): `%ProgramData%\Package Cache` for a machine entry, the
+/// `%LOCALAPPDATA%\Package Cache` of the entry's own user for a per-user one. Another user's Package
+/// Cache holds that user's own install, never a leftover of this one. Empty when the folder is not known.
 fn package_cache_roots(ctx: &ScanCtx<'_>) -> Vec<String> {
     let guard = ctx.guard;
     let mut out: Vec<String> = Vec::new();
-    let bases = std::iter::once(guard.program_data.as_str())
-        .chain(guard.profiles.iter().map(|p| p.local_appdata.as_str()))
-        .filter(|dir| !dir.trim().is_empty());
-    for base in bases {
+    let base = match ctx.fp.app.program_id.hive_sid() {
+        None => Some(guard.program_data.as_str()),
+        Some(sid) => guard
+            .profiles
+            .iter()
+            .find(|p| prefix::eq_ci(&p.sid, sid.trim()))
+            .map(|p| p.local_appdata.as_str()),
+    };
+    for base in base.into_iter().filter(|dir| !dir.trim().is_empty()) {
         let input = format!(
             r"{}\Package Cache",
             base.trim().trim_end_matches(prefix::SEP)

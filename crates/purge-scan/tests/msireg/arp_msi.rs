@@ -246,7 +246,6 @@ fn arp_msi_per_user_context_paths() {
     let gone = [p.clone()];
     for target in [
         key(&format!(r"{USERDATA}\{SID}\Products\{p}")),
-        key(&format!(r"{USERDATA}\{MACHINE_SID}\Products\{p}")),
         key(&format!(
             r"HKU\{SID}\Software\Microsoft\Installer\Products\{p}"
         )),
@@ -257,6 +256,14 @@ fn arp_msi_per_user_context_paths() {
         assert_eq!(band(&c), (Band::Safe, true), "{target:?}");
         assert_eq!(guard_check(&w, &target, &gone), None, "{target:?}");
     }
+    // R3a B1: the machine context's registration of the same code is not the per-user product's.
+    assert!(
+        w.find(
+            &Scanner,
+            &key(&format!(r"{USERDATA}\{MACHINE_SID}\Products\{p}"))
+        )
+        .is_none()
+    );
     assert!(
         w.find(&Scanner, &value(&component_key(MACHINE_SID, C1), &p))
             .is_none()
@@ -273,6 +280,71 @@ fn arp_msi_per_user_context_paths() {
         )
         .is_none()
     );
+}
+
+/// Hostile (R3a B1): the same ProductCode installed per-user by a second user. Windows Installer answers
+/// for the calling user only (every context unknown here), so "gone" is never concluded for the other
+/// user's install, and nothing under that user's SID is offered.
+#[test]
+fn arp_msi_same_code_installed_by_second_user_never() {
+    const SID2: &str = "S-1-5-21-1000000000-2000000000-3000000000-1002";
+    let p = packed(OWN);
+    let second_user = |fx: &mut purge_source::fixture::Fixture| {
+        fx.add_key(&format!(
+            r"{USERDATA}\{SID2}\Products\{p}\InstallProperties"
+        ));
+        fx.add_key(&format!(
+            r"HKU\{SID2}\Software\Microsoft\Installer\Products\{p}"
+        ));
+        fx.set_value(
+            &component_key(SID2, C1),
+            &p,
+            RegData::from_sz(&file("app.exe")),
+        );
+    };
+
+    // 1. The app's product is machine-wide and gone for the scan's user, but the fresh inventory lists
+    //    the code installed (for the second user): not gone, nothing at all.
+    let mut fx = machine();
+    second_user(&mut fx);
+    let mut w = World::with(fx);
+    let mut entry = msi_entry(OWN, LP_OTHER);
+    entry.hive_sid = Some(SID2.into());
+    if let Some(msi) = entry.msi.as_mut() {
+        msi.context = MsiContext::UserUnmanaged;
+    }
+    w.inventory.push(entry);
+    w.reindex();
+    assert_eq!(w.ctx().product_known(OWN), Some(true));
+    assert!(w.run(&Scanner).is_empty());
+
+    // 2. Without the inventory's word (the engine ran unelevated): the machine product is gone, and
+    //    still nothing under the second user's SID is a candidate.
+    let mut fx = machine();
+    second_user(&mut fx);
+    let w = World::with(fx);
+    assert_eq!(w.ctx().product_known(OWN), Some(false));
+    let all = w.run(&Scanner);
+    assert!(!all.is_empty());
+    for c in &all {
+        let (Target::RegKey { path } | Target::RegValue { path, .. }) = &c.target else {
+            continue;
+        };
+        assert!(!path.to_ascii_uppercase().contains(SID2), "{path}");
+    }
+
+    // 3. The fingerprint's product is the second user's per-user install: its state was never asked
+    //    (Windows Installer answers for the scan's user only), so it is not known gone.
+    let mut fx = machine();
+    second_user(&mut fx);
+    let mut w = World::with(fx);
+    w.fp.msi[0].context = MsiContext::UserUnmanaged;
+    w.fp.msi[0].user_sid = Some(SID2.into());
+    assert_eq!(w.ctx().product_known(OWN), None);
+    assert!(w.run(&Scanner).is_empty());
+    // A per-user product whose user is not recorded: the same.
+    w.fp.msi[0].user_sid = None;
+    assert_eq!(w.ctx().product_known(OWN), None);
 }
 
 #[test]

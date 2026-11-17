@@ -307,6 +307,92 @@ fn gone_products_only_when_known_absent() {
     assert_eq!(band(&c), Band::Blocked);
 }
 
+/// R3a B1, defence in depth: a gone product opens the guard only under its own context's SID. The same
+/// ProductCode registered under another user's SID is that user's install.
+#[test]
+fn gone_product_opens_only_its_own_sid() {
+    const SID2: &str = "S-1-5-21-1000000000-2000000000-3000000000-1002";
+    const USERDATA: &str = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData";
+    let deny = deny();
+    let gone = |_: &str| Some(false);
+
+    // A per-machine product: S-1-5-18 only.
+    let mut fp = bare_fp();
+    fp.msi = vec![msi(GONE_CODE, GONE_PACKED)];
+    let ctx = with_m1b(&deny, M1bDecide::from_facts(&fp, &gone, &unknown));
+    let open = [
+        userdata_product(GONE_PACKED),
+        classes_product(GONE_PACKED),
+        key(&format!(
+            r"{USERDATA}\S-1-5-18\Components\0123456789ABCDEF0123456789ABCDEF"
+        )),
+    ];
+    for target in open {
+        let c = msi_owned("own", target.clone(), "S");
+        assert_eq!(
+            exemptions(&c, &ctx).gone_msi_products,
+            [GONE_PACKED.to_owned()]
+        );
+    }
+    for target in [
+        key(&format!(r"{USERDATA}\{SID2}\Products\{GONE_PACKED}")),
+        key(&format!(r"{USERDATA}\{SID}\Products\{GONE_PACKED}")),
+        key(&format!(
+            r"HKU\{SID2}\Software\Microsoft\Installer\Products\{GONE_PACKED}"
+        )),
+        key(&format!(
+            r"HKCU\Software\Microsoft\Installer\Products\{GONE_PACKED}"
+        )),
+    ] {
+        let c = msi_owned("other", target.clone(), "S");
+        assert!(
+            exemptions(&c, &ctx).gone_msi_products.is_empty(),
+            "{target:?}"
+        );
+        let c = one(c, &ctx);
+        assert!(deny_rule(&c).is_some(), "{target:?}");
+        assert_eq!(band(&c), Band::Blocked, "{target:?}");
+    }
+
+    // A per-user product of the sample user: that user's SID (in HKLM UserData and in HKU / HKCU).
+    fp.msi[0].context = MsiContext::UserUnmanaged;
+    fp.msi[0].user_sid = Some(SID.to_ascii_lowercase());
+    let ctx = with_m1b(&deny, M1bDecide::from_facts(&fp, &gone, &unknown));
+    for target in [
+        key(&format!(r"{USERDATA}\{SID}\Products\{GONE_PACKED}")),
+        key(&format!(
+            r"HKCU\Software\Microsoft\Installer\Products\{GONE_PACKED}"
+        )),
+    ] {
+        let c = one(msi_owned("own", target.clone(), "S"), &ctx);
+        assert_eq!(deny_rule(&c), None, "{target:?}");
+    }
+    for target in [
+        userdata_product(GONE_PACKED),
+        key(&format!(r"{USERDATA}\{SID2}\Products\{GONE_PACKED}")),
+        key(&format!(
+            r"HKU\{SID2}\Software\Microsoft\Installer\Products\{GONE_PACKED}"
+        )),
+    ] {
+        let c = one(msi_owned("other", target.clone(), "S"), &ctx);
+        assert!(deny_rule(&c).is_some(), "{target:?}");
+        assert_eq!(band(&c), Band::Blocked, "{target:?}");
+    }
+
+    // A per-user product whose user is not recorded opens no SID-filed registration.
+    fp.msi[0].user_sid = None;
+    let ctx = with_m1b(&deny, M1bDecide::from_facts(&fp, &gone, &unknown));
+    let c = one(
+        msi_owned(
+            "x",
+            key(&format!(r"{USERDATA}\{SID}\Products\{GONE_PACKED}")),
+            "S",
+        ),
+        &ctx,
+    );
+    assert_eq!(deny_rule(&c), Some("reg.installer"));
+}
+
 /// Hostile: the product state cannot be read (a source error), or the fingerprint's packed code is not the
 /// packed form of its ProductCode. Nothing is opened.
 #[test]

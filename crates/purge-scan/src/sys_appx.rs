@@ -106,16 +106,10 @@ impl Scanner for SysAppx {
             b.reversibility(Reversibility::None)
                 .blocker(Blocker::ReversibilityNone)
                 .common_blockers();
-            let mut candidate = b.build();
             if let Some(n) = others.fact() {
-                for e in candidate
-                    .evidence
-                    .iter_mut()
-                    .filter(|e| e.kind == EvidenceKind::AppxExternalLocation)
-                {
-                    e.detail = std::mem::take(&mut e.detail).with(OTHER_USERS, n.clone());
-                }
+                b.evidence_fact(EvidenceKind::AppxExternalLocation, OTHER_USERS, n);
             }
+            let candidate = b.build();
             if !out.iter().any(|c| c.id == candidate.id) {
                 out.push(candidate);
             }

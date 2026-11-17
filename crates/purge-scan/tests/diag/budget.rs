@@ -1,6 +1,6 @@
 //! The read budget of REG-DIAG and FS-WER (M1B_DESIGN.json `budgets`): REG-DIAG at most one `subkeys()`
-//! per event log plus 2 opens per source matched, and one `subkeys()` of `Tracing` (one per registry
-//! view); FS-WER one `list_dir()` of each WER store (at most 6), names only, plus one `list_dir()` per
+//! per event log plus 2 opens per source matched, one `subkeys()` of `Tracing` (one per registry view)
+//! and, once a tracing key matched, one `subkeys()` of each `App Paths` key (R3a S5); FS-WER one `list_dir()` of each WER store (at most 6), names only, plus one `list_dir()` per
 //! matched report.
 //!
 //! The common blockers of every scanner read the target key's facts once (`key_info()`); that read is
@@ -95,12 +95,13 @@ fn reads(world: &World, scanner: &dyn Scanner) -> (u64, u64, u64, usize) {
 fn budget_key_opens_and_dir_lists() {
     let world = busy_world(40);
 
-    // REG-DIAG: one listing of each Tracing view, one of the one log holding the app's sources, and per
-    // candidate its values and the common blockers' key facts.
+    // REG-DIAG: one listing of each Tracing view, one of each of the three `App Paths` keys once a
+    // tracing key matched (R3a S5), one of the one log holding the app's sources, and per candidate its
+    // values and the common blockers' key facts.
     let (opens, lists, files, found) = reads(&world, &RegDiag);
     assert_eq!(found, 2 * N, "candidates");
     assert_eq!((lists, files), (0, 0), "REG-DIAG reads no file");
-    let budget = 2 + 1 + 2 * N as u64 + N as u64;
+    let budget = 2 + 3 + 1 + 2 * N as u64 + N as u64;
     assert!(
         opens <= budget,
         "REG-DIAG: {opens} key opens (budget {budget})"

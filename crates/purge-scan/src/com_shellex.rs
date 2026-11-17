@@ -93,9 +93,9 @@ use purge_source::types::{RegData, RegValue};
 
 use crate::cls_progid::classes;
 use crate::com_class::{
-    ClassCache, ClassState, HKLM_CLASSES, Offer, Place, anchor_ids, bare, classes_roots,
-    com_key_ownership, is_anchor, is_braced_guid, proven_not_windows, shared_iids, split_classes,
-    walk_hits, walked_user_sids,
+    ClassCache, ClassState, HKLM_CLASSES, Offer, Place, WALK_INCOMPLETE, anchor_ids, bare,
+    classes_roots, com_key_ownership, is_anchor, is_braced_guid, proven_not_windows, shared_iids,
+    split_classes, walk_hits, walked_user_sids,
 };
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner, anchor_trust, weakest};
 
@@ -215,7 +215,7 @@ impl Scanner for ComShellex {
         }
         found.take_lists(ctx, &classes_roots, &software);
 
-        let mut classes = ClassCache::new(hits, kb);
+        let mut classes = ClassCache::new(ctx, ID, hits, kb);
         let mut out = Vec::new();
         for handler in &found.handlers {
             out.extend(handler_candidate(ctx, &mut classes, handler));
@@ -854,6 +854,11 @@ fn build(ctx: &ScanCtx<'_>, target: Target, clsid: &str, standing: &Standing) ->
     }
     if !is_key && classes::matching_baseline(ctx).is_none() {
         b.cap_at_tier_b("no baseline of this Windows");
+    }
+    // R3a S3: the handlers and their classes' referrers come from the walk; an incomplete walk proves
+    // no "nothing else".
+    if !ctx.ext.ref_walk_complete() {
+        b.cap_at_tier_b(WALK_INCOMPLETE);
     }
     if let Some(blocker) = ctx.other_apps.anchor_blocker(AnchorKind::Clsid, clsid) {
         b.blocker(blocker);

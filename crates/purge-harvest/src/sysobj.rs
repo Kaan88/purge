@@ -178,6 +178,18 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
         let Some(files) = programs.files() else {
             continue;
         };
+        // R3a S6: a relative argument in a working directory that is not the app's runs somebody
+        // else's code.
+        let dirs_own = programs.work_dirs.iter().flatten().all(|dir| match dir {
+            ProgramRef::File(dir) => inp
+                .roots
+                .iter()
+                .any(|r| prefix::is_same(dir, &r.path) || prefix::is_inside(dir, &r.path)),
+            ProgramRef::Unresolved { .. } | ProgramRef::None => false,
+        });
+        if !dirs_own {
+            continue;
+        }
         // Every argument path of every action, checked with each program.
         let args: Vec<ProgramRef> = programs.all_arg_paths().cloned().collect();
         let mut how = Owned::InRoot;

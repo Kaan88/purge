@@ -112,7 +112,7 @@ impl Scanner for ComClass {
             return Vec::new();
         };
         let mut out = Vec::new();
-        let mut classes = ClassCache::new(hits, kb);
+        let mut classes = ClassCache::new(ctx, ID, hits, kb);
         // Classes, every view.
         for clsid in anchor_ids(&ctx.fp.anchors.clsids) {
             for place in places(ctx, "CLSID") {
@@ -659,6 +659,48 @@ pub(crate) struct ClassView {
     pub(crate) dangling: Vec<Evidence>,
     /// The trust of its `ComKeyOwnership`.
     pub(crate) trust: SourceTrust,
+    /// Why the candidate was capped at Tier B because "no other referrer" could not be concluded from
+    /// the walk (R3a S3); `dangling` is empty then, so nothing built on the class is Safe either.
+    pub(crate) capped: Option<&'static str>,
+}
+
+/// Why no other referrer can be concluded from the walk (R3a S3): it did not read every key of its scope.
+pub(crate) const WALK_INCOMPLETE: &str =
+    "the reference walk did not read every key; another referrer may have been missed";
+/// Why no other referrer of a machine registration can be concluded (R3a S3): a loaded user hive the
+/// walk did not cover may hold a class that names it.
+pub(crate) const UNWALKED_HIVES: &str =
+    "a loaded user hive was not walked; a class there may name this machine registration";
+/// The scan warning when the walk is incomplete (R3a S3).
+pub(crate) const WARN_WALK_INCOMPLETE: &str = "the shared reference walk did not read every key \
+     (budget or unreadable keys): no COM registration is Safe on the walk's word that nothing else \
+     refers to it";
+
+/// Whether a loaded user hive was not covered by the reference walk (the walk covers the fingerprint's
+/// user and the hive of a per-user registration), or the loaded hives cannot be listed.
+fn unwalked_user_hives(ctx: &ScanCtx<'_>) -> bool {
+    let walked: Vec<&str> = [
+        Some(ctx.fp.user_sid.as_str()),
+        ctx.fp.app.program_id.hive_sid(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .collect();
+    let is_user = |sid: &str| {
+        let sid = sid.trim().to_ascii_uppercase();
+        (sid.starts_with("S-1-5-21-") || sid.starts_with("S-1-12-1-"))
+            && !sid.ends_with("_CLASSES")
+            && !sid.contains(prefix::SEP)
+    };
+    let Ok(loaded) = ctx.reg.loaded_user_sids() else {
+        return true;
+    };
+    loaded
+        .iter()
+        .chain(ctx.guard.loaded_sids.iter())
+        .filter(|sid| is_user(sid))
+        .any(|sid| !walked.iter().any(|w| prefix::eq_ci(w, sid.trim())))
 }
 
 /// The class views judged so far, so that COM-INTERFACE and the AppIDs read each class once.
@@ -666,15 +708,43 @@ pub(crate) struct ClassCache<'h> {
     hits: &'h [RefHit],
     kb: &'static SharedIids,
     views: HashMap<String, ClassView>,
+    /// Why no other referrer of a registration in a user's Classes can be concluded (R3a S3).
+    user_unknown: Option<&'static str>,
+    /// The same for the machine's Classes.
+    machine_unknown: Option<&'static str>,
 }
 
 impl<'h> ClassCache<'h> {
-    /// An empty cache over the walk's hits.
-    pub(crate) fn new(hits: &'h [RefHit], kb: &'static SharedIids) -> Self {
+    /// An empty cache over the walk's hits. Says once (as `scanner`'s warning) when the walk is
+    /// incomplete.
+    pub(crate) fn new(
+        ctx: &ScanCtx<'_>,
+        scanner: &str,
+        hits: &'h [RefHit],
+        kb: &'static SharedIids,
+    ) -> Self {
+        let user_unknown = (!ctx.ext.ref_walk_complete()).then_some(WALK_INCOMPLETE);
+        if user_unknown.is_some() {
+            ctx.ext.warn(scanner, WARN_WALK_INCOMPLETE);
+        }
+        let machine_unknown =
+            user_unknown.or_else(|| unwalked_user_hives(ctx).then_some(UNWALKED_HIVES));
         Self {
             hits,
             kb,
             views: HashMap::new(),
+            user_unknown,
+            machine_unknown,
+        }
+    }
+
+    /// Why "no other referrer" cannot be concluded from the walk's hits for a registration at `place`
+    /// (R3a S3); `None` when it can. A candidate that rests on it is capped at Tier B with this reason.
+    pub(crate) fn referrers_unknown(&self, place: &Place) -> Option<&'static str> {
+        if place.is_machine() {
+            self.machine_unknown
+        } else {
+            self.user_unknown
         }
     }
 
@@ -682,7 +752,8 @@ impl<'h> ClassCache<'h> {
     pub(crate) fn get(&mut self, ctx: &ScanCtx<'_>, place: &Place, clsid: &str) -> &ClassView {
         let map_key = place.fold_key(clsid);
         if !self.views.contains_key(&map_key) {
-            let view = judge_class(ctx, self.hits, self.kb, place, clsid);
+            let unknown = self.referrers_unknown(place);
+            let view = judge_class(ctx, self.hits, self.kb, place, clsid, unknown);
             self.views.insert(map_key.clone(), view);
         }
         &self.views[&map_key]
@@ -707,6 +778,7 @@ fn judge_class(
     kb: &SharedIids,
     place: &Place,
     clsid: &str,
+    referrers_unknown: Option<&'static str>,
 ) -> ClassView {
     let key = place.key("CLSID", clsid);
     let mut view = ClassView {
@@ -716,6 +788,7 @@ fn judge_class(
         offer: None,
         dangling: Vec::new(),
         trust: SourceTrust::AdminOnly,
+        capped: None,
     };
     // A shared proxy/stub class is never a candidate, and nothing is read of it.
     if kb.is_shared_proxy_clsid(clsid) || !is_anchor(&ctx.fp.anchors.clsids, clsid) {
@@ -781,6 +854,12 @@ fn judge_class(
     }
     for blocker in class_referrer_blockers(ctx, hits, kb, clsid) {
         b.blocker(blocker);
+    }
+    // R3a S3: no `TreatAs` or shared-IID referrer seen is "none" only when the walk saw everything.
+    if let Some(why) = referrers_unknown {
+        b.cap_at_tier_b(why);
+        view.dangling.clear();
+        view.capped = Some(why);
     }
     if let Some(blocker) = ctx.other_apps.anchor_blocker(AnchorKind::Clsid, clsid) {
         b.blocker(blocker);
@@ -1105,6 +1184,8 @@ fn appid_candidate(
     }
     let mut trust = SourceTrust::AdminOnly;
     let mut chain: Option<String> = None;
+    // R3a S3: "every class naming it is the app's" holds only when the walk saw every class that could.
+    let mut unknown = classes.referrers_unknown(place);
     for (at, clsid) in &referrers {
         if !is_anchor(&ctx.fp.anchors.clsids, clsid) {
             return None;
@@ -1113,6 +1194,7 @@ fn appid_candidate(
         if view.offer != Some(Offer::Dangling) {
             return None;
         }
+        unknown = unknown.or(view.capped);
         trust = weakest(trust, view.trust);
         chain.get_or_insert_with(|| view.key.clone());
     }
@@ -1160,10 +1242,14 @@ fn appid_candidate(
         standard,
         Facts::new().with("named_by", referrers.len().to_string()),
     );
-    let tier = ownership.as_ref().map_or(Tier::B, |e| e.tier);
+    let mut tier = ownership.as_ref().map_or(Tier::B, |e| e.tier);
     b.evidence_also(ownership);
     if let Some(class_key) = &chain {
         b.chained_ref(tier, class_key);
+    }
+    if let Some(why) = unknown {
+        b.cap_at_tier_b(why);
+        tier = Tier::B;
     }
     if ctx.predates_install(&key) {
         b.blocker(Blocker::ExistedBeforeInstall);
@@ -1270,6 +1356,24 @@ pub(crate) struct TypeLibScan {
     pub(crate) key: String,
     /// Whether the whole key is a candidate with no hard blocker.
     pub(crate) whole_offered: bool,
+    /// What the type library is now (R3a S2).
+    pub(crate) standing: TypeLibStanding,
+}
+
+/// What a type library of the app is now, as [`scan_typelib`] read it (R3a S2). The worst finding wins:
+/// a foreign file over an unreadable key over a version of the app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TypeLibStanding {
+    /// At least one version is a candidate (every platform path a file of the app).
+    Own,
+    /// A platform path is an existing file outside the app: another product registered the library.
+    Foreign(String),
+    /// The key is gone.
+    Absent,
+    /// A key or value could not be read.
+    Unreadable,
+    /// Not the app's now: not an anchor, in the baseline, no version, or files that cannot be told.
+    NotOwn,
 }
 
 /// The version of a type library: its candidate and what its files are.
@@ -1278,6 +1382,10 @@ struct VersionScan {
     trust: SourceTrust,
     dangling: Vec<Evidence>,
     all_dangling: bool,
+    /// An existing file outside the app that a platform path names.
+    foreign: Option<String>,
+    /// A key or value of the version could not be read.
+    unreadable: bool,
 }
 
 /// Reads `TypeLib\{id}` of `place` (an app's type library) and builds its candidates.
@@ -1287,6 +1395,7 @@ pub(crate) fn scan_typelib(ctx: &ScanCtx<'_>, place: &Place, id: &str) -> TypeLi
         candidates: Vec::new(),
         key: key.clone(),
         whole_offered: false,
+        standing: TypeLibStanding::NotOwn,
     };
     if !is_anchor(&ctx.fp.anchors.typelibs, id)
         || ctx.in_baseline(&Target::RegKey { path: key.clone() })
@@ -1295,8 +1404,13 @@ pub(crate) fn scan_typelib(ctx: &ScanCtx<'_>, place: &Place, id: &str) -> TypeLi
     }
     let versions = match ctx.reg.subkeys(&key) {
         Ok(versions) => versions,
+        Err(SourceError::NotFound) => {
+            scan.standing = TypeLibStanding::Absent;
+            return scan;
+        }
         Err(e) => {
             warn_unread(ctx, ID, &key, &e);
+            scan.standing = TypeLibStanding::Unreadable;
             return scan;
         }
     };
@@ -1305,9 +1419,15 @@ pub(crate) fn scan_typelib(ctx: &ScanCtx<'_>, place: &Place, id: &str) -> TypeLi
     let mut trust = SourceTrust::AdminOnly;
     let mut dangling: Vec<Evidence> = Vec::new();
     let mut all_dangling = true;
+    let mut foreign: Option<String> = None;
+    let mut unreadable = false;
     for version in &versions {
         let version_key = format!(r"{key}\{version}");
         let v = scan_version(ctx, &version_key);
+        if foreign.is_none() {
+            foreign = v.foreign;
+        }
+        unreadable |= v.unreadable;
         match v.candidate {
             Some(candidate) => {
                 all &= !hard_blocked(ctx, &candidate);
@@ -1320,6 +1440,15 @@ pub(crate) fn scan_typelib(ctx: &ScanCtx<'_>, place: &Place, id: &str) -> TypeLi
             None => all = false,
         }
     }
+    scan.standing = if let Some(file) = foreign {
+        TypeLibStanding::Foreign(file)
+    } else if unreadable {
+        TypeLibStanding::Unreadable
+    } else if !scan.candidates.is_empty() {
+        TypeLibStanding::Own
+    } else {
+        TypeLibStanding::NotOwn
+    };
     if !all {
         return scan;
     }
@@ -1359,6 +1488,8 @@ fn scan_version(ctx: &ScanCtx<'_>, version_key: &str) -> VersionScan {
         trust: SourceTrust::AdminOnly,
         dangling: Vec::new(),
         all_dangling: false,
+        foreign: None,
+        unreadable: false,
     };
     if ctx.in_baseline(&Target::RegKey {
         path: version_key.to_owned(),
@@ -1369,12 +1500,16 @@ fn scan_version(ctx: &ScanCtx<'_>, version_key: &str) -> VersionScan {
         Ok(children) => children,
         Err(e) => {
             warn_unread(ctx, ID, version_key, &e);
+            out.unreadable = !matches!(e, SourceError::NotFound);
             return out;
         }
     };
     let env = env_for(ctx, version_key);
     let mut own: Vec<(String, String, SourceTrust, ExistsState)> = Vec::new();
     let mut nonstandard: Option<String> = None;
+    // A file that is not the app's: the version is not offered, but every path is still looked at, so
+    // that another product's file is found wherever it is (R3a S2).
+    let mut not_own = false;
     for child in &children {
         if prefix::eq_ci(child, "FLAGS") || prefix::eq_ci(child, "HELPDIR") {
             continue;
@@ -1388,6 +1523,7 @@ fn scan_version(ctx: &ScanCtx<'_>, version_key: &str) -> VersionScan {
             Ok(platforms) => platforms,
             Err(e) => {
                 warn_unread(ctx, ID, &lcid_key, &e);
+                out.unreadable = !matches!(e, SourceError::NotFound);
                 return out;
             }
         };
@@ -1400,7 +1536,10 @@ fn scan_version(ctx: &ScanCtx<'_>, version_key: &str) -> VersionScan {
             let raw = match default_string(ctx, &platform_key) {
                 Ok(Some(raw)) => raw,
                 Ok(None) => continue,
-                Err(()) => return out,
+                Err(()) => {
+                    out.unreadable = true;
+                    return out;
+                }
             };
             match stand_of(ctx, &resolve_file(&raw, &env)) {
                 FileStand::Own {
@@ -1409,12 +1548,16 @@ fn scan_version(ctx: &ScanCtx<'_>, version_key: &str) -> VersionScan {
                     exists,
                 } => own.push((platform_key, path, trust, exists)),
                 FileStand::Nothing => {}
+                FileStand::ForeignPresent(file) => {
+                    out.foreign.get_or_insert(file);
+                    not_own = true;
+                }
                 // Not every file is the app's: the version is not offered.
-                _ => return out,
+                FileStand::ForeignOther | FileStand::Unresolved => not_own = true,
             }
         }
     }
-    if own.is_empty() {
+    if own.is_empty() || not_own {
         return out;
     }
     out.trust = own

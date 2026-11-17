@@ -1150,6 +1150,29 @@ impl OwnershipIndex {
         out
     }
 
+    /// Every file key path (folded) whose file name is `name` (compared ignoring case), each with the
+    /// components it is the key path of, in path order. Empty for a name that is empty or holds a
+    /// separator. One pass over the index's files.
+    pub fn files_named(&self, name: &str) -> Vec<(&str, Vec<ComponentOwner<'_>>)> {
+        let want = fold(name.trim());
+        if want.is_empty() || want.contains(['\\', '/']) {
+            return Vec::new();
+        }
+        let suffix = format!("\\{want}");
+        self.files
+            .iter()
+            .filter(|(path, _)| path.ends_with(&suffix))
+            .map(|(path, list)| {
+                let mut out = Vec::new();
+                for &(comp, kp) in list {
+                    let shared = self.components[comp as usize].key_paths[kp as usize].shared_dll;
+                    self.push_owner(&mut out, comp, shared);
+                }
+                (path.as_str(), out)
+            })
+            .collect()
+    }
+
     /// The components whose file key path is directly in `dir` (canonical) or below it, and the
     /// components whose key path is a directory at or below `dir`. A sibling with a longer name
     /// (`C:\AppData` beside `C:\App`) is not below.

@@ -205,6 +205,26 @@ impl World {
     fn run(&self) -> Vec<Candidate> {
         self.run_with(SysFirewall::default())
     }
+
+    /// The whole InstallRoot is gone (the uninstaller removed `helper.exe` and the folder too).
+    fn root_gone(&mut self) {
+        assert!(self.fixture.remove_path(ROOT));
+    }
+}
+
+/// R3a S1: a recorded rule whose program file is absent while its InstallRoot still exists (`helper.exe`
+/// is left) is not proven gone: the dangling rule asks for the whole root. Likely, Tier B.
+#[test]
+fn program_absent_but_root_present_is_likely() {
+    let mut w = World::new();
+    w.record(OWNED, ObjectWhy::ProgramInRoot);
+    let out = w.run();
+    let c = find(&out, OWNED);
+    assert_eq!(owned_object_tier(c), Some(Tier::B));
+    assert_eq!(band(c), (Band::Likely, false));
+    w.root_gone();
+    let out = w.run();
+    assert_eq!(owned_object_tier(find(&out, OWNED)), Some(Tier::A));
 }
 
 fn ids(candidates: &[Candidate]) -> Vec<&str> {
@@ -255,6 +275,7 @@ fn owned_object_tier(c: &Candidate) -> Option<Tier> {
 fn owned_recorded_dangling_rule_safe() {
     let mut w = World::new();
     w.record(OWNED, ObjectWhy::ProgramInRoot);
+    w.root_gone();
     let out = w.run();
     let c = find(&out, OWNED);
     assert_eq!(c.action, Action::DeleteKey);
@@ -354,8 +375,10 @@ fn app_env_var_expanded() {
     let c = find(&out, ENV_APP);
     assert_eq!(c.reversibility, Reversibility::Full);
     assert_eq!(band(c), (Band::Likely, false));
-    // Recorded: the expanded program is gone and undo can re-create it, so it is Safe.
+    // Recorded: the expanded program is gone (with its whole root) and undo can re-create it, so it
+    // is Safe.
     w.record(ENV_APP, ObjectWhy::ProgramInRoot);
+    w.root_gone();
     let out = w.run();
     let c = find(&out, ENV_APP);
     assert_eq!(owned_object_tier(c), Some(Tier::A));
@@ -417,6 +440,7 @@ fn restore_not_exact_makes_partial() {
 fn id_spelled_exactly_as_stored() {
     let mut w = World::new();
     w.record(PROMPT, ObjectWhy::ProgramInRoot);
+    w.root_gone();
     let out = w.run();
     let c = find(&out, PROMPT);
     assert_eq!(

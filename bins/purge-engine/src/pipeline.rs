@@ -65,7 +65,8 @@ use purge_plan::decide::{DecideCtx, Limits, M1bDecide, bundle_known};
 use purge_plan::emit::{Built, build};
 use purge_scan::catalog::all_scanners;
 use purge_scan::framework::{
-    AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, ScanLimits, product_known_in,
+    AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, ScanLimits, inventory_lists_product,
+    product_known_in,
 };
 use purge_source::registry::RegistrySource;
 use purge_win::env::{EnvMap, expand_with};
@@ -956,8 +957,9 @@ fn run_scan(
 /// The M1b exemption lists of a plan (C-GUARD, R2a S9): [`M1bDecide::from_facts`] over the fingerprint,
 /// with two fresh queries made now, never anything a candidate or a plan file says:
 ///
-/// - `product_known`: Windows Installer's state of the product in every context
-///   ([`purge_scan::framework::product_known_in`]);
+/// - `product_known`: Windows Installer's state of the product in every context, the fresh inventory's
+///   list of every user's products, and the product's own user
+///   ([`purge_scan::framework::product_known_in`], R3a B1);
 /// - `bundle_known`: the bundle in the fresh inventory `inv` ([`purge_plan::decide::bundle_known`]); a
 ///   hive counts as read when it is loaded and no Uninstall key of it failed to list (an inventory
 ///   warning on that hive's Uninstall keys, or on the list of loaded hives for a user, makes it
@@ -990,9 +992,15 @@ pub fn m1b_lists(sources: Sources<'_>, fp: &Fingerprint, inv: &Inventory) -> M1b
             }
         }
     };
-    M1bDecide::from_facts(fp, &|code| product_known_in(sources.sys, code), &|bundle| {
-        bundle_known(bundle, &fp.app.program_id, &inv.doc.entries, &hive_read)
-    })
+    // R3a B1: Windows Installer answers for the calling user only; the fresh inventory (every user's
+    // products when elevated) and the product's own user decide the rest.
+    let listed =
+        |packed: &str| inventory_lists_product(&inv.doc.entries, &inv.doc.msi_only, packed);
+    M1bDecide::from_facts(
+        fp,
+        &|code| product_known_in(sources.sys, fp, &listed, code),
+        &|bundle| bundle_known(bundle, &fp.app.program_id, &inv.doc.entries, &hive_read),
+    )
 }
 
 /// What the shared scan data could not read, as scan warnings: unknown MSI ownership blocks the

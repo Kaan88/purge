@@ -50,15 +50,30 @@ fn pkgcache_bundle_dir_safe_when_gone() {
     assert!(c.blockers.is_empty(), "{:?}", c.blockers);
     assert_eq!(band(c), (Band::Safe, true));
 
-    // A package whose product is gone and that nothing else keeps goes too, in either cache.
+    // A package whose product is gone and that nothing else keeps goes too, in the bundle's own cache.
     let core = find(&found, &core_dir()).expect("the Core package's directory");
     assert_eq!(band(core), (Band::Safe, true));
-    assert!(find(&found, &dir(format!(r"{USER_CACHE}\{USER_PART}v1.0.0.0"))).is_some());
+    // R3a S4: a machine bundle's own cache is the machine's; a user's Package Cache holds that user's
+    // install, never this bundle's leftover.
+    assert!(find(&found, &dir(format!(r"{USER_CACHE}\{USER_PART}v1.0.0.0"))).is_none());
 
     // A recorded directory that no longer exists is not offered.
     let mut w = World::new();
     assert!(w.fixture.remove_path(&format!(r"{CACHE}\{BUNDLE}")));
     assert!(find(&run(&w), &bundle_dir()).is_none());
+}
+
+/// R3a S4: a per-user bundle's own cache is its user's `%LOCALAPPDATA%\Package Cache`; the machine's
+/// Package Cache holds another (machine) install of the same packages, never this bundle's leftover.
+#[test]
+fn pkgcache_per_user_bundle_only_its_own_cache() {
+    let w = World::new().per_user();
+    let found = run(&w);
+    let user = find(&found, &dir(format!(r"{USER_CACHE}\{USER_PART}v1.0.0.0")))
+        .expect("the per-user package's directory");
+    assert_eq!(user.action, Action::Quarantine);
+    assert!(find(&found, &core_dir()).is_none(), "{found:?}");
+    assert!(find(&found, &bundle_dir()).is_none(), "{found:?}");
 }
 
 #[test]
@@ -120,7 +135,9 @@ fn pkgcache_dir_not_direct_child_ignored() {
     assert!(find(&found, &core_dir()).is_none());
     assert!(find(&found, &dir(format!(r"{CACHE}\{CORE}v1.0.0.0\core.msi"))).is_none());
     // The other recorded directories are not affected.
-    assert!(find(&found, &dir(format!(r"{USER_CACHE}\{USER_PART}v1.0.0.0"))).is_some());
+    let mut w = World::new();
+    w.burn_mut().cache_path = Some(format!(r"{CACHE}\..\x"));
+    assert!(find(&run(&w), &core_dir()).is_some());
 
     // Not under a cache root at all.
     let mut w = World::new();

@@ -17,7 +17,11 @@
 //!   uninstaller's `unins000`, ...) or the exe is one of the app's recorded uninstallers: such a name is
 //!   every installer's;
 //! - another installed app has an exe of that stem ([`OtherApps`](crate::framework::OtherApps): its exe
-//!   anchors and the `.exe` files its records name);
+//!   anchors and the `.exe` files its records name; R3a S5: a component of another installed MSI
+//!   product whose file key path is `<stem>.exe`; a service, task or firewall program `<stem>.exe`
+//!   outside the app's roots);
+//! - `App Paths\<stem>.exe` (the machine's, both views, or the scan user's) exists and its default is
+//!   not a path in the app's roots or one of its files, or cannot be read (R3a S5);
 //! - the clean Windows of this build has the key (Windows' own program of that name).
 //!
 //! The `Tracing` keys themselves are never candidates (guard rule `reg.tracing-root`).
@@ -50,8 +54,9 @@
 //!
 //! # Reads
 //!
-//! One `subkeys()` of each `Tracing` key; one `subkeys()` per log holding a source looked at; per source
-//! one `values()`. The common blockers add one `key_info()` per candidate.
+//! One `subkeys()` of each `Tracing` key; when a tracing key matched, one `subkeys()` of each of the three
+//! `App Paths` keys and one `value()` per `App Paths\<stem>.exe` found; one `subkeys()` per log holding a
+//! source looked at; per source one `values()`. The common blockers add one `key_info()` per candidate.
 //!
 //! # Missing data
 //!
@@ -63,6 +68,7 @@ use std::collections::HashSet;
 use purge_guard::canon::canon_path;
 use purge_guard::prefix::{self, Relation};
 use purge_identity::kbdata::Kb;
+use purge_index::sysobj::{Env, ProgramRef, task_programs};
 use purge_model::{
     Action, AnchorKind, Blocker, Candidate, Category, EvidenceKind, ManifestKind, Target, Tier,
 };
@@ -163,18 +169,137 @@ pub fn generic_stem(stem: &str) -> bool {
         .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// Whether another installed app has an exe whose file stem is `stem`.
+/// Whether another installed app has an exe whose file stem is `stem`, from what the scan already holds
+/// (R3a S5 widened the rule beyond the other apps' records):
+///
+/// - another installed app's exe anchors and the `.exe` files its records name
+///   ([`OtherApps`](crate::framework::OtherApps));
+/// - a file key path `<stem>.exe` of a component that an installed MSI product other than the app's
+///   is a client of (the ownership index);
+/// - a service's, a scheduled task's or a firewall rule's program `<stem>.exe` that is not the app's
+///   (outside its roots, not one of its files; the system-object index).
 fn stem_of_other_app(ctx: &ScanCtx<'_>, stem_text: &str) -> bool {
     let same = |file: &str| {
         let name = prefix::leaf(file).unwrap_or(file);
         has_extension(name, &["exe"]) && prefix::eq_ci(stem(name), stem_text)
     };
-    ctx.other_apps.apps().iter().any(|app| {
+    let records = ctx.other_apps.apps().iter().any(|app| {
         app.anchors
             .iter()
             .any(|a| a.kind == AnchorKind::Exe && same(&a.text))
             || app.files.iter().any(|f| same(f))
-    })
+    });
+    records || msi_file_of_other_product(ctx, stem_text) || system_object_program(ctx, &same)
+}
+
+/// Whether an installed MSI product other than the app's owns a component whose file key path is
+/// `<stem>.exe`.
+fn msi_file_of_other_product(ctx: &ScanCtx<'_>, stem_text: &str) -> bool {
+    let ix = &ctx.ext.ownership;
+    let own = |client: &str| {
+        ctx.fp
+            .msi
+            .iter()
+            .any(|m| prefix::eq_ci(m.packed_code.trim(), client.trim()))
+    };
+    ix.files_named(&format!("{stem_text}.exe"))
+        .iter()
+        .flat_map(|(_, owners)| owners.iter())
+        .flat_map(|owner| owner.clients.iter())
+        .any(|client| !own(client) && ix.installed(client).is_some())
+}
+
+/// Whether a service, task or firewall rule of the machine runs a program `same` accepts that is not
+/// the app's (outside every root of the app and none of its files).
+fn system_object_program(ctx: &ScanCtx<'_>, same: &dyn Fn(&str) -> bool) -> bool {
+    let index = &ctx.ext.sysobj;
+    let foreign = |file: &str| {
+        same(file)
+            && !ctx
+                .fp
+                .roots
+                .iter()
+                .any(|r| prefix::is_inside(file, &r.path))
+            && !ctx.is_app_file(file)
+    };
+    let env = Env::new(ctx.env.iter());
+    index
+        .services
+        .iter()
+        .filter_map(|s| s.program.file())
+        .any(foreign)
+        || index
+            .firewall
+            .iter()
+            .filter_map(|r| r.program.file())
+            .any(foreign)
+        || index.tasks.iter().any(|t| {
+            task_programs(&t.identity, &env)
+                .actions
+                .iter()
+                .filter_map(ProgramRef::file)
+                .any(foreign)
+        })
+}
+
+/// The `App Paths` keys a program name is registered under: the machine's (both views) and the scan
+/// user's.
+fn app_paths_roots(ctx: &ScanCtx<'_>) -> [String; 3] {
+    const APP_PATHS: &str = r"Microsoft\Windows\CurrentVersion\App Paths";
+    [
+        format!(r"HKLM\SOFTWARE\{APP_PATHS}"),
+        format!(r"HKLM\SOFTWARE\WOW6432Node\{APP_PATHS}"),
+        format!(r"HKU\{}\Software\{APP_PATHS}", ctx.fp.user_sid.trim()),
+    ]
+}
+
+/// One `App Paths` key and its subkey names; `Err` for a key that could not be read.
+type AppPathsRoot = (String, Result<Vec<String>, ()>);
+
+/// The `App Paths` listings, read on first use: one `subkeys()` per root.
+#[derive(Default)]
+struct AppPaths {
+    roots: Option<Vec<AppPathsRoot>>,
+}
+
+impl AppPaths {
+    /// Whether `App Paths\<stem>.exe` registers another program (R3a S5): it exists and its default
+    /// value is a path outside the app's roots, or cannot be read; or a listing could not be read.
+    fn foreign(&mut self, ctx: &ScanCtx<'_>, stem_text: &str) -> bool {
+        let roots = self.roots.get_or_insert_with(|| {
+            app_paths_roots(ctx)
+                .into_iter()
+                .map(|root| {
+                    let names = match ctx.reg.subkeys(&root) {
+                        Ok(names) => Ok(names),
+                        Err(SourceError::NotFound) => Ok(Vec::new()),
+                        Err(_) => Err(()),
+                    };
+                    (root, names)
+                })
+                .collect()
+        });
+        let want = format!("{stem_text}.exe");
+        roots.iter().any(|(root, names)| {
+            let Ok(names) = names else {
+                // warning: an `App Paths` key cannot be read: who else has the name is unknown.
+                return true;
+            };
+            let Some(name) = names.iter().find(|n| prefix::eq_ci(n, &want)) else {
+                return false;
+            };
+            let key = format!(r"{root}\{name}");
+            let path = match ctx.reg.value(&key, "") {
+                Ok(data) if data.is_complete() => data
+                    .string()
+                    .and_then(|s| clean_path(&expand_env(&s, ctx.env))),
+                _ => None,
+            };
+            !path.is_some_and(|p| {
+                ctx.fp.roots.iter().any(|r| prefix::is_inside(&p, &r.path)) || ctx.is_app_file(&p)
+            })
+        })
+    }
 }
 
 /// The app's exes a tracing key may be named after: `(stem, exe path)`, one per stem, without the
@@ -212,6 +337,7 @@ fn tracing_keys(ctx: &ScanCtx<'_>, out: &mut Vec<Candidate>) {
     if stems.is_empty() {
         return;
     }
+    let mut app_paths = AppPaths::default();
     for root in TRACING_KEYS {
         let names = match ctx.reg.subkeys(root) {
             Ok(names) => names,
@@ -224,7 +350,8 @@ fn tracing_keys(ctx: &ScanCtx<'_>, out: &mut Vec<Candidate>) {
             let Some(key_stem) = tracing_stem(&name) else {
                 continue;
             };
-            let Some((_, exe)) = stems.iter().find(|(s, _)| prefix::eq_ci(s, key_stem)) else {
+            let Some((stem_text, exe)) = stems.iter().find(|(s, _)| prefix::eq_ci(s, key_stem))
+            else {
                 continue;
             };
             let target = Target::RegKey {
@@ -232,6 +359,10 @@ fn tracing_keys(ctx: &ScanCtx<'_>, out: &mut Vec<Candidate>) {
             };
             // Windows has a key of that name: the stem is a Windows program's too.
             if ctx.in_baseline(&target) {
+                continue;
+            }
+            // Another program is registered under the name (R3a S5).
+            if app_paths.foreign(ctx, stem_text) {
                 continue;
             }
             let mut b = ctx.candidate(ID, target, Action::DeleteKey, Category::Registration);

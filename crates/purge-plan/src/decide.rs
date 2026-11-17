@@ -48,8 +48,8 @@ use purge_guard::deny::{DenyList, Exemptions, ObjectGuardFacts};
 use purge_guard::{containers, prefix};
 use purge_model::{
     Action, Band, Blocker, Candidate, Category, Evidence, EvidenceKind, Fingerprint, Hive,
-    InventoryEntry, ObjectKind, Origin, ProgramId, Reversibility, ScanMode, Scope, SourceTrust,
-    Target, Tier, VerifyGone,
+    InventoryEntry, MsiContext, ObjectKind, Origin, ProgramId, Reversibility, ScanMode, Scope,
+    SourceTrust, Target, Tier, VerifyGone,
 };
 use purge_policy::band::{self, PolicyCtx, TargetScope};
 use purge_policy::score::effective_weight;
@@ -95,9 +95,16 @@ impl Default for Limits {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct M1bDecide {
     gone_msi_products: Vec<String>,
+    /// The gone products by the SID their registration is filed under (R3a B1): `(folded SID, packed
+    /// codes)`, `s-1-5-18` for a per-machine product, the user's for a per-user one; a per-user product
+    /// whose user is not recorded is under no SID.
+    gone_msi_by_sid: Vec<(String, Vec<String>)>,
     gone_cache_dirs: Vec<String>,
     gone_burn: Vec<String>,
 }
+
+/// The `UserData` SID of the machine context.
+const MACHINE_SID: &str = "S-1-5-18";
 
 impl M1bDecide {
     /// The lists for the app of `fp`, judged by two fresh queries the caller makes now (after the
@@ -136,6 +143,21 @@ impl M1bDecide {
             if packed.eq_ignore_ascii_case(&msi.packed_code)
                 && gone(product_known(&msi.product_code))
             {
+                let sid = match msi.context {
+                    MsiContext::Machine => Some(MACHINE_SID),
+                    MsiContext::UserManaged | MsiContext::UserUnmanaged => msi
+                        .user_sid
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty()),
+                };
+                if let Some(sid) = sid {
+                    let sid = prefix::fold(sid);
+                    match out.gone_msi_by_sid.iter_mut().find(|(s, _)| *s == sid) {
+                        Some((_, list)) => list.push(packed.clone()),
+                        None => out.gone_msi_by_sid.push((sid, vec![packed.clone()])),
+                    }
+                }
                 out.gone_msi_products.push(packed);
             }
         }
@@ -169,6 +191,11 @@ impl M1bDecide {
             list.sort();
             list.dedup();
         }
+        for (_, list) in &mut out.gone_msi_by_sid {
+            list.sort();
+            list.dedup();
+        }
+        out.gone_msi_by_sid.sort();
         out
     }
 
@@ -177,6 +204,31 @@ impl M1bDecide {
     #[must_use]
     pub fn gone_msi_products(&self) -> &[String] {
         &self.gone_msi_products
+    }
+
+    /// The gone MSI products the guard may let through for `target` (R3a B1, defence in depth behind
+    /// REG-ARP-MSI). A Windows Installer registration filed under a SID
+    /// (`HKLM\...\Installer\UserData\<sid>\...`, `HKU\<sid>\Software\Microsoft\Installer\...`) is let
+    /// through only for the products whose own context is that SID (`S-1-5-18` for a per-machine
+    /// product, the user's for a per-user one): the same ProductCode under another SID is another user's
+    /// install, which "gone" says nothing about. Every other target gets [`M1bDecide::gone_msi_products`].
+    /// `env` and `user_sid` canonicalise the key as the guard does. The executor's gate passes the same
+    /// to the guard (M1B-X-INTEG).
+    #[must_use]
+    pub fn gone_msi_products_for(
+        &self,
+        target: &Target,
+        env: &GuardEnv,
+        user_sid: Option<&str>,
+    ) -> &[String] {
+        match installer_registration_sid(target, env, user_sid) {
+            Some(sid) => self
+                .gone_msi_by_sid
+                .iter()
+                .find(|(s, _)| *s == sid)
+                .map_or(&[], |(_, list)| list.as_slice()),
+            None => &self.gone_msi_products,
+        }
     }
 
     /// Package Cache directories, as the fingerprint recorded them, of gone bundles and packages.
@@ -197,6 +249,45 @@ impl M1bDecide {
         self.gone_msi_products.is_empty()
             && self.gone_cache_dirs.is_empty()
             && self.gone_burn.is_empty()
+    }
+}
+
+/// The SID (folded) a Windows Installer registration target is filed under: the `<sid>` of
+/// `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\<sid>\...` (either view), or the
+/// user of `HKU\<sid>\Software\Microsoft\Installer\...`. Compared in the guard's canonical form; `None`
+/// for every other target and for a key that does not canonicalise (the guard denies those anyway).
+fn installer_registration_sid(
+    target: &Target,
+    env: &GuardEnv,
+    user_sid: Option<&str>,
+) -> Option<String> {
+    let path = match target {
+        Target::RegKey { path }
+        | Target::RegValue { path, .. }
+        | Target::RegValueChanged { path, .. }
+        | Target::RegMultiSzSegment { path, .. } => path,
+        _ => return None,
+    };
+    let key = canon_key(path, None, env, user_sid).ok()?;
+    let folded: Vec<String> = prefix::segments(&key.path).map(prefix::fold).collect();
+    let segs: Vec<&str> = folded.iter().map(String::as_str).collect();
+    match &key.hive {
+        Hive::Hklm => match segs.as_slice() {
+            [
+                "software",
+                "microsoft",
+                "windows",
+                "currentversion",
+                "installer",
+                "userdata",
+                sid,
+                ..,
+            ] => Some((*sid).to_owned()),
+            _ => None,
+        },
+        Hive::Hku(sid) => matches!(segs.as_slice(), ["software", "microsoft", "installer", ..])
+            .then(|| prefix::fold(sid)),
+        Hive::HkuClasses(_) => None,
     }
 }
 
@@ -436,7 +527,11 @@ pub fn target_scope_in(target: &Target, env: &GuardEnv, user_sid: Option<&str>) 
 pub fn exemptions<'c>(candidate: &Candidate, ctx: &'c DecideCtx<'_>) -> Exemptions<'c> {
     Exemptions {
         gone_burn: ctx.m1b.gone_burn(),
-        gone_msi_products: ctx.m1b.gone_msi_products(),
+        gone_msi_products: ctx.m1b.gone_msi_products_for(
+            &candidate.target,
+            ctx.env(),
+            ctx.user_sid,
+        ),
         gone_cache_dirs: ctx.m1b.gone_cache_dirs(),
         ..deny_exemptions(candidate, ctx.env(), ctx.user_sid, ctx.long_names_resolved)
     }

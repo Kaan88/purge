@@ -56,7 +56,7 @@ use crate::skeleton;
 
 mod m1b;
 
-pub use m1b::{PathStore, ScanExt, product_known_in};
+pub use m1b::{PathStore, ScanExt, inventory_lists_product, product_known_in};
 
 // ---------------------------------------------------------------------------------------------------------
 // Scanner trait and root specs

@@ -90,6 +90,58 @@ fn tracing_stem_shared_with_other_app_not_emitted() {
     assert!(found.is_empty(), "{:#?}", spots(&found));
 }
 
+/// R3a S5 (trap, the `python312-with-313` shape): another installed program of the same file name that
+/// the other apps' records do not list, found by `App Paths` or by a scheduled task's program. The tracing
+/// key is that program's too: not emitted. An `App Paths` entry of the app's own exe is no reason.
+#[test]
+fn tracing_stem_of_unlisted_other_program_not_emitted() {
+    const APP_PATHS: &str = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths";
+    let key = format!(r"{TRACING}\{MAIN_STEM}_RASAPI32");
+    let with = |setup: &dyn Fn(&mut purge_source::fixture::Fixture)| {
+        let mut fx = machine();
+        fx.add_key(&key);
+        setup(&mut fx);
+        World::new(fx).ready().diag()
+    };
+    let exe = format!("{MAIN_STEM}.exe");
+
+    // `App Paths` names another program of that name.
+    let found = with(&|fx| {
+        fx.set_value(
+            &format!(r"{APP_PATHS}\{exe}"),
+            "",
+            purge_source::types::RegData::from_sz(&format!(r"{OTHER_ROOT}\{exe}")),
+        );
+    });
+    assert!(found.is_empty(), "{:#?}", spots(&found));
+
+    // `App Paths` names the app's own exe: still offered.
+    let found = with(&|fx| {
+        fx.set_value(
+            &format!(r"{APP_PATHS}\{exe}"),
+            "",
+            purge_source::types::RegData::from_sz(&app_file(&exe)),
+        );
+    });
+    assert_eq!(spots(&found), std::slice::from_ref(&key));
+
+    // A scheduled task of another product runs a program of that name.
+    let found = with(&|fx| {
+        fx.add_task(purge_source::sysobj::TaskInfo {
+            identity: purge_model::object::TaskIdentity {
+                path: r"\Other\Run".into(),
+                actions: vec![purge_model::object::TaskAction::Exec {
+                    path: format!(r"{OTHER_ROOT}\{exe}"),
+                    arguments: None,
+                    working_dir: None,
+                }],
+            },
+            ..Default::default()
+        });
+    });
+    assert!(found.is_empty(), "{:#?}", spots(&found));
+}
+
 #[test]
 fn tracing_partial_stem_not_matched() {
     // Hostile: the app is `7zFM.exe`; `7z_RASAPI32` belongs to another `7z.exe`, and `7zFM2_RASAPI32`

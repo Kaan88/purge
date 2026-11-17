@@ -17,7 +17,8 @@
 //!   (`purge_index::sysobj::task_programs`, the harvest's resolution) for which `ScanCtx::object_owner`
 //!   answers (the file lies in an InstallRoot of the app or is one of its exe or outside-root files) and
 //!   every absolute path among its arguments is a file of the app
-//!   (`sys_service::arguments_are_the_apps`; R2a S5), or a COM-handler action whose CLSID is one of the app's (`fp.anchors.clsids`); or
+//!   (`sys_service::arguments_are_the_apps`; R2a S5) and, when an argument may be relative, its working
+//!   directory is a root of the app or inside one (`TaskPrograms::work_dirs`; R3a S6), or a COM-handler action whose CLSID is one of the app's (`fp.anchors.clsids`); or
 //! - the harvest recorded a task at this path (`fp.sys.tasks`).
 //!
 //! A task the harvest did not record is offered only in the first case, so an action of another product,
@@ -43,7 +44,8 @@
 //! Task folders are never candidates.
 //!
 //! - Recorded at harvest with the same digest, every action the app's, every exec action's file proven
-//!   absent now and no COM-handler action: `OwnedSystemObject` (Tier A), which can make it Safe (D10).
+//!   gone now (`ScanCtx::program_gone`, R3a S1: in an InstallRoot the whole root gone on the volume the
+//!   harvest recorded) and no COM-handler action: `OwnedSystemObject` (Tier A), which can make it Safe (D10).
 //!   A COM handler's class could be shown dangling only by reading its `CLSID` keys, which this scanner's
 //!   budget (no key opens) does not allow; such a task is at most Likely.
 //! - Recorded with the same digest but a program file present (or its state unknown), a COM-handler
@@ -67,14 +69,11 @@
 
 use std::collections::HashSet;
 
-use purge_guard::canon::canon_path;
-use purge_guard::deny::{DenyList, ObjectGuardFacts};
+use purge_guard::deny::DenyList;
 use purge_guard::prefix;
 use purge_index::sysobj::{Env, ProgramRef, task_programs};
 use purge_model::object::{TaskAction, TaskIdentity};
-use purge_model::{
-    Action, Blocker, Candidate, Category, Harm, ObjectKind, ObjectWhy, Reversibility, Target,
-};
+use purge_model::{Action, Blocker, Candidate, Category, Harm, ObjectWhy, Reversibility, Target};
 use purge_source::sysobj::TaskInfo;
 
 use crate::framework::{AppIdentityView, CandidateBuilder, RootSpec, ScanCtx, Scanner};
@@ -85,11 +84,6 @@ pub const ID: &str = "SYS-TASK";
 
 /// Task Scheduler's registry cache: where the rig captures what the task list says.
 const TASK_CACHE: &str = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache";
-
-/// The tasks' tree in the registry, where the baseline records which tasks Windows has (the key the
-/// harvest's baseline check uses: this prefix followed by the task path).
-const TASK_TREE: &str =
-    r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree";
 
 /// The prefix of the index's error line for a task list it could not read (`purge_index::sysobj`).
 const LIST_UNREADABLE: &str = "sysobj: tasks:";
@@ -228,7 +222,8 @@ fn classify(ctx: &ScanCtx<'_>, env: &Env, identity: &TaskIdentity) -> Vec<Act> {
         .iter()
         .zip(programs.actions)
         .zip(programs.arg_paths)
-        .map(|((action, program), args)| match action {
+        .zip(programs.work_dirs)
+        .map(|(((action, program), args), dir)| match action {
             TaskAction::ComHandler { clsid, .. } => {
                 let clsid = clsid.trim();
                 let own = !clsid.is_empty()
@@ -248,6 +243,7 @@ fn classify(ctx: &ScanCtx<'_>, env: &Env, identity: &TaskIdentity) -> Vec<Act> {
                 ProgramRef::File(file) => match ctx
                     .object_owner(&program)
                     .filter(|_| arguments_are_the_apps(ctx, &args))
+                    .filter(|_| dir.as_ref().is_none_or(|d| work_dir_is_the_apps(ctx, d)))
                 {
                     Some(why) => Act::Own {
                         file: file.clone(),
@@ -279,20 +275,19 @@ fn judge(ctx: &ScanCtx<'_>, deny: &DenyList, env: &Env, task: &TaskInfo) -> Opti
     if recorded.is_none() && !all_own {
         return None;
     }
-    let guard = guard_blocker(ctx, deny, identity, &acts);
+    let target = Target::Task {
+        path: identity.path.clone(),
+    };
+    let now = identity.fp();
+    // The guard's object rules as the framework judges them (R3a M5: one place). `task` is the index's
+    // first task of this path, which the framework looks up too.
+    let guard = ctx.object_guard(deny, &target, Some(&now)).ok().flatten();
     if guard.is_some() && recorded.is_none() {
         return None;
     }
 
-    let mut b = ctx.candidate(
-        ID,
-        Target::Task {
-            path: identity.path.clone(),
-        },
-        Action::DeleteKey,
-        Category::Startup,
-    );
-    b = b.object_fp(identity.fp());
+    let mut b = ctx.candidate(ID, target, Action::DeleteKey, Category::Startup);
+    b = b.object_fp(now);
     b.harm(Harm::Low);
     match recorded {
         None => {
@@ -347,14 +342,15 @@ fn unrecorded_why(acts: &[Act]) -> ObjectWhy {
     }
 }
 
-/// Whether every exec action's file is proven absent (not "unknown"). Called only for tasks with at
-/// least one exec action of the app and no other kind.
+/// Whether every exec action's file is proven gone ([`ScanCtx::program_gone`], R3a S1: the dangling
+/// rule's proof, not a bare "absent"). Called only for tasks with at least one exec action of the app
+/// and no other kind.
 fn programs_gone(ctx: &ScanCtx<'_>, acts: &[Act]) -> bool {
     let mut any = false;
     for act in acts {
         match act {
             Act::Own { file, .. } => {
-                if !ctx.fs.exists(file).is_absent() {
+                if !ctx.program_gone(file) {
                     return false;
                 }
                 any = true;
@@ -365,55 +361,16 @@ fn programs_gone(ctx: &ScanCtx<'_>, acts: &[Act]) -> bool {
     any
 }
 
-/// `path` without one pair of surrounding double quotes and outer blanks (the executor's form).
-fn unquote(path: &str) -> &str {
-    let t = path.trim();
-    t.strip_prefix('"')
-        .and_then(|rest| rest.strip_suffix('"'))
-        .unwrap_or(t)
-        .trim()
-}
-
-/// The guard's object rule for the task (see the module documentation): the path (with the baseline),
-/// then every exec action's path as the executor's gate checks it, then every resolved program file.
-fn guard_blocker(
-    ctx: &ScanCtx<'_>,
-    deny: &DenyList,
-    identity: &TaskIdentity,
-    acts: &[Act],
-) -> Option<Blocker> {
-    let in_baseline = ctx
-        .baseline
-        .is_some_and(|b| b.has_key(&format!("{TASK_TREE}{}", identity.path)));
-    let base = ObjectGuardFacts {
-        name_or_path_or_id: &identity.path,
-        in_baseline,
-        ..ObjectGuardFacts::default()
-    };
-    if let Some(blocker) = deny.check_object(ObjectKind::Task, &base) {
-        return Some(blocker);
+/// Whether a task action's working directory (`TaskPrograms::work_dirs`, set when an argument may be
+/// relative to it) is the app's: a root of the app or inside one (R3a S6).
+fn work_dir_is_the_apps(ctx: &ScanCtx<'_>, dir: &ProgramRef) -> bool {
+    match dir {
+        ProgramRef::File(dir) => ctx.fp.roots.iter().any(|r| {
+            !prefix::steps_back(dir)
+                && (prefix::is_same(dir, &r.path) || prefix::is_inside(dir, &r.path))
+        }),
+        ProgramRef::Unresolved { .. } | ProgramRef::None => false,
     }
-    let check = |program: &str| {
-        deny.check_object(
-            ObjectKind::Task,
-            &ObjectGuardFacts {
-                program: Some(program),
-                ..base
-            },
-        )
-    };
-    for action in &identity.actions {
-        if let TaskAction::Exec { path, .. } = action {
-            let plain = unquote(path);
-            let as_gate = canon_path(plain, ctx.guard, None)
-                .map(|c| c.path)
-                .unwrap_or_else(|_| plain.to_owned());
-            if let Some(blocker) = check(&as_gate) {
-                return Some(blocker);
-            }
-        }
-    }
-    acts.iter().filter_map(Act::file).find_map(check)
 }
 
 /// The blockers of another installed app whose root holds, or whose records name, a program file of
@@ -448,12 +405,5 @@ mod tests {
         ] {
             assert_eq!(is_task_path(path), want, "{path:?}");
         }
-    }
-
-    #[test]
-    fn unquote_is_the_executors() {
-        assert_eq!(unquote(r#" "C:\A b\x.exe" "#), r"C:\A b\x.exe");
-        assert_eq!(unquote(r#""C:\x.exe"#), r#""C:\x.exe"#);
-        assert_eq!(unquote(r"C:\x.exe"), r"C:\x.exe");
     }
 }

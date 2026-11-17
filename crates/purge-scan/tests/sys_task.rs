@@ -277,6 +277,64 @@ fn owned_recorded_dangling_task_safe() {
     assert_eq!(band(c), (Band::Safe, true));
 }
 
+/// R3a S1: the program file is absent but its InstallRoot still holds a file: not proven gone (the
+/// dangling rule asks for the whole root), so the record stays at Tier B and the task Likely.
+#[test]
+fn program_absent_root_present_not_safe() {
+    let mut fx = machine_with(&[UPDATE]);
+    fx.add_file(&format!(r"{ROOT}\left-behind.dll"), 10);
+    let world = World::new(fx).recorded(UPDATE, ObjectWhy::ProgramIsAppExe);
+    let found = world.run();
+    let c = only(&found, UPDATE);
+    assert!(
+        !has(c, EvidenceKind::OwnedSystemObject, Tier::A),
+        "{:#?}",
+        c.evidence
+    );
+    assert_eq!(band(c), (Band::Likely, false));
+}
+
+/// R3a S6 (hostile): the app's program with a relative argument in a working directory outside the
+/// app's roots runs another product's code: not offered unrecorded, at most Tier B recorded. The same in
+/// the app's root is the app's.
+#[test]
+fn relative_argument_in_foreign_working_dir_not_the_apps() {
+    let with_dir = |dir: &str| {
+        let mut fx = machine_with(&[UPDATE]);
+        let mut tasks = fx.tasks().unwrap();
+        for action in &mut tasks[0].identity.actions {
+            if let TaskAction::Exec {
+                arguments,
+                working_dir,
+                ..
+            } = action
+            {
+                *arguments = Some("run start".to_owned());
+                *working_dir = Some(dir.to_owned());
+            }
+        }
+        fx.set_tasks(Some(tasks));
+        fx
+    };
+    let foreign = r"C:\Other\proj";
+    assert!(World::new(with_dir(foreign)).run().is_empty());
+
+    let mut world = World::new(with_dir(foreign));
+    let recorded = world.ext.sysobj.tasks[0].identity.clone();
+    world
+        .fp
+        .sys
+        .tasks
+        .push(record(&recorded, ObjectWhy::ProgramIsAppExe));
+    let found = world.run();
+    let c = only(&found, UPDATE);
+    assert!(!has(c, EvidenceKind::OwnedSystemObject, Tier::A));
+    assert_eq!(band(c), (Band::Likely, false));
+
+    // The app's own root as the working directory: the app's.
+    assert_eq!(World::new(with_dir(ROOT)).run().len(), 1);
+}
+
 /// Hostile (trap `task-similar-name`): a task named after the app, in a folder named after its vendor,
 /// authored "Contoso Widget", that runs another installed product's program. Not offered, whatever its
 /// names say.

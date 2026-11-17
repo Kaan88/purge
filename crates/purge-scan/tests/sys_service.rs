@@ -146,6 +146,12 @@ impl World {
         assert!(self.fixture.remove_path(file), "{file} was in the fixture");
     }
 
+    /// The whole InstallRoot is gone: what the dangling rule asks for before a program file in it is
+    /// proven gone (R3a S1).
+    fn remove_root(&mut self) {
+        assert!(self.fixture.remove_path(ROOT), "{ROOT} was in the fixture");
+    }
+
     fn ctx(&self) -> ScanCtx<'_> {
         ScanCtx {
             reg: &self.fixture,
@@ -223,7 +229,7 @@ fn file(name: &str) -> String {
 fn owned_recorded_dangling_service_safe() {
     let mut w = World::new();
     w.record("AppSvc", ObjectWhy::ProgramInRoot);
-    w.remove_file(&file("svc.exe"));
+    w.remove_root();
     let c = w.get("AppSvc");
     assert_eq!(
         c.target,
@@ -239,6 +245,18 @@ fn owned_recorded_dangling_service_safe() {
     assert!(has_owned_object(&c), "{:?}", c.evidence);
     assert!(c.blockers.is_empty(), "{:?}", c.blockers);
     assert_eq!(band(&c), (Band::Safe, true));
+}
+
+/// R3a S1: the program file is absent but its InstallRoot is still there (other files left): not proven
+/// gone, so the record is not Tier A.
+#[test]
+fn owned_recorded_program_absent_root_present_likely() {
+    let mut w = World::new();
+    w.record("AppSvc", ObjectWhy::ProgramInRoot);
+    w.remove_file(&file("svc.exe"));
+    let c = w.get("AppSvc");
+    assert!(!has_owned_object(&c), "{:?}", c.evidence);
+    assert_eq!(band(&c), (Band::Likely, false));
 }
 
 #[test]
@@ -340,7 +358,7 @@ fn svchost_service_with_app_dll_in_root() {
     assert_eq!(band(&c), (Band::Likely, false));
 
     // The DLL is.
-    w.remove_file(&file("apphost.dll"));
+    w.remove_root();
     let c = w.get("AppHost");
     assert!(has_owned_object(&c), "{:?}", c.evidence);
     assert_eq!(band(&c), (Band::Safe, true));
@@ -403,8 +421,7 @@ fn dependent_service_blocks() {
     let mut w = World::new();
     w.record("AppCore", ObjectWhy::ProgramInRoot);
     w.record("AppAgent", ObjectWhy::ProgramInRoot);
-    w.remove_file(&file("core.exe"));
-    w.remove_file(&file("agent.exe"));
+    w.remove_root();
     let core = w.get("AppCore");
     assert!(
         core.blockers.contains(&Blocker::HasDependents {
@@ -487,7 +504,7 @@ fn digest_changed_since_harvest_blocks() {
 fn password_account_partial_never_safe() {
     let mut w = World::new();
     w.record("AppAccount", ObjectWhy::ProgramInRoot);
-    w.remove_file(&file("acct.exe"));
+    w.remove_root();
     let c = w.get("AppAccount");
     assert!(has_owned_object(&c), "owned, and still not Safe");
     assert_eq!(c.reversibility, Reversibility::Partial);
@@ -586,7 +603,7 @@ fn controlset_spelling_does_not_duplicate() {
     let mut again = w.fp.sys.services[0].clone();
     again.identity.name = "APPSVC".into();
     w.fp.sys.services.push(again);
-    w.remove_file(&file("svc.exe"));
+    w.remove_root();
     let all: Vec<Candidate> = w
         .run()
         .into_iter()

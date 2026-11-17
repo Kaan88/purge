@@ -10,7 +10,10 @@
 //! registry view. Each is read in place: its subkeys, the proxy value and the `TypeLib` value.
 //!
 //! An interface is considered only when its proxy is a class of the app that COM-CLASS offers under (a)
-//! or (b) ([`crate::com_class`]) or its `TypeLib` names one of the app's type libraries. A proxy listed
+//! or (b) ([`crate::com_class`]) or its `TypeLib` names one of the app's type libraries that is the
+//! app's now (R3a S2: at least one version whose files are all the app's). A type library one of whose
+//! paths is an existing file outside the app (another product registered it again) adds
+//! `ReferencedByOtherApp`; one that cannot be read gives no candidate at all. A proxy listed
 //! in `kb/shared-iids.json` as a shared proxy (`oleaut32`'s `PSOAInterface`, ...) says nothing about who
 //! registered the interface: such an interface is considered only through its `TypeLib`.
 //!
@@ -37,9 +40,9 @@ use purge_model::{Action, Blocker, Candidate, Category, Evidence, Target, Tier};
 use purge_source::types::SourceError;
 
 use crate::com_class::{
-    ClassCache, ClassState, NO_KB, NO_WALK, Offer, Place, TypeLibScan, classes_roots,
-    foreign_class_owner, is_anchor, is_braced_guid, scan_typelib, shared_iids, split_classes,
-    walk_hits, walked_user_sids, warn_unread,
+    ClassCache, ClassState, NO_KB, NO_WALK, Offer, Place, TypeLibScan, TypeLibStanding,
+    classes_roots, foreign_class_owner, foreign_file_owner, is_anchor, is_braced_guid,
+    scan_typelib, shared_iids, split_classes, walk_hits, walked_user_sids, warn_unread,
 };
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner};
 
@@ -79,7 +82,7 @@ impl Scanner for ComInterface {
             ctx.ext.warn(ID, NO_KB);
             return Vec::new();
         };
-        let mut classes = ClassCache::new(hits, kb);
+        let mut classes = ClassCache::new(ctx, ID, hits, kb);
         let mut typelibs: HashMap<String, TypeLibScan> = HashMap::new();
         let mut views: Vec<IfaceView> = Vec::new();
         for (place, iid) in locations(ctx, hits) {
@@ -198,8 +201,22 @@ enum Read {
         proxy: Option<String>,
         /// The type library id, when the `TypeLib` value is one.
         typelib: Option<String>,
+        /// A subkey COM does not define for an interface (R3a M7), when there is one.
+        other: Option<String>,
     },
 }
+
+/// The subkeys COM defines for `Interface\{IID}`.
+const INTERFACE_SUBKEYS: &[&str] = &[
+    "ProxyStubClsid32",
+    "ProxyStubClsid",
+    "TypeLib",
+    "NumMethods",
+    "BaseInterface",
+    "AsynchronousInterface",
+    "SynchronousInterface",
+    "OLEViewerIViewerCLSID",
+];
 
 /// One view of one interface, judged on its own.
 struct IfaceView {
@@ -314,7 +331,15 @@ fn read(ctx: &ScanCtx<'_>, key: &str) -> Read {
     let Ok(typelib) = guid_of("TypeLib") else {
         return Read::Unreadable;
     };
-    Read::Present { proxy, typelib }
+    let other = names
+        .iter()
+        .find(|n| !INTERFACE_SUBKEYS.iter().any(|w| prefix::eq_ci(w, n)))
+        .cloned();
+    Read::Present {
+        proxy,
+        typelib,
+        other,
+    }
 }
 
 /// Reads and judges one view of one interface.
@@ -337,7 +362,12 @@ fn judge(
         dangling: Vec::new(),
         why: "",
     };
-    let Read::Present { proxy, typelib } = view.read.clone() else {
+    let Read::Present {
+        proxy,
+        typelib,
+        other,
+    } = view.read.clone()
+    else {
         return view;
     };
     let Some(kb) = shared_iids() else {
@@ -407,8 +437,24 @@ fn judge(
         let scan = typelibs
             .entry(map_key)
             .or_insert_with(|| scan_typelib(ctx, &tl_place, typelib));
-        typelib_whole = scan.whole_offered;
-        view.chains.push((Tier::A, scan.key.clone()));
+        // R3a S2: the type library attributes the interface only when it is the app's now.
+        match &scan.standing {
+            TypeLibStanding::Own => {
+                typelib_whole = scan.whole_offered;
+                view.chains.push((Tier::A, scan.key.clone()));
+            }
+            TypeLibStanding::Foreign(file) => {
+                view.blockers.push(Blocker::ReferencedByOtherApp {
+                    app: foreign_file_owner(ctx, file),
+                });
+            }
+            // Unknown never makes a candidate, whatever the proxy says.
+            TypeLibStanding::Unreadable => {
+                view.chains.clear();
+                return view;
+            }
+            TypeLibStanding::Absent | TypeLibStanding::NotOwn => {}
+        }
     }
     if view.chains.is_empty() {
         return view;
@@ -426,9 +472,15 @@ fn judge(
         "the proxy is not a class of the app whose server is proven gone"
     } else if !(msi_row || typelib_whole) {
         "neither a row of the app's MSI nor its whole type library declares the interface"
+    } else if other.is_some() {
+        // R3a M7: what another subkey holds is not known to be the app's (the COM-CLASS rule).
+        "the key has a subkey that is not an interface's"
     } else {
-        ""
+        // R3a S3: the interfaces were found by the walk, and other users of them are unknown ("" when
+        // they are known).
+        classes.referrers_unknown(place).unwrap_or_default()
     };
+    let referrers_known = classes.referrers_unknown(place).is_none();
     let blocked = view.blockers.iter().any(Blocker::is_hard)
         || ctx
             .msi_blockers(&Target::RegKey { path: key.clone() })
@@ -436,6 +488,8 @@ fn judge(
             .any(Blocker::is_hard);
     if let Some(dangling) = proxy_dangling
         && (msi_row || typelib_whole)
+        && other.is_none()
+        && referrers_known
         && !blocked
     {
         view.safe_here = true;

@@ -194,6 +194,12 @@ impl World {
         self.ext = ScanExt::new(index(&self.fixture), SysObjectIndex::default());
     }
 
+    /// The bundle as a per-user one of the user `SID` (its ARP entry in that user's hive).
+    pub fn per_user(mut self) -> Self {
+        self.fp.app.program_id = ProgramId::user(SID, View::K64, BUNDLE).unwrap();
+        self
+    }
+
     pub fn burn_mut(&mut self) -> &mut BurnFacts {
         self.fp.burn.as_mut().expect("the fingerprint has a bundle")
     }

@@ -211,8 +211,11 @@ pub fn host_names() -> &'static [String] {
 }
 
 /// Whether the last segment of `program` (a path or a bare name, quotes around it ignored) is an
-/// interpreter or host executable of `kb/hosts.json`, compared ignoring case. A name without an
-/// extension matches with `.exe` added (`cmd`, `PowerShell`), as `CreateProcess` would run it.
+/// interpreter or host executable, compared ignoring case: a name of `kb/hosts.json` (a name without an
+/// extension matches with `.exe` added, `cmd`, `PowerShell`, as `CreateProcess` would run it), or one of
+/// the versioned or script-host patterns (R3a S6): any batch script (`.cmd`, `.bat`: `cmd.exe` runs it,
+/// `npm.cmd`), and `python` or `pypy` followed by a version and an optional `w` (`python3.exe`,
+/// `python3.12.exe`, `pypy3.exe`, `python3w.exe`).
 pub fn is_host(program: &str) -> bool {
     let Some(hosts) = hosts() else {
         return true;
@@ -226,7 +229,21 @@ pub fn is_host(program: &str) -> bool {
         .trim()
         .to_lowercase();
     let with_exe = format!("{name}.exe");
-    hosts.iter().any(|h| *h == name || *h == with_exe)
+    hosts.iter().any(|h| *h == name || *h == with_exe) || host_pattern(&name)
+}
+
+/// The patterns of [`is_host`] for a lower-case file name.
+fn host_pattern(name: &str) -> bool {
+    if name.ends_with(".cmd") || name.ends_with(".bat") {
+        return true;
+    }
+    let base = name.strip_suffix(".exe").unwrap_or(name);
+    ["python", "pypy"].iter().any(|prefix| {
+        base.strip_prefix(prefix).is_some_and(|rest| {
+            let rest = rest.strip_suffix('w').unwrap_or(rest);
+            rest.chars().all(|c| c.is_ascii_digit() || c == '.')
+        })
+    })
 }
 
 /// The program a command line runs (a service's `ImagePath`, a `LocalServer32` command), resolved to
@@ -407,15 +424,46 @@ fn arg_tokens(args: &str) -> Vec<String> {
     out
 }
 
-/// Where a drive path (`X:\` or `X:/`) starts in `token`: at its start or right after a character that
-/// is not a letter, a digit or `/` (`=`, `:`, `,`, ...; `http://x:/` is no drive path).
+/// Where a drive path (`X:\` or `X:/`) starts in `token`: at its start, right after a character that is
+/// not a letter or a digit (`=`, `:`, `,`, `/`, ...: `file:///C:/x`), or right after a one-letter switch
+/// glued to it (`-IC:\x`, `/IC:\x`; R3a S6). Finding too many paths is safe: an argument path that is
+/// not the app's only keeps an object from being the app's.
 fn drive_path_start(token: &str) -> Option<usize> {
     let b = token.as_bytes();
+    let separator = |j: usize| !b[j].is_ascii_alphanumeric();
     (0..b.len().saturating_sub(2)).find(|&i| {
         b[i].is_ascii_alphabetic()
             && b[i + 1] == b':'
             && matches!(b[i + 2], b'\\' | b'/')
-            && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'/'))
+            && (i == 0
+                || separator(i - 1)
+                || (i >= 2
+                    && matches!(b[i - 2], b'-' | b'/')
+                    && b[i - 1].is_ascii_alphabetic()
+                    && (i == 2 || separator(i - 3))))
+    })
+}
+
+/// Whether `args` (a task action's arguments) holds an argument that may name a path relative to the
+/// working directory (R3a S6): after `%NAME%` expansion, a token, or the value of a `-name=` / `/name:`
+/// switch, that is not absolute (see [`argument_paths`]), not a switch itself and not a plain number.
+pub fn has_relative_argument(args: &str, env: &Env) -> bool {
+    let expanded = env.expand(args);
+    arg_tokens(&expanded).iter().any(|token| {
+        let token = token.trim().trim_end_matches([',', ';']);
+        let value = if token.starts_with(['-', '/']) {
+            match token.find(['=', ':']) {
+                Some(i) => &token[i + 1..],
+                None => return false,
+            }
+        } else {
+            token
+        };
+        let value = value.trim();
+        !value.is_empty()
+            && !value.starts_with('\\')
+            && drive_path_start(value) != Some(0)
+            && !value.chars().all(|c| c.is_ascii_digit() || c == '.')
     })
 }
 
@@ -771,6 +819,12 @@ pub struct TaskPrograms {
     /// ([`argument_paths`]); empty for other actions. An action is the app's only when each is a file
     /// of that app.
     pub arg_paths: Vec<Vec<ProgramRef>>,
+    /// One entry per action, in action order (R3a S6): for an exec action with a working directory and
+    /// an argument that may be relative to it ([`has_relative_argument`]), the directory, resolved like
+    /// a path argument; `None` otherwise. An action is the app's only when this directory is the app's
+    /// (a root of the app, or inside one): `npm.cmd run start` in `C:\Other\proj` runs another
+    /// product's code.
+    pub work_dirs: Vec<Option<ProgramRef>>,
 }
 
 impl TaskPrograms {
@@ -823,6 +877,25 @@ pub fn task_programs(task: &TaskIdentity, env: &Env) -> TaskPrograms {
                     ..
                 } => argument_paths(args, env),
                 _ => Vec::new(),
+            })
+            .collect(),
+        work_dirs: task
+            .actions
+            .iter()
+            .map(|action| match action {
+                TaskAction::Exec {
+                    arguments: Some(args),
+                    working_dir: Some(dir),
+                    ..
+                } if !dir.trim().is_empty() && has_relative_argument(args, env) => {
+                    let expanded = env.expand(dir.trim().trim_matches('"'));
+                    let dir = expanded.trim().trim_end_matches(['\\', '/']);
+                    Some(
+                        canonical_program(dir, env)
+                            .map_or_else(|| ProgramRef::unresolved(dir), ProgramRef::File),
+                    )
+                }
+                _ => None,
             })
             .collect(),
     }
@@ -999,7 +1072,82 @@ mod tests {
         );
         assert!(command_arguments(r"C:\App\svc.exe -run", &env).is_empty());
         assert!(command_arguments(r"C:\App\svc.exe", &env).is_empty());
-        assert!(argument_paths("http://x:/y --n=5%", &env).is_empty());
+        assert!(argument_paths("--n=5% http://host:80/y", &env).is_empty());
+        // R3a S6: a drive path after `/` or after a one-letter switch.
+        assert_eq!(
+            argument_paths(r"file:///C:/Other/x.jar -IC:\Other\inc /LD:\y.txt", &env),
+            vec![
+                ProgramRef::File(r"C:\Other\x.jar".into()),
+                ProgramRef::File(r"C:\Other\inc".into()),
+                ProgramRef::File(r"D:\y.txt".into()),
+            ]
+        );
+        assert!(argument_paths(r"-KEYC:\x", &env).is_empty());
+    }
+
+    #[test]
+    fn host_patterns() {
+        for host in [
+            r"C:\Program Files\nodejs\npm.cmd",
+            "NPX.CMD",
+            r"C:\Tools\build.bat",
+            r"C:\Python312\python3.exe",
+            "python3.12.exe",
+            "python3w.exe",
+            "pypy3.exe",
+            "pypy",
+        ] {
+            assert!(is_host(host), "{host}");
+        }
+        for not in [
+            "pythonx.exe",
+            "pypyfoo.exe",
+            r"C:\App\cmdtool.exe",
+            "app.cmd.exe",
+        ] {
+            assert!(!is_host(not), "{not}");
+        }
+    }
+
+    #[test]
+    fn relative_arguments_and_work_dirs() {
+        let env = env();
+        for (args, want) in [
+            ("run start", true),
+            (r"scripts\x.js", true),
+            ("-config=app.ini", true),
+            ("--minimized -v 5", false),
+            (r"C:\App\x.ini /q", false),
+            (r"/p:C:\App\x", false),
+            (r"\\srv\share\x", false),
+            ("", false),
+        ] {
+            assert_eq!(has_relative_argument(args, &env), want, "{args:?}");
+        }
+        let task = TaskIdentity {
+            path: r"\T".into(),
+            actions: vec![
+                TaskAction::Exec {
+                    path: r"C:\App\app.exe".into(),
+                    arguments: Some("run start".into()),
+                    working_dir: Some(r"C:\Other\proj\".into()),
+                },
+                TaskAction::Exec {
+                    path: r"C:\App\app.exe".into(),
+                    arguments: Some("--quiet".into()),
+                    working_dir: Some(r"C:\Other".into()),
+                },
+                TaskAction::Exec {
+                    path: r"C:\App\app.exe".into(),
+                    arguments: Some("x.ini".into()),
+                    working_dir: None,
+                },
+            ],
+        };
+        assert_eq!(
+            task_programs(&task, &env).work_dirs,
+            vec![Some(ProgramRef::File(r"C:\Other\proj".into())), None, None]
+        );
     }
 
     #[test]
