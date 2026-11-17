@@ -23,7 +23,9 @@ use purge_model::{
     InnoRecord, InnoRecordKind, OsInfo, ProgramId, Root, RootKind, RootSource, ScanMode, SourceId,
     SourceTrust, Target, TimeWindow, VerifyGone, View,
 };
-use purge_scan::framework::{AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanLimits, Scanner};
+use purge_scan::framework::{
+    AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, ScanLimits, Scanner,
+};
 use purge_source::fixture::{Fixture, FixtureBuilder};
 use purge_source::types::FileTimes;
 
@@ -131,6 +133,7 @@ impl World {
             guard: &self.guard,
             other_apps: &self.other_apps,
             limits: ScanLimits::default(),
+            ext: ScanExt::none(),
         }
     }
 

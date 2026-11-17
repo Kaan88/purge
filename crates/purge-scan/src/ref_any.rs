@@ -9,6 +9,11 @@
 //! at value level only: the whole value when it is about the app (its name refers to it, or its data
 //! does and holds nothing else), or the matching entries of a list as segment edits.
 //!
+//! The walk is the one reference walk of a scan (C-SCANEXT): the pipeline runs it once, before the
+//! scanners, through `ScanExt::build` ([`walk`]), and REF-ANY reads its hits from the context. It
+//! runs the same walk itself only when the context holds no hits for the app it is scanning for (unit
+//! tests, and the pass of a co-removed product, whose anchors and hives are its own).
+//!
 //! # `REG_MULTI_SZ`: lists and records
 //!
 //! A segment edit is right only for a value whose entries stand each for itself (the plan names the
@@ -74,8 +79,10 @@
 
 use purge_guard::containers;
 use purge_guard::prefix;
-use purge_index::refscan::{self, RefScanOptions, Scope, default_prune};
-use purge_model::{Action, Candidate, Category, SubtreeBaseline, Target};
+use purge_index::matcher::RefMatcher;
+use purge_index::refscan::{self, RefHit, RefScan, RefScanOptions, Scope, default_prune};
+use purge_model::{Action, Candidate, Category, Fingerprint, SubtreeBaseline, Target};
+use purge_source::registry::RegistrySource;
 
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner};
 use crate::reg_software::common::{self, Foreign};
@@ -133,8 +140,31 @@ fn is_environment(key: &str) -> bool {
 
 /// The reference-index scope without the `Environment` keys.
 fn scope(ctx: &ScanCtx<'_>) -> Scope {
-    let sids = common::user_sids(ctx);
-    let roots: Vec<String> = match Scope::for_sids(ctx.reg, &sids) {
+    scope_of(ctx.reg, ctx.fp)
+}
+
+/// The user hives the walk looks into: the interactive user's of the fingerprint, and the hive of a
+/// per-user registration. The same list as `reg_software::common::user_sids`, read from the
+/// fingerprint alone, so that the pipeline can run the walk before any scanner context exists.
+fn user_sids_of(fp: &Fingerprint) -> Vec<String> {
+    let mut sids: Vec<String> = Vec::new();
+    let own = fp.app.program_id.hive_sid();
+    for sid in [Some(fp.user_sid.as_str()), own].into_iter().flatten() {
+        let sid = sid.trim();
+        if !sid.is_empty()
+            && !sid.contains(prefix::SEP)
+            && !sids.iter().any(|s| prefix::eq_ci(s, sid))
+        {
+            sids.push(sid.to_owned());
+        }
+    }
+    sids
+}
+
+/// [`scope`] for the app of `fp`, read through `reg`.
+fn scope_of(reg: &dyn RegistrySource, fp: &Fingerprint) -> Scope {
+    let sids = user_sids_of(fp);
+    let roots: Vec<String> = match Scope::for_sids(reg, &sids) {
         Ok(scope) => scope.roots().to_vec(),
         // The source cannot name the current control set: scan what does not depend on it.
         Err(_) => std::iter::once(r"HKLM\SOFTWARE".to_owned())
@@ -150,6 +180,23 @@ fn scope(ctx: &ScanCtx<'_>) -> Scope {
         roots.into_iter().filter(|root| !is_environment(root)),
         default_prune(),
     )
+}
+
+/// The reference walk of REF-ANY (ENGINE_PLAN.md §5.5, C-SCANEXT): the scope of [`scope_of`], every
+/// anchor reported, no key budget and no progress callback (so the walk runs on several threads with
+/// the same result). The pipeline runs it once per scan through `ScanExt::build` and REF-ANY reads its
+/// hits; REF-ANY runs it itself only when the context holds no hits for its app.
+pub(crate) fn walk(reg: &dyn RegistrySource, fp: &Fingerprint, refs: &RefMatcher) -> RefScan {
+    walk_scope(reg, refs, &scope_of(reg, fp))
+}
+
+/// [`walk`] over a scope at hand.
+fn walk_scope(reg: &dyn RegistrySource, refs: &RefMatcher, scope: &Scope) -> RefScan {
+    let options = RefScanOptions {
+        all_anchors: true,
+        ..RefScanOptions::default()
+    };
+    refscan::scan(reg, refs, scope, &options, None)
 }
 
 /// The rest of `key` below its control-set root (`HKLM\SYSTEM\ControlSet00N`), if it lies under one.
@@ -195,13 +242,18 @@ fn scan_app(ctx: &ScanCtx<'_>, app: &AppIdentityView, out: &mut Vec<Candidate>) 
     let scope = scope(ctx);
     if !app.anchors.is_empty() {
         let foreign = Foreign::new(ctx);
-        let options = RefScanOptions {
-            all_anchors: true,
-            ..RefScanOptions::default()
+        // The pipeline's one walk when the context holds it for this app (C-SCANEXT); otherwise
+        // (unit tests, a co-removed product's own pass) the same walk, run here.
+        let walked;
+        let hits: &[RefHit] = match ctx.ext.ref_hits_for(&ctx.fp.app.program_id) {
+            Some(hits) => hits,
+            None => {
+                walked = walk_scope(ctx.reg, &app.refs, &scope);
+                &walked.hits
+            }
         };
-        let scan = refscan::scan(ctx.reg, &app.refs, &scope, &options, None);
         let mut last: Option<(&str, &str)> = None;
-        for hit in &scan.hits {
+        for hit in hits {
             // The hits of one value follow each other; the value is read and offered once.
             let this = (hit.key.as_str(), hit.value_name.as_str());
             if last == Some(this) || is_environment(&hit.key) {
@@ -316,4 +368,36 @@ fn covered(subtree: &SubtreeBaseline, walk: &common::KeyWalk) -> bool {
         && walk.subkeys.iter().all(|at| {
             relative(at).is_some_and(|sub| subtree.subkeys.iter().any(|s| prefix::is_same(s, &sub)))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::framework::testkit::World;
+    use purge_model::{ProgramId, View};
+    use purge_source::fixture::Fixture;
+
+    /// The walk the pipeline runs for REF-ANY looks into the hives REF-ANY's own scope does: the
+    /// fingerprint-only list equals the context's.
+    #[test]
+    fn walk_hives_equal_the_scanners_hives() {
+        let mut world = World::new(Fixture::new());
+        let sid = "S-1-5-21-1-2-3-1009";
+        let other = "S-1-5-21-9-9-9-1001";
+        for (program_id, user_sid) in [
+            (ProgramId::machine(View::K64, "Git_is1").unwrap(), other),
+            (ProgramId::user(sid, View::K64, "App").unwrap(), other),
+            (ProgramId::user(sid, View::K64, "App").unwrap(), sid),
+            (ProgramId::machine(View::K64, "Git_is1").unwrap(), ""),
+            (
+                ProgramId::machine(View::K64, "Git_is1").unwrap(),
+                r"bad\sid",
+            ),
+        ] {
+            world.fp.app.program_id = program_id;
+            world.fp.user_sid = user_sid.into();
+            let ctx = world.ctx();
+            assert_eq!(user_sids_of(ctx.fp), common::user_sids(&ctx), "{user_sid}");
+        }
+    }
 }

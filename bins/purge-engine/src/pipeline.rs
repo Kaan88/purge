@@ -53,6 +53,7 @@ use purge_harvest::roots::guard_env;
 use purge_identity::kbdata::Kb;
 use purge_index::baseline::{Baseline, RecordCounts};
 use purge_index::matcher::AnchorSet;
+use purge_index::ownership::OwnershipLimits;
 use purge_inventory::arp::Inventory;
 use purge_inventory::runner::{ProcessHost, RunError, RunOptions, RunReport, RunRequest};
 use purge_inventory::verify_gone::{self, VerifyTarget};
@@ -63,7 +64,7 @@ use purge_model::{
 use purge_plan::decide::{DecideCtx, Limits};
 use purge_plan::emit::{Built, build};
 use purge_scan::catalog::all_scanners;
-use purge_scan::framework::{AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanLimits};
+use purge_scan::framework::{AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, ScanLimits};
 use purge_source::registry::RegistrySource;
 use purge_win::env::{EnvMap, expand_with};
 
@@ -849,8 +850,27 @@ fn run_scan(
 
     let baseline = baseline_for(sources, settings, &mut warnings, &mut step);
 
-    // Scanners.
+    // Scanners. What every scanner shares is read once, before the first (C-SCANEXT): the one
+    // reference walk, the MSI ownership index and the system objects.
     let app = AppIdentityView::from_fingerprint(fp, &env);
+    step.say("scan: reading the references, the MSI ownership and the system objects");
+    let ext = ScanExt::build(
+        sources.reg,
+        sources.fs,
+        sources.sys,
+        fp,
+        &app,
+        &inv.doc.entries,
+        None,
+        OwnershipLimits::default(),
+    );
+    warnings.extend(ext_warnings(&ext));
+    step.done(&format!(
+        "scan: {} reference(s), {} MSI product(s), {} service(s)",
+        ext.ref_hits.as_ref().map_or(0, Vec::len),
+        ext.ownership.stats().products,
+        ext.sysobj.services.len()
+    ));
     let ctx = ScanCtx {
         reg: sources.reg,
         fs: sources.fs,
@@ -863,6 +883,7 @@ fn run_scan(
         guard: &guard,
         other_apps: &other_apps,
         limits: ScanLimits::default(),
+        ext: &ext,
     };
     let mut candidates = Vec::new();
     let mut per_scanner = Vec::new();
@@ -877,6 +898,11 @@ fn run_scan(
         per_scanner.push((scanner.id(), found.len()));
         candidates.extend(found);
     }
+    warnings.extend(
+        ext.take_faults()
+            .into_iter()
+            .map(|f| format!("scan: scanner fault: {f}")),
+    );
 
     // Decide, collapse, emit.
     let deny = DenyList::compile(&guard);
@@ -907,6 +933,34 @@ fn run_scan(
         per_scanner,
         warnings,
     })
+}
+
+/// What the shared scan data could not read, as scan warnings: unknown MSI ownership blocks the
+/// targets it may concern (`MsiPackageUnreadable`), and the user should know why.
+fn ext_warnings(ext: &ScanExt) -> Vec<String> {
+    let stats = ext.ownership.stats();
+    let mut out = Vec::new();
+    let unreadable = ext.ownership.unreadable();
+    if !unreadable.is_empty() {
+        out.push(format!(
+            "scan: {} MSI package(s) could not be read; what they own is unknown",
+            unreadable.len()
+        ));
+    }
+    if !stats.incomplete.is_empty() {
+        out.push(format!(
+            "scan: the MSI ownership index is incomplete ({})",
+            stats.incomplete.join(", ")
+        ));
+    }
+    out.extend(stats.errors.iter().map(|e| format!("scan: ownership: {e}")));
+    out.extend(
+        ext.sysobj
+            .errors
+            .iter()
+            .map(|e| format!("scan: system objects: {e}")),
+    );
+    out
 }
 
 /// The canonical form of each directory; ones that do not canonicalise are dropped with a warning.
@@ -1040,8 +1094,10 @@ pub fn other_apps(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purge_model::Target;
     use purge_source::fixture::Fixture;
-    use purge_source::types::RegData;
+    use purge_source::types::{KeyInfo, RegData, RegValue, SourceResult};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const SID: &str = GuardEnv::SAMPLE_SID;
 
@@ -1057,6 +1113,108 @@ mod tests {
             "pipeline.rs calls a scanner directly"
         );
         assert_eq!(source.matches(&driver).count(), 1);
+    }
+
+    /// A registry that counts the reads of one key's values. Its walker is the trait's default, which
+    /// reads through the counted methods.
+    struct Counting<'f> {
+        inner: &'f Fixture,
+        probe: &'static str,
+        reads: AtomicUsize,
+    }
+
+    impl RegistrySource for Counting<'_> {
+        fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+            self.inner.key_info(key)
+        }
+        fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+            self.inner.subkeys(key)
+        }
+        fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+            if key.eq_ignore_ascii_case(self.probe) {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+            }
+            self.inner.values(key)
+        }
+        fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+            self.inner.value(key, name)
+        }
+        fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+            self.inner.loaded_user_sids()
+        }
+        fn current_control_set(&self) -> SourceResult<u32> {
+            self.inner.current_control_set()
+        }
+    }
+
+    /// The scan makes the reference walk once (C-SCANEXT): `ScanExt::build` walks, REF-ANY reads its
+    /// hits. A key only the walk reads (it refers to nothing, so no scanner looks at it again) is read
+    /// once in the whole scan; next to it, a value that refers to the app still reaches REF-ANY.
+    #[test]
+    fn pipeline_runs_one_reference_walk() {
+        const PROBE: &str = r"HKLM\SOFTWARE\Acme Holder\Quiet";
+        const REFERS: &str = r"HKLM\SOFTWARE\Acme Holder\Settings";
+        const UNINSTALL: &str = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Probe";
+        let fixture = Fixture::builder()
+            .os("Professional", 26340, 9882)
+            .user_sid(SID)
+            .env("SYSTEMDRIVE", "C:")
+            .env("WINDIR", r"C:\Windows")
+            .env("PROGRAMFILES", r"C:\Program Files")
+            .env("PROGRAMDATA", r"C:\ProgramData")
+            .sz(
+                r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList",
+                "ProfilesDirectory",
+                r"C:\Users",
+            )
+            .volume(r"C:\", Some(0x1234_5678), true, "NTFS")
+            .dir(r"C:\Program Files\Probe")
+            .file(r"C:\Program Files\Probe\probe.exe", 10)
+            .sz(UNINSTALL, "DisplayName", "Probe")
+            .sz(UNINSTALL, "InstallLocation", r"C:\Program Files\Probe")
+            .sz(
+                UNINSTALL,
+                "DisplayIcon",
+                r"C:\Program Files\Probe\probe.exe",
+            )
+            .sz(
+                UNINSTALL,
+                "UninstallString",
+                r"C:\Program Files\Probe\uninst.exe",
+            )
+            .sz(PROBE, "Tool", r"C:\Tools\other.exe")
+            .sz(REFERS, "Tool", r"C:\Program Files\Probe\probe.exe")
+            .key(&format!(r"HKU\{SID}\Software"))
+            .build();
+        let counting = Counting {
+            inner: &fixture,
+            probe: PROBE,
+            reads: AtomicUsize::new(0),
+        };
+        let sources = Sources {
+            reg: &counting,
+            fs: &fixture,
+            sys: &fixture,
+        };
+        let settings = Settings::default();
+        let harvested = harvest(sources, "Probe", Kb::shipped(), &settings, &mut |_| {}).unwrap();
+        let fp = harvested.report.fingerprint;
+        counting.reads.store(0, Ordering::SeqCst);
+        let scanned = scan(sources, &fp, ScanMode::Forced, None, &settings, &mut |_| {}).unwrap();
+        assert_eq!(
+            counting.reads.load(Ordering::SeqCst),
+            1,
+            "the probe key is read by one walk"
+        );
+        // The walk's hit reached REF-ANY: the value is a candidate.
+        let targets: Vec<&Target> = scanned.candidates.iter().map(|c| &c.target).collect();
+        assert!(
+            targets.iter().any(|t| matches!(
+                t,
+                Target::RegValue { path, name } if path.eq_ignore_ascii_case(REFERS) && name == "Tool"
+            )),
+            "{targets:#?}"
+        );
     }
 
     fn entry(key: &str, name: &str) -> InventoryEntry {

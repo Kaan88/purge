@@ -11,12 +11,15 @@ mod hostile;
 mod world;
 
 use purge_guard::containers;
+use purge_index::ownership::OwnershipLimits;
 use purge_model::{
     Action, AnchorKind, AnchorRef, Blocker, Candidate, EvidenceKind, FileTime, InnoRecordKind,
     ProgramId, RefCarrier, RootSource, Scope, SourceTrust, SubtreeBaseline, SubtreeValue, Target,
     Tier, View,
 };
-use purge_scan::framework::{OtherApp, OtherApps, Scanner, candidate_id};
+use purge_scan::framework::{
+    AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, Scanner, candidate_id,
+};
 use purge_scan::ref_any::RefAny;
 use purge_scan::reg_apppaths::RegAppPaths;
 use purge_scan::reg_env::RegEnv;
@@ -2538,4 +2541,90 @@ fn software_key_named_like_the_product_is_a_product_key_not_a_vendor_container()
     let shared = expect(&found, &key(npp_key));
     assert_eq!(shared.action, Action::RemoveDirIfEmpty);
     assert_eq!(kinds(shared), vec![EvidenceKind::VendorContainer]);
+}
+
+/// REF-ANY gives the same candidates whether it walks itself (`ScanExt::none`) or reads the pipeline's
+/// one walk (`ScanExt::build`), for the app and for its co-removed products, which walk with their own
+/// anchors either way.
+#[test]
+fn ref_any_same_output_with_shared_hits() {
+    let firefox_exe = format!(r"{FIREFOX}\firefox.exe");
+    let worlds = [
+        World::new(
+            firefox_leftovers()
+                .sz(
+                    &format!(r"HKLM\SOFTWARE\Clients\StartMenuInternet\Firefox-{HASH}\DefaultIcon"),
+                    "",
+                    &format!("{firefox_exe},0"),
+                )
+                .sz(
+                    &format!(r"{}\{CV}\Run", hkcu()),
+                    "Maintenance",
+                    &format!(r"{MAINTENANCE}\maintenanceservice.exe"),
+                ),
+            firefox(),
+        ),
+        World::new(
+            machine()
+                .sz(r"HKLM\SOFTWARE\GitForWindows", "InstallPath", GIT)
+                .sz(
+                    r"HKLM\SOFTWARE\Classes\sh_auto_file\shell\open\command",
+                    "",
+                    &format!(r#""{GIT}\git-bash.exe" "%1""#),
+                )
+                .multi_sz(
+                    &format!(r"{}\Software\Acme", hkcu()),
+                    "Tools",
+                    &[&format!(r"{GIT}\cmd"), r"C:\Tools"],
+                ),
+            git(),
+        ),
+        World::new(
+            machine()
+                .sz(
+                    &format!(r"{}\{CV}\App Paths\notepad++.exe", r"HKLM\SOFTWARE"),
+                    "",
+                    &format!(r"{NPP}\notepad++.exe"),
+                )
+                .sz(
+                    &format!(r"{}\Software\Classes\*\shell\Notepad++\command", hkcu()),
+                    "",
+                    &format!(r#""{NPP}\notepad++.exe" "%1""#),
+                ),
+            notepadpp(),
+        ),
+    ];
+    for world in &worlds {
+        let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
+        let ext = ScanExt::build(
+            &world.fixture,
+            &world.fixture,
+            &world.fixture,
+            &world.fp,
+            &app,
+            &[],
+            None,
+            OwnershipLimits::default(),
+        );
+        let hits = ext.ref_hits_for(&world.fp.app.program_id).expect("hits");
+        assert!(!hits.is_empty(), "{}", world.fp.app.display_name);
+        let alone = world.scan(&RefAny);
+        assert!(!alone.is_empty(), "{}", world.fp.app.display_name);
+        let shared = RefAny.scan(
+            &ScanCtx {
+                ext: &ext,
+                ..world.ctx()
+            },
+            &app,
+        );
+        assert_eq!(alone, shared, "{}", world.fp.app.display_name);
+        // Through the sealing driver, too.
+        let run_alone = world.ctx().run(&RefAny, &app);
+        let run_shared = ScanCtx {
+            ext: &ext,
+            ..world.ctx()
+        }
+        .run(&RefAny, &app);
+        assert_eq!(run_alone, run_shared, "{}", world.fp.app.display_name);
+    }
 }
