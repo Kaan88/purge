@@ -920,6 +920,8 @@ fn run_scan(
         // Candidates also come from registry data, which may spell 8.3 names: keep the refusal on.
         long_names_resolved: false,
         limits: Limits::default(),
+        // M1b lists stay closed until M1B-SCAN-INTEG calls `M1bDecide::from_facts` here.
+        m1b: Default::default(),
     };
     let built = build(app_id, candidates.clone(), &decide);
     step.done(&format!(
