@@ -120,3 +120,8 @@ S-COM (wave 4, for R3):
 - TypeLib-only interface found only via MSI/Inno rows; AppID with no referring class -> no candidate
 - blocked proxy class still attributes its interface (ISimpleDOMNode listed Protected); relates to R2a S10 (Firefox K6/K16)
 - interface MSI-row check is own path matching, not framework code
+
+S-TASK (wave 4, for R3):
+- COM handler never treated as gone (zero key-open budget); unrecorded COM-only task reason "program_in_root" misleading
+- recorded but unreadable task carries empty-actions digest -> executor never acts
+- guard checks each exec path like executor gate; %LOCALAPPDATA% path -> Blocked as sys.task.windows (misleading rule name for an executor limit)
