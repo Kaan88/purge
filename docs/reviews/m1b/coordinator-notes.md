@@ -108,3 +108,8 @@ S-SERVICE (wave 4):
 - scanners cannot add scan warnings; SCAN-INTEG should surface sysobj.errors as warnings
 - any unreadable service -> every offered service gets HasDependents (relies on index error text "sysobj: service <name>: ...") -> may block all app services on such hosts
 - added Driver, InsideOtherApp, ReferencedByOtherApp checks; type 0 -> unknown -> sys.driver
+
+S-FIREWALL (wave 4, for R3):
+- recreate_refusal copies purge-win map_rule (checked equal on 400k generated rules); undo root check copied too -> keep in sync
+- App outside InstallRoot -> ReversibilityNone (soft, never preselected); None vs Partial?
+- recorded-but-unresolved-now fallback; no scanner warning API
