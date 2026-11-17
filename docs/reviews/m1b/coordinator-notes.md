@@ -165,3 +165,9 @@ S-DIAG (wave 4, for R3):
 - Windows EventLog source whose message file was re-pointed into the app root, host without baseline -> can reach Likely
 - ProgramData WER reports emitted but guard-denied; source key not checked for subkeys (budget)
 - S-PRIVACY, S-DIAG (and S-APPX) were written before the scan-warning channel: they mark `// warning:` spots; SCAN-INTEG must wire them
+
+S-APPX (wave 4, for R3):
+- family exact match + full name of that family; bundles (`~` resource id) never offered
+- RemovePackage only when registered for scanning user alone; other users incl. SYSTEM -> ReportOnly other_users=n; unknown users -> ReportOnly other_users=unknown
+- unelevated live scans turn the Notepad++ package into ReportOnly (rig snapshots elevated, replay unchanged)
+- fact added to evidence after build(); `no-new-walks` is not an xtask subcommand yet (SCAN-INTEG)
