@@ -175,7 +175,7 @@ fn ctx(selected: &[ExecOp]) -> GateCtx {
 }
 
 /// The exemptions of an item read from the file system in long form.
-fn long() -> Exemptions {
+fn long() -> Exemptions<'static> {
     Exemptions {
         long_names_resolved: true,
         ..Exemptions::default()
@@ -2629,6 +2629,7 @@ fn exemptions_survive_the_journal_round_trip() {
             environment_segment_edit: bits & 2 != 0,
             tier_a_start_menu_entry: bits & 4 != 0,
             long_names_resolved: bits & 8 != 0,
+            ..Exemptions::default()
         };
         let journal = exemptions_to_journal(&guard);
         assert_eq!(

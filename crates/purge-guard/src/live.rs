@@ -403,7 +403,7 @@ pub struct PathCheck<'a> {
     /// Validate pass, or re-check against the recorded stamp.
     pub binding: Binding<'a, PathStamp>,
     /// What the candidate's evidence has earned, derived as at plan time.
-    pub exemptions: Exemptions,
+    pub exemptions: Exemptions<'a>,
 }
 
 /// The canonical form of a path without any environment: a leading `%TOKEN%` is refused. Plans hold
@@ -823,7 +823,7 @@ pub struct KeyCheck<'a> {
     /// for key actions.
     pub binding: Binding<'a, ValueStamp>,
     /// What the candidate's evidence has earned, derived as at plan time.
-    pub exemptions: Exemptions,
+    pub exemptions: Exemptions<'a>,
 }
 
 /// Where the facts for a registry target must be read.
@@ -1436,7 +1436,7 @@ pub struct UndoPathCheck<'a> {
     /// [`check_store_item`]).
     pub volume_serial: u64,
     /// The exemptions the item had when it was removed.
-    pub exemptions: Exemptions,
+    pub exemptions: Exemptions<'a>,
 }
 
 /// Whether a quarantined item may be renamed back to its original path (§7.8). The quarantined item

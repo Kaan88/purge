@@ -2885,6 +2885,7 @@ fn the_journalled_exemptions_are_those_the_plan_derives() {
             environment_segment_edit: true,
             tier_a_start_menu_entry: true,
             long_names_resolved: true,
+            ..Exemptions::default()
         }
     );
     // Nothing was acted on.

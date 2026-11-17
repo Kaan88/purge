@@ -10,6 +10,13 @@
 //!
 //! `FileExts\*\OpenWithProgids` is deliberately absent: an app's own `OpenWithProgids` key can be removed
 //! once it is a proven owned skeleton (§5.7.1).
+//!
+//! [`M1B_VALUE_CONTAINERS`] holds the containers of the M1b scanners: every path-keyed store of
+//! C-PATHSTORES, the `Shell Extensions\Approved` lists and the MSI `UpgradeCodes` and `Components` keys.
+//! The guard treats them as structural now ([`value_container`], [`check`]); they stay out of
+//! [`VALUE_CONTAINERS`] until the scanners that read them are in the catalog, because `purge-scan` and
+//! `xtask scanner-coverage` require the catalog's containers to equal that table (M1B-SCAN-INTEG appends
+//! them there).
 
 use purge_model::{Blocker, Target};
 
@@ -31,11 +38,47 @@ pub const VALUE_CONTAINERS: &[&str] = &[
     r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths",
 ];
 
-/// The entry of [`VALUE_CONTAINERS`] that names `key_path`, if any. The key is canonicalised first; one
-/// that does not canonicalise is not a container (the deny-list refuses it anyway).
+/// The value containers of the M1b scanners (C-PATHSTORES and C-GUARD). Same syntax as
+/// [`VALUE_CONTAINERS`]; the patterns are view-agnostic, so each covers the `WOW6432Node` view too, and a
+/// user's Classes matches both `HKU\<sid>\Software\Classes` and `HKU\<sid>_Classes`.
+pub const M1B_VALUE_CONTAINERS: &[&str] = &[
+    // C-PATHSTORES: SharedDlls (both views).
+    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs",
+    // InstallerFolders.
+    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\Folders",
+    // AppCompatLayers (HKLM and every user).
+    r"*\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers",
+    // PcaStore and PcaPersisted.
+    r"HKU\*\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store",
+    r"HKU\*\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Persisted",
+    // MuiCache.
+    r"HKU\*\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache",
+    // UserAssist.
+    r"HKU\*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\*\Count",
+    // FeatureUsage.
+    r"HKU\*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppBadgeUpdated",
+    r"HKU\*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppLaunch",
+    r"HKU\*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\AppSwitched",
+    r"HKU\*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\ShowJumpView",
+    // Shell extension approvals (both views, HKLM and every user).
+    r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved",
+    // MSI upgrade codes and component client lists.
+    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UpgradeCodes\*",
+    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\*\Components\*",
+    r"HKLM\SOFTWARE\Classes\Installer\UpgradeCodes\*",
+];
+
+/// Every value container the guard enforces: [`VALUE_CONTAINERS`], then [`M1B_VALUE_CONTAINERS`].
+pub fn all_value_containers() -> impl Iterator<Item = &'static str> {
+    VALUE_CONTAINERS.iter().chain(M1B_VALUE_CONTAINERS).copied()
+}
+
+/// The entry of [`VALUE_CONTAINERS`] or [`M1B_VALUE_CONTAINERS`] that names `key_path`, if any. The key
+/// is canonicalised first; one that does not canonicalise is not a container (the deny-list refuses it
+/// anyway).
 pub fn value_container(key_path: &str, env: &GuardEnv) -> Option<&'static str> {
     let logical = RegLogical::new(canon_key(key_path, None, env, None).ok()?);
-    VALUE_CONTAINERS.iter().copied().find(|pattern| {
+    all_value_containers().find(|pattern| {
         parse_key_pattern(pattern).is_ok_and(|(base, segs)| {
             logical
                 .segs_for(base)
@@ -72,7 +115,7 @@ mod tests {
 
     #[test]
     fn every_pattern_parses() {
-        for pattern in VALUE_CONTAINERS {
+        for pattern in all_value_containers() {
             assert!(parse_key_pattern(pattern).is_ok(), "{pattern}");
         }
     }

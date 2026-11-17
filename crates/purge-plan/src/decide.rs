@@ -170,7 +170,7 @@ pub fn target_scope_in(target: &Target, env: &GuardEnv, user_sid: Option<&str>) 
 /// context's machine layout, user and long-name flag. The scan mode, verify-gone result and limits of the
 /// context are not consulted.
 #[must_use]
-pub fn exemptions(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Exemptions {
+pub fn exemptions(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Exemptions<'static> {
     deny_exemptions(candidate, ctx.env(), ctx.user_sid, ctx.long_names_resolved)
 }
 
@@ -199,7 +199,7 @@ pub fn deny_exemptions(
     env: &GuardEnv,
     user_sid: Option<&str>,
     long_names_resolved: bool,
-) -> Exemptions {
+) -> Exemptions<'static> {
     let scope = target_scope_in(&candidate.target, env, user_sid);
     let tier_a = |e: &Evidence, wanted: Scope| {
         e.scope == wanted && band::effective_tier(e, scope) == Tier::A && effective_weight(e) > 0
@@ -235,6 +235,8 @@ pub fn deny_exemptions(
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        // M1b: the three lists are filled by M1B-PLAN; empty keeps both exemptions closed.
+        ..Exemptions::default()
     }
 }
 

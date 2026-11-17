@@ -567,7 +567,7 @@ struct Recorded {
     op: ExecOp,
     record: Validated,
     stamp: Stamp,
-    exemptions: Exemptions,
+    exemptions: Exemptions<'static>,
     max_files: u32,
 }
 
@@ -887,7 +887,7 @@ impl GateCtx {
     }
 
     /// The exemptions recorded for `op` (those of its journal `validated` record).
-    pub fn exemptions(&self, op: OpId) -> Option<Exemptions> {
+    pub fn exemptions(&self, op: OpId) -> Option<Exemptions<'static>> {
         self.validated.get(&op).map(|recorded| recorded.exemptions)
     }
 
@@ -918,20 +918,25 @@ pub fn exemptions_for(
     _mode: ScanMode,
     user_sid: Option<&str>,
     long_names_resolved: bool,
-) -> Exemptions {
+) -> Exemptions<'static> {
     purge_plan::decide::deny_exemptions(candidate, deny.env(), user_sid, long_names_resolved)
 }
 
 /// The journal form of the exemptions a verdict was given ([`Validation::exemptions`]), for the
 /// `validated` record's `exemptions` field. Every field is carried over unchanged;
 /// [`exemptions_from_journal`] is the exact inverse.
-pub fn exemptions_to_journal(exemptions: &Exemptions) -> GateExemptions {
+pub fn exemptions_to_journal(exemptions: &Exemptions<'_>) -> GateExemptions {
     // Destructured without `..`, so a field added to either type fails to compile here.
+    // M1b: wired by M1B-X-FOUND. The three gone lists (M1B-GUARD) are not journalled yet; the act-time
+    // gate then sees them empty, which keeps their exemptions closed (fail closed).
     let Exemptions {
         proven_owned_skeleton,
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        gone_burn: _,
+        gone_msi_products: _,
+        gone_cache_dirs: _,
     } = *exemptions;
     GateExemptions {
         proven_owned_skeleton,
@@ -945,7 +950,7 @@ pub fn exemptions_to_journal(exemptions: &Exemptions) -> GateExemptions {
 /// pass to [`check_undo_path`] and [`check_undo_key`], and what [`GateCtx::record`] keeps for the
 /// act-time gate, instead of deriving them again from the scan. The exact inverse of
 /// [`exemptions_to_journal`].
-pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions {
+pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions<'static> {
     let GateExemptions {
         proven_owned_skeleton,
         environment_segment_edit,
@@ -957,6 +962,10 @@ pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions {
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        // M1b: wired by M1B-X-FOUND (see `exemptions_to_journal`).
+        gone_burn: &[],
+        gone_msi_products: &[],
+        gone_cache_dirs: &[],
     }
 }
 
@@ -972,7 +981,7 @@ pub struct GateItem<'a> {
     pub op: &'a ExecOp,
     /// The candidate's exemptions ([`exemptions_for`]). The validation hands them back for the journal
     /// ([`Validation::exemptions`]).
-    pub exemptions: Exemptions,
+    pub exemptions: Exemptions<'static>,
     /// The most files, and separately the most directories, the tree below a directory moved whole may
     /// hold; more is refused with [`Blocker::TooLarge`]. The plan's limit: 5,000, or 50,000 for a
     /// manifest-backed install root.
@@ -993,7 +1002,7 @@ pub struct GateItem<'a> {
 impl<'a> GateItem<'a> {
     /// An item with the default blast-radius limit (`purge_plan::decide::Limits::default().max_files`),
     /// the default key limit ([`regbackup::DEFAULT_KEY_LIMIT`]) and no scan-time identity.
-    pub fn new(op: &'a ExecOp, exemptions: Exemptions) -> GateItem<'a> {
+    pub fn new(op: &'a ExecOp, exemptions: Exemptions<'static>) -> GateItem<'a> {
         GateItem {
             op,
             exemptions,
@@ -1199,7 +1208,7 @@ pub struct Validation {
     pub facts: ItemFacts,
     /// The exemptions the verdict was given ([`GateItem::exemptions`]), for the journal. The act is gated
     /// with the ones of the journal record ([`GateCtx::record`]).
-    pub exemptions: Exemptions,
+    pub exemptions: Exemptions<'static>,
 }
 
 impl Validation {

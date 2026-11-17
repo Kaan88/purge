@@ -154,7 +154,7 @@ fn live_env(data_root: &str) -> GuardEnv {
 }
 
 /// Exemptions of an item whose path is in long form.
-fn long() -> Exemptions {
+fn long() -> Exemptions<'static> {
     Exemptions {
         long_names_resolved: true,
         ..Exemptions::default()

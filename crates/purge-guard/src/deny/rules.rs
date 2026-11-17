@@ -3,6 +3,8 @@
 //! Rule names are stable (`fs.*`, `reg.*`): they are reported in `Blocker::DenyListed` and shown to the
 //! user under "Protected".
 
+use serde::{Deserialize, Serialize};
+
 use super::pattern::{Seg, parse_fs_pattern};
 use super::{Annotation, Exempt, Matcher, Rule};
 use crate::canon::GuardEnv;
@@ -12,6 +14,274 @@ const E: Annotation = Annotation::Exact;
 const EA: Annotation = Annotation::ExactAndAncestors;
 
 type Row = (&'static str, Annotation, &'static str, &'static str);
+
+/// File rules added in M1b (C-GUARD). They come before [`FS`] and the `%WINDIR%` and
+/// `ProgramData\Microsoft` subtree rules, so that the more specific name is the one reported.
+const M1B_FS: &[Row] = &[
+    (
+        "task.registry-direct",
+        S,
+        r"%WINDIR%\System32\Tasks",
+        "Task definitions: tasks are removed through the Task Scheduler API only.",
+    ),
+    (
+        "task.registry-direct",
+        S,
+        r"%WINDIR%\Tasks",
+        "Task Scheduler 1.0 jobs: never offered.",
+    ),
+    (
+        "fs.wer-root",
+        EA,
+        r"%ProgramData%\Microsoft\Windows\WER\ReportArchive",
+        "A Windows Error Reporting store; only single reports in it are offered.",
+    ),
+    (
+        "fs.wer-root",
+        EA,
+        r"%ProgramData%\Microsoft\Windows\WER\ReportQueue",
+        "A Windows Error Reporting store; only single reports in it are offered.",
+    ),
+    (
+        "fs.wer-root",
+        EA,
+        r"%ProgramData%\Microsoft\Windows\WER\Temp",
+        "A Windows Error Reporting store; only single reports in it are offered.",
+    ),
+    (
+        "fs.wer-root",
+        EA,
+        r"%LOCALAPPDATA%\Microsoft\Windows\WER\ReportArchive",
+        "A Windows Error Reporting store; only single reports in it are offered.",
+    ),
+    (
+        "fs.wer-root",
+        EA,
+        r"%LOCALAPPDATA%\Microsoft\Windows\WER\ReportQueue",
+        "A Windows Error Reporting store; only single reports in it are offered.",
+    ),
+    (
+        "fs.wer-root",
+        EA,
+        r"%LOCALAPPDATA%\Microsoft\Windows\WER\Temp",
+        "A Windows Error Reporting store; only single reports in it are offered.",
+    ),
+];
+
+/// The Package Cache roots as subtree rules: everything in a cache is denied unless the item lies in a
+/// listed gone entry that is a direct child of the root (`Exemptions::gone_cache_dirs`). The \[E+A\]
+/// rules of [`FS`] keep denying the roots and their ancestors.
+const PACKAGE_CACHE_ROOTS: &[Row] = &[
+    (
+        "fs.package-cache",
+        S,
+        r"%ProgramData%\Package Cache",
+        "The machine Package Cache: only a gone product's or bundle's entry is offered.",
+    ),
+    (
+        "fs.package-cache",
+        S,
+        r"%LOCALAPPDATA%\Package Cache",
+        "The per-user Package Cache: only a gone product's or bundle's entry is offered.",
+    ),
+];
+
+/// Registry rules added in M1b (C-GUARD) that come before the M1a rules they overlap, so that their name
+/// is the one reported. The COM rules from `kb/shared-iids.json` and the Installer database rules follow
+/// them (see [`builtin`]).
+const M1B_REG: &[Row] = &[
+    (
+        "fw.policy-store",
+        S,
+        r"HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall",
+        "The firewall's policy store: rules are removed only as firewall rules.",
+    ),
+    (
+        "task.registry-direct",
+        S,
+        r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache",
+        "The Task Scheduler's cache: tasks are removed through the Task Scheduler API only.",
+    ),
+    (
+        "msi.component-foreign",
+        E,
+        r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\*\Components\*",
+        "An MSI component's client list: only a gone product's value in it is offered.",
+    ),
+    (
+        "reg.shareddlls",
+        E,
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs",
+        "Shared file reference counts: only single counters are offered.",
+    ),
+];
+
+/// The Windows Installer database, as subtree rules lifted only by `installer_shape` (C-GUARD).
+const INSTALLER_DATABASE: &[Row] = &[
+    (
+        "reg.installer",
+        S,
+        r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer",
+        "Windows Installer state.",
+    ),
+    (
+        "reg.installer",
+        S,
+        r"HKU\*\SOFTWARE\Microsoft\Installer",
+        "Per-user Windows Installer registration.",
+    ),
+    (
+        "reg.installer",
+        S,
+        r"HKCR\Installer",
+        "Windows Installer registration.",
+    ),
+];
+
+/// Rules below `HKLM\SYSTEM`, which the deny-list refuses as a whole (`reg.hklm.system`); these only
+/// name what a target there is. `CurrentControlSet` matches every control set.
+const SYSTEM: &[Row] = &[
+    (
+        "fw.registry-direct",
+        S,
+        r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy",
+        "The firewall's store: rules are removed only as firewall rules, never as registry values.",
+    ),
+    (
+        "svc.registry-direct",
+        E,
+        r"HKLM\SYSTEM\CurrentControlSet\Services\*",
+        "A service: removed only as a service, never as a registry key.",
+    ),
+    (
+        "svc.registry-direct",
+        E,
+        r"HKLM\SYSTEM\CurrentControlSet\Services\*\Parameters",
+        "A service: removed only as a service, never as a registry key.",
+    ),
+    (
+        "svc.registry-direct",
+        E,
+        r"HKLM\SYSTEM\CurrentControlSet\Services\*\Security",
+        "A service: removed only as a service, never as a registry key.",
+    ),
+    (
+        "svc.registry-direct",
+        E,
+        r"HKLM\SYSTEM\CurrentControlSet\Services\*\TriggerInfo",
+        "A service: removed only as a service, never as a registry key.",
+    ),
+    (
+        "svc.registry-direct",
+        E,
+        r"HKLM\SYSTEM\CurrentControlSet\Services\*\Enum",
+        "A service: removed only as a service, never as a registry key.",
+    ),
+    (
+        "reg.eventlog-log",
+        E,
+        r"HKLM\SYSTEM\CurrentControlSet\Services\EventLog\*",
+        "An event log: only its source keys are offered.",
+    ),
+];
+
+/// One interface of `kb/shared-iids.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SharedIid {
+    /// The IID, `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
+    pub iid: String,
+    /// The name as registered (not used by any rule: two IIDs carry the same registered name).
+    pub name: String,
+    /// Why no single app owns it.
+    pub why: String,
+}
+
+/// One proxy/stub CLSID of `kb/shared-iids.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SharedProxyClsid {
+    /// The CLSID, `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
+    pub clsid: String,
+    /// The name as registered.
+    pub name: String,
+    /// Why it is never an owner.
+    pub why: String,
+}
+
+/// `kb/shared-iids.json`: interfaces many products register, and proxy/stub CLSIDs that are never an
+/// owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SharedIids {
+    /// Interfaces denied as `com.shared-iid` in every Classes view.
+    pub iids: Vec<SharedIid>,
+    /// CLSIDs denied as `com.shared-proxy` in every Classes view.
+    pub shared_proxy_clsids: Vec<SharedProxyClsid>,
+}
+
+impl SharedIids {
+    /// Whether `iid` (braced, any case) is a listed interface.
+    pub fn is_shared_iid(&self, iid: &str) -> bool {
+        self.iids.iter().any(|e| e.iid.eq_ignore_ascii_case(iid))
+    }
+
+    /// Whether `clsid` (braced, any case) is a listed proxy/stub CLSID: never an owner, never a
+    /// candidate.
+    pub fn is_shared_proxy_clsid(&self, clsid: &str) -> bool {
+        self.shared_proxy_clsids
+            .iter()
+            .any(|e| e.clsid.eq_ignore_ascii_case(clsid))
+    }
+}
+
+/// The lists embedded from `kb/shared-iids.json`.
+pub fn shared_iids() -> Result<SharedIids, serde_json::Error> {
+    serde_json::from_str(include_str!("../../../../kb/shared-iids.json"))
+}
+
+/// `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}` with hex digits of either case. A malformed entry would turn
+/// into a wider pattern, so the list refuses to compile instead.
+fn is_braced_guid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 38
+        && b[0] == b'{'
+        && b[37] == b'}'
+        && b[1..37].iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// The COM rules of `kb/shared-iids.json`: \[S\] on `Interface\{IID}` and `CLSID\{CLSID}` under every
+/// Classes root (machine, both views, and every user).
+fn com_rules() -> Result<Vec<Rule>, String> {
+    let data = shared_iids().map_err(|e| format!("kb/shared-iids.json: {e}"))?;
+    let mut out = Vec::new();
+    for entry in &data.iids {
+        if !is_braced_guid(&entry.iid) {
+            return Err(format!("kb/shared-iids.json: bad IID {:?}", entry.iid));
+        }
+        let pattern = format!(r"HKCR\Interface\{}", entry.iid);
+        out.push(Rule::key("com.shared-iid", S, &pattern, &entry.why)?);
+    }
+    for entry in &data.shared_proxy_clsids {
+        if !is_braced_guid(&entry.clsid) {
+            return Err(format!("kb/shared-iids.json: bad CLSID {:?}", entry.clsid));
+        }
+        let pattern = format!(r"HKCR\CLSID\{}", entry.clsid);
+        out.push(Rule::key("com.shared-proxy", S, &pattern, &entry.why)?);
+    }
+    Ok(out)
+}
+
+/// The rules below `HKLM\SYSTEM` ([`SYSTEM`]).
+pub(super) fn system() -> Result<Vec<Rule>, String> {
+    SYSTEM
+        .iter()
+        .map(|(id, annotation, pattern, why)| Rule::key(id, *annotation, pattern, why))
+        .collect()
+}
 
 /// File rules without a carve-out.
 const FS: &[Row] = &[
@@ -1085,8 +1355,18 @@ pub(super) fn builtin(env: &GuardEnv) -> Result<Vec<Rule>, String> {
         }
     }
 
+    for (id, annotation, pattern, why) in M1B_FS {
+        out.extend(Rule::fs(id, *annotation, pattern, why, env)?);
+    }
     for (id, annotation, pattern, why) in FS {
         out.extend(Rule::fs(id, *annotation, pattern, why, env)?);
+    }
+    for (id, annotation, pattern, why) in PACKAGE_CACHE_ROOTS {
+        out.extend(
+            Rule::fs(id, *annotation, pattern, why, env)?
+                .into_iter()
+                .map(|r| r.with_exempt(Exempt::GoneCache)),
+        );
     }
     for folder in WINDOWS_START_MENU_FOLDERS {
         for base in ["%APPDATA%", "%ProgramData%"] {
@@ -1126,6 +1406,22 @@ pub(super) fn builtin(env: &GuardEnv) -> Result<Vec<Rule>, String> {
         .map(|r| r.with_exempt(Exempt::StartMenu)),
     );
 
+    for (id, annotation, pattern, why) in M1B_REG {
+        out.push(Rule::key(id, *annotation, pattern, why)?);
+    }
+    out.push(
+        Rule::key(
+            "reg.tracing-root",
+            E,
+            r"*\SOFTWARE\Microsoft\Tracing",
+            "The RAS tracing root: only an app's own tracing key is offered.",
+        )?
+        .with_values(true),
+    );
+    out.extend(com_rules()?);
+    for (id, annotation, pattern, why) in INSTALLER_DATABASE {
+        out.push(Rule::key(id, *annotation, pattern, why)?.with_exempt(Exempt::GoneInstaller));
+    }
     for (id, annotation, pattern, why) in REG_WITH_VALUES {
         out.push(Rule::key(id, *annotation, pattern, why)?.with_values(true));
     }

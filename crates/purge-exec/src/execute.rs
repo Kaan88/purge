@@ -1009,7 +1009,7 @@ impl<'a> Run<'a> {
     /// derivation the plan's decide step uses, with the machine layout of the deny-list and the run's
     /// `user_sid` and `long_names_resolved`. The act is gated with the journalled copy of these, never
     /// with this value.
-    fn exemptions(&self, op: OpId) -> Exemptions {
+    fn exemptions(&self, op: OpId) -> Exemptions<'static> {
         self.op_candidate(op)
             .map_or_else(Exemptions::default, |candidate| {
                 purge_plan::decide::deny_exemptions(
