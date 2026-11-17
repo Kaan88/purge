@@ -45,12 +45,13 @@
 //!
 //! - Recorded at harvest with the same digest, every action the app's, every exec action's file proven
 //!   gone now (`ScanCtx::program_gone`, R3a S1: in an InstallRoot the whole root gone on the volume the
-//!   harvest recorded) and no COM-handler action: `OwnedSystemObject` (Tier A), which can make it Safe (D10).
-//!   A COM handler's class could be shown dangling only by reading its `CLSID` keys, which this scanner's
-//!   budget (no key opens) does not allow; such a task is at most Likely.
-//! - Recorded with the same digest but a program file present (or its state unknown), a COM-handler
-//!   action, or a program that is no longer the app's by the scan's rule (not inside an InstallRoot, not
-//!   an exe): `OwnedSystemObject` lowered to Tier B with the reason: Likely.
+//!   harvest recorded) and every COM-handler action's class proven unregistered (below):
+//!   `OwnedSystemObject` (Tier A), which can make it Safe (D10). This covers a task whose only actions
+//!   are COM handlers of the app's classes, which the harvest records since R4 B2.
+//! - Recorded with the same digest but a program file present (or its state unknown), a COM handler
+//!   whose class is still registered somewhere (or that cannot be shown not to be), or a program that is
+//!   no longer the app's by the scan's rule (not inside an InstallRoot, not an exe): `OwnedSystemObject`
+//!   lowered to Tier B with the reason: Likely.
 //! - Recorded with the same digest and an action that does not resolve to one file (interpreter, host,
 //!   unexpandable reference, other action kind): the soft blocker `ProgramUnresolved`: Likely.
 //! - Recorded, but the definition cannot be read now: `ProgramUnresolved` and the evidence at Tier B
@@ -66,6 +67,15 @@
 //!   app's blocker.
 //!
 //! A recorded task that is gone now gives nothing: there is nothing left to remove.
+//!
+//! # A COM handler's class (R4 B2)
+//!
+//! A class is gone when its `CLSID\{x}` key is absent (`NotFound`, nothing else) in both registry views
+//! of the machine's Classes and of the Classes of every user whose hive is loaded, the fingerprint's user
+//! and the user of a per-user registration included; each such user's `HKU\<SID>_Classes` must itself be
+//! there (a hive that is not loaded proves nothing). A key that is present, even with its server
+//! missing, keeps the task Likely: COM-CLASS judges the key. The read is made only for a task that is
+//! otherwise Safe: at most two opens per view per COM-handler action, and one list of the loaded hives.
 
 use std::collections::HashSet;
 
@@ -75,12 +85,17 @@ use purge_index::sysobj::{Env, ProgramRef, task_programs};
 use purge_model::object::{TaskAction, TaskIdentity};
 use purge_model::{Action, Blocker, Candidate, Category, Harm, ObjectWhy, Reversibility, Target};
 use purge_source::sysobj::TaskInfo;
+use purge_source::types::ExistsState;
 
+use crate::com_class::is_braced_guid;
 use crate::framework::{AppIdentityView, CandidateBuilder, RootSpec, ScanCtx, Scanner};
 use crate::sys_service::arguments_are_the_apps;
 
 /// The scanner's catalog id.
 pub const ID: &str = "SYS-TASK";
+
+/// The machine's Classes, where a COM handler's class is looked up (with each loaded user's).
+const MACHINE_CLASSES: &str = r"HKLM\SOFTWARE\Classes";
 
 /// Task Scheduler's registry cache: where the rig captures what the task list says.
 const TASK_CACHE: &str = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache";
@@ -98,7 +113,8 @@ const WHY_CHANGED: &str = "the task differs from the one recorded at harvest";
 const WHY_FOREIGN: &str =
     "an action no longer runs a file of the app (not in an InstallRoot, not one of its exes)";
 const WHY_PRESENT: &str = "an action's program file still exists or its state is unknown";
-const WHY_COM: &str = "a COM-handler action's class cannot be shown gone";
+const WHY_COM: &str =
+    "a COM-handler action's class is still registered, or cannot be shown not to be";
 
 /// The SYS-TASK scanner.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -190,8 +206,8 @@ fn is_task_path(path: &str) -> bool {
 enum Act {
     /// An exec action running a file of the app.
     Own { file: String, why: ObjectWhy },
-    /// A COM-handler action of one of the app's classes.
-    OwnCom,
+    /// A COM-handler action of one of the app's classes (`clsid` as the action names it, trimmed).
+    OwnCom { clsid: String },
     /// An exec action running a file that is not the app's (`file`), or a COM handler of another class
     /// (`file` is `None`).
     Foreign { file: Option<String> },
@@ -202,7 +218,7 @@ enum Act {
 
 impl Act {
     fn is_own(&self) -> bool {
-        matches!(self, Act::Own { .. } | Act::OwnCom)
+        matches!(self, Act::Own { .. } | Act::OwnCom { .. })
     }
 
     fn file(&self) -> Option<&str> {
@@ -234,7 +250,9 @@ fn classify(ctx: &ScanCtx<'_>, env: &Env, identity: &TaskIdentity) -> Vec<Act> {
                         .iter()
                         .any(|c| prefix::eq_ci(c.trim(), clsid));
                 if own {
-                    Act::OwnCom
+                    Act::OwnCom {
+                        clsid: clsid.to_owned(),
+                    }
                 } else {
                     Act::Foreign { file: None }
                 }
@@ -306,10 +324,10 @@ fn judge(ctx: &ScanCtx<'_>, deny: &DenyList, env: &Env, task: &TaskInfo) -> Opti
                 b.blocker(Blocker::ProgramUnresolved);
             } else if !all_own {
                 b.cap_at_tier_b(WHY_FOREIGN);
-            } else if acts.contains(&Act::OwnCom) {
-                b.cap_at_tier_b(WHY_COM);
             } else if !programs_gone(ctx, &acts) {
                 b.cap_at_tier_b(WHY_PRESENT);
+            } else if !classes_gone(ctx, &acts) {
+                b.cap_at_tier_b(WHY_COM);
             }
         }
     }
@@ -325,9 +343,12 @@ fn judge(ctx: &ScanCtx<'_>, deny: &DenyList, env: &Env, task: &TaskInfo) -> Opti
 }
 
 /// The `why` of a task the harvest did not record, all of whose actions are the app's: the program is
-/// one of the app's exes when any exec action's file is (the harvest's rule); otherwise in a root.
+/// one of the app's exes when any exec action's file is (the harvest's rule); the app's class when
+/// there is no exec action; otherwise in a root.
 fn unrecorded_why(acts: &[Act]) -> ObjectWhy {
-    if acts.iter().any(|a| {
+    if !acts.iter().any(|a| matches!(a, Act::Own { .. })) {
+        ObjectWhy::AppComClass
+    } else if acts.iter().any(|a| {
         matches!(
             a,
             Act::Own {
@@ -343,8 +364,8 @@ fn unrecorded_why(acts: &[Act]) -> ObjectWhy {
 }
 
 /// Whether every exec action's file is proven gone ([`ScanCtx::program_gone`], R3a S1: the dangling
-/// rule's proof, not a bare "absent"). Called only for tasks with at least one exec action of the app
-/// and no other kind.
+/// rule's proof, not a bare "absent"). Called only for tasks whose every action is the app's; a
+/// COM-handler action is judged by [`classes_gone`], and a task needs at least one action.
 fn programs_gone(ctx: &ScanCtx<'_>, acts: &[Act]) -> bool {
     let mut any = false;
     for act in acts {
@@ -355,10 +376,67 @@ fn programs_gone(ctx: &ScanCtx<'_>, acts: &[Act]) -> bool {
                 }
                 any = true;
             }
-            _ => return false,
+            Act::OwnCom { .. } => any = true,
+            Act::Foreign { .. } | Act::Unresolved => return false,
         }
     }
     any
+}
+
+/// Whether the class of every COM-handler action is proven unregistered (R4 B2; module documentation
+/// "A COM handler's class"). `true` for a task without COM-handler actions, without a read.
+fn classes_gone(ctx: &ScanCtx<'_>, acts: &[Act]) -> bool {
+    let clsids: Vec<&str> = acts
+        .iter()
+        .filter_map(|a| match a {
+            Act::OwnCom { clsid } => Some(clsid.as_str()),
+            _ => None,
+        })
+        .collect();
+    if clsids.is_empty() {
+        return true;
+    }
+    if !clsids.iter().all(|c| is_braced_guid(c)) {
+        return false;
+    }
+    let Ok(loaded) = ctx.reg.loaded_user_sids() else {
+        return false;
+    };
+    let mut users: Vec<String> = Vec::new();
+    for sid in [
+        Some(ctx.fp.user_sid.as_str()),
+        ctx.fp.app.program_id.hive_sid(),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(loaded.iter().map(String::as_str))
+    {
+        let sid = sid.trim();
+        let is_user = (sid.starts_with("S-1-5-21-") || sid.starts_with("S-1-12-1-"))
+            && !prefix::fold(sid).ends_with("_classes")
+            && !sid.contains(prefix::SEP);
+        if is_user && !users.iter().any(|u| prefix::eq_ci(u, sid)) {
+            users.push(sid.to_owned());
+        }
+    }
+    let mut roots: Vec<String> = vec![MACHINE_CLASSES.to_owned()];
+    for sid in &users {
+        let root = format!(r"HKU\{sid}_Classes");
+        if ctx.reg.key_exists(&root) != ExistsState::Present {
+            return false;
+        }
+        roots.push(root);
+    }
+    clsids.iter().all(|clsid| {
+        roots.iter().all(|root| {
+            [
+                format!(r"{root}\CLSID\{clsid}"),
+                format!(r"{root}\WOW6432Node\CLSID\{clsid}"),
+            ]
+            .iter()
+            .all(|key| ctx.reg.key_exists(key) == ExistsState::Absent)
+        })
+    })
 }
 
 /// Whether a task action's working directory (`TaskPrograms::work_dirs`, set when an argument may be

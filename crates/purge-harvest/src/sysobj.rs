@@ -22,7 +22,14 @@
 //!
 //! A task is recorded only when **every** exec action runs a file of the app, no action is of an
 //! unknown kind, and every COM-handler action names one of the app's own CLSIDs. A program that is
-//! an interpreter or host (`cmd.exe`, `rundll32.exe`, ...) is unresolved and never the app's. An object
+//! an interpreter or host (`cmd.exe`, `rundll32.exe`, ...) is unresolved and never the app's.
+//!
+//! A task whose actions are all COM handlers has no program file. It is recorded
+//! ([`ObjectWhy::AppComClass`], R4 B2) when every handler's CLSID is one of the app's own classes
+//! (`fp.anchors.clsids`: a class whose `InprocServer32`/`LocalServer32` lay in the app's files and that
+//! passed the anchor harvest's baseline, owner, age and shared-server tests, or a `Class` row of the
+//! app's own MSI whose component has no other client). A handler of any other class, or one without a
+//! CLSID, records nothing, as before; a task without actions (unreadable) records nothing. An object
 //! [`DenyList::check_object`] blocks (drivers, per-user services, objects marked for delete, Windows'
 //! own, AppX-bound or resource-named rules) is not recorded.
 //!
@@ -175,8 +182,17 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
             }
         }
         let programs = task_programs(identity, inp.env);
-        let Some(files) = programs.files() else {
-            continue;
+        // Every action a COM handler of the app's own classes (checked above): no program file, the
+        // class is the app's (R4 B2).
+        let com_only = !identity.actions.is_empty()
+            && identity
+                .actions
+                .iter()
+                .all(|a| matches!(a, TaskAction::ComHandler { .. }));
+        let files = match programs.files() {
+            Some(files) => files,
+            None if com_only => Vec::new(),
+            None => continue,
         };
         // R3a S6: a relative argument in a working directory that is not the app's runs somebody
         // else's code.
@@ -203,10 +219,16 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
         let in_baseline = inp
             .baseline
             .is_some_and(|b| b.has_key(&format!("{TASK_TREE}{}", identity.path)));
-        for file in &files {
+        // The guard's object rule with every program, or with none for a COM-only task.
+        let programs_checked: Vec<Option<&str>> = if files.is_empty() {
+            vec![None]
+        } else {
+            files.iter().map(|f| Some(*f)).collect()
+        };
+        for program in programs_checked {
             let facts = ObjectGuardFacts {
                 name_or_path_or_id: &identity.path,
-                program: Some(file),
+                program,
                 in_baseline,
                 ..ObjectGuardFacts::default()
             };
@@ -217,7 +239,11 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
         objects.tasks.push(SysTask {
             identity: identity.clone(),
             program: files.first().map(|f| (*f).to_owned()),
-            why: why_of(how),
+            why: if files.is_empty() {
+                ObjectWhy::AppComClass
+            } else {
+                why_of(how)
+            },
         });
     }
 

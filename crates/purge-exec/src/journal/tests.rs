@@ -1655,6 +1655,7 @@ fn run_settings() -> RunSettings {
         restore_point: RestorePointPolicy::HighRiskOnly,
         selected: Vec::new(),
         gone_msi_products: Vec::new(),
+        gone_msi_by_sid: Vec::new(),
         gone_cache_dirs: Vec::new(),
         gone_burn: Vec::new(),
     }

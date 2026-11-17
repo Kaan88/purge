@@ -48,7 +48,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purge_guard::live;
 use purge_model::ObjectKind;
-use purge_model::exec::journal::{RestorePointPolicy, RunSettings};
+use purge_model::exec::journal::{GoneMsiForSid, RestorePointPolicy, RunSettings};
 use purge_model::exec::op::{ExecOp, Mismatch, OpId, Sha256Hex, resolve};
 use purge_model::{Action, Band, Blocker, Candidate, CandidateId};
 use purge_plan::collapse::nests_in;
@@ -114,6 +114,11 @@ impl Default for ExecSettings {
 pub struct GoneLists {
     /// Packed codes of MSI products Windows Installer knows in no context.
     pub msi_products: Vec<String>,
+    /// The same products by the folded SID of their own install context
+    /// (`purge_plan::decide::M1bDecide::gone_msi_by_sid`). The act-time gate lets a Windows Installer
+    /// registration filed under a SID through only for the products listed under that SID, as the
+    /// plan's decide step does (R3a B1, R4 S8); `msi_products` serves every other target.
+    pub msi_by_sid: Vec<(String, Vec<String>)>,
     /// Package Cache directories of gone bundles and packages.
     pub cache_dirs: Vec<String>,
     /// Bundle ids and provider keys of gone Burn bundles and packages.
@@ -125,6 +130,7 @@ impl GoneLists {
     pub fn from_decide(decide: &purge_plan::decide::M1bDecide) -> GoneLists {
         GoneLists {
             msi_products: decide.gone_msi_products().to_vec(),
+            msi_by_sid: decide.gone_msi_by_sid().to_vec(),
             cache_dirs: decide.gone_cache_dirs().to_vec(),
             burn: decide.gone_burn().to_vec(),
         }
@@ -134,6 +140,13 @@ impl GoneLists {
     pub fn from_journal(settings: &RunSettings) -> GoneLists {
         GoneLists {
             msi_products: settings.gone_msi_products.clone(),
+            // A journal written before the field existed has none: a registration filed under a SID
+            // then stays closed for every SID (R4 S8).
+            msi_by_sid: settings
+                .gone_msi_by_sid
+                .iter()
+                .map(|g| (purge_guard::prefix::fold(g.sid.trim()), g.products.clone()))
+                .collect(),
             cache_dirs: settings.gone_cache_dirs.clone(),
             burn: settings.gone_burn.clone(),
         }
@@ -141,7 +154,10 @@ impl GoneLists {
 
     /// Whether all three lists are empty.
     pub fn is_empty(&self) -> bool {
-        self.msi_products.is_empty() && self.cache_dirs.is_empty() && self.burn.is_empty()
+        self.msi_products.is_empty()
+            && self.msi_by_sid.is_empty()
+            && self.cache_dirs.is_empty()
+            && self.burn.is_empty()
     }
 }
 
@@ -161,6 +177,15 @@ impl ExecSettings {
                 RestorePointSetting::Always => RestorePointPolicy::Always,
             },
             gone_msi_products: self.gone.msi_products.clone(),
+            gone_msi_by_sid: self
+                .gone
+                .msi_by_sid
+                .iter()
+                .map(|(sid, products)| GoneMsiForSid {
+                    sid: sid.clone(),
+                    products: products.clone(),
+                })
+                .collect(),
             gone_cache_dirs: self.gone.cache_dirs.clone(),
             gone_burn: self.gone.burn.clone(),
         }

@@ -160,6 +160,101 @@ fn sys_task_all_actions_must_be_owned() {
     assert_eq!(tasks[0].program.as_deref(), Some(update.as_str()));
 }
 
+/// R4 B2: a task whose only action is a COM handler of the app's own class (its `InprocServer32` is a
+/// file in the app's InstallRoot: an anchor) is recorded, with no program and `AppComClass`. A
+/// COM-only task of a class that is not the app's, one that mixes the app's class with another, and one
+/// whose handler names no CLSID are not.
+#[test]
+fn sys_task_com_handler_of_the_apps_class_recorded() {
+    const OWN: &str = "{0A0A0A0A-0000-4000-8000-00000000C0DE}";
+    const FOREIGN: &str = "{0F0F0F0F-0000-0000-0000-000000000001}";
+    let com = |path: &str, clsids: &[&str]| {
+        let mut t = task(path, &[]);
+        t.identity.actions = clsids
+            .iter()
+            .map(|c| TaskAction::ComHandler {
+                clsid: (*c).to_owned(),
+                data: Some("notify".into()),
+            })
+            .collect();
+        t
+    };
+    let b = tool()
+        .file(&format!(r"{APP}\toolcom.dll"), 1_000)
+        .sz(
+            &format!(r"HKLM\SOFTWARE\Classes\CLSID\{OWN}\InprocServer32"),
+            "",
+            &format!(r"{APP}\toolcom.dll"),
+        )
+        .file(r"C:\Program Files\Other\othercom.dll", 1_000)
+        .sz(
+            &format!(r"HKLM\SOFTWARE\Classes\CLSID\{FOREIGN}\InprocServer32"),
+            "",
+            r"C:\Program Files\Other\othercom.dll",
+        )
+        .task(com(r"\Tool\Notify", &[OWN]))
+        .task(com(r"\Tool\NotifyTwice", &[OWN, OWN]))
+        .task(com(r"\Tool\Foreign", &[FOREIGN]))
+        .task(com(r"\Tool\Both", &[OWN, FOREIGN]))
+        .task(com(r"\Tool\NoClass", &[" "]));
+    let report = harvest_of(&b.build(), "Tool");
+    let clsids = &report.fingerprint.anchors.clsids;
+    assert!(
+        clsids.iter().any(|c| c.eq_ignore_ascii_case(OWN)),
+        "{clsids:?}"
+    );
+    assert!(
+        !clsids.iter().any(|c| c.eq_ignore_ascii_case(FOREIGN)),
+        "{clsids:?}"
+    );
+    let tasks = &report.fingerprint.sys.tasks;
+    assert_eq!(
+        tasks
+            .iter()
+            .map(|t| (t.identity.path.as_str(), t.why, t.program.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            (r"\Tool\Notify", ObjectWhy::AppComClass, None),
+            (r"\Tool\NotifyTwice", ObjectWhy::AppComClass, None),
+        ]
+    );
+    // The identity, with the handler's data, is what the scan compares.
+    assert_eq!(tasks[0].identity, com(r"\Tool\Notify", &[OWN]).identity);
+}
+
+/// R4 B2 (hostile): the app's class under a task path of Windows' own is still refused by the guard.
+#[test]
+fn sys_task_com_handler_windows_path_not_recorded() {
+    const OWN: &str = "{0A0A0A0A-0000-4000-8000-00000000C0DE}";
+    let mut t = task(r"\Microsoft\Windows\Tool\Notify", &[]);
+    t.identity.actions = vec![TaskAction::ComHandler {
+        clsid: OWN.into(),
+        data: None,
+    }];
+    let b = tool()
+        .file(&format!(r"{APP}\toolcom.dll"), 1_000)
+        .sz(
+            &format!(r"HKLM\SOFTWARE\Classes\CLSID\{OWN}\InprocServer32"),
+            "",
+            &format!(r"{APP}\toolcom.dll"),
+        )
+        .task(t);
+    let report = harvest_of(&b.build(), "Tool");
+    assert!(
+        report
+            .fingerprint
+            .anchors
+            .clsids
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(OWN))
+    );
+    assert!(
+        report.fingerprint.sys.tasks.is_empty(),
+        "{:?}",
+        report.fingerprint.sys.tasks
+    );
+}
+
 #[test]
 fn sys_task_interpreter_action_not_recorded() {
     let mut script = task(r"\Tool\Script", &[r"C:\Windows\System32\cmd.exe"]);

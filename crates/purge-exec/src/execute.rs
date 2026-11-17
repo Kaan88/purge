@@ -1338,8 +1338,13 @@ impl<'a> Run<'a> {
                     self.settings.long_names_resolved,
                 )
             });
-        // The run's M1b lists, which the plan's decide step gives every candidate too.
-        self.ctx.with_gone(exemptions)
+        // The run's M1b lists, which the plan's decide step gives every candidate too: the gone MSI
+        // products per op, by the SID a registration is filed under (R4 S8). An op id without an op
+        // acts on nothing and gets none of them.
+        match self.plan.item(op).and_then(|item| item.exec_op.as_ref()) {
+            Some(exec_op) => self.ctx.with_gone(exemptions, exec_op),
+            None => exemptions,
+        }
     }
 
     /// The gate's view of op `op` (`exec_op`) at validation: its exemptions ([`Run::exemptions`]), the

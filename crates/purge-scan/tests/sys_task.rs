@@ -419,8 +419,8 @@ fn multi_action_one_foreign_no_candidate() {
     assert!(world.run().is_empty());
 }
 
-/// A COM-handler task whose class is one of the app's: offered, never ticked (the harvest records no
-/// COM-only task, and a class cannot be shown gone without reading its keys).
+/// A COM-handler task whose class is one of the app's, not recorded at harvest: offered, never ticked
+/// (the class's word alone is no harvest record), with the class as its reason.
 #[test]
 fn com_handler_owned_clsid() {
     let world = World::new(machine_with(&[NOTIFY]));
@@ -433,6 +433,170 @@ fn com_handler_owned_clsid() {
             .any(|e| e.kind == EvidenceKind::OwnedSystemObject && e.tier == Tier::A)
     );
     assert_eq!(band(c), (Band::Likely, false));
+}
+
+/// The fixture with the scan user's Classes hive loaded (empty): what a logged-on user has.
+fn with_user_classes(mut fx: Fixture) -> Fixture {
+    fx.add_key(&format!(r"HKU\{}_Classes", GuardEnv::SAMPLE_SID));
+    fx
+}
+
+/// R4 B2: a task whose only action is a COM handler of the app's class, recorded at harvest
+/// (`AppComClass`), the same now, and the class registered in no view of the machine's or a loaded
+/// user's Classes: Safe and ticked, like an exec task whose program is gone.
+#[test]
+fn com_handler_recorded_class_gone_safe() {
+    let world = World::new(with_user_classes(machine_with(&[NOTIFY])))
+        .recorded(NOTIFY, ObjectWhy::AppComClass);
+    let found = world.run();
+    let c = only(&found, NOTIFY);
+    assert!(c.blockers.is_empty(), "{:?}", c.blockers);
+    assert!(
+        c.evidence
+            .iter()
+            .any(|e| e.kind == EvidenceKind::OwnedSystemObject
+                && e.tier == Tier::A
+                && e.scope == Scope::Object),
+        "{:#?}",
+        c.evidence
+    );
+    assert_eq!(band(c), (Band::Safe, true));
+}
+
+/// R4 B2 (hostile): the class still registered in any view, or a Classes hive that cannot be seen, keeps
+/// the recorded COM-handler task at Tier B: Likely, never ticked.
+#[test]
+fn com_handler_recorded_class_present_or_unknown_likely() {
+    let other_user = "S-1-5-21-1111111111-2222222222-3333333333-1002";
+    let class_key = |root: &str| format!(r"{root}\CLSID\{OWN_CLSID}");
+    let cases: Vec<(&str, Fixture)> = vec![
+        (
+            "the scan user's Classes not loaded",
+            machine_with(&[NOTIFY]),
+        ),
+        ("64-bit machine class", {
+            let mut fx = with_user_classes(machine_with(&[NOTIFY]));
+            fx.add_key(&class_key(r"HKLM\SOFTWARE\Classes"));
+            fx
+        }),
+        ("32-bit machine class, key without a server", {
+            let mut fx = with_user_classes(machine_with(&[NOTIFY]));
+            fx.add_key(&class_key(r"HKLM\SOFTWARE\Classes\WOW6432Node"));
+            fx
+        }),
+        ("the scan user's class", {
+            let mut fx = with_user_classes(machine_with(&[NOTIFY]));
+            fx.add_key(&class_key(&format!(
+                r"HKU\{}_Classes",
+                GuardEnv::SAMPLE_SID
+            )));
+            fx
+        }),
+        ("another logged-on user's class", {
+            let mut fx = with_user_classes(machine_with(&[NOTIFY]));
+            fx.add_key(&format!(r"HKU\{other_user}\Software"));
+            fx.add_key(&class_key(&format!(
+                r"HKU\{other_user}_Classes\WOW6432Node"
+            )));
+            fx
+        }),
+        ("another logged-on user's Classes not loaded", {
+            let mut fx = with_user_classes(machine_with(&[NOTIFY]));
+            fx.add_key(&format!(r"HKU\{other_user}\Software"));
+            fx
+        }),
+    ];
+    for (why, fx) in cases {
+        let world = World::new(fx).recorded(NOTIFY, ObjectWhy::AppComClass);
+        let found = world.run();
+        let c = only(&found, NOTIFY);
+        assert!(
+            !has(c, EvidenceKind::OwnedSystemObject, Tier::A),
+            "{why}: {:#?}",
+            c.evidence
+        );
+        assert_eq!(band(c), (Band::Likely, false), "{why}");
+    }
+}
+
+/// R4 B2: an exec action of the app and a COM handler of its class, both gone: Safe; the class still
+/// registered: Likely.
+#[test]
+fn exec_and_own_com_handler_recorded_gone_safe() {
+    const MIXED: &str = r"\Contoso\Widget Mixed";
+    let mixed_fixture = || {
+        let mut fx = with_user_classes(machine_with(&[]));
+        let mut mixed = task(UPDATE);
+        mixed.identity.path = MIXED.into();
+        mixed.identity.actions.push(TaskAction::ComHandler {
+            clsid: OWN_CLSID.into(),
+            data: None,
+        });
+        fx.add_task(mixed);
+        fx
+    };
+    let mut world = World::new(mixed_fixture());
+    let identity = world.ext.sysobj.tasks[0].identity.clone();
+    world
+        .fp
+        .sys
+        .tasks
+        .push(record(&identity, ObjectWhy::ProgramIsAppExe));
+    let found = world.run();
+    assert_eq!(band(only(&found, MIXED)), (Band::Safe, true));
+
+    let mut fx = mixed_fixture();
+    fx.add_key(&format!(r"HKLM\SOFTWARE\Classes\CLSID\{OWN_CLSID}"));
+    let mut world = World::new(fx);
+    world
+        .fp
+        .sys
+        .tasks
+        .push(record(&identity, ObjectWhy::ProgramIsAppExe));
+    let found = world.run();
+    assert_eq!(band(only(&found, MIXED)), (Band::Likely, false));
+}
+
+/// Budget (R4 B2): a recorded COM-handler task opens only the class keys of its handlers (two views
+/// of the machine's Classes, the user's Classes hive and its two views) and lists the loaded hives once.
+#[test]
+fn budget_com_handler_class_keys_only() {
+    let world = World::new(with_user_classes(machine_with(&[NOTIFY])))
+        .recorded(NOTIFY, ObjectWhy::AppComClass);
+    let meter = Meter::new();
+    let reg = MeteredRegistry::new(&world.fixture, &meter);
+    let fs = MeteredFileSystem::new(&world.fixture, &meter);
+    let sys = MeteredSystem::new(&world.fixture, &meter);
+    let ctx = ScanCtx {
+        reg: &reg,
+        fs: &fs,
+        sys: &sys,
+        ..world.ctx()
+    };
+    let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
+    let found = ctx.run(&SysTask, &app);
+    assert_eq!(band(only(&found, NOTIFY)), (Band::Safe, true));
+    let calls = meter.snapshot();
+    assert!(
+        calls.get(Op::RegKeyInfo).calls <= 5,
+        "{}",
+        calls.get(Op::RegKeyInfo).calls
+    );
+    assert!(
+        calls.get(Op::RegOther).calls <= 1,
+        "{}",
+        calls.get(Op::RegOther).calls
+    );
+    for op in [
+        Op::RegSubkeys,
+        Op::RegValues,
+        Op::RegValue,
+        Op::SysTasks,
+        Op::SysMsiTables,
+        Op::FsListDir,
+    ] {
+        assert_eq!(calls.get(op).calls, 0, "{}", op.name());
+    }
 }
 
 /// A COM-handler task of a class that is not the app's runs somebody else's code.

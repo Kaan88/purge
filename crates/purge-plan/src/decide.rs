@@ -212,8 +212,9 @@ impl M1bDecide {
     /// through only for the products whose own context is that SID (`S-1-5-18` for a per-machine
     /// product, the user's for a per-user one): the same ProductCode under another SID is another user's
     /// install, which "gone" says nothing about. Every other target gets [`M1bDecide::gone_msi_products`].
-    /// `env` and `user_sid` canonicalise the key as the guard does. The executor's gate passes the same
-    /// to the guard (M1B-X-INTEG).
+    /// `env` and `user_sid` canonicalise the key as the guard does. The executor journals both lists
+    /// ([`M1bDecide::gone_msi_by_sid`]) and its gate makes the same choice per op with
+    /// [`installer_registration_sid`] (R4 S8).
     #[must_use]
     pub fn gone_msi_products_for(
         &self,
@@ -229,6 +230,14 @@ impl M1bDecide {
                 .map_or(&[], |(_, list)| list.as_slice()),
             None => &self.gone_msi_products,
         }
+    }
+
+    /// The gone MSI products by the folded SID of their own install context (`s-1-5-18` for a
+    /// per-machine product), each list sorted: what [`M1bDecide::gone_msi_products_for`] gives a
+    /// registration filed under that SID. A product whose user is not recorded is under no SID.
+    #[must_use]
+    pub fn gone_msi_by_sid(&self) -> &[(String, Vec<String>)] {
+        &self.gone_msi_by_sid
     }
 
     /// Package Cache directories, as the fingerprint recorded them, of gone bundles and packages.
@@ -256,7 +265,9 @@ impl M1bDecide {
 /// `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\<sid>\...` (either view), or the
 /// user of `HKU\<sid>\Software\Microsoft\Installer\...`. Compared in the guard's canonical form; `None`
 /// for every other target and for a key that does not canonicalise (the guard denies those anyway).
-fn installer_registration_sid(
+/// The executor's gate uses it to pick the journalled per-SID list for an op (R4 S8).
+#[must_use]
+pub fn installer_registration_sid(
     target: &Target,
     env: &GuardEnv,
     user_sid: Option<&str>,

@@ -143,6 +143,10 @@ pub enum ObjectWhy {
     ProgramIsAppExe,
     /// A `ServiceInstall` row of one of the app's MSI products names the service.
     MsiServiceRow,
+    /// A scheduled task whose every action is a COM handler of one of the app's own classes
+    /// (`Anchors::clsids`: a class whose server was the app's file, or a `Class` row of the app's own
+    /// MSI), with no exec action (R4 B2).
+    AppComClass,
 }
 
 /// A service the harvest recorded as the app's.

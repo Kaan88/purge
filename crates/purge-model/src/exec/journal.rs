@@ -246,6 +246,14 @@ pub struct RunSettings {
     /// they open closed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gone_msi_products: Vec<String>,
+    /// The same products by the SID of their own install context (`S-1-5-18` for a per-machine
+    /// product, the user's for a per-user one), as the plan's decide step keeps them (R3a B1, R4 S8): a
+    /// Windows Installer registration filed under a SID (`...\Installer\UserData\<sid>\...`,
+    /// `HKU\<sid>\Software\Microsoft\Installer\...`) is let through only for the products listed under
+    /// that SID; every other target gets [`RunSettings::gone_msi_products`]. A journal written before
+    /// the field existed reads it as empty: such registrations then stay closed for every SID.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gone_msi_by_sid: Vec<GoneMsiForSid>,
     /// The Package Cache directories of the app's gone bundles and packages (see
     /// [`RunSettings::gone_msi_products`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -254,6 +262,15 @@ pub struct RunSettings {
     /// [`RunSettings::gone_msi_products`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gone_burn: Vec<String>,
+}
+
+/// The gone MSI products of one install context ([`RunSettings::gone_msi_by_sid`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct GoneMsiForSid {
+    /// The context's SID, folded as the guard compares it.
+    pub sid: String,
+    /// Packed codes of the products of that context that Windows Installer no longer knows.
+    pub products: Vec<String>,
 }
 
 /// The deny-list exemptions an item was judged with (ENGINE_PLAN.md §5.10). The same four inputs as the

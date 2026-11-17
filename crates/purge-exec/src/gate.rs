@@ -351,18 +351,60 @@ pub struct GateCtx {
 
 /// The run's M1b exemption lists as the guard's [`Exemptions`] take them (`&'static` slices, interned
 /// once per distinct list for the process: [`intern`]).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct Gone {
     msi_products: &'static [String],
+    /// The gone MSI products by the folded SID of their own install context.
+    msi_by_sid: Vec<(String, &'static [String])>,
     cache_dirs: &'static [String],
     burn: &'static [String],
 }
 
 impl Gone {
-    /// `exemptions` with these lists in place of its own.
-    fn apply(self, exemptions: Exemptions<'static>) -> Exemptions<'static> {
+    fn new(lists: &crate::plan_in::GoneLists) -> Gone {
+        Gone {
+            msi_products: intern(&lists.msi_products),
+            msi_by_sid: lists
+                .msi_by_sid
+                .iter()
+                .map(|(sid, products)| (prefix::fold(sid.trim()), intern(products)))
+                .collect(),
+            cache_dirs: intern(&lists.cache_dirs),
+            burn: intern(&lists.burn),
+        }
+    }
+
+    /// The gone MSI products the guard may let through for `op` (R3a B1, R4 S8), the choice the plan's
+    /// decide step makes (`M1bDecide::gone_msi_products_for`): a Windows Installer registration filed
+    /// under a SID gets only the products whose own context is that SID (none when the run journalled
+    /// no list for it); every other target gets the flat list. `env` and `user_sid` canonicalise the
+    /// key as the guard does.
+    fn msi_products_for(
+        &self,
+        op: &ExecOp,
+        env: &purge_guard::canon::GuardEnv,
+        user_sid: Option<&str>,
+    ) -> &'static [String] {
+        match purge_plan::decide::installer_registration_sid(&op.target(), env, user_sid) {
+            Some(sid) => self
+                .msi_by_sid
+                .iter()
+                .find(|(s, _)| *s == sid)
+                .map_or(&[], |(_, list)| *list),
+            None => self.msi_products,
+        }
+    }
+
+    /// `exemptions` of `op` with these lists in place of its own.
+    fn apply(
+        &self,
+        exemptions: Exemptions<'static>,
+        op: &ExecOp,
+        env: &purge_guard::canon::GuardEnv,
+        user_sid: Option<&str>,
+    ) -> Exemptions<'static> {
         Exemptions {
-            gone_msi_products: self.msi_products,
+            gone_msi_products: self.msi_products_for(op, env, user_sid),
             gone_cache_dirs: self.cache_dirs,
             gone_burn: self.burn,
             ..exemptions
@@ -695,22 +737,32 @@ impl GateCtx {
     /// run, as the plan's decide step gives them to every candidate: to the records accepted before and
     /// after this call ([`GateCtx::exemptions`]) and to [`GateCtx::with_gone`]. Without a call they
     /// are empty, which keeps every exemption they open closed.
+    ///
+    /// The gone MSI products are applied per op: an op on a Windows Installer registration filed under a
+    /// SID gets only the products the run journalled for that SID (`GoneLists::msi_by_sid`), every other
+    /// op the flat list (R4 S8). The SID of an `HKCU` spelling is the bound user's
+    /// ([`GateCtx::bind_user`]), so call that first; it applies the lists again when called later.
     pub fn set_gone(&mut self, lists: &crate::plan_in::GoneLists) {
-        self.gone = Gone {
-            msi_products: intern(&lists.msi_products),
-            cache_dirs: intern(&lists.cache_dirs),
-            burn: intern(&lists.burn),
-        };
-        let gone = self.gone;
+        self.gone = Gone::new(lists);
+        self.apply_gone();
+    }
+
+    /// Applies the run's M1b lists to every recorded op again.
+    fn apply_gone(&mut self) {
+        let env = self.deny.env();
+        let user_sid = self.user_sid.as_deref();
         for recorded in self.validated.values_mut() {
-            recorded.exemptions = gone.apply(recorded.exemptions);
+            recorded.exemptions = self
+                .gone
+                .apply(recorded.exemptions, &recorded.op, env, user_sid);
         }
     }
 
-    /// `exemptions` with the run's M1b exemption lists ([`GateCtx::set_gone`]) in place of its own: what
-    /// the validate pass judges an item with.
-    pub fn with_gone(&self, exemptions: Exemptions<'static>) -> Exemptions<'static> {
-        self.gone.apply(exemptions)
+    /// `exemptions` of `op` with the run's M1b exemption lists ([`GateCtx::set_gone`]) in place of its
+    /// own: what the validate pass judges an item with.
+    pub fn with_gone(&self, exemptions: Exemptions<'static>, op: &ExecOp) -> Exemptions<'static> {
+        self.gone
+            .apply(exemptions, op, self.deny.env(), self.user_sid.as_deref())
     }
 
     /// Tells the gate whom the scan was made for: the run's `user_sid` setting (journalled with the
@@ -718,6 +770,7 @@ impl GateCtx {
     /// it with the process token's user ([`GateCtx::package_user_refusal`]).
     pub fn bind_user(&mut self, user_sid: Option<&str>) {
         self.user_sid = user_sid.map(str::to_owned);
+        self.apply_gone();
     }
 
     /// The user the scan was made for ([`GateCtx::bind_user`]), whose profile tokens a task's program
@@ -951,9 +1004,12 @@ impl GateCtx {
                 op: op.clone(),
                 record: validated.clone(),
                 stamp,
-                exemptions: self
-                    .gone
-                    .apply(exemptions_from_journal(&validated.exemptions)),
+                exemptions: self.gone.apply(
+                    exemptions_from_journal(&validated.exemptions),
+                    op,
+                    self.deny.env(),
+                    self.user_sid.as_deref(),
+                ),
                 max_files,
             },
         );

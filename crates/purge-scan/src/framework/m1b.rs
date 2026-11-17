@@ -1307,6 +1307,7 @@ fn why_name(why: ObjectWhy) -> &'static str {
         ObjectWhy::ProgramInRoot => "program_in_root",
         ObjectWhy::ProgramIsAppExe => "program_is_app_exe",
         ObjectWhy::MsiServiceRow => "msi_service_row",
+        ObjectWhy::AppComClass => "app_com_class",
     }
 }
 
