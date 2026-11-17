@@ -216,6 +216,8 @@ dependencies = [
  "purge-guard",
  "purge-model",
  "purge-source",
+ "purge-win",
+ "serde_json",
 ]
 
 [[package]]

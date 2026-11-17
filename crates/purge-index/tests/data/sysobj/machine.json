@@ -1,0 +1,139 @@
+{
+  "schema": "purge.fixture/1",
+  "system": {
+    "env": {
+      "SYSTEMROOT": "C:\\WINDOWS",
+      "WINDIR": "C:\\WINDOWS",
+      "SYSTEMDRIVE": "C:",
+      "PROGRAMFILES": "C:\\Program Files",
+      "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+      "PROGRAMDATA": "C:\\ProgramData"
+    }
+  },
+  "registry": {
+    "current_control_set": 1,
+    "keys": {
+      "HKLM\\SYSTEM\\Select": { "values": { "Current": { "dword": 1 } } },
+      "HKLM\\SYSTEM\\ControlSet001\\Services": {
+        "keys": {
+          "AppSvc": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"C:\\Program Files\\App\\svc.exe\" -run" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 2 },
+              "ErrorControl": { "dword": 1 },
+              "ObjectName": "LocalSystem",
+              "DisplayName": "App Service",
+              "DependOnService": { "multi_sz": ["RpcSs", "+NetworkProvider", ""] }
+            }
+          },
+          "AppHelper": {
+            "values": {
+              "ImagePath": { "expand_sz": "C:\\Program Files\\App\\helper.exe" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 3 },
+              "DependOnService": { "multi_sz": ["appsvc"] }
+            }
+          },
+          "Dnscache": {
+            "values": {
+              "ImagePath": { "expand_sz": "%SystemRoot%\\system32\\svchost.exe -k NetworkService -p" },
+              "Type": { "dword": 48 },
+              "Start": { "dword": 2 },
+              "ObjectName": "NT AUTHORITY\\NetworkService",
+              "DisplayName": "@%SystemRoot%\\System32\\dnsapi.dll,-101",
+              "DependOnService": { "multi_sz": ["nsi", "Tdx"] }
+            },
+            "keys": {
+              "Parameters": {
+                "values": { "ServiceDll": { "expand_sz": "%SystemRoot%\\System32\\dnsrslvr.dll" } }
+              }
+            }
+          },
+          "RpcSs": {
+            "values": {
+              "ImagePath": { "expand_sz": "%SystemRoot%\\system32\\svchost.exe -k rpcss -p" },
+              "Type": { "dword": 32 },
+              "Start": { "dword": 2 },
+              "ObjectName": "NT AUTHORITY\\NetworkService"
+            },
+            "keys": {
+              "Parameters": {
+                "values": { "ServiceDll": { "expand_sz": "%SystemRoot%\\system32\\rpcss.dll" } }
+              }
+            }
+          },
+          "appdrv": {
+            "values": {
+              "ImagePath": { "expand_sz": "\\SystemRoot\\System32\\drivers\\appdrv.sys" },
+              "Type": { "dword": 1 },
+              "Start": { "dword": 3 }
+            }
+          },
+          "CDPUserSvc": {
+            "values": {
+              "ImagePath": { "expand_sz": "C:\\WINDOWS\\system32\\svchost.exe -k UnistackSvcGroup" },
+              "Type": { "dword": 96 },
+              "Start": { "dword": 2 }
+            },
+            "keys": {
+              "Parameters": {
+                "values": { "ServiceDll": { "expand_sz": "%SystemRoot%\\System32\\CDPUserSvc.dll" } }
+              }
+            }
+          },
+          "CDPUserSvc_4a5b1": {
+            "values": {
+              "ImagePath": { "expand_sz": "C:\\WINDOWS\\system32\\svchost.exe -k UnistackSvcGroup" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 2 }
+            }
+          },
+          "Gone": {
+            "values": {
+              "ImagePath": { "expand_sz": "C:\\Program Files\\Old\\old.exe" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 4 },
+              "DeleteFlag": { "dword": 1 }
+            }
+          }
+        }
+      },
+      "HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules": {
+        "values": {
+          "{11111111-0000-0000-0000-000000000001}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|App=C:\\Program Files\\PurgeSpike\\app1.exe|Name=PurgeSpike F1 program|Defer=User|",
+          "{11111111-0000-0000-0000-000000000002}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=8080|LPort2_10=8090-8095|Name=PurgeSpike F2 port|",
+          "{11111111-0000-0000-0000-000000000004}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=9000|App=%SystemRoot%\\System32\\svchost.exe|Svc=PurgeSpikeS1|Name=PurgeSpike F4 service|",
+          "{11111111-0000-0000-0000-000000000006}": "v2.33|Action=Allow|Active=TRUE|Dir=Out|App=C:\\Program Files\\PurgeSpike\\app6.exe|Name=PurgeSpike F6 group|Desc=Purge spike rule 6: a=b, c|EmbedCtxt=PurgeSpike Group|",
+          "{22222222-0000-0000-0000-000000000001}": "v2.33|Action=Allow|Active=TRUE|Dir=In|App=%ProgramFiles%\\App\\app.exe|Name=App In|",
+          "{22222222-0000-0000-0000-000000000002}": "v2.33|Action=Allow|Active=TRUE|Dir=In|App=C:\\Program Files\\App\\other.exe|Name=app in|",
+          "{22222222-0000-0000-0000-000000000003}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=445|App=System|Name=@FirewallAPI.dll,-28502|",
+          "{22222222-0000-0000-0000-000000000004}": "v2.33|Action=Allow|Active=TRUE|Dir=Out|PFN=Microsoft.Edge.GameAssist_8wekyb3d8bbwe|Name=Game Assist|",
+          "{22222222-0000-0000-0000-000000000005}": "not a rule",
+          "{22222222-0000-0000-0000-000000000006}": { "dword": 7 },
+          "{22222222-0000-0000-0000-000000000007}": "v2.33|Action=Allow|Dir=In|Name|"
+        }
+      }
+    }
+  },
+  "tasks": [
+    {
+      "identity": {
+        "path": "\\App\\Update",
+        "actions": [
+          { "kind": "exec", "path": "C:\\Program Files\\App\\update.exe", "arguments": "/check", "working_dir": null }
+        ]
+      },
+      "enabled": true
+    },
+    {
+      "identity": {
+        "path": "\\Microsoft\\Windows\\Example\\Handler",
+        "actions": [
+          { "kind": "com_handler", "clsid": "{01234567-89AB-CDEF-0123-456789ABCDEF}", "data": null }
+        ]
+      },
+      "enabled": true
+    }
+  ]
+}
