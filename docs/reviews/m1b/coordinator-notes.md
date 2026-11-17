@@ -125,3 +125,13 @@ S-TASK (wave 4, for R3):
 - COM handler never treated as gone (zero key-open budget); unrecorded COM-only task reason "program_in_root" misleading
 - recorded but unreadable task carries empty-actions digest -> executor never acts
 - guard checks each exec path like executor gate; %LOCALAPPDATA% path -> Blocked as sys.task.windows (misleading rule name for an executor limit)
+
+S-MSIREG (wave 4, for R3):
+- ScanExt::fault private -> no scan warnings (SCAN-INTEG / framework fix)
+- per-user HKU\<sid>\...\Installer\Features\<P> not emitted (reg.installer does not allow it)
+- sealing content rule reads every value candidate twice (build + run)
+- component values use product context SID only; existence from merged index
+- content rule caps some component values at Likely
+- REG-SHAREDDLLS DROPS framework SharedRefcount (sums both views, no non-MSI minimum) and counts each view alone; if SharedDLLs is WOW64-shared the views are one key -> check with R2a S1 fix
+- MSI app count limit = components keyed on the file, can be 0
+- INSTFOLDERS values guard-blocked unless a gone MSI product
