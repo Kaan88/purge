@@ -74,7 +74,8 @@ use purge_guard::prefix;
 use purge_model::exec::journal::{
     FileFacts, GateExemptions, Intent, ItemFacts, RegFacts, Validated, ValueFacts,
 };
-use purge_model::exec::op::{ExecOp, FileIdHex, Inverse, ItemOutcome, OpId, Sha256Hex};
+use purge_model::exec::op::{ExecOp, FileIdHex, Inverse, ItemOutcome, OpId, Sha256Hex, SkipReason};
+use purge_model::object::{ObjectFp, ObjectKind};
 use purge_model::{Blocker, Candidate, CandidateId, FileTime, ItemFp, ScanMode, Target, View};
 use purge_win::fs::{FileHandle, FileMeta, volume_info};
 use purge_win::fs_write::{DestDir, FsError, MoveHandle, extended_path};
@@ -135,6 +136,18 @@ pub mod reason {
     /// differs from the candidate's scan-time identity ([`purge_model::Candidate::item_fp`]), or either
     /// volume serial is 0. Soft: changed since the scan.
     pub const SCAN_IDENTITY: &str = "gate.scan-identity";
+    /// Detail of a skipped object: the candidate carries no object fingerprint (or one that is not 64
+    /// lower-case hex digits). The detail C-ACT names.
+    pub const NO_OBJECT_FP: &str = "no object fingerprint";
+    /// Detail of a skipped object: the object's identity digest is not the validated or planned one.
+    pub const OBJECT_CHANGED: &str = "gate.object-changed";
+    /// Detail of a skipped object: the object read is of another kind than the validated or planned one.
+    pub const OBJECT_KIND: &str = "gate.object-kind";
+    /// Detail of a skipped object: the object is gone at the act-time check (the caller's `Vanished`
+    /// comes first; this is the fallback).
+    pub const OBJECT_GONE: &str = "gate.object-gone";
+    /// Detail of a skipped object: the op's validated record holds no object stamp.
+    pub const OBJECT_NOT_VALIDATED: &str = "gate.object-not-validated";
 }
 
 /// A refusal for which no dedicated blocker exists: reported as a deny rule named after the reason, as
@@ -1037,6 +1050,15 @@ pub enum Stamp {
     Value(ValueStamp),
     /// A package removal (no live facts).
     Package,
+    /// A service, scheduled task or firewall rule (M1b): its kind and identity digest
+    /// ([`ObjectFp`], C-OBJECT). The act-time gate of the object's act module re-reads the identity and
+    /// requires the same kind and digest ([`check_object_stamp`]).
+    Object {
+        /// The kind of object.
+        kind: ObjectKind,
+        /// The identity digest as validated, 64 lower-case hex digits.
+        sha256: String,
+    },
 }
 
 impl Stamp {
@@ -1059,8 +1081,22 @@ impl Stamp {
             }),
             ItemFacts::Package => Stamp::Package,
             ItemFacts::Absent | ItemFacts::Refused { .. } => return None,
-            // M1b: wired by M1B-X-INTEG (no object is validated yet, so these facts bind nothing)
-            ItemFacts::Object { .. } => return None,
+            // A running object is never acted on (nothing is stopped), and a digest in another
+            // spelling matches no object: such a record binds nothing, so the act-time gate refuses
+            // the op.
+            ItemFacts::Object {
+                kind,
+                sha256,
+                running,
+            } => {
+                if *running || !is_object_digest(sha256) {
+                    return None;
+                }
+                Stamp::Object {
+                    kind: *kind,
+                    sha256: sha256.clone(),
+                }
+            }
         })
     }
 
@@ -1078,8 +1114,80 @@ impl Stamp {
                 ExecOp::DeleteValue { .. } | ExecOp::EditSegment { .. },
                 Stamp::Value(_)
             ) | (ExecOp::RemovePackage { .. }, Stamp::Package)
-        )
+        ) || matches!(self, Stamp::Object { kind, .. } if op.object_kind() == Some(*kind))
     }
+}
+
+/// Whether `s` is an object digest as C-OBJECT spells it: 64 lower-case hex digits.
+fn is_object_digest(s: &str) -> bool {
+    ObjectFp {
+        kind: ObjectKind::Service,
+        sha256: s.to_owned(),
+    }
+    .is_well_formed()
+}
+
+/// The act-time check of an object: `live` is the fingerprint of the identity the act module has just
+/// read, `validated` the stamp the journal's `validated` record gave the op ([`GateCtx::stamp`]).
+///
+/// `Ok` only when `validated` is a [`Stamp::Object`] and `live` is `Some` with the same kind and the same
+/// digest (64 lower-case hex digits). An object that is gone (`None`) is the caller's `Vanished`, decided
+/// before this check; here it is refused like every other difference, with
+/// [`SkipReason::ChangedSinceScan`]. Nothing is changed on a refusal.
+pub fn check_object_stamp(validated: &Stamp, live: Option<&ObjectFp>) -> Result<(), SkipReason> {
+    check_object_stamp_detailed(validated, live).map_err(|(reason, _)| reason)
+}
+
+/// [`check_object_stamp`], with the detail for the journal's `done` record.
+pub fn check_object_stamp_detailed(
+    validated: &Stamp,
+    live: Option<&ObjectFp>,
+) -> Result<(), (SkipReason, &'static str)> {
+    let changed = |detail| Err((SkipReason::ChangedSinceScan, detail));
+    let Stamp::Object { kind, sha256 } = validated else {
+        return changed(reason::OBJECT_NOT_VALIDATED);
+    };
+    let Some(live) = live else {
+        return changed(reason::OBJECT_GONE);
+    };
+    if live.kind != *kind {
+        return changed(reason::OBJECT_KIND);
+    }
+    if !is_object_digest(sha256) || !live.is_well_formed() || live.sha256 != *sha256 {
+        return changed(reason::OBJECT_CHANGED);
+    }
+    Ok(())
+}
+
+/// The validate-time check of an object against the plan: `live` is the fingerprint of the identity
+/// the act module has just read, `cand` the plan item. `Ok` only when the candidate carries an object
+/// fingerprint ([`Candidate::object_fp`]) of 64 lower-case hex digits, of the kind of its target and
+/// of `live`'s kind, with `live`'s digest. A candidate without one is refused with
+/// [`SkipReason::ChangedSinceScan`] and the detail [`reason::NO_OBJECT_FP`] (`resolve` already refuses
+/// such an item; this is the second lock); every other difference is `ChangedSinceScan` too.
+pub fn check_plan_fp(cand: &Candidate, live: &ObjectFp) -> Result<(), SkipReason> {
+    check_plan_fp_detailed(cand, live).map_err(|(reason, _)| reason)
+}
+
+/// [`check_plan_fp`], with the detail for the journal's `done` record.
+pub fn check_plan_fp_detailed(
+    cand: &Candidate,
+    live: &ObjectFp,
+) -> Result<(), (SkipReason, &'static str)> {
+    let changed = |detail| Err((SkipReason::ChangedSinceScan, detail));
+    let Some(planned) = &cand.object_fp else {
+        return changed(reason::NO_OBJECT_FP);
+    };
+    if !planned.is_well_formed() {
+        return changed(reason::NO_OBJECT_FP);
+    }
+    if ObjectKind::of(&cand.target) != Some(planned.kind) || planned.kind != live.kind {
+        return changed(reason::OBJECT_KIND);
+    }
+    if !live.is_well_formed() || live.sha256 != planned.sha256 {
+        return changed(reason::OBJECT_CHANGED);
+    }
+    Ok(())
 }
 
 /// The result of the validate pass for one item.
@@ -2761,5 +2869,62 @@ pub fn check_undo_key(
             address,
             facts,
         }))
+    }
+}
+
+#[cfg(test)]
+mod object_stamp_tests {
+    use super::*;
+
+    const DIGEST: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+    fn facts(kind: ObjectKind, sha256: &str, running: bool) -> ItemFacts {
+        ItemFacts::Object {
+            kind,
+            sha256: sha256.into(),
+            running,
+        }
+    }
+
+    /// A journal `validated` record of an object binds the act to its kind and digest, and only an op
+    /// of that kind fits it; a running object or a malformed digest binds nothing.
+    #[test]
+    fn object_facts_make_an_object_stamp_that_fits_only_its_op() {
+        let stamp = Stamp::from_item_facts(&facts(ObjectKind::Service, DIGEST, false)).unwrap();
+        assert_eq!(
+            stamp,
+            Stamp::Object {
+                kind: ObjectKind::Service,
+                sha256: DIGEST.into()
+            }
+        );
+        let service = ExecOp::DeleteService { name: "S".into() };
+        let task = ExecOp::DeleteTask { path: r"\T".into() };
+        let rule = ExecOp::DeleteFirewallRule { id: "{R}".into() };
+        let key = ExecOp::DeleteKeyTree {
+            key: r"HKLM\SYSTEM\CurrentControlSet\Services\S".into(),
+        };
+        assert!(stamp.fits(&service));
+        assert!(!stamp.fits(&task) && !stamp.fits(&rule) && !stamp.fits(&key));
+        let task_stamp = Stamp::from_item_facts(&facts(ObjectKind::Task, DIGEST, false)).unwrap();
+        assert!(task_stamp.fits(&task) && !task_stamp.fits(&service));
+        let rule_stamp =
+            Stamp::from_item_facts(&facts(ObjectKind::FirewallRule, DIGEST, false)).unwrap();
+        assert!(rule_stamp.fits(&rule) && !rule_stamp.fits(&task));
+        // No other stamp fits an object op.
+        assert!(!Stamp::Package.fits(&service));
+
+        assert_eq!(
+            Stamp::from_item_facts(&facts(ObjectKind::Service, DIGEST, true)),
+            None
+        );
+        assert_eq!(
+            Stamp::from_item_facts(&facts(ObjectKind::Service, &DIGEST.to_uppercase(), false)),
+            None
+        );
+        assert_eq!(
+            Stamp::from_item_facts(&facts(ObjectKind::Service, "", false)),
+            None
+        );
     }
 }

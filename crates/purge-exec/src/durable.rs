@@ -126,7 +126,19 @@ impl Hive {
         Some(Hive { machine, name })
     }
 
-    /// The hive a registry op acts in; `None` for a file or package op.
+    /// The `SOFTWARE` hive, which holds the Task Scheduler's `TaskCache`.
+    pub(crate) fn software() -> Hive {
+        Hive {
+            machine: true,
+            name: "SOFTWARE".to_owned(),
+        }
+    }
+
+    /// The hive an op acts in, which its inverse writes too: the key's hive for a registry op; for a
+    /// typed object (C-ACT) the hive the object lives in: `SYSTEM` for a service (`Services\<name>`) and
+    /// a firewall rule (`SharedAccess\Parameters\FirewallPolicy`), `SOFTWARE` for a scheduled task
+    /// (`Schedule\TaskCache`; the task file's directory is flushed by the act module). `None` for a file
+    /// or package op.
     pub(crate) fn of_op(op: &ExecOp) -> Option<Hive> {
         match op {
             ExecOp::DeleteKeyTree { key }
@@ -136,10 +148,10 @@ impl Hive {
             ExecOp::QuarantineMove { .. }
             | ExecOp::RemoveDirIfEmpty { .. }
             | ExecOp::RemovePackage { .. } => None,
-            // M1b: wired by M1B-X-INTEG
-            ExecOp::DeleteService { .. }
-            | ExecOp::DeleteTask { .. }
-            | ExecOp::DeleteFirewallRule { .. } => None,
+            ExecOp::DeleteService { .. } | ExecOp::DeleteFirewallRule { .. } => {
+                Some(Hive::system())
+            }
+            ExecOp::DeleteTask { .. } => Some(Hive::software()),
         }
     }
 
@@ -209,6 +221,15 @@ impl DirtyHives {
     }
 }
 
+/// Flushes the hive `op` acts in ([`Hive::of_op`]), for an act module that must make its change durable
+/// before the journal record that vouches for it (C-ACT: a typed object's delete is flushed before its
+/// `done`). Nothing to flush for an op without a hive.
+pub fn flush_op_hive(op: &ExecOp) -> Result<(), FlushError> {
+    let mut dirty = DirtyHives::default();
+    dirty.touch(Hive::of_op(op));
+    dirty.flush()
+}
+
 /// The test seam of the crash matrix: a power loss cannot be made in a test, so a test watches every
 /// hive flush and, after it killed the process, puts its test keys back to what they were at the last
 /// flush of their hive, as Windows would after a power loss.
@@ -275,6 +296,49 @@ mod tests {
             }),
             Hive::of_key(r"HKLM\SOFTWARE")
         );
+    }
+
+    /// C-ACT: services and firewall rules live in `SYSTEM`, the task cache in `SOFTWARE`; the inverse
+    /// of each op writes the same hive (the journal writer flushes the hive of the op's intent before
+    /// an `undo_done`).
+    #[test]
+    fn hive_of_typed_ops() {
+        let system = Some(Hive::system());
+        let software = Hive::of_key(r"HKLM\SOFTWARE\Microsoft");
+        assert_eq!(software, Some(Hive::software()));
+        assert_eq!(
+            Hive::of_op(&ExecOp::DeleteService {
+                name: "VendorSvc".into()
+            }),
+            system
+        );
+        assert_eq!(
+            Hive::of_op(&ExecOp::DeleteFirewallRule {
+                id: "{0B7AC2E8-3A6B-4C1D-9E58-7F7B2B1E7A10}".into()
+            }),
+            system
+        );
+        assert_eq!(
+            Hive::of_op(&ExecOp::DeleteTask {
+                path: r"\Vendor\Update".into()
+            }),
+            software
+        );
+        assert_eq!(
+            Hive::of_key(r"HKLM\SYSTEM\CurrentControlSet\Services\VendorSvc"),
+            system
+        );
+        assert_eq!(Hive::system().label(), r"HKLM\SYSTEM");
+        assert_eq!(Hive::software().label(), r"HKLM\SOFTWARE");
+        // Flushing a machine hive through a read-only handle needs no elevation.
+        flush_op_hive(&ExecOp::DeleteTask {
+            path: r"\Vendor\Update".into(),
+        })
+        .unwrap();
+        flush_op_hive(&ExecOp::RemovePackage {
+            full_name: "x".into(),
+        })
+        .unwrap();
     }
 
     /// Review M1: only a restart of Windows can take a registry change, so recovery probes again only

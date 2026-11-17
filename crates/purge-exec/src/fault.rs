@@ -67,6 +67,15 @@ pub const INDEX_WRITE: &str = "index.write";
 pub const EXPIRY_MID: &str = "expiry.mid";
 /// After a boot-time move is registered, before its `done` record is written.
 pub const BOOTMOVE_REGISTERED: &str = "bootmove.registered";
+/// Undo of a service (M1b): after `CreateServiceW` succeeded, before the config2 items, the security
+/// descriptor and the written-back values.
+pub const SVCRESTORE_MID: &str = "svcrestore.mid";
+/// Undo of a firewall rule (M1b): after the rule instance exists again, before the check that it is
+/// exactly the backed-up rule.
+pub const FWRESTORE_MID: &str = "fwrestore.mid";
+/// Delete of a service, task or firewall rule (M1b): after the delete call returned, before the hive
+/// the object lives in is flushed.
+pub const OBJDELETE_AFTER: &str = "objdelete.after";
 
 /// Every fault point, in the order a run meets them. `purge-engine journal fault-points` prints this list.
 pub const FAULT_POINTS: &[&str] = &[
@@ -86,6 +95,9 @@ pub const FAULT_POINTS: &[&str] = &[
     INDEX_WRITE,
     EXPIRY_MID,
     BOOTMOVE_REGISTERED,
+    OBJDELETE_AFTER,
+    SVCRESTORE_MID,
+    FWRESTORE_MID,
 ];
 
 /// Whether `name` is a declared fault point.
@@ -112,6 +124,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         INDEX_WRITE => "new session index in its temp file, not yet renamed",
         EXPIRY_MID => "expiry delete walk half done",
         BOOTMOVE_REGISTERED => "boot-time move registered, done not yet written",
+        OBJDELETE_AFTER => "object delete returned, its hive not yet flushed",
+        SVCRESTORE_MID => "service created again, config2, security and values not yet applied",
+        FWRESTORE_MID => "firewall rule created again, not yet checked to be exact",
         _ => return None,
     })
 }
@@ -292,7 +307,7 @@ mod tests {
 
     #[test]
     fn points_are_unique_described_and_well_formed() {
-        assert_eq!(FAULT_POINTS.len(), 16);
+        assert_eq!(FAULT_POINTS.len(), 19);
         for (i, name) in FAULT_POINTS.iter().enumerate() {
             assert!(!FAULT_POINTS[..i].contains(name), "duplicate {name}");
             assert!(describe(name).is_some(), "{name} has no description");

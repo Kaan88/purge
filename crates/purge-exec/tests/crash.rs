@@ -323,6 +323,12 @@ fn drive(point: &str) -> Drive {
             "expiry is not a run: a crash in its delete walk leaves a finished session, which the \
              next expiry finishes (expiry's own crash test); recovery has no step for it",
         ),
+        // M1b: no typed object can be made in an unelevated test; the rig's crash matrix drives these
+        // (gate procedure G6).
+        fault::OBJDELETE_AFTER | fault::SVCRESTORE_MID | fault::FWRESTORE_MID => Drive::NotDriven(
+            "a service, task or firewall rule point: the crash plan holds no typed object (they need \
+             an elevated rig VM); the rig's crash matrix (M1b gate G6) drives it",
+        ),
         other => panic!("fault point {other} has no scenario in the crash matrix"),
     }
 }

@@ -888,7 +888,7 @@ mod rig {
             names.push(name.to_owned());
         }
         assert_eq!(names, fault::FAULT_POINTS);
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 19);
     }
 
     /// The child half of the crash test: runs the command line of [`CHILD_ARGS`] on the store at
