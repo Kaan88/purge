@@ -144,3 +144,10 @@ S-BURN (wave 4, for R3):
 - ScanExt::none() reports Burn area complete and empty
 - read budget (<=8/provider) exceeded beyond ~6 loaded user hives
 - framework adds MsiPackageUnreadable to Dependencies keys when ownership incomplete
+
+S-SHELLEX (wave 4, for R3):
+- value targets use ChainedRef + DanglingRef (ComKeyOwnership is key scope only)
+- class gone in every view: key Safe; value Safe only if recorded at harvest else Likely
+- guard lists only `Approved` as value container; Cached/ShellExecuteHooks/SharedTaskScheduler kept only by deny rules
+- PropertySystem\PropertyHandlers not covered (not in design)
+- non-walked user hive holding the class blocks the candidate; ProgID/extension handler keys found only through hits
