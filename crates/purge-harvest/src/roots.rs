@@ -27,8 +27,9 @@
 //! [`collect`] turns the entry's records into candidates, strongest first: ARP `InstallLocation` and the
 //! Inno `{app}` directory (`Inno Setup: App Path`, or the uninstaller's directory when the uninstall log
 //! names it) give an `InstallRoot`; the directories of `DisplayIcon` and of the uninstaller give an
-//! `InferredRoot` (Tier B only, never quarantined whole). MSI component paths and AppX locations join in
-//! M1b. An inferred root at or below another root adds nothing and is dropped.
+//! `InferredRoot` (Tier B only, never quarantined whole). An inferred root at or below another root adds
+//! nothing and is dropped. AppX locations join in M1b; the MSI component rule (R-MSI,
+//! [`crate::msi::component_roots`]) adds its roots after this step and never widens these.
 //!
 //! Trust follows Rule T (§5.3): a root read from an `HKU` Uninstall key is `UserWritable` whatever the
 //! directory's ACL says; otherwise it is `AdminOnly` only when the source reports that just
@@ -128,6 +129,38 @@ pub(crate) fn under_any(path: &str, roots: &[Root]) -> bool {
     roots
         .iter()
         .any(|r| prefix::is_same_or_inside(path, &r.path))
+}
+
+/// The Package Cache roots of the machine the guard describes: `%ProgramData%\Package Cache` and the
+/// `%LOCALAPPDATA%\Package Cache` of every profile, canonical (M1b: Burn caches bundles and packages
+/// there, and no root and no MSI key path in them is ever the app's install folder).
+pub fn package_cache_roots(guard: &GuardEnv) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let candidates = std::iter::once(guard.program_data.as_str())
+        .chain(guard.profiles.iter().map(|p| p.local_appdata.as_str()))
+        .filter(|dir| !dir.trim().is_empty())
+        .filter_map(|dir| {
+            canon_file(
+                &format!("{}\\Package Cache", dir.trim_end_matches('\\')),
+                guard,
+            )
+        });
+    for dir in candidates {
+        if !out.iter().any(|have| prefix::is_same(have, &dir)) {
+            out.push(dir);
+        }
+    }
+    out
+}
+
+/// Whether `dir` (canonical) is a direct child of one of the Package Cache roots.
+pub fn is_package_cache_entry(dir: &str, guard: &GuardEnv) -> bool {
+    let Some(parent) = prefix::parent(dir) else {
+        return false;
+    };
+    package_cache_roots(guard)
+        .iter()
+        .any(|root| prefix::is_same(root, parent))
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -356,6 +389,11 @@ impl RootEnv {
     /// The other apps' files.
     pub fn other_files(&self) -> &[OtherAnchor] {
         &self.other_files
+    }
+
+    /// The `Common Files` directories of every `Program Files` directory, canonical.
+    pub fn common_files(&self) -> &[String] {
+        &self.common_files
     }
 
     /// Declares a root directory of another app. Returns `false` when the path does not canonicalise or

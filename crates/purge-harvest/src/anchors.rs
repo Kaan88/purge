@@ -652,7 +652,7 @@ impl NameSet {
     }
 }
 
-fn is_structural(name: &str) -> bool {
+pub(crate) fn is_structural(name: &str) -> bool {
     name.starts_with('.') || STRUCTURAL.iter().any(|s| s.eq_ignore_ascii_case(name))
 }
 

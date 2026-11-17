@@ -1,0 +1,238 @@
+{
+  "schema": "purge.fp/0",
+  "app": {
+    "program_id": "HKLM|64|Tool_is1",
+    "display_name": "Tool"
+  },
+  "identity": {
+    "names": [
+      "Tool"
+    ],
+    "vendors": [
+      "Tool Makers"
+    ],
+    "tokens": [],
+    "mega_vendor": false
+  },
+  "roots": [
+    {
+      "path": "C:\\Program Files\\Tool",
+      "kind": "InstallRoot",
+      "source": "ArpInstallLocation",
+      "trust": "AdminOnly",
+      "volume_serial": 2864434397,
+      "parent_existed": true
+    }
+  ],
+  "exes": [
+    {
+      "path": "C:\\Program Files\\Tool\\lib\\core.dll",
+      "main": false
+    },
+    {
+      "path": "C:\\Program Files\\Tool\\tool.exe",
+      "main": true
+    },
+    {
+      "path": "C:\\Program Files\\Tool\\unins000.exe",
+      "main": false
+    }
+  ],
+  "outside_root_files": [],
+  "uninstallers": [
+    "C:\\Program Files\\Tool\\unins000.dat",
+    "C:\\Program Files\\Tool\\unins000.exe",
+    "C:\\Program Files\\Tool\\unins000.msg"
+  ],
+  "anchors": {
+    "progids": [
+      "Tool.Doc"
+    ],
+    "clsids": [],
+    "appids": [],
+    "typelibs": [],
+    "aumids": [],
+    "package_families": [],
+    "package_full_names": [],
+    "run_entries": []
+  },
+  "tokens": [],
+  "inno": [],
+  "ref_snapshot": [
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Tool.Doc\\shell\\open\\command",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\Tool\\tool.exe"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "1b95b76538e23ae2"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\tool.exe",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\Tool\\tool.exe"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f40cd13a45c1bba7"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Tool_is1",
+        "name": "DisplayIcon"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\Tool\\tool.exe"
+      },
+      "parent_values": 5,
+      "parent_subkeys": 0,
+      "data_hash": "f40cd13a45c1bba7"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Tool_is1",
+        "name": "InstallLocation"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Root",
+        "text": "C:\\Program Files\\Tool"
+      },
+      "parent_values": 5,
+      "parent_subkeys": 0,
+      "data_hash": "d80cd8fce109dc54"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Tool_is1",
+        "name": "UninstallString"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\Tool\\unins000.exe"
+      },
+      "parent_values": 5,
+      "parent_subkeys": 0,
+      "data_hash": "2678d67dfac98b3a"
+    }
+  ],
+  "subtrees": [
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Tool.Doc",
+      "values": [
+        {
+          "subkey": "shell\\open\\command",
+          "name": "",
+          "hash": "1:1b95b76538e23ae2"
+        }
+      ],
+      "subkeys": [
+        "shell",
+        "shell\\open",
+        "shell\\open\\command"
+      ],
+      "lwt": 0,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Tool.Doc\\shell\\open\\command",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:1b95b76538e23ae2"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 0,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\tool.exe",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f40cd13a45c1bba7"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 0,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Tool_is1",
+      "values": [
+        {
+          "subkey": "",
+          "name": "DisplayIcon",
+          "hash": "1:f40cd13a45c1bba7"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayName",
+          "hash": "1:a36ebb31bb15f191"
+        },
+        {
+          "subkey": "",
+          "name": "InstallLocation",
+          "hash": "1:d80cd8fce109dc54"
+        },
+        {
+          "subkey": "",
+          "name": "Publisher",
+          "hash": "1:552aa60c02475bb2"
+        },
+        {
+          "subkey": "",
+          "name": "UninstallString",
+          "hash": "1:2678d67dfac98b3a"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 0,
+      "ti_owned": false,
+      "fully_attributed": false
+    }
+  ],
+  "ext_journal": [],
+  "co_removed": [],
+  "os": {
+    "edition": "Professional",
+    "build": 26100,
+    "ubr": 1742
+  },
+  "user_sid": "S-1-5-21-1004336348-1177238915-682003330-1001",
+  "window": {
+    "install_time": null,
+    "t_start": null,
+    "t_end": null
+  },
+  "verify_gone": null,
+  "warnings": [
+    "inno: no uninstall log at C:\\Program Files\\Tool\\unins000.dat",
+    "subtree: the source records no key owners; TrustedInstaller ownership was not checked"
+  ]
+}
