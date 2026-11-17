@@ -36,64 +36,9 @@ pub enum Relation {
     Unrelated,
 }
 
-/// Ranges of letters that Unicode gives a lower-case form and Windows does not fold: the name with
-/// the capital and the name with the small letter are two folders and two keys (letters cased
-/// after the Windows table was drawn up: Georgian Mtavruli, Cherokee, late Latin and Cyrillic
-/// additions, the title-case digraphs). Measured on Windows 11 build 26300, on an NTFS volume and
-/// in a registry hive, for every pair below U+10000 that the rule of [`fold_char`] would join;
-/// both gave the same 194 letters. The small letters inside a range fold to themselves anyway.
-const WINDOWS_KEEPS_APART: &[(u32, u32)] = &[
-    (0x01C5, 0x01C5),
-    (0x01C8, 0x01C8),
-    (0x01CB, 0x01CB),
-    (0x01F2, 0x01F2),
-    (0x037F, 0x037F),
-    (0x0524, 0x052F),
-    (0x10C7, 0x10CD),
-    (0x13A0, 0x13F5),
-    (0x1C90, 0x1CBF),
-    (0x2C2F, 0x2C2F),
-    (0x2C70, 0x2C70),
-    (0x2C7E, 0x2C7F),
-    (0x2CEB, 0x2CF2),
-    (0xA660, 0xA660),
-    (0xA698, 0xA69A),
-    (0xA78D, 0xA7F5),
-];
-
-/// One character folded for case-insensitive comparison: its lower-case form when that is the same
-/// letter (upper-casing the lower-case form gives what upper-casing the character gives), else the
-/// character itself. `K` and `k` fold to `k`; the Kelvin sign, whose lower-case form is the `k` of
-/// another letter, stays the Kelvin sign.
-///
-/// Windows folds less than Unicode does, and folding more than Windows calls two different names
-/// one. A character outside the Basic Multilingual Plane is never folded (NTFS and the registry
-/// compare UTF-16 units and cannot join a surrogate pair), and neither is a letter of
-/// [`WINDOWS_KEEPS_APART`].
-pub fn fold_char(c: char) -> impl Iterator<Item = char> {
-    let code = u32::from(c);
-    let apart = code > 0xFFFF
-        || WINDOWS_KEEPS_APART
-            .iter()
-            .any(|(first, last)| (*first..=*last).contains(&code));
-    let (lower, keep) = if c.is_ascii() {
-        (None, Some(c.to_ascii_lowercase()))
-    } else if !apart
-        && c.to_lowercase()
-            .flat_map(char::to_uppercase)
-            .eq(c.to_uppercase())
-    {
-        (Some(c.to_lowercase()), None)
-    } else {
-        (None, Some(c))
-    };
-    lower.into_iter().flatten().chain(keep)
-}
-
-/// Folds a string for case-insensitive comparison or use as a map key.
-pub fn fold(s: &str) -> String {
-    s.chars().flat_map(fold_char).collect()
-}
+/// The fold lives in `purge-model`, so that the object digest (C-OBJECT), which folds service names and
+/// task paths, uses this very function (M1B-MODEL moved it there unchanged).
+pub use purge_model::object::{fold, fold_char};
 
 /// Case-insensitive equality of two names (single segments or whole strings).
 pub fn eq_ci(a: &str, b: &str) -> bool {

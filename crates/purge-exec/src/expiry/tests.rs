@@ -273,6 +273,7 @@ fn build(
         items: n_items,
         allow_irreversible: false,
         volumes: Vec::new(),
+        program_roots: Vec::new(),
     };
     let mut w = JournalWriter::create(&session, header).unwrap();
     let movers: Vec<(MoveHandle, FileFacts)> = items
@@ -1185,6 +1186,7 @@ fn header_of(session: &SessionDir, items: u32) -> Header {
         items,
         allow_irreversible: false,
         volumes: Vec::new(),
+        program_roots: Vec::new(),
     }
 }
 
@@ -1519,6 +1521,7 @@ fn one_op_session(fx: &Fx, committed: Option<FileTime>) -> ExpiryId {
             items: 1,
             allow_irreversible: false,
             volumes: Vec::new(),
+            program_roots: Vec::new(),
         },
     )
     .unwrap();
@@ -1768,6 +1771,7 @@ fn build_backups(fx: &Fx, created: FileTime, committed: bool, scan_copy: bool) -
         items: 2,
         allow_irreversible: true,
         volumes: Vec::new(),
+        program_roots: Vec::new(),
     };
     let mut w = JournalWriter::create(&session, header).unwrap();
     let key = r"HKU\S-1-5-21-1-2-3-1001\Software\VendorApp".to_owned();

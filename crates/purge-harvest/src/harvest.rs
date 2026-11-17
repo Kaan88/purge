@@ -5,16 +5,26 @@
 //! step feeds the next:
 //!
 //! 1. machine facts: Windows edition and build, the interactive user, the environment, the guard facts;
+//!    then the two M1b indexes: the ownership index of `purge-index` (only for an MSI or Burn entry)
+//!    and the system-object index (services, tasks, firewall rules);
 //! 2. the Inno Setup uninstall log, when the entry has one ([`crate::inno_map`]);
-//! 3. the identity (`purge-identity`): names, vendors, tokens, proposed main exes;
-//! 4. the validated roots ([`crate::roots`]) and the exe set under them ([`crate::exes`]);
-//! 5. the registry anchors ([`crate::anchors`]) and the harvested tokens ([`crate::tokens`]);
-//! 6. the files the installer declares outside the roots, and the linked sparse packages
-//!    ([`crate::appx_link`]);
+//! 3. the identity (`purge-identity`): names, vendors, tokens, proposed main exes; then the MSI facts
+//!    ([`crate::msi`]) of an MSI entry, or the Burn facts ([`crate::burn`]) of a bundle and the MSI
+//!    facts of the packages that are the bundle's alone;
+//! 4. the validated roots ([`crate::roots`]), with the MSI component roots where the entry's own
+//!    records leave room ([`msi::component_roots`]), and the exe set under them ([`crate::exes`]);
+//! 5. the registry anchors ([`crate::anchors`]), the anchors of the app's own MSI tables
+//!    ([`msi::table_anchors`]) and the harvested tokens ([`crate::tokens`]);
+//! 6. the files the installer declares outside the roots (Inno log, MSI key paths), and the linked
+//!    sparse packages ([`crate::appx_link`]);
 //! 7. with all anchors known: the reference snapshot ([`crate::refsnap`]), the subtree baselines
 //!    ([`crate::subtree`]), the file-association journal ([`crate::assoc`]) and the co-product
-//!    candidates ([`crate::coproducts`]);
+//!    candidates ([`crate::coproducts`]); then the system objects that are the app's
+//!    ([`crate::sysobj`]);
 //! 8. the stamps: Windows, user SID, install time.
+//!
+//! An entry that is neither MSI nor Burn and owns no service, task or firewall rule gives the same
+//! document as before M1b, byte for byte.
 //!
 //! Nothing here fails. A fact that cannot be read becomes a line in the fingerprint's `warnings` and
 //! the harvest goes on with less: fewer anchors only ever mean fewer findings.
@@ -37,9 +47,13 @@ use purge_identity::kbdata::Kb;
 use purge_identity::tokenizer::vendor_key;
 use purge_index::baseline::Baseline;
 use purge_index::matcher::AnchorSet;
+use purge_index::ownership::{
+    OwnershipIndex, OwnershipInput, OwnershipStats, TableCache, area as ownership_area, pack_guid,
+};
+use purge_index::sysobj as sysobj_index;
 use purge_model::{
-    AppRef, ExeFile, FileTime, Fingerprint, FingerprintSchema, InventoryDoc, InventoryEntry,
-    OsInfo, TimeWindow,
+    AppRef, ExeFile, FileTime, Fingerprint, FingerprintSchema, InstallerKind, InventoryDoc,
+    InventoryEntry, OsInfo, RootKind, SysObjects, TimeWindow,
 };
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
@@ -48,13 +62,16 @@ use purge_source::system::SystemSource;
 use crate::anchors::{self, AnchorInput, ModifiedClsid, ModifiedProgId};
 use crate::appx_link::{self, LinkedPackage};
 use crate::assoc;
+use crate::burn;
 use crate::coproducts::{self, CoProductPre};
 use crate::exes::{self, ExeLimits};
 use crate::inno_map::{self, UserBinding};
+use crate::msi;
 use crate::refsnap::{self, HarvestCtx};
 use crate::roots::{self, InnoRootFacts, RejectedRoot, RootEnv, env_map};
 use crate::shared_root;
 use crate::subtree::{self, SubtreeOptions};
+use crate::sysobj;
 use crate::tokens::{self, DroppedToken, TokenInput};
 
 /// The time before which a registry key is older than the app ([`anchors::ComCutoff`]).
@@ -157,6 +174,13 @@ pub struct HarvestReport {
     pub co_candidates: Vec<CoProductPre>,
     /// The reference scan read every key of its scope.
     pub refsnap_complete: bool,
+    /// What the system-object index could not read (lists left empty, objects left out). A system
+    /// object that was not read is not recorded; the fingerprint holds no warning for it, since an
+    /// object that is not recorded is never offered as the app's.
+    pub sysobj_errors: Vec<String>,
+    /// What the ownership index read; `None` when the entry is neither MSI nor Burn and no index was
+    /// built.
+    pub ownership: Option<OwnershipStats>,
 }
 
 /// Harvests `entry`: see the module documentation. `baseline` is used only when it is for exactly the
@@ -235,6 +259,14 @@ fn install_time(entry: &InventoryEntry) -> Option<FileTime> {
     entry.install_time_evidence.iter().map(|e| e.time).min()
 }
 
+/// Options of [`harvest_report_with`].
+#[derive(Clone, Copy, Default)]
+pub struct HarvestOpts<'a> {
+    /// A cache of MSI tables for the ownership index and the app's own packages; `None` reads every
+    /// package from the source.
+    pub table_cache: Option<&'a dyn TableCache>,
+}
+
 /// Like [`harvest`], with the facts the fingerprint has no field for.
 pub fn harvest_report(
     entry: &InventoryEntry,
@@ -242,6 +274,44 @@ pub fn harvest_report(
     sources: Sources<'_>,
     baseline: Option<&Baseline>,
     kb: &Kb,
+) -> HarvestReport {
+    harvest_report_with(
+        entry,
+        inventory,
+        sources,
+        baseline,
+        kb,
+        &HarvestOpts::default(),
+    )
+}
+
+/// Whether the entry's installer is one the M1b MSI and Burn steps read.
+/// At most this many notes of one M1b step go into the warnings; the rest are counted.
+const MAX_NOTES: usize = 20;
+
+/// Adds the notes of an M1b step to the warnings, at most [`MAX_NOTES`] of them.
+fn push_notes(warnings: &mut Vec<String>, notes: &[String]) {
+    warnings.extend(notes.iter().take(MAX_NOTES).cloned());
+    if notes.len() > MAX_NOTES {
+        warnings.push(format!("msi: and {} more notes", notes.len() - MAX_NOTES));
+    }
+}
+
+fn reads_msi(entry: &InventoryEntry) -> bool {
+    matches!(
+        entry.installer_kind,
+        InstallerKind::Msi | InstallerKind::Burn
+    )
+}
+
+/// [`harvest_report`] with options: see the module documentation for the steps.
+pub fn harvest_report_with(
+    entry: &InventoryEntry,
+    inventory: &InventoryDoc,
+    sources: Sources<'_>,
+    baseline: Option<&Baseline>,
+    kb: &Kb,
+    opts: &HarvestOpts<'_>,
 ) -> HarvestReport {
     let Sources { reg, fs, sys } = sources;
     let mut warnings: Vec<String> = Vec::new();
@@ -288,6 +358,20 @@ pub fn harvest_report(
             os.baseline_name()
         ));
     }
+    // The two M1b indexes. The ownership index (component clients, MSI rows, Burn dependents) is read
+    // only for an MSI or Burn entry: nothing else of the harvest asks it.
+    let ownership = reads_msi(entry).then(|| {
+        OwnershipIndex::build(&OwnershipInput {
+            reg,
+            fs,
+            sys,
+            products: &inventory.entries,
+            msi_only: &inventory.msi_only,
+            cache: opts.table_cache,
+            threads: 0,
+        })
+    });
+    let sys_index = sysobj_index::build(reg, sys);
 
     // 2. The Inno Setup uninstall log.
     let binding = UserBinding {
@@ -307,6 +391,78 @@ pub fn harvest_report(
     .with_arp_urls(reg, entry);
     let identity = AppIdentity::resolve_with(entry, &inventory.entries, fs, &hints);
     warnings.extend(identity.warnings().iter().cloned());
+
+    // 3b. MSI facts and Burn facts.
+    let mut msi_harvests: Vec<msi::MsiHarvest> = Vec::new();
+    let mut burn_harvest: Option<burn::BurnHarvest> = None;
+    let mut components_complete = true;
+    if let Some(ix) = &ownership {
+        let read = msi::ReadCtx {
+            ownership: ix,
+            sys,
+            fs,
+            cache: opts.table_cache,
+            current_control_set: guard.current_control_set,
+            env: &env,
+            guard,
+        };
+        let mut products: Vec<msi::ProductInput> = Vec::new();
+        match entry.installer_kind {
+            InstallerKind::Burn => {
+                let b = burn::harvest(reg, entry, ix, &env, guard);
+                warnings.extend(b.warnings.iter().cloned());
+                for packed in &b.children {
+                    let child = inventory.entries.iter().find(|e| {
+                        e.product_code
+                            .as_deref()
+                            .and_then(|c| pack_guid(c.trim()))
+                            .is_some_and(|p| p == *packed)
+                    });
+                    match child.and_then(msi::ProductInput::of_entry) {
+                        Some(mut product) => {
+                            // Rule T follows the bundle's own entry too.
+                            product.user_writable |= entry.hive_sid.is_some();
+                            products.push(product);
+                        }
+                        None => warnings.push(format!(
+                            "burn: the package {packed} has no inventory entry; it is not harvested"
+                        )),
+                    }
+                }
+                burn_harvest = Some(b);
+            }
+            _ => match msi::ProductInput::of_entry(entry) {
+                Some(product) => products.push(product),
+                None => warnings.push(
+                    "msi: the entry has no ProductCode in GUID form; no MSI facts are read".into(),
+                ),
+            },
+        }
+        for product in &products {
+            let h = msi::harvest_product(&read, product);
+            warnings.extend(h.warnings.iter().cloned());
+            msi_harvests.push(h);
+        }
+        let stats = ix.stats();
+        components_complete = stats.complete(ownership_area::COMPONENTS);
+        if !products.is_empty() && !components_complete {
+            warnings.push(format!(
+                "msi: the component registrations could not be read completely ({}); the MSI root \
+                 rule is not applied",
+                stats
+                    .errors
+                    .iter()
+                    .take(MAX_NOTES)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+    }
+    let own_codes: Vec<String> = msi_harvests
+        .iter()
+        .map(|h| h.facts.packed_code.clone())
+        .collect();
 
     // 4. Roots and the exe set.
     let inno_facts = InnoRootFacts {
@@ -341,6 +497,30 @@ pub fn harvest_report(
             shared.path, shared.foreign, shared.first
         ));
     }
+    // MSI component roots (R-MSI): only where the M1a roots leave room, never wider.
+    if let (Some(ix), true) = (&ownership, components_complete) {
+        for h in msi_harvests.iter().filter(|h| !h.components_cut) {
+            let product = &h.facts;
+            let found = msi::component_roots(&msi::ComponentRootInput {
+                fs,
+                env: &root_env,
+                ownership: ix,
+                own_codes: &own_codes,
+                components: &product.components,
+                corroboration: &h.folder_dirs,
+                existing: &root_set.roots,
+                user_writable: h.user_writable,
+            });
+            warnings.extend(found.rejected.iter().map(|r| format!("roots: {r}")));
+            push_notes(&mut warnings, &found.notes);
+            root_set.rejected.extend(found.rejected);
+            root_set.roots.extend(found.roots);
+        }
+        // Install roots first; the order is kept inside each kind.
+        root_set
+            .roots
+            .sort_by_key(|r| u8::from(r.kind != RootKind::InstallRoot));
+    }
     if root_set.roots.is_empty() {
         warnings
             .push("roots: the app has no validated root; nothing can be attributed by path".into());
@@ -366,7 +546,7 @@ pub fn harvest_report(
     let cutoff = install_cutoff(&demoted, &entry.install_time_evidence);
 
     // 5. Anchors and tokens.
-    let anchor_harvest = anchors::collect(AnchorInput {
+    let mut anchor_harvest = anchors::collect(AnchorInput {
         reg,
         fs,
         sys,
@@ -388,6 +568,36 @@ pub fn harvest_report(
             class.id, class.reason
         ));
     }
+    // Anchors from the app's own MSI tables.
+    if let (Some(ix), false) = (&ownership, msi_harvests.is_empty()) {
+        let foreign: Vec<String> = anchor_harvest
+            .foreign_names
+            .iter()
+            .cloned()
+            .chain(
+                anchor_harvest
+                    .modified_progids
+                    .iter()
+                    .map(|m| m.name.clone()),
+            )
+            .chain(anchor_harvest.modified_clsids.iter().map(|m| m.id.clone()))
+            .collect();
+        let found = msi::table_anchors(
+            &msi_harvests,
+            &msi::TableAnchorInput {
+                ownership: ix,
+                own_codes: &own_codes,
+                baseline: matching_baseline,
+                foreign: &foreign,
+            },
+        );
+        push_notes(&mut warnings, &found.notes);
+        let a = &mut anchor_harvest.anchors;
+        msi::merge_names(&mut a.clsids, &found.clsids);
+        msi::merge_names(&mut a.progids, &found.progids);
+        msi::merge_names(&mut a.typelibs, &found.typelibs);
+        msi::merge_names(&mut a.appids, &found.appids);
+    }
     let token_harvest = tokens::harvest(TokenInput {
         entry,
         inventory: &inventory.entries,
@@ -399,11 +609,21 @@ pub fn harvest_report(
     });
 
     // 6. Files outside the roots, and the sparse packages.
-    let outside_root_files = inno
+    let mut outside_root_files = inno
         .log_path
         .as_deref()
         .map(|log| inno_map::outside_root_files(&inno.records, &root_set.roots, log))
         .unwrap_or_default();
+    for h in &msi_harvests {
+        for file in msi::outside_root_files(&h.facts, &root_set.roots) {
+            if !outside_root_files
+                .iter()
+                .any(|f| prefix::is_same(&f.path, &file.path))
+            {
+                outside_root_files.push(file);
+            }
+        }
+    }
     // The app's own uninstaller: what its uninstall commands run, and the Inno log next to it.
     let mut uninstallers: Vec<String> = [&entry.uninstall_string, &entry.quiet_uninstall_string]
         .into_iter()
@@ -451,6 +671,9 @@ pub fn harvest_report(
         subtrees: Vec::new(),
         ext_journal: Vec::new(),
         co_removed: Vec::new(),
+        msi: msi_harvests.iter().map(|h| h.facts.clone()).collect(),
+        burn: burn_harvest.map(|b| b.facts),
+        sys: SysObjects::default(),
         os,
         user_sid,
         window: TimeWindow {
@@ -508,6 +731,27 @@ pub fn harvest_report(
     fp.ext_journal = journal.records.into_iter().map(|r| r.entry).collect();
     let candidates = subtree::older_key_candidates(&fp.subtrees, &fp.ext_journal, &fp.inno);
     fp.older_keys = subtree::older_keys(&ctx, candidates);
+
+    // 7b. The system objects the app registered.
+    let msi_services: Vec<String> = fp
+        .msi
+        .iter()
+        .flat_map(|m| m.services.iter().map(|s| s.name.clone()))
+        .collect();
+    let sys_env = sysobj_index::Env::new(env_vars.iter().map(|(k, v)| (k, v.clone())));
+    let objects = sysobj::record(&sysobj::SysInput {
+        index: &sys_index,
+        roots: &fp.roots,
+        exes: &fp.exes,
+        outside: &fp.outside_root_files,
+        msi_services: &msi_services,
+        clsids: &fp.anchors.clsids,
+        deny: root_env.deny(),
+        baseline: matching_baseline,
+        env: &sys_env,
+    });
+    warnings.extend(objects.warnings);
+    fp.sys = objects.objects;
     fp.warnings = warnings;
 
     HarvestReport {
@@ -520,6 +764,8 @@ pub fn harvest_report(
         inno: inno_summary,
         co_candidates,
         refsnap_complete,
+        sysobj_errors: sys_index.errors,
+        ownership: ownership.map(|ix| ix.stats().clone()),
     }
 }
 

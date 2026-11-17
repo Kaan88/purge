@@ -48,9 +48,32 @@ pub struct DeepDoc {
     pub files: Vec<FileRec>,
     #[serde(default)]
     pub keys: Vec<KeyRec>,
+    /// M1b: the typed objects' own definition, for the fidelity measure of C-RIG: a task's XML and security
+    /// descriptor as Task Scheduler returns them, a firewall rule's registry string. Absent in documents written
+    /// before M1b.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<ObjRec>,
     /// Records with an `error` field.
     #[serde(default)]
     pub errors: u64,
+}
+
+/// A typed object as its own API shows it (M1b). `kind`: `task` (`id` = the task path, `xml` =
+/// `IRegisteredTask::get_Xml`, `sddl` = `GetSecurityDescriptor(OWNER|GROUP|DACL)`) or `firewall_rule` (`id` = the
+/// value name under `FirewallRules`, `rule` = its REG_SZ string, unchanged).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ObjRec {
+    pub kind: String,
+    pub id: String,
+    pub present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xml: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sddl: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// One file or directory. Optional fields are absent when they do not apply or could not be read (`error`).
@@ -545,8 +568,13 @@ pub fn capture(scope: &Scope, sid: Option<&str>) -> DeepDoc {
     doc.files.sort_by(|a, b| canon::ci_cmp(&a.path, &b.path).then_with(|| a.path.cmp(&b.path)));
     doc.keys = c.keys.into_values().collect();
     doc.keys.sort_by(|a, b| canon::ci_cmp(&a.key, &b.key).then_with(|| a.key.cmp(&b.key)));
+    doc.objects = win::task_objects(&scope.tasks);
+    for id in &scope.firewall_rules {
+        doc.objects.push(win::firewall_object(id));
+    }
     doc.errors = (doc.files.iter().filter(|f| f.error.is_some()).count()
-        + doc.keys.iter().filter(|k| k.error.is_some()).count()) as u64;
+        + doc.keys.iter().filter(|k| k.error.is_some()).count()
+        + doc.objects.iter().filter(|o| o.error.is_some()).count()) as u64;
     doc
 }
 
@@ -556,7 +584,7 @@ pub fn capture(scope: &Scope, sid: Option<&str>) -> DeepDoc {
 
 #[cfg(windows)]
 pub(crate) mod win {
-    use super::{Depth, FileRec, KeyRec, StreamRec, ValueRec, hex};
+    use super::{Depth, FileRec, KeyRec, ObjRec, StreamRec, ValueRec, hex};
     use crate::canon;
     use sha2::{Digest, Sha256};
     use std::collections::HashMap;
@@ -1170,6 +1198,203 @@ pub(crate) mod win {
         Ok((out, link))
     }
 
+    /// A firewall rule's registry string (M1b): the REG_SZ value `id` under `FirewallRules`, read as stored.
+    pub fn firewall_object(id: &str) -> ObjRec {
+        let mut r = ObjRec { kind: "firewall_rule".into(), id: id.to_string(), ..Default::default() };
+        let h = match open_key(crate::target::FW_RULES) {
+            Ok(h) => h,
+            Err(ERROR_FILE_NOT_FOUND) => return r,
+            Err(e) => {
+                r.error = Some(format!("open: {e}"));
+                return r;
+            }
+        };
+        let w = wide(id);
+        let mut buf = vec![0u8; 4096];
+        loop {
+            let (mut typ, mut len) = (0u32, buf.len() as u32);
+            let e =
+                unsafe { RegQueryValueExW(h.0, w.as_ptr(), std::ptr::null(), &mut typ, buf.as_mut_ptr(), &mut len) };
+            match e {
+                ERROR_SUCCESS => {
+                    r.present = true;
+                    if typ != REG_SZ {
+                        r.error = Some(format!("type {typ}, want REG_SZ"));
+                        return r;
+                    }
+                    let units: Vec<u16> =
+                        buf[..len as usize].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+                    let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
+                    r.rule = Some(String::from_utf16_lossy(&units[..end]));
+                    return r;
+                }
+                ERROR_FILE_NOT_FOUND => return r,
+                ERROR_MORE_DATA if buf.len() < (1 << 20) => buf.resize((len as usize).max(buf.len() * 2), 0),
+                e => {
+                    r.error = Some(format!("query: {e}"));
+                    return r;
+                }
+            }
+        }
+    }
+
+    /// The task capture script (Windows PowerShell 5.1, `Schedule.Service`): `@@LIST@@` = the task paths as
+    /// base64 (UTF-8) literals. One output line per task: `OK<TAB>path<TAB>xml<TAB>sddl`, `ABSENT<TAB>path` or
+    /// `ERR<TAB>path<TAB>message`, every field after the tag base64 (UTF-8).
+    const TASK_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
+$s = New-Object -ComObject Schedule.Service
+$s.Connect()
+$u = New-Object System.Text.UTF8Encoding($false)
+foreach ($b in @(@@LIST@@)) {
+    $p = $u.GetString([Convert]::FromBase64String($b))
+    try {
+        $i = $p.LastIndexOf('\')
+        $dir = if ($i -le 0) { '\' } else { $p.Substring(0, $i) }
+        $t = $s.GetFolder($dir).GetTask($p.Substring($i + 1))
+        $x = [Convert]::ToBase64String($u.GetBytes([string]$t.Xml))
+        $d = [Convert]::ToBase64String($u.GetBytes([string]$t.GetSecurityDescriptor(7)))
+        "OK`t$b`t$x`t$d"
+    } catch {
+        $e = $_.Exception
+        if ($e.InnerException) { $e = $e.InnerException }
+        if ($e.HResult -eq -2147024894 -or $e.HResult -eq -2147024893) { "ABSENT`t$b" }
+        else { "ERR`t$b`t" + [Convert]::ToBase64String($u.GetBytes(('0x{0:X8} {1}' -f $e.HResult, $e.Message))) }
+    }
+}
+"#;
+
+    /// Tasks as Task Scheduler returns them (M1b): one Windows PowerShell run over the `Schedule.Service` COM
+    /// object for all `paths` (XML and `GetSecurityDescriptor(7)` = OWNER|GROUP|DACL, as the M1b spike read
+    /// them). A missing task or folder (0x80070002 / 0x80070003) is `present: false`, any other failure an `error`.
+    pub fn task_objects(paths: &[String]) -> Vec<ObjRec> {
+        if paths.is_empty() {
+            return Vec::new();
+        }
+        let list = paths.iter().map(|p| format!("'{}'", b64::encode(p.as_bytes()))).collect::<Vec<_>>().join(",");
+        let script = TASK_SCRIPT.replace("@@LIST@@", &list);
+        let fail = |e: String| -> Vec<ObjRec> {
+            paths
+                .iter()
+                .map(|p| ObjRec {
+                    kind: "task".into(),
+                    id: p.clone(),
+                    present: true,
+                    error: Some(e.clone()),
+                    ..Default::default()
+                })
+                .collect()
+        };
+        let file = std::env::temp_dir().join(format!("rigtool-tasks-{}.ps1", std::process::id()));
+        // UTF-8 with a BOM: Windows PowerShell 5.1 reads a script without one in the ANSI code page.
+        let mut body = vec![0xEF, 0xBB, 0xBF];
+        body.extend_from_slice(script.as_bytes());
+        if let Err(e) = std::fs::write(&file, body) {
+            return fail(format!("task scheduler: write script: {e}"));
+        }
+        let sys = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+        let out = std::process::Command::new(format!("{sys}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"))
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&file)
+            .stdin(std::process::Stdio::null())
+            .output();
+        let _ = std::fs::remove_file(&file);
+        let out = match out {
+            Ok(o) if o.status.success() => o,
+            Ok(o) => {
+                return fail(format!(
+                    "task scheduler: powershell exit {:?}: {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ));
+            }
+            Err(e) => return fail(format!("task scheduler: powershell: {e}")),
+        };
+        let dec = |b: &str| b64::decode(b).map(|v| String::from_utf8_lossy(&v).into_owned());
+        let mut got: HashMap<String, ObjRec> = HashMap::new();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let f: Vec<&str> = line.trim_end().split('\t').collect();
+            let Some(path) = f.get(1).and_then(|b| dec(b)) else { continue };
+            let mut r = ObjRec { kind: "task".into(), id: path.clone(), ..Default::default() };
+            match (f[0], f.len()) {
+                ("OK", 4) => {
+                    r.present = true;
+                    r.xml = dec(f[2]);
+                    r.sddl = dec(f[3]);
+                    if r.xml.is_none() || r.sddl.is_none() {
+                        r.error = Some("task scheduler: undecodable output".into());
+                    }
+                }
+                ("ABSENT", 2) => {}
+                ("ERR", 3) => {
+                    r.present = true;
+                    r.error = Some(format!("task scheduler: {}", dec(f[2]).unwrap_or_default()));
+                }
+                _ => continue,
+            }
+            got.insert(path, r);
+        }
+        paths
+            .iter()
+            .map(|p| {
+                got.remove(p).unwrap_or_else(|| ObjRec {
+                    kind: "task".into(),
+                    id: p.clone(),
+                    present: true,
+                    error: Some("task scheduler: no output for this task".into()),
+                    ..Default::default()
+                })
+            })
+            .collect()
+    }
+
+    /// Standard base64 (RFC 4648, padded), for the task capture's exchange with PowerShell.
+    pub(crate) mod b64 {
+        const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+        pub fn encode(b: &[u8]) -> String {
+            let mut s = String::with_capacity(b.len().div_ceil(3) * 4);
+            for c in b.chunks(3) {
+                let n = ((c[0] as u32) << 16)
+                    | ((c.get(1).copied().unwrap_or(0) as u32) << 8)
+                    | c.get(2).copied().unwrap_or(0) as u32;
+                for i in 0..4 {
+                    if i <= c.len() {
+                        s.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
+                    } else {
+                        s.push('=');
+                    }
+                }
+            }
+            s
+        }
+
+        pub fn decode(s: &str) -> Option<Vec<u8>> {
+            let s = s.trim().as_bytes();
+            if !s.len().is_multiple_of(4) {
+                return None;
+            }
+            let mut out = Vec::with_capacity(s.len() / 4 * 3);
+            for q in s.chunks(4) {
+                let pad = q.iter().rev().take_while(|&&c| c == b'=').count();
+                if pad > 2 || q[..4 - pad].contains(&b'=') {
+                    return None;
+                }
+                let mut n = 0u32;
+                for (i, &c) in q[..4 - pad].iter().enumerate() {
+                    n |= (A.iter().position(|&x| x == c)? as u32) << (18 - 6 * i);
+                }
+                out.push((n >> 16) as u8);
+                if pad < 2 {
+                    out.push((n >> 8) as u8);
+                }
+                if pad < 1 {
+                    out.push(n as u8);
+                }
+            }
+            Some(out)
+        }
+    }
+
     #[derive(Default)]
     pub struct KeyOpts {
         pub skip_subkeys: &'static [&'static str],
@@ -1646,5 +1871,41 @@ mod tests {
         assert_eq!(o.only_values.as_deref(), Some(&["keep".to_string()][..]));
         let missing = capture(&Scope { keys: vec![k.canon("Nope")], ..Default::default() }, None);
         assert!(!missing.keys[0].present);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn b64_round_trip() {
+        use super::win::b64::{decode, encode};
+        for s in ["", "a", "ab", "abc", "\\Vendor\\Täsk", "x\ty"] {
+            let e = encode(s.as_bytes());
+            assert_eq!(decode(&e).unwrap(), s.as_bytes(), "{e}");
+        }
+        assert_eq!(encode(b"Man"), "TWFu");
+        assert_eq!(encode(b"Ma"), "TWE=");
+        assert!(decode("TWE").is_none());
+        assert!(decode("T=E=").is_none());
+    }
+
+    /// M1b typed objects through their own API: a missing task and a missing firewall rule are absent, not
+    /// errors; a task Windows ships (when this machine has it) comes back with its XML and SDDL.
+    #[cfg(windows)]
+    #[test]
+    fn capture_typed_objects() {
+        let scope = Scope {
+            tasks: vec!["\\PurgeRigtoolNoSuchFolder\\NoSuchTask".into(), "\\PurgeRigtoolNoSuchTask".into()],
+            firewall_rules: vec!["{00000000-0000-0000-0000-00000000dead}".into()],
+            ..Default::default()
+        };
+        let doc = capture(&scope, None);
+        let objs: Vec<_> = doc.objects.iter().map(|o| (o.kind.as_str(), o.present, o.error.is_some())).collect();
+        assert_eq!(objs, [("task", false, false), ("task", false, false), ("firewall_rule", false, false)], "{doc:?}");
+        let known = "\\Microsoft\\Windows\\Defrag\\ScheduledDefrag";
+        let o = &super::win::task_objects(&[known.to_string()])[0];
+        if o.present {
+            assert!(o.error.is_none(), "{o:?}");
+            assert!(o.xml.as_deref().is_some_and(|x| x.contains("<Task")), "{o:?}");
+            assert!(o.sddl.as_deref().is_some_and(|s| s.contains("D:")), "{o:?}");
+        }
     }
 }

@@ -18,7 +18,7 @@ const CLOUD_6: u32 = 0x9000_601A;
 
 static LIST: LazyLock<DenyList> = LazyLock::new(|| DenyList::compile(&GuardEnv::sample()));
 
-fn none() -> Exemptions {
+fn none() -> Exemptions<'static> {
     Exemptions::default()
 }
 
@@ -1412,7 +1412,7 @@ fn the_deny_list_and_the_containers_run_on_registry_targets() {
         ),
         (
             r"HKLM\SYSTEM\ControlSet001\Services\VendorSvc",
-            "reg.hklm.system",
+            "svc.registry-direct",
         ),
         (r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager", ""),
         (r"HKU\S-1-5-18\Software\Vendor", "reg.hku.system-account"),

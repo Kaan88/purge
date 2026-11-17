@@ -365,6 +365,10 @@ fn key_of(exec_op: &ExecOp) -> &str {
         | ExecOp::EditSegment { key, .. } => key,
         ExecOp::QuarantineMove { path } | ExecOp::RemoveDirIfEmpty { path } => path,
         ExecOp::RemovePackage { full_name } => full_name,
+        // Object ops never reach the registry act; named for the message only.
+        ExecOp::DeleteService { name } => name,
+        ExecOp::DeleteTask { path } => path,
+        ExecOp::DeleteFirewallRule { id } => id,
     }
 }
 
@@ -642,7 +646,10 @@ pub fn prepare_reg(
         },
         ExecOp::QuarantineMove { .. }
         | ExecOp::RemoveDirIfEmpty { .. }
-        | ExecOp::RemovePackage { .. } => unreachable!("checked by is_registry above"),
+        | ExecOp::RemovePackage { .. }
+        | ExecOp::DeleteService { .. }
+        | ExecOp::DeleteTask { .. }
+        | ExecOp::DeleteFirewallRule { .. } => unreachable!("checked by is_registry above"),
     };
     // A key action is bound to the whole tree it validated, not only to the root's facts: the tree the
     // backup will hold must be that tree as this run's own completed ops left it (review M2 final S4,
@@ -1224,6 +1231,10 @@ enum Undo {
         /// The intent had no `Done` (crash, or `VerifyFailed`): the missing part of a partly deleted
         /// tree is completed instead of the whole tree restored.
         complete: bool,
+        /// The completion is the exact one ([`regbackup::complete_tree`]): every key that exists must
+        /// match its backup node, else a conflict. For an op recovery's re-probe did not find done
+        /// (review S2): a key that exists and differs there is not the run's own half-deleted tree.
+        exact: bool,
     },
     /// Restore a value.
     Value,
@@ -1312,6 +1323,22 @@ pub fn prepare_undo_reg(
     intent: &Intent,
     done: Option<&ItemOutcome>,
 ) -> Option<RegUndoPrepared> {
+    prepare_undo_reg_with(ctx, session, intent, done, false)
+}
+
+/// [`prepare_undo_reg`]; with `exact`, a key tree whose op has no `Done` is completed only where every
+/// key that exists matches its backup node ([`regbackup::complete_tree`]: absent, intact or partly
+/// deleted), and is a conflict ([`UndoConflict::KeyExists`]) where one differs, instead of being
+/// completed around what differs ([`regbackup::restore_missing`]). The undo driver asks for it for an
+/// op whose `Done` recovery's re-probe replaced (review S2): its key, if it exists and differs, is not
+/// the run's own half-deleted tree.
+pub fn prepare_undo_reg_with(
+    ctx: &GateCtx,
+    session: &SessionDir,
+    intent: &Intent,
+    done: Option<&ItemOutcome>,
+    exact: bool,
+) -> Option<RegUndoPrepared> {
     let exec_op = &intent.exec_op;
     if !exec_op.is_registry() {
         return None;
@@ -1372,6 +1399,7 @@ pub fn prepare_undo_reg(
     let undo = match &intent.inverse {
         Inverse::RestoreKeyTree { .. } | Inverse::RecreateKey { .. } => Undo::Tree {
             complete: !matches!(done, Some(ItemOutcome::Done)),
+            exact,
         },
         Inverse::RestoreValue { .. } => Undo::Value,
         Inverse::ReinsertSegment {
@@ -1389,7 +1417,12 @@ pub fn prepare_undo_reg(
             written_value_hash: *written_value_hash,
             original: backup.as_ref().and_then(|b| b.value().cloned()),
         }),
-        Inverse::MoveBack { .. } | Inverse::RecreateDir { .. } | Inverse::None => {
+        Inverse::MoveBack { .. }
+        | Inverse::RecreateDir { .. }
+        | Inverse::None
+        | Inverse::RecreateService { .. }
+        | Inverse::RecreateTask { .. }
+        | Inverse::RecreateFirewallRule { .. } => {
             unreachable!("Inverse::undoes accepts only the registry inverses for a registry op")
         }
     };
@@ -1434,7 +1467,8 @@ pub fn prepare_undo_reg(
 /// - Tree: [`regbackup::restore_tree`] below the checked parent, or [`regbackup::restore_missing`] when
 ///   the op has no `Done` (intent only, or `VerifyFailed`): the keys of the backup that are missing are
 ///   put back and no existing key is changed, also when one was changed since (the tree is then the
-///   backup plus that change, reported as a difference).
+///   backup plus that change, reported as a difference); in the exact form
+///   ([`prepare_undo_reg_with`]) [`regbackup::complete_tree`], where a key that differs is a conflict.
 /// - Value: [`regbackup::restore_value`] into the checked key.
 /// - Segment: [`regbackup::reinsert_segment`] into the value of the checked key, with the value backup
 ///   when there is one.
@@ -1464,17 +1498,17 @@ pub fn run_undo_reg(inverse: Box<RegInverse>, token: &UndoToken) -> RegUndoResul
         )
     };
     match undo {
-        Undo::Tree { complete } => {
+        Undo::Tree { complete, exact } => {
             let Some(backup) = backup else {
                 return RegUndoResult::conflict(UndoConflict::BackupMissing, "no backup");
             };
             let CheckedUndoKey::Recreate(parent) = &checked else {
                 return wrong_key();
             };
-            let restored = if complete {
-                regbackup::restore_missing(parent, &backup)
-            } else {
-                regbackup::restore_tree(parent, &backup)
+            let restored = match (complete, exact) {
+                (false, _) => regbackup::restore_tree(parent, &backup),
+                (true, false) => regbackup::restore_missing(parent, &backup),
+                (true, true) => regbackup::complete_tree(parent, &backup),
             };
             fault::point(fault::UNDO_ACT_AFTER);
             restore_result(restored, &at)
@@ -1719,6 +1753,36 @@ pub fn probe_reg(ctx: &GateCtx, session: &SessionDir, intent: &Intent) -> Probe 
         }
         _ => inconsistent(),
     }
+}
+
+/// Whether the undo gate refuses the key `intent` is checked in ([`checked_key`]: the parent of a key,
+/// the key holding a value) because it does not exist (`gate.undo-key-missing`), and for no other
+/// reason. Changes nothing.
+pub(crate) fn key_missing(ctx: &GateCtx, intent: &Intent) -> bool {
+    let Some(exemptions) = ctx.exemptions(intent.op) else {
+        return false;
+    };
+    matches!(
+        gate::check_undo_key(ctx, &intent.exec_op.target(), &exemptions),
+        Err(refusal) if refusal.reason == gate::reason::UNDO_KEY_MISSING
+    )
+}
+
+/// The data the value of a value or segment op (`intent`) holds now, read in the key the undo gate
+/// checked: `Ok(None)` when the value does not exist, `Err` when the key cannot be opened or read.
+/// Changes nothing.
+pub(crate) fn value_now(ctx: &GateCtx, intent: &Intent) -> Result<Option<Vec<u8>>, String> {
+    let name = match &intent.exec_op {
+        ExecOp::DeleteValue { name, .. } | ExecOp::EditSegment { name, .. } => name,
+        _ => return Err("the intent is not a value op".to_owned()),
+    };
+    let key = checked_key(ctx, intent)?
+        .into_value_key()
+        .ok_or_else(|| "the intent is not a value op".to_owned())?;
+    key.key()
+        .value(name)
+        .map(|live| live.map(|value| value.data))
+        .map_err(|e| format!("the value cannot be read: {e}"))
 }
 
 /// Finishes the registry action of `intent` forward, under the token `JournalWriter::resume_intent`

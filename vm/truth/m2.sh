@@ -269,7 +269,10 @@ if run is not None:
         "torn": {"tail_pass": (torn.get("tail") or {}).get("pass") is True, "middle_pass": (torn.get("middle") or {}).get("pass") is True},
         "complete": res(run, "crash", "complete") is True,
     })
+    # The gate needs the whole matrix and the hard power-off rounds: a run without -HardPowerOff, or one
+    # whose fault points were not all reached, does not pass.
     g3["pass"] = bool(run_ok("m2-crash") and g3["complete"] and rows and not failing and not errors and g3["hit"] > 0
+                      and not g3["not_hit"] and len(power) >= 3 and all(r.get("pass") for r in power)
                       and g3["torn"]["tail_pass"] and g3["torn"]["middle_pass"])
 else:
     g3["pass"] = False

@@ -116,3 +116,21 @@ for known reasons:
   Unchecked). It counts in recall_listed but cannot reach recall_safe by design.
 - Clean-Pro baseline: built for Pro 26340.9882 (`kb/baselines/Professional-26340.9882.tsv.gz`, 2026-11-12).
   The host is still on 26300.9974, so it has no matching baseline until it updates (docs/M0_REPORT.md).
+
+## M1b: powershell and temurin (PENDING)
+
+These two apps are not frozen yet. The freeze needs four VM runs, and this package (M1B-RIG-HOST) did not make them.
+
+The gate package does the freeze:
+1. Run `.\vm\rig.ps1 -Mode m1b-freeze`. It makes two raw runs of each app on Inbound-Win11-Test, rig-base, with the vendor uninstall and the MSI
+   tables captured.
+2. Run `bash truth/m1b.sh freeze powershell` and `bash truth/m1b.sh freeze temurin` (RIG.md §12.6).
+
+The method is M0's:
+- **Ambient:** `truth/ambient.json` plus `labels/_os.json`, plus `_os-servicing.json` for the rig-base drift since M0.
+- **Labels:** from `truth/mk_labels.py` (powershell.json and temurin.json). Their UNSURE rules are listed in RIG.md §12.4.
+- **Installers** (in cache-sources.json):
+  - PowerShell-7.6.10-win-x64.msi
+  - OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.msi
+
+Once both apps are frozen, replace this section with the campaign names, the counts per label and the open points.

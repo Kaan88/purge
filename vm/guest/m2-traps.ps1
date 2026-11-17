@@ -1042,7 +1042,7 @@ function Get-M2TrapTable([string]$Sid, [string]$LocalAppData) {
     }
 
     # --- expiry walk ---------------------------------------------------------------------------------
-    Add-Trap 'expiry-junction' 'expiry' 'After exec, a junction and a file symlink to canaries are planted inside the quarantined item; the expiry walk must delete the links and never descend.' @(
+    Add-Trap 'expiry-junction' 'expiry' 'After exec, a junction and a file symlink to canaries replace the two files of the quarantined item (entry count unchanged); the expiry walk must delete the links and never descend.' @(
         (O 'canary-file' @{ id = 'expiry.target'; path = "$C\expiry\target\keep.txt" }),
         (O 'canary-file' @{ id = 'expiry.target-file'; path = "$C\expiry\target-file.txt" }),
         (O 'file' @{ path = "$R\expiry\payload\expiry-marker.txt"; text = "PURGE-EXPIRY-MARKER m2-traps`n" }),
@@ -1590,16 +1590,25 @@ switch ($Action) {
             }
         }
         & $walk (Join-Path $M2PdRoot 'Quarantine') 0
-        $rec = [ordered]@{ trap = $t.id; quarantined_dirs = @($found); planted = New-Object System.Collections.ArrayList; error = $null }
+        $rec = [ordered]@{ trap = $t.id; quarantined_dirs = @($found); replaced = New-Object System.Collections.ArrayList; planted = New-Object System.Collections.ArrayList; error = $null }
         if ($found.Count -ne 1) { $rec.error = "expected one quarantined copy of $($t.helper.marker), found $($found.Count)" }
         else {
-            foreach ($pl in $t.helper.plants) {
+            # The links replace the item's own files, so the item holds no more entries than the engine counted at
+            # the move: the expiry walk itself must meet the links (a purge of an item that gained entries is
+            # refused before any walk, expiry.rs MoreEntriesThanCounted, and would not exercise it).
+            foreach ($e in @([PurgeRigM2.Native]::List($found[0]))) {
+                if (($e.Attributes -band 0x410) -ne 0) { continue }
+                $p = Join-Path $found[0] $e.Name
+                try { [IO.File]::Delete($p); [void]$rec.replaced.Add($p) } catch { $rec.error = "removing $p failed: $($_.Exception.Message)" }
+            }
+            if (@($t.helper.plants).Count -gt $rec.replaced.Count) { $rec.error = "only $($rec.replaced.Count) own file(s) replaced for $(@($t.helper.plants).Count) link(s)" }
+            if (-not $rec.error) { foreach ($pl in $t.helper.plants) {
                 $p = Join-Path $found[0] $pl.name
                 try {
                     if ($pl.kind -eq 'junction') { [PurgeRigM2.Native]::Junction($p, $pl.target) } else { [PurgeRigM2.Native]::Symlink($p, $pl.target, $false) }
                     [void]$rec.planted.Add([ordered]@{ path = $p; kind = $pl.kind; target = $pl.target; ok = $true })
                 } catch { [void]$rec.planted.Add([ordered]@{ path = $p; kind = $pl.kind; target = $pl.target; ok = $false; error = $_.Exception.Message }); $rec.error = 'a plant failed' }
-            }
+            } }
         }
         if ($OutDir) { Write-M2Json $rec (Join-Path $OutDir 'm2-traps-plant-expiry.json') }
         Log "plant-expiry-junction: $(if ($rec.error) { $rec.error } else { "planted in $($found[0])" })"

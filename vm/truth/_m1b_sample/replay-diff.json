@@ -1,0 +1,13 @@
+{
+  "schema": "purge.replay-diff/1",
+  "reasons": [
+    "new_scanner",
+    "msi_blocker_added"
+  ],
+  "unexplained": 0,
+  "rows": [
+    {
+      "reason": "new_scanner"
+    }
+  ]
+}

@@ -46,6 +46,15 @@
 //! | file op | [`act_fs::plan_undo_fs`], [`act_fs::undo_fs`] |
 //! | registry op | [`act_reg::prepare_undo_reg`] (which reads the backup hash-checked), [`act_reg::run_undo_reg`] |
 //! | package removal | [`act_typed::undo_typed`]: an `Irreversible` record, not an error |
+//! | service delete | [`act_service::prepare_undo`], [`act_service::run_undo`], over [`UndoEnv::objects`]; the note a restore leaves (a password to set again) is journalled with its `undo_done` |
+//! | scheduled task delete | [`act_task::prepare_undo_task`], [`act_task::run_undo_task`] |
+//! | firewall rule delete | [`act_firewall::prepare_undo`], [`act_firewall::run_undo`] |
+//! | object op without object backends | `Failed{Internal}`, nothing read or changed (to be tried again) |
+//!
+//! A service, task or firewall rule is created again only when its program lies inside the program
+//! roots of the journal header (`Header::program_roots`; none: never). A value or key below a deleted
+//! service's `Services\<name>` key depends on that service's undo: a partial selection pulls it in, and
+//! the reverse order already puts the service back first.
 //!
 //! Nothing existing is overwritten and no conflict is forced: those rules live in the modules the
 //! inverses belong to. An undo that was interrupted (an `undo_intent` with nothing after it) or that
@@ -73,10 +82,13 @@ use purge_model::exec::session::{
 use purge_model::{Blocker, CandidateId, FileTime, Target};
 use serde::{Deserialize, Serialize};
 
+use crate::act_firewall::{self, FwUndoArgs, FwUndoPrepared, FwUndoResult};
 use crate::act_fs::{self, FsUndo, FsUndoPlan, Retry};
 use crate::act_reg::{self, RegUndoPrepared, RegUndoResult};
+use crate::act_service::{self, SvcUndoArgs, SvcUndoPrepared, SvcUndoResult};
+use crate::act_task::{self, TaskUndoPrepared};
 use crate::act_typed::{self, TypedUndo};
-use crate::execute;
+use crate::execute::{self, ObjectBackends};
 use crate::gate::{GateCtx, GateItem, GateSetupError};
 use crate::journal::{
     self, JournalError, JournalState, JournalWriter, OpState, OpStatus, UndoState, UndoToken,
@@ -98,6 +110,9 @@ pub struct UndoEnv<'a> {
     pub pending_renames: &'a mut dyn PendingRenames,
     /// How a move back that finds its item in use is retried.
     pub retry: Retry,
+    /// The backends of services, scheduled tasks and firewall rules; `None` (the default) in a process
+    /// that may not change them, where the undo of such an op fails without changing anything.
+    pub objects: Option<ObjectBackends<'a>>,
 }
 
 impl<'a> UndoEnv<'a> {
@@ -112,6 +127,7 @@ impl<'a> UndoEnv<'a> {
             deny,
             pending_renames,
             retry: Retry::standard(),
+            objects: None,
         }
     }
 }
@@ -289,6 +305,8 @@ enum Place<'a> {
     Key(&'a str),
     /// A value or segment inside this key.
     Inside(&'a str),
+    /// The service of this name (its `Services\<name>` key).
+    Service(&'a str),
 }
 
 fn place(op: &ExecOp) -> Option<Place<'_>> {
@@ -296,17 +314,49 @@ fn place(op: &ExecOp) -> Option<Place<'_>> {
         ExecOp::QuarantineMove { path } | ExecOp::RemoveDirIfEmpty { path } => Place::Path(path),
         ExecOp::DeleteKeyTree { key } | ExecOp::DeleteKeyIfEmpty { key } => Place::Key(key),
         ExecOp::DeleteValue { key, .. } | ExecOp::EditSegment { key, .. } => Place::Inside(key),
-        ExecOp::RemovePackage { .. } => return None,
+        ExecOp::DeleteService { name } => Place::Service(name),
+        // A package, a task and a firewall rule hold nothing another op of the session acts on.
+        ExecOp::RemovePackage { .. }
+        | ExecOp::DeleteTask { .. }
+        | ExecOp::DeleteFirewallRule { .. } => return None,
     })
 }
 
+/// The service whose `Services\<name>` key `key` is or lies below: `HKLM\SYSTEM\<set>\Services\<name>`
+/// with `<set>` `CurrentControlSet` or `ControlSet` and three digits, compared without regard to case.
+fn service_of_key(key: &str) -> Option<&str> {
+    let mut parts = key.split('\\').filter(|part| !part.is_empty());
+    let (hklm, system, set, services, name) = (
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+    );
+    let control_set = set.eq_ignore_ascii_case("CurrentControlSet")
+        || (set.len() == 13
+            && set
+                .get(..10)
+                .is_some_and(|head| head.eq_ignore_ascii_case("ControlSet"))
+            && set.bytes().skip(10).all(|b| b.is_ascii_digit()));
+    (hklm.eq_ignore_ascii_case("HKLM")
+        && system.eq_ignore_ascii_case("SYSTEM")
+        && control_set
+        && services.eq_ignore_ascii_case("Services"))
+    .then_some(name)
+}
+
 /// Whether the restore of `of` needs what `dependency` removed to be back first.
-fn depends_on(of: &ExecOp, dependency: &ExecOp) -> bool {
+pub(crate) fn depends_on(of: &ExecOp, dependency: &ExecOp) -> bool {
     match (place(of), place(dependency)) {
         (Some(Place::Path(path)), Some(Place::Path(above))) => prefix::is_ancestor(above, path),
         (Some(Place::Key(key)), Some(Place::Key(above))) => prefix::is_ancestor(above, key),
         (Some(Place::Inside(key)), Some(Place::Key(above))) => {
             prefix::is_ancestor(above, key) || prefix::is_same(above, key)
+        }
+        // A key or value below a deleted service's key comes back after the service.
+        (Some(Place::Key(key) | Place::Inside(key)), Some(Place::Service(name))) => {
+            service_of_key(key).is_some_and(|service| service.eq_ignore_ascii_case(name))
         }
         _ => false,
     }
@@ -469,8 +519,9 @@ impl From<CtxError> for UndoError {
 }
 
 /// The gate context of an undo or recovery run over `state`: the session's own store scope from the
-/// journal header's volumes, and every op's journalled `validated` record, as written. A record the
-/// gate does not accept is a warning; its op then has no record and ends as a conflict.
+/// journal header's volumes, the run's user and M1b exemption lists from its `settings` record, and
+/// every op's journalled `validated` record, as written. A record the gate does not accept is a
+/// warning; its op then has no record and ends as a conflict.
 pub(crate) fn gate_ctx(
     roots: &StorageRoots,
     deny: &DenyList,
@@ -492,6 +543,12 @@ pub(crate) fn gate_ctx(
         .store_scope(session.id(), &volume_roots)
         .map_err(CtxError::Store)?;
     let mut ctx = GateCtx::new(deny.clone(), &exec_ops, scope).map_err(CtxError::Gate)?;
+    // The run's user and its M1b exemption lists, from its `settings` record (none in a journal
+    // written before the record existed: no user, empty lists).
+    if let Some(settings) = state.settings() {
+        ctx.bind_user(settings.user_sid.as_deref());
+        ctx.set_gone(&crate::plan_in::GoneLists::from_journal(settings));
+    }
     for op in state.ops() {
         let Some(intent) = &op.intent else {
             continue;
@@ -623,6 +680,25 @@ impl Step<'_> {
         Ok(detail)
     }
 
+    /// [`Step::done`] whose `undo_done` (when it has an intent) also carries `detail` for the report
+    /// (`JournalWriter::undo_done_noted`): what an object's restore leaves to do, such as a password
+    /// to set again.
+    fn done_noted(mut self, outcome: UndoOutcome, detail: String) -> Result<String, JournalError> {
+        let decided = matches!(
+            outcome,
+            UndoOutcome::NothingToUndo | UndoOutcome::AlreadyRestored
+        );
+        if self.token.is_none() && decided {
+            self.journal.undo_done_without_intent(self.op, outcome)?;
+            return Ok(detail);
+        }
+        self.token()?;
+        if let Some(token) = self.token.take() {
+            self.journal.undo_done_noted(token, outcome, &detail)?;
+        }
+        Ok(detail)
+    }
+
     fn failed(self, code: FailCode, detail: String) -> Result<String, JournalError> {
         self.done(
             UndoOutcome::Failed {
@@ -653,6 +729,7 @@ pub(crate) struct Driver<'a> {
     pub(crate) ctx: &'a GateCtx,
     pub(crate) pending: &'a mut dyn PendingRenames,
     pub(crate) retry: &'a Retry,
+    pub(crate) objects: Option<ObjectBackends<'a>>,
 }
 
 impl Driver<'_> {
@@ -801,6 +878,7 @@ impl Driver<'_> {
                     Some(LockUndo::RemovePair(removal)) => {
                         let outcome =
                             locked::remove_boot_move(removal, step.token()?, &mut *self.pending);
+                        step.journal.touch_boot_moves();
                         return step.done(
                             outcome,
                             "the registered boot-time move was taken back".to_owned(),
@@ -812,7 +890,10 @@ impl Driver<'_> {
                 // put back, and an op whose pair cannot be told stays unsettled (review M2 M7).
                 match locked::listed_before_move_back(op, &*self.pending) {
                     Some(LockUndo::RemovePair(removal)) => {
-                        match locked::remove_boot_move(removal, step.token()?, &mut *self.pending) {
+                        let removed =
+                            locked::remove_boot_move(removal, step.token()?, &mut *self.pending);
+                        step.journal.touch_boot_moves();
+                        match removed {
                             UndoOutcome::Restored | UndoOutcome::AlreadyRestored => {}
                             outcome => {
                                 return step.done(
@@ -882,6 +963,24 @@ impl Driver<'_> {
                     ),
                 }
             }
+            ExecOp::DeleteService { .. }
+            | ExecOp::DeleteTask { .. }
+            | ExecOp::DeleteFirewallRule { .. } => {
+                let Some(objects) = self.objects else {
+                    return step.failed(
+                        FailCode::Internal,
+                        format!(
+                            "op {} deletes a system object and this process has no backends for \
+                             services, scheduled tasks and firewall rules (it is not elevated); nothing \
+                             was changed",
+                            op.op
+                        ),
+                    );
+                };
+                // The roots the run recorded, never anything a file outside the journal says.
+                let roots = step.journal.state().header().program_roots.clone();
+                Self::undo_object(objects, self.ctx, self.session, step, op, intent, &roots)
+            }
             ExecOp::DeleteKeyTree { .. }
             | ExecOp::DeleteKeyIfEmpty { .. }
             | ExecOp::DeleteValue { .. }
@@ -890,7 +989,18 @@ impl Driver<'_> {
                     Some(ItemOutcome::Done) if again => None,
                     other => other.as_ref(),
                 };
-                match act_reg::prepare_undo_reg(self.ctx, self.session, intent, done) {
+                // An op whose `Done` recovery's re-probe replaced (`reconcile` `Retried` on a registry
+                // op; `crate::durable`) is completed only where its key equals the backup or is the
+                // run's own half-deleted tree: a key that exists and differs is somebody else's, and
+                // a conflict as in an ordinary undo (review S2). An unconfirmed op that the re-probe
+                // found done, or that no restart can have touched, is undone in the ordinary form.
+                let reprobed = !again
+                    && op
+                        .reconciles
+                        .iter()
+                        .any(|r| matches!(r, ReconcileResult::Retried { .. }));
+                match act_reg::prepare_undo_reg_with(self.ctx, self.session, intent, done, reprobed)
+                {
                     None => step.failed(
                         FailCode::Internal,
                         format!("op {} is not a registry op", op.op),
@@ -912,6 +1022,107 @@ impl Driver<'_> {
                     }
                 }
             }
+        }
+    }
+}
+
+impl Driver<'_> {
+    /// The undo of a service, scheduled task or firewall rule delete through its module, with the
+    /// header's `roots`.
+    ///
+    /// Whether this op's last undo attempt may have created the object already (`own_attempt`) is read
+    /// from its undo records: for a service (review R2b S3) its last record is an `undo_intent` with
+    /// nothing after it, or an `undo_done` `Failed{VerifyFailed}` (the code every failure after a
+    /// successful create ends with); for a firewall rule the op has any `undo_intent`.
+    fn undo_object(
+        objects: ObjectBackends<'_>,
+        ctx: &GateCtx,
+        session: &SessionDir,
+        mut step: Step<'_>,
+        op: &OpState,
+        intent: &purge_model::exec::journal::Intent,
+        roots: &[String],
+    ) -> Result<String, JournalError> {
+        let done = effective_outcome(op);
+        let env = ctx.deny().env();
+        match &intent.exec_op {
+            ExecOp::DeleteService { .. } => {
+                let own_attempt = matches!(
+                    op.undo,
+                    UndoState::InProgress
+                        | UndoState::Finished(UndoOutcome::Failed {
+                            code: FailCode::VerifyFailed,
+                            ..
+                        })
+                );
+                let args = SvcUndoArgs {
+                    intent,
+                    done: done.as_ref(),
+                    own_attempt,
+                    program_roots: roots,
+                };
+                let result = match act_service::prepare_undo(objects.services, session, env, &args)
+                {
+                    SvcUndoPrepared::Decided(result) => result,
+                    SvcUndoPrepared::Ready(job) => {
+                        act_service::run_undo(objects.services, job, step.token()?)
+                    }
+                };
+                match result {
+                    SvcUndoResult::Done { outcome, detail } => step.done_noted(outcome, detail),
+                    SvcUndoResult::Conflict { conflict, detail } => step.conflict(conflict, detail),
+                }
+            }
+            ExecOp::DeleteFirewallRule { .. } => {
+                let args = FwUndoArgs {
+                    intent,
+                    done: done.as_ref(),
+                    own_attempt: op.undo_attempts > 0,
+                    program_roots: roots,
+                };
+                let result = match act_firewall::prepare_undo(objects.firewall, session, env, &args)
+                {
+                    FwUndoPrepared::Decided(result) => result,
+                    FwUndoPrepared::Ready(job) => {
+                        act_firewall::run_undo(objects.firewall, job, step.token()?)
+                    }
+                };
+                match result {
+                    FwUndoResult::Done { outcome, detail } => step.done_noted(outcome, detail),
+                    FwUndoResult::Conflict { conflict, detail } => step.conflict(conflict, detail),
+                }
+            }
+            ExecOp::DeleteTask { .. } => {
+                let prepared = act_task::prepare_undo_task(
+                    objects.tasks,
+                    ctx,
+                    session,
+                    intent,
+                    done.as_ref(),
+                    roots,
+                    ctx.user_sid(),
+                );
+                let result = match prepared {
+                    None => {
+                        return step.failed(
+                            FailCode::Internal,
+                            format!("op {} is not a task delete", op.op),
+                        );
+                    }
+                    Some(TaskUndoPrepared::Decided(result)) => result,
+                    Some(TaskUndoPrepared::Ready(recreate)) => {
+                        act_task::run_undo_task(objects.tasks, *recreate, step.token()?)
+                    }
+                };
+                match result {
+                    TypedUndo::Done(outcome) => step.done(outcome, String::new()),
+                    TypedUndo::Conflict { conflict, detail } => step.conflict(conflict, detail),
+                }
+            }
+            _ => step.failed(
+                FailCode::Internal,
+                format!("op {} is not an object op", op.op),
+            ),
         }
     }
 }
@@ -1020,6 +1231,7 @@ pub fn undo(request: &UndoRequest, env: UndoEnv<'_>) -> Result<UndoOutput, UndoE
     let UndoEnv {
         pending_renames,
         retry,
+        objects,
         ..
     } = env;
     let mut driver = Driver {
@@ -1028,6 +1240,7 @@ pub fn undo(request: &UndoRequest, env: UndoEnv<'_>) -> Result<UndoOutput, UndoE
         ctx: &ctx,
         pending: pending_renames,
         retry: &retry,
+        objects,
     };
     let all: BTreeSet<OpId> = requested.union(&pulled_in).copied().collect();
     let covered = match driver

@@ -9,7 +9,7 @@ use purge_model::{
     FingerprintSchema, IdentitySnapshot, OsInfo, ProgramId, RefCarrier, RefSnapEntry, Root,
     RootKind, RootSource, ScanMode, SourceTrust, Target, TimeWindow, VerifyGone, View,
 };
-use purge_scan::framework::{AppIdentityView, OtherApps, ScanCtx, ScanLimits, Scanner};
+use purge_scan::framework::{AppIdentityView, OtherApps, ScanCtx, ScanExt, ScanLimits, Scanner};
 use purge_source::fixture::Fixture;
 
 /// The edition of the LTSC rig image.
@@ -81,6 +81,9 @@ pub fn fingerprint(progids: &[&str]) -> Fingerprint {
         subtrees: Vec::new(),
         ext_journal: Vec::new(),
         co_removed: Vec::new(),
+        msi: Vec::new(),
+        burn: None,
+        sys: Default::default(),
         os: OsInfo {
             edition: EDITION.into(),
             build: BUILD,
@@ -180,6 +183,7 @@ impl World {
             guard: &self.guard,
             other_apps: &self.other_apps,
             limits: ScanLimits::default(),
+            ext: ScanExt::none(),
         }
     }
 

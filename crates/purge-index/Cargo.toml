@@ -11,7 +11,12 @@ license.workspace = true
 purge-model.workspace = true
 purge-source.workspace = true
 purge-guard.workspace = true
+# M1B-SYSOBJ: the command-line splitter (purge_win::cmdline, no features) and kb/hosts.json.
+purge-win.workspace = true
+serde_json.workspace = true
 flate2.workspace = true
+serde.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

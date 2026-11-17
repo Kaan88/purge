@@ -72,6 +72,15 @@ pub enum Blocker {
     CannotBackUp,
     /// Hard. Verify-gone failed: the app still appears installed (for Safe-only evidence paths).
     NotGone,
+    /// Hard. The service is a kernel, file-system or recognizer driver (M1b).
+    Driver,
+    /// Hard. Other services depend on this service (M1b). They go first, in a later run.
+    HasDependents {
+        /// Names of the dependent services.
+        names: Vec<String>,
+    },
+    /// Hard. The object's identity digest differs from the one the harvest recorded (M1b).
+    ObjectChangedSinceHarvest,
 
     // Soft blockers.
     /// Soft. The container has children that are not attributed to the app.
@@ -95,6 +104,10 @@ pub enum Blocker {
     MsiPackageUnreadable,
     /// Soft. The target changed between the scan and the execution; it is skipped.
     ChangedSinceScan,
+    /// Soft. Undo cannot restore everything (M1b), e.g. the stored password of a service account.
+    ReversibilityPartial,
+    /// Soft. The object's program path could not be resolved to one file (M1b).
+    ProgramUnresolved,
 }
 
 impl Blocker {
@@ -122,7 +135,10 @@ impl Blocker {
             | ReparseMismatch
             | WindowsManagedOpaque
             | CannotBackUp
-            | NotGone => true,
+            | NotGone
+            | Driver
+            | HasDependents { .. }
+            | ObjectChangedSinceHarvest => true,
             UnmatchedChildren { .. }
             | UserData
             | TooLarge
@@ -131,7 +147,9 @@ impl Blocker {
             | ReversibilityNone
             | InUse
             | MsiPackageUnreadable
-            | ChangedSinceScan => false,
+            | ChangedSinceScan
+            | ReversibilityPartial
+            | ProgramUnresolved => false,
         }
     }
 
@@ -160,6 +178,9 @@ impl Blocker {
             WindowsManagedOpaque => "WindowsManagedOpaque",
             CannotBackUp => "CannotBackUp",
             NotGone => "NotGone",
+            Driver => "Driver",
+            HasDependents { .. } => "HasDependents",
+            ObjectChangedSinceHarvest => "ObjectChangedSinceHarvest",
             UnmatchedChildren { .. } => "UnmatchedChildren",
             UserData => "UserData",
             TooLarge => "TooLarge",
@@ -169,6 +190,8 @@ impl Blocker {
             InUse => "InUse",
             MsiPackageUnreadable => "MsiPackageUnreadable",
             ChangedSinceScan => "ChangedSinceScan",
+            ReversibilityPartial => "ReversibilityPartial",
+            ProgramUnresolved => "ProgramUnresolved",
         }
     }
 }
@@ -208,6 +231,11 @@ mod tests {
             WindowsManagedOpaque,
             CannotBackUp,
             NotGone,
+            Driver,
+            HasDependents {
+                names: vec!["VendorHelper".into(), "VendorUi".into()],
+            },
+            ObjectChangedSinceHarvest,
         ]
     }
 
@@ -223,14 +251,16 @@ mod tests {
             InUse,
             MsiPackageUnreadable,
             ChangedSinceScan,
+            ReversibilityPartial,
+            ProgramUnresolved,
         ]
     }
 
-    /// The hard/soft split of §5.3: 21 hard blockers, 9 soft ones.
+    /// The hard/soft split of §5.3 with the M1b additions: 24 hard blockers, 11 soft ones.
     #[test]
     fn hard_and_soft_split_matches_the_plan() {
         let (hard, soft) = (hard(), soft());
-        assert_eq!((hard.len(), soft.len()), (21, 9));
+        assert_eq!((hard.len(), soft.len()), (24, 11));
         for b in &hard {
             assert!(b.is_hard(), "{b:?} must be hard");
         }
@@ -240,7 +270,87 @@ mod tests {
         let mut names: Vec<_> = hard.iter().chain(&soft).map(Blocker::name).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 30, "a blocker is listed twice");
+        assert_eq!(names.len(), 35, "a blocker is listed twice");
+    }
+
+    /// C-MODEL-SCOPE: the classes of the M1b blockers, and the lists above cover every variant. The
+    /// match below has no wildcard arm, like the one in [`Blocker::is_hard`]: a new variant does not
+    /// compile until it is listed here and classified there.
+    #[test]
+    fn blocker_classification_exhaustive() {
+        use Blocker::*;
+        for b in [
+            Driver,
+            HasDependents { names: vec![] },
+            ObjectChangedSinceHarvest,
+        ] {
+            assert!(b.is_hard(), "{b:?}");
+        }
+        for b in [ReversibilityPartial, ProgramUnresolved] {
+            assert!(!b.is_hard(), "{b:?}");
+        }
+        let all: Vec<Blocker> = hard().into_iter().chain(soft()).collect();
+        let mut covered = Vec::new();
+        for b in &all {
+            // One arm per variant, in declaration order: the index is the variant's position.
+            let position = match b {
+                DenyListed { .. } => 0,
+                StructuralContainer => 1,
+                WindowsBaseline => 2,
+                OwnedByInstalledMsi { .. } => 3,
+                ReferencedByOtherApp { .. } => 4,
+                InsideOtherApp { .. } => 5,
+                ContainsOtherApp { .. } => 6,
+                SharedRefcount => 7,
+                MsiProductStillRegistered => 8,
+                BurnDependentsRemain => 9,
+                ExistedBeforeInstall => 10,
+                TrustedInstallerOwned => 11,
+                MicrosoftSystemTarget => 12,
+                SharedIid => 13,
+                SyncRoot => 14,
+                HardLinkOutsidePlan => 15,
+                RegLink => 16,
+                ReparseMismatch => 17,
+                WindowsManagedOpaque => 18,
+                CannotBackUp => 19,
+                NotGone => 20,
+                Driver => 21,
+                HasDependents { .. } => 22,
+                ObjectChangedSinceHarvest => 23,
+                UnmatchedChildren { .. } => 24,
+                UserData => 25,
+                TooLarge => 26,
+                OlderThanInstall => 27,
+                MultiTargetOwner => 28,
+                ReversibilityNone => 29,
+                InUse => 30,
+                MsiPackageUnreadable => 31,
+                ChangedSinceScan => 32,
+                ReversibilityPartial => 33,
+                ProgramUnresolved => 34,
+            };
+            assert_eq!(b.is_hard(), position < 24, "{b:?}");
+            covered.push(position);
+        }
+        covered.sort_unstable();
+        assert_eq!(
+            covered,
+            (0..35).collect::<Vec<_>>(),
+            "a variant is missing from the lists"
+        );
+        assert_eq!(
+            serde_json::to_value(HasDependents {
+                names: vec!["A".into()]
+            })
+            .unwrap(),
+            json!({"kind": "HasDependents", "names": ["A"]})
+        );
+        assert!(serde_json::from_value::<Blocker>(json!({"kind": "HasDependents"})).is_err());
+        assert_eq!(
+            serde_json::to_value(ReversibilityPartial).unwrap(),
+            json!({"kind": "ReversibilityPartial"})
+        );
     }
 
     #[test]

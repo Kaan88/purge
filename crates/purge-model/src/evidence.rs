@@ -45,11 +45,17 @@ impl Tier {
     }
 }
 
-/// Which installer record an [`EvidenceKind::InstallerManifest`] was read from.
+/// Which installer record an [`EvidenceKind::InstallerManifest`] was read from. Serialised by its
+/// variant name (`"Inno"`, `"Msi"`, `"Burn"`), the rule the enum has always followed, so M1a plans read
+/// unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum ManifestKind {
     /// The Inno Setup uninstall log (`unins*.dat`), read before the uninstall.
     Inno,
+    /// The product's cached MSI package and its Windows Installer registration, read at harvest (M1b).
+    Msi,
+    /// A Burn bundle's registration and package cache, read at harvest (M1b).
+    Burn,
 }
 
 /// A kind of evidence: one row of the §5.3 table.
@@ -80,6 +86,10 @@ pub enum EvidenceKind {
     /// A CLSID/AppID/TypeLib key whose harvested server path lies in an InstallRoot, with no other
     /// referrer.
     ComKeyOwnership,
+    /// A service, scheduled task or firewall rule the harvest recorded as the app's (its program lies in
+    /// an InstallRoot or is one of the app's exes, or an MSI `ServiceInstall` row of the product names
+    /// it), still with the identity digest the harvest recorded (M1b).
+    OwnedSystemObject,
     /// The app's own ARP key or uninstaller file.
     UninstallerArtifact,
     /// A package whose external location equals or lies under an InstallRoot, or whose family was
@@ -115,8 +125,10 @@ pub enum EvidenceKind {
 }
 
 impl EvidenceKind {
-    /// Every kind, in §5.3 order (positives, then `EmptyAfterPlan`, then the negatives).
-    pub const ALL: [EvidenceKind; 24] = [
+    /// Every kind, in §5.3 order (positives, then `EmptyAfterPlan`, then the negatives). One entry per row:
+    /// [`EvidenceKind::InstallerManifest`] appears once, as its Inno form; its Msi and Burn forms have the
+    /// same tier, weight and scope.
+    pub const ALL: [EvidenceKind; 25] = [
         EvidenceKind::InsideInstallRoot,
         EvidenceKind::InstallerManifest(ManifestKind::Inno),
         EvidenceKind::InPreUninstallRefSnapshot,
@@ -126,6 +138,7 @@ impl EvidenceKind {
         EvidenceKind::HarvestedToken,
         EvidenceKind::AppNamedKeyWithRootRef,
         EvidenceKind::ComKeyOwnership,
+        EvidenceKind::OwnedSystemObject,
         EvidenceKind::UninstallerArtifact,
         EvidenceKind::AppxExternalLocation,
         EvidenceKind::ChainedRef,
@@ -165,6 +178,7 @@ impl EvidenceKind {
             | HarvestedToken
             | AppNamedKeyWithRootRef
             | ComKeyOwnership
+            | OwnedSystemObject
             | UninstallerArtifact
             | AppxExternalLocation
             | ChainedRef
@@ -193,6 +207,7 @@ impl EvidenceKind {
             HarvestedToken => 7,
             AppNamedKeyWithRootRef => 7,
             ComKeyOwnership => 7,
+            OwnedSystemObject => 8,
             UninstallerArtifact => 6,
             AppxExternalLocation => 8,
             ChainedRef => 5,
@@ -225,6 +240,7 @@ impl EvidenceKind {
             HarvestedToken => ScopeSet::PATH_KEY_VALUE,
             AppNamedKeyWithRootRef => ScopeSet::KEY,
             ComKeyOwnership => ScopeSet::KEY,
+            OwnedSystemObject => ScopeSet::OBJECT,
             UninstallerArtifact => ScopeSet::PATH_KEY,
             AppxExternalLocation => ScopeSet::PACKAGE,
             ChainedRef => ScopeSet::VALUE_KEY,
@@ -344,16 +360,16 @@ mod tests {
     use serde_json::json;
 
     use EvidenceKind::*;
-    use Scope::{Key, Package, Path, Value};
+    use Scope::{Key, Object, Package, Path, Value};
 
     /// The §5.3 table, line by line: kind, tier, weight, allowed scopes.
-    const GOLDEN: [(EvidenceKind, Tier, i8, &[Scope]); 24] = [
+    const GOLDEN: [(EvidenceKind, Tier, i8, &[Scope]); 25] = [
         (InsideInstallRoot, Tier::A, 9, &[Path]),
         (
             InstallerManifest(ManifestKind::Inno),
             Tier::A,
             8,
-            &[Value, Key, Path, Package],
+            &[Value, Key, Path, Package, Object],
         ),
         (InPreUninstallRefSnapshot, Tier::A, 8, &[Value]),
         (ProvenOwnedSkeleton, Tier::A, 8, &[Key]),
@@ -362,6 +378,7 @@ mod tests {
         (HarvestedToken, Tier::A, 7, &[Value, Key, Path]),
         (AppNamedKeyWithRootRef, Tier::A, 7, &[Key]),
         (ComKeyOwnership, Tier::A, 7, &[Key]),
+        (OwnedSystemObject, Tier::A, 8, &[Object]),
         (UninstallerArtifact, Tier::A, 6, &[Key, Path]),
         (AppxExternalLocation, Tier::A, 8, &[Package]),
         (ChainedRef, Tier::A, 5, &[Value, Key]),
@@ -370,22 +387,27 @@ mod tests {
         (ExactFullName, Tier::B, 4, &[Key, Path]),
         (NameTokenExact, Tier::C, 3, &[Key, Path]),
         (VendorContainer, Tier::C, 2, &[Key, Path]),
-        (TimeWindow, Tier::C, 1, &[Value, Key, Path, Package]),
+        (TimeWindow, Tier::C, 1, &[Value, Key, Path, Package, Object]),
         (EmptyAfterPlan, Tier::A, 8, &[Key, Path]),
         (
             ExecutablesPresent,
             Tier::C,
             -4,
-            &[Value, Key, Path, Package],
+            &[Value, Key, Path, Package, Object],
         ),
-        (ManyFiles, Tier::C, -2, &[Value, Key, Path, Package]),
-        (GenericName, Tier::C, -3, &[Value, Key, Path, Package]),
-        (NameFuzzy, Tier::C, -2, &[Value, Key, Path, Package]),
+        (ManyFiles, Tier::C, -2, &[Value, Key, Path, Package, Object]),
+        (
+            GenericName,
+            Tier::C,
+            -3,
+            &[Value, Key, Path, Package, Object],
+        ),
+        (NameFuzzy, Tier::C, -2, &[Value, Key, Path, Package, Object]),
         (
             ModifiedAfterUninstall,
             Tier::C,
             -4,
-            &[Value, Key, Path, Package],
+            &[Value, Key, Path, Package, Object],
         ),
     ];
 
@@ -404,6 +426,54 @@ mod tests {
         // The golden table covers every kind exactly once, in the order of `ALL`.
         assert_eq!(GOLDEN.map(|row| row.0), EvidenceKind::ALL);
         assert_eq!(EvidenceKind::MEGA_VENDOR_WEIGHT, 0);
+    }
+
+    /// C-MODEL-SCOPE: the one new row, and nothing else moved (the golden table above is otherwise the
+    /// M1a table).
+    #[test]
+    fn owned_system_object_is_tier_a_weight_8_scope_object_only() {
+        assert_eq!(OwnedSystemObject.default_tier(), Tier::A);
+        assert_eq!(OwnedSystemObject.default_weight(), 8);
+        assert_eq!(OwnedSystemObject.scope(), ScopeSet::OBJECT);
+        assert_eq!(
+            OwnedSystemObject.scope().iter().collect::<Vec<_>>(),
+            [Object]
+        );
+        assert!(!OwnedSystemObject.is_negative());
+        let e = Evidence::new(OwnedSystemObject, Object, SourceTrust::AdminOnly, "sysobj").unwrap();
+        assert_eq!((e.tier, e.weight, e.scope), (Tier::A, 8, Object));
+        for scope in [Value, Key, Path, Package] {
+            assert!(Evidence::new(OwnedSystemObject, scope, SourceTrust::AdminOnly, "x").is_none());
+        }
+        // No other kind may be recorded with Object scope except the "as recorded" and "any" rows.
+        for kind in EvidenceKind::ALL {
+            if kind.scope().contains(Object) {
+                assert!(
+                    kind == OwnedSystemObject || kind.scope() == ScopeSet::ANY,
+                    "{kind:?}"
+                );
+            }
+        }
+        assert_eq!(
+            serde_json::to_value(OwnedSystemObject).unwrap(),
+            json!("OwnedSystemObject")
+        );
+        // The manifest kinds keep the enum's spelling; M1a's `Inno` reads as before.
+        for (kind, name) in [
+            (ManifestKind::Inno, "Inno"),
+            (ManifestKind::Msi, "Msi"),
+            (ManifestKind::Burn, "Burn"),
+        ] {
+            let ev = InstallerManifest(kind);
+            assert_eq!(
+                serde_json::to_value(ev).unwrap(),
+                json!({"InstallerManifest": name})
+            );
+            assert_eq!(
+                (ev.default_tier(), ev.default_weight(), ev.scope()),
+                (Tier::A, 8, ScopeSet::ANY)
+            );
+        }
     }
 
     #[test]

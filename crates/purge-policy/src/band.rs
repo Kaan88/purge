@@ -12,15 +12,23 @@
 //! 2. **Blocked** if any hard blocker is present.
 //! 3. **Safe** iff all of these hold:
 //!    - some evidence is Tier A after step 1 and its scope equals the scope of the target (Value evidence
-//!      never supports a key; services, tasks and firewall rules have no M1a evidence scope). `EmptyAfterPlan`
-//!      supports only a `RemoveDirIfEmpty` action;
+//!      never supports a key). `EmptyAfterPlan` supports only a `RemoveDirIfEmpty` action.
+//!      `InstallerManifest` of every kind (Inno, Msi, Burn) is Tier A for whatever scope it was recorded
+//!      with (P-MSI-1);
+//!    - **P-OBJ-1:** for a typed object (a service, task or firewall rule: `Scope::Object`) the supporting
+//!      evidence must be `OwnedSystemObject` itself. Any other evidence, however strong and whatever its
+//!      stored scope, leaves the object at most Likely;
 //!    - S ≥ 8 (see `score`);
 //!    - no soft blocker, and the removal can be undone: `Reversibility::None` and `Action::RemovePackage`
 //!      (§7.8: a package removal has no inverse) count as the `ReversibilityNone` soft blocker even when the
-//!      producer did not attach it;
+//!      producer did not attach it. For a typed object, `Reversibility::Partial` counts as the
+//!      `ReversibilityPartial` soft blocker in the same way (P-OBJ-2), so a typed object is Safe only with
+//!      `Reversibility::Full`. `ReversibilityPartial` and `ProgramUnresolved` are soft blockers;
 //!    - harm ≤ Low, where a declared `PATH` segment edit counts as Low (see `harm`);
-//!    - the category is neither `UserData` nor `System`;
-//!    - the action fits the target and is not `ReportOnly`.
+//!    - the category is not `UserData`, and not `System` unless the target is a typed object (P-OBJ-1: a
+//!      service or firewall rule is `System` by nature; a registry key or value under `Services` stays
+//!      never Safe);
+//!    - the action fits the target and is not `ReportOnly` (a typed object is removed by `DeleteKey`).
 //! 4. Otherwise **Likely** iff Tier A evidence exists together with a soft blocker (stated or implied, see
 //!    above) or a (stored) harm ≥ Medium, or S ≥ 4, or `ExactFullName` is present, or the item is the
 //!    app's own data folder named after the product (a `UserData` path with the `UserData` blocker and
@@ -46,7 +54,7 @@ use crate::score::{LIKELY_MIN, SAFE_MIN, effective_weight, score, score_where};
 
 /// Version of the rule set in this crate. Bump it with every change that can alter a decision or an
 /// explanation; the golden tests are keyed by it and it is part of the plan hash.
-pub const POLICY_VERSION: &str = "m1a.6";
+pub const POLICY_VERSION: &str = "m1b.1";
 
 /// Whether a target is machine-wide or belongs to one user, for Rule T (§5.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -171,11 +179,16 @@ pub fn action_fits(action: Action, target: &Target) -> bool {
         ) | (Action::DeleteValue, Target::RegValue { .. })
             | (Action::EditSegment, Target::RegMultiSzSegment { .. })
             | (Action::RemovePackage, Target::AppxPackage { .. })
+            | (
+                Action::DeleteKey,
+                Target::Service { .. } | Target::Task { .. } | Target::FirewallRule { .. }
+            )
     )
 }
 
-/// The scope evidence must have to support `target`; `None` when nothing can (services, tasks, firewall
-/// rules, and the truth-only `RegValueChanged`).
+/// The scope evidence must have to support `target`; `None` when nothing can (the truth-only
+/// `RegValueChanged`). Services, tasks and firewall rules need `Scope::Object`, and only
+/// `OwnedSystemObject` supports them (P-OBJ-1, see [`decide`]).
 fn support_scope(target: &Target) -> Option<Scope> {
     match target {
         Target::RegValueChanged { .. } => None,
@@ -201,12 +214,17 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
 
     let target_scope = ctx.target_scope.or_machine_for(&c.target);
     let needed = support_scope(&c.target);
+    // A service, task or firewall rule (P-OBJ-1).
+    let typed_object = needed == Some(Scope::Object);
     let tier_of = |e: &Evidence| effective_tier(e, target_scope);
     let supports = |e: &Evidence| {
         tier_of(e) == Tier::A
             && Some(e.scope) == needed
             && effective_weight(e) > 0
             && (e.kind != EvidenceKind::EmptyAfterPlan || c.action == Action::RemoveDirIfEmpty)
+            // P-OBJ-1: only the harvest's record of the object speaks for a typed object; an installer
+            // record or any other evidence recorded with Object scope does not.
+            && (!typed_object || e.kind == EvidenceKind::OwnedSystemObject)
     };
 
     let any_tier_a = c.evidence.iter().any(|e| tier_of(e) == Tier::A);
@@ -223,7 +241,17 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
             .blockers
             .iter()
             .any(|b| matches!(b, Blocker::ReversibilityNone));
-    let soft = c.has_soft_blocker() || irreversible;
+    // P-OBJ-2: a typed object whose undo is only partial (a service account's stored password, a task's
+    // stored credentials, a firewall rule re-created under a new id) counts as carrying the
+    // `ReversibilityPartial` blocker, whether or not its scanner attached it. Other targets keep the M1a
+    // rule, under which `Partial` alone does not stop Safe.
+    let partial = typed_object && c.reversibility == Reversibility::Partial;
+    let partial_unstated = partial
+        && !c
+            .blockers
+            .iter()
+            .any(|b| matches!(b, Blocker::ReversibilityPartial));
+    let soft = c.has_soft_blocker() || irreversible || partial;
     // Only evidence about the segment itself declares it: Value scope, or the segment taken as a path
     // (`InsideInstallRoot`). A manifest record about the key that holds the list says nothing about one
     // entry of it.
@@ -240,7 +268,13 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
             .map(|e| e.kind),
     );
     let harm = effective_harm(c.harm, declared_segment);
-    let category_ok = !matches!(c.category, Category::UserData | Category::System);
+    // `System` is never Safe, except for a typed object, which is `System` by nature and is held to
+    // P-OBJ-1 instead (`OwnedSystemObject` support above, no soft blocker, `Full` undo, harm <= Low).
+    let category_ok = match c.category {
+        Category::UserData => false,
+        Category::System => typed_object,
+        _ => true,
+    };
     let actionable = action_fits(c.action, &c.target);
     let exact_full_name = c
         .evidence
@@ -297,6 +331,9 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
     }
     if irreversible_unstated {
         notes.push(Note::CannotBeUndone);
+    }
+    if partial_unstated {
+        notes.push(Note::PartialUndo);
     }
     if declared_segment && c.harm == Harm::Medium {
         notes.push(Note::DeclaredSegment);

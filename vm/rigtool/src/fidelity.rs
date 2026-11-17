@@ -12,13 +12,30 @@
 //! "outside plan" row: parents and siblings, which must not change either.
 //!
 //! The journal is read by [`journal::parse_journal`], shared with `execdiff`.
+//!
+//! Typed objects (M1b, C-RIG; the measure each row compares):
+//! - `DeleteService`: the whole `Services\<name>` key tree as `deep` captures it (every key's class, SDDL and link
+//!   flag; every value's name, type, length and data hash; the runtime `Enum` subkey left out by `deep`). The SCM
+//!   configuration and the service's security descriptor are compared through that registry form: `Type`,
+//!   `Start`, `ErrorControl`, `ImagePath`, `ObjectName`, `DisplayName`, `Group`, `DependOnService`, the config2
+//!   values and `Security\Security` are values of the tree (spike: `scm_owned_values` is empty).
+//! - `DeleteTask`: the XML and the SDDL Task Scheduler returns (`deep` objects, `get_Xml` and
+//!   `GetSecurityDescriptor(OWNER|GROUP|DACL)`), compared byte for byte. The task file and the `TaskCache\Tree` key
+//!   are compared too, except the task file's content (`sha256`, `size`: the file is rewritten on registration,
+//!   spike `file_equal: false`, outside the measure) and the values the spike lists as regenerated
+//!   ([`SpikeRules::taskcache_regenerated`]); every such use is printed and listed in `normalisations`.
+//! - `DeleteFirewallRule`: the value name (exact) and the rule string as a field multiset (version, then the
+//!   (key, value) pairs, both exact, order ignored). A rule string whose bytes differ only in field order passes and
+//!   the use is printed; without the `deep` objects the value's data hash must be equal.
+//!
+//! The normalisations come from `vm/spikes/m1b/RESULT.json` (compiled in, [`spike_rules`]) and nothing else.
 
 use crate::ambient::AmbientSet;
 use crate::canon;
-use crate::deep::{self, DeepDoc, FileRec, KeyRec, ValueRec};
+use crate::deep::{self, DeepDoc, FileRec, KeyRec, ObjRec, ValueRec};
 use crate::err::{Context, Result, bail};
 use crate::jsonio;
-use crate::target::Target;
+use crate::target::{FW_RULES, TASKCACHE, TASKS_DIR, Target};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -63,6 +80,94 @@ const FILE_META: &[&str] = &["path", "typed", "last_write", "short_name"];
 const FILE_ID_FIELDS: &[&str] = &["file_id", "volume_serial"];
 const KEY_META: &[&str] = &["key", "typed", "last_write", "values", "only_values", "omitted"];
 const VALUE_META: &[&str] = &["name"];
+
+// ---------------------------------------------------------------------------------------------
+// Spike rules (vm/spikes/m1b/RESULT.json)
+// ---------------------------------------------------------------------------------------------
+
+/// The M1b spike's result, compiled in: the only source of the typed-object normalisations.
+const SPIKE_RESULT: &str = include_str!("../../spikes/m1b/RESULT.json");
+
+/// What the spike allows to differ after a delete and re-create.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpikeRules {
+    /// `task.normalise`: XML/SDDL normalisations (the spike found none).
+    pub task_normalise: Vec<String>,
+    /// `task.taskcache_regenerated`: TaskCache values Task Scheduler writes anew on every registration,
+    /// `Tree|<value>` (the task's `TaskCache\Tree\<path>` key) or `Tasks\{id}|<value>`.
+    pub taskcache_regenerated: Vec<String>,
+    /// `service.scm_owned_values`: service values the SCM writes itself (the spike found none).
+    pub service_scm_owned: Vec<String>,
+}
+
+impl SpikeRules {
+    /// Value names of `prefix` (`Tree` or `Tasks\{id}`) in `taskcache_regenerated`.
+    pub fn regenerated(&self, prefix: &str) -> Vec<String> {
+        self.taskcache_regenerated
+            .iter()
+            .filter_map(|e| e.split_once('|'))
+            .filter(|(p, _)| p.eq_ignore_ascii_case(prefix))
+            .map(|(_, n)| n.to_string())
+            .collect()
+    }
+}
+
+pub fn parse_spike(text: &str) -> Result<SpikeRules> {
+    let v: Value = serde_json::from_str(text).context("spike result")?;
+    if v.get("schema").and_then(Value::as_str) != Some("purge.m1b.spike/1") {
+        bail!("spike result: schema is not purge.m1b.spike/1");
+    }
+    let list = |path: &[&str]| -> Result<Vec<String>> {
+        let mut x = &v;
+        for p in path {
+            x = x.get(p).with_context(|| format!("spike result: no {}", path.join(".")))?;
+        }
+        x.as_array()
+            .with_context(|| format!("spike result: {} is not an array", path.join(".")))?
+            .iter()
+            .map(|e| e.as_str().map(str::to_string).with_context(|| format!("spike result: {}[]", path.join("."))))
+            .collect()
+    };
+    for kind in ["task", "service", "firewall"] {
+        if v.get(kind).and_then(|k| k.get("exact")).and_then(Value::as_bool) != Some(true) {
+            bail!("spike result: {kind}.exact is not true: no exact restore to measure against");
+        }
+    }
+    Ok(SpikeRules {
+        task_normalise: list(&["task", "normalise"])?,
+        taskcache_regenerated: list(&["task", "taskcache_regenerated"])?,
+        service_scm_owned: list(&["service", "scm_owned_values"])?,
+    })
+}
+
+/// The compiled-in spike rules.
+pub fn spike_rules() -> &'static SpikeRules {
+    static R: std::sync::OnceLock<SpikeRules> = std::sync::OnceLock::new();
+    R.get_or_init(|| parse_spike(SPIKE_RESULT).expect("vm/spikes/m1b/RESULT.json"))
+}
+
+/// A firewall rule string as (version, sorted (key, value) pairs, both exact): C-OBJECT's parse
+/// (`v<digits>.<digits>` first, every other non-empty segment `key=value`, value after the first `=`, at most
+/// 32 KiB). `None` when it does not parse.
+pub fn fw_fields(raw: &str) -> Option<(String, Vec<(String, String)>)> {
+    if raw.is_empty() || raw.len() > 32 * 1024 {
+        return None;
+    }
+    let mut it = raw.split('|');
+    let ver = it.next()?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (maj, min) = ver.strip_prefix('v')?.split_once('.')?;
+    if !digits(maj) || !digits(min) {
+        return None;
+    }
+    let mut f = Vec::new();
+    for seg in it.filter(|s| !s.is_empty()) {
+        let (k, v) = seg.split_once('=')?;
+        f.push((k.to_string(), v.to_string()));
+    }
+    f.sort();
+    Some((ver.to_string(), f))
+}
 
 pub struct FidelityArgs {
     pub before: PathBuf,
@@ -128,6 +233,18 @@ pub mod journal {
         RemovePackage {
             full_name: String,
         },
+        /// M1b (C-EXECOP).
+        DeleteService {
+            name: String,
+        },
+        /// M1b; `path` starts with a backslash.
+        DeleteTask {
+            path: String,
+        },
+        /// M1b; `id` = the registry value name = the WMI InstanceID.
+        DeleteFirewallRule {
+            id: String,
+        },
     }
 
     impl ExecOp {
@@ -140,6 +257,19 @@ pub mod journal {
                 ExecOp::DeleteValue { .. } => "DeleteValue",
                 ExecOp::EditSegment { .. } => "EditSegment",
                 ExecOp::RemovePackage { .. } => "RemovePackage",
+                ExecOp::DeleteService { .. } => "DeleteService",
+                ExecOp::DeleteTask { .. } => "DeleteTask",
+                ExecOp::DeleteFirewallRule { .. } => "DeleteFirewallRule",
+            }
+        }
+
+        /// purge-model `ExecOp::object_kind` (`ObjectKind` serde names).
+        pub fn object_kind(&self) -> Option<&'static str> {
+            match self {
+                ExecOp::DeleteService { .. } => Some("service"),
+                ExecOp::DeleteTask { .. } => Some("task"),
+                ExecOp::DeleteFirewallRule { .. } => Some("firewall_rule"),
+                _ => None,
             }
         }
 
@@ -153,6 +283,9 @@ pub mod journal {
                     Target::RegMultiSzSegment { path: key, name, segment }
                 }
                 ExecOp::RemovePackage { full_name } => Target::AppxPackage { full_name },
+                ExecOp::DeleteService { name } => Target::Service { name },
+                ExecOp::DeleteTask { path } => Target::Task { path },
+                ExecOp::DeleteFirewallRule { id } => Target::FirewallRule { id },
             }
         }
     }
@@ -188,6 +321,8 @@ pub mod journal {
         },
         HeldRetry,
         PendingReboot,
+        /// M1b: a deleted service that is only marked for deletion (another handle is open).
+        PendingDelete,
         Failed {
             code: String,
             #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,6 +340,7 @@ pub mod journal {
                 Outcome::Skipped { .. } => "Skipped",
                 Outcome::HeldRetry => "HeldRetry",
                 Outcome::PendingReboot => "PendingReboot",
+                Outcome::PendingDelete => "PendingDelete",
                 Outcome::Failed { .. } => "Failed",
             }
         }
@@ -292,6 +428,16 @@ pub mod journal {
             backup: BackupRef,
         },
         None,
+        /// M1b: the definition file of the deleted object.
+        RecreateService {
+            definition: BackupRef,
+        },
+        RecreateTask {
+            definition: BackupRef,
+        },
+        RecreateFirewallRule {
+            definition: BackupRef,
+        },
     }
 
     impl Inverse {
@@ -306,6 +452,9 @@ pub mod journal {
                     | (ExecOp::DeleteValue { .. }, Inverse::RestoreValue { .. })
                     | (ExecOp::EditSegment { .. }, Inverse::ReinsertSegment { .. })
                     | (ExecOp::RemovePackage { .. }, Inverse::None)
+                    | (ExecOp::DeleteService { .. }, Inverse::RecreateService { .. })
+                    | (ExecOp::DeleteTask { .. }, Inverse::RecreateTask { .. })
+                    | (ExecOp::DeleteFirewallRule { .. }, Inverse::RecreateFirewallRule { .. })
             )
         }
     }
@@ -344,6 +493,12 @@ pub mod journal {
         },
         Package,
         Absent,
+        /// M1b: a service, task or firewall rule (`object_kind`: `service` | `task` | `firewall_rule`).
+        Object {
+            object_kind: ObjectKind,
+            sha256: String,
+            running: bool,
+        },
         /// The validate pass refused the item (or could not open it); nothing was bound.
         Refused {
             #[serde(default)]
@@ -352,6 +507,25 @@ pub mod journal {
             #[serde(default)]
             os_error: Option<u32>,
         },
+    }
+
+    /// purge-model `ObjectKind`.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ObjectKind {
+        Service,
+        Task,
+        FirewallRule,
+    }
+
+    impl ObjectKind {
+        pub fn name(self) -> &'static str {
+            match self {
+                ObjectKind::Service => "service",
+                ObjectKind::Task => "task",
+                ObjectKind::FirewallRule => "firewall_rule",
+            }
+        }
     }
 
     impl Facts {
@@ -408,7 +582,8 @@ pub mod journal {
                 Outcome::Vanished => &mut self.vanished,
                 Outcome::Skipped { .. } => &mut self.skipped,
                 Outcome::HeldRetry => &mut self.held_retry,
-                Outcome::PendingReboot => &mut self.pending_reboot,
+                // purge-model counts a service marked for deletion with the pending reboots.
+                Outcome::PendingReboot | Outcome::PendingDelete => &mut self.pending_reboot,
                 Outcome::Failed { .. } => &mut self.failed,
             } += 1;
         }
@@ -489,9 +664,19 @@ pub mod journal {
         KeyExists,
         ValueDiffers,
         ValueChanged,
-        GateBlocked { blocker: Blocker },
+        GateBlocked {
+            blocker: Blocker,
+        },
         Irreversible,
         ParentMissing,
+        /// M1b: an object with the backed-up name, path or id exists again and differs from the backup.
+        ObjectExists,
+        /// M1b: the service is still marked for deletion.
+        PendingDelete,
+        /// M1b: the backed-up program lies outside the journal header's roots.
+        ProgramOutsideRoot,
+        /// M1b: a task with a stored password.
+        PasswordNeeded,
     }
 
     /// purge-model `ReconcileResult`.
@@ -762,6 +947,19 @@ pub mod journal {
                     if !x.inverse.fits(&x.exec_op) {
                         bail!("journal line {ln}: op {}: inverse does not fit {}", x.op, x.exec_op.name());
                     }
+                    // purge-model `Intent::is_consistent`: an object op acts on object facts of its own kind.
+                    if let Some(want) = x.exec_op.object_kind() {
+                        match &x.pre {
+                            Facts::Object { object_kind, .. } if object_kind.name() == want => {}
+                            _ => bail!(
+                                "journal line {ln}: op {}: {} with pre facts that are not a {want} object",
+                                x.op,
+                                x.exec_op.name()
+                            ),
+                        }
+                    } else if matches!(x.pre, Facts::Object { .. }) {
+                        bail!("journal line {ln}: op {}: {} with object pre facts", x.op, x.exec_op.name());
+                    }
                     let o = &mut j.ops[p];
                     if o.item != x.item {
                         bail!("journal line {ln}: op {} intent names item {:?}, validated {:?}", x.op, x.item, o.item);
@@ -908,6 +1106,14 @@ pub mod journal {
             json!({"kind": "Value", "type": 1, "size": 4, "data_sha256": HASH_A})
         }
 
+        fn def(op: u32) -> Value {
+            json!({"path": format!("def\\{op:06}.json"), "sha256": HASH_A, "bytes": 300})
+        }
+
+        fn object_facts(kind: &str) -> Value {
+            json!({"kind": "Object", "object_kind": kind, "sha256": HASH_B, "running": false})
+        }
+
         fn backup(op: u32) -> Value {
             json!({"path": format!("reg\\{op:06}.regbackup.json"), "sha256": HASH_A, "bytes": 10})
         }
@@ -958,6 +1164,24 @@ pub mod journal {
                     json!({"kind": kind, "full_name": a}),
                     json!({"kind": "None"}),
                     json!({"kind": "Package"}),
+                ),
+                "DeleteService" => (
+                    json!({"type": "Service", "name": a}),
+                    json!({"kind": kind, "name": a}),
+                    json!({"kind": "RecreateService", "definition": def(op)}),
+                    object_facts("service"),
+                ),
+                "DeleteTask" => (
+                    json!({"type": "Task", "path": a}),
+                    json!({"kind": kind, "path": a}),
+                    json!({"kind": "RecreateTask", "definition": def(op)}),
+                    object_facts("task"),
+                ),
+                "DeleteFirewallRule" => (
+                    json!({"type": "FirewallRule", "id": a}),
+                    json!({"kind": kind, "id": a}),
+                    json!({"kind": "RecreateFirewallRule", "definition": def(op)}),
+                    object_facts("firewall_rule"),
                 ),
                 k => panic!("fixture: unknown kind {k}"),
             }
@@ -1269,6 +1493,9 @@ pub struct FidelityReport {
     pub differences: Vec<Difference>,
     pub ops: Vec<OpRow>,
     pub excluded: Excluded,
+    /// M1b: every use of a typed-object rule that let a difference pass (one line each, with its source).
+    #[serde(default)]
+    pub normalisations: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -1289,6 +1516,8 @@ struct Prep {
     kind: String,
     /// Primitive targets (canonical).
     prims: Vec<Target>,
+    /// The op's own target when it is a service, task or firewall rule (canonical).
+    typed: Option<Target>,
     renamed: bool,
     ran: bool,
 }
@@ -1297,6 +1526,8 @@ enum Obj<'a> {
     File(&'a str),
     Key(&'a str),
     Value(&'a str, &'a str),
+    /// A `deep` object record: (kind, id).
+    Typed(&'a str, &'a str),
 }
 
 impl Prep {
@@ -1304,6 +1535,15 @@ impl Prep {
     fn covers(&self, o: &Obj) -> Option<(bool, usize)> {
         let depth = |p: &str| p.split('\\').count();
         let k = self.kind.as_str();
+        if let Obj::Typed(kind, id) = o {
+            return match (*kind, &self.typed) {
+                ("task", Some(Target::Task { path })) if canon::ci_eq(id, path) => Some((true, usize::MAX)),
+                ("firewall_rule", Some(Target::FirewallRule { id: t })) if canon::ci_eq(id, t) => {
+                    Some((true, usize::MAX))
+                }
+                _ => None,
+            };
+        }
         for t in &self.prims {
             match (o, t) {
                 (Obj::File(p), Target::Path { path }) => {
@@ -1428,9 +1668,24 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
         if let Some(t) = t {
             let ran = o.kind.is_some()
                 && !matches!(o.outcome.as_deref(), Some("Vanished" | "Skipped" | "Failed" | "MovedBack" | "Cancelled"));
-            preps.push(Prep { id: o.id.clone(), label, kind, prims: t.primitives(), renamed: o.renamed, ran });
+            let typed = matches!(t, Target::Service { .. } | Target::Task { .. } | Target::FirewallRule { .. })
+                .then(|| t.clone());
+            preps.push(Prep { id: o.id.clone(), label, kind, prims: t.primitives(), typed, renamed: o.renamed, ran });
         }
     }
+    let objs = |d: &'_ DeepDoc| -> HashMap<(String, String), ObjRec> {
+        d.objects.iter().map(|o| ((o.kind.clone(), canon::fold(&o.id)), o.clone())).collect()
+    };
+    let (oa, oc) = (objs(a), objs(c));
+    let spike = spike_rules();
+    if !spike.task_normalise.is_empty() || !spike.service_scm_owned.is_empty() {
+        warnings.push(format!(
+            "spike result lists normalisations this tool does not apply (task.normalise {:?}, \
+             service.scm_owned_values {:?}): compared strictly",
+            spike.task_normalise, spike.service_scm_owned
+        ));
+    }
+    let mut normalisations: Vec<String> = Vec::new();
     let op_pos: HashMap<String, usize> = op_rows.iter().enumerate().map(|(i, r)| (r.id.clone(), i)).collect();
 
     let mut tally: BTreeMap<String, u64> = BTreeMap::new(); // label -> ops
@@ -1487,11 +1742,34 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
             excluded.ambient_objects += 1;
             continue;
         }
+        // The task file of a DeleteTask: its content is outside the task measure (XML + SDDL, compared below).
+        let task_file = attribute(&preps, &Obj::File(path)).and_then(|p| match &p.typed {
+            Some(Target::Task { path: tp })
+                if canon::ci_eq(path, &format!("{TASKS_DIR}\\{}", tp.trim_start_matches('\\'))) =>
+            {
+                Some(tp.clone())
+            }
+            _ => None,
+        });
+        let extra: &'static [&'static str] = if task_file.is_some() { TASK_FILE_CONTENT } else { &[] };
+        if let Some(tp) = &task_file {
+            let full = diff_fields(to_value(ra), to_value(rc), FILE_META);
+            let hidden: Vec<&str> =
+                full.iter().map(|d| d.field.as_str()).filter(|f| TASK_FILE_CONTENT.contains(f)).collect();
+            if !hidden.is_empty() {
+                normalisations.push(format!(
+                    "task {tp}: file {path}: {} not compared (outside the task measure, C-RIG XML + SDDL; \
+                     spike: the file is rewritten on registration, file_equal false)",
+                    hidden.join(", ")
+                ));
+            }
+        }
         let fields = Box::new(move |renamed: bool| {
             let mut skip: Vec<&str> = FILE_META.to_vec();
             if !renamed {
                 skip.extend_from_slice(FILE_ID_FIELDS);
             }
+            skip.extend_from_slice(extra);
             diff_fields(to_value(ra), to_value(rc), &skip)
         });
         record(format!("P:{path}"), Obj::File(path), fields, &mut excluded);
@@ -1525,9 +1803,40 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
                 continue;
             }
             let (ja, jc) = (to_value(xa), to_value(xc));
-            let fields = Box::new(move |_: bool| diff_fields(ja.clone(), jc.clone(), VALUE_META));
+            let extra = typed_value_rule(attribute(&preps, &Obj::Value(key, name)), key, name, spike, &oa, &oc);
+            if let Some((skip, why)) = &extra {
+                let full = diff_fields(ja.clone(), jc.clone(), VALUE_META);
+                let hidden: Vec<&str> = full.iter().map(|d| d.field.as_str()).filter(|f| skip.contains(f)).collect();
+                if !hidden.is_empty() {
+                    normalisations.push(format!("value {key}|{name}: {} not compared ({why})", hidden.join(", ")));
+                }
+            }
+            let skip: Vec<&'static str> =
+                VALUE_META.iter().copied().chain(extra.map(|e| e.0).unwrap_or_default().iter().copied()).collect();
+            let fields = Box::new(move |_: bool| diff_fields(ja.clone(), jc.clone(), &skip));
             record(format!("V:{key}|{name}"), Obj::Value(key, name), fields, &mut excluded);
         }
+    }
+
+    // Typed objects through their own API (M1b).
+    let mut okeys: Vec<&(String, String)> = oa.keys().chain(oc.keys()).collect();
+    okeys.sort();
+    okeys.dedup();
+    for k in okeys {
+        let (ra, rc) = (oa.get(k), oc.get(k));
+        let Some(r) = ra.or(rc) else { continue };
+        let (kind, id) = (r.kind.as_str(), r.id.as_str());
+        let f = obj_diff(ra, rc);
+        if kind == "firewall_rule"
+            && f.is_empty()
+            && ra.and_then(|x| x.rule.as_ref()) != rc.and_then(|x| x.rule.as_ref())
+        {
+            normalisations.push(format!(
+                "firewall rule {id}: the rule string differs only in field order (C-RIG: value name + field multiset)"
+            ));
+        }
+        let tag = if kind == "task" { "T" } else { "FW" };
+        record(format!("{tag}:{id}"), Obj::Typed(kind, id), Box::new(move |_: bool| f.clone()), &mut excluded);
     }
 
     // Rows.
@@ -1585,8 +1894,102 @@ pub fn compare(a: &DeepDoc, c: &DeepDoc, ops: &[JOp], amb: Option<&AmbientSet>, 
         differences,
         ops: op_rows,
         excluded,
+        normalisations,
         warnings,
     }
+}
+
+/// The task file's content fields: outside the task measure (C-RIG compares the XML and the SDDL).
+const TASK_FILE_CONTENT: &[&str] = &["sha256", "size"];
+/// Value fields a regenerated or re-encoded value may change (its type must stay).
+const VALUE_CONTENT: &[&str] = &["sha256", "len"];
+/// The rows of the M1b typed objects.
+const TYPED_ROWS: &[&str] = &["DeleteService", "DeleteTask", "DeleteFirewallRule"];
+
+/// Value fields to leave out for a value of a typed object, and why: a `TaskCache\Tree\<path>` value the spike
+/// lists as regenerated (`Tree|<name>`), or the firewall rule's value when both captures hold its rule string
+/// (compared as a field multiset instead).
+fn typed_value_rule(
+    p: Option<&Prep>,
+    key: &str,
+    name: &str,
+    spike: &SpikeRules,
+    oa: &HashMap<(String, String), ObjRec>,
+    oc: &HashMap<(String, String), ObjRec>,
+) -> Option<(&'static [&'static str], String)> {
+    match &p?.typed {
+        Some(Target::Task { path }) => {
+            let tree = format!("{TASKCACHE}\\Tree\\{}", path.trim_start_matches('\\'));
+            (canon::ci_eq(key, &tree) && spike.regenerated("Tree").iter().any(|n| n.eq_ignore_ascii_case(name)))
+                .then(|| (VALUE_CONTENT, format!("spike task.taskcache_regenerated Tree|{name}")))
+        }
+        Some(Target::FirewallRule { id }) => {
+            let k = ("firewall_rule".to_string(), canon::fold(id));
+            let both = oa.get(&k).is_some_and(|o| o.rule.is_some()) && oc.get(&k).is_some_and(|o| o.rule.is_some());
+            (canon::ci_eq(key, FW_RULES) && name.eq_ignore_ascii_case(id) && both)
+                .then(|| (VALUE_CONTENT, "compared as the rule's field multiset".to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// Differences between two typed-object records. A task: `present`, `xml` and `sddl` byte for byte. A firewall
+/// rule: `present`, then the rule string as (version, field multiset). An `error` on either side is a difference.
+fn obj_diff(a: Option<&ObjRec>, c: Option<&ObjRec>) -> Vec<FieldDiff> {
+    let mut out = Vec::new();
+    let (ea, ec) = (a.and_then(|x| x.error.clone()), c.and_then(|x| x.error.clone()));
+    if ea.is_some() || ec.is_some() {
+        out.push(FieldDiff { field: "error".into(), before: json!(ea), after: json!(ec) });
+    }
+    let (pa, pc) = (a.is_some_and(|x| x.present), c.is_some_and(|x| x.present));
+    if pa != pc {
+        out.push(FieldDiff { field: "present".into(), before: json!(pa), after: json!(pc) });
+        return out;
+    }
+    let (Some(a), Some(c)) = (a, c) else { return out };
+    if !pa {
+        return out;
+    }
+    if a.kind == "firewall_rule" {
+        let (ra, rc) = (a.rule.as_deref().unwrap_or(""), c.rule.as_deref().unwrap_or(""));
+        if ra == rc {
+            return out;
+        }
+        match (fw_fields(ra), fw_fields(rc)) {
+            (Some((va, fa)), Some((vc, fc))) => {
+                if va != vc {
+                    out.push(FieldDiff { field: "rule.version".into(), before: json!(va), after: json!(vc) });
+                }
+                // Multiset differences (both sides sorted).
+                let only = |x: &[(String, String)], y: &[(String, String)]| -> Vec<String> {
+                    let mut y = y.to_vec();
+                    let mut left = Vec::new();
+                    for e in x {
+                        match y.iter().position(|f| f == e) {
+                            Some(i) => {
+                                y.remove(i);
+                            }
+                            None => left.push(format!("{}={}", e.0, e.1)),
+                        }
+                    }
+                    left
+                };
+                let (lost, new) = (only(&fa, &fc), only(&fc, &fa));
+                if !lost.is_empty() || !new.is_empty() {
+                    out.push(FieldDiff { field: "rule.fields".into(), before: json!(lost), after: json!(new) });
+                }
+            }
+            _ => out.push(FieldDiff { field: "rule".into(), before: json!(ra), after: json!(rc) }),
+        }
+    } else {
+        if a.xml != c.xml {
+            out.push(FieldDiff { field: "xml".into(), before: json!(a.xml), after: json!(c.xml) });
+        }
+        if a.sddl != c.sddl {
+            out.push(FieldDiff { field: "sddl".into(), before: json!(a.sddl), after: json!(c.sddl) });
+        }
+    }
+    out
 }
 
 pub(crate) fn read_deep(p: &Path) -> Result<DeepDoc> {
@@ -1636,6 +2039,15 @@ pub fn cmd_fidelity(a: &FidelityArgs) -> Result<FidelityReport> {
             }
         );
     }
+    // M1b typed objects: every difference and every normalisation used, one per line.
+    for d in rep.differences.iter().filter(|d| TYPED_ROWS.contains(&d.action.as_str())) {
+        for f in &d.fields {
+            eprintln!("fidelity: difference: {} {} {}: {} -> {}", d.action, d.object, f.field, f.before, f.after);
+        }
+    }
+    for n in &rep.normalisations {
+        eprintln!("fidelity: normalised: {n}");
+    }
     for w in &rep.warnings {
         eprintln!("fidelity: warning: {w}");
     }
@@ -1654,6 +2066,30 @@ mod tests {
 
     const R: &str = "C:\\Program Files\\Fx";
     const K: &str = "HKLM\\SOFTWARE\\Fx";
+
+    /// The compiled-in spike result: the regenerated TaskCache values and nothing to normalise elsewhere.
+    #[test]
+    fn spike_rules_from_result() {
+        let r = spike_rules();
+        assert!(r.task_normalise.is_empty() && r.service_scm_owned.is_empty(), "{r:?}");
+        let mut tree = r.regenerated("Tree");
+        tree.sort();
+        assert_eq!(tree, ["Id", "SD"]);
+        let mut tasks = r.regenerated("Tasks\\{id}");
+        tasks.sort();
+        assert_eq!(tasks, ["DynamicInfo", "Hash", "Triggers"]);
+        assert!(parse_spike(&SPIKE_RESULT.replace("purge.m1b.spike/1", "purge.m1b.spike/2")).is_err());
+        assert!(parse_spike(&SPIKE_RESULT.replacen("\"exact\": true", "\"exact\": false", 1)).is_err());
+    }
+
+    #[test]
+    fn firewall_fields_parse() {
+        let (v, f) = fw_fields("v2.33|Dir=In|Action=Allow|Name=a=b|").unwrap();
+        assert_eq!(v, "v2.33");
+        assert_eq!(f, [("Action".into(), "Allow".into()), ("Dir".into(), "In".into()), ("Name".into(), "a=b".into())]);
+        assert!(fw_fields("2.33|Dir=In").is_none());
+        assert!(fw_fields("v2.33|NoEquals|").is_none());
+    }
 
     fn file(path: &str, content: &str, n: u64) -> FileRec {
         FileRec {

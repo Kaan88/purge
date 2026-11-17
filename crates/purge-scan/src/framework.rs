@@ -54,6 +54,10 @@ use purge_source::types::{ExistsState, RegData};
 
 use crate::skeleton;
 
+mod m1b;
+
+pub use m1b::{PathStore, ScanExt, inventory_lists_product, product_known_in};
+
 // ---------------------------------------------------------------------------------------------------------
 // Scanner trait and root specs
 // ---------------------------------------------------------------------------------------------------------
@@ -380,6 +384,9 @@ pub struct ScanCtx<'a> {
     pub other_apps: &'a OtherApps,
     /// Read bounds.
     pub limits: ScanLimits,
+    /// What the pipeline read once for every scanner (M1b, C-SCANEXT): the reference walk, the MSI
+    /// ownership index and the system objects. [`ScanExt::none`] everywhere but the pipeline.
+    pub ext: &'a ScanExt,
 }
 
 /// Proof that a path is a dangling reference (§5.3 `DanglingRef`). Only [`ScanCtx::dangling`] makes one,
@@ -529,7 +536,15 @@ impl<'a> ScanCtx<'a> {
     /// the slot held another product's record before the install), and taking the value out leaves a
     /// hole in a structure Windows manages. What the slot holds now is the app's record; whose the
     /// slot is, nothing shows.
+    ///
+    /// M1b (C-PATHSTORES): in a path-keyed store (`SharedDLLs`, `MuiCache`, `UserAssist`, …,
+    /// [`ScanCtx::path_keyed_store`]) the value is the app's registration only when its name, decoded
+    /// as the store requires, is a full path inside an InstallRoot of the app or one of its exe paths
+    /// ([`ScanCtx::path_from_value_name`]); nothing else above counts there.
     pub fn owns_registration(&self, key: &str, name: &str) -> bool {
+        if let Some(store) = self.path_keyed_store(key) {
+            return self.path_store_value_is_apps(store, name);
+        }
         // 1. The installer's record.
         self.installer_recorded_value(key, name) || self.owns_place(key, true)
     }
@@ -655,10 +670,25 @@ impl<'a> ScanCtx<'a> {
     /// [`CandidateBuilder::build`].
     ///
     /// It also records the scan-time identity of every path item ([`ScanCtx::record_item_fp`]).
+    ///
+    /// M1b (C-SCANEXT) adds, for every candidate of every scanner, M1a scanners included:
+    ///
+    /// - a candidate on a service, task or firewall rule without a well-formed `object_fp` of its
+    ///   kind is dropped, and so is one whose object the system-object index does not hold with that
+    ///   digest, and a candidate that carries `OwnedSystemObject` on a target that is not a system
+    ///   object; each drop is a scanner fault ([`ScanExt::take_faults`]); the guard's object rules are
+    ///   applied to every system object here, from the index ([`ScanCtx::object_guard`]);
+    ///   `OwnedSystemObject` that no harvest record backs is lowered to Tier B
+    ///   ([`ScanCtx::seal_object`]);
+    /// - after the rule about what a value holds, the MSI blockers of the target
+    ///   ([`ScanCtx::msi_blockers`]).
     pub fn run(&self, scanner: &dyn Scanner, app: &AppIdentityView) -> Vec<Candidate> {
-        let mut found = scanner.scan(self, app);
-        for candidate in &mut found {
-            self.record_item_fp(candidate);
+        let found = scanner.scan(self, app);
+        let mut sealed = Vec::with_capacity(found.len());
+        // Compiled once per run, and only when a system object needs the guard's object rules.
+        let deny = std::cell::OnceCell::new();
+        for mut candidate in found {
+            self.record_item_fp(&mut candidate);
             // A candidate of a co-removed product is judged as that product's: its paths and
             // ids are the product's, not the app's (`reg_software::common::for_each_app`).
             let owner = (candidate.owner != self.fp.app)
@@ -670,12 +700,22 @@ impl<'a> ScanCtx<'a> {
                         .find_map(|product| product.fingerprint.as_deref())
                 })
                 .flatten();
-            match owner {
-                Some(fp) => ScanCtx { fp, ..*self }.seal(candidate),
-                None => self.seal(candidate),
+            let ctx = match owner {
+                Some(fp) => ScanCtx { fp, ..*self },
+                None => *self,
+            };
+            if !ctx.seal_object(scanner.id(), &mut candidate, &deny) {
+                continue;
             }
+            ctx.seal(&mut candidate);
+            for blocker in ctx.msi_blockers(&candidate.target) {
+                if !candidate.blockers.contains(&blocker) {
+                    candidate.blockers.push(blocker);
+                }
+            }
+            sealed.push(candidate);
         }
-        found
+        sealed
     }
 
     /// Records the identity a path item has now, as `Candidate::item_fp` (ENGINE_PLAN.md §5.10 G1:
@@ -1223,6 +1263,7 @@ impl<'a> ScanCtx<'a> {
                 decision: None,
                 // Filled in by `ScanCtx::run` for path items, after the scanner is done.
                 item_fp: None,
+                object_fp: None,
             },
         }
     }
@@ -2634,6 +2675,9 @@ pub(crate) mod testkit {
             subtrees: Vec::new(),
             ext_journal: Vec::new(),
             co_removed: Vec::new(),
+            msi: Vec::new(),
+            burn: None,
+            sys: Default::default(),
             os: OsInfo {
                 edition: EDITION.into(),
                 build: BUILD,
@@ -2693,6 +2737,7 @@ pub(crate) mod testkit {
                 guard: &self.guard,
                 other_apps: &self.other_apps,
                 limits: ScanLimits::default(),
+                ext: ScanExt::none(),
             }
         }
     }
@@ -3244,7 +3289,11 @@ mod tests {
         for kind in EvidenceKind::ALL {
             let expected = !matches!(
                 kind,
-                EvidenceKind::EmptyAfterPlan | EvidenceKind::ComKeyOwnership
+                EvidenceKind::EmptyAfterPlan
+                    | EvidenceKind::ComKeyOwnership
+                    // Stated through the by-value M1b constructor
+                    // `CandidateBuilder::owned_system_object` (tested in `framework::m1b`).
+                    | EvidenceKind::OwnedSystemObject
             );
             assert_eq!(seen.contains(&kind), expected, "{kind:?}");
         }

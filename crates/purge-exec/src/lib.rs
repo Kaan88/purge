@@ -7,15 +7,20 @@
 //!
 //! Milestone: M2 (§11.1).
 
+pub mod act_firewall;
 pub mod act_fs;
 pub mod act_reg;
+pub mod act_service;
+pub mod act_task;
 pub mod act_typed;
+pub mod durable;
 pub mod execute;
 pub mod expiry;
 pub mod fault;
 pub mod gate;
 pub mod journal;
 pub mod locked;
+pub mod objdef;
 pub mod plan_in;
 pub mod prepare;
 pub mod recover;

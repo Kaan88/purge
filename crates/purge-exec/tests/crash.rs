@@ -7,6 +7,11 @@
 //! Unelevated, on a temp directory and a test-created `HKU\<SID>\Software\PurgeTest-<random>` subtree.
 //! The package backend is a marker file, the boot-time move list an in-memory value; the child gets a
 //! temp directory of its own inside the scratch directory.
+//!
+//! A power loss (gate case p902) is simulated on top of a fault point: the child records the test key
+//! at every flush of its hive (`purge_exec::durable::set_flush_observer`), and after the child died the
+//! parent puts the key back to the last of those records, which is what Windows' lazy registry writes
+//! leave after a power loss.
 
 #![cfg(all(feature = "fault-inject", feature = "test-support"))]
 
@@ -36,8 +41,12 @@ use purge_win::reg::{REG_MULTI_SZ, REG_SZ};
 const CHILD_ROOT: &str = "PURGE_XUNDO_CHILD_ROOT";
 /// Set only in a child process: the name of the parent's test key.
 const CHILD_KEY: &str = "PURGE_XUNDO_CHILD_KEY";
-/// Set only in a child process: what to do (`execute`, `undo`, `bootmove`, `resume` or `rollback`).
+/// Set only in a child process: what to do (`execute`, `undo`, `bootmove`, `resume`, `rollback`,
+/// `power-execute`, `power-undo` or `segments-execute`).
 const CHILD_MODE: &str = "PURGE_XUNDO_CHILD_MODE";
+/// Set only in a child process of a power-loss scenario: the file the test key is recorded in at every
+/// flush of its hive.
+const CHILD_FLUSHED: &str = "PURGE_XUNDO_CHILD_FLUSHED";
 
 /// The exit code of a process ended by `std::process::abort` on Windows (`__fastfail`).
 const ABORT_CODE: i32 = 0xC000_0409_u32 as i32;
@@ -152,7 +161,22 @@ fn child_scenario() {
     // The parent owns the scratch directory and the key.
     let mut rig = ManuallyDrop::new(Rig::with(s, roots));
     let k = TestKey::at(&key);
+    if std::env::var_os(CHILD_FLUSHED).is_some() {
+        purge_exec::durable::set_flush_observer(Some(record_flushed));
+    }
     match mode.as_str() {
+        "power-execute" => {
+            let request = power_plan(&rig.s, &k);
+            rig.run(request);
+        }
+        "segments-execute" => {
+            let request = segments_plan(&rig.s, &k);
+            rig.run(request);
+        }
+        "power-undo" => {
+            let [id]: [SessionId; 1] = rig.sessions().try_into().unwrap();
+            rig.undo_all(&id);
+        }
         "execute" => {
             let request = crash_plan(&rig.s, &k);
             rig.run(request);
@@ -192,21 +216,45 @@ fn child_scenario() {
 
 /// Runs the child in `mode` with the fault `at` and returns its exit code.
 fn spawn(rig: &Rig, k: &TestKey, mode: &str, at: &str) -> Option<i32> {
+    spawn_with(rig, k, mode, at, &[])
+}
+
+/// [`spawn`] with more environment variables for the child.
+fn spawn_with(rig: &Rig, k: &TestKey, mode: &str, at: &str, vars: &[(&str, &str)]) -> Option<i32> {
     let temp = rig.s.dir("child-temp");
-    Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args(["--exact", "child_scenario", "--test-threads=1"])
         .env(CHILD_ROOT, &rig.s.root)
         .env(CHILD_KEY, &k.name)
         .env(CHILD_MODE, mode)
         .env(fault::ENV_AT, at)
         .env_remove(fault::ENV_PAUSE)
+        .env_remove(CHILD_FLUSHED)
         .env("TEMP", &temp)
         .env("TMP", &temp)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .code()
+        .stderr(Stdio::null());
+    for (name, value) in vars {
+        command.env(name, value);
+    }
+    command.status().unwrap().code()
+}
+
+/// The child's flush observer: after a flush of the hive the test key is in, the test key as it is now
+/// is what a power loss leaves; it goes to the file [`CHILD_FLUSHED`] names (written aside, then
+/// renamed over the last record).
+fn record_flushed(hive: &str) {
+    let (Ok(file), Ok(key)) = (std::env::var(CHILD_FLUSHED), std::env::var(CHILD_KEY)) else {
+        return;
+    };
+    let k = TestKey::at(&key);
+    if !hive.eq_ignore_ascii_case(&format!(r"HKU\{}", k.sid)) {
+        return;
+    }
+    let aside = format!("{file}.new");
+    std::fs::write(ext(&aside), snap_json(&k.snap())).unwrap();
+    std::fs::rename(ext(&aside), ext(&file)).unwrap();
 }
 
 /// The pair a boot-time move of op 1 registers, from the op's journalled intent.
@@ -274,6 +322,12 @@ fn drive(point: &str) -> Drive {
         fault::EXPIRY_MID => Drive::NotDriven(
             "expiry is not a run: a crash in its delete walk leaves a finished session, which the \
              next expiry finishes (expiry's own crash test); recovery has no step for it",
+        ),
+        // M1b: no typed object can be made in an unelevated test; the rig's crash matrix drives these
+        // (gate procedure G6).
+        fault::OBJDELETE_AFTER | fault::SVCRESTORE_MID | fault::FWRESTORE_MID => Drive::NotDriven(
+            "a service, task or firewall rule point: the crash plan holds no typed object (they need \
+             an elevated rig VM); the rig's crash matrix (M1b gate G6) drives it",
         ),
         other => panic!("fault point {other} has no scenario in the crash matrix"),
     }
@@ -1161,4 +1215,610 @@ fn a_session_directory_without_a_journal_is_removed() {
     assert_eq!(out.state, None);
     assert!(rig.sessions().is_empty());
     assert!(recover::pending(&rig.roots).unwrap().sessions.is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------------
+// A power loss (gate case p902)
+// ---------------------------------------------------------------------------------------------------
+
+/// What the power-loss plan acts on: a value inside a key tree that the plan then deletes from the
+/// inside out (as the gate's `nested-sequence` fixture), a value, a list segment, then a file and its
+/// directory, so that the registry ops' `done` records reach the disk with the file's intent.
+fn power_setup(rig: &Rig, k: &TestKey) {
+    k.create(r"Nest\A\B\C");
+    k.create(r"Nest\Keep");
+    k.set(r"Nest\A", "a", REG_SZ, &utf16z("a"));
+    k.set(r"Nest\A\B", "b", REG_SZ, &utf16z("b"));
+    k.set(r"Nest\A\B\C", "leaf", REG_SZ, &utf16z("leaf"));
+    k.create("Vals");
+    k.set("Vals", "Gone", REG_SZ, &utf16z("bye"));
+    k.set("Vals", "Stays", REG_SZ, &utf16z("hi"));
+    k.create("Seg");
+    k.set(
+        "Seg",
+        "List",
+        REG_MULTI_SZ,
+        &multi_sz(&["keep", "vendor", "also"]),
+    );
+    rig.s.file(r"app\f1.txt", b"one");
+}
+
+/// The power-loss plan: ops 1 to 6 change the registry, op 7 moves a file, op 8 removes its directory.
+fn power_plan(s: &Scratch, k: &TestKey) -> ExecRequest {
+    request(
+        vec![
+            safe(
+                "p-leaf",
+                value(&k.wire(r"Nest\A\B\C"), "leaf"),
+                Action::DeleteValue,
+            ),
+            safe("p-c", key(&k.wire(r"Nest\A\B\C")), Action::DeleteKey),
+            safe("p-b", key(&k.wire(r"Nest\A\B")), Action::DeleteKey),
+            safe("p-a", key(&k.wire(r"Nest\A")), Action::DeleteKey),
+            safe("p-val", value(&k.wire("Vals"), "Gone"), Action::DeleteValue),
+            safe(
+                "p-seg",
+                segment(&k.wire("Seg"), "List", "vendor"),
+                Action::EditSegment,
+            ),
+            quarantine("p-f1", &s.path(r"app\f1.txt")),
+            safe("p-app", path(&s.path("app")), Action::RemoveDirIfEmpty),
+        ],
+        Vec::new(),
+    )
+}
+
+/// The machine after an uninterrupted run of the power-loss plan.
+fn power_reference() -> &'static World {
+    static REFERENCE: OnceLock<World> = OnceLock::new();
+    REFERENCE.get_or_init(|| {
+        let mut rig = Rig::new("power-reference");
+        let k = TestKey::new();
+        power_setup(&rig, &k);
+        let done = rig.run(power_plan(&rig.s, &k));
+        assert_eq!(
+            outcomes(&rig.journal(&done.session)),
+            vec![Some(ItemOutcome::Done); 8],
+            "{:#?}",
+            done.report
+        );
+        world(&rig, &k)
+    })
+}
+
+/// The power goes off: the test key falls back to what it was at the last flush of its hive that the
+/// child recorded in `flushed` (or that the parent recorded before the child started).
+fn power_loss(k: &TestKey, flushed: &str) {
+    let text = std::fs::read_to_string(ext(flushed)).unwrap();
+    k.restore_snap(&snap_from_json(&text));
+}
+
+/// The child runs the power-loss plan and dies at `point`:`hit`. With `power_off` the test key then
+/// falls back to its last flushed state; with `restarted` recovery takes Windows to have started since
+/// the run began (a power loss always restarts it). Returns the rig, the key, the machine before the
+/// run and the session.
+fn power_crash(
+    point: &str,
+    hit: u32,
+    power_off: bool,
+    restarted: bool,
+) -> (Rig, TestKey, World, SessionId) {
+    let mut rig = Rig::new("power");
+    let k = TestKey::new();
+    power_setup(&rig, &k);
+    let before = world(&rig, &k);
+    let flushed = rig.s.path("flushed.json");
+    // On disk before the run.
+    std::fs::write(ext(&flushed), snap_json(&k.snap())).unwrap();
+    let code = spawn_with(
+        &rig,
+        &k,
+        "power-execute",
+        &format!("{point}:{hit}"),
+        &[(CHILD_FLUSHED, flushed.as_str())],
+    );
+    assert_eq!(
+        code,
+        Some(ABORT_CODE),
+        "{point}:{hit}: the child did not die"
+    );
+    if power_off {
+        power_loss(&k, &flushed);
+    }
+    rig.restarted = restarted;
+    let [id]: [SessionId; 1] = rig.sessions().try_into().unwrap();
+    (rig, k, before, id)
+}
+
+/// What exit 0 of `journal resume` stands on (`recovered_exit` in the CLI): the run committed with
+/// every item done, its report and index entry written, every re-probed op as the journal says, and
+/// no warning.
+fn assert_clean_resume(out: &RecoverOutput, what: &str) {
+    let report = out.report.as_ref().expect("a resumed run has its report");
+    assert_eq!(report.state, SessionState::Committed, "{what}: {out:#?}");
+    assert!(
+        report
+            .items
+            .iter()
+            .all(|item| item.outcome == ItemOutcome::Done),
+        "{what}: {out:#?}"
+    );
+    assert!(out.report_written && out.index_updated, "{what}: {out:#?}");
+    assert!(
+        out.reprobed.iter().all(|r| r.matches_journal()),
+        "{what}: {out:#?}"
+    );
+    assert!(report.warnings.is_empty(), "{what}: {:#?}", report.warnings);
+    assert!(out.warnings.is_empty(), "{what}: {:#?}", out.warnings);
+}
+
+/// A crash while executing, at `point`:`hit`, then recovery in `mode`. Before the fix the registry ops'
+/// `done` records survived a power loss and their changes did not: resume committed removals that had
+/// not happened, and a rollback found the nested keys back with content (`KeyExists`). Without
+/// `power_off` the process only dies and every change stays; without `restarted` the unconfirmed ops
+/// are not probed again (review M1), with it they are, and the ops a later op of the run overtook
+/// count as done (review S1).
+fn power_loss_scenario(point: &str, hit: u32, mode: RecoverMode, power_off: bool, restarted: bool) {
+    let what =
+        format!("{point}:{hit} with power off {power_off}, restarted {restarted}, then {mode:?}");
+    let (mut rig, k, before, id) = power_crash(point, hit, power_off, restarted);
+    let crashed = rig.journal(&id);
+    assert!(!crashed.state.is_finished(), "{what}");
+    let unconfirmed: Vec<OpId> = crashed.state.unconfirmed().map(|op| op.op).collect();
+    let listed = recover::pending(&rig.roots).unwrap();
+    assert_eq!(listed.sessions[0].unconfirmed, unconfirmed, "{what}");
+
+    let out = recover_with(&mut rig, &id, mode);
+    let read = rig.journal(&id);
+    let reprobed: Vec<OpId> = out.reprobed.iter().map(|r| r.op).collect();
+    let expected = if restarted {
+        unconfirmed.clone()
+    } else {
+        Vec::new()
+    };
+    assert_eq!(reprobed, expected, "{what}: {out:#?}");
+    assert!(
+        out.reprobed
+            .iter()
+            .all(|r| r.matches_journal() && r.corrected.is_none()),
+        "{what}: {out:#?}"
+    );
+    match mode {
+        RecoverMode::Resume => {
+            // Nothing was lost, so nothing is made again.
+            assert_eq!(
+                out.reprobed.iter().all(|r| r.redone.is_none()),
+                !power_off || unconfirmed.is_empty(),
+                "{what}: {out:#?}"
+            );
+            assert_eq!(
+                outcomes(&read),
+                vec![Some(ItemOutcome::Done); 8],
+                "{what}: {out:#?}"
+            );
+            assert_eq!(read.state.phase(), Phase::Committed, "{what}");
+            assert_eq!(&world(&rig, &k), power_reference(), "{what}: {out:#?}");
+            assert_eq!(out.state, Some(SessionState::Committed), "{what}");
+            assert_clean_resume(&out, &what);
+        }
+        RecoverMode::Rollback => {
+            assert_eq!(world(&rig, &k), before, "{what}: {out:#?}");
+            for op in read.state.ops().filter(|op| op.intent.is_some()) {
+                assert!(
+                    op.undo.is_settled(),
+                    "{what}: op {} is {:?}: {out:#?}",
+                    op.op,
+                    op.undo
+                );
+            }
+            assert_eq!(out.state, Some(SessionState::Undone), "{what}: {out:#?}");
+            assert_eq!(
+                read.state.aborted().map(|a| a.reason),
+                Some(AbortReason::RolledBack),
+                "{what}"
+            );
+        }
+    }
+    assert!(read.state.unconfirmed().next().is_none(), "{what}");
+    assert_idempotent(&mut rig, &k, &id, mode, &what);
+    let undone = rig.undo_all(&id);
+    assert_eq!(undone.stopped, None, "{what}");
+    assert_eq!(world(&rig, &k), before, "{what}: {undone:#?}");
+}
+
+/// A power loss while undoing a committed session of the power-loss plan, at `point`:`hit`, then
+/// recovery in `mode`. Before the fix an `undo_done` survived and the restore it records did not.
+fn power_loss_in_undo(point: &str, hit: u32, mode: RecoverMode) {
+    let what = format!("power off in undo at {point}:{hit}, then {mode:?}");
+    let mut rig = Rig::new("power-undo");
+    let k = TestKey::new();
+    power_setup(&rig, &k);
+    let before = world(&rig, &k);
+    let done = rig.run(power_plan(&rig.s, &k));
+    let id = done.session.clone();
+    let flushed = rig.s.path("flushed.json");
+    // The committed run is on disk (its `commit` flushed the hive).
+    std::fs::write(ext(&flushed), snap_json(&k.snap())).unwrap();
+    let code = spawn_with(
+        &rig,
+        &k,
+        "power-undo",
+        &format!("{point}:{hit}"),
+        &[(CHILD_FLUSHED, flushed.as_str())],
+    );
+    assert_eq!(code, Some(ABORT_CODE), "{what}: the child did not die");
+    power_loss(&k, &flushed);
+    assert_eq!(
+        recover::pending(&rig.roots).unwrap().sessions[0].kind,
+        PendingKind::Undo,
+        "{what}"
+    );
+
+    let out = recover_with(&mut rig, &id, mode);
+    let read = rig.journal(&id);
+    assert_eq!(world(&rig, &k), before, "{what}: {out:#?}");
+    for op in read.state.ops() {
+        assert!(
+            op.undo.is_settled(),
+            "{what}: op {} is {:?}",
+            op.op,
+            op.undo
+        );
+    }
+    assert_eq!(out.state, Some(SessionState::Undone), "{what}: {out:#?}");
+    assert_idempotent(&mut rig, &k, &id, mode, &what);
+}
+
+/// Gate case p902 in the crash matrix: the power goes off after the registry ops' `done` records
+/// reached the disk (with the next intent, at the next `done`, or with the last `group_end`), and the
+/// registry falls back to its last flush. Resume makes the lost changes again; rollback ends with every
+/// op undone and nothing in conflict.
+#[test]
+fn a_power_loss_after_registry_dones_is_recovered_by_resume_and_by_rollback() {
+    power_reference();
+    let mut failures = Vec::new();
+    for (point, hit, power_off, restarted) in [
+        (fault::INTENT_FLUSHED, 7, true, true),
+        (fault::DONE_BEFORE, 7, true, true),
+        (fault::COMMIT_BEFORE, 1, true, true),
+        (fault::DONE_BEFORE, 2, true, true),
+        // The process only died: with no restart nothing is probed again (review M1); with one
+        // everything is, and nothing is made again.
+        (fault::INTENT_FLUSHED, 7, false, false),
+        (fault::INTENT_FLUSHED, 7, false, true),
+    ] {
+        for mode in [RecoverMode::Resume, RecoverMode::Rollback] {
+            if let Err(e) = std::panic::catch_unwind(|| {
+                power_loss_scenario(point, hit, mode, power_off, restarted)
+            }) {
+                failures.push(format!(
+                    "{point}:{hit} power off {power_off} restarted {restarted} {mode:?}: {}",
+                    panic_text(e)
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// Review S1 (a), in the crash matrix's terms: on the nested sequence, the process dies after the key
+/// delete of op 2 (`Nest\A\B\C`) and before its `done` (`done.before:2`), so op 1's value went with
+/// the key while op 2 still has an open intent. Recovery ends clean (exit 0, no warning), with and
+/// without a restart since. Before the fix op 1 was reported lost (`gate.undo-key-missing`) and the
+/// resume exited 10.
+#[test]
+fn a_crash_between_a_key_delete_and_its_done_is_not_reported_lost() {
+    power_reference();
+    let mut failures = Vec::new();
+    for restarted in [true, false] {
+        for mode in [RecoverMode::Resume, RecoverMode::Rollback] {
+            if let Err(e) = std::panic::catch_unwind(|| {
+                power_loss_scenario(fault::DONE_BEFORE, 2, mode, false, restarted)
+            }) {
+                failures.push(format!("restarted {restarted} {mode:?}: {}", panic_text(e)));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// The test the durability review proposed (Question 5, 1): the lazy writer modelled outside the code
+/// under test. Windows may write any prefix of the registry changes since the last flush before the
+/// power goes, so for every prefix of the nested sequence's six registry ops (none, op 1, ops 1-2, ...,
+/// all six) the key is put into that state after the run died with every `done` on disk
+/// (`intent.flushed:7`); resume must reach the uninterrupted run and rollback the machine before it.
+/// It fails without the re-probe whatever the flush code does.
+#[test]
+fn every_prefix_of_the_lost_registry_changes_is_recovered() {
+    let prefixes = power_prefixes();
+    let mut failures = Vec::new();
+    for (kept, prefix) in prefixes.iter().enumerate() {
+        for mode in [RecoverMode::Resume, RecoverMode::Rollback] {
+            let what = format!("{kept} of 6 registry changes kept, then {mode:?}");
+            let run = || {
+                let (mut rig, k, before, id) = power_crash(fault::INTENT_FLUSHED, 7, false, true);
+                k.restore_snap(prefix);
+                let out = recover_with(&mut rig, &id, mode);
+                let read = rig.journal(&id);
+                // The machine first: this is what fails without the re-probe.
+                match mode {
+                    RecoverMode::Resume => {
+                        assert_eq!(&world(&rig, &k), power_reference(), "{what}: {out:#?}");
+                        assert_clean_resume(&out, &what);
+                    }
+                    RecoverMode::Rollback => {
+                        assert_eq!(world(&rig, &k), before, "{what}: {out:#?}");
+                        assert_eq!(out.state, Some(SessionState::Undone), "{what}: {out:#?}");
+                    }
+                }
+                assert_eq!(out.reprobed.len(), 6, "{what}: {out:#?}");
+                assert_eq!(
+                    out.reprobed.iter().filter(|r| r.redone.is_some()).count(),
+                    6 - kept,
+                    "{what}: {out:#?}"
+                );
+                assert!(read.state.unconfirmed().next().is_none(), "{what}");
+                assert_idempotent(&mut rig, &k, &id, mode, &what);
+            };
+            if let Err(e) = std::panic::catch_unwind(run) {
+                failures.push(format!("{what}: {}", panic_text(e)));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// The test key of the nested sequence after each prefix of its six registry ops: index `n` holds it
+/// after ops 1 to `n` (taken when a child dies at op `n`'s `done.before`), index 0 before the run.
+fn power_prefixes() -> &'static Vec<Vec<KeySnap>> {
+    static PREFIXES: OnceLock<Vec<Vec<KeySnap>>> = OnceLock::new();
+    PREFIXES.get_or_init(|| {
+        (0..=6)
+            .map(|n| {
+                let rig = Rig::new("power-prefix");
+                let k = TestKey::new();
+                power_setup(&rig, &k);
+                if n > 0 {
+                    let at = format!("{}:{n}", fault::DONE_BEFORE);
+                    assert_eq!(spawn(&rig, &k, "power-execute", &at), Some(ABORT_CODE));
+                }
+                k.snap()
+            })
+            .collect()
+    })
+}
+
+/// Review S2: the run's key deletes survived the crash, then the application created `Nest\A` again
+/// with a value of its own. Rollback must not take that key for the one it deleted: the undo of op 4
+/// is a conflict, as in an ordinary undo, and the session is not `Undone`. Before the fix the undo of
+/// the unconfirmed op ran in the completing form, op 4 was `AlreadyRestored` and the session `Undone`
+/// with the backed-up value `a` not put back.
+#[test]
+fn rollback_leaves_a_key_somebody_else_created_again_alone() {
+    let mut failures = Vec::new();
+    for restarted in [false, true] {
+        let what = format!("restarted {restarted}");
+        let run = || {
+            let (mut rig, k, _, id) = power_crash(fault::INTENT_FLUSHED, 7, false, restarted);
+            k.create(r"Nest\A");
+            k.set(r"Nest\A", "new", REG_SZ, &utf16z("new"));
+            let out = rig.rollback(&id);
+            let read = rig.journal(&id);
+            assert_eq!(
+                read.state.op(OpId(4)).unwrap().undo,
+                UndoState::Conflict(UndoConflict::KeyExists),
+                "{what}: {out:#?}"
+            );
+            assert_eq!(
+                out.state,
+                Some(SessionState::PartiallyUndone),
+                "{what}: {out:#?}"
+            );
+            assert!(k.get(r"Nest\A", "new").is_some(), "{what}");
+            assert!(k.get(r"Nest\A", "a").is_none(), "{what}");
+            // With a restart the re-probe found op 4's key not as the run left it and says so.
+            let corrected = read.state.op(OpId(4)).unwrap().outcome.clone();
+            assert_eq!(
+                matches!(corrected, Some(ItemOutcome::Failed { .. })),
+                restarted,
+                "{what}: {corrected:?}"
+            );
+        };
+        if let Err(e) = std::panic::catch_unwind(run) {
+            failures.push(format!("{what}: {}", panic_text(e)));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// Review S3: the power loss took the delete of `Vals\Gone`, and before the resume the application
+/// wrote `Gone` again with other data. The re-probe cannot make the delete again; the journal now says
+/// so (`reconcile` `Retried{Failed{VerifyFailed}}` in place of `Done`), and the report, its counts and
+/// the index entry follow it; the resumed run exits 10 (an item not done). A later undo does not take
+/// the value for one it deleted: it is a conflict, the value stays. Before the fix the op stayed `Done`
+/// in the journal and the report (8 of 8 done).
+#[test]
+fn a_change_the_reprobe_cannot_make_again_is_journalled_as_it_stands() {
+    let (mut rig, k, _, id) = power_crash(fault::INTENT_FLUSHED, 7, true, true);
+    k.set("Vals", "Gone", REG_SZ, &utf16z("other"));
+    let out = rig.resume(&id);
+    let read = rig.journal(&id);
+    let op = read.state.op(OpId(5)).unwrap();
+    assert!(
+        matches!(
+            op.outcome,
+            Some(ItemOutcome::Failed {
+                code: purge_model::exec::op::FailCode::VerifyFailed,
+                ..
+            })
+        ),
+        "{out:#?}"
+    );
+    assert!(
+        matches!(
+            op.reconciles.as_slice(),
+            [ReconcileResult::Retried {
+                outcome: ItemOutcome::Failed { .. }
+            }]
+        ),
+        "{:?}",
+        op.reconciles
+    );
+    let entry = out.reprobed.iter().find(|r| r.op == OpId(5)).unwrap();
+    assert!(!entry.matches_journal());
+    assert_eq!(entry.corrected, op.outcome);
+    assert_eq!(read.state.phase(), Phase::Committed);
+    let report = out.report.as_ref().unwrap();
+    assert_eq!(
+        (report.counts.done, report.counts.failed),
+        (7, 1),
+        "{out:#?}"
+    );
+    assert_eq!(read.state.commit().unwrap().counts, report.counts);
+    assert_eq!(rig.entry(&id).unwrap().counts, report.counts);
+    assert_eq!(report.items[4].outcome, op.outcome.clone().unwrap());
+    assert_eq!(report.warnings.len(), 1, "{:#?}", report.warnings);
+    assert!(read.state.unconfirmed().next().is_none());
+    // Exit 10: committed, but not every item done.
+    assert!(!report.items.iter().all(|item| item.outcome.is_success()));
+
+    let undone = rig.undo_all(&id);
+    let five = undone
+        .report
+        .items
+        .iter()
+        .find(|item| item.op == OpId(5))
+        .unwrap();
+    assert!(
+        matches!(
+            five.result,
+            UndoResult::Conflict {
+                conflict: UndoConflict::ValueDiffers,
+                ..
+            }
+        ),
+        "{undone:#?}"
+    );
+    assert_eq!(k.get("Vals", "Gone").unwrap().1, utf16z("other"));
+}
+
+/// Review M1: the process died after the value delete of op 5 had its `done`, Windows did not restart,
+/// and the application wrote `Gone` back exactly as it was. Nothing can have been lost, so resume does
+/// not probe again and does not delete the value a second time. After a restart it would (the delete
+/// may have been lost and the value is exactly its backup). Before the fix resume deleted it in both
+/// cases.
+#[test]
+fn without_a_restart_resume_does_not_delete_again_what_came_back() {
+    for restarted in [false, true] {
+        let (mut rig, k, _, id) = power_crash(fault::INTENT_FLUSHED, 7, false, restarted);
+        assert!(k.get("Vals", "Gone").is_none());
+        k.set("Vals", "Gone", REG_SZ, &utf16z("bye"));
+        let out = rig.resume(&id);
+        assert_eq!(out.reprobed.is_empty(), !restarted, "{out:#?}");
+        assert_eq!(k.get("Vals", "Gone").is_some(), !restarted, "{out:#?}");
+        assert_eq!(
+            outcomes(&rig.journal(&id)),
+            vec![Some(ItemOutcome::Done); 8],
+            "{out:#?}"
+        );
+        assert_clean_resume(&out, &format!("restarted {restarted}"));
+    }
+}
+
+/// What the segments plan acts on: one list value with two segments the plan removes.
+fn segments_setup(rig: &Rig, k: &TestKey) {
+    k.create("Seg");
+    k.set(
+        "Seg",
+        "List",
+        REG_MULTI_SZ,
+        &multi_sz(&["keep", "vendor", "also"]),
+    );
+    rig.s.file(r"app\f1.txt", b"one");
+}
+
+/// Two segment edits of one value (two PATH entries of one application), then a file.
+fn segments_plan(s: &Scratch, k: &TestKey) -> ExecRequest {
+    request(
+        vec![
+            safe(
+                "s-vendor",
+                segment(&k.wire("Seg"), "List", "vendor"),
+                Action::EditSegment,
+            ),
+            safe(
+                "s-also",
+                segment(&k.wire("Seg"), "List", "also"),
+                Action::EditSegment,
+            ),
+            quarantine("s-f1", &s.path(r"app\f1.txt")),
+        ],
+        Vec::new(),
+    )
+}
+
+/// Review S1 (b): two segment edits of one value, and the run dies at the file's intent. After a
+/// restart the first edit's probe finds the value neither as before nor as it wrote it: the second
+/// edit wrote it since. That is the run's own doing, so recovery ends clean. Before the fix op 1 was
+/// reported lost ("neither what it was nor what the edit writes") and the resume exited 10.
+#[test]
+fn two_edits_of_one_value_are_not_reported_lost() {
+    let mut failures = Vec::new();
+    for mode in [RecoverMode::Resume, RecoverMode::Rollback] {
+        let run = || {
+            let mut rig = Rig::new("segments");
+            let k = TestKey::new();
+            segments_setup(&rig, &k);
+            let before = k.snap();
+            let at = format!("{}:3", fault::INTENT_FLUSHED);
+            assert_eq!(spawn(&rig, &k, "segments-execute", &at), Some(ABORT_CODE));
+            rig.restarted = true;
+            let [id]: [SessionId; 1] = rig.sessions().try_into().unwrap();
+            let out = recover_with(&mut rig, &id, mode);
+            assert_eq!(out.reprobed.len(), 2, "{out:#?}");
+            assert!(
+                out.reprobed
+                    .iter()
+                    .all(|r| r.matches_journal() && r.redone.is_none()),
+                "{out:#?}"
+            );
+            match mode {
+                RecoverMode::Resume => {
+                    assert_eq!(
+                        k.get("Seg", "List").unwrap().1,
+                        multi_sz(&["keep"]),
+                        "{out:#?}"
+                    );
+                    assert_clean_resume(&out, "segments");
+                }
+                RecoverMode::Rollback => {
+                    assert_eq!(k.snap(), before, "{out:#?}");
+                    assert_eq!(out.state, Some(SessionState::Undone), "{out:#?}");
+                }
+            }
+        };
+        if let Err(e) = std::panic::catch_unwind(run) {
+            failures.push(format!("{mode:?}: {}", panic_text(e)));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// The undo half of gate case p902: the power goes off while an undo runs, after the `undo_done` of a
+/// registry restore reached the disk; recovery finishes the undo and the machine is as before the run.
+#[test]
+fn a_power_loss_while_undoing_is_recovered() {
+    let mut failures = Vec::new();
+    // The undo runs ops 8 (the directory), 7 (the file), 6, 5, 4, 3, 2, 1: the fifth `undo_intent`
+    // comes after the restores of the segment and the value, the eighth after those of the keys.
+    for hit in [5, 8] {
+        for mode in [RecoverMode::Resume, RecoverMode::Rollback] {
+            if let Err(e) = std::panic::catch_unwind(|| {
+                power_loss_in_undo(fault::UNDO_INTENT, hit, mode);
+            }) {
+                failures.push(format!("undo.intent:{hit} {mode:?}: {}", panic_text(e)));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }

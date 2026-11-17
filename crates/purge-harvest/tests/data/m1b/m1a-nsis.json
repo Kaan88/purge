@@ -1,0 +1,124 @@
+{
+  "schema": "purge.fp/0",
+  "app": {
+    "program_id": "HKLM|64|Editor",
+    "display_name": "Editor"
+  },
+  "identity": {
+    "names": [
+      "Editor"
+    ],
+    "vendors": [],
+    "tokens": [
+      "editor"
+    ],
+    "mega_vendor": false
+  },
+  "roots": [
+    {
+      "path": "C:\\Program Files (x86)\\Editor",
+      "kind": "InferredRoot",
+      "source": "DisplayIcon",
+      "trust": "AdminOnly",
+      "volume_serial": 2864434397,
+      "parent_existed": true
+    }
+  ],
+  "exes": [
+    {
+      "path": "C:\\Program Files (x86)\\Editor\\editor.exe",
+      "main": true
+    }
+  ],
+  "outside_root_files": [],
+  "uninstallers": [
+    "C:\\Program Files (x86)\\Editor\\uninstall.exe"
+  ],
+  "anchors": {
+    "progids": [],
+    "clsids": [],
+    "appids": [],
+    "typelibs": [],
+    "aumids": [],
+    "package_families": [],
+    "package_full_names": [],
+    "run_entries": []
+  },
+  "tokens": [],
+  "inno": [],
+  "ref_snapshot": [
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Editor",
+        "name": "DisplayIcon"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files (x86)\\Editor\\editor.exe"
+      },
+      "parent_values": 3,
+      "parent_subkeys": 0,
+      "data_hash": "939d3303981fcca9"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Editor",
+        "name": "UninstallString"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Root",
+        "text": "C:\\Program Files (x86)\\Editor"
+      },
+      "parent_values": 3,
+      "parent_subkeys": 0,
+      "data_hash": "b24d486eb2ca233a"
+    }
+  ],
+  "subtrees": [
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Editor",
+      "values": [
+        {
+          "subkey": "",
+          "name": "DisplayIcon",
+          "hash": "1:939d3303981fcca9"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayName",
+          "hash": "1:b335145ed54aa363"
+        },
+        {
+          "subkey": "",
+          "name": "UninstallString",
+          "hash": "1:b24d486eb2ca233a"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 0,
+      "ti_owned": false,
+      "fully_attributed": false
+    }
+  ],
+  "ext_journal": [],
+  "co_removed": [],
+  "os": {
+    "edition": "Professional",
+    "build": 26100,
+    "ubr": 1742
+  },
+  "user_sid": "S-1-5-21-1004336348-1177238915-682003330-1001",
+  "window": {
+    "install_time": null,
+    "t_start": null,
+    "t_end": null
+  },
+  "verify_gone": null,
+  "warnings": [
+    "subtree: the source records no key owners; TrustedInstaller ownership was not checked"
+  ]
+}

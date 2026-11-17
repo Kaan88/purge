@@ -300,7 +300,8 @@ fn exec_op_of(op: &OpState, candidate: Option<&Candidate>) -> Option<ExecOp> {
     if let Some(intent) = &op.intent {
         return Some(intent.exec_op.clone());
     }
-    let resolved = resolve(&op.target, candidate?.action).ok()?;
+    let candidate = candidate?;
+    let resolved = resolve(&op.target, candidate.action, candidate.object_fp.as_ref()).ok()?;
     (resolved.target() == op.target).then_some(resolved)
 }
 
@@ -318,7 +319,14 @@ pub fn build(state: &JournalState, scan: &ScanDoc, notes: &RunNotes, at: FileTim
         let exec_op = exec_op_of(op, candidate);
         if exec_op.is_none() && detail.is_none() {
             warnings.push(format!(
-                "item {} (op {}) was not acted on: it has no executor in this version",
+                "item {} (op {}) was not acted on: it resolves to no executor op",
+                op.item.0, op.op
+            ));
+        }
+        if outcome == ItemOutcome::PendingDelete {
+            warnings.push(format!(
+                "item {} (op {}) is removed at the next restart: the service is marked for delete \
+                 while another program holds it open",
                 op.item.0, op.op
             ));
         }
@@ -365,12 +373,21 @@ pub fn build(state: &JournalState, scan: &ScanDoc, notes: &RunNotes, at: FileTim
         backup_bytes: items
             .iter()
             .fold(0u64, |sum, item| sum.saturating_add(item.backup_bytes)),
-        pending_reboot: state.pending_reboot().next().is_some(),
+        pending_reboot: pending_reboot(state),
         items,
         counts,
         restore_point: notes.restore_point.clone(),
         warnings,
     }
+}
+
+/// Whether something of the session is completed only by a restart: a registered boot-time move, or
+/// a service marked for delete (`PendingDelete`, removed at the next restart at the latest).
+fn pending_reboot(state: &JournalState) -> bool {
+    state.pending_reboot().next().is_some()
+        || state
+            .ops()
+            .any(|op| op.outcome == Some(ItemOutcome::PendingDelete))
 }
 
 /// The owner the plan's items share, when they all name the same app.
@@ -418,7 +435,7 @@ pub(crate) fn summary_with_owner(
         usage: usage(state, data),
         expires: Expiry::from_start(header.created),
         purged: Vec::new(),
-        pending_reboot: state.pending_reboot().next().is_some(),
+        pending_reboot: pending_reboot(state),
         journal: Some(state.mark()),
     }
 }

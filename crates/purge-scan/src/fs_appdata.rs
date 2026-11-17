@@ -611,7 +611,7 @@ mod tests {
     use purge_source::fixture::{Fixture, FixtureBuilder};
 
     use super::*;
-    use crate::framework::{OtherApp, OtherApps, ScanLimits};
+    use crate::framework::{OtherApp, OtherApps, ScanExt, ScanLimits};
 
     const ROAMING: &str = r"C:\Users\tester\AppData\Roaming";
     const LOCAL: &str = r"C:\Users\tester\AppData\Local";
@@ -677,6 +677,9 @@ mod tests {
             subtrees: Vec::new(),
             ext_journal: Vec::new(),
             co_removed: Vec::new(),
+            msi: Vec::new(),
+            burn: None,
+            sys: Default::default(),
             os: OsInfo {
                 edition: "Professional".into(),
                 build: 26340,
@@ -781,6 +784,7 @@ mod tests {
             guard: &guard,
             other_apps: &other_apps,
             limits: ScanLimits::default(),
+            ext: ScanExt::none(),
         };
         let app = AppIdentityView::from_fingerprint(fp, &env);
         FsAppData.scan(&ctx, &app)

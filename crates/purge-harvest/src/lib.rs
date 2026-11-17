@@ -11,13 +11,16 @@
 pub mod anchors;
 pub mod appx_link;
 pub mod assoc;
+pub mod burn;
 pub mod coproducts;
 pub mod exes;
 pub mod harvest;
 pub mod inno;
 pub mod inno_map;
+pub mod msi;
 pub mod refsnap;
 pub mod roots;
 pub mod shared_root;
 pub mod subtree;
+pub mod sysobj;
 pub mod tokens;

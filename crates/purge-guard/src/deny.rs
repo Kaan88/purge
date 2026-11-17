@@ -39,6 +39,20 @@
 //! Two exceptions need no exemption because the rule text itself excludes them: a single
 //! `%WINDIR%\Prefetch\<name>.pf` file, and keys of an event source
 //! (`HKLM\SYSTEM\<set>\Services\EventLog\<log>\<source>`).
+//!
+//! # M1b (C-GUARD)
+//!
+//! The Windows Installer database (`...\CurrentVersion\Installer`, `HKU\<sid>\Software\Microsoft\
+//! Installer`, `<Classes>\Installer`) is a subtree rule (`reg.installer`). It lets a target through only
+//! in the eight shapes of C-GUARD for a product in [`Exemptions::gone_msi_products`], and in the two Burn
+//! dependency shapes for a name in [`Exemptions::gone_burn`] (`installer_shape`). Package Cache entries
+//! are denied (`fs.package-cache`) unless they lie in an entry of [`Exemptions::gone_cache_dirs`] that is a
+//! direct child of a Package Cache root. Empty lists close both exemptions.
+//!
+//! Under `HKLM\SYSTEM`, which stays denied as a whole, the rules `fw.registry-direct`,
+//! `svc.registry-direct` and `reg.eventlog-log` name what a target is before `reg.hklm.system` does.
+//! Typed objects (services, tasks, firewall rules) are judged by [`check_object`], not by the location
+//! rules.
 
 use purge_model::{Blocker, Target, View};
 use serde::{Deserialize, Serialize};
@@ -46,13 +60,67 @@ use serde::{Deserialize, Serialize};
 use crate::canon::{CanonKey, GuardEnv, canon_key, canon_path};
 use crate::prefix::fold;
 
+mod objects;
 pub(crate) mod pattern;
 mod rules;
 mod shared;
 #[cfg(test)]
 mod tests;
 
+pub use objects::{ObjectGuardFacts, check_object};
+pub use rules::{SharedIid, SharedIids, shared_iids};
 pub use shared::{SharedComponent, SharedComponents, shared_components};
+
+/// The names of the deny rules added in M1b (C-GUARD), as reported in [`Blocker::DenyListed`]. A scanner
+/// that blocks with one of them from its own facts (`com.system-class` from the baseline, say) uses these
+/// constants, so that one name is never spelled two ways.
+pub mod ids {
+    /// A service of a driver type (or of a type that could not be read).
+    pub const SYS_DRIVER: &str = "sys.driver";
+    /// A per-user service template or instance.
+    pub const SYS_SERVICE_PERUSER: &str = "sys.service.peruser";
+    /// A service whose program is under `%SystemRoot%`.
+    pub const SYS_SERVICE_WINDOWS: &str = "sys.service.windows";
+    /// A service already marked for deletion.
+    pub const SYS_SERVICE_MARKED: &str = "sys.service.marked";
+    /// A task in one of Windows' folders, or whose program is under `%SystemRoot%`.
+    pub const SYS_TASK_WINDOWS: &str = "sys.task.windows";
+    /// A firewall rule bound to an AppX package or AppContainer.
+    pub const FW_PACKAGE_BOUND: &str = "fw.package-bound";
+    /// A firewall rule whose name is a resource reference (`@...`): Windows' own rule groups.
+    pub const FW_RESOURCE_NAME: &str = "fw.resource-name";
+    /// The firewall policy store under `HKLM\SOFTWARE\Policies`.
+    pub const FW_POLICY_STORE: &str = "fw.policy-store";
+    /// Any registry target in the firewall's own store: rules are removed only as `Target::FirewallRule`.
+    pub const FW_REGISTRY_DIRECT: &str = "fw.registry-direct";
+    /// A service's key or one of its structural subkeys: services are removed only as `Target::Service`.
+    pub const SVC_REGISTRY_DIRECT: &str = "svc.registry-direct";
+    /// The Task Scheduler's registry cache and task directories: tasks are removed only as
+    /// `Target::Task`.
+    pub const TASK_REGISTRY_DIRECT: &str = "task.registry-direct";
+    /// An interface listed in `kb/shared-iids.json`.
+    pub const COM_SHARED_IID: &str = "com.shared-iid";
+    /// A proxy/stub CLSID listed in `kb/shared-iids.json` (`shared_proxy_clsids`): never an owner.
+    pub const COM_SHARED_PROXY: &str = "com.shared-proxy";
+    /// A CLSID, AppID, TypeLib or Interface present in the Windows baseline. Not a location rule (the
+    /// guard has no baseline): the COM scanners report it.
+    pub const COM_SYSTEM_CLASS: &str = "com.system-class";
+    /// A component key of the Installer database; only a gone product's value in it is offered.
+    pub const MSI_COMPONENT_FOREIGN: &str = "msi.component-foreign";
+    /// The Windows Installer database.
+    pub const REG_INSTALLER: &str = "reg.installer";
+    /// A `SharedDLLs` key itself.
+    pub const REG_SHAREDDLLS: &str = "reg.shareddlls";
+    /// An event log key itself; only its source keys are offered.
+    pub const REG_EVENTLOG_LOG: &str = "reg.eventlog-log";
+    /// The `Tracing` key itself.
+    pub const REG_TRACING_ROOT: &str = "reg.tracing-root";
+    /// A WER report directory itself.
+    pub const FS_WER_ROOT: &str = "fs.wer-root";
+    /// A Package Cache root, or an entry in it that no exemption opens (the plan's
+    /// `fs.package-cache-root`; the M1a id is kept).
+    pub const FS_PACKAGE_CACHE: &str = "fs.package-cache";
+}
 
 use pattern::{
     KeyBase, Rel, Seg, literal, parse_fs_pattern, parse_key_pattern, relate, split_fold,
@@ -122,8 +190,12 @@ pub fn kb_rules() -> Result<Vec<DataRule>, serde_json::Error> {
 }
 
 /// What the candidate's evidence has earned, and what the caller has already done.
+///
+/// The three lists (M1b) are filled by the plan's decide step from the fingerprint and a fresh query of
+/// Windows Installer, never from a scanner's candidate facts. Each is empty by default, and an empty list
+/// opens nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Exemptions {
+pub struct Exemptions<'a> {
     /// The key carries `ProvenOwnedSkeleton` evidence: lifts the rules on the `shell` / `shellex` roots
     /// under the Classes shell objects (exact key only).
     pub proven_owned_skeleton: bool,
@@ -138,6 +210,26 @@ pub struct Exemptions {
     /// this, a path with a segment that looks like a short name is denied, because the lexical tests
     /// cannot see what it aliases.
     pub long_names_resolved: bool,
+    /// The target is one value (a whole-value delete, never a key, a segment or an edit) and the
+    /// candidate's admin-trust evidence ties that value's data to the app before the uninstall (R2a
+    /// S10). Lifts `com.shared-iid` and `com.shared-proxy` for exactly that value; the shared keys
+    /// themselves stay denied. Such a value was last written for the app (its data named the app's file
+    /// or one of its anchors): any other product that shares the interface already points at what the
+    /// app's uninstall removed, so removing the value takes nothing from it that still works.
+    pub shared_com_value: bool,
+    /// Bundle ids and provider keys of Burn bundles and packages that are gone. Lets through, under
+    /// `reg.installer`, exactly the keys `<Classes>\Installer\Dependencies\<P>` with `P` listed and
+    /// `<Classes>\Installer\Dependencies\<P>\Dependents\<B>` with `B` listed, where `<Classes>` is
+    /// `HKLM\SOFTWARE\Classes` or a user's Classes. Whole segment, case-insensitive.
+    pub gone_burn: &'a [String],
+    /// Packed product codes (32 hex digits) unknown to Windows Installer in every context. Lets through,
+    /// under `reg.installer`, exactly the eight shapes of C-GUARD (see `installer_shape`). An entry that
+    /// is not 32 hex digits is ignored.
+    pub gone_msi_products: &'a [String],
+    /// Canonical Package Cache directories of gone products and bundles. Lets a path through the
+    /// `fs.package-cache` rule when it equals or lies inside an entry that is a direct child of a Package
+    /// Cache root; any other entry (a root itself, a deeper directory, anything outside) is ignored.
+    pub gone_cache_dirs: &'a [String],
 }
 
 /// A carve-out a rule honours.
@@ -146,6 +238,13 @@ pub(crate) enum Exempt {
     Skeleton,
     StartMenu,
     Prefetch,
+    /// The Installer database rule: lifted for the shapes of `installer_shape`.
+    GoneInstaller,
+    /// The Package Cache subtree rule: lifted inside a listed direct child of a cache root.
+    GoneCache,
+    /// The shared COM rules (`com.shared-iid`, `com.shared-proxy`): lifted for a single value at or below
+    /// the shared key when [`Exemptions::shared_com_value`] is set; never for a key.
+    SharedComValue,
 }
 
 #[derive(Debug, Clone)]
@@ -331,6 +430,8 @@ pub struct DenyList {
     /// from and what targets are matched against.
     norm: GuardEnv,
     rules: Vec<Rule>,
+    /// The rules below `HKLM\SYSTEM` that name a target before the blanket `reg.hklm.system` (M1b).
+    system_rules: Vec<Rule>,
     /// Extra "cannot be a root" patterns for [`DenyList::root_rejection`].
     root_only: Vec<RootOnly>,
     /// Set when the list could not be built; every location is then denied.
@@ -358,7 +459,8 @@ impl DenyList {
             Ok(norm) => norm,
             Err(e) => return DenyList::broken(env, e),
         };
-        let build = |env: &GuardEnv| -> Result<(Vec<Rule>, Vec<RootOnly>), String> {
+        type Built = (Vec<Rule>, Vec<Rule>, Vec<RootOnly>);
+        let build = |env: &GuardEnv| -> Result<Built, String> {
             let mut all = Vec::new();
             for rule in data {
                 let id = format!("kb.{}", rule.id);
@@ -382,13 +484,14 @@ impl DenyList {
                 }
             }
             all.extend(rules::builtin(env)?);
-            Ok((all, rules::root_only(env)?))
+            Ok((all, rules::system()?, rules::root_only(env)?))
         };
         match build(&norm) {
-            Ok((rules, root_only)) => DenyList {
+            Ok((rules, system_rules, root_only)) => DenyList {
                 env: env.clone(),
                 norm,
                 rules,
+                system_rules,
                 root_only,
                 invalid: None,
             },
@@ -401,6 +504,7 @@ impl DenyList {
             env: env.clone(),
             norm: env.clone(),
             rules: Vec::new(),
+            system_rules: Vec::new(),
             root_only: Vec::new(),
             invalid: Some(reason),
         }
@@ -422,13 +526,13 @@ impl DenyList {
     }
 
     /// The blocker for a denied target, or `None` when no rule applies.
-    pub fn check(&self, target: &Target, exemptions: &Exemptions) -> Option<Blocker> {
+    pub fn check(&self, target: &Target, exemptions: &Exemptions<'_>) -> Option<Blocker> {
         self.denying_rule(target, exemptions)
             .map(|rule| Blocker::DenyListed { rule })
     }
 
     /// The name of the rule that denies the target, if any.
-    pub fn denying_rule(&self, target: &Target, exemptions: &Exemptions) -> Option<String> {
+    pub fn denying_rule(&self, target: &Target, exemptions: &Exemptions<'_>) -> Option<String> {
         let location = matches!(target, Target::Path { .. }) || target.is_registry();
         if !location {
             return None;
@@ -437,12 +541,32 @@ impl DenyList {
             return Some("guard.unavailable".to_owned());
         }
         match target {
-            Target::Path { path } => self.check_path(path, exemptions),
+            Target::Path { path } => self.check_path(path, exemptions, false),
             other => self.check_key(other, key_of(other)?, exemptions),
         }
     }
 
-    fn check_path(&self, path: &str, ex: &Exemptions) -> Option<String> {
+    /// [`check_object`] with the Windows directory of this list's `GuardEnv` added to the lexical
+    /// `%SystemRoot%` forms, so that a Windows installed elsewhere than `<drive>:\Windows` is still
+    /// recognised. A list that could not be built blocks every object (`guard.unavailable`). Callers that
+    /// hold a `DenyList` (the scanners, the executor gate) use this form.
+    pub fn check_object(
+        &self,
+        kind: purge_model::ObjectKind,
+        facts: &ObjectGuardFacts<'_>,
+    ) -> Option<Blocker> {
+        if self.invalid.is_some() {
+            return Some(Blocker::DenyListed {
+                rule: "guard.unavailable".to_owned(),
+            });
+        }
+        objects::check_object_in(kind, facts, Some(&split_fold(&self.norm.windir)))
+    }
+
+    /// `for_root`: the question is whether a root may live at `path` ([`DenyList::root_rejection`]). The
+    /// Package Cache subtree rule is then skipped and left to the `root.package-cache` pattern, which
+    /// names the refusal the way M1a did.
+    fn check_path(&self, path: &str, ex: &Exemptions<'_>, for_root: bool) -> Option<String> {
         let segs = match self.path_segments(path, ex.long_names_resolved) {
             Ok(segs) => segs,
             Err(rule) => return Some(rule),
@@ -462,10 +586,15 @@ impl DenyList {
             programs.extend(["microsoft", "windows", "start menu", "programs"].map(String::from));
             segs.len() > programs.len() && segs.starts_with(&programs)
         };
+        let gone_cache = !for_root && self.in_gone_cache_dir(&segs, ex);
         first_hit(self.rules.iter().filter_map(|rule| {
+            if for_root && rule.exempt == Some(Exempt::GoneCache) {
+                return None;
+            }
             let lifted = match rule.exempt {
                 Some(Exempt::Prefetch) => prefetch_file,
                 Some(Exempt::StartMenu) => start_menu_entry,
+                Some(Exempt::GoneCache) => gone_cache,
                 _ => false,
             };
             let rel = match &rule.matcher {
@@ -480,6 +609,28 @@ impl DenyList {
         }))
     }
 
+    /// Whether the path (the folded segments of its canonical form) equals or lies inside an entry of
+    /// `gone_cache_dirs` that is a direct child of a Package Cache root. An entry that does not
+    /// canonicalise, or that has a segment shaped like a short name, is ignored.
+    fn in_gone_cache_dir(&self, segs: &[String], ex: &Exemptions<'_>) -> bool {
+        ex.gone_cache_dirs.iter().any(|entry| {
+            let Ok(canon) = canon_path(entry, &self.norm, None) else {
+                return false;
+            };
+            if canon.needs_long_name {
+                return false;
+            }
+            let entry = split_fold(&canon.path);
+            let direct_child = self.rules.iter().any(|rule| match &rule.matcher {
+                Matcher::Fs(root) if rule.exempt == Some(Exempt::GoneCache) => {
+                    entry.len() == root.len() + 1 && relate(root, &entry) == Some(Rel::Inside)
+                }
+                _ => false,
+            });
+            direct_child && segs.starts_with(&entry)
+        })
+    }
+
     /// The folded segments of the canonical form of `path`, or the `canon.*` rule that refuses it.
     fn path_segments(&self, path: &str, long_names_resolved: bool) -> Result<Vec<String>, String> {
         let canon =
@@ -490,7 +641,7 @@ impl DenyList {
         Ok(split_fold(&canon.path))
     }
 
-    fn check_key(&self, target: &Target, key_path: &str, ex: &Exemptions) -> Option<String> {
+    fn check_key(&self, target: &Target, key_path: &str, ex: &Exemptions<'_>) -> Option<String> {
         let key = match canon_key(key_path, None, &self.env, None) {
             Ok(key) => key,
             Err(e) => return Some(format!("canon.{}", e.code())),
@@ -526,6 +677,21 @@ impl DenyList {
                 && Some(&full[1]) == current_set.as_ref()
                 && full[2..4] == ["services", "eventlog"];
             if !(environment_edit || event_source) {
+                // Under SYSTEM, the M1b rules name what the target is; `reg.hklm.system` denies the rest,
+                // the ancestors of their items included.
+                if system {
+                    let named = first_hit(self.system_rules.iter().filter_map(|rule| {
+                        let Matcher::Key(KeyBase::Hklm, pattern) = &rule.matcher else {
+                            return None;
+                        };
+                        let rel = relate(pattern, full)?;
+                        (matches!(rel, Rel::Exact | Rel::Inside) && rule.denies(rel, !is_key))
+                            .then_some((rule, rel))
+                    }));
+                    if named.is_some() {
+                        return named;
+                    }
+                }
                 let rule = if system {
                     "reg.hklm.system"
                 } else {
@@ -545,6 +711,7 @@ impl DenyList {
                 return Some("reg.environment.core-value".to_owned());
             }
         }
+        let installer_lift = installer_shape(&logical, target, ex);
         first_hit(self.rules.iter().filter_map(|rule| {
             let Matcher::Key(base, pattern) = &rule.matcher else {
                 return None;
@@ -555,10 +722,16 @@ impl DenyList {
             let rel = logical
                 .segs_for(*base)
                 .and_then(|segs| relate(pattern, segs))?;
-            let lifted = rule.exempt == Some(Exempt::Skeleton)
-                && ex.proven_owned_skeleton
-                && is_key
-                && rel == Rel::Exact;
+            let lifted = match rule.exempt {
+                Some(Exempt::Skeleton) => ex.proven_owned_skeleton && is_key && rel == Rel::Exact,
+                Some(Exempt::GoneInstaller) => installer_lift,
+                Some(Exempt::SharedComValue) => {
+                    ex.shared_com_value
+                        && matches!(target, Target::RegValue { .. })
+                        && matches!(rel, Rel::Exact | Rel::Inside)
+                }
+                _ => false,
+            };
             (!lifted && rule.denies(rel, !is_key)).then_some((rule, rel))
         }))
     }
@@ -572,10 +745,12 @@ impl DenyList {
             long_names_resolved,
             ..Exemptions::default()
         };
-        let target = Target::Path {
-            path: path.to_owned(),
+        let denied = if self.invalid.is_some() {
+            Some("guard.unavailable".to_owned())
+        } else {
+            self.check_path(path, &ex, true)
         };
-        if let Some(rule) = self.denying_rule(&target, &ex) {
+        if let Some(rule) = denied {
             return Some(rule);
         }
         let segs = self.path_segments(path, long_names_resolved).ok()?;
@@ -584,6 +759,99 @@ impl DenyList {
             .find(|(_, pattern)| matches!(relate(pattern, &segs), Some(Rel::Exact | Rel::Inside)))
             .map(|(id, _)| (*id).to_owned())
     }
+}
+
+/// The folded segments of `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer` below the hive.
+const MSI_ROOT: [&str; 5] = [
+    "software",
+    "microsoft",
+    "windows",
+    "currentversion",
+    "installer",
+];
+
+/// Whether the target is one of the shapes the `reg.installer` rule lets through for the exemption lists
+/// (C-GUARD); every other target under the rule stays denied. All comparisons are on whole folded
+/// segments of the canonical key, which is view-agnostic and spells a user's Classes one way, so the
+/// WOW64 spellings and both spellings of a user's Classes give the same answer.
+///
+/// With `P` a listed packed product code (`gone_msi_products`):
+/// 1. `HKLM\...\Installer\UserData\<sid>\Products\<P>` (key);
+/// 2. `HKLM\SOFTWARE\Classes\Installer\Products\<P>` (key);
+/// 3. `HKU\<sid>\Software\Microsoft\Installer\Products\<P>` (key);
+/// 4. `HKLM\...\Installer\UpgradeCodes\<U>`, the value named `<P>`;
+/// 5. `HKLM\SOFTWARE\Classes\Installer\UpgradeCodes\<U>`, the value named `<P>`;
+/// 6. `HKLM\...\Installer\UserData\<sid>\Components\<C>`, the value named `<P>`;
+/// 7. `HKLM\SOFTWARE\Classes\Installer\Features\<P>` (key);
+/// 8. a named value of `HKLM\...\Installer\Folders`, while at least one product is listed. The store is
+///    path-keyed (C-PATHSTORES): a value's name is a directory, which only the scanner can match against
+///    the app's roots; the guard ties it to no product.
+///
+/// With a listed Burn name (`gone_burn`), in `HKLM\SOFTWARE\Classes` or a user's Classes, keys only:
+/// `Installer\Dependencies\<P>` with `P` listed, and `Installer\Dependencies\<P>\Dependents\<B>` with `B`
+/// listed.
+///
+/// `...` is `SOFTWARE\Microsoft\Windows\CurrentVersion` of `HKLM`, either view.
+fn installer_shape(l: &RegLogical, target: &Target, ex: &Exemptions<'_>) -> bool {
+    let products: Vec<&str> = ex
+        .gone_msi_products
+        .iter()
+        .map(String::as_str)
+        .filter(|p| is_packed_code(p))
+        .collect();
+    let product = |name: &str| products.iter().any(|p| p.eq_ignore_ascii_case(name));
+    let burn = |segment: &str| {
+        ex.gone_burn
+            .iter()
+            .any(|b| !b.is_empty() && !b.contains(['\\', '*']) && fold(b) == segment)
+    };
+    let full = &l.full;
+    let msi = l.machine && full.len() > MSI_ROOT.len() && full[..MSI_ROOT.len()] == MSI_ROOT;
+    let user = matches!(l.key.hive, purge_model::Hive::Hku(_));
+    let machine_classes = l.classes.as_deref().filter(|_| l.machine);
+    match target {
+        Target::RegKey { .. } => {
+            let userdata_product = msi
+                && full.len() == 9
+                && full[5] == "userdata"
+                && full[7] == "products"
+                && product(&full[8]);
+            let classes_product = machine_classes.is_some_and(|c| {
+                c.len() == 3
+                    && c[0] == "installer"
+                    && (c[1] == "products" || c[1] == "features")
+                    && product(&c[2])
+            });
+            let user_product = user
+                && full.len() == 5
+                && full[..4] == ["software", "microsoft", "installer", "products"]
+                && product(&full[4]);
+            let burn_key = l.classes.as_deref().is_some_and(|c| {
+                c.len() >= 3
+                    && c[0] == "installer"
+                    && c[1] == "dependencies"
+                    && ((c.len() == 3 && burn(&c[2]))
+                        || (c.len() == 5 && c[3] == "dependents" && burn(&c[4])))
+            });
+            userdata_product || classes_product || user_product || burn_key
+        }
+        Target::RegValue { name, .. } => {
+            let upgrade = msi && full.len() == 7 && full[5] == "upgradecodes";
+            let classes_upgrade = machine_classes
+                .is_some_and(|c| c.len() == 3 && c[0] == "installer" && c[1] == "upgradecodes");
+            let component =
+                msi && full.len() == 9 && full[5] == "userdata" && full[7] == "components";
+            let folders = msi && full.len() == 6 && full[5] == "folders";
+            ((upgrade || classes_upgrade || component) && product(name))
+                || (folders && !name.is_empty() && !products.is_empty())
+        }
+        _ => false,
+    }
+}
+
+/// A packed product code as Windows Installer stores it: 32 hex digits.
+fn is_packed_code(s: &str) -> bool {
+    s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Per-user environment variables that Windows defines; deleting one whole is never a cleanup.
@@ -617,6 +885,6 @@ fn first_hit<'a>(hits: impl Iterator<Item = (&'a Rule, Rel)>) -> Option<String> 
 /// Checks one target against the deny-list for `env`.
 ///
 /// Compiles the list on every call; use [`DenyList`] to check many targets.
-pub fn check(target: &Target, env: &GuardEnv, exemptions: &Exemptions) -> Option<Blocker> {
+pub fn check(target: &Target, env: &GuardEnv, exemptions: &Exemptions<'_>) -> Option<Blocker> {
     DenyList::compile(env).check(target, exemptions)
 }

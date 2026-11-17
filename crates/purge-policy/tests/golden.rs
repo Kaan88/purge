@@ -14,7 +14,7 @@ use purge_model::{
 use purge_policy::band::{POLICY_VERSION, PolicyCtx, TargetScope, decide, effective_tier, rank};
 
 /// The policy version the rows below were written for.
-const GOLDEN_VERSION: &str = "m1a.6";
+const GOLDEN_VERSION: &str = "m1b.1";
 
 const ADMIN: SourceTrust = SourceTrust::AdminOnly;
 const USER: SourceTrust = SourceTrust::UserWritable;
@@ -83,6 +83,7 @@ fn cand(target: Target, action: Action, category: Category, evidence: Vec<Eviden
         child_count: None,
         decision: None,
         item_fp: None,
+        object_fp: None,
     }
 }
 

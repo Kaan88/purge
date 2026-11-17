@@ -10,7 +10,15 @@
 //!   authorised. Authorised are: (op) a record covered by the target of a journal op whose effective outcome is
 //!   `Done` or `Vanished`: a path at or inside a `QuarantineMove` target, the exact `RemoveDirIfEmpty`
 //!   directory, a key or value at or inside a `DeleteKeyTree` key, the exact `DeleteKeyIfEmpty` key, the exact
-//!   `DeleteValue` value (removed) and the exact `EditSegment` value (changed); (store) Purge's own stores:
+//!   `DeleteValue` value (removed) and the exact `EditSegment` value (changed); M1b typed objects, removed records
+//!   only: a key or value at or inside `Services\<name>` of a `DeleteService`, the exact `FirewallRules` value of a
+//!   `DeleteFirewallRule`, the exact task file of a `DeleteTask` and keys or values at or inside its
+//!   `TaskCache\Tree\<path>` key and, by the before snapshot's `Id`, `TaskCache\{Tasks,Plain,Logon,Boot,
+//!   Maintenance}\{id}`; (pending-delete) a `DeleteService` left `PendingDelete`: its `DeleteFlag` value added or
+//!   changed; (task-reregistered) for a `DeleteTask` whose Tree key is present before and after, exactly the
+//!   TaskCache values the M1b spike lists as regenerated, and, when the op has an intent and the Tree `Id`
+//!   changed, the task file itself changed with kind, attributes and reparse state unchanged (see
+//!   `task_reregistrations`); (store) Purge's own stores:
 //!   `C:\ProgramData\Purge`, the header's per-volume quarantine directories and any `X:\.purge-q`; (rig) the rig's
 //!   own files (`items::RigRules`); (pending-rename) `Session Manager|PendingFileRenameOperations` when an op was
 //!   left `PendingReboot` or reconciled; (engine-rm) the engine's own Restart Manager session state, keys and
@@ -51,7 +59,7 @@ use crate::fidelity::read_deep;
 use crate::items::RigRules;
 use crate::jsonio;
 use crate::snap::{LoadOpts, Snap};
-use crate::target::Target;
+use crate::target::{FW_RULES, SERVICES, TASKCACHE, TASKS_DIR, Target};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -465,11 +473,70 @@ struct OpT<'a> {
     j: &'a JOp,
     kind: Option<String>,
     target: Option<Target>,
+    /// DeleteTask: the task's `TaskCache\Tree\<path>|Id` in the before snapshot (its `Tasks\{id}` key).
+    task_id: Option<String>,
+}
+
+/// TaskCache keys that hold a task by its `{id}`: its definition and its trigger-category index entries.
+const TASKCACHE_ID_KEYS: &[&str] = &["Tasks", "Plain", "Logon", "Boot", "Maintenance"];
+
+fn task_tree(path: &str) -> String {
+    format!("{TASKCACHE}\\Tree\\{}", path.trim_start_matches('\\'))
+}
+
+fn task_file(path: &str) -> String {
+    format!("{TASKS_DIR}\\{}", path.trim_start_matches('\\'))
 }
 
 impl OpT<'_> {
     fn removed(&self) -> bool {
         self.j.removed()
+    }
+
+    /// The typed objects (M1b): what a deleted service, task or firewall rule takes with it. A record removed
+    /// (`-`) at or inside `Services\<name>`; the firewall rule's value; the task's file (exactly), its
+    /// `TaskCache\Tree\<path>` key and, by the before snapshot's `Id`, its `Tasks\{id}` and trigger-category keys.
+    fn covers_typed(&self, kind: &str, t: &Target, c: &Change) -> bool {
+        if c.op != '-' {
+            return false;
+        }
+        match (kind, t) {
+            ("DeleteService", Target::Service { name }) => {
+                matches!(c.rec, 'K' | 'V') && canon::is_under_or_eq(&c.path, &format!("{SERVICES}\\{name}"))
+            }
+            ("DeleteFirewallRule", Target::FirewallRule { id }) => {
+                c.rec == 'V'
+                    && canon::ci_eq(&c.path, FW_RULES)
+                    && c.name.as_deref().is_some_and(|n| canon::ci_eq(n, id))
+            }
+            ("DeleteTask", Target::Task { path }) => match c.rec {
+                'F' => canon::ci_eq(&c.path, &task_file(path)),
+                'K' | 'V' => {
+                    canon::is_under_or_eq(&c.path, &task_tree(path))
+                        || self.task_id.as_deref().is_some_and(|id| {
+                            TASKCACHE_ID_KEYS
+                                .iter()
+                                .any(|k| canon::is_under_or_eq(&c.path, &format!("{TASKCACHE}\\{k}\\{id}")))
+                        })
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// A service the engine left `PendingDelete` (marked for deletion, its key stays until the last handle closes):
+    /// the SCM's `DeleteFlag` value on its key, added or changed.
+    fn covers_pending_delete(&self, c: &Change) -> bool {
+        let (Some("DeleteService"), Some(Target::Service { name })) = (self.kind.as_deref(), self.target.as_ref())
+        else {
+            return false;
+        };
+        self.j.outcome.as_deref() == Some("PendingDelete")
+            && c.rec == 'V'
+            && matches!(c.op, '+' | '~')
+            && canon::ci_eq(&c.path, &format!("{SERVICES}\\{name}"))
+            && c.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("DeleteFlag"))
     }
 
     /// Does this op's target cover diff record `c` (see the module comment)?
@@ -479,6 +546,9 @@ impl OpT<'_> {
         };
         if c.op == '+' {
             return false;
+        }
+        if matches!(t, Target::Service { .. } | Target::Task { .. } | Target::FirewallRule { .. }) {
+            return self.covers_typed(kind, t, c);
         }
         match (c.rec, t) {
             ('D' | 'F', Target::Path { path }) => match kind {
@@ -511,6 +581,150 @@ impl OpT<'_> {
             _ => false,
         }
     }
+}
+
+fn is_braced_guid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 38
+        && b[0] == b'{'
+        && b[37] == b'}'
+        && b[1..37]
+            .iter()
+            .enumerate()
+            .all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { *c == b'-' } else { c.is_ascii_hexdigit() })
+}
+
+/// Identity of a diff record: (op, rec, folded path, folded value name).
+type ChangeId = (char, char, String, String);
+
+fn change_id(c: &Change) -> ChangeId {
+    (c.op, c.rec, canon::fold(&c.path), c.name.as_deref().map(str::to_lowercase).unwrap_or_default())
+}
+
+/// The TaskCache records a re-registration of a deleted task rewrites (M1b spike, K10), and only those: for a
+/// DeleteTask op whose `TaskCache\Tree\<path>` key is present before and after (the task was registered again),
+/// - the Tree key's values the spike lists as regenerated (`task.taskcache_regenerated` `Tree|<name>`: `Id`, `SD`),
+///   changed with the same type;
+/// - the task's `Tasks\{id}` values the spike lists (`Tasks\{id}|<name>`: `DynamicInfo`, `Hash` changed with the
+///   same type, `Triggers` with the same type and length), when the `Id` stayed;
+/// - when the `Id` changed: `Tasks\{old}` removed and `Tasks\{new}` added, and each trigger-category key
+///   `<category>\{old}` removed with `<category>\{new}` added, provided the old and new `Tasks` keys hold the same
+///   value names and every value not listed by the spike has the same type and data.
+///
+/// - the task file `System32\Tasks\<path>` (exactly), changed, when the op has an intent (the run acted on the
+///   task), the `Id` changed (a registration happened) and the file is a plain file before and after with the
+///   same attributes and no reparse point: Task Scheduler writes it again; its content is vouched for by
+///   fidelity (XML and SDDL).
+///
+/// Anything else (the task file in any other case, other TaskCache values, a category key that does not pair)
+/// stays collateral.
+fn task_reregistrations(
+    ops: &[OpT],
+    a: &Snap,
+    b: &Snap,
+    spike: &crate::fidelity::SpikeRules,
+    warnings: &mut Vec<String>,
+) -> HashSet<ChangeId> {
+    let mut out = HashSet::new();
+    let tree_names = spike.regenerated("Tree");
+    let task_names = spike.regenerated("Tasks\\{id}");
+    let id_of = |s: &Snap, tree: &str| {
+        s.value(tree, "Id").map(|v| v.preview.trim().to_string()).filter(|id| is_braced_guid(id))
+    };
+    let listed = |names: &[String], n: &str| names.iter().any(|x| x.eq_ignore_ascii_case(n));
+    // Same type; Triggers also the same length (the spike: 5 bytes of the trigger blob change, its size stays).
+    let regen_ok = |n: &str, x: &crate::snap::ValRec, y: &crate::snap::ValRec| {
+        x.typ == y.typ && (!n.eq_ignore_ascii_case("Triggers") || x.len == y.len)
+    };
+    for o in ops {
+        let (Some("DeleteTask"), Some(Target::Task { path })) = (o.kind.as_deref(), o.target.as_ref()) else {
+            continue;
+        };
+        let tree = task_tree(path);
+        if !(a.has_key(&tree) && b.has_key(&tree)) {
+            continue;
+        }
+        for n in &tree_names {
+            if let (Some(x), Some(y)) = (a.value(&tree, n), b.value(&tree, n))
+                && regen_ok(n, x, y)
+            {
+                out.insert(('~', 'V', canon::fold(&tree), n.to_lowercase()));
+            }
+        }
+        let (Some(old), Some(new)) = (id_of(a, &tree), id_of(b, &tree)) else {
+            warnings.push(format!("task {path}: re-registered, but its TaskCache Id is unreadable before or after"));
+            continue;
+        };
+        // The task file (R2a S12): Task Scheduler writes it again on every registration, and the
+        // spike shows it differing while the XML and SDDL are equal. Excused exactly, and only when the
+        // run acted on the task (the op has an intent), the TaskCache Id changed (a registration
+        // happened) and the file stayed a plain file with the same attributes. Its content is vouched
+        // for by fidelity (XML and SDDL), not here.
+        if o.j.kind.is_some() && !old.eq_ignore_ascii_case(&new) {
+            let file = task_file(path);
+            if let (Some(x), Some(y)) = (a.path(&file), b.path(&file))
+                && !x.dir
+                && !y.dir
+                && x.attrs == y.attrs
+                && x.reparse == 0
+                && y.reparse == 0
+            {
+                out.insert(('~', 'F', canon::fold(&file), String::new()));
+            }
+        }
+        let tasks = |id: &str| format!("{TASKCACHE}\\Tasks\\{id}");
+        if old.eq_ignore_ascii_case(&new) {
+            for n in &task_names {
+                if let (Some(x), Some(y)) = (a.value(&tasks(&old), n), b.value(&tasks(&old), n))
+                    && regen_ok(n, x, y)
+                {
+                    out.insert(('~', 'V', canon::fold(&tasks(&old)), n.to_lowercase()));
+                }
+            }
+            continue;
+        }
+        // A new Id: the definition key moved; it must hold the same values apart from the regenerated ones.
+        let (Some(ka), Some(kb)) = (a.key(&tasks(&old)), b.key(&tasks(&new))) else {
+            continue;
+        };
+        if a.has_key(&tasks(&new)) || b.has_key(&tasks(&old)) {
+            continue;
+        }
+        let same = ka.values.len() == kb.values.len()
+            && ka.values.iter().all(|x| match kb.value(&x.name) {
+                Some(y) if listed(&task_names, &x.name) => regen_ok(&x.name, x, y),
+                Some(y) => (x.typ, x.len, x.hash) == (y.typ, y.len, y.hash),
+                None => false,
+            });
+        if !same {
+            continue;
+        }
+        let mut pair = |ko: String, kn: String, vo: &[crate::snap::ValRec], vn: &[crate::snap::ValRec]| {
+            out.insert(('-', 'K', canon::fold(&ko), String::new()));
+            out.insert(('+', 'K', canon::fold(&kn), String::new()));
+            for v in vo {
+                out.insert(('-', 'V', canon::fold(&ko), v.name.to_lowercase()));
+            }
+            for v in vn {
+                out.insert(('+', 'V', canon::fold(&kn), v.name.to_lowercase()));
+            }
+        };
+        pair(tasks(&old), tasks(&new), &ka.values, &kb.values);
+        for cat in TASKCACHE_ID_KEYS.iter().filter(|k| **k != "Tasks") {
+            let (ko, kn) = (format!("{TASKCACHE}\\{cat}\\{old}"), format!("{TASKCACHE}\\{cat}\\{new}"));
+            if let (Some(x), Some(y)) = (a.key(&ko), b.key(&kn))
+                && !b.has_key(&ko)
+                && !a.has_key(&kn)
+                && x.values.len() == y.values.len()
+                && x.values
+                    .iter()
+                    .all(|v| y.value(&v.name).is_some_and(|w| (v.typ, v.len, v.hash) == (w.typ, w.len, w.hash)))
+            {
+                pair(ko, kn, &x.values, &y.values);
+            }
+        }
+    }
+    out
 }
 
 fn is_purge_q(p: &str) -> bool {
@@ -881,6 +1095,36 @@ fn effect(o: &OpT, all: &[OpT], a: &Snap, b: &Snap, helper_dirs: &[String]) -> (
             let same = matches!((va, vb), (Some(x), Some(y)) if (x.typ, x.hash) == (y.typ, y.hash));
             (va.is_some(), vb.is_some(), va.is_some() || a.values_known(path), same)
         }
+        Target::Service { name } => {
+            let key = format!("{SERVICES}\\{name}");
+            let (pa, pb) = (a.has_key(&key), b.has_key(&key));
+            if outcome == Some("PendingDelete") {
+                if !pa {
+                    return unv("absent in the before snapshot");
+                }
+                let flagged = b.value(&key, "DeleteFlag").is_some_and(|v| v.preview == "1");
+                return match (pb, flagged) {
+                    (false, _) => ok("gone after"),
+                    (true, true) => ok("marked for deletion (DeleteFlag 1)"),
+                    (true, false) => ("missing".into(), "PendingDelete, but the key has no DeleteFlag 1".into()),
+                };
+            }
+            let same = pa && pb && a.key(&key).map(|k| &k.values) == b.key(&key).map(|k| &k.values);
+            (pa, pb, pa || a.captures_key(&key), same)
+        }
+        Target::Task { path } => {
+            let (file, tree) = (task_file(path), task_tree(path));
+            let (fa, fb) = (a.path(&file), b.path(&file));
+            let (pa, pb) = (fa.is_some() || a.has_key(&tree), fb.is_some() || b.has_key(&tree));
+            let same = matches!((fa, fb), (Some(x), Some(y)) if (x.size, x.mtime) == (y.size, y.mtime))
+                && a.value(&tree, "Id").map(|v| v.hash) == b.value(&tree, "Id").map(|v| v.hash);
+            (pa, pb, pa || (a.captures_path(&file) && a.captures_key(&tree)), same)
+        }
+        Target::FirewallRule { id } => {
+            let (va, vb) = (a.value(FW_RULES, id), b.value(FW_RULES, id));
+            let same = matches!((va, vb), (Some(x), Some(y)) if (x.typ, x.hash) == (y.typ, y.hash));
+            (va.is_some(), vb.is_some(), va.is_some() || a.values_known(FW_RULES), same)
+        }
         Target::AppxPackage { .. } => return unv("packages are not in snapshots"),
         _ => return unv("target kind not checked"),
     };
@@ -1043,9 +1287,18 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
                 .or_else(|| report_op.map(ExecOp::target))
                 .or_else(|| o.target.clone())
                 .map(|t| t.canonical(cx.sid));
-            OpT { j: o, kind, target }
+            let task_id = match &target {
+                Some(Target::Task { path }) => {
+                    cx.a.value(&task_tree(path), "Id")
+                        .map(|v| v.preview.trim().to_string())
+                        .filter(|id| is_braced_guid(id))
+                }
+                _ => None,
+            };
+            OpT { j: o, kind, target, task_id }
         })
         .collect();
+    let rereg = task_reregistrations(&ops, cx.a, cx.b, crate::fidelity::spike_rules(), &mut warnings);
     let pending = j.ops.iter().any(|o| {
         o.outcome.as_deref() == Some("PendingReboot")
             || o.done.as_ref().is_some_and(|d| d.name() == "PendingReboot")
@@ -1076,6 +1329,10 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
         let t = target_of(c);
         let a: Option<&'static str> = if ops.iter().any(|o| o.removed() && o.covers(c)) {
             Some("op")
+        } else if ops.iter().any(|o| o.covers_pending_delete(c)) {
+            Some("pending-delete")
+        } else if rereg.contains(&change_id(c)) {
+            Some("task-reregistered")
         } else if matches!(c.rec, 'D' | 'F')
             && (stores.iter().any(|s| canon::is_under_or_eq(&c.path, s)) || is_purge_q(&c.path))
         {

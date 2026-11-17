@@ -9,7 +9,7 @@ license.workspace = true
 
 [dependencies]
 purge-model.workspace = true
-purge-win = { workspace = true, features = ["read", "appx"] }
+purge-win = { workspace = true, features = ["read", "appx", "com"] }
 flate2.workspace = true
 serde.workspace = true
 serde_json.workspace = true

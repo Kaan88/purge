@@ -30,6 +30,7 @@ use super::op::{
 };
 use super::session::{RetentionClass, SessionId};
 use crate::ids::schema_id;
+use crate::object::ObjectKind;
 use crate::{Blocker, CandidateId, FileTime, ScanMode, Target};
 
 schema_id!(
@@ -118,6 +119,19 @@ pub enum ItemFacts {
     Package,
     /// The item does not exist.
     Absent,
+    /// A service, scheduled task or firewall rule (M1b).
+    Object {
+        /// Which kind of object. Serialised as `object_kind`: the tag already uses `kind`.
+        #[serde(rename = "object_kind")]
+        kind: ObjectKind,
+        /// The object's identity digest as read ([`ObjectFp::sha256`](crate::object::ObjectFp)), 64
+        /// lower-case hex digits. A digest other than the candidate's `object_fp` is
+        /// `SkipReason::ChangedSinceScan`.
+        sha256: String,
+        /// Whether the object is running: true only for a service whose state is not
+        /// `SERVICE_STOPPED`. A running service is skipped with the `InUse` blocker; nothing is stopped.
+        running: bool,
+    },
     /// The item did not pass validation: a gate refused it, or it could not be opened or read. Nothing
     /// acts on it in the run (the act-time gate keeps no record of it), exactly as for
     /// [`ItemFacts::Absent`], but the journal says why.
@@ -181,6 +195,14 @@ pub struct Header {
     pub allow_irreversible: bool,
     /// The volumes the session keeps quarantine data on.
     pub volumes: Vec<VolumeRecord>,
+    /// The roots of the app the run removes leftovers of (M1b, C-EXECOP): the program a deleted
+    /// service, task or firewall rule runs must lie strictly inside one of them, or the executor neither
+    /// deletes it nor creates it again ([`UndoConflict::ProgramOutsideRoot`]). Written by the run that
+    /// journals object ops; covered by the journal's hash chain like every other field, so undo never
+    /// takes its roots from a file a user can replace. Absent in M2 journals and in runs without object
+    /// ops (empty: every object delete and re-create is refused).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub program_roots: Vec<String>,
 }
 
 /// When a run asks for a restore point (Settings S5, "Restore point"), as the journal records it.
@@ -216,6 +238,39 @@ pub struct RunSettings {
     /// Empty in journals written before the field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected: Vec<CandidateId>,
+    /// The M1b exemption lists of the run (C-GUARD, M1B-X-INTEG): packed codes of the app's MSI products
+    /// Windows Installer no longer knows. The run's own caller computed them when the run started, from
+    /// the app's fingerprint and fresh system queries (never from the plan), and the act-time gate, undo
+    /// and recovery read them from here, so they judge with what the run was judged with. Written only
+    /// when not empty, so journals without them read and write as before (empty keeps every exemption
+    /// they open closed).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gone_msi_products: Vec<String>,
+    /// The same products by the SID of their own install context (`S-1-5-18` for a per-machine
+    /// product, the user's for a per-user one), as the plan's decide step keeps them (R3a B1, R4 S8): a
+    /// Windows Installer registration filed under a SID (`...\Installer\UserData\<sid>\...`,
+    /// `HKU\<sid>\Software\Microsoft\Installer\...`) is let through only for the products listed under
+    /// that SID; every other target gets [`RunSettings::gone_msi_products`]. A journal written before
+    /// the field existed reads it as empty: such registrations then stay closed for every SID.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gone_msi_by_sid: Vec<GoneMsiForSid>,
+    /// The Package Cache directories of the app's gone bundles and packages (see
+    /// [`RunSettings::gone_msi_products`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gone_cache_dirs: Vec<String>,
+    /// The bundle ids and provider keys of the app's gone Burn bundles and packages (see
+    /// [`RunSettings::gone_msi_products`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gone_burn: Vec<String>,
+}
+
+/// The gone MSI products of one install context ([`RunSettings::gone_msi_by_sid`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct GoneMsiForSid {
+    /// The context's SID, folded as the guard compares it.
+    pub sid: String,
+    /// Packed codes of the products of that context that Windows Installer no longer knows.
+    pub products: Vec<String>,
 }
 
 /// The deny-list exemptions an item was judged with (ENGINE_PLAN.md §5.10). The same four inputs as the
@@ -230,6 +285,10 @@ pub struct GateExemptions {
     pub tier_a_start_menu_entry: bool,
     /// The path had its 8.3 names resolved.
     pub long_names_resolved: bool,
+    /// A whole-value delete under a shared COM key whose data was the app's (M1b, R2a S10). Written only
+    /// when set, so journals without it read and write as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared_com_value: bool,
 }
 
 /// The state of one selected item when the run started. The per-item re-check compares against this.
@@ -261,8 +320,10 @@ pub struct Intent {
     pub exec_op: ExecOp,
     /// How it is undone. Any backup it names has been written, read back and hashed.
     pub inverse: Inverse,
-    /// A definition file kept for the record when the op has no inverse that reads one (the full
-    /// definition of a removed package). Undo does not read it.
+    /// A second backup file the op keeps: the full definition of a removed package (kept for the
+    /// record; undo does not read it), or the key backup of a deleted service (`reg\<op>.regbackup.json`,
+    /// which the service's definition names too; M1b review R2b S5). Naming it here makes expiry, the
+    /// kept-bytes count and the report see it ([`Intent::backups`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<BackupRef>,
     /// The item as seen through the handle the action will use.
@@ -280,8 +341,9 @@ impl Intent {
     /// - the inverse is the kind that undoes the op and addresses the same item ([`Inverse::undoes`]);
     /// - `pre` is the kind of facts the op acts on: [`ItemFacts::File`] for the path ops (a directory for
     ///   [`ExecOp::RemoveDirIfEmpty`]), [`ItemFacts::Key`] for the key ops, [`ItemFacts::Value`] for the
-    ///   value and segment ops, [`ItemFacts::Package`] for a package. An intent is only written for an item
-    ///   that is there, so `Absent` never fits;
+    ///   value and segment ops, [`ItemFacts::Package`] for a package, [`ItemFacts::Object`] of the op's
+    ///   kind for the object ops. An intent is only written for an item that is there, so `Absent` never
+    ///   fits;
     /// - for [`Inverse::MoveBack`], the recorded file id and volume serial are those of `pre`, the handle
     ///   the move uses;
     /// - every backup path stays inside the session directory ([`BackupRef::is_session_relative`]).
@@ -294,6 +356,12 @@ impl Intent {
             }
             (ExecOp::DeleteValue { .. } | ExecOp::EditSegment { .. }, ItemFacts::Value(_)) => true,
             (ExecOp::RemovePackage { .. }, ItemFacts::Package) => true,
+            (
+                ExecOp::DeleteService { .. }
+                | ExecOp::DeleteTask { .. }
+                | ExecOp::DeleteFirewallRule { .. },
+                ItemFacts::Object { kind, .. },
+            ) => self.exec_op.object_kind() == Some(*kind),
             _ => false,
         };
         let same_file = match (&self.inverse, &self.pre) {
@@ -344,6 +412,12 @@ pub struct GroupEnd {
     #[serde(deserialize_with = "group_count")]
     #[schemars(range(min = 1, max = 64))]
     pub ops: u32,
+    /// The writer flushed the registry hives the journal's registry ops act on (`RegFlushKey`) before
+    /// it wrote this record: every registry change a `done` before it claims is durable. Written as
+    /// `true` only; absent (`false`) in journals written before the field existed, whose registry
+    /// `done` records recovery therefore does not take on trust after an unclean stop.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub registry_flushed: bool,
 }
 
 /// Reads a group number: at least 1.
@@ -469,6 +543,20 @@ pub enum UndoConflict {
     /// of the same session (a `RecreateDir` or `RestoreKeyTree` that must run first); nothing was created
     /// for this op.
     ParentMissing,
+    /// A service, task or firewall rule with the backed-up name, path or id exists again and differs
+    /// from the backup (M1b). The re-create is create-only and never overwrites it.
+    ObjectExists,
+    /// The service is still marked for deletion (`DeleteFlag = 1`; a create fails with 1072) because a
+    /// handle to it is open (M1b). Undo can run again once the SCM has removed it.
+    PendingDelete,
+    /// The backed-up service `ImagePath` or task exec path is not under a root recorded in the journal
+    /// header (M1b).
+    ProgramOutsideRoot,
+    /// The task was registered with a stored password (logon type `Password`); Task Scheduler refuses to
+    /// register it again without that password (`0x8007052E`, measured by the M1b spike), and Purge never
+    /// holds one. A service with a stored password is not this conflict: it re-creates without the
+    /// password, which the scan states as `Reversibility::Partial` up front.
+    PasswordNeeded,
 }
 
 /// An inverse ran to an end.
@@ -478,6 +566,11 @@ pub struct UndoDone {
     pub op: OpId,
     /// How it ended.
     pub outcome: UndoOutcome,
+    /// What the report must still say about an inverse that ran to its end (M1b review R2b S6): for
+    /// example that a service came back without its stored password, which must be set again. May be
+    /// empty; absent in journals written before it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
 }
 
 /// An inverse was not applied. This record ends the undo of the op, with or without an `undo_intent`
@@ -508,6 +601,12 @@ pub enum ReconcileResult {
     Cancelled,
     /// A held item was tried again, with this outcome. Written after the op's [`RetryIntent`]; the
     /// outcome takes the place of `HeldRetry`.
+    ///
+    /// Also written by crash recovery, before the run's `commit` or `aborted`, for a registry op whose
+    /// `done` says `Done` but that no hive flush vouched for yet (an unconfirmed op): probed again after
+    /// a restart that may have taken its change, the machine did not show the change and it could not
+    /// be made again. The outcome takes the place of the `done`'s `Done`: `Failed{VerifyFailed}` when
+    /// the probe found something else, or the outcome of the attempt to make the change again.
     Retried {
         /// The outcome of the new attempt.
         outcome: ItemOutcome,
@@ -771,7 +870,46 @@ mod tests {
             r#"{"rec":"undo_conflict","op":2,"conflict":{"kind":"ParentMissing"},"detail":"C:\\A is gone"}"#.to_owned(),
             r#"{"rec":"undo_plan","at":5,"ops":[6,2,1]}"#.to_owned(),
             r#"{"rec":"undo_plan","at":6,"ops":[]}"#.to_owned(),
+            r#"{"rec":"group_end","group":2,"ops":64,"registry_flushed":true}"#.to_owned(),
         ]
+    }
+
+    /// The `registry_flushed` mark of `group_end`: absent in older lines (read as `false`, which is
+    /// written as before), `true` written and read back; an older reader that does not know the field
+    /// ignores it, since records do not refuse unknown members.
+    #[test]
+    fn group_end_registry_mark_reads_both_ways() {
+        let old: Record = serde_json::from_str(r#"{"rec":"group_end","group":1,"ops":3}"#).unwrap();
+        assert_eq!(
+            old,
+            Record::GroupEnd(GroupEnd {
+                group: 1,
+                ops: 3,
+                registry_flushed: false
+            })
+        );
+        assert_eq!(
+            serde_json::to_string(&old).unwrap(),
+            r#"{"rec":"group_end","group":1,"ops":3}"#
+        );
+        let new = Record::GroupEnd(GroupEnd {
+            group: 2,
+            ops: 1,
+            registry_flushed: true,
+        });
+        let line = serde_json::to_string(&new).unwrap();
+        assert_eq!(
+            line,
+            r#"{"rec":"group_end","group":2,"ops":1,"registry_flushed":true}"#
+        );
+        assert_eq!(serde_json::from_str::<Record>(&line).unwrap(), new);
+        #[derive(serde::Deserialize)]
+        struct OldGroupEnd {
+            group: u32,
+            ops: u32,
+        }
+        let read: OldGroupEnd = serde_json::from_str(&line).unwrap();
+        assert_eq!((read.group, read.ops), (2, 1));
     }
 
     /// Documents written before the additions read unchanged, and the additions round-trip without
@@ -904,6 +1042,10 @@ mod tests {
             r#"{"kind":"GateBlocked","blocker":{"kind":"ReparseMismatch"}}"#,
             r#"{"kind":"Irreversible"}"#,
             r#"{"kind":"ParentMissing"}"#,
+            r#"{"kind":"ObjectExists"}"#,
+            r#"{"kind":"PendingDelete"}"#,
+            r#"{"kind":"ProgramOutsideRoot"}"#,
+            r#"{"kind":"PasswordNeeded"}"#,
         ]);
         all::<ReconcileResult>(&[
             r#"{"kind":"Completed"}"#,
@@ -920,7 +1062,151 @@ mod tests {
             r#"{"kind":"Absent"}"#,
             r#"{"kind":"Refused","reason":"exec.unsupported"}"#,
             r#"{"kind":"Refused","blocker":{"kind":"CannotBackUp"},"reason":"exec.unsupported"}"#,
+            r#"{"kind":"Object","object_kind":"service","sha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","running":false}"#,
+            r#"{"kind":"Object","object_kind":"firewall_rule","sha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","running":true}"#,
         ]);
+    }
+
+    /// A journal the M2 executor wrote on the gate VM (cleanpro run `cp2-m2-fidelity`, session
+    /// `conflict`: validated, intent, done, group_end, commit, undo records and one undo conflict) reads
+    /// line by line with the M1b types and writes every record back unchanged (apart from the `chain`
+    /// member the writer adds, which records do not carry).
+    #[test]
+    fn journal_m2_document_still_parses() {
+        let text = include_str!("../../testdata/m2-conflict.journal.jsonl");
+        let mut kinds = Vec::new();
+        let mut lines = 0;
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            lines += 1;
+            let record: Record =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("{line}: {e}"));
+            let mut original: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert!(original.as_object_mut().unwrap().remove("chain").is_some());
+            assert_eq!(serde_json::to_value(&record).unwrap(), original, "{line}");
+            if let Record::Intent(intent) = &record {
+                assert!(intent.is_consistent(), "{line}");
+                assert!(!intent.exec_op.is_object());
+            }
+            // The M1b fields read as absent and are written as absent.
+            match &record {
+                Record::Header(h) => assert!(h.program_roots.is_empty(), "{line}"),
+                Record::UndoDone(u) => assert!(u.detail.is_empty(), "{line}"),
+                _ => {}
+            }
+            if !kinds.contains(&record.name()) {
+                kinds.push(record.name());
+            }
+        }
+        assert_eq!(lines, 127);
+        for kind in [
+            "header",
+            "settings",
+            "validated",
+            "intent",
+            "done",
+            "group_end",
+            "commit",
+            "undo_plan",
+            "undo_intent",
+            "undo_done",
+            "undo_conflict",
+        ] {
+            assert!(kinds.contains(&kind), "the fixture lacks {kind}");
+        }
+    }
+
+    /// The object ops: an intent hangs together only with object facts of the op's kind and the
+    /// matching re-create inverse, whose definition file is listed with its backups.
+    #[test]
+    fn object_intents_check_kind_and_inverse() {
+        let hash: Sha256Hex = HASH_A.parse().unwrap();
+        let definition = BackupRef {
+            path: r"def\000009.json".into(),
+            sha256: hash,
+            bytes: 300,
+        };
+        let facts = |kind: ObjectKind| ItemFacts::Object {
+            kind,
+            sha256: HASH_A.into(),
+            running: false,
+        };
+        let intent = |exec_op: ExecOp, inverse: Inverse, pre: ItemFacts| Intent {
+            op: OpId(9),
+            item: CandidateId("c-09".into()),
+            exec_op,
+            inverse,
+            definition: None,
+            pre,
+        };
+        let service = || ExecOp::DeleteService {
+            name: "VendorSvc".into(),
+        };
+        let task = || ExecOp::DeleteTask {
+            path: r"\Vendor\Update".into(),
+        };
+        let rule = || ExecOp::DeleteFirewallRule { id: "{1}".into() };
+        let recreate_service = Inverse::RecreateService {
+            definition: definition.clone(),
+        };
+        let recreate_task = Inverse::RecreateTask {
+            definition: definition.clone(),
+        };
+        let recreate_rule = Inverse::RecreateFirewallRule {
+            definition: definition.clone(),
+        };
+        let good = [
+            intent(
+                service(),
+                recreate_service.clone(),
+                facts(ObjectKind::Service),
+            ),
+            intent(task(), recreate_task.clone(), facts(ObjectKind::Task)),
+            intent(
+                rule(),
+                recreate_rule.clone(),
+                facts(ObjectKind::FirewallRule),
+            ),
+        ];
+        for i in &good {
+            assert!(i.is_consistent(), "{i:?}");
+            assert_eq!(
+                i.backups().map(|b| b.path.as_str()).collect::<Vec<_>>(),
+                [r"def\000009.json"]
+            );
+            let line = serde_json::to_string(&Record::Intent(i.clone())).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Record>(&line).unwrap(),
+                Record::Intent(i.clone())
+            );
+        }
+        // Facts of another kind, or of no object.
+        assert!(
+            !intent(service(), recreate_service.clone(), facts(ObjectKind::Task)).is_consistent()
+        );
+        assert!(!intent(rule(), recreate_rule.clone(), ItemFacts::Absent).is_consistent());
+        assert!(!intent(task(), recreate_task.clone(), ItemFacts::Package).is_consistent());
+        // The re-create of another kind.
+        assert!(!intent(service(), recreate_task, facts(ObjectKind::Service)).is_consistent());
+        assert!(!intent(task(), Inverse::None, facts(ObjectKind::Task)).is_consistent());
+        // A definition outside the session.
+        let outside = Inverse::RecreateService {
+            definition: BackupRef {
+                path: r"..\x.json".into(),
+                ..definition
+            },
+        };
+        assert!(!intent(service(), outside, facts(ObjectKind::Service)).is_consistent());
+        // The tag and the object kind do not collide; a facts record without its kind does not read.
+        assert!(
+            serde_json::from_str::<ItemFacts>(r#"{"kind":"Object","sha256":"00","running":false}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<ItemFacts>(
+                r#"{"kind":"Object","object_kind":"driver","sha256":"00","running":false}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -11,13 +11,14 @@ use purge_model::exec::journal::{
     Reconcile, ReconcileResult, Record, RetryIntent, RunSettings, UndoConflict, UndoConflictEntry,
     UndoDone, UndoIntent, UndoOutcome, UndoPlan,
 };
-use purge_model::exec::op::{ItemOutcome, OpId, Sha256Hex};
+use purge_model::exec::op::{ExecOp, ItemOutcome, OpId, Sha256Hex};
 use purge_model::{CandidateId, FileTime};
 
 use super::frame::{CHAIN_SEED, frame};
 use super::reader::read_checked;
 use super::state::{JournalState, OpStatus, UndoState, Violation};
 use super::{JournalError, JournalRead, MAX_JOURNAL_BYTES};
+use crate::durable::{DirtyHives, Hive};
 use crate::fault;
 use crate::storage::{FileMode, JOURNAL_FILE, SessionDir, StoreFile};
 
@@ -130,6 +131,12 @@ pub struct JournalWriter {
     /// Ops whose retry was in flight when the journal was opened, for
     /// [`JournalWriter::resume_retry`].
     resumable_retry: BTreeSet<OpId>,
+    /// Unconfirmed registry ops ([`JournalState::unconfirmed`]) whose token
+    /// [`JournalWriter::reprobe_token`] has not handed out yet.
+    reprobable: BTreeSet<OpId>,
+    /// The registry hives this writer's ops may have changed since the last flush of them
+    /// ([`crate::durable`]): flushed before every record that vouches for a registry change.
+    hives: DirtyHives,
     /// Test hook: the next line write fails as a disk error would.
     #[cfg(test)]
     fail_next_write: bool,
@@ -215,10 +222,25 @@ impl JournalWriter {
             )
         };
         let resumable_retry = state.retries_in_flight().map(|s| s.op).collect();
+        let reprobable = state.unconfirmed().map(|s| s.op).collect();
+        // Whatever an earlier process changed may not be flushed: every hive the session's registry
+        // ops act in, and the boot-time move list when a move may have been registered, count as
+        // changed until the first flush (a flush of a hive with nothing pending costs microseconds).
+        let mut hives = DirtyHives::default();
+        for op in state.ops() {
+            if let Some(intent) = &op.intent {
+                hives.touch(Hive::of_op(&intent.exec_op));
+                if matches!(intent.exec_op, ExecOp::QuarantineMove { .. }) {
+                    hives.touch(Some(Hive::system()));
+                }
+            }
+        }
         let mut writer = JournalWriter::with(file, state, head.0, valid_len);
         writer.resumable = resumable;
         writer.resumable_undo = resumable_undo;
         writer.resumable_retry = resumable_retry;
+        writer.reprobable = reprobable;
+        writer.hives = hives;
         writer.discarded_tail = torn_tail;
         if torn_tail != 0 {
             writer.file.file().set_len(valid_len).map_err(|source| {
@@ -256,6 +278,8 @@ impl JournalWriter {
             resumable: BTreeSet::new(),
             resumable_undo: BTreeSet::new(),
             resumable_retry: BTreeSet::new(),
+            reprobable: BTreeSet::new(),
+            hives: DirtyHives::default(),
             #[cfg(test)]
             fail_next_write: false,
         }
@@ -319,13 +343,25 @@ impl JournalWriter {
 
     /// Writes and flushes the op's `intent`, closing the open group first if it is full, and returns the
     /// token the action and [`JournalWriter::done`] need. Hits [`fault::INTENT_FLUSHED`] after the flush.
+    ///
+    /// A registry op whose key is in no hive the writer can flush (a root other than `HKLM` or `HKU`;
+    /// [`crate::durable`]) is refused with [`Violation::InconsistentIntent`] and nothing is written:
+    /// its change could never be vouched for (review M6; plan intake lets only canonical targets
+    /// through, so this does not happen today).
     pub fn intent(&mut self, intent: Intent) -> Result<IntentToken, JournalError> {
         self.check_poison()?;
+        let hive = Hive::of_op(&intent.exec_op);
+        if intent.exec_op.is_registry() && hive.is_none() {
+            return Err(JournalError::Refused(Violation::InconsistentIntent(
+                intent.op,
+            )));
+        }
         if self.state.open_group_intents() >= MAX_GROUP_INTENTS {
             self.end_group()?;
         }
         let (op, item) = (intent.op, intent.item.clone());
         self.append(&Record::Intent(intent), true)?;
+        self.hives.touch(hive);
         fault::point(fault::INTENT_FLUSHED);
         Ok(IntentToken {
             writer: self.id,
@@ -359,6 +395,9 @@ impl JournalWriter {
         let durable = needs_flush(&outcome);
         if durable {
             fault::point(fault::BOOTMOVE_REGISTERED);
+            // The registration is a registry write (`PendingFileRenameOperations`).
+            self.hives.touch(Some(Hive::system()));
+            self.flush_registry()?;
         }
         fault::point(fault::DONE_BEFORE);
         self.append(
@@ -426,15 +465,57 @@ impl JournalWriter {
         if self.state.is_finished() || !matches!(state.status(), OpStatus::IntentOnly) {
             return None;
         }
+        let item = state.item.clone();
+        let hive = state.intent.as_ref().and_then(|i| Hive::of_op(&i.exec_op));
+        self.hives.touch(hive);
         Some(IntentToken {
             writer: self.id,
             op,
-            item: state.item.clone(),
+            item,
         })
     }
 
+    /// The token of an unconfirmed registry op ([`JournalState::unconfirmed`]: its `done` says `Done`,
+    /// no flush vouches for it yet) when [`JournalWriter::open_append`] read the journal, for recovery
+    /// to carry out again a change its probe finds undone (`act_reg::complete_reg`): the journal
+    /// already says what the change is, so when the machine matches the journal afterwards the token
+    /// is dropped without a second record, and the next `group_end`, `commit` or `aborted` flushes the
+    /// change; when it does not, [`JournalWriter::reprobed`] records what the op stands at. Handed out
+    /// once per op, like [`JournalWriter::resume_intent`]: `None` on a second call, for any other op,
+    /// on a writer made by [`JournalWriter::create`], and once the run ended.
+    pub fn reprobe_token(&mut self, op: OpId) -> Option<IntentToken> {
+        if !self.reprobable.remove(&op) {
+            return None;
+        }
+        if self.state.is_finished() || !self.state.is_unconfirmed(op) {
+            return None;
+        }
+        let state = self.state.op(op)?;
+        let item = state.item.clone();
+        let hive = state.intent.as_ref().and_then(|i| Hive::of_op(&i.exec_op));
+        self.hives.touch(hive);
+        Some(IntentToken {
+            writer: self.id,
+            op,
+            item,
+        })
+    }
+
+    /// Notes that the boot-time move list (`PendingFileRenameOperations`, in the `SYSTEM` hive) was
+    /// written: an undo that took a pair back. The next undo record flushes the hive first.
+    pub(crate) fn touch_boot_moves(&mut self) {
+        self.hives.touch(Some(Hive::system()));
+    }
+
+    /// Flushes the registry hives this writer's ops may have changed since the last flush
+    /// ([`crate::durable`]). Nothing is written to the journal.
+    fn flush_registry(&mut self) -> Result<(), JournalError> {
+        self.hives.flush().map_err(JournalError::RegistryFlush)
+    }
+
     /// Closes the open group with a `group_end` and flushes; returns whether there was one to close (a
-    /// group with no intent is not closed). Hits [`fault::GROUP_END`] after the flush.
+    /// group with no intent is not closed). The registry hives are flushed before the record, which
+    /// says so (`registry_flushed`; [`crate::durable`]). Hits [`fault::GROUP_END`] after the flush.
     pub fn end_group(&mut self) -> Result<bool, JournalError> {
         self.check_poison()?;
         let ops = self.state.open_group_intents();
@@ -442,7 +523,15 @@ impl JournalWriter {
             return Ok(false);
         }
         let group = self.state.groups_closed() + 1;
-        self.append(&Record::GroupEnd(GroupEnd { group, ops }), true)?;
+        self.flush_registry()?;
+        self.append(
+            &Record::GroupEnd(GroupEnd {
+                group,
+                ops,
+                registry_flushed: true,
+            }),
+            true,
+        )?;
         fault::point(fault::GROUP_END);
         Ok(true)
     }
@@ -457,8 +546,9 @@ impl JournalWriter {
         Ok(())
     }
 
-    /// Ends the run: closes the open group, hits [`fault::COMMIT_BEFORE`], then writes and flushes
-    /// `commit` with the counts of the done records. Refused unless every op has its done.
+    /// Ends the run: closes the open group, hits [`fault::COMMIT_BEFORE`], flushes the registry hives
+    /// ([`crate::durable`]), then writes and flushes `commit` with the counts of the done records.
+    /// Refused unless every op has its done.
     pub fn commit(&mut self, at: FileTime, backup_bytes: u64) -> Result<Commit, JournalError> {
         self.check_poison()?;
         // Refuse before closing the group, so a refused commit writes nothing.
@@ -470,6 +560,7 @@ impl JournalWriter {
         }
         self.end_group()?;
         fault::point(fault::COMMIT_BEFORE);
+        self.flush_registry()?;
         let commit = Commit {
             at,
             counts: self.state.counts(),
@@ -479,8 +570,9 @@ impl JournalWriter {
         Ok(commit)
     }
 
-    /// Ends the run early: closes the open group, then writes and flushes `aborted`. Items without a done
-    /// stay as they are (recovery probes those with an intent).
+    /// Ends the run early: closes the open group, flushes the registry hives ([`crate::durable`]), then
+    /// writes and flushes `aborted`. Items without a done stay as they are (recovery probes those with
+    /// an intent).
     pub fn abort(
         &mut self,
         at: FileTime,
@@ -489,6 +581,7 @@ impl JournalWriter {
     ) -> Result<(), JournalError> {
         self.check_poison()?;
         self.end_group()?;
+        self.flush_registry()?;
         self.append(&Record::Aborted(Aborted { at, reason, detail }), true)
     }
 
@@ -503,6 +596,7 @@ impl JournalWriter {
     /// [`JournalWriter::undo_done`] need. Hits [`fault::UNDO_INTENT`] after the flush.
     pub fn undo_intent(&mut self, op: OpId) -> Result<UndoToken, JournalError> {
         self.append(&Record::UndoIntent(UndoIntent { op }), true)?;
+        self.touch_op(op);
         fault::point(fault::UNDO_INTENT);
         Ok(UndoToken {
             writer: self.id,
@@ -510,24 +604,41 @@ impl JournalWriter {
         })
     }
 
-    /// Writes and flushes the `undo_done` of an inverse that ran, consuming its token.
+    /// Writes and flushes the `undo_done` of an inverse that ran, consuming its token. The registry
+    /// hives the inverse may have written are flushed first ([`crate::durable`]).
     pub fn undo_done(
         &mut self,
         token: UndoToken,
         outcome: UndoOutcome,
     ) -> Result<(), JournalError> {
+        self.undo_done_noted(token, outcome, "")
+    }
+
+    /// [`JournalWriter::undo_done`] with what the report must still say about the restore (M1b review
+    /// R2b S6: a service re-created without its stored password is `Restored`, and the note that the
+    /// password must be set again is journalled with it). The note is cut like a `done`'s detail
+    /// (2,048 bytes).
+    pub fn undo_done_noted(
+        &mut self,
+        token: UndoToken,
+        outcome: UndoOutcome,
+        detail: &str,
+    ) -> Result<(), JournalError> {
         self.undo_owned(&token)?;
+        self.flush_registry()?;
         self.append(
             &Record::UndoDone(UndoDone {
                 op: token.op,
                 outcome,
+                detail: crate::execute::journal_detail(detail),
             }),
             true,
         )
     }
 
     /// Writes and flushes the `undo_conflict` that ends an undo after its `undo_intent`, consuming its
-    /// token.
+    /// token. The registry hives the inverse may have written (keys put back after a failure) are
+    /// flushed first.
     pub fn undo_conflict(
         &mut self,
         token: UndoToken,
@@ -535,6 +646,7 @@ impl JournalWriter {
         detail: String,
     ) -> Result<(), JournalError> {
         self.undo_owned(&token)?;
+        self.flush_registry()?;
         self.append(
             &Record::UndoConflict(UndoConflictEntry {
                 op: token.op,
@@ -554,7 +666,15 @@ impl JournalWriter {
         outcome: UndoOutcome,
     ) -> Result<(), JournalError> {
         self.no_open_undo(op)?;
-        self.append(&Record::UndoDone(UndoDone { op, outcome }), true)
+        self.flush_registry()?;
+        self.append(
+            &Record::UndoDone(UndoDone {
+                op,
+                outcome,
+                detail: String::new(),
+            }),
+            true,
+        )
     }
 
     /// Writes and flushes an `undo_conflict` found before any `undo_intent` (a tampered or missing
@@ -566,6 +686,7 @@ impl JournalWriter {
         detail: String,
     ) -> Result<(), JournalError> {
         self.no_open_undo(op)?;
+        self.flush_registry()?;
         self.append(
             &Record::UndoConflict(UndoConflictEntry {
                 op,
@@ -584,10 +705,24 @@ impl JournalWriter {
         if !self.resumable_undo.remove(&op) {
             return None;
         }
-        (self.state.op(op)?.undo == UndoState::InProgress).then_some(UndoToken {
+        if self.state.op(op)?.undo != UndoState::InProgress {
+            return None;
+        }
+        self.touch_op(op);
+        Some(UndoToken {
             writer: self.id,
             op,
         })
+    }
+
+    /// Notes the hive of op `op`'s registry target as changed (an inverse is about to run on it).
+    fn touch_op(&mut self, op: OpId) {
+        let hive = self
+            .state
+            .op(op)
+            .and_then(|s| s.intent.as_ref())
+            .and_then(|i| Hive::of_op(&i.exec_op));
+        self.hives.touch(hive);
     }
 
     /// Writes and flushes a `reconcile` record for a pending op. A
@@ -638,6 +773,33 @@ impl JournalWriter {
             }),
             true,
         )
+    }
+
+    /// Writes and flushes the `reconcile` `Retried{outcome}` that ends recovery's re-probe of an
+    /// unconfirmed registry op whose change the machine does not show and that could not be made again
+    /// (`outcome` is `Failed{VerifyFailed}`, or the outcome of the attempt), consuming the token of
+    /// [`JournalWriter::reprobe_token`]: the outcome replaces the op's `Done` (see
+    /// [`JournalState`]). The registry hives are flushed first, since the attempt may have written
+    /// (a key delete that stopped and put back what it deleted). Refused with
+    /// [`Violation::ReconcileMismatch`] for `Done`, `HeldRetry` or `PendingReboot`, and with
+    /// [`Violation::NotPending`] for an op that is not unconfirmed.
+    pub fn reprobed(
+        &mut self,
+        token: IntentToken,
+        at: FileTime,
+        outcome: ItemOutcome,
+    ) -> Result<(), JournalError> {
+        self.check_poison()?;
+        self.own(token.writer, token.op)?;
+        let record = Record::Reconcile(Reconcile {
+            at,
+            op: token.op,
+            result: ReconcileResult::Retried { outcome },
+        });
+        // Refuse before the flush, so a refused record costs nothing.
+        self.state.check(&record).map_err(JournalError::Refused)?;
+        self.flush_registry()?;
+        self.append(&record, true)
     }
 
     /// The token of an op whose retry was in flight (a `retry_intent` with no `reconcile` after it)

@@ -1,0 +1,4 @@
+[  0.010s] start harvest
+timing:   phase ownership.components 0.400s; 12
+timing:   phase ownership.tables 0.050s; 3
+[  4.000s] done

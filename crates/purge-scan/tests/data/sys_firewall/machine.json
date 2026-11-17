@@ -1,0 +1,52 @@
+{
+  "schema": "purge.fixture/1",
+  "system": {
+    "os": { "edition": "Professional", "build": 26340, "ubr": 9882 },
+    "user_sid": "S-1-5-21-1004336348-1177238915-682003330-1001",
+    "known_folders": {
+      "ProgramFiles": "C:\\Program Files",
+      "ProgramFilesX86": "C:\\Program Files (x86)",
+      "Windows": "C:\\Windows"
+    },
+    "env": {
+      "SYSTEMROOT": "C:\\Windows",
+      "WINDIR": "C:\\Windows",
+      "SYSTEMDRIVE": "C:",
+      "PROGRAMFILES": "C:\\Program Files",
+      "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+      "PROGRAMDATA": "C:\\ProgramData"
+    }
+  },
+  "registry": {
+    "current_control_set": 1,
+    "keys": {
+      "HKLM\\SYSTEM\\Select": { "values": { "Current": { "dword": 1 } } },
+      "HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules": {
+        "values": {
+          "{0000F1F1-0000-0000-0000-000000000001}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|Profile=Private|App=C:\\Program Files\\Tool\\tool.exe|Name=Tool|",
+          "{0000F1F1-0000-0000-0000-000000000002}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|Profile=Private|App=C:\\Program Files\\Other\\tool.exe|Name=Tool|",
+          "{0000F1F1-0000-0000-0000-000000000003}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=8080|Svc=ToolSvc|Name=Tool|",
+          "{0000F1F1-0000-0000-0000-000000000004}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=445|App=System|Name=Tool|",
+          "{0000F1F1-0000-0000-0000-000000000005}": "v2.33|Action=Allow|Active=TRUE|Dir=Out|App=C:\\Program Files\\Tool\\tool.exe|PFN=Tool_abcdefgh12345|Name=Tool Store|",
+          "{0000F1F1-0000-0000-0000-000000000006}": "v2.33|Action=Allow|Active=TRUE|Dir=Out|App=C:\\Program Files\\Tool\\tool.exe|LUOwn=S-1-15-2-1111-2222-3333|Name=Tool Container|",
+          "{0000F1F1-0000-0000-0000-000000000007}": "v2.33|Action=Allow|Active=TRUE|Dir=In|App=C:\\Program Files\\Tool\\tool.exe|Name=@tool.dll,-100|",
+          "{0000F1F1-0000-0000-0000-000000000008}": "v2.33|Action=Allow|Active=TRUE|Dir=In|App=C:\\Program Files\\Tool\\tool.exe|Name=Tool Group|EmbedCtxt=@tool.dll,-200|",
+          "{0000F1F1-0000-0000-0000-000000000009}": "v2.33|Action=Allow|Active=TRUE|Dir=In|App=%ProgramFiles%\\Tool\\tool.exe|Name=Tool Env|",
+          "{0000F1F1-0000-0000-0000-00000000000A}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=9000|App=%SystemRoot%\\System32\\svchost.exe|Svc=ToolSvc|Name=Tool Service|",
+          "{0000F1F1-0000-0000-0000-00000000000B}": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=RPC|App=C:\\Program Files\\Tool\\tool.exe|Name=Tool RPC|",
+          "{0000F1F1-0000-0000-0000-00000000000C}": "v2.33|Action=Allow|Active=TRUE|Dir=In|App=C:\\Program Files\\Tool\\helper.exe|Name=Tool Helper|",
+          "TCP Query User{aBcD0001-0000-0000-0000-00000000000d}C:\\program files\\tool\\tool.exe": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|Profile=Public|App=C:\\program files\\tool\\tool.exe|Name=tool.exe|Desc=tool.exe|",
+          "{0000F1F1-0000-0000-0000-00000000000E}": "v2.33|Action=Allow|Active=TRUE|Dir=In|App=C:\\ProgramData\\Tool\\agent.exe|Name=Tool Agent|"
+        }
+      }
+    }
+  },
+  "filesystem": {
+    "volumes": { "C:\\": { "serial": 305419896, "fixed": true, "fs": "NTFS" } },
+    "admin_only_roots": ["C:\\Program Files"],
+    "entries": {
+      "C:\\Program Files\\Tool": { "dir": true, "children": { "helper.exe": { "size": 2048 } } },
+      "C:\\Program Files\\Other": { "dir": true, "children": { "tool.exe": { "size": 4096 } } }
+    }
+  }
+}

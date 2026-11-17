@@ -337,7 +337,10 @@ fn com_class_older_than_the_install_is_not_offered() {
 }
 
 /// The control: the browser's own class is an anchor. Its server value is offered, and the interface
-/// values, known only through the class id, are never Safe or ticked.
+/// values, known only through the class id, are never Safe or ticked. The class is the shared Gecko
+/// proxy of `kb/shared-iids.json` and the interfaces are shared IIDs, but the values' data was the
+/// browser's, so `com.shared-proxy` and `com.shared-iid` are lifted for these values only (R2a S10):
+/// the bands are M1a's. The shared keys themselves stay denied.
 #[test]
 fn com_class_of_the_app_itself_is_offered_with_unticked_interface_values() {
     let (anchor, listed) = class_items(ClassStory::BrowsersOwn);

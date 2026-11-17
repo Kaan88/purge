@@ -17,9 +17,10 @@
 //!    [`Selection::Ids`] may add Likely and Weak items; empty ids are dropped and repeated ids count
 //!    once; an id that names no top-level item (unknown, or an absorbed child) is refused. No selected
 //!    item may be undecided, in the Blocked band, carry a hard blocker, be report-only, or have a target
-//!    and action that resolve to no executor op. Services, scheduled tasks and firewall rules are the
-//!    exception: they may be selected and are journalled as skipped, because this version has no
-//!    executor for them ([`BoundItem::exec_op`] is `None`). A selected whole-tree removal must not
+//!    and action that resolve to no executor op. The one exception is a service, scheduled task or
+//!    firewall rule without its scan-time digest (`Candidate::object_fp`, `Mismatch::NoObjectFp`): it may
+//!    be selected and is journalled as skipped (`ChangedSinceScan`) before any backup
+//!    ([`BoundItem::exec_op`] is `None`). A selected whole-tree removal must not
 //!    hold a protected plan item below it (`purge_guard::live::check_protected_descendants`). An empty
 //!    selection is refused.
 //! 5. **Order.** For any two selected items where one nests in the other, the inner one comes first.
@@ -46,7 +47,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purge_guard::live;
-use purge_model::exec::journal::{RestorePointPolicy, RunSettings};
+use purge_model::ObjectKind;
+use purge_model::exec::journal::{GoneMsiForSid, RestorePointPolicy, RunSettings};
 use purge_model::exec::op::{ExecOp, Mismatch, OpId, Sha256Hex, resolve};
 use purge_model::{Action, Band, Blocker, Candidate, CandidateId};
 use purge_plan::collapse::nests_in;
@@ -79,6 +81,15 @@ pub struct ExecSettings {
     pub long_names_resolved: bool,
     /// The most keys a registry tree may hold to be deleted ([`regbackup::DEFAULT_KEY_LIMIT`]).
     pub key_limit: usize,
+    /// The roots of the app the plan removes leftovers of (its fingerprint's install roots), for the
+    /// journal header (`Header::program_roots`): a service, task or firewall rule whose program is not
+    /// inside one is neither deleted nor created again. The header records them only when the run
+    /// selects an object op; a resumed run reads them from the header. Empty refuses every object
+    /// delete (fail closed).
+    pub program_roots: Vec<String>,
+    /// The M1b exemption lists of the run ([`GoneLists`]), journalled in the `settings` record. Empty
+    /// keeps every exemption they open closed.
+    pub gone: GoneLists,
 }
 
 impl Default for ExecSettings {
@@ -88,7 +99,65 @@ impl Default for ExecSettings {
             user_sid: None,
             long_names_resolved: true,
             key_limit: regbackup::DEFAULT_KEY_LIMIT,
+            program_roots: Vec::new(),
+            gone: GoneLists::default(),
         }
+    }
+}
+
+/// The M1b exemption lists of a run (C-GUARD): the gone MSI products, Package Cache directories and Burn
+/// bundles and packages of the app, as `purge_plan::decide::M1bDecide` computes them from the
+/// fingerprint and fresh system queries. The caller of a run computes them when the run starts (never
+/// from the plan); the run journals them in its `settings` record, and the act-time gate, undo and
+/// recovery take them from there (`GateCtx::set_gone`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoneLists {
+    /// Packed codes of MSI products Windows Installer knows in no context.
+    pub msi_products: Vec<String>,
+    /// The same products by the folded SID of their own install context
+    /// (`purge_plan::decide::M1bDecide::gone_msi_by_sid`). The act-time gate lets a Windows Installer
+    /// registration filed under a SID through only for the products listed under that SID, as the
+    /// plan's decide step does (R3a B1, R4 S8); `msi_products` serves every other target.
+    pub msi_by_sid: Vec<(String, Vec<String>)>,
+    /// Package Cache directories of gone bundles and packages.
+    pub cache_dirs: Vec<String>,
+    /// Bundle ids and provider keys of gone Burn bundles and packages.
+    pub burn: Vec<String>,
+}
+
+impl GoneLists {
+    /// The lists of `decide`.
+    pub fn from_decide(decide: &purge_plan::decide::M1bDecide) -> GoneLists {
+        GoneLists {
+            msi_products: decide.gone_msi_products().to_vec(),
+            msi_by_sid: decide.gone_msi_by_sid().to_vec(),
+            cache_dirs: decide.gone_cache_dirs().to_vec(),
+            burn: decide.gone_burn().to_vec(),
+        }
+    }
+
+    /// The lists a journal's `settings` record holds.
+    pub fn from_journal(settings: &RunSettings) -> GoneLists {
+        GoneLists {
+            msi_products: settings.gone_msi_products.clone(),
+            // A journal written before the field existed has none: a registration filed under a SID
+            // then stays closed for every SID (R4 S8).
+            msi_by_sid: settings
+                .gone_msi_by_sid
+                .iter()
+                .map(|g| (purge_guard::prefix::fold(g.sid.trim()), g.products.clone()))
+                .collect(),
+            cache_dirs: settings.gone_cache_dirs.clone(),
+            burn: settings.gone_burn.clone(),
+        }
+    }
+
+    /// Whether all three lists are empty.
+    pub fn is_empty(&self) -> bool {
+        self.msi_products.is_empty()
+            && self.msi_by_sid.is_empty()
+            && self.cache_dirs.is_empty()
+            && self.burn.is_empty()
     }
 }
 
@@ -107,6 +176,18 @@ impl ExecSettings {
                 RestorePointSetting::HighRiskOnly => RestorePointPolicy::HighRiskOnly,
                 RestorePointSetting::Always => RestorePointPolicy::Always,
             },
+            gone_msi_products: self.gone.msi_products.clone(),
+            gone_msi_by_sid: self
+                .gone
+                .msi_by_sid
+                .iter()
+                .map(|(sid, products)| GoneMsiForSid {
+                    sid: sid.clone(),
+                    products: products.clone(),
+                })
+                .collect(),
+            gone_cache_dirs: self.gone.cache_dirs.clone(),
+            gone_burn: self.gone.burn.clone(),
         }
     }
 
@@ -122,6 +203,9 @@ impl ExecSettings {
             user_sid: settings.user_sid.clone(),
             long_names_resolved: settings.long_names_resolved,
             key_limit: usize::try_from(settings.key_limit).unwrap_or(usize::MAX),
+            // The header's, which `Run::resume` fills in.
+            program_roots: Vec::new(),
+            gone: GoneLists::from_journal(settings),
         }
     }
 }
@@ -254,8 +338,8 @@ pub struct BoundItem {
     pub op: OpId,
     /// Its index in `scan.items`.
     pub index: usize,
-    /// The executor op it resolved to; `None` for a service, scheduled task or firewall rule, which this
-    /// version journals as skipped.
+    /// The executor op it resolved to; `None` for a service, scheduled task or firewall rule without its
+    /// scan-time digest, which the run journals as skipped.
     pub exec_op: Option<ExecOp>,
 }
 
@@ -688,8 +772,8 @@ fn bind_items(scan: &ScanDoc, selected: &[usize]) -> Result<Vec<BoundItem>, Plan
     Ok(items)
 }
 
-/// Whether `candidate` may be selected, and the executor op it resolves to (`None`: a target without an
-/// executor in this version).
+/// Whether `candidate` may be selected, and the executor op it resolves to (`None`: a service, task or
+/// firewall item without its scan-time digest, which the run skips).
 fn selectable(scan: &ScanDoc, candidate: &Candidate) -> Result<Option<ExecOp>, NotSelectable> {
     let decision = candidate
         .decision
@@ -704,9 +788,16 @@ fn selectable(scan: &ScanDoc, candidate: &Candidate) -> Result<Option<ExecOp>, N
     if candidate.action == Action::ReportOnly {
         return Err(NotSelectable::ReportOnly);
     }
-    let exec_op = match resolve(&candidate.target, candidate.action) {
+    let exec_op = match resolve(
+        &candidate.target,
+        candidate.action,
+        candidate.object_fp.as_ref(),
+    ) {
         Ok(op) => Some(op),
-        Err(Mismatch::NoExecutor) => None,
+        // A service, task or firewall item without its scan-time digest stays selectable without an
+        // executor op: the run journals it as skipped (`ChangedSinceScan`, "no object fingerprint")
+        // before any backup, and never acts on it.
+        Err(Mismatch::NoObjectFp) if ObjectKind::of(&candidate.target).is_some() => None,
         Err(Mismatch::ReportOnly) => return Err(NotSelectable::ReportOnly),
         Err(other) => return Err(NotSelectable::Unresolvable(other)),
     };

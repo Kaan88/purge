@@ -66,7 +66,7 @@ fn hku(rest: &str) -> String {
     format!(r"HKU\{SID}\{rest}")
 }
 
-fn none() -> Exemptions {
+fn none() -> Exemptions<'static> {
     Exemptions::default()
 }
 
@@ -381,6 +381,7 @@ fn notepad_shortcut_is_always_denied() {
         environment_segment_edit: true,
         tier_a_start_menu_entry: true,
         long_names_resolved: true,
+        ..Exemptions::default()
     };
     for path in [
         r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Accessories\Notepad.lnk".to_owned(),
@@ -643,7 +644,6 @@ fn fs_exact_and_ancestor_containers() {
         p(r"C:\Program Files (x86)\Notepad++\notepad++.exe"),
         p(r"C:\ProgramData\Vendor"),
         p(r"C:\Program Files\Common Files\Vendor"),
-        p(r"C:\ProgramData\Package Cache\{0A1B2C3D-0000-1111-2222-333344445555}v1.0\app.msi"),
         p(r"C:\Users\tester\AppData\Local\Programs\Microsoft VS Code"),
         p(
             r"C:\Program Files\InstallShield Installation Information\{0A1B2C3D-0000-1111-2222-333344445555}",
@@ -661,6 +661,14 @@ fn fs_exact_and_ancestor_containers() {
         p(r"E:\Docs\App"),
         p(r"D:\Apps\Tool"),
     ]);
+    // M1b (C-GUARD): a Package Cache entry is offered only through `gone_cache_dirs`
+    // (`tests/m1b_deny.rs`).
+    all_denied(
+        &[p(
+            r"C:\ProgramData\Package Cache\{0A1B2C3D-0000-1111-2222-333344445555}v1.0\app.msi",
+        )],
+        "fs.package-cache",
+    );
 }
 
 #[test]
@@ -883,7 +891,9 @@ fn reg_subtree_rules() {
             k(r"HKLM\SOFTWARE\Microsoft\Cryptography\Providers"),
             k(r"HKLM\SYSTEM\Setup"),
             k(format!(r"{system}\Services\bam\State\UserSettings\{SID}")),
-            k(format!(r"HKLM\{NT}\Schedule\TaskCache\Tree\Vendor\Task")),
+            k(hku(
+                r"Software\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\X",
+            )),
             k(format!(r"HKLM\{CV}\AppModel\Lookaside\user")),
             k(format!(r"HKLM\{CV}\Appx\AppxAllUserStore")),
             k(r"HKLM\SOFTWARE\Classes\PackagedCom\Package\Vendor.App"),
@@ -894,10 +904,17 @@ fn reg_subtree_rules() {
             k(format!(r"HKLM\{CV}\Component Based Servicing\Packages")),
             k(format!(r"HKLM\{CV}\SideBySide\Winners")),
             k(format!(r"HKLM\{CV}\WindowsUpdate\Auto Update")),
-            // The parent of a subtree rule cannot go either.
-            k(format!(r"HKLM\{NT}\Schedule")),
         ],
         "reg.",
+    );
+    // M1b (C-GUARD) names the machine TaskCache `task.registry-direct`; the parent of a subtree rule
+    // cannot go either.
+    all_denied(
+        &[
+            k(format!(r"HKLM\{NT}\Schedule\TaskCache\Tree\Vendor\Task")),
+            k(format!(r"HKLM\{NT}\Schedule")),
+        ],
+        "task.registry-direct",
     );
     all_allowed(&[
         k(r"HKLM\SOFTWARE\Vendor\Winlogon"),
@@ -954,16 +971,26 @@ fn reg_hklm_system_and_other_hives() {
         &[
             k(r"HKLM\SYSTEM"),
             k(r"HKLM\SYSTEM\CurrentControlSet"),
-            k(format!(r"{services}\MyService")),
+            k(services),
             v(format!(r"{services}\MyService"), "ImagePath"),
-            k(format!(r"{services}\WinSock2\Parameters")),
-            k(format!(r"{services}\EventLog")),
-            k(format!(r"{services}\EventLog\Application")),
             v(format!(r"{services}\EventLog\Application"), "MaxSize"),
-            k(r"HKLM\SYSTEM\ControlSet002\Services\MyService"),
             k(r"HKLM\SYSTEM\MountedDevices"),
         ],
         "reg.hklm.system",
+    );
+    // M1b (C-GUARD) names service keys and event logs; they stay denied.
+    all_denied(
+        &[
+            k(format!(r"{services}\MyService")),
+            k(format!(r"{services}\WinSock2\Parameters")),
+            k(format!(r"{services}\EventLog")),
+            k(r"HKLM\SYSTEM\ControlSet002\Services\MyService"),
+        ],
+        "svc.registry-direct",
+    );
+    all_denied(
+        &[k(format!(r"{services}\EventLog\Application"))],
+        "reg.eventlog-log",
     );
     all_denied(
         &[
@@ -1028,14 +1055,6 @@ fn reg_registration_containers() {
         v(format!(r"HKLM\{CV}\Run"), "MyApp"),
         v(hku(&format!(r"{CV}\Explorer\StartupApproved\Run")), "MyApp"),
         k(format!(r"HKLM\{CV}\App Paths\myapp.exe")),
-        k(format!(
-            r"HKLM\{CV}\Installer\UserData\S-1-5-18\Products\0A1B2C3D"
-        )),
-        v(
-            format!(r"HKLM\{CV}\Installer\Folders"),
-            r"C:\Program Files\MyApp\",
-        ),
-        k(r"HKLM\SOFTWARE\Classes\Installer\Products\0A1B2C3D"),
         v(r"HKLM\SOFTWARE\RegisteredApplications", "MyApp"),
         k(hku(&format!(r"{CV}\Explorer\FileExts\.myext"))),
         k(hku(&format!(
@@ -1047,6 +1066,21 @@ fn reg_registration_containers() {
         ),
         k(format!(r"HKLM\{CV}\RunX")),
     ]);
+    // M1b (C-GUARD): inside the Installer database only the exemption lists open anything
+    // (`tests/m1b_deny.rs`); without them these M1a-era children are denied.
+    all_denied(
+        &[
+            k(format!(
+                r"HKLM\{CV}\Installer\UserData\S-1-5-18\Products\0A1B2C3D"
+            )),
+            v(
+                format!(r"HKLM\{CV}\Installer\Folders"),
+                r"C:\Program Files\MyApp\",
+            ),
+            k(r"HKLM\SOFTWARE\Classes\Installer\Products\0A1B2C3D"),
+        ],
+        "reg.installer",
+    );
 }
 
 #[test]
@@ -1653,6 +1687,7 @@ fn every_target_of_the_rig_deny_file_is_denied() {
         environment_segment_edit: true,
         tier_a_start_menu_entry: true,
         long_names_resolved: true,
+        ..Exemptions::default()
     };
     let mut checked = 0;
     for rule in rules {
@@ -1995,14 +2030,23 @@ fn event_sources_only_in_the_current_control_set() {
             k(format!(r"HKLM\SYSTEM\ControlSet002\{source}")),
             k(format!(r"HKLM\SYSTEM\ControlSetBackup\{source}")),
             k(format!(r"HKLM\SYSTEM\{source}")),
-            k(r"HKLM\SYSTEM\ControlSet001\Services\EventLog\Application"),
-            k(r"HKLM\SYSTEM\ControlSet001\Services\EventLog"),
             v(
                 r"HKLM\SYSTEM\ControlSet001\Services\EventLog\Application",
                 "File",
             ),
         ],
         "reg.hklm.system",
+    );
+    // M1b (C-GUARD) names the log and the EventLog service key; both stay denied.
+    all_denied(
+        &[k(
+            r"HKLM\SYSTEM\ControlSet001\Services\EventLog\Application",
+        )],
+        "reg.eventlog-log",
+    );
+    all_denied(
+        &[k(r"HKLM\SYSTEM\ControlSet001\Services\EventLog")],
+        "svc.registry-direct",
     );
 }
 
@@ -2029,6 +2073,7 @@ fn core_user_environment_values_are_never_deleted_whole() {
         environment_segment_edit: true,
         tier_a_start_menu_entry: true,
         long_names_resolved: true,
+        ..Exemptions::default()
     };
     for name in ["Path", "JAVA_HOME"] {
         let target = v(
@@ -2099,6 +2144,7 @@ fn windows_start_menu_folders_are_denied_with_their_entries() {
         environment_segment_edit: true,
         tier_a_start_menu_entry: true,
         long_names_resolved: true,
+        ..Exemptions::default()
     };
     for base in [
         PD_PROGRAMS.to_owned(),

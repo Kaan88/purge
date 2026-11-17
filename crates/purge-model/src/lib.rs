@@ -18,6 +18,7 @@
 //! | `fingerprint` | [`Fingerprint`] (`purge.fp/0`): what the harvest knows about one app |
 //! | `inventory` | [`InventoryDoc`] (`purge.inventory/0`): one [`InventoryEntry`] per Uninstall key |
 //! | `run` | [`RunDoc`] (`purge.run/0`): the record of one uninstall run, with [`VerifyGone`] |
+//! | `object`, `fingerprint_m1b` | M1b: [`ObjectFp`] and the identities it digests, firewall rule strings, the fold; [`MsiFacts`], [`BurnFacts`], [`SysObjects`] |
 //!
 //! Every document starts with a `schema` field holding its id; reading a document with any other id
 //! fails. The journal and inverse types arrive with the executor (M2).
@@ -28,8 +29,10 @@ mod candidate;
 mod evidence;
 pub mod exec;
 mod fingerprint;
+mod fingerprint_m1b;
 mod ids;
 mod inventory;
+pub mod object;
 mod plan;
 mod root;
 mod run;
@@ -46,10 +49,19 @@ pub use fingerprint::{
     OsInfo, RefCarrier, RefSnapEntry, RunEntry, SubtreeBaseline, SubtreeValue, TimeWindow,
     VendorBackup,
 };
+pub use fingerprint_m1b::{
+    BurnFacts, BurnPackage, MsiComponentFact, MsiFacts, MsiKeyPath, MsiRegRow, MsiServiceRow,
+    ObjectWhy, SysFirewallRule, SysObjects, SysService, SysTask,
+};
 pub use ids::{CandidateId, FileTime, ProgramId, ProgramIdError, SourceId};
 pub use inventory::{
     InstallScope, InstallTimeEvidence, InstallTimeSource, InstallerKind, InventoryDoc,
     InventoryEntry, InventorySchema, MsiContext, MsiInfo, MsiOnlyRow, RawFlags, WritableBy,
+};
+pub use object::{
+    FIREWALL_RESTORE_EXACT, FIREWALL_UNPROVEN_SHAPES, FirewallIdentity, FirewallRuleFields,
+    FirewallShape, FwParseError, ObjectFp, ObjectKind, ServiceIdentity, TaskAction, TaskIdentity,
+    parse_firewall_rule,
 };
 pub use plan::{Band, Category, Plan, PlanItem, PlanSchema, ScanMode, Tool};
 pub use root::{Root, RootKind, RootSource, SourceTrust};

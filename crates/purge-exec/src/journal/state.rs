@@ -229,7 +229,8 @@ pub struct OpState {
     pub exemptions: GateExemptions,
     /// The intent, when one was written.
     pub intent: Option<Intent>,
-    /// The outcome of the `done` record, when one was written.
+    /// The outcome of the `done` record, when one was written; for an unconfirmed registry op that
+    /// recovery's re-probe did not find done, the outcome of its `reconcile` `Retried` instead.
     pub outcome: Option<ItemOutcome>,
     /// The results of the `reconcile` records for the op, in order.
     pub reconciles: Vec<ReconcileResult>,
@@ -300,6 +301,22 @@ impl OpState {
     }
 }
 
+/// Takes one `outcome` out of `counts` (the inverse of `OutcomeCounts::record`).
+fn uncount(counts: &mut OutcomeCounts, outcome: &ItemOutcome) {
+    let slot = match outcome {
+        ItemOutcome::Done => &mut counts.done,
+        ItemOutcome::Vanished => &mut counts.vanished,
+        ItemOutcome::Skipped { .. } => &mut counts.skipped,
+        ItemOutcome::HeldRetry => &mut counts.held_retry,
+        ItemOutcome::PendingReboot { .. } => &mut counts.pending_reboot,
+        // A service marked for delete goes at the next restart at the latest: counted with the pending
+        // reboots, as `OutcomeCounts::record` does.
+        ItemOutcome::PendingDelete => &mut counts.pending_reboot,
+        ItemOutcome::Failed { .. } => &mut counts.failed,
+    };
+    *slot = slot.saturating_sub(1);
+}
+
 /// The pending kind an outcome stands for.
 fn pending_of(outcome: &ItemOutcome) -> Option<Pending> {
     match outcome {
@@ -325,6 +342,10 @@ fn pending_of(outcome: &ItemOutcome) -> Option<Pending> {
 /// - `reconcile`: the op is pending ([`OpState::pending`]); `Retried` only for a held item, the other
 ///   results only for a boot-time move. `NotMoved`, `MismatchKept` and `Lost` end the boot move's pending state like
 ///   `Completed` does; the last two leave the op needing attention ([`OpState::attention`]).
+///   Recovery's re-probe also writes `Retried` for an unconfirmed op ([`JournalState::unconfirmed`])
+///   while the run is open, with an outcome other than `Done`, `HeldRetry` and `PendingReboot`: that
+///   outcome replaces the op's `Done` (in [`OpState::outcome`] and in the counts), and the op is no
+///   longer unconfirmed.
 /// - `retry_intent`: after `commit` or `aborted`, for a held op ([`Pending::Held`]) with no retry in
 ///   flight ([`Violation::RetryNotHeld`], [`Violation::RetryInFlight`]). The `reconcile` with
 ///   `Retried` that follows ends the retry; its outcome replaces `HeldRetry`. A `Retried` without a
@@ -356,11 +377,15 @@ pub struct JournalState {
     open_group_intents: u32,
     open_intents: u32,
     counts: OutcomeCounts,
-    /// The free text of each op's last `undo_conflict`, while that conflict is where its undo stands.
-    conflict_details: BTreeMap<OpId, String>,
+    /// The free text of each op's last `undo_conflict` or `undo_done`, while that record is where its
+    /// undo stands.
+    undo_details: BTreeMap<OpId, String>,
     /// The ops of the last `undo_plan`, in order, and those of them an undo record was written for
     /// since.
     undo_plan: Option<(Vec<OpId>, BTreeSet<OpId>)>,
+    /// Registry ops whose `done` (`Done`) came after the last `group_end` that vouches for the
+    /// registry (`registry_flushed`), `commit` or `aborted`: see [`JournalState::unconfirmed`].
+    unconfirmed: BTreeSet<OpId>,
 }
 
 impl JournalState {
@@ -379,8 +404,9 @@ impl JournalState {
             open_group_intents: 0,
             open_intents: 0,
             counts: OutcomeCounts::default(),
-            conflict_details: BTreeMap::new(),
+            undo_details: BTreeMap::new(),
             undo_plan: None,
+            unconfirmed: BTreeSet::new(),
         }
     }
 
@@ -390,7 +416,19 @@ impl JournalState {
     pub fn undo_conflict_detail(&self, op: OpId) -> Option<&str> {
         match self.ops.get(&op).map(|s| &s.undo) {
             Some(UndoState::Conflict(_)) => {
-                Some(self.conflict_details.get(&op).map_or("", String::as_str))
+                Some(self.undo_details.get(&op).map_or("", String::as_str))
+            }
+            _ => None,
+        }
+    }
+
+    /// The note of the `undo_done` record that op `op`'s undo stands at ([`UndoState::Finished`]), such
+    /// as a service restored without its stored password (M1b review R2b S6); `None` when its undo did
+    /// not finish so. Empty when the record held none (every record written before the note existed).
+    pub fn undo_done_detail(&self, op: OpId) -> Option<&str> {
+        match self.ops.get(&op).map(|s| &s.undo) {
+            Some(UndoState::Finished(_)) => {
+                Some(self.undo_details.get(&op).map_or("", String::as_str))
             }
             _ => None,
         }
@@ -532,6 +570,21 @@ impl JournalState {
         self.ops
             .values()
             .filter(|s| s.undo == UndoState::InProgress)
+    }
+
+    /// The registry ops whose `done` says `Done` and whose change the journal does not vouch for yet,
+    /// in op order: their `done` came after the last `group_end` marked `registry_flushed` (none in a
+    /// journal written before the mark existed) and the run has not ended. Windows writes registry
+    /// changes lazily, so after an unclean stop such a change may be gone although its `done` is on
+    /// disk; recovery probes these ops again ([`crate::durable`]). Empty once the run ended: the writer
+    /// flushes the hives before `commit` and `aborted`.
+    pub fn unconfirmed(&self) -> impl Iterator<Item = &OpState> + '_ {
+        self.unconfirmed.iter().filter_map(|op| self.ops.get(op))
+    }
+
+    /// Whether op `op` is one of [`JournalState::unconfirmed`].
+    pub fn is_unconfirmed(&self, op: OpId) -> bool {
+        self.unconfirmed.contains(&op)
     }
 
     /// How many items ended in each outcome, from the `done` records.
@@ -807,51 +860,81 @@ impl JournalState {
             Record::Done(d) => {
                 let s = self.known_mut(d.op);
                 let had_intent = s.intent.is_some();
+                let registry = s
+                    .intent
+                    .as_ref()
+                    .is_some_and(|intent| intent.exec_op.is_registry());
                 s.outcome = Some(d.outcome.clone());
                 self.phase = Phase::Running;
                 self.counts.record(&d.outcome);
                 if had_intent {
                     self.open_intents -= 1;
                 }
+                if registry && d.outcome == ItemOutcome::Done {
+                    self.unconfirmed.insert(d.op);
+                }
             }
-            Record::GroupEnd(_) => {
+            Record::GroupEnd(g) => {
                 self.groups_closed += 1;
                 self.open_group_intents = 0;
+                if g.registry_flushed {
+                    self.unconfirmed.clear();
+                }
             }
             Record::Commit(c) => {
                 self.commit = Some(c.clone());
                 self.phase = Phase::Committed;
+                self.unconfirmed.clear();
             }
             Record::Aborted(a) => {
                 self.aborted = Some(a.clone());
                 self.phase = Phase::Aborted;
+                self.unconfirmed.clear();
             }
             Record::UndoIntent(u) => {
                 let s = self.known_mut(u.op);
                 s.undo = UndoState::InProgress;
                 s.undo_attempts = s.undo_attempts.saturating_add(1);
-                self.conflict_details.remove(&u.op);
+                self.undo_details.remove(&u.op);
                 self.reach(u.op);
             }
             Record::UndoDone(u) => {
                 self.known_mut(u.op).undo = UndoState::Finished(u.outcome.clone());
-                self.conflict_details.remove(&u.op);
+                if u.detail.is_empty() {
+                    self.undo_details.remove(&u.op);
+                } else {
+                    self.undo_details.insert(u.op, u.detail.clone());
+                }
                 self.reach(u.op);
             }
             Record::UndoConflict(c) => {
                 self.known_mut(c.op).undo = UndoState::Conflict(c.conflict.clone());
-                self.conflict_details.insert(c.op, c.detail.clone());
+                self.undo_details.insert(c.op, c.detail.clone());
                 self.reach(c.op);
             }
             Record::UndoPlan(plan) => {
                 self.undo_plan = Some((plan.ops.clone(), BTreeSet::new()));
             }
             Record::Reconcile(r) => {
+                // A `Retried` for an unconfirmed op is recovery's verdict on a registry change it did
+                // not find: its outcome replaces the `done`'s `Done` (and is counted instead).
+                let corrected = match &r.result {
+                    ReconcileResult::Retried { outcome } if self.unconfirmed.remove(&r.op) => {
+                        Some(outcome.clone())
+                    }
+                    _ => None,
+                };
                 let s = self.known_mut(r.op);
                 if matches!(r.result, ReconcileResult::Retried { .. }) {
                     s.retry_in_flight = false;
                 }
                 s.reconciles.push(r.result.clone());
+                if let Some(outcome) = corrected {
+                    if let Some(old) = s.outcome.replace(outcome.clone()) {
+                        uncount(&mut self.counts, &old);
+                    }
+                    self.counts.record(&outcome);
+                }
             }
             Record::Expire(e) => self.known_mut(e.op).expired.push(e.class),
         }
@@ -869,6 +952,22 @@ impl JournalState {
     }
 
     fn check_reconcile(&self, r: &Reconcile) -> Result<(), Violation> {
+        if let ReconcileResult::Retried { outcome } = &r.result
+            && self.unconfirmed.contains(&r.op)
+        {
+            // Recovery's verdict on an unconfirmed registry op whose change it did not find: only
+            // while the run is open, and only an outcome that says the change is not (all) there.
+            self.run_open("reconcile")?;
+            let fits = !matches!(
+                outcome,
+                ItemOutcome::Done | ItemOutcome::HeldRetry | ItemOutcome::PendingReboot { .. }
+            );
+            return if fits {
+                Ok(())
+            } else {
+                Err(Violation::ReconcileMismatch(r.op))
+            };
+        }
         let pending = self.known(r.op)?.pending();
         let fits = match (pending, &r.result) {
             (None, _) => return Err(Violation::NotPending(r.op)),

@@ -159,26 +159,14 @@ pub enum IrreversibleAck {
     Missing,
 }
 
-/// The skip for an item whose target is a service, a scheduled task or a firewall rule: those have no
-/// executor in this version (their definition capture and recreate are deferred), so they are never acted
-/// on. `None` for every other target.
-///
-/// The outcome is `Skipped{GateBlocked{CannotBackUp}}`: without the definition capture there is no backup,
-/// and no verified backup means no delete (§7.4). The model has no dedicated "not supported" reason.
+/// The skip for an item whose target has no executor in this version: none since M1b. Services,
+/// scheduled tasks and firewall rules are run by `act_service`, `act_task` and `act_firewall`
+/// (M1B-X-INTEG); one without its scan-time digest is skipped by the run as `ChangedSinceScan` before
+/// any backup. Kept so that a target without an executor has one place to be named again; `None` for
+/// every target.
 pub fn unsupported_target(target: &Target) -> Option<TypedResult> {
-    let what = match target {
-        Target::Service { name } => format!("service {name}"),
-        Target::Task { path } => format!("scheduled task {path}"),
-        Target::FirewallRule { id } => format!("firewall rule {id}"),
-        _ => return None,
-    };
-    Some(TypedResult::blocked(
-        Blocker::CannotBackUp,
-        format!(
-            "{what}: removing services, scheduled tasks and firewall rules is not supported in this \
-             version; left untouched"
-        ),
-    ))
+    let _ = target;
+    None
 }
 
 // ---------------------------------------------------------------------------------------------------

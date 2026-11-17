@@ -36,7 +36,14 @@
 //!         "readme.txt": {"content_text": "hello"},
 //!         "unins000.dat": {"content_file": "side/unins000.dat"} } } } },
 //!   "msi": {"products": [], "states": {}},
-//!   "packages": []
+//!   "packages": [],
+//!   "msi_tables": { "C:\\Windows\\Installer\\1a2b3c.msi": {
+//!       "properties": [["ProductName", "App"]],
+//!       "components": [{"component": "Main", "component_id": "{…}", "attributes": 256,
+//!                       "key_path": "app.exe"}] } },
+//!   "tasks": [{"identity": {"path": "\\Vendor\\Update",
+//!                           "actions": [{"kind": "exec", "path": "C:\\Program Files\\App\\u.exe"}]},
+//!              "enabled": true}]
 //! }
 //! ```
 //!
@@ -60,6 +67,13 @@
 //!   explicit flag on the path or an ancestor wins, otherwise a path under an admin-only root is admin-only.
 //! - `unknown_file_facts: true` makes missing version info, signer and shortcut data `NotCaptured` instead
 //!   of "none" (set by snapshot fixtures, which do not record them).
+//! - `msi_tables` maps `LocalPackage` paths (compared like file paths: case-insensitive, `/` = `\`) to
+//!   [`MsiTables`]; `tasks` lists [`TaskInfo`]s. Unlike the other lists, an **absent** section (or
+//!   `null`) means "not captured": `msi_tables` and `tasks` then return [`SourceError::NotCaptured`]; a
+//!   package missing from a present section is [`SourceError::NotFound`]. Both are returned within the
+//!   C-SOURCE limits ([`crate::sysobj`]).
+//! - Unknown fields are rejected at the top level and anywhere in `msi_tables` and `tasks`, so a typo
+//!   fails the load instead of reading as "not captured" or "none".
 //!
 //! Serialisation ([`Fixture::to_json`]) writes the same format with every key and entry flat at the top
 //! level, in case-folded order, so the output is deterministic and loads back to an equal fixture.
@@ -73,6 +87,7 @@ use serde::{Deserialize, Serialize};
 use crate::filesystem::{FileSystemSource, join_file_path, split_file_path};
 use crate::registry::{RegistrySource, is_registry_path, map_current_control_set, split_key};
 use crate::snapfixture::SnapStats;
+use crate::sysobj::{MsiTables, TaskInfo, limited_tasks};
 use crate::system::SystemSource;
 use crate::types::{
     DirEntry, ExistsState, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FileMeta, FileTime,
@@ -506,6 +521,10 @@ pub struct Fixture {
     msi_products: Option<Vec<MsiProduct>>,
     msi_states: BTreeMap<String, Vec<MsiContextState>>,
     packages: Option<Vec<PackageInfo>>,
+    /// MSI tables by [`package_key`], with the path as given; `None` = not captured.
+    msi_tables: Option<BTreeMap<String, (String, MsiTables)>>,
+    /// Scheduled tasks; `None` = not captured.
+    tasks: Option<Vec<TaskInfo>>,
     base_dir: Option<PathBuf>,
     overlay_dir: Option<PathBuf>,
     pub(crate) snap_stats: Option<SnapStats>,
@@ -542,6 +561,8 @@ impl Fixture {
             msi_products: Some(Vec::new()),
             msi_states: BTreeMap::new(),
             packages: Some(Vec::new()),
+            msi_tables: None,
+            tasks: None,
             base_dir: None,
             overlay_dir: None,
             snap_stats: None,
@@ -929,6 +950,39 @@ impl Fixture {
     /// Adds a package.
     pub fn add_package(&mut self, package: PackageInfo) {
         self.packages.get_or_insert_with(Vec::new).push(package);
+    }
+
+    /// Sets the tables of one cached MSI package (turning "not captured" into captured); replaces the
+    /// tables of the same path in any case or slash form. Returns `false`, changing nothing, when
+    /// `local_package` is not an absolute file path.
+    pub fn set_msi_tables(&mut self, local_package: &str, tables: MsiTables) -> bool {
+        let Some(key) = package_key(local_package) else {
+            return false;
+        };
+        self.msi_tables
+            .get_or_insert_with(BTreeMap::new)
+            .insert(key, (local_package.to_string(), tables));
+        true
+    }
+
+    /// Whether the fixture captured MSI tables: `false` drops them all (`msi_tables` answers
+    /// `NotCaptured`), `true` keeps those set and makes every other package `NotFound`.
+    pub fn set_msi_tables_captured(&mut self, captured: bool) {
+        if captured {
+            self.msi_tables.get_or_insert_with(BTreeMap::new);
+        } else {
+            self.msi_tables = None;
+        }
+    }
+
+    /// Replaces the task list (`None` = not captured).
+    pub fn set_tasks(&mut self, tasks: Option<Vec<TaskInfo>>) {
+        self.tasks = tasks;
+    }
+
+    /// Adds a task (turning a "not captured" list into a captured one).
+    pub fn add_task(&mut self, task: TaskInfo) {
+        self.tasks.get_or_insert_with(Vec::new).push(task);
     }
 
     // ---- counts ---------------------------------------------------------------------------------------
@@ -1390,9 +1444,26 @@ impl SystemSource for Fixture {
         self.packages.clone().ok_or(SourceError::NotCaptured)
     }
 
+    fn msi_tables(&self, local_package: &str) -> SourceResult<MsiTables> {
+        let tables = self.msi_tables.as_ref().ok_or(SourceError::NotCaptured)?;
+        let key = package_key(local_package)
+            .ok_or_else(|| SourceError::InvalidPath(local_package.to_string()))?;
+        let (_, t) = tables.get(&key).ok_or(SourceError::NotFound)?;
+        Ok(t.limited())
+    }
+
+    fn tasks(&self) -> SourceResult<Vec<TaskInfo>> {
+        limited_tasks(self.tasks.as_deref().ok_or(SourceError::NotCaptured)?)
+    }
+
     fn now(&self) -> FileTime {
         self.system.now.unwrap_or(FileTime(0))
     }
+}
+
+/// The look-up key of a `LocalPackage` path: the file-path segments, case-folded, `/` read as `\`.
+fn package_key(path: &str) -> Option<String> {
+    folded_segments(path, false, 0).map(|segs| join_file_path(&segs))
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1745,6 +1816,7 @@ fn yes() -> bool {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FixtureDoc {
     schema: String,
     #[serde(default)]
@@ -1757,6 +1829,57 @@ struct FixtureDoc {
     msi: MsiDoc,
     #[serde(default = "some_empty")]
     packages: Option<Vec<PackageInfo>>,
+    /// Absent (or `null`) = not captured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    msi_tables: Option<BTreeMap<String, MsiTables>>,
+    /// Absent (or `null`) = not captured.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "strict_tasks"
+    )]
+    tasks: Option<Vec<TaskInfo>>,
+}
+
+/// The `tasks` section, with unknown fields rejected at every depth: [`TaskInfo`] denies them itself, but
+/// the task identity and its actions (purge-model types) would ignore them. Each task is read, written
+/// back, and every key of the input must be in what was written (serde writes every field of these types).
+fn strict_tasks<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<TaskInfo>>, D::Error> {
+    use serde::de::Error as _;
+    let Some(items) = Option::<Vec<serde_json::Value>>::deserialize(d)? else {
+        return Ok(None);
+    };
+    let mut tasks = Vec::with_capacity(items.len());
+    for (i, item) in items.into_iter().enumerate() {
+        let task: TaskInfo = serde_json::from_value(item.clone())
+            .map_err(|e| D::Error::custom(format!("tasks[{i}]: {e}")))?;
+        let written = serde_json::to_value(&task)
+            .map_err(|e| D::Error::custom(format!("tasks[{i}]: {e}")))?;
+        if let Some(field) = unknown_field(&item, &written) {
+            return Err(D::Error::custom(format!(
+                "tasks[{i}]: unknown field `{field}`"
+            )));
+        }
+        tasks.push(task);
+    }
+    Ok(Some(tasks))
+}
+
+/// The first key path of `input` that `known` lacks (objects by key, arrays by position).
+fn unknown_field(input: &serde_json::Value, known: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    match (input, known) {
+        (Value::Object(a), Value::Object(b)) => a.iter().find_map(|(k, va)| match b.get(k) {
+            None => Some(k.clone()),
+            Some(vb) => unknown_field(va, vb).map(|rest| format!("{k}.{rest}")),
+        }),
+        (Value::Array(a), Value::Array(b)) => a
+            .iter()
+            .zip(b)
+            .enumerate()
+            .find_map(|(i, (va, vb))| unknown_field(va, vb).map(|rest| format!("{i}.{rest}"))),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2038,6 +2161,21 @@ impl Fixture {
             .map(|(k, v)| (k.to_ascii_uppercase(), v))
             .collect();
         f.packages = doc.packages;
+        if let Some(tables) = doc.msi_tables {
+            let mut map = BTreeMap::new();
+            for (path, t) in tables {
+                let key = package_key(&path).ok_or_else(|| {
+                    FixtureError::Invalid(format!("msi_tables: bad package path {path:?}"))
+                })?;
+                if map.insert(key, (path.clone(), t)).is_some() {
+                    return Err(FixtureError::Invalid(format!(
+                        "msi_tables: package {path:?} listed twice"
+                    )));
+                }
+            }
+            f.msi_tables = Some(map);
+        }
+        f.tasks = doc.tasks;
 
         let reg = doc.registry;
         f.current_control_set = reg.current_control_set;
@@ -2285,6 +2423,12 @@ impl Fixture {
                 states: self.msi_states.clone(),
             },
             packages: self.packages.clone(),
+            msi_tables: self.msi_tables.as_ref().map(|m| {
+                m.values()
+                    .map(|(path, t)| (path.clone(), t.clone()))
+                    .collect()
+            }),
+            tasks: self.tasks.clone(),
         }
     }
 
@@ -2540,6 +2684,18 @@ impl FixtureBuilder {
     /// Adds a package.
     pub fn package(mut self, package: PackageInfo) -> Self {
         self.0.add_package(package);
+        self
+    }
+
+    /// Sets the tables of one cached MSI package.
+    pub fn msi_tables(mut self, local_package: &str, tables: MsiTables) -> Self {
+        self.0.set_msi_tables(local_package, tables);
+        self
+    }
+
+    /// Adds a scheduled task.
+    pub fn task(mut self, task: TaskInfo) -> Self {
+        self.0.add_task(task);
         self
     }
 
@@ -3230,5 +3386,361 @@ mod tests {
         assert!(r.key_info("HKLM\\SOFTWARE").is_ok());
         assert!(fs.metadata("C:\\Program Files").is_ok());
         assert!(s.os_info().is_ok());
+    }
+
+    // ---- M1b: MSI tables and tasks ----------------------------------------------------------------------
+
+    mod m1b {
+        use super::*;
+        use crate::sysobj::{
+            MAX_CELL_BYTES, MAX_TABLE_ROWS, MAX_TASKS, MsiClassRow, MsiComponentRow,
+            MsiExtensionRow, MsiRegistryRaw, MsiServiceRaw, TOO_MANY_TASKS,
+        };
+        use purge_model::object::{TaskAction, TaskIdentity};
+
+        const PKG: &str = r"C:\Windows\Installer\1A2b3C.msi";
+
+        fn load(json: &str) -> Result<Fixture, FixtureError> {
+            Fixture::from_json_str(json, None)
+        }
+
+        fn tables() -> MsiTables {
+            MsiTables {
+                properties: vec![
+                    ("ProductName".into(), "App".into()),
+                    ("Manufacturer".into(), "Vendor".into()),
+                ],
+                components: vec![MsiComponentRow {
+                    component: "Main".into(),
+                    component_id: Some("{11111111-2222-3333-4444-555555555555}".into()),
+                    attributes: 256,
+                    key_path: Some("app.exe".into()),
+                }],
+                registry: vec![MsiRegistryRaw {
+                    row: "reg1".into(),
+                    root: -1,
+                    key: "Software\\[Manufacturer]\\[ProductName]".into(),
+                    name: Some("Path".into()),
+                    value: Some("[INSTALLDIR]".into()),
+                    component: "Main".into(),
+                }],
+                remove_registry: vec![MsiRegistryRaw {
+                    row: "rm1".into(),
+                    root: 1,
+                    key: "Software\\Old".into(),
+                    name: None,
+                    value: None,
+                    component: "Main".into(),
+                }],
+                classes: vec![MsiClassRow {
+                    clsid: "{AAAAAAAA-0000-0000-0000-000000000001}".into(),
+                    context: "LocalServer32".into(),
+                    component: "Main".into(),
+                    progid: Some("App.Doc.1".into()),
+                    appid: None,
+                }],
+                progids: vec!["App.Doc.1".into()],
+                extensions: vec![MsiExtensionRow {
+                    extension: "appdoc".into(),
+                    component: "Main".into(),
+                    progid: Some("App.Doc.1".into()),
+                }],
+                typelibs: vec!["{BBBBBBBB-0000-0000-0000-000000000002}".into()],
+                appids: vec!["{CCCCCCCC-0000-0000-0000-000000000003}".into()],
+                service_install: vec![MsiServiceRaw {
+                    name: "AppSvc".into(),
+                    component: "Main".into(),
+                    service_type: 16,
+                    start_type: 2,
+                }],
+                custom_action_count: 4,
+                truncated: false,
+            }
+        }
+
+        fn tasks() -> Vec<TaskInfo> {
+            vec![
+                TaskInfo {
+                    identity: TaskIdentity {
+                        path: r"\Vendor\App Update".into(),
+                        actions: vec![
+                            TaskAction::Exec {
+                                path: r"C:\Program Files\App\update.exe".into(),
+                                arguments: Some("/silent".into()),
+                                working_dir: None,
+                            },
+                            TaskAction::ComHandler {
+                                clsid: "{AAAAAAAA-0000-0000-0000-000000000001}".into(),
+                                data: Some("x".into()),
+                            },
+                            TaskAction::Other {
+                                kind: "email".into(),
+                            },
+                        ],
+                    },
+                    enabled: true,
+                    hidden: true,
+                    author: Some("Vendor".into()),
+                    stored_password: true,
+                    run_as: Some("S-1-5-18".into()),
+                },
+                // Unreadable to the scanning user: no actions.
+                TaskInfo {
+                    identity: TaskIdentity {
+                        path: r"\Locked".into(),
+                        actions: Vec::new(),
+                    },
+                    ..TaskInfo::default()
+                },
+            ]
+        }
+
+        #[test]
+        fn fixture_msi_tables_absent_section_is_not_captured() {
+            let f = load(r#"{"schema":"purge.fixture/1"}"#).unwrap();
+            assert_eq!(f.msi_tables(PKG), Err(SourceError::NotCaptured));
+            assert_eq!(f.tasks(), Err(SourceError::NotCaptured));
+            let f = load(r#"{"schema":"purge.fixture/1","msi_tables":null,"tasks":null}"#).unwrap();
+            assert_eq!(f.msi_tables(PKG), Err(SourceError::NotCaptured));
+            assert_eq!(f.tasks(), Err(SourceError::NotCaptured));
+            // Built in code: not captured until something is set.
+            let mut f = Fixture::new();
+            assert_eq!(f.msi_tables(PKG), Err(SourceError::NotCaptured));
+            assert_eq!(f.tasks(), Err(SourceError::NotCaptured));
+            f.set_msi_tables_captured(true);
+            assert_eq!(f.msi_tables(PKG), Err(SourceError::NotFound));
+            f.set_msi_tables_captured(false);
+            assert_eq!(f.msi_tables(PKG), Err(SourceError::NotCaptured));
+            // An empty list is a captured "no tasks", not "unknown".
+            let f = load(r#"{"schema":"purge.fixture/1","tasks":[]}"#).unwrap();
+            assert_eq!(f.tasks(), Ok(Vec::new()));
+            // Not captured survives a round trip (the sections are left out, not written empty).
+            let text = Fixture::new().to_json();
+            assert!(
+                !text.contains("msi_tables") && !text.contains("tasks"),
+                "{text}"
+            );
+            let back = load(&text).unwrap();
+            assert_eq!(back.msi_tables(PKG), Err(SourceError::NotCaptured));
+            assert_eq!(back.tasks(), Err(SourceError::NotCaptured));
+        }
+
+        #[test]
+        fn fixture_msi_tables_unknown_package_is_not_found() {
+            let f = load(
+                r#"{"schema":"purge.fixture/1","msi_tables":{"C:\\Windows\\Installer\\1a2b3c.msi":{}}}"#,
+            )
+            .unwrap();
+            assert_eq!(f.msi_tables(PKG), Ok(MsiTables::default()));
+            for other in [
+                r"C:\Windows\Installer\ffff.msi",
+                r"C:\Windows\Installer\1a2b3c.msi.bak",
+                r"C:\Windows\Installer",
+                r"D:\Windows\Installer\1a2b3c.msi",
+            ] {
+                assert_eq!(f.msi_tables(other), Err(SourceError::NotFound), "{other}");
+            }
+            let f = load(r#"{"schema":"purge.fixture/1","msi_tables":{}}"#).unwrap();
+            assert_eq!(f.msi_tables(PKG), Err(SourceError::NotFound));
+            // Not a path at all: an error of its own, never an empty table set.
+            assert!(matches!(
+                f.msi_tables("1a2b3c.msi"),
+                Err(SourceError::InvalidPath(_))
+            ));
+        }
+
+        #[test]
+        fn fixture_msi_tables_path_case_and_slash_insensitive() {
+            let f = Fixture::builder().msi_tables(PKG, tables()).build();
+            for spelling in [
+                PKG,
+                r"c:\windows\installer\1a2b3c.MSI",
+                "C:/Windows/Installer/1a2b3c.msi",
+                r"c:\WINDOWS/installer\\1A2B3C.msi",
+                r"\\?\C:\Windows\Installer\1a2b3c.msi",
+            ] {
+                assert_eq!(f.msi_tables(spelling), Ok(tables()), "{spelling}");
+            }
+            // The same through JSON, keyed with forward slashes.
+            let f = load(
+                r#"{"schema":"purge.fixture/1","msi_tables":{"c:/windows/INSTALLER/1a2b3c.msi":{"progids":["App.Doc.1"]}}}"#,
+            )
+            .unwrap();
+            assert_eq!(f.msi_tables(PKG).unwrap().progids, vec!["App.Doc.1"]);
+            // Setting the same package in another spelling replaces it.
+            let mut f = Fixture::new();
+            assert!(f.set_msi_tables(PKG, MsiTables::default()));
+            assert!(f.set_msi_tables("c:/windows/installer/1a2b3c.msi", tables()));
+            assert_eq!(f.msi_tables(PKG), Ok(tables()));
+            assert!(!f.set_msi_tables("relative.msi", tables()));
+            // Hostile: two spellings of one package in a document is ambiguous, not "last wins".
+            let dup = r#"{"schema":"purge.fixture/1","msi_tables":{
+                "C:\\Windows\\Installer\\a.msi":{"progids":["One"]},
+                "c:/windows/installer/A.MSI":{"progids":["Two"]}}}"#;
+            assert!(matches!(load(dup), Err(FixtureError::Invalid(m)) if m.contains("twice")));
+            let bad = r#"{"schema":"purge.fixture/1","msi_tables":{"a.msi":{}}}"#;
+            assert!(matches!(load(bad), Err(FixtureError::Invalid(_))));
+        }
+
+        #[test]
+        fn fixture_tasks_round_trip() {
+            let f = Fixture::builder()
+                .msi_tables(PKG, tables())
+                .task(tasks()[0].clone())
+                .task(tasks()[1].clone())
+                .build();
+            assert_eq!(f.tasks(), Ok(tasks()));
+            let text = f.to_json();
+            let back = load(&text).unwrap();
+            assert_eq!(back.tasks(), Ok(tasks()));
+            assert_eq!(back.msi_tables(PKG), Ok(tables()));
+            assert_eq!(back.to_json(), text);
+            // The path keeps the spelling it was given.
+            assert!(
+                text.contains(r#""C:\\Windows\\Installer\\1A2b3C.msi""#),
+                "{text}"
+            );
+
+            // Written by hand: optional fields may be left out.
+            let f = load(
+                r#"{"schema":"purge.fixture/1","tasks":[
+                    {"identity":{"path":"\\Vendor\\App Update","actions":[
+                        {"kind":"exec","path":"C:\\Program Files\\App\\update.exe"},
+                        {"kind":"com_handler","clsid":"{AAAAAAAA-0000-0000-0000-000000000001}"},
+                        {"kind":"other","other_kind":"email"}]},
+                     "enabled":true}]}"#,
+            )
+            .unwrap();
+            let got = f.tasks().unwrap();
+            assert_eq!(got.len(), 1);
+            assert!(got[0].enabled && !got[0].hidden && got[0].author.is_none());
+            assert_eq!(
+                got[0].identity.actions[0],
+                TaskAction::Exec {
+                    path: r"C:\Program Files\App\update.exe".into(),
+                    arguments: None,
+                    working_dir: None,
+                }
+            );
+            assert_eq!(
+                got[0].identity.actions[2],
+                TaskAction::Other {
+                    kind: "email".into()
+                }
+            );
+        }
+
+        #[test]
+        fn fixture_rejects_unknown_field() {
+            // Hostile: every misspelt or invented field fails the load, at every depth.
+            let cases = [
+                // A section name.
+                r#"{"schema":"purge.fixture/1","task":[]}"#,
+                r#"{"schema":"purge.fixture/1","msi_table":{}}"#,
+                // MsiTables itself and each kind of row.
+                r#"{"schema":"purge.fixture/1","msi_tables":{"C:\\a.msi":{"propertys":[]}}}"#,
+                r#"{"schema":"purge.fixture/1","msi_tables":{"C:\\a.msi":{"components":[
+                    {"component":"Main","attributes":0,"keypath":"app.exe"}]}}}"#,
+                r#"{"schema":"purge.fixture/1","msi_tables":{"C:\\a.msi":{"registry":[
+                    {"row":"r","root":2,"key":"Software\\X","component":"c","Value":"v"}]}}}"#,
+                r#"{"schema":"purge.fixture/1","msi_tables":{"C:\\a.msi":{"classes":[
+                    {"clsid":"{A}","context":"InprocServer32","component":"c","prog_id":"P"}]}}}"#,
+                r#"{"schema":"purge.fixture/1","msi_tables":{"C:\\a.msi":{"extensions":[
+                    {"extension":"x","component":"c","verb":"open"}]}}}"#,
+                r#"{"schema":"purge.fixture/1","msi_tables":{"C:\\a.msi":{"service_install":[
+                    {"name":"S","component":"c","service_type":16,"start_type":2,"account":"x"}]}}}"#,
+                // TaskInfo itself.
+                r#"{"schema":"purge.fixture/1","tasks":[{"identity":{"path":"\\T","actions":[]},"enabld":true}]}"#,
+                // The identity and the actions (purge-model types, which do not deny unknown fields).
+                r#"{"schema":"purge.fixture/1","tasks":[{"identity":{"path":"\\T","actions":[],"author":"x"}}]}"#,
+                r#"{"schema":"purge.fixture/1","tasks":[{"identity":{"path":"\\T","actions":[
+                    {"kind":"exec","path":"C:\\a.exe","argument":"/x"}]}}]}"#,
+                r#"{"schema":"purge.fixture/1","tasks":[{"identity":{"path":"\\T","actions":[
+                    {"kind":"exec","path":"C:\\a.exe"},
+                    {"kind":"com_handler","clsid":"{A}","Data":"d"}]}}]}"#,
+            ];
+            for json in cases {
+                let err = load(json).map(|_| ()).unwrap_err();
+                assert!(
+                    err.to_string().contains("unknown field"),
+                    "{json}\n=> {err}"
+                );
+            }
+        }
+
+        #[test]
+        fn fixture_table_over_limit_sets_truncated() {
+            let row = |i: usize| MsiComponentRow {
+                component: format!("C{i}"),
+                component_id: None,
+                attributes: 0,
+                key_path: None,
+            };
+            // Exactly at the limit: whole and not truncated.
+            let at = MsiTables {
+                components: (0..MAX_TABLE_ROWS).map(row).collect(),
+                ..MsiTables::default()
+            };
+            let f = Fixture::builder().msi_tables(PKG, at).build();
+            let got = f.msi_tables(PKG).unwrap();
+            assert_eq!(got.components.len(), MAX_TABLE_ROWS);
+            assert!(!got.truncated);
+
+            // Hostile: one row over the limit is cut and flagged, never returned whole.
+            let over = MsiTables {
+                components: (0..=MAX_TABLE_ROWS).map(row).collect(),
+                progids: vec!["App.Doc".into()],
+                ..MsiTables::default()
+            };
+            let f = Fixture::builder().msi_tables(PKG, over).build();
+            let got = f.msi_tables(PKG).unwrap();
+            assert_eq!(got.components.len(), MAX_TABLE_ROWS);
+            assert_eq!(got.components.last(), Some(&row(MAX_TABLE_ROWS - 1)));
+            assert_eq!(got.progids, vec!["App.Doc"]);
+            assert!(got.truncated);
+
+            // Hostile: a cell over 64 KiB drops its row and flags the set.
+            let long = MsiTables {
+                registry: vec![
+                    MsiRegistryRaw {
+                        row: "big".into(),
+                        root: 2,
+                        key: "Software\\X".into(),
+                        name: None,
+                        value: Some("v".repeat(MAX_CELL_BYTES + 1)),
+                        component: "c".into(),
+                    },
+                    MsiRegistryRaw {
+                        row: "small".into(),
+                        root: 2,
+                        key: "Software\\X".into(),
+                        name: None,
+                        value: Some("v".into()),
+                        component: "c".into(),
+                    },
+                ],
+                ..MsiTables::default()
+            };
+            let f = Fixture::builder().msi_tables(PKG, long).build();
+            let got = f.msi_tables(PKG).unwrap();
+            assert!(got.truncated);
+            assert_eq!(got.registry.len(), 1);
+            assert_eq!(got.registry[0].row, "small");
+
+            // A package flagged truncated by its capture stays flagged.
+            let flagged = MsiTables {
+                truncated: true,
+                ..MsiTables::default()
+            };
+            let f = Fixture::builder().msi_tables(PKG, flagged).build();
+            assert!(f.msi_tables(PKG).unwrap().truncated);
+
+            // Hostile: more tasks than the limit is an error, never a cut list.
+            let mut f = Fixture::new();
+            f.set_tasks(Some(vec![TaskInfo::default(); MAX_TASKS]));
+            assert_eq!(f.tasks().map(|t| t.len()), Ok(MAX_TASKS));
+            f.add_task(TaskInfo::default());
+            assert_eq!(f.tasks(), Err(SourceError::Other(TOO_MANY_TASKS)));
+        }
     }
 }

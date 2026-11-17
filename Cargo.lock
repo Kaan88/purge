@@ -172,6 +172,7 @@ dependencies = [
 name = "purge-guard"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "purge-model",
  "serde",
  "serde_json",
@@ -215,6 +216,10 @@ dependencies = [
  "purge-guard",
  "purge-model",
  "purge-source",
+ "purge-win",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -254,6 +259,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

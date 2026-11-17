@@ -38,6 +38,7 @@ mod filesystem;
 mod registry;
 mod regpath;
 mod shortcut;
+mod sysobj;
 mod system;
 
 #[cfg(test)]

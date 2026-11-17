@@ -24,6 +24,10 @@
 //!   (`purge-win` feature `appx`): machine-wide with the registered users' SIDs when the engine is
 //!   elevated, otherwise the engine account's own packages, recorded for that account's SID. A package
 //!   with an `EffectiveExternalPath` is sparse and that path is its external location ([`to_package_info`]).
+//! - MSI tables ([`SystemSource::msi_tables`]) come from `purge_win::msi_db::read_tables` (read-only
+//!   database open, one handle per call) and scheduled tasks ([`SystemSource::tasks`]) from
+//!   `purge_win::taskschd::list_all` (feature `com`); `live/sysobj.rs` maps the wrappers' types and
+//!   errors. A failure is an error, never an empty result.
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,6 +39,7 @@ use super::errors::{map_io, map_win32};
 use super::registry::LiveRegistry;
 use crate::fixture::expand_env;
 use crate::registry::{RegistrySource, control_set_name};
+use crate::sysobj::{MsiTables, TaskInfo};
 use crate::system::SystemSource;
 use crate::types::{
     KnownFolder, MsiContextState, MsiProduct, MsiProductState, PackageInfo, PackageSignatureKind,
@@ -527,6 +532,14 @@ impl SystemSource for LiveSystem {
             .into_iter()
             .map(|p| to_package_info(p, listed_for.as_deref()))
             .collect())
+    }
+
+    fn msi_tables(&self, local_package: &str) -> SourceResult<MsiTables> {
+        super::sysobj::msi_tables(local_package)
+    }
+
+    fn tasks(&self) -> SourceResult<Vec<TaskInfo>> {
+        super::sysobj::tasks()
     }
 
     fn now(&self) -> FileTime {

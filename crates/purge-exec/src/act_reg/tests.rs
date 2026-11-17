@@ -401,6 +401,7 @@ impl Run {
             items: ops.len() as u32,
             allow_irreversible: false,
             volumes: Vec::new(),
+            program_roots: Vec::new(),
         };
         let mut journal = JournalWriter::create(&session, header).unwrap();
         let mut ctx = GateCtx::new(DenyList::compile(&live_env()), &ops, no_store()).unwrap();

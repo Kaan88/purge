@@ -92,6 +92,7 @@ fn header(items: u32) -> Header {
         items,
         allow_irreversible: false,
         volumes: Vec::new(),
+        program_roots: Vec::new(),
     }
 }
 
@@ -466,7 +467,11 @@ fn undo_is_refused_after_expiry_and_expiry_during_an_undo() {
             outcome: ItemOutcome::Done,
             detail: String::new(),
         }),
-        Record::GroupEnd(purge_model::exec::journal::GroupEnd { group: 1, ops: 1 }),
+        Record::GroupEnd(purge_model::exec::journal::GroupEnd {
+            group: 1,
+            ops: 1,
+            registry_flushed: true,
+        }),
         Record::Commit(purge_model::exec::journal::Commit {
             at: FileTime(1),
             counts: OutcomeCounts {
@@ -996,6 +1001,7 @@ fn reader_refuses_rule_breaks() {
         body(Record::GroupEnd(purge_model::exec::journal::GroupEnd {
             group,
             ops,
+            registry_flushed: true,
         }))
     };
     assert!(matches!(
@@ -1648,6 +1654,10 @@ fn run_settings() -> RunSettings {
         key_limit: 10_000,
         restore_point: RestorePointPolicy::HighRiskOnly,
         selected: Vec::new(),
+        gone_msi_products: Vec::new(),
+        gone_msi_by_sid: Vec::new(),
+        gone_cache_dirs: Vec::new(),
+        gone_burn: Vec::new(),
     }
 }
 
@@ -2210,4 +2220,239 @@ fn an_undo_plan_names_what_an_interrupted_undo_had_not_reached() {
             .undo_unfinished()
             .is_empty()
     );
+}
+
+/// A key in a user hive that is not loaded: the writer's hive flush skips it, so these tests change
+/// nothing in the registry.
+const UNLOADED_KEY: &str = r"HKU\S-1-5-21-0-0-0-424242\Software\Vendor";
+
+fn reg_validated(n: u32) -> Validated {
+    Validated {
+        op: OpId(n),
+        item: item(n),
+        target: Target::RegValue {
+            path: UNLOADED_KEY.into(),
+            name: format!("v{n}"),
+        },
+        facts: ItemFacts::Absent,
+        exemptions: GateExemptions::default(),
+    }
+}
+
+/// The intent of a value delete, op `n`.
+fn reg_intent(n: u32) -> Intent {
+    Intent {
+        op: OpId(n),
+        item: item(n),
+        exec_op: ExecOp::DeleteValue {
+            key: UNLOADED_KEY.into(),
+            name: format!("v{n}"),
+        },
+        inverse: Inverse::RestoreValue {
+            backup: BackupRef {
+                path: format!(r"reg\{n:06}.regbackup.json"),
+                sha256: sha256_bytes(b"backup"),
+                bytes: 6,
+            },
+        },
+        definition: None,
+        pre: ItemFacts::Value(purge_model::exec::journal::ValueFacts {
+            value_type: 1,
+            size: 0,
+            data_sha256: sha256_bytes(b""),
+        }),
+    }
+}
+
+/// Gate case p902: a registry `done` is unconfirmed until a `group_end` marked `registry_flushed`
+/// (written after the hives were flushed), `commit` or `aborted` follows it; a journal from before the
+/// mark has no such `group_end`, so after an unclean stop all its registry `done` records are.
+#[test]
+fn registry_dones_are_unconfirmed_until_a_flushed_group_end() {
+    let ids = |state: &JournalState| state.unconfirmed().map(|op| op.op).collect::<Vec<_>>();
+    let dir = TempDir::new("unconfirmed");
+    let mut w = JournalWriter::create(&dir.session, dir.header(4)).unwrap();
+    for n in 1..=3 {
+        w.validated(reg_validated(n)).unwrap();
+    }
+    w.validated(validated(4)).unwrap();
+    let t1 = w.intent(reg_intent(1)).unwrap();
+    w.done(t1, ItemOutcome::Done).unwrap();
+    // Only a registry op whose `done` says it changed the registry.
+    let t2 = w.intent(reg_intent(2)).unwrap();
+    w.done(t2, failed()).unwrap();
+    let t4 = w.intent(intent(4)).unwrap();
+    w.done(t4, ItemOutcome::Done).unwrap();
+    assert_eq!(ids(w.state()), [OpId(1)]);
+    assert!(w.state().is_unconfirmed(OpId(1)));
+    assert!(w.end_group().unwrap());
+    assert!(ids(w.state()).is_empty());
+    let t3 = w.intent(reg_intent(3)).unwrap();
+    w.done(t3, ItemOutcome::Done).unwrap();
+    assert_eq!(ids(w.state()), [OpId(3)]);
+    // The run stops here, uncleanly.
+    drop(w);
+
+    let read = super::read(&dir.session).unwrap();
+    let marks: Vec<bool> = read
+        .records
+        .iter()
+        .filter_map(|r| match r {
+            Record::GroupEnd(g) => Some(g.registry_flushed),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marks, [true]);
+    assert_eq!(ids(&read.state), [OpId(3)]);
+
+    // Recovery gets one token per unconfirmed op, to make its change again without a second `done`.
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    assert!(w.reprobe_token(OpId(1)).is_none());
+    assert!(w.resume_intent(OpId(3)).is_none());
+    let token = w.reprobe_token(OpId(3)).unwrap();
+    assert_eq!((token.op(), token.item()), (OpId(3), &item(3)));
+    assert!(w.reprobe_token(OpId(3)).is_none());
+    w.commit(FileTime(1), 0).unwrap();
+    assert!(ids(w.state()).is_empty());
+    drop(w);
+    let read = super::read(&dir.session).unwrap();
+    assert!(ids(&read.state).is_empty());
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    assert!(w.reprobe_token(OpId(3)).is_none());
+    drop(w);
+
+    // A journal from before the mark: its `group_end` vouches for nothing.
+    let group_end = |registry_flushed| {
+        body(Record::GroupEnd(purge_model::exec::journal::GroupEnd {
+            group: 1,
+            ops: 1,
+            registry_flushed,
+        }))
+    };
+    let journal = |flushed| {
+        let mut bodies = vec![body(Record::Header(header(2)))];
+        bodies.extend([1, 2].map(|n| body(Record::Validated(reg_validated(n)))));
+        for n in [1, 2] {
+            bodies.push(body(Record::Intent(reg_intent(n))));
+            bodies.push(body(Record::Done(purge_model::exec::journal::Done {
+                op: OpId(n),
+                item: item(n),
+                outcome: ItemOutcome::Done,
+                detail: String::new(),
+            })));
+            if n == 1 {
+                bodies.push(group_end(flushed));
+            }
+        }
+        parse(&chained(&bodies)).unwrap()
+    };
+    assert_eq!(ids(&journal(false).state), [OpId(1), OpId(2)]);
+    assert_eq!(ids(&journal(true).state), [OpId(2)]);
+    assert!(!body(Record::Header(header(1))).contains("registry_flushed"));
+    assert!(group_end(false).ends_with(r#""ops":1}"#));
+}
+
+/// Review S3: an unconfirmed registry op that recovery's re-probe did not find done gets a `reconcile`
+/// `Retried`, written with the op's reprobe token, whose outcome replaces its `Done`: in the op, in the
+/// counts (so the `commit` agrees), and when the journal is read back. Before the fix no record could
+/// be written and the op stayed `Done`.
+#[test]
+fn a_reprobe_correction_replaces_the_done_of_an_unconfirmed_op() {
+    let verify = ItemOutcome::Failed {
+        code: FailCode::VerifyFailed,
+        os_error: None,
+        detail: "the value is not the one backed up".to_owned(),
+    };
+    let dir = TempDir::new("reprobed");
+    let mut w = JournalWriter::create(&dir.session, dir.header(3)).unwrap();
+    for n in 1..=2 {
+        w.validated(reg_validated(n)).unwrap();
+    }
+    w.validated(validated(3)).unwrap();
+    for n in 1..=2 {
+        let token = w.intent(reg_intent(n)).unwrap();
+        w.done(token, ItemOutcome::Done).unwrap();
+    }
+    drop(w);
+
+    // Only an outcome that says the change is not (all) there; a refused record writes nothing.
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    let token = w.reprobe_token(OpId(1)).unwrap();
+    let len = w.len();
+    assert_eq!(
+        refused(w.reprobed(token, FileTime(5), ItemOutcome::Done)),
+        Violation::ReconcileMismatch(OpId(1))
+    );
+    assert_eq!(w.len(), len);
+    drop(w);
+
+    let mut w = JournalWriter::open_append(&dir.session).unwrap();
+    let token = w.reprobe_token(OpId(1)).unwrap();
+    w.reprobed(token, FileTime(5), verify.clone()).unwrap();
+    let op = w.state().op(OpId(1)).unwrap();
+    assert_eq!(op.outcome, Some(verify.clone()));
+    assert_eq!(
+        op.reconciles,
+        [ReconcileResult::Retried {
+            outcome: verify.clone()
+        }]
+    );
+    assert!(!w.state().is_unconfirmed(OpId(1)));
+    assert!(w.state().is_unconfirmed(OpId(2)));
+    assert_eq!((w.state().counts().done, w.state().counts().failed), (1, 1));
+    // A reconcile of an op that is neither pending nor unconfirmed is still refused.
+    assert_eq!(
+        refused(w.reconcile(Reconcile {
+            at: FileTime(6),
+            op: OpId(1),
+            result: ReconcileResult::Completed,
+        })),
+        Violation::NotPending(OpId(1))
+    );
+    let t3 = w.intent(intent(3)).unwrap();
+    w.done(t3, ItemOutcome::Done).unwrap();
+    let commit = w.commit(FileTime(7), 0).unwrap();
+    assert_eq!((commit.counts.done, commit.counts.failed), (2, 1));
+    drop(w);
+
+    let read = super::read(&dir.session).unwrap();
+    assert_eq!(
+        read.state.op(OpId(1)).unwrap().outcome,
+        Some(verify.clone())
+    );
+    assert_eq!(read.state.counts(), commit.counts);
+    // Once the run ended, the correction is refused like any other record of the run.
+    let mut bodies: Vec<String> = read.records.iter().cloned().map(body).collect();
+    bodies.push(body(Record::Reconcile(Reconcile {
+        at: FileTime(8),
+        op: OpId(2),
+        result: ReconcileResult::Retried { outcome: verify },
+    })));
+    assert!(parse(&chained(&bodies)).is_err());
+}
+
+/// Review M6: a registry op whose key is in no hive the writer can flush is refused at its intent,
+/// and nothing is written. Before the fix the intent was written and its change never vouched for.
+#[test]
+fn an_intent_on_a_key_in_no_flushable_hive_is_refused() {
+    let dir = TempDir::new("nohive");
+    let mut w = JournalWriter::create(&dir.session, dir.header(1)).unwrap();
+    let mut validated = reg_validated(1);
+    validated.target = Target::RegValue {
+        path: r"HKCU\Software\Vendor".into(),
+        name: "v1".into(),
+    };
+    w.validated(validated).unwrap();
+    let mut intent = reg_intent(1);
+    intent.exec_op = ExecOp::DeleteValue {
+        key: r"HKCU\Software\Vendor".into(),
+        name: "v1".into(),
+    };
+    let len = w.len();
+    assert_eq!(
+        refused(w.intent(intent)),
+        Violation::InconsistentIntent(OpId(1))
+    );
+    assert_eq!(w.len(), len);
+    assert!(!w.is_poisoned());
 }

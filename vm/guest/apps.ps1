@@ -31,6 +31,7 @@
 #   upgrade_from  id of an app installed first in the install phase (after snap 0), then the main installer runs
 #                 over it (an in-place upgrade)
 #   plant_files   files of the host installer cache (vm\cache\inst) a plant function needs, pushed with the run
+# Optional (M1b records): version and sha256 (lower-case hex, vendor-published) of the pinned installer.
 # Installer files: when vm\cache\inst holds the app's 'file' (listed in vm\cache\inst\cache-sources.json with its
 # URL and SHA-256), rig.ps1 pushes it to C:\cr\inst before the run and the guest uses it after checking the hash;
 # otherwise the guest downloads from 'url' (rig-base already holds the M0 installers).
@@ -164,6 +165,33 @@ $Apps = @(
      install = '/VERYSILENT /NORESTART'; match = '^Git$|^Git version'
      un = '{U} /VERYSILENT /NORESTART /SUPPRESSMSGBOXES'
      launch = @{ exe = 'git-bash.exe'; args = ''; dirs = @('%ProgramFiles%\Git') } }
+
+  # ---- M1b records (docs/M1B_DESIGN.json M1B-RIG-GUEST; looked up 2026-11-16). Pinned official URLs with the
+  # vendor-published SHA-256 in 'sha256' (and 'version'); the guest checks installer hashes through the host cache
+  # manifest cache-sources.json, so these files belong there with the same hash. 7zip above is already the MSI build.
+  # PowerShell 7.6 LTS (7.6.10; 7.7.0 is the current non-LTS release). SHA-256: the release's hashes.sha256 asset and
+  # the GitHub asset digest. Default MSI options (ADD_PATH etc.); ARP name 'PowerShell 7-x64'.
+  @{ id = 'powershell'; tech = 'MSI (WiX)'; file = 'powershell.msi'; version = '7.6.10'
+     url = { 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.10/PowerShell-7.6.10-win-x64.msi' }
+     sha256 = '7d8daea48b450d4d62fcd1ac4d6faa7ac2db5e11aba5061ee81b7496adca8c07'
+     install = 'msi'; match = '^PowerShell 7[\d.]*-x64$'; un = 'msi'
+     launch = @{ exe = 'pwsh.exe'; args = '-NoLogo'; dirs = @('%ProgramFiles%\PowerShell\7') } }
+
+  # Eclipse Temurin 21 LTS JDK x64 MSI (21.0.13+9), the file adoptium.net links (api.adoptium.net latest/21 hotspot
+  # windows x64 jdk 'installer'); SHA-256 from that API record and its .sha256.txt. Default features (no JAVA_HOME).
+  @{ id = 'temurin'; tech = 'MSI (WiX)'; file = 'temurin21.msi'; version = '21.0.13+9'
+     url = { 'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.msi' }
+     sha256 = '9dcbb8ebe24aa9ee5a47a7fab2106a7c8988d7acee461260fef107411df91dc5'
+     install = 'msi'; match = '^Eclipse Temurin JDK .*\b21\.'; un = 'msi'; launch = $null }
+
+  # Python 3.13.17, the last 3.13 release with Windows installers (3.13.18 is source-only); SHA-256 from python.org's
+  # release file record. Same switches as 'python' (3.12).
+  @{ id = 'python313'; tech = 'WiX Burn bundle'; file = 'python313.exe'; version = '3.13.17'
+     url = { 'https://www.python.org/ftp/python/3.13.17/python-3.13.17-amd64.exe' }
+     sha256 = '5da012101ba2e17113a9a1cd901e9ce1441086f2b7ecb5de06ec94163899a190'
+     install = '/quiet InstallAllUsers=1 PrependPath=1 Include_test=0'; match = '^Python 3\.13\.17 \(64-bit\)$'; un = '{Q}'
+     launch = @{ exe = 'pythonw.exe'; args = '-m idlelib'; regdir = 'HKLM\SOFTWARE\Python\PythonCore\3.13\InstallPath'
+                 dirs = @('%ProgramFiles%\Python313') } }
 )
 
 function Get-BaseApp([string]$Id) { $Apps | Where-Object { $_.id -eq $Id } | Select-Object -First 1 }
@@ -210,6 +238,15 @@ $Apps += @(
     (Copy-AppDef (Get-BaseApp 'firefox') @{ id = 'ff-reinstall'; pre = @('firefox'); pre_launch = $true; pre_uninstall = $true })
     # 20: Git 2.56.0 first, then 2.56.1 over it.
     (Copy-AppDef (Get-BaseApp 'git') @{ id = 'git-upgrade'; upgrade_from = 'git-2560' })
+)
+
+# M1b variants (gate G2/G3): two Pythons side by side, only the target uninstalled; both install the Python Launcher,
+# which the other Python still uses (kept_owner / protected truth).
+$Apps += @(
+    # 3.13 installed first (pre, in the clean state), then the target 3.12; uninstalls 3.12 only.
+    (Copy-AppDef (Get-BaseApp 'python') @{ id = 'python312-with-313'; pre = @('python313') })
+    # The reverse: 3.12 first, then the target 3.13.
+    (Copy-AppDef (Get-BaseApp 'python313') @{ id = 'python313-with-312'; pre = @('python') })
 )
 
 # Pure: every installer or plant file a run of $Id needs (the app, its pre/post apps, upgrade_from, plant_files).

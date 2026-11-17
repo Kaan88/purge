@@ -577,6 +577,10 @@ impl RegBackup {
             ExecOp::QuarantineMove { .. }
             | ExecOp::RemoveDirIfEmpty { .. }
             | ExecOp::RemovePackage { .. } => return Err(RegBackupError::NotARegistryOp),
+            // M1b: wired by M1B-X-SERVICE (the key backup of a service definition is checked there)
+            ExecOp::DeleteService { .. }
+            | ExecOp::DeleteTask { .. }
+            | ExecOp::DeleteFirewallRule { .. } => return Err(RegBackupError::NotARegistryOp),
         };
         if &self.key != key {
             return Err(RegBackupError::WrongKey);

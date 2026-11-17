@@ -19,6 +19,7 @@ use purge_model::{FileTime, ProcessSeen};
 use purge_source::filesystem::FileSystemSource;
 use purge_source::fixture::Fixture;
 use purge_source::registry::RegistrySource;
+use purge_source::sysobj::{MsiTables, TaskInfo};
 use purge_source::system::SystemSource;
 use purge_source::types::{
     DirEntry, ExistsState, FileMeta, KeyInfo, KnownFolder, MsiContextState, MsiProduct, OsInfo,
@@ -196,9 +197,36 @@ impl SystemSource for Switch {
     fn packages(&self) -> SourceResult<Vec<PackageInfo>> {
         self.now().packages()
     }
+    fn msi_tables(&self, local_package: &str) -> SourceResult<MsiTables> {
+        self.now().msi_tables(local_package)
+    }
+    fn tasks(&self) -> SourceResult<Vec<TaskInfo>> {
+        self.now().tasks()
+    }
     fn now(&self) -> FileTime {
         SystemSource::now(Switch::now(self))
     }
+}
+
+#[test]
+fn switch_forwards_msi_tables_and_tasks_to_the_active_side() {
+    use purge_source::types::SourceError;
+    let pkg = r"C:\Windows\Installer\1a2b3c.msi";
+    let mut before = Fixture::new();
+    before.set_msi_tables(
+        pkg,
+        MsiTables {
+            progids: vec!["App.Doc".into()],
+            ..MsiTables::default()
+        },
+    );
+    before.add_task(TaskInfo::default());
+    let switch = Switch::new((before.clone(), Fixture::new()));
+    assert_eq!(switch.msi_tables(pkg), before.msi_tables(pkg));
+    assert_eq!(switch.tasks(), Ok(vec![TaskInfo::default()]));
+    switch.flag().store(true, Ordering::SeqCst);
+    assert_eq!(switch.msi_tables(pkg), Err(SourceError::NotCaptured));
+    assert_eq!(switch.tasks(), Err(SourceError::NotCaptured));
 }
 
 // ---------------------------------------------------------------------------------------------------------

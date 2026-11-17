@@ -3,18 +3,26 @@
 //! - `ui-strings`: fail if any 12+ character string literal of ours equals a string of the reference
 //!   product's English language file (path in `PURGE_UT_STRINGS`, never committed).
 //! - `check-deps`: fail if `purge-mcp` depends on any Purge crate other than `purge-model` and
-//!   `purge-rpc`, in its own tree or under workspace feature unification (so never the executor).
+//!   `purge-rpc`, in its own tree or under workspace feature unification (so never the executor); also
+//!   fail if purge-win's code names a forbidden service, MSI or firewall API, `netsh` or PowerShell.
+//! - `no-new-walks`: fail if a file of `purge-scan/src` outside `ref_any.rs`, `framework.rs` and
+//!   `framework/m1b.rs` calls `.walker(` or `refscan::scan` (the scan makes one reference walk).
 //! - `scanner-coverage`: fail if a scanner declares a root the VM rig does not capture, or if the
 //!   scanners' value containers differ from the guard's table (ENGINE_PLAN.md §5.6, §5.10).
 //! - `replay`: run the engine pipeline offline over one frozen rig run (harvest at snap-1, scan at
 //!   snap-2) and write its `purge.plan/0`; `replay-all` does so for the M0 runs and scores them with
-//!   rigtool when it is built (see replay.rs).
+//!   rigtool when it is built; `replay-diff` replays the M0 runs and compares the plans with the
+//!   committed m1a.6 plans, every difference with an allowed reason (see replay.rs).
 //! - `ci`: fmt check, clippy, tests, a standalone clippy of `purge-mcp`, clippy and the feature-gated
-//!   tests of the rig-exec build (engine CLI, crash matrix), check-deps, ui-strings, scanner-coverage.
+//!   tests of the rig-exec build (engine CLI), every purge-exec test target with its `fault-inject` and
+//!   `test-support` features (crash matrix, object ops), check-deps, no-new-walks, ui-strings,
+//!   scanner-coverage.
 
 mod check_deps;
 mod lex;
+mod no_new_walks;
 mod replay;
+mod replay_diff;
 mod scanner_coverage;
 mod ui_strings;
 
@@ -23,17 +31,19 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, bail};
 
-const USAGE: &str =
-    "usage: cargo xtask <ui-strings | check-deps | scanner-coverage | replay | replay-all | ci>";
+const USAGE: &str = "usage: cargo xtask <ui-strings | check-deps | no-new-walks | scanner-coverage | \
+                     replay | replay-all | replay-diff | ci>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("ui-strings") => ui_strings::run(&workspace_root()),
         Some("check-deps") => check_deps::run(&workspace_root()),
+        Some("no-new-walks") => no_new_walks::run(&workspace_root()),
         Some("scanner-coverage") => scanner_coverage::run(),
         Some("replay") => replay::run_one(&workspace_root(), &args[1..]),
         Some("replay-all") => replay::run_all(&workspace_root(), &args[1..]),
+        Some("replay-diff") => replay_diff::run(&workspace_root(), &args[1..]),
         Some("ci") => ci(&workspace_root()),
         Some("-h" | "--help") => {
             println!("{USAGE}");
@@ -81,8 +91,12 @@ fn cargo_step(root: &Path, args: &[&str]) -> Result<bool> {
 /// The features of the rig's executor build, for the `ci` steps that compile it.
 const RIG_FEATURES: &str = "purge-engine/rig-exec,purge-exec/test-support";
 
+/// The features every purge-exec test target needs: the same `fault-inject` and `test-support` the rig
+/// build unifies in (`rig-exec` enables `fault-inject`), named on purge-exec alone.
+const EXEC_TEST_FEATURES: &str = "purge-exec/fault-inject,purge-exec/test-support";
+
 fn ci(root: &Path) -> Result<bool> {
-    let cargo_steps: [&[&str]; 6] = [
+    let cargo_steps: [&[&str]; 7] = [
         &["fmt", "--all", "--", "--check"],
         &[
             "clippy",
@@ -104,10 +118,12 @@ fn ci(root: &Path) -> Result<bool> {
             "-D",
             "warnings",
         ],
-        // The executor CLI and the crash matrix, which only a rig-exec build and purge-exec's
-        // fault-inject feature compile (review M2 M23). The two libraries (their unit tests include
-        // feature-gated ones), the CLI tests and the crash matrix; the other test targets of both
-        // crates do not depend on the features and ran in the workspace step.
+        // The executor CLI and every purge-exec test target, which only a rig-exec build and
+        // purge-exec's `fault-inject` and `test-support` features compile (review M2 M23, M1b R2b S1:
+        // `act_service`, `act_task`, `act_firewall`, `m1b_found`, `roundtrip` and `crash` are empty
+        // without them). purge-engine's library and CLI tests, and its engine tests, whose `m1b_exec`
+        // module (M1B-X-INTEG) only a rig-exec build compiles; its other targets do not depend on the
+        // features and ran in the workspace step.
         &[
             "clippy",
             "-p",
@@ -125,16 +141,15 @@ fn ci(root: &Path) -> Result<bool> {
             "test",
             "-p",
             "purge-engine",
-            "-p",
-            "purge-exec",
             "--features",
             RIG_FEATURES,
             "--lib",
             "--test",
             "exec_cli",
             "--test",
-            "crash",
+            "engine",
         ],
+        &["test", "-p", "purge-exec", "--features", EXEC_TEST_FEATURES],
     ];
     for step in cargo_steps {
         if !cargo_step(root, step)? {
@@ -144,6 +159,10 @@ fn ci(root: &Path) -> Result<bool> {
     println!("xtask ci: check-deps");
     if !check_deps::run(root)? {
         bail!("step failed: check-deps");
+    }
+    println!("xtask ci: no-new-walks");
+    if !no_new_walks::run(root)? {
+        bail!("step failed: no-new-walks");
     }
     println!("xtask ci: ui-strings");
     if !ui_strings::run(root)? {

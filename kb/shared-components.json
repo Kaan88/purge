@@ -124,5 +124,82 @@
     "packages": [
       "Microsoft.UI.Xaml.*"
     ]
+  },
+  {
+    "id": "python-launcher",
+    "name": "Python Launcher",
+    "paths": [
+      "%WINDIR%\\py.exe",
+      "%WINDIR%\\pyw.exe",
+      "%WINDIR%\\pyshellext.amd64.dll",
+      "%ProgramData%\\Package Cache\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}v*",
+      "%ProgramData%\\Package Cache\\{7102CAE5-270C-4E81-AC25-27699156D8AE}v*"
+    ],
+    "keys": [
+      "HKCR\\.py",
+      "HKCR\\.pyc",
+      "HKCR\\.pyd",
+      "HKCR\\.pyo",
+      "HKCR\\.pyw",
+      "HKCR\\.pyz",
+      "HKCR\\.pyzw",
+      "HKCR\\Python.File",
+      "HKCR\\Python.NoConFile",
+      "HKCR\\Python.CompiledFile",
+      "HKCR\\Python.ArchiveFile",
+      "HKCR\\Python.NoConArchiveFile",
+      "HKCR\\Python.Extension",
+      "HKCR\\CLSID\\{BEA218D2-6950-497B-9434-61683EC065FE}",
+      "HKLM\\SOFTWARE\\Python\\PyLauncher",
+      "*\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+      "*\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{7102CAE5-270C-4E81-AC25-27699156D8AE}"
+    ],
+    "packages": []
+  },
+  {
+    "id": "vcredist-files",
+    "name": "Microsoft Visual C++ Redistributable",
+    "paths": [
+      "%WINDIR%\\System32\\concrt140.dll",
+      "%WINDIR%\\System32\\mfc140.dll",
+      "%WINDIR%\\System32\\mfc140chs.dll",
+      "%WINDIR%\\System32\\mfc140cht.dll",
+      "%WINDIR%\\System32\\mfc140deu.dll",
+      "%WINDIR%\\System32\\mfc140enu.dll",
+      "%WINDIR%\\System32\\mfc140esn.dll",
+      "%WINDIR%\\System32\\mfc140fra.dll",
+      "%WINDIR%\\System32\\mfc140ita.dll",
+      "%WINDIR%\\System32\\mfc140jpn.dll",
+      "%WINDIR%\\System32\\mfc140kor.dll",
+      "%WINDIR%\\System32\\mfc140rus.dll",
+      "%WINDIR%\\System32\\mfc140u.dll",
+      "%WINDIR%\\System32\\mfcm140.dll",
+      "%WINDIR%\\System32\\mfcm140u.dll",
+      "%WINDIR%\\System32\\msvcp140.dll",
+      "%WINDIR%\\System32\\msvcp140_1.dll",
+      "%WINDIR%\\System32\\msvcp140_2.dll",
+      "%WINDIR%\\System32\\msvcp140_atomic_wait.dll",
+      "%WINDIR%\\System32\\msvcp140_codecvt_ids.dll",
+      "%WINDIR%\\System32\\vcamp140.dll",
+      "%WINDIR%\\System32\\vccorlib140.dll",
+      "%WINDIR%\\System32\\vcomp140.dll",
+      "%WINDIR%\\System32\\vcruntime140.dll",
+      "%WINDIR%\\System32\\vcruntime140_1.dll",
+      "%WINDIR%\\System32\\vcruntime140_threads.dll"
+    ],
+    "keys": [],
+    "packages": []
+  },
+  {
+    "id": "windowsappruntime-registration",
+    "name": "Windows App Runtime",
+    "paths": [],
+    "keys": [
+      "HKCR\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PackageRepository\\Packages\\Microsoft.WindowsAppRuntime.*",
+      "HKCR\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages\\Microsoft.WindowsAppRuntime.*",
+      "HKLM\\SOFTWARE\\Microsoft\\SecurityManager\\CapAuthz\\ApplicationsEx\\Microsoft.WindowsAppRuntime.*",
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\AppxAllUserStore\\*\\Microsoft.WindowsAppRuntime.*"
+    ],
+    "packages": []
   }
 ]

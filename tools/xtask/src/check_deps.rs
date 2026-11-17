@@ -14,6 +14,10 @@
 //!    releases are built with `cargo build --release -p purge-engine`).
 //! 5. **Relaxed store.** purge-exec's `test-support` comes on only through purge-engine's `sandbox-dev`
 //!    (never a default, `rig-exec` or workspace build; see `test_support_violations`).
+//! 6. **Forbidden identifiers** (M1b, C-WIN). purge-win's code (its `src`, test modules left out) never
+//!    names an API that starts, stops or controls a service, opens, installs, configures or repairs an
+//!    MSI product, or removes a firewall rule by name through `INetFwRules`, and never spawns `netsh` or
+//!    PowerShell (see `identifier_violations`).
 //!
 //! `xtask ci` also builds purge-mcp on its own (`cargo clippy -p purge-mcp`), so code that only compiles
 //! with features another member turns on fails CI.
@@ -401,6 +405,8 @@ pub fn run(root: &Path) -> Result<bool> {
     )?;
     found.extend(test_support_violations(&manifest, &engine_sandbox));
 
+    found.extend(win_source_violations(root)?);
+
     for v in &found {
         eprintln!("check-deps: {v}");
     }
@@ -419,13 +425,166 @@ pub fn run(root: &Path) -> Result<bool> {
         println!(
             "check-deps: ok ({EXEC} test-support only through {ENGINE} feature {SANDBOX_DEV})"
         );
+        println!(
+            "check-deps: ok (purge-win names none of {}, no `INetFwRules` removal, no {})",
+            FORBIDDEN_WIN_IDENTS.join(", "),
+            FORBIDDEN_WIN_WORDS.join(" or ")
+        );
     }
     Ok(found.is_empty())
+}
+
+/// API names purge-win's code must not contain (case-sensitive; a longer name that starts with one,
+/// such as `ControlServiceExW` or `MsiOpenPackageExW`, counts).
+pub const FORBIDDEN_WIN_IDENTS: &[&str] = &[
+    "ControlService",
+    "StartServiceW",
+    "MsiOpenPackage",
+    "MsiOpenProduct",
+    "MsiInstallProduct",
+    "MsiConfigureProduct",
+    "MsiReinstallProduct",
+];
+
+/// Tools purge-win's code must not name in any case (no spawned tool changes the machine).
+pub const FORBIDDEN_WIN_WORDS: &[&str] = &["netsh", "powershell"];
+
+/// `src` without its top-level `#[cfg(test)]` items: from an attribute line at column 0 through the
+/// first line that is `}` at column 0 (the end of a top-level `mod tests { ... }`), or through the
+/// attribute's item line when it ends in `;`. An indented `#[cfg(test)]` is kept, so its item is checked.
+fn strip_test_modules(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut lines = src.lines();
+    while let Some(line) = lines.next() {
+        if line.trim_end() != "#[cfg(test)]" {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        for item in lines.by_ref() {
+            let t = item.trim_end();
+            if t == "}" || (!item.starts_with(' ') && t.ends_with(';')) {
+                break;
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// What one purge-win source file (`file`, for the message) names that it must not (rule 5).
+pub fn identifier_violations(file: &str, src: &str) -> Vec<String> {
+    let code = strip_test_modules(src);
+    let lower = code.to_ascii_lowercase();
+    let mut out = Vec::new();
+    for ident in FORBIDDEN_WIN_IDENTS {
+        if code.contains(ident) {
+            out.push(format!("{file} names {ident}"));
+        }
+    }
+    for word in FORBIDDEN_WIN_WORDS {
+        if lower.contains(word) {
+            out.push(format!("{file} names {word}"));
+        }
+    }
+    if code.contains("INetFwRules") && code.contains("Remove(") {
+        out.push(format!(
+            "{file} removes a firewall rule through INetFwRules"
+        ));
+    }
+    out
+}
+
+/// Rule 5 over every `.rs` file of `crates/purge-win/src` (none when the directory does not exist, as in
+/// the fixture workspaces of the tests).
+fn win_source_violations(root: &Path) -> Result<Vec<String>> {
+    let src = root.join("crates").join("purge-win").join("src");
+    let mut out = Vec::new();
+    if !src.is_dir() {
+        return Ok(out);
+    }
+    let mut stack = vec![src.clone()];
+    let mut files = Vec::new();
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("listing {}", dir.display()))?
+        {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    for path in files {
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let name = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        out.extend(identifier_violations(&name, &text));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rule 5: each forbidden name in code fails, in any spelling the rule covers; the same names in a
+    /// test module, and an `INetFwRules` mention without a removal, pass. The real purge-win passes.
+    #[test]
+    fn xtask_check_deps_forbidden_identifiers() {
+        assert!(identifier_violations("x.rs", "fn f() { let s = \"sc.exe\"; }\n").is_empty());
+        for (code, what) in [
+            (
+                "unsafe { ControlService(h, 1, &mut st) };",
+                "ControlService",
+            ),
+            (
+                "unsafe { ControlServiceExW(h, 1, 0, p) };",
+                "ControlService",
+            ),
+            ("StartServiceW(h, None)", "StartServiceW"),
+            ("MsiOpenPackageExW(p, 0, &mut h)", "MsiOpenPackage"),
+            ("MsiOpenProduct(code, &mut h)", "MsiOpenProduct"),
+            ("MsiInstallProductW(p, c)", "MsiInstallProduct"),
+            ("MsiConfigureProductEx(p, 0, 2, c)", "MsiConfigureProduct"),
+            ("MsiReinstallProductW(p, 0)", "MsiReinstallProduct"),
+            ("Command::new(\"NETSH.exe\")", "netsh"),
+            (
+                "let p = r\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\";",
+                "powershell",
+            ),
+        ] {
+            let src = format!("fn f() {{\n    {code}\n}}\n");
+            let v = identifier_violations("purge-win/src/x.rs", &src);
+            assert_eq!(v, [format!("purge-win/src/x.rs names {what}")], "{code}");
+        }
+        let fw = "fn f(rules: &INetFwRules) { unsafe { rules.Remove(&name) } }\n";
+        assert_eq!(
+            identifier_violations("fw.rs", fw),
+            ["fw.rs removes a firewall rule through INetFwRules"]
+        );
+        assert!(identifier_violations("fw.rs", "// INetFwRules is never used\n").is_empty());
+
+        // Test modules may name them (a test that checks a signer of powershell.exe, a list of the
+        // names a grep test forbids).
+        let tests = "fn real() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        \
+                     let _ = \"powershell.exe\";\n        let _ = \"ControlService\";\n    }\n}\n";
+        assert!(identifier_violations("x.rs", tests).is_empty());
+        let after = format!("{tests}fn later() {{ StartServiceW(h); }}\n");
+        assert_eq!(identifier_violations("x.rs", &after).len(), 1);
+
+        assert_eq!(
+            win_source_violations(&crate::workspace_root()).unwrap(),
+            Vec::<String>::new()
+        );
+    }
 
     #[test]
     fn parses_path_and_registry_lines() {

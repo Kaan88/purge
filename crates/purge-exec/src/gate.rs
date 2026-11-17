@@ -74,7 +74,8 @@ use purge_guard::prefix;
 use purge_model::exec::journal::{
     FileFacts, GateExemptions, Intent, ItemFacts, RegFacts, Validated, ValueFacts,
 };
-use purge_model::exec::op::{ExecOp, FileIdHex, Inverse, ItemOutcome, OpId, Sha256Hex};
+use purge_model::exec::op::{ExecOp, FileIdHex, Inverse, ItemOutcome, OpId, Sha256Hex, SkipReason};
+use purge_model::object::{ObjectFp, ObjectKind};
 use purge_model::{Blocker, Candidate, CandidateId, FileTime, ItemFp, ScanMode, Target, View};
 use purge_win::fs::{FileHandle, FileMeta, volume_info};
 use purge_win::fs_write::{DestDir, FsError, MoveHandle, extended_path};
@@ -135,6 +136,21 @@ pub mod reason {
     /// differs from the candidate's scan-time identity ([`purge_model::Candidate::item_fp`]), or either
     /// volume serial is 0. Soft: changed since the scan.
     pub const SCAN_IDENTITY: &str = "gate.scan-identity";
+    /// Detail of a skipped object: the candidate carries no object fingerprint (or one that is not 64
+    /// lower-case hex digits). The detail C-ACT names.
+    pub const NO_OBJECT_FP: &str = "no object fingerprint";
+    /// Detail of a skipped object: the object's identity digest is not the validated or planned one.
+    pub const OBJECT_CHANGED: &str = "gate.object-changed";
+    /// Detail of a skipped object: the object read is of another kind than the validated or planned one.
+    pub const OBJECT_KIND: &str = "gate.object-kind";
+    /// Detail of a skipped object: the object is gone at the act-time check (the caller's `Vanished`
+    /// comes first; this is the fallback).
+    pub const OBJECT_GONE: &str = "gate.object-gone";
+    /// Detail of a skipped object: the op's validated record holds no object stamp.
+    pub const OBJECT_NOT_VALIDATED: &str = "gate.object-not-validated";
+    /// Detail of a refused object delete: the journal header records no program roots (review R3b
+    /// S2). Every service, task and firewall delete is then refused, with a program or without one.
+    pub const NO_ROOTS: &str = "gate.no-program-roots";
 }
 
 /// A refusal for which no dedicated blocker exists: reported as a deny rule named after the reason, as
@@ -329,6 +345,90 @@ pub struct GateCtx {
     effects: BTreeMap<OpId, OwnEffect>,
     /// The user the scan was made for (the run's `user_sid` setting, [`GateCtx::bind_user`]).
     user_sid: Option<String>,
+    /// The run's M1b exemption lists ([`GateCtx::set_gone`]), applied to every recorded op.
+    gone: Gone,
+}
+
+/// The run's M1b exemption lists as the guard's [`Exemptions`] take them (`&'static` slices, interned
+/// once per distinct list for the process: [`intern`]).
+#[derive(Debug, Clone, Default)]
+struct Gone {
+    msi_products: &'static [String],
+    /// The gone MSI products by the folded SID of their own install context.
+    msi_by_sid: Vec<(String, &'static [String])>,
+    cache_dirs: &'static [String],
+    burn: &'static [String],
+}
+
+impl Gone {
+    fn new(lists: &crate::plan_in::GoneLists) -> Gone {
+        Gone {
+            msi_products: intern(&lists.msi_products),
+            msi_by_sid: lists
+                .msi_by_sid
+                .iter()
+                .map(|(sid, products)| (prefix::fold(sid.trim()), intern(products)))
+                .collect(),
+            cache_dirs: intern(&lists.cache_dirs),
+            burn: intern(&lists.burn),
+        }
+    }
+
+    /// The gone MSI products the guard may let through for `op` (R3a B1, R4 S8), the choice the plan's
+    /// decide step makes (`M1bDecide::gone_msi_products_for`): a Windows Installer registration filed
+    /// under a SID gets only the products whose own context is that SID (none when the run journalled
+    /// no list for it); every other target gets the flat list. `env` and `user_sid` canonicalise the
+    /// key as the guard does.
+    fn msi_products_for(
+        &self,
+        op: &ExecOp,
+        env: &purge_guard::canon::GuardEnv,
+        user_sid: Option<&str>,
+    ) -> &'static [String] {
+        match purge_plan::decide::installer_registration_sid(&op.target(), env, user_sid) {
+            Some(sid) => self
+                .msi_by_sid
+                .iter()
+                .find(|(s, _)| *s == sid)
+                .map_or(&[], |(_, list)| *list),
+            None => self.msi_products,
+        }
+    }
+
+    /// `exemptions` of `op` with these lists in place of its own.
+    fn apply(
+        &self,
+        exemptions: Exemptions<'static>,
+        op: &ExecOp,
+        env: &purge_guard::canon::GuardEnv,
+        user_sid: Option<&str>,
+    ) -> Exemptions<'static> {
+        Exemptions {
+            gone_msi_products: self.msi_products_for(op, env, user_sid),
+            gone_cache_dirs: self.cache_dirs,
+            gone_burn: self.burn,
+            ..exemptions
+        }
+    }
+}
+
+/// A process-lifetime copy of `list`, shared by every caller with an equal list. The guard's
+/// [`Exemptions`] borrow their lists for `'static`; a process runs a handful of sessions, each with one
+/// set of lists, so the copies stay few.
+fn intern(list: &[String]) -> &'static [String] {
+    static INTERNED: std::sync::Mutex<Vec<&'static [String]>> = std::sync::Mutex::new(Vec::new());
+    if list.is_empty() {
+        return &[];
+    }
+    let mut interned = INTERNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(found) = interned.iter().find(|known| **known == list) {
+        return found;
+    }
+    let leaked: &'static [String] = Box::leak(list.to_vec().into_boxed_slice());
+    interned.push(leaked);
+    leaked
 }
 
 /// One op of the run, with the canonical address of the key it acts on (the key itself for a key op,
@@ -537,9 +637,14 @@ fn own_effect(
             };
             Some(effect(probe.ancestors.last()?.clone(), 0, 1, None, content))
         }
+        // Not a key: nothing a later registry op is bound to changes. An object op's hive is flushed by
+        // its own module.
         ExecOp::QuarantineMove { .. }
         | ExecOp::RemoveDirIfEmpty { .. }
-        | ExecOp::RemovePackage { .. } => None,
+        | ExecOp::RemovePackage { .. }
+        | ExecOp::DeleteService { .. }
+        | ExecOp::DeleteTask { .. }
+        | ExecOp::DeleteFirewallRule { .. } => None,
     }
 }
 
@@ -550,7 +655,7 @@ struct Recorded {
     op: ExecOp,
     record: Validated,
     stamp: Stamp,
-    exemptions: Exemptions,
+    exemptions: Exemptions<'static>,
     max_files: u32,
 }
 
@@ -622,7 +727,42 @@ impl GateCtx {
             run_ops: Vec::new(),
             effects: BTreeMap::new(),
             user_sid: None,
+            gone: Gone::default(),
         })
+    }
+
+    /// Sets the run's M1b exemption lists (C-GUARD): the ones its `settings` record holds
+    /// (`RunSettings::gone_*`, [`crate::plan_in::GoneLists`]), which the run's caller computed from the
+    /// app's fingerprint and fresh system queries when the run started. They apply to every op of the
+    /// run, as the plan's decide step gives them to every candidate: to the records accepted before and
+    /// after this call ([`GateCtx::exemptions`]) and to [`GateCtx::with_gone`]. Without a call they
+    /// are empty, which keeps every exemption they open closed.
+    ///
+    /// The gone MSI products are applied per op: an op on a Windows Installer registration filed under a
+    /// SID gets only the products the run journalled for that SID (`GoneLists::msi_by_sid`), every other
+    /// op the flat list (R4 S8). The SID of an `HKCU` spelling is the bound user's
+    /// ([`GateCtx::bind_user`]), so call that first; it applies the lists again when called later.
+    pub fn set_gone(&mut self, lists: &crate::plan_in::GoneLists) {
+        self.gone = Gone::new(lists);
+        self.apply_gone();
+    }
+
+    /// Applies the run's M1b lists to every recorded op again.
+    fn apply_gone(&mut self) {
+        let env = self.deny.env();
+        let user_sid = self.user_sid.as_deref();
+        for recorded in self.validated.values_mut() {
+            recorded.exemptions = self
+                .gone
+                .apply(recorded.exemptions, &recorded.op, env, user_sid);
+        }
+    }
+
+    /// `exemptions` of `op` with the run's M1b exemption lists ([`GateCtx::set_gone`]) in place of its
+    /// own: what the validate pass judges an item with.
+    pub fn with_gone(&self, exemptions: Exemptions<'static>, op: &ExecOp) -> Exemptions<'static> {
+        self.gone
+            .apply(exemptions, op, self.deny.env(), self.user_sid.as_deref())
     }
 
     /// Tells the gate whom the scan was made for: the run's `user_sid` setting (journalled with the
@@ -630,6 +770,13 @@ impl GateCtx {
     /// it with the process token's user ([`GateCtx::package_user_refusal`]).
     pub fn bind_user(&mut self, user_sid: Option<&str>) {
         self.user_sid = user_sid.map(str::to_owned);
+        self.apply_gone();
+    }
+
+    /// The user the scan was made for ([`GateCtx::bind_user`]), whose profile tokens a task's program
+    /// path may use; `None` when the run names none.
+    pub fn user_sid(&self) -> Option<&str> {
+        self.user_sid.as_deref()
     }
 
     /// Why a package removal (always for the process token's user, `RemovalScope::CurrentUser`) must not
@@ -857,7 +1004,12 @@ impl GateCtx {
                 op: op.clone(),
                 record: validated.clone(),
                 stamp,
-                exemptions: exemptions_from_journal(&validated.exemptions),
+                exemptions: self.gone.apply(
+                    exemptions_from_journal(&validated.exemptions),
+                    op,
+                    self.deny.env(),
+                    self.user_sid.as_deref(),
+                ),
                 max_files,
             },
         );
@@ -869,8 +1021,9 @@ impl GateCtx {
         self.validated.get(&op).map(|recorded| &recorded.stamp)
     }
 
-    /// The exemptions recorded for `op` (those of its journal `validated` record).
-    pub fn exemptions(&self, op: OpId) -> Option<Exemptions> {
+    /// The exemptions recorded for `op`: those of its journal `validated` record, with the run's M1b
+    /// exemption lists ([`GateCtx::set_gone`]).
+    pub fn exemptions(&self, op: OpId) -> Option<Exemptions<'static>> {
         self.validated.get(&op).map(|recorded| recorded.exemptions)
     }
 
@@ -901,26 +1054,33 @@ pub fn exemptions_for(
     _mode: ScanMode,
     user_sid: Option<&str>,
     long_names_resolved: bool,
-) -> Exemptions {
+) -> Exemptions<'static> {
     purge_plan::decide::deny_exemptions(candidate, deny.env(), user_sid, long_names_resolved)
 }
 
 /// The journal form of the exemptions a verdict was given ([`Validation::exemptions`]), for the
 /// `validated` record's `exemptions` field. Every field is carried over unchanged;
 /// [`exemptions_from_journal`] is the exact inverse.
-pub fn exemptions_to_journal(exemptions: &Exemptions) -> GateExemptions {
-    // Destructured without `..`, so a field added to either type fails to compile here.
+pub fn exemptions_to_journal(exemptions: &Exemptions<'_>) -> GateExemptions {
+    // Destructured without `..`, so a field added to either type fails to compile here. The three M1b
+    // gone lists are the run's, not the item's: they are journalled once, in the run's `settings`
+    // record (`RunSettings::gone_*`), and `GateCtx::set_gone` applies them to every record.
     let Exemptions {
         proven_owned_skeleton,
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
+        gone_burn: _,
+        gone_msi_products: _,
+        gone_cache_dirs: _,
     } = *exemptions;
     GateExemptions {
         proven_owned_skeleton,
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
     }
 }
 
@@ -928,18 +1088,24 @@ pub fn exemptions_to_journal(exemptions: &Exemptions) -> GateExemptions {
 /// pass to [`check_undo_path`] and [`check_undo_key`], and what [`GateCtx::record`] keeps for the
 /// act-time gate, instead of deriving them again from the scan. The exact inverse of
 /// [`exemptions_to_journal`].
-pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions {
+pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions<'static> {
     let GateExemptions {
         proven_owned_skeleton,
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
     } = *exemptions;
     Exemptions {
         proven_owned_skeleton,
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
+        // The run's lists, journalled in its `settings` record: `GateCtx::set_gone` fills them in.
+        gone_burn: &[],
+        gone_msi_products: &[],
+        gone_cache_dirs: &[],
     }
 }
 
@@ -955,7 +1121,7 @@ pub struct GateItem<'a> {
     pub op: &'a ExecOp,
     /// The candidate's exemptions ([`exemptions_for`]). The validation hands them back for the journal
     /// ([`Validation::exemptions`]).
-    pub exemptions: Exemptions,
+    pub exemptions: Exemptions<'static>,
     /// The most files, and separately the most directories, the tree below a directory moved whole may
     /// hold; more is refused with [`Blocker::TooLarge`]. The plan's limit: 5,000, or 50,000 for a
     /// manifest-backed install root.
@@ -976,7 +1142,7 @@ pub struct GateItem<'a> {
 impl<'a> GateItem<'a> {
     /// An item with the default blast-radius limit (`purge_plan::decide::Limits::default().max_files`),
     /// the default key limit ([`regbackup::DEFAULT_KEY_LIMIT`]) and no scan-time identity.
-    pub fn new(op: &'a ExecOp, exemptions: Exemptions) -> GateItem<'a> {
+    pub fn new(op: &'a ExecOp, exemptions: Exemptions<'static>) -> GateItem<'a> {
         GateItem {
             op,
             exemptions,
@@ -1033,6 +1199,15 @@ pub enum Stamp {
     Value(ValueStamp),
     /// A package removal (no live facts).
     Package,
+    /// A service, scheduled task or firewall rule (M1b): its kind and identity digest
+    /// ([`ObjectFp`], C-OBJECT). The act-time gate of the object's act module re-reads the identity and
+    /// requires the same kind and digest ([`check_object_stamp`]).
+    Object {
+        /// The kind of object.
+        kind: ObjectKind,
+        /// The identity digest as validated, 64 lower-case hex digits.
+        sha256: String,
+    },
 }
 
 impl Stamp {
@@ -1055,6 +1230,22 @@ impl Stamp {
             }),
             ItemFacts::Package => Stamp::Package,
             ItemFacts::Absent | ItemFacts::Refused { .. } => return None,
+            // A running object is never acted on (nothing is stopped), and a digest in another
+            // spelling matches no object: such a record binds nothing, so the act-time gate refuses
+            // the op.
+            ItemFacts::Object {
+                kind,
+                sha256,
+                running,
+            } => {
+                if *running || !is_object_digest(sha256) {
+                    return None;
+                }
+                Stamp::Object {
+                    kind: *kind,
+                    sha256: sha256.clone(),
+                }
+            }
         })
     }
 
@@ -1072,8 +1263,161 @@ impl Stamp {
                 ExecOp::DeleteValue { .. } | ExecOp::EditSegment { .. },
                 Stamp::Value(_)
             ) | (ExecOp::RemovePackage { .. }, Stamp::Package)
-        )
+        ) || matches!(self, Stamp::Object { kind, .. } if op.object_kind() == Some(*kind))
     }
+}
+
+/// Whether `s` is an object digest as C-OBJECT spells it: 64 lower-case hex digits.
+fn is_object_digest(s: &str) -> bool {
+    ObjectFp {
+        kind: ObjectKind::Service,
+        sha256: s.to_owned(),
+    }
+    .is_well_formed()
+}
+
+/// The one root check of the object ops (M1b review R2b B1, M5): whether `file`, a program path already
+/// resolved to one canonical absolute file by the op's own rules, lies strictly inside one of `roots`,
+/// the program roots of the journal header (`Header::program_roots`). Each root is canonicalised with
+/// `env` (per-user tokens with `user_sid`); a root that does not canonicalise, needs 8.3 resolution,
+/// steps back or is a drive root counts for nothing, so no roots at all means outside. A `file` that
+/// steps back or needs 8.3 resolution is outside too.
+///
+/// The service, task and firewall modules apply exactly this before a delete (prepare and the act-time
+/// gate) and before a re-create (undo), so a delete never runs whose undo is certain to refuse with
+/// `UndoConflict::ProgramOutsideRoot`.
+pub fn file_in_roots(
+    file: &str,
+    roots: &[String],
+    env: &purge_guard::canon::GuardEnv,
+    user_sid: Option<&str>,
+) -> bool {
+    if file.trim().is_empty() || prefix::steps_back(file) {
+        return false;
+    }
+    let Ok(file) = purge_guard::canon::canon_path(file, env, user_sid) else {
+        return false;
+    };
+    if file.needs_long_name {
+        return false;
+    }
+    roots.iter().any(|root| {
+        let root = root.trim();
+        let root = root
+            .strip_prefix('"')
+            .and_then(|r| r.strip_suffix('"'))
+            .unwrap_or(root)
+            .trim();
+        !root.is_empty()
+            && !prefix::steps_back(root)
+            && purge_guard::canon::canon_path(root, env, user_sid).is_ok_and(|root| {
+                !root.needs_long_name
+                    && prefix::depth(&root.path) >= 2
+                    && prefix::is_inside(&file.path, &root.path)
+            })
+    })
+}
+
+/// Whether `roots`, the program roots of the journal header, hold no root at all (review R3b S2). The
+/// service, task and firewall modules refuse every delete then (`GateBlocked{CannotBackUp}`,
+/// [`reason::NO_ROOTS`]) before their per-program check: an object without a program (a port rule, a
+/// task of COM handlers only) passes that check vacuously, and "no roots" must not leave it to the
+/// scanner's attribution alone. Undo does not apply this: it re-creates only what a run deleted.
+pub fn no_program_roots(roots: &[String]) -> bool {
+    roots.iter().all(|root| root.trim().is_empty())
+}
+
+/// Why `root` cannot be a program root of a run (review R3b S3): it does not canonicalise to an
+/// absolute path of depth two or more without 8.3 resolution (a root [`file_in_roots`] counts for
+/// nothing), or the guard refuses it as the root of an app ([`DenyList::root_rejection`]: `%WINDIR%`,
+/// `C:\Program Files` itself, `C:\ProgramData`, a Package Cache, another app's root, ...), as the
+/// harvest does. `None`: the root may be journalled. `Run::start` drops every root this refuses
+/// before the journal header is written, whoever wrote the fingerprint the roots came from.
+pub fn root_refusal(root: &str, deny: &DenyList, user_sid: Option<&str>) -> Option<String> {
+    let root = root.trim();
+    let root = root
+        .strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .unwrap_or(root)
+        .trim();
+    if root.is_empty() || prefix::steps_back(root) {
+        return Some("it is not an absolute path".to_owned());
+    }
+    match purge_guard::canon::canon_path(root, deny.env(), user_sid) {
+        Err(_) => return Some("it does not canonicalise".to_owned()),
+        Ok(canon) if canon.needs_long_name => {
+            return Some("it needs 8.3 name resolution".to_owned());
+        }
+        Ok(canon) if prefix::depth(&canon.path) < 2 => {
+            return Some("it is a drive root".to_owned());
+        }
+        Ok(_) => {}
+    }
+    deny.root_rejection(root, true)
+        .map(|rule| format!("the guard refuses it as an app's root ({rule})"))
+}
+
+/// The act-time check of an object: `live` is the fingerprint of the identity the act module has just
+/// read, `validated` the stamp the journal's `validated` record gave the op ([`GateCtx::stamp`]).
+///
+/// `Ok` only when `validated` is a [`Stamp::Object`] and `live` is `Some` with the same kind and the same
+/// digest (64 lower-case hex digits). An object that is gone (`None`) is the caller's `Vanished`, decided
+/// before this check; here it is refused like every other difference, with
+/// [`SkipReason::ChangedSinceScan`]. Nothing is changed on a refusal.
+pub fn check_object_stamp(validated: &Stamp, live: Option<&ObjectFp>) -> Result<(), SkipReason> {
+    check_object_stamp_detailed(validated, live).map_err(|(reason, _)| reason)
+}
+
+/// [`check_object_stamp`], with the detail for the journal's `done` record.
+pub fn check_object_stamp_detailed(
+    validated: &Stamp,
+    live: Option<&ObjectFp>,
+) -> Result<(), (SkipReason, &'static str)> {
+    let changed = |detail| Err((SkipReason::ChangedSinceScan, detail));
+    let Stamp::Object { kind, sha256 } = validated else {
+        return changed(reason::OBJECT_NOT_VALIDATED);
+    };
+    let Some(live) = live else {
+        return changed(reason::OBJECT_GONE);
+    };
+    if live.kind != *kind {
+        return changed(reason::OBJECT_KIND);
+    }
+    if !is_object_digest(sha256) || !live.is_well_formed() || live.sha256 != *sha256 {
+        return changed(reason::OBJECT_CHANGED);
+    }
+    Ok(())
+}
+
+/// The validate-time check of an object against the plan: `live` is the fingerprint of the identity
+/// the act module has just read, `cand` the plan item. `Ok` only when the candidate carries an object
+/// fingerprint ([`Candidate::object_fp`]) of 64 lower-case hex digits, of the kind of its target and
+/// of `live`'s kind, with `live`'s digest. A candidate without one is refused with
+/// [`SkipReason::ChangedSinceScan`] and the detail [`reason::NO_OBJECT_FP`] (`resolve` already refuses
+/// such an item; this is the second lock); every other difference is `ChangedSinceScan` too.
+pub fn check_plan_fp(cand: &Candidate, live: &ObjectFp) -> Result<(), SkipReason> {
+    check_plan_fp_detailed(cand, live).map_err(|(reason, _)| reason)
+}
+
+/// [`check_plan_fp`], with the detail for the journal's `done` record.
+pub fn check_plan_fp_detailed(
+    cand: &Candidate,
+    live: &ObjectFp,
+) -> Result<(), (SkipReason, &'static str)> {
+    let changed = |detail| Err((SkipReason::ChangedSinceScan, detail));
+    let Some(planned) = &cand.object_fp else {
+        return changed(reason::NO_OBJECT_FP);
+    };
+    if !planned.is_well_formed() {
+        return changed(reason::NO_OBJECT_FP);
+    }
+    if ObjectKind::of(&cand.target) != Some(planned.kind) || planned.kind != live.kind {
+        return changed(reason::OBJECT_KIND);
+    }
+    if !live.is_well_formed() || live.sha256 != planned.sha256 {
+        return changed(reason::OBJECT_CHANGED);
+    }
+    Ok(())
 }
 
 /// The result of the validate pass for one item.
@@ -1085,7 +1429,7 @@ pub struct Validation {
     pub facts: ItemFacts,
     /// The exemptions the verdict was given ([`GateItem::exemptions`]), for the journal. The act is gated
     /// with the ones of the journal record ([`GateCtx::record`]).
-    pub exemptions: Exemptions,
+    pub exemptions: Exemptions<'static>,
 }
 
 impl Validation {
@@ -1144,6 +1488,12 @@ fn validate_as(ctx: &GateCtx, item: &GateItem<'_>, op: Option<OpId>) -> GateOutc
             facts: ItemFacts::Package,
             exemptions: item.exemptions,
         }),
+        // An object op is validated by its action module (`act_service::validate`,
+        // `act_task::validate_task`, `act_firewall::validate`), which the run calls with the object
+        // backends; never by the location gate.
+        ExecOp::DeleteService { .. }
+        | ExecOp::DeleteTask { .. }
+        | ExecOp::DeleteFirewallRule { .. } => GateOutcome::Refused(rule(reason::OP_KIND)),
     }
 }
 
@@ -2751,5 +3101,62 @@ pub fn check_undo_key(
             address,
             facts,
         }))
+    }
+}
+
+#[cfg(test)]
+mod object_stamp_tests {
+    use super::*;
+
+    const DIGEST: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+    fn facts(kind: ObjectKind, sha256: &str, running: bool) -> ItemFacts {
+        ItemFacts::Object {
+            kind,
+            sha256: sha256.into(),
+            running,
+        }
+    }
+
+    /// A journal `validated` record of an object binds the act to its kind and digest, and only an op
+    /// of that kind fits it; a running object or a malformed digest binds nothing.
+    #[test]
+    fn object_facts_make_an_object_stamp_that_fits_only_its_op() {
+        let stamp = Stamp::from_item_facts(&facts(ObjectKind::Service, DIGEST, false)).unwrap();
+        assert_eq!(
+            stamp,
+            Stamp::Object {
+                kind: ObjectKind::Service,
+                sha256: DIGEST.into()
+            }
+        );
+        let service = ExecOp::DeleteService { name: "S".into() };
+        let task = ExecOp::DeleteTask { path: r"\T".into() };
+        let rule = ExecOp::DeleteFirewallRule { id: "{R}".into() };
+        let key = ExecOp::DeleteKeyTree {
+            key: r"HKLM\SYSTEM\CurrentControlSet\Services\S".into(),
+        };
+        assert!(stamp.fits(&service));
+        assert!(!stamp.fits(&task) && !stamp.fits(&rule) && !stamp.fits(&key));
+        let task_stamp = Stamp::from_item_facts(&facts(ObjectKind::Task, DIGEST, false)).unwrap();
+        assert!(task_stamp.fits(&task) && !task_stamp.fits(&service));
+        let rule_stamp =
+            Stamp::from_item_facts(&facts(ObjectKind::FirewallRule, DIGEST, false)).unwrap();
+        assert!(rule_stamp.fits(&rule) && !rule_stamp.fits(&task));
+        // No other stamp fits an object op.
+        assert!(!Stamp::Package.fits(&service));
+
+        assert_eq!(
+            Stamp::from_item_facts(&facts(ObjectKind::Service, DIGEST, true)),
+            None
+        );
+        assert_eq!(
+            Stamp::from_item_facts(&facts(ObjectKind::Service, &DIGEST.to_uppercase(), false)),
+            None
+        );
+        assert_eq!(
+            Stamp::from_item_facts(&facts(ObjectKind::Service, "", false)),
+            None
+        );
     }
 }

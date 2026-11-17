@@ -1,0 +1,190 @@
+{
+  "schema": "purge.fixture/1",
+  "system": {
+    "os": { "edition": "Professional", "build": 26340, "ubr": 9882 },
+    "user_sid": "S-1-5-21-1000000000-2000000000-3000000000-1001",
+    "env": {
+      "SYSTEMROOT": "C:\\WINDOWS",
+      "WINDIR": "C:\\WINDOWS",
+      "SYSTEMDRIVE": "C:",
+      "PROGRAMFILES": "C:\\Program Files",
+      "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+      "PROGRAMDATA": "C:\\ProgramData"
+    }
+  },
+  "registry": {
+    "current_control_set": 1,
+    "keys": {
+      "HKLM\\SYSTEM\\Select": { "values": { "Current": { "dword": 1 } } },
+      "HKLM\\SYSTEM\\ControlSet001\\Services": {
+        "keys": {
+          "AppSvc": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"C:\\Program Files\\App\\svc.exe\" -run" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 2 },
+              "ErrorControl": { "dword": 1 },
+              "ObjectName": "LocalSystem",
+              "DisplayName": "App Service"
+            }
+          },
+          "AppUpdate": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"%ProgramFiles%\\App\\update.exe\"" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 3 },
+              "ObjectName": "NT AUTHORITY\\LocalService"
+            }
+          },
+          "App Shared Helper": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"C:\\Program Files\\Other Vendor\\helper.exe\"" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 2 },
+              "ObjectName": "LocalSystem",
+              "DisplayName": "App Service Helper",
+              "Description": "Helper service of App"
+            }
+          },
+          "AppHost": {
+            "values": {
+              "ImagePath": { "expand_sz": "%SystemRoot%\\System32\\svchost.exe -k AppGroup" },
+              "Type": { "dword": 32 },
+              "Start": { "dword": 3 },
+              "ObjectName": "LocalSystem"
+            },
+            "keys": {
+              "Parameters": {
+                "values": { "ServiceDll": { "expand_sz": "C:\\Program Files\\App\\apphost.dll" } }
+              }
+            }
+          },
+          "AppNet": {
+            "values": {
+              "ImagePath": { "expand_sz": "%SystemRoot%\\System32\\svchost.exe -k netsvcs -p" },
+              "Type": { "dword": 32 },
+              "Start": { "dword": 3 },
+              "ObjectName": "LocalSystem",
+              "DisplayName": "App Network Service"
+            },
+            "keys": {
+              "Parameters": {
+                "values": { "ServiceDll": { "expand_sz": "%SystemRoot%\\System32\\appnet.dll" } }
+              }
+            }
+          },
+          "appdrv": {
+            "values": {
+              "ImagePath": { "expand_sz": "\\??\\C:\\Program Files\\App\\appdrv.sys" },
+              "Type": { "dword": 1 },
+              "Start": { "dword": 3 }
+            }
+          },
+          "AppUserSvc": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"C:\\Program Files\\App\\usersvc.exe\"" },
+              "Type": { "dword": 80 },
+              "Start": { "dword": 3 }
+            }
+          },
+          "AppUserSvc_4a5b1": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"C:\\Program Files\\App\\usersvc.exe\"" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 3 }
+            }
+          },
+          "AppCore": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"C:\\Program Files\\App\\core.exe\"" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 2 },
+              "ObjectName": "LocalSystem"
+            }
+          },
+          "AppAgent": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"C:\\Program Files\\App\\agent.exe\"" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 2 },
+              "ObjectName": "LocalSystem",
+              "DependOnService": { "multi_sz": ["RpcSs", "appcore"] }
+            }
+          },
+          "AppAccount": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"C:\\Program Files\\App\\acct.exe\"" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 3 },
+              "ObjectName": ".\\appuser"
+            }
+          },
+          "AppScript": {
+            "values": {
+              "ImagePath": { "expand_sz": "C:\\WINDOWS\\System32\\cmd.exe /c \"C:\\Program Files\\App\\run.cmd\"" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 3 },
+              "ObjectName": "LocalSystem"
+            }
+          },
+          "AppMarked": {
+            "values": {
+              "ImagePath": { "expand_sz": "\"C:\\Program Files\\App\\marked.exe\"" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 3 },
+              "ObjectName": "LocalSystem",
+              "DeleteFlag": { "dword": 1 }
+            }
+          },
+          "RpcSs": {
+            "values": {
+              "ImagePath": { "expand_sz": "%SystemRoot%\\system32\\svchost.exe -k rpcss -p" },
+              "Type": { "dword": 32 },
+              "Start": { "dword": 2 },
+              "ObjectName": "NT AUTHORITY\\NetworkService"
+            },
+            "keys": {
+              "Parameters": {
+                "values": { "ServiceDll": { "expand_sz": "%SystemRoot%\\system32\\rpcss.dll" } }
+              }
+            }
+          },
+          "Spooler": {
+            "values": {
+              "ImagePath": { "expand_sz": "%SystemRoot%\\System32\\spoolsv.exe" },
+              "Type": { "dword": 16 },
+              "Start": { "dword": 2 },
+              "ObjectName": "LocalSystem",
+              "DependOnService": { "multi_sz": ["RPCSS", "http"] }
+            }
+          }
+        }
+      }
+    }
+  },
+  "filesystem": {
+    "volumes": { "C:\\": { "serial": 305419896, "fixed": true, "fs": "NTFS" } },
+    "entries": {
+      "C:\\WINDOWS\\System32": { "dir": true, "children": {
+        "svchost.exe": { "size": 1 },
+        "cmd.exe": { "size": 1 },
+        "appnet.dll": { "size": 1 },
+        "rpcss.dll": { "size": 1 },
+        "spoolsv.exe": { "size": 1 } } },
+      "C:\\Program Files\\Other Vendor": { "dir": true, "children": {
+        "helper.exe": { "size": 1 } } },
+      "C:\\Program Files\\App": { "dir": true, "children": {
+        "app.exe": { "size": 1 },
+        "svc.exe": { "size": 1 },
+        "update.exe": { "size": 1 },
+        "apphost.dll": { "size": 1 },
+        "appdrv.sys": { "size": 1 },
+        "usersvc.exe": { "size": 1 },
+        "core.exe": { "size": 1 },
+        "agent.exe": { "size": 1 },
+        "acct.exe": { "size": 1 },
+        "run.cmd": { "size": 1 },
+        "marked.exe": { "size": 1 } } }
+    }
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "schema": "purge.fixture/1",
+  "system": {
+    "os": { "edition": "Professional", "build": 26340, "ubr": 9882 },
+    "user_sid": "S-1-5-21-1004336348-1177238915-682003330-1001",
+    "elevated": true,
+    "profiles": [
+      { "sid": "S-1-5-21-1004336348-1177238915-682003330-1001", "path": "C:\\Users\\tester" }
+    ],
+    "env": {
+      "SYSTEMROOT": "C:\\Windows",
+      "WINDIR": "C:\\Windows",
+      "SYSTEMDRIVE": "C:",
+      "PROGRAMFILES": "C:\\Program Files",
+      "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+      "PROGRAMDATA": "C:\\ProgramData",
+      "USERPROFILE": "C:\\Users\\tester",
+      "APPDATA": "C:\\Users\\tester\\AppData\\Roaming",
+      "LOCALAPPDATA": "C:\\Users\\tester\\AppData\\Local"
+    }
+  },
+  "filesystem": {
+    "volumes": { "C:\\": { "serial": 305419896, "fixed": true, "fs": "NTFS" } },
+    "admin_only_roots": ["C:\\Program Files", "C:\\Windows"],
+    "entries": {
+      "C:\\Program Files\\Contoso": { "dir": true },
+      "C:\\Program Files\\Fabrikam\\Gadget": {
+        "dir": true,
+        "children": { "gadget.exe": { "size": 4096 } }
+      },
+      "C:\\Windows\\System32": {
+        "dir": true,
+        "children": { "cmd.exe": { "size": 4096 }, "rundll32.exe": { "size": 4096 } }
+      },
+      "C:\\Python313": { "dir": true, "children": { "python.exe": { "size": 4096 } } },
+      "C:\\Users\\tester\\AppData\\Local\\Contoso": { "dir": true }
+    }
+  },
+  "tasks": [
+    {
+      "identity": {
+        "path": "\\Contoso\\Widget Update",
+        "actions": [
+          { "kind": "exec", "path": "\"C:\\Program Files\\Contoso\\Widget\\update.exe\"", "arguments": "/check" }
+        ]
+      },
+      "enabled": true,
+      "author": "Contoso"
+    },
+    {
+      "identity": {
+        "path": "\\Contoso Widget Tray",
+        "actions": [
+          { "kind": "exec", "path": "C:\\Program Files\\Contoso\\Widget\\widget.exe", "arguments": "--tray" }
+        ]
+      },
+      "enabled": true,
+      "hidden": true
+    },
+    {
+      "identity": {
+        "path": "\\Contoso\\Widget Updater",
+        "actions": [
+          { "kind": "exec", "path": "C:\\Program Files\\Fabrikam\\Gadget\\gadget.exe", "arguments": "--update widget" }
+        ]
+      },
+      "enabled": true,
+      "author": "Contoso Widget"
+    },
+    {
+      "identity": {
+        "path": "\\Contoso\\Widget Cleanup",
+        "actions": [
+          {
+            "kind": "exec",
+            "path": "C:\\Windows\\System32\\cmd.exe",
+            "arguments": "/c \"C:\\Program Files\\Contoso\\Widget\\cleanup.bat\""
+          }
+        ]
+      },
+      "enabled": true
+    },
+    {
+      "identity": {
+        "path": "\\Contoso\\Widget Script",
+        "actions": [
+          {
+            "kind": "exec",
+            "path": "C:\\Python313\\python.exe",
+            "arguments": "\"C:\\Program Files\\Contoso\\Widget\\job.py\""
+          }
+        ]
+      },
+      "enabled": true
+    },
+    {
+      "identity": {
+        "path": "\\Contoso\\Widget Sync",
+        "actions": [
+          { "kind": "exec", "path": "C:\\Program Files\\Contoso\\Widget\\update.exe" },
+          { "kind": "exec", "path": "C:\\Program Files\\Fabrikam\\Gadget\\gadget.exe" }
+        ]
+      },
+      "enabled": true
+    },
+    {
+      "identity": {
+        "path": "\\Contoso\\Widget Notify",
+        "actions": [
+          { "kind": "com_handler", "clsid": "{C0C0C0C0-0000-4000-8000-000000000001}", "data": "notify" }
+        ]
+      },
+      "enabled": true
+    },
+    {
+      "identity": {
+        "path": "\\Contoso\\Widget Shell",
+        "actions": [
+          { "kind": "com_handler", "clsid": "{F0F0F0F0-0000-4000-8000-000000000001}" }
+        ]
+      },
+      "enabled": true
+    },
+    {
+      "identity": {
+        "path": "\\Microsoft\\Windows\\Contoso\\Widget Telemetry",
+        "actions": [
+          { "kind": "exec", "path": "C:\\Program Files\\Contoso\\Widget\\update.exe" }
+        ]
+      },
+      "enabled": true
+    },
+    {
+      "identity": { "path": "\\Contoso\\Widget Locked", "actions": [] }
+    },
+    {
+      "identity": {
+        "path": "\\Contoso\\Widget Mail",
+        "actions": [{ "kind": "other", "other_kind": "email" }]
+      },
+      "enabled": true
+    },
+    {
+      "identity": {
+        "path": "\\Contoso\\Widget Profile",
+        "actions": [
+          { "kind": "exec", "path": "%LOCALAPPDATA%\\Contoso\\Widget\\agent.exe" }
+        ]
+      },
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "schema": "purge.rig.m1b-exec-cases/1",
+  "about": "M1b executor rig (docs/M1B_DESIGN.json M1B-RIG-EXEC, gates G5 and G6; usage in vm/rig-m1b-exec.ps1). The guest scripts vm/guest/m1b-exec.ps1 and vm/guest/m1b-crash.ps1 plant from this file and vm/truth/m1b-exec.sh scores against it. Object names are rig-owned (PurgeExec*); the app is the fabricated PurgeExecApp under C:\\Program Files\\PurgeExecApp with its own ARP key. This file says what the guest plants; the gate's minimums (full variants per kind, the act-time and undo traps with their outcomes, the crash rounds, the power-off rounds, the elevated targets) are constants in vm/truth/m1b-exec.sh (review R4 S4), so lowering a number here cannot pass the gate. Each run records this file's SHA-256 and the score requires it equal to the file it scores.",
+  "requires": "the engine must run the SYS-SERVICE, SYS-TASK and SYS-FIREWALL scanners (M1B-SCAN-INTEG adds them to purge-scan catalog.rs); without them scan offers no typed object and every mode but m1b-x-elevated fails at select (smoke run 2026-11-17 on 5e2cf69).",
+  "kinds": ["service", "task", "firewall"],
+  "fidelity": {
+    "about": "m1b-x-fidelity: every variant planted, harvested, the program files and ARP key removed, scan --mode external, the Safe selection executed, undone. expect full: offered Safe, Done, Restored, fidelity exact (K11). expect refused: never deleted (not offered, or Skipped by the executor) and byte-equal after exec and after undo.",
+    "min_full": { "service": 2, "task": 4, "firewall": 3 },
+    "variants": [
+      { "id": "svc-full", "kind": "service", "name": "PurgeExecSvcA", "expect": "full",
+        "plant": { "exe": "PurgeExecSvcA.exe", "account": "LocalSystem", "description": "PurgeExec: own-process LocalSystem service", "failure_actions": true, "trigger": "start/networkon", "parameters": true } },
+      { "id": "svc-localservice", "kind": "service", "name": "PurgeExecSvcB", "expect": "full",
+        "plant": { "exe": "PurgeExecSvcB.exe", "account": "NT AUTHORITY\\LocalService", "description": "PurgeExec: LocalService with required privileges and SID type", "privileges": ["SeChangeNotifyPrivilege", "SeCreateGlobalPrivilege"], "sidtype": "unrestricted" } },
+      { "id": "task-simple", "kind": "task", "path": "\\PurgeExecApp\\Simple Update", "expect": "full",
+        "plant": { "actions": [ { "exe": "app.exe", "args": "/update" } ] } },
+      { "id": "task-hidden-two", "kind": "task", "path": "\\PurgeExecApp\\Hidden Two", "expect": "full",
+        "plant": { "hidden": true, "actions": [ { "exe": "app.exe", "args": "/one" }, { "exe": "tool.exe", "args": "/two" } ] } },
+      { "id": "task-com", "kind": "task", "path": "\\PurgeExecApp\\Com Handler", "expect": "full",
+        "plant": { "com_handler": true } },
+      { "id": "task-sddl", "kind": "task", "path": "\\PurgeExecApp\\Sub\\Secured", "expect": "full",
+        "plant": { "actions": [ { "exe": "tool.exe", "args": "/secured" } ], "sddl": "D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;FRFX;;;AU)" } },
+      { "id": "fw-program", "kind": "firewall", "rule": "PurgeExecFwProgram", "expect": "full",
+        "plant": { "display": "PurgeExec program rule", "program": "app.exe", "direction": "Inbound", "protocol": "TCP", "local_port": "50210" } },
+      { "id": "fw-addresses", "kind": "firewall", "rule": "PurgeExecFwAddr", "expect": "full",
+        "plant": { "display": "PurgeExec address list rule", "program": "tool.exe", "direction": "Outbound", "remote_address": ["10.20.30.40", "192.168.50.0/24"] } },
+      { "id": "fw-profile", "kind": "firewall", "rule": "PurgeExecFwProfile", "expect": "full",
+        "plant": { "display": "PurgeExec profile rule", "program": "app.exe", "direction": "Inbound", "profile": "Domain,Private" } },
+      { "id": "fw-service", "kind": "firewall", "rule": "PurgeExecFwSvc", "expect": "refused",
+        "why": "a rule with Svc is never deleted (act_firewall rule_blocker, review R2b B1: undo could not create it again); the design's 'rule with service and profile' variant is therefore a refusal check, the profile shape is fw-profile",
+        "plant": { "display": "PurgeExec service rule", "program": "PurgeExecSvcA.exe", "service": "PurgeExecSvcA", "direction": "Inbound", "profile": "Domain,Private" } }
+    ]
+  },
+  "act_traps": {
+    "about": "m1b-x-traps: planted and scanned like fidelity; after the scan and before exec the rig changes the world. Each changed planted object must end Skipped with one of the reasons and must not be deleted; svc-running: the service must also still run as the same process (SCM state and PID before and after exec). fw-same-name: the planned rule (its own id, unchanged) must be Done and gone, the twin with the same display name present and byte-equal; the score reports 5 skipped + 1 twin untouched. Exit code 10 (partial) by the M2 precedence.",
+    "exec_exit": [10],
+    "cases": [
+      { "id": "svc-running", "kind": "service", "name": "PurgeExecTrapSvcRun", "change": "start", "expect": "skipped", "reasons": ["GateBlocked", "ChangedSinceScan"], "blocker": "InUse" },
+      { "id": "svc-repoint", "kind": "service", "name": "PurgeExecTrapSvcPath", "change": "imagepath", "to": "C:\\Windows\\System32\\cmd.exe", "expect": "skipped", "reasons": ["ChangedSinceScan", "GateBlocked"] },
+      { "id": "svc-dependent", "kind": "service", "name": "PurgeExecTrapSvcBase", "change": "add-dependent", "dependent": "PurgeExecTrapSvcDep", "expect": "skipped", "reasons": ["GateBlocked", "ChangedSinceScan"], "blocker": "HasDependents" },
+      { "id": "task-edit", "kind": "task", "path": "\\PurgeExecApp\\Trap Edit", "change": "action", "expect": "skipped", "reasons": ["ChangedSinceScan", "GateBlocked"] },
+      { "id": "fw-edit", "kind": "firewall", "rule": "PurgeExecTrapFwEdit", "change": "app", "expect": "skipped", "reasons": ["ChangedSinceScan", "GateBlocked"] },
+      { "id": "fw-same-name", "kind": "firewall", "rule": "PurgeExecTrapFwBase", "change": "twin", "twin": "PurgeExecTrapFwTwin", "expect": "twin-untouched" }
+    ]
+  },
+  "undo_traps": {
+    "about": "m1b-x-undo-traps: the fidelity plants executed; then, before undo, the rig sets a trap per op. Expected conflict per op; nothing overwritten (the impostors equal before and after undo, the tampered or missing definition left as the rig made it, the trapped objects not created).",
+    "undo_exit": [11],
+    "cases": [
+      { "id": "svc-impostor", "variant": "svc-full", "trap": "impostor-service", "expect_conflict": "ObjectExists" },
+      { "id": "task-impostor", "variant": "task-simple", "trap": "impostor-task", "expect_conflict": "ObjectExists" },
+      { "id": "def-tamper", "variant": "fw-program", "trap": "tamper-definition", "expect_conflict": "BackupTampered" },
+      { "id": "def-missing", "variant": "svc-localservice", "trap": "delete-definition", "expect_conflict": "BackupMissing" }
+    ]
+  },
+  "crash": {
+    "about": "m1b-x-crash: one object of the kind per round (fresh plant, harvest, scan); exec (or exec then undo) with PURGE_FAULT_AT=<point>; recover twice (the second changes nothing), resume or rollback, undo, fidelity exact. A declared point that is not hit fails its row: the matrix needs every point here reached for every kind it names. Every point of purge-exec FAULT_POINTS is listed once, with a reason for each kind it cannot reach (selftest exec_cases_json_lists_every_fault_point_per_kind).",
+    "round_objects": { "service": "svc-full", "task": "task-simple", "firewall": "fw-program" },
+    "exec_afters": ["resume", "rollback"],
+    "undo_afters": ["resume"],
+    "fault_points": [
+      { "point": "journal.header", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "backup.written", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "backup.verified", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "intent.flushed", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "act.before", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "act.after", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "done.before", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "group.end", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "commit.before", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "regdelete.mid", "phase": null, "kinds": [],
+        "not_reachable": { "service": "a service is deleted by DeleteService, never by a key-tree delete", "task": "a task is deleted through Task Scheduler, never by a key-tree delete", "firewall": "a rule is deleted through WMI by instance id, never by a key-tree delete" } },
+      { "point": "regrestore.mid", "phase": null, "kinds": [],
+        "not_reachable": { "service": "undo re-creates through CreateServiceW and writes the extra values itself; no regbackup restore walk", "task": "undo re-registers the XML; no key-tree restore", "firewall": "undo re-creates through WMI; no key-tree restore" } },
+      { "point": "undo.intent", "phase": "undo", "kinds": ["service", "task", "firewall"] },
+      { "point": "undo.act.after", "phase": "undo", "kinds": ["service", "task", "firewall"] },
+      { "point": "index.write", "phase": "undo", "kinds": ["service", "task", "firewall"],
+        "more_phases": [ { "phase": "exec", "afters": ["resume"], "why": "exec also hits index.write, after commit (crates/purge-exec/src/execute.rs step 11; review R4 S4); a committed run has no rollback, so resume only (then undo and fidelity as every exec resume round)" } ] },
+      { "point": "expiry.mid", "phase": null, "kinds": [],
+        "not_reachable": { "service": "fires only in the expiry walk of a quarantined directory (quarantine purge); a typed op quarantines no directory", "task": "as service", "firewall": "as service" } },
+      { "point": "bootmove.registered", "phase": null, "kinds": [],
+        "not_reachable": { "service": "fires only for a boot-time quarantine move; typed ops never register one", "task": "as service", "firewall": "as service" } },
+      { "point": "objdelete.after", "phase": "exec", "kinds": ["service", "task", "firewall"] },
+      { "point": "svcrestore.mid", "phase": "undo", "kinds": ["service"],
+        "not_reachable": { "task": "service undo only", "firewall": "service undo only" } },
+      { "point": "fwrestore.mid", "phase": "undo", "kinds": ["firewall"],
+        "not_reachable": { "service": "firewall undo only", "task": "firewall undo only" } }
+    ],
+    "poweroff": {
+      "about": "Hard power-off rounds: per kind, rounds_per_kind rounds; the engine is started detached with PURGE_FAULT_PAUSE=<point>:600000 at a point drawn from the pool (first always the pool's first, the rest drawn without replacement, seeded by the run name), and the host powers the VM off while it sits there. After the boot: recover twice, resume, undo (exec phase), fidelity exact, the boot id changed.",
+      "rounds_per_kind": 5,
+      "pool": {
+        "service": [ { "point": "objdelete.after", "phase": "exec" }, { "point": "intent.flushed", "phase": "exec" }, { "point": "act.before", "phase": "exec" }, { "point": "act.after", "phase": "exec" }, { "point": "done.before", "phase": "exec" }, { "point": "commit.before", "phase": "exec" }, { "point": "svcrestore.mid", "phase": "undo" }, { "point": "undo.act.after", "phase": "undo" } ],
+        "task": [ { "point": "objdelete.after", "phase": "exec" }, { "point": "intent.flushed", "phase": "exec" }, { "point": "act.before", "phase": "exec" }, { "point": "act.after", "phase": "exec" }, { "point": "done.before", "phase": "exec" }, { "point": "commit.before", "phase": "exec" }, { "point": "undo.intent", "phase": "undo" }, { "point": "undo.act.after", "phase": "undo" } ],
+        "firewall": [ { "point": "objdelete.after", "phase": "exec" }, { "point": "intent.flushed", "phase": "exec" }, { "point": "act.before", "phase": "exec" }, { "point": "act.after", "phase": "exec" }, { "point": "done.before", "phase": "exec" }, { "point": "commit.before", "phase": "exec" }, { "point": "fwrestore.mid", "phase": "undo" }, { "point": "undo.act.after", "phase": "undo" } ]
+      }
+    }
+  },
+  "elevated": {
+    "about": "m1b-x-elevated: test binaries built on the host (cargo test --release --no-run), run by the elevated agent in the VM. A target with run 'all' runs every test of the binary (--include-ignored); every one must pass, none may be ignored, at least min must run, and each require_prefix must have at least prefix_min passing tests (the #[ignore]d elevated ones). A target with require_names runs exactly those (--include-ignored --exact) and each must pass.",
+    "targets": [
+      { "crate": "purge-win", "features": "write,com", "test": "scm", "run": "all", "min": 12, "require_prefix": "elevated::", "prefix_min": 6 },
+      { "crate": "purge-win", "features": "write,com", "test": "firewall", "run": "all", "min": 12, "require_prefix": "rig::", "prefix_min": 10 },
+      { "crate": "purge-win", "features": "write,com", "test": "taskschd", "run": "all", "min": 11, "require_prefix": "", "prefix_min": 0 },
+      { "crate": "purge-exec", "features": "fault-inject,test-support", "test": "act_service", "require_names": ["rig_live_delete_and_recreate_round_trip"] },
+      { "crate": "purge-exec", "features": "fault-inject,test-support", "test": "act_task", "require_names": ["rig_live_delete_and_undo"], "env": { "PURGE_TEST_TASK_RIG": "1" } },
+      { "crate": "purge-exec", "features": "fault-inject,test-support", "test": "act_firewall", "require_names": ["rig_live_delete_and_recreate_round_trip"] }
+    ]
+  }
+}

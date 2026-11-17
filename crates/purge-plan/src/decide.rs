@@ -20,7 +20,22 @@
 //!    blocker `TooLarge`.
 //! 3. **Policy.** `purge_policy::band::decide` with the target scope from [`target_scope`].
 //! 4. **EmptyAfterPlan** ([`crate::empty_after::apply`]) for containers carrying the pending marker, which
-//!    re-runs steps 2 and 3 for a container that the rest of the plan empties.
+//!    re-runs steps 2 and 3 for a container that the rest of the plan empties. A delete-if-empty container
+//!    on a Windows Installer client list (`...\Installer\UpgradeCodes\<U>`, `...\Components\<C>`) is then
+//!    offered only when the plan empties it and the guard lets it through; otherwise it is left out of the
+//!    plan ([`installer_client_list`]).
+//!
+//! # M1b: system facts and typed objects
+//!
+//! The guard's three M1b exemption lists (gone MSI products, gone Package Cache directories, gone Burn
+//! names) come from [`DecideCtx::m1b`], which only [`M1bDecide::from_facts`] fills: from the fingerprint
+//! and a fresh query of Windows Installer and the bundle inventory, never from a candidate. They are
+//! computed once per plan and handed to the guard for every candidate ([`exemptions`]).
+//!
+//! Typed objects (services, tasks, firewall rules) merge like any other equal target, but every candidate
+//! of the group must carry the same `object_fp`; otherwise two scanners saw two different objects under
+//! one name and the merged candidate gets the hard blocker `ObjectChangedSinceHarvest`. A typed candidate
+//! has no children ([`merge`] clears any it was given) and never nests ([`crate::collapse`]).
 //!
 //! Canonical registry keys spell the current control set `ControlSet00N`. The rig scorer folds that
 //! spelling onto `CurrentControlSet` itself (vm/rigtool `canon.rs`), so plans are emitted in canonical
@@ -29,11 +44,12 @@
 use std::collections::HashMap;
 
 use purge_guard::canon::{GuardEnv, canon_key, canon_target};
-use purge_guard::deny::{DenyList, Exemptions};
+use purge_guard::deny::{DenyList, Exemptions, ObjectGuardFacts};
 use purge_guard::{containers, prefix};
 use purge_model::{
-    Action, Blocker, Candidate, Category, Evidence, EvidenceKind, Origin, Reversibility, ScanMode,
-    Scope, Target, Tier, VerifyGone,
+    Action, Band, Blocker, Candidate, Category, Evidence, EvidenceKind, Fingerprint, Hive,
+    InventoryEntry, MsiContext, ObjectKind, Origin, ProgramId, Reversibility, ScanMode, Scope,
+    SourceTrust, Target, Tier, VerifyGone,
 };
 use purge_policy::band::{self, PolicyCtx, TargetScope};
 use purge_policy::score::effective_weight;
@@ -69,8 +85,284 @@ impl Default for Limits {
     }
 }
 
+/// The M1b exemption lists of one plan (C-GUARD): which MSI products, Package Cache directories and Burn
+/// bundles and packages are gone. [`Default`] has all three empty, which keeps every exemption they open
+/// closed.
+///
+/// The fields are private: the only way to fill them is [`M1bDecide::from_facts`], from the fingerprint
+/// and a fresh query of the system. Nothing a scanner writes into a candidate (facts, evidence, its id)
+/// is read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct M1bDecide {
+    gone_msi_products: Vec<String>,
+    /// The gone products by the SID their registration is filed under (R3a B1): `(folded SID, packed
+    /// codes)`, `s-1-5-18` for a per-machine product, the user's for a per-user one; a per-user product
+    /// whose user is not recorded is under no SID.
+    gone_msi_by_sid: Vec<(String, Vec<String>)>,
+    gone_cache_dirs: Vec<String>,
+    gone_burn: Vec<String>,
+}
+
+/// The `UserData` SID of the machine context.
+const MACHINE_SID: &str = "S-1-5-18";
+
+impl M1bDecide {
+    /// The lists for the app of `fp`, judged by two fresh queries the caller makes now (after the
+    /// uninstall), not at harvest:
+    ///
+    /// - `product_known(product_code)`: whether Windows Installer knows the ProductCode (`{GUID}`) in
+    ///   some context (`Some(true)`), in none (`Some(false)`), or its state could not be read (`None`: a
+    ///   source error, no data);
+    /// - `bundle_known(bundle_id)`: the same for a Burn bundle id, against the fresh inventory.
+    ///
+    /// Only `Some(false)` makes anything gone; unknown keeps it out. The lists are:
+    ///
+    /// - `gone_msi_products`: the packed code of each `fp.msi` entry (Burn MSI children are recorded there
+    ///   too) whose product is known absent. An entry whose recorded packed code is not the packed form of
+    ///   its ProductCode is left out.
+    /// - `gone_burn`: when the bundle is known absent, its bundle id and, if no other bundle depended on it
+    ///   at harvest, its provider key; plus the provider key of each package whose product is known absent
+    ///   and that has no other dependents.
+    /// - `gone_cache_dirs`: when the bundle is known absent, its Package Cache folder; plus the Package
+    ///   Cache folder of each package whose product is known absent and that has no other dependents.
+    ///
+    /// Each list is sorted and free of duplicates and empty entries (packed codes upper-cased), so the
+    /// result depends on the facts only, not on their order.
+    #[must_use]
+    pub fn from_facts(
+        fp: &Fingerprint,
+        product_known: &dyn Fn(&str) -> Option<bool>,
+        bundle_known: &dyn Fn(&str) -> Option<bool>,
+    ) -> M1bDecide {
+        let gone = |known: Option<bool>| known == Some(false);
+        let mut out = M1bDecide::default();
+        for msi in &fp.msi {
+            let Some(packed) = pack_guid(&msi.product_code) else {
+                continue;
+            };
+            if packed.eq_ignore_ascii_case(&msi.packed_code)
+                && gone(product_known(&msi.product_code))
+            {
+                let sid = match msi.context {
+                    MsiContext::Machine => Some(MACHINE_SID),
+                    MsiContext::UserManaged | MsiContext::UserUnmanaged => msi
+                        .user_sid
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty()),
+                };
+                if let Some(sid) = sid {
+                    let sid = prefix::fold(sid);
+                    match out.gone_msi_by_sid.iter_mut().find(|(s, _)| *s == sid) {
+                        Some((_, list)) => list.push(packed.clone()),
+                        None => out.gone_msi_by_sid.push((sid, vec![packed.clone()])),
+                    }
+                }
+                out.gone_msi_products.push(packed);
+            }
+        }
+        if let Some(burn) = &fp.burn {
+            let bundle_id = burn.bundle_id.as_str();
+            if !bundle_id.trim().is_empty() && gone(bundle_known(bundle_id)) {
+                out.gone_burn.push(bundle_id.to_owned());
+                if burn.dependents_at_harvest.is_empty() {
+                    out.gone_burn.extend(burn.provider_key.iter().cloned());
+                }
+                out.gone_cache_dirs.extend(burn.cache_path.iter().cloned());
+            }
+            for package in &burn.packages {
+                let product_gone = package
+                    .product_code
+                    .as_deref()
+                    .is_some_and(|code| gone(product_known(code)));
+                if product_gone && package.other_dependents.is_empty() {
+                    out.gone_burn.push(package.provider_key.clone());
+                    out.gone_cache_dirs
+                        .extend(package.cache_dir.iter().cloned());
+                }
+            }
+        }
+        for list in [
+            &mut out.gone_msi_products,
+            &mut out.gone_cache_dirs,
+            &mut out.gone_burn,
+        ] {
+            list.retain(|s| !s.trim().is_empty());
+            list.sort();
+            list.dedup();
+        }
+        for (_, list) in &mut out.gone_msi_by_sid {
+            list.sort();
+            list.dedup();
+        }
+        out.gone_msi_by_sid.sort();
+        out
+    }
+
+    /// Packed codes (32 upper-case hex digits) of the app's MSI products that Windows Installer no longer
+    /// knows in any context.
+    #[must_use]
+    pub fn gone_msi_products(&self) -> &[String] {
+        &self.gone_msi_products
+    }
+
+    /// The gone MSI products the guard may let through for `target` (R3a B1, defence in depth behind
+    /// REG-ARP-MSI). A Windows Installer registration filed under a SID
+    /// (`HKLM\...\Installer\UserData\<sid>\...`, `HKU\<sid>\Software\Microsoft\Installer\...`) is let
+    /// through only for the products whose own context is that SID (`S-1-5-18` for a per-machine
+    /// product, the user's for a per-user one): the same ProductCode under another SID is another user's
+    /// install, which "gone" says nothing about. Every other target gets [`M1bDecide::gone_msi_products`].
+    /// `env` and `user_sid` canonicalise the key as the guard does. The executor journals both lists
+    /// ([`M1bDecide::gone_msi_by_sid`]) and its gate makes the same choice per op with
+    /// [`installer_registration_sid`] (R4 S8).
+    #[must_use]
+    pub fn gone_msi_products_for(
+        &self,
+        target: &Target,
+        env: &GuardEnv,
+        user_sid: Option<&str>,
+    ) -> &[String] {
+        match installer_registration_sid(target, env, user_sid) {
+            Some(sid) => self
+                .gone_msi_by_sid
+                .iter()
+                .find(|(s, _)| *s == sid)
+                .map_or(&[], |(_, list)| list.as_slice()),
+            None => &self.gone_msi_products,
+        }
+    }
+
+    /// The gone MSI products by the folded SID of their own install context (`s-1-5-18` for a
+    /// per-machine product), each list sorted: what [`M1bDecide::gone_msi_products_for`] gives a
+    /// registration filed under that SID. A product whose user is not recorded is under no SID.
+    #[must_use]
+    pub fn gone_msi_by_sid(&self) -> &[(String, Vec<String>)] {
+        &self.gone_msi_by_sid
+    }
+
+    /// Package Cache directories, as the fingerprint recorded them, of gone bundles and packages.
+    #[must_use]
+    pub fn gone_cache_dirs(&self) -> &[String] {
+        &self.gone_cache_dirs
+    }
+
+    /// Bundle ids and provider keys of gone Burn bundles and packages.
+    #[must_use]
+    pub fn gone_burn(&self) -> &[String] {
+        &self.gone_burn
+    }
+
+    /// Whether all three lists are empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.gone_msi_products.is_empty()
+            && self.gone_cache_dirs.is_empty()
+            && self.gone_burn.is_empty()
+    }
+}
+
+/// The SID (folded) a Windows Installer registration target is filed under: the `<sid>` of
+/// `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\<sid>\...` (either view), or the
+/// user of `HKU\<sid>\Software\Microsoft\Installer\...`. Compared in the guard's canonical form; `None`
+/// for every other target and for a key that does not canonicalise (the guard denies those anyway).
+/// The executor's gate uses it to pick the journalled per-SID list for an op (R4 S8).
+#[must_use]
+pub fn installer_registration_sid(
+    target: &Target,
+    env: &GuardEnv,
+    user_sid: Option<&str>,
+) -> Option<String> {
+    let path = match target {
+        Target::RegKey { path }
+        | Target::RegValue { path, .. }
+        | Target::RegValueChanged { path, .. }
+        | Target::RegMultiSzSegment { path, .. } => path,
+        _ => return None,
+    };
+    let key = canon_key(path, None, env, user_sid).ok()?;
+    let folded: Vec<String> = prefix::segments(&key.path).map(prefix::fold).collect();
+    let segs: Vec<&str> = folded.iter().map(String::as_str).collect();
+    match &key.hive {
+        Hive::Hklm => match segs.as_slice() {
+            [
+                "software",
+                "microsoft",
+                "windows",
+                "currentversion",
+                "installer",
+                "userdata",
+                sid,
+                ..,
+            ] => Some((*sid).to_owned()),
+            _ => None,
+        },
+        Hive::Hku(sid) => matches!(segs.as_slice(), ["software", "microsoft", "installer", ..])
+            .then(|| prefix::fold(sid)),
+        Hive::HkuClasses(_) => None,
+    }
+}
+
+/// The `bundle_known` of [`M1bDecide::from_facts`] (R2a S9): whether the Burn bundle `bundle_id` is in the
+/// fresh inventory `entries`, for the bundle whose own entry was `home` (the fingerprint's app).
+///
+/// - `Some(true)`: some entry's key is named `bundle_id` (Burn registers a bundle under its bundle id),
+///   in any hive and view, compared ignoring case.
+/// - `Some(false)`: no such entry, and the Uninstall keys of the bundle's own hive were read completely
+///   (`hive_read(None)` for a per-machine bundle, `hive_read(Some(sid))` for a bundle of the user
+///   `sid`): the hive is loaded and no Uninstall key of it failed to list.
+/// - `None` otherwise: an id that is not a `{GUID}`, a hive that is not loaded (a per-user bundle of a
+///   user who is not logged on) or was not read completely. Unknown keeps the bundle out of every list.
+#[must_use]
+pub fn bundle_known(
+    bundle_id: &str,
+    home: &ProgramId,
+    entries: &[InventoryEntry],
+    hive_read: &dyn Fn(Option<&str>) -> bool,
+) -> Option<bool> {
+    let id = bundle_id.trim();
+    pack_guid(id)?;
+    if entries
+        .iter()
+        .any(|e| e.program_id.key_name().trim().eq_ignore_ascii_case(id))
+    {
+        return Some(true);
+    }
+    hive_read(home.hive_sid()).then_some(false)
+}
+
+/// `{GUID}` (braces required, any case) to the packed form Windows Installer stores in the registry: 32
+/// upper-case hex digits. `None` for anything else.
+fn pack_guid(guid: &str) -> Option<String> {
+    let inner = guid.strip_prefix('{')?.strip_suffix('}')?;
+    let well_formed = inner.len() == 36
+        && inner.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        });
+    if !well_formed {
+        return None;
+    }
+    let hex: Vec<u8> = inner
+        .bytes()
+        .filter(|&b| b != b'-')
+        .map(|b| b.to_ascii_uppercase())
+        .collect();
+    let mut out: Vec<u8> = Vec::with_capacity(32);
+    out.extend(hex[0..8].iter().rev());
+    out.extend(hex[8..12].iter().rev());
+    out.extend(hex[12..16].iter().rev());
+    for pair in hex[16..32].chunks(2) {
+        out.push(pair[1]);
+        out.push(pair[0]);
+    }
+    String::from_utf8(out).ok()
+}
+
 /// What deciding needs besides the candidates. One per scan.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct DecideCtx<'a> {
     /// The deny-list compiled for this scan's `GuardEnv`.
     pub deny: &'a DenyList,
@@ -87,10 +379,13 @@ pub struct DecideCtx<'a> {
     pub long_names_resolved: bool,
     /// The blast-radius limits.
     pub limits: Limits,
+    /// The M1b exemption lists of this plan ([`M1bDecide::from_facts`]). The default, all empty, keeps
+    /// the Windows Installer, Package Cache and Burn exemptions closed.
+    pub m1b: M1bDecide,
 }
 
 impl<'a> DecideCtx<'a> {
-    /// A context with the default limits, no user and unresolved long names.
+    /// A context with the default limits, no user, unresolved long names and empty M1b lists.
     pub fn new(deny: &'a DenyList, mode: ScanMode, verify_gone: VerifyGone) -> Self {
         Self {
             deny,
@@ -99,6 +394,7 @@ impl<'a> DecideCtx<'a> {
             user_sid: None,
             long_names_resolved: false,
             limits: Limits::default(),
+            m1b: M1bDecide::default(),
         }
     }
 
@@ -108,7 +404,8 @@ impl<'a> DecideCtx<'a> {
 }
 
 /// Decides the candidates of one scan: merge, guard, policy, then `EmptyAfterPlan`. The result has one
-/// candidate per distinct target, each with a decision, in the order of first appearance.
+/// candidate per distinct target, each with a decision, in the order of first appearance, except the
+/// Windows Installer client-list containers the plan does not offer ([`installer_client_list`]).
 #[must_use]
 pub fn decide(candidates: Vec<Candidate>, ctx: &DecideCtx<'_>) -> Vec<Candidate> {
     let merged = merge(candidates, ctx);
@@ -121,7 +418,74 @@ pub fn decide(candidates: Vec<Candidate>, ctx: &DecideCtx<'_>) -> Vec<Candidate>
         candidate.evidence.push(evidence);
         guard_and_policy(candidate, ctx)
     });
+    decided.retain(|c| !unoffered_installer_container(c, ctx));
     decided
+}
+
+/// Whether `candidate` is a delete-if-empty container on a Windows Installer client list
+/// ([`installer_client_list`]) that the plan does not offer: one the rest of the plan does not empty (no
+/// `EmptyAfterPlan`: some value of it is not an allowed item of the plan), or one the guard does not let
+/// through. Such a key holds the values of other products. An empty one left behind is accepted; a listed
+/// one would only suggest that the shared key is the app's to remove.
+fn unoffered_installer_container(candidate: &Candidate, ctx: &DecideCtx<'_>) -> bool {
+    if candidate.action != Action::RemoveDirIfEmpty {
+        return false;
+    }
+    let Target::RegKey { path } = &candidate.target else {
+        return false;
+    };
+    if !installer_client_list(path, ctx) {
+        return false;
+    }
+    let emptied = candidate
+        .evidence
+        .iter()
+        .any(|e| e.kind == EvidenceKind::EmptyAfterPlan);
+    let blocked = candidate
+        .decision
+        .as_ref()
+        .is_none_or(|d| d.band == Band::Blocked)
+        || candidate
+            .blockers
+            .iter()
+            .any(|b| matches!(b, Blocker::DenyListed { .. }));
+    !emptied || blocked
+}
+
+/// Whether the key is one of Windows Installer's per-product client lists: an `UpgradeCodes\<U>` key
+/// (its values are named by packed product codes) or a `Components\<C>` key (its values are named by the
+/// packed codes of the component's clients), under the machine Installer data
+/// (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer`, with `UserData\<sid>\Components\<C>`), a
+/// user's Installer data (`HKU\<sid>\Software\Microsoft\Installer`) or a Classes `Installer` key, in either
+/// WOW64 view. The key is compared in the guard's canonical form, segment by folded segment; a key that
+/// does not canonicalise is not one (the guard blocks it anyway).
+#[must_use]
+pub fn installer_client_list(key_path: &str, ctx: &DecideCtx<'_>) -> bool {
+    let Ok(key) = canon_key(key_path, None, ctx.env(), ctx.user_sid) else {
+        return false;
+    };
+    let folded: Vec<String> = prefix::segments(&key.path).map(prefix::fold).collect();
+    let segs: Vec<&str> = folded.iter().map(String::as_str).collect();
+    const MACHINE: &[&str] = &[
+        "software",
+        "microsoft",
+        "windows",
+        "currentversion",
+        "installer",
+    ];
+    const USER: &[&str] = &["software", "microsoft", "installer"];
+    const CLASSES: &[&str] = &["software", "classes", "installer"];
+    let roots: &[&[&str]] = match key.hive {
+        Hive::Hklm => &[MACHINE, CLASSES],
+        Hive::Hku(_) => &[USER, MACHINE, CLASSES],
+        Hive::HkuClasses(_) => &[&["installer"]],
+    };
+    roots.iter().any(|root| {
+        segs.strip_prefix(*root).is_some_and(|rest| {
+            matches!(rest, ["upgradecodes" | "components", _])
+                || matches!(rest, ["userdata", _, "components", _])
+        })
+    })
 }
 
 /// Whether a target is machine-wide or per-user, for Rule T (§5.3).
@@ -166,12 +530,22 @@ pub fn target_scope_in(target: &Target, env: &GuardEnv, user_sid: Option<&str>) 
     }
 }
 
-/// The exemptions the candidate's evidence earns from the deny-list (§5.10): [`deny_exemptions`] with the
-/// context's machine layout, user and long-name flag. The scan mode, verify-gone result and limits of the
-/// context are not consulted.
+/// The exemptions the decide step checks the deny-list with (§5.10): what the candidate's evidence earns
+/// ([`deny_exemptions`], with the context's machine layout, user and long-name flag) plus the plan's M1b
+/// lists ([`DecideCtx::m1b`]), the same for every candidate. The scan mode, verify-gone result and limits
+/// of the context are not consulted.
 #[must_use]
-pub fn exemptions(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Exemptions {
-    deny_exemptions(candidate, ctx.env(), ctx.user_sid, ctx.long_names_resolved)
+pub fn exemptions<'c>(candidate: &Candidate, ctx: &'c DecideCtx<'_>) -> Exemptions<'c> {
+    Exemptions {
+        gone_burn: ctx.m1b.gone_burn(),
+        gone_msi_products: ctx.m1b.gone_msi_products_for(
+            &candidate.target,
+            ctx.env(),
+            ctx.user_sid,
+        ),
+        gone_cache_dirs: ctx.m1b.gone_cache_dirs(),
+        ..deny_exemptions(candidate, ctx.env(), ctx.user_sid, ctx.long_names_resolved)
+    }
 }
 
 /// The deny-list exemptions (§5.10) the decide step derives for a candidate, from exactly the inputs it
@@ -190,6 +564,13 @@ pub fn exemptions(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Exemptions {
 ///   that carries `EmptyAfterPlan` (every item in it is a Safe item of the plan). The guard cannot tell a
 ///   file from a folder, so nothing else below the all-users Start Menu is exempted.
 /// - `long_names_resolved`: as passed.
+/// - `shared_com_value` (R2a S10): a whole-value delete whose Value-scope evidence (a pre-uninstall
+///   reference to the app, a reference into its InstallRoot, a dangling reference) counts at Tier A or B
+///   after Rule T and comes from an admin-only source (or from any source on a per-user target): the
+///   value's data was the app's. It lifts only the shared-COM rules, for that value.
+///
+/// The three M1b lists are left empty: no evidence earns them; they come from the plan's system facts
+/// ([`M1bDecide`]) and [`exemptions`] adds them.
 ///
 /// Tier A is judged after Rule T ([`target_scope_in`]): user-writable evidence earns nothing on a
 /// machine-scope target.
@@ -199,7 +580,7 @@ pub fn deny_exemptions(
     env: &GuardEnv,
     user_sid: Option<&str>,
     long_names_resolved: bool,
-) -> Exemptions {
+) -> Exemptions<'static> {
     let scope = target_scope_in(&candidate.target, env, user_sid);
     let tier_a = |e: &Evidence, wanted: Scope| {
         e.scope == wanted && band::effective_tier(e, scope) == Tier::A && effective_weight(e) > 0
@@ -230,11 +611,27 @@ pub fn deny_exemptions(
         }
         _ => false,
     };
+    let shared_com_value = candidate.action == Action::DeleteValue
+        && matches!(candidate.target, Target::RegValue { .. })
+        && candidate.evidence.iter().any(|e| {
+            matches!(
+                e.kind,
+                EvidenceKind::InPreUninstallRefSnapshot
+                    | EvidenceKind::PointsIntoInstallRoot
+                    | EvidenceKind::DanglingRef
+            ) && e.scope == Scope::Value
+                && (e.trust == SourceTrust::AdminOnly || scope == TargetScope::PerUser)
+                && matches!(band::effective_tier(e, scope), Tier::A | Tier::B)
+                && effective_weight(e) > 0
+        });
     Exemptions {
         proven_owned_skeleton,
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
+        // M1b: the three lists come from the plan's system facts, not from evidence (`exemptions`).
+        ..Exemptions::default()
     }
 }
 
@@ -256,6 +653,9 @@ pub fn guard_and_policy(mut candidate: Candidate, ctx: &DecideCtx<'_>) -> Candid
             if let Some(blocker) = containers::check(&candidate.target, env) {
                 push_blocker(&mut candidate, blocker);
             }
+            if let Some(blocker) = object_rules(&candidate, ctx) {
+                push_blocker(&mut candidate, blocker);
+            }
         }
         Err(error) => push_blocker(
             &mut candidate,
@@ -269,6 +669,42 @@ pub fn guard_and_policy(mut candidate: Candidate, ctx: &DecideCtx<'_>) -> Candid
     }
     redecide(&mut candidate, ctx);
     candidate
+}
+
+/// The rule id of a typed object that reaches the plan without a well-formed digest of its kind.
+pub const OBJECT_NO_FP: &str = "object.no-fp";
+
+/// The object rules the plan applies itself to a system object (R2a S2), on top of the blockers the
+/// scan's sealing added from the system-object index (`purge_scan` `ScanCtx::object_guard`), which
+/// the plan cannot read:
+///
+/// - the candidate must carry a well-formed `object_fp` of the target's kind, else the hard
+///   `DenyListed { rule: "object.no-fp" }` (the act would be bound to nothing);
+/// - a task's path is judged by `DenyList::check_object` (`sys.task.windows` for the folders of
+///   Windows, Office and Edge's updater), the one object rule the target alone decides.
+///
+/// `None` for a target that is no system object.
+fn object_rules(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Option<Blocker> {
+    let kind = ObjectKind::of(&candidate.target)?;
+    let bound = candidate
+        .object_fp
+        .as_ref()
+        .is_some_and(|fp| fp.kind == kind && fp.is_well_formed());
+    if !bound {
+        return Some(Blocker::DenyListed {
+            rule: OBJECT_NO_FP.to_owned(),
+        });
+    }
+    match &candidate.target {
+        Target::Task { path } => ctx.deny.check_object(
+            ObjectKind::Task,
+            &ObjectGuardFacts {
+                name_or_path_or_id: path,
+                ..ObjectGuardFacts::default()
+            },
+        ),
+        _ => None,
+    }
 }
 
 /// Runs the policy over `candidate` as it stands and stores the decision. The target must already be
@@ -367,6 +803,10 @@ fn merge_key(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Vec<String> {
 
 /// Step 1 of the module docs: folds candidates on the same target into one, in order of first appearance.
 /// Stored decisions and any `EmptyAfterPlan` evidence are dropped.
+///
+/// A typed object (service, task, firewall rule) keeps the `object_fp` of the first candidate. When the
+/// candidates of its group do not all carry the same one (absent included), it gets the hard blocker
+/// `ObjectChangedSinceHarvest`. Its children are cleared, whoever listed them.
 #[must_use]
 pub fn merge(candidates: Vec<Candidate>, ctx: &DecideCtx<'_>) -> Vec<Candidate> {
     let mut groups: Vec<Vec<Candidate>> = Vec::new();
@@ -386,6 +826,14 @@ pub fn merge(candidates: Vec<Candidate>, ctx: &DecideCtx<'_>) -> Vec<Candidate> 
 }
 
 fn merge_group(group: Vec<Candidate>) -> Candidate {
+    // C-OBJECT: every candidate on one typed target must have seen the same object. An absent digest is a
+    // value of its own, so a digest and no digest disagree too.
+    let typed = group
+        .first()
+        .is_some_and(|c| ObjectKind::of(&c.target).is_some());
+    let one_object = group
+        .windows(2)
+        .all(|pair| pair[0].object_fp == pair[1].object_fp);
     let strongest = group
         .iter()
         .map(|c| action_strength(c.action))
@@ -437,6 +885,13 @@ fn merge_group(group: Vec<Candidate>) -> Candidate {
         merged.origin = stricter_origin(merged.origin, other.origin);
         merged.size_bytes = merged.size_bytes.max(other.size_bytes);
         merged.child_count = merged.child_count.max(other.child_count);
+    }
+    if typed {
+        if !one_object {
+            push_blocker(&mut merged, Blocker::ObjectChangedSinceHarvest);
+        }
+        // An object is removed through its own API, alone: it holds no plan items.
+        merged.children.clear();
     }
     merged
 }
@@ -557,6 +1012,7 @@ pub(crate) mod testkit {
             child_count: None,
             decision: None,
             item_fp: None,
+            object_fp: None,
         }
     }
 
@@ -868,14 +1324,85 @@ mod tests {
             owned_path("short", r"C:\PROGRA~1\App\app.exe"),
             owned_path("app", r"C:\Program Files\Vendor\App\app.exe"),
             owned_key("app-key", r"HKLM\SOFTWARE\Vendor\App"),
+            Candidate {
+                object_fp: Some(purge_model::ObjectFp {
+                    kind: ObjectKind::Service,
+                    sha256: "a".repeat(64),
+                }),
+                ..cand(
+                    "svc",
+                    Target::Service {
+                        name: "AppSvc".into(),
+                    },
+                    "SYS",
+                )
+            },
+        ]
+    }
+
+    /// R2a S2: a typed object without a well-formed digest of its kind is `object.no-fp`; a task path
+    /// under Windows' own task folder is denied by the object rules in the plan itself.
+    #[test]
+    fn object_rules_bind_and_judge_typed_targets() {
+        let deny = deny();
+        let ctx = ctx(&deny);
+        let rule = |c: &Candidate| {
+            c.blockers
+                .iter()
+                .filter_map(|b| match b {
+                    Blocker::DenyListed { rule } => Some(rule.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let fp = |kind, sha: &str| {
+            Some(purge_model::ObjectFp {
+                kind,
+                sha256: sha.into(),
+            })
+        };
+        let svc = || {
             cand(
                 "svc",
                 Target::Service {
                     name: "AppSvc".into(),
                 },
                 "SYS",
-            ),
-        ]
+            )
+        };
+        for bad in [
+            None,
+            fp(ObjectKind::Service, "A".repeat(64).as_str()),
+            fp(ObjectKind::Task, "a".repeat(64).as_str()),
+        ] {
+            let c = guard_and_policy(
+                Candidate {
+                    object_fp: bad.clone(),
+                    ..svc()
+                },
+                &ctx,
+            );
+            assert_eq!(rule(&c), vec![OBJECT_NO_FP.to_owned()], "{bad:?}");
+        }
+        let good = guard_and_policy(
+            Candidate {
+                object_fp: fp(ObjectKind::Service, &"a".repeat(64)),
+                ..svc()
+            },
+            &ctx,
+        );
+        assert!(rule(&good).is_empty());
+        let task = |path: &str| {
+            guard_and_policy(
+                Candidate {
+                    object_fp: fp(ObjectKind::Task, &"b".repeat(64)),
+                    ..cand("task", Target::Task { path: path.into() }, "SYS")
+                },
+                &ctx,
+            )
+        };
+        assert!(!rule(&task(r"\Microsoft\Windows\Defrag\ScheduledDefrag")).is_empty());
+        assert!(rule(&task(r"\VendorAppUpdate")).is_empty());
     }
 
     /// `deny_exemptions` is `exemptions` with the inputs spelled out: equal under every context, whatever
@@ -901,7 +1428,7 @@ mod tests {
                                 max_key_items: 1,
                                 ..Limits::default()
                             },
-                            ..base
+                            ..base.clone()
                         });
                     }
                 }
@@ -1050,7 +1577,7 @@ mod tests {
             scope(&key(r"HKU\.DEFAULT\Software\App")),
             TargetScope::Machine
         );
-        let mut nobody = ctx;
+        let mut nobody = ctx.clone();
         nobody.user_sid = None;
         assert_eq!(
             target_scope(&path(r"C:\Users\tester\AppData\Roaming\App"), &nobody),

@@ -1,0 +1,176 @@
+{
+  "schema": "purge.fixture/1",
+  "system": {
+    "os": { "edition": "Professional", "build": 26340, "ubr": 9882 },
+    "user_sid": "S-1-5-21-1004336348-1177238915-682003330-1001",
+    "env": {
+      "SYSTEMROOT": "C:\\Windows",
+      "WINDIR": "C:\\Windows",
+      "SYSTEMDRIVE": "C:",
+      "PROGRAMFILES": "C:\\Program Files",
+      "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+      "PROGRAMDATA": "C:\\ProgramData",
+      "LOCALAPPDATA": "C:\\Users\\tester\\AppData\\Local"
+    }
+  },
+  "registry": {
+    "current_control_set": 1,
+    "keys": {
+      "HKLM\\SYSTEM\\Select": { "values": { "Current": { "dword": 1 } } },
+      "HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies": {
+        "keys": {
+          "AppBundle": {
+            "values": {
+              "": "{B0B0B0B0-1111-2222-3333-444444444444}",
+              "DisplayName": "App Bundle",
+              "Version": "1.0.0.0"
+            },
+            "keys": { "Dependents": {} }
+          },
+          "AppBundle_Core": {
+            "values": {
+              "": "{C0C0C0C0-1111-2222-3333-444444444444}",
+              "DisplayName": "App Core",
+              "Version": "1.0.0.0"
+            },
+            "keys": {
+              "Dependents": {
+                "keys": { "{B0B0B0B0-1111-2222-3333-444444444444}": {} }
+              }
+            }
+          },
+          "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}": {
+            "values": {
+              "": "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+              "DisplayName": "Python Launcher",
+              "Version": "3.12.7150.0"
+            },
+            "keys": {
+              "Dependents": {
+                "keys": { "{B0B0B0B0-1111-2222-3333-444444444444}": {} }
+              }
+            }
+          },
+          "Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14": {
+            "values": {
+              "": "{D0D0D0D0-1111-2222-3333-444444444444}",
+              "DisplayName": "Microsoft Visual C++ 2022 X64 Minimum Runtime",
+              "Version": "14.44.35211"
+            },
+            "keys": {
+              "Dependents": {
+                "keys": { "{B0B0B0B0-1111-2222-3333-444444444444}": {} }
+              }
+            }
+          },
+          "PurgeTrapPkg": {
+            "values": {
+              "": "PurgeTrapPkg",
+              "DisplayName": "PurgeTrap Shared Package",
+              "Version": "1.0.0.0"
+            },
+            "keys": {
+              "Dependents": {
+                "keys": {
+                  "{B0B0B0B0-1111-2222-3333-444444444444}": {},
+                  "{8F55F023-DF9B-4357-8AE7-2C820D0150CA}": {}
+                }
+              }
+            }
+          },
+          "Unrelated.Provider": {
+            "values": { "": "{99999999-1111-2222-3333-444444444444}" },
+            "keys": {
+              "Dependents": {
+                "keys": { "{8F55F023-DF9B-4357-8AE7-2C820D0150CA}": {} }
+              }
+            }
+          }
+        }
+      },
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Software\\Microsoft": {},
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001_Classes\\Installer\\Dependencies": {
+        "keys": {
+          "AppBundle_User": {
+            "values": {
+              "": "{F0F0F0F0-1111-2222-3333-444444444444}",
+              "DisplayName": "App User Part",
+              "Version": "1.0.0.0"
+            },
+            "keys": {
+              "Dependents": {
+                "keys": { "{B0B0B0B0-1111-2222-3333-444444444444}": {} }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "msi": {
+    "products": [
+      {
+        "code": "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+        "context": "Machine",
+        "name": "Python Launcher"
+      },
+      {
+        "code": "{D0D0D0D0-1111-2222-3333-444444444444}",
+        "context": "Machine",
+        "name": "Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.44.35211"
+      }
+    ]
+  },
+  "filesystem": {
+    "volumes": {
+      "C:\\": { "serial": 305419896, "fixed": true, "fs": "NTFS" }
+    },
+    "entries": {
+      "C:\\ProgramData\\Package Cache": {
+        "dir": true,
+        "children": {
+          "{B0B0B0B0-1111-2222-3333-444444444444}": {
+            "dir": true,
+            "children": {
+              "app-setup.exe": { "size": 1000 },
+              "state.rsm": { "size": 24 }
+            }
+          },
+          "{C0C0C0C0-1111-2222-3333-444444444444}v1.0.0.0": {
+            "dir": true,
+            "children": { "core.msi": { "size": 500 } }
+          },
+          "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}v3.12.7150.0": {
+            "dir": true,
+            "children": { "launcher.msi": { "size": 300 } }
+          },
+          "{D0D0D0D0-1111-2222-3333-444444444444}v14.44.35211": {
+            "dir": true,
+            "children": { "vc_runtimeMinimum_x64.msi": { "size": 300 } }
+          },
+          "PurgeTrapPkg": {
+            "dir": true,
+            "children": { "PurgeTrapPkg.msi": { "size": 40 } }
+          },
+          "{5A5A5A5A-1111-2222-3333-444444444444}v2.0": {
+            "dir": true,
+            "children": { "PurgeTrapForeign.msi": { "size": 40 } }
+          }
+        }
+      },
+      "C:\\ProgramData\\x": {
+        "dir": true,
+        "children": { "keep.txt": { "size": 5 } }
+      },
+      "C:\\Users\\tester\\AppData\\Local\\Package Cache": {
+        "dir": true,
+        "children": {
+          "{F0F0F0F0-1111-2222-3333-444444444444}v1.0.0.0": {
+            "dir": true,
+            "children": { "user.msi": { "size": 200 } }
+          }
+        }
+      }
+    }
+  }
+}

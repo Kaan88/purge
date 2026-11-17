@@ -666,6 +666,13 @@ impl QuarantineDir {
         self.dir.volume_serial()
     }
 
+    /// Flushes the op directory (`FlushFileBuffers` through a second handle on it), so that a rename
+    /// into it is on disk: on a volume other than the journal's, the journal's own flushes do not
+    /// commit that volume's file system log ([`crate::durable`]).
+    pub fn sync(&self) -> Result<(), StorageError> {
+        at::flush_dir_at(&self.dir.handle).map_err(|e| io("flush", &self.dir.path, e))
+    }
+
     /// Removes the op directory while it is empty, by handle: the directory is opened again relative
     /// to its own checked handle (an empty name: this very object, whatever its path names now) with
     /// `DELETE`, must still be the checked directory (same file id), and is marked for deletion

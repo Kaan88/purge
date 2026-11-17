@@ -628,6 +628,47 @@ function Suspend-M2Telemetry {
     $rec
 }
 
+# M2 settle wait (RIG.md §11.8), right before snap A of every exec-run job (null runs included): waits until the
+# ReadyBoot ETW session (`logman query ReadyBoot -ets`) has stopped, or $MaxSec, whichever comes first, then
+# $AfterSec more for the trace file to be written, then until the uptime is at least $MinUptimeSec (all within
+# $MaxSec). On m2-base the trace stops about 60 s after boot (ReadyBoot.etl deleted); written while it ran, it was
+# m2-traps collateral in the gate run of 2026-11-16, and so were Explorer's first-run writes at uptime ~71 s, hence
+# the 180 s floor. Never throws; returns the record for run.json `results.settle`.
+function Wait-M2BootSettle([int]$MaxSec = 300, [int]$AfterSec = 5, [int]$PollSec = 3, [int]$MinUptimeSec = 180) {
+    $t0 = Get-Date
+    $rec = [ordered]@{ session = 'ReadyBoot'; active_at_start = $null; first_query = $null; stopped = $false; bounded = $false; min_uptime_sec = $MinUptimeSec
+        floor_wait_sec = 0; waited_sec = $null; uptime_sec = $null; error = $null }
+    try {
+        $logman = Join-Path $env:SystemRoot 'System32\logman.exe'
+        while ($true) {
+            $q = Invoke-Native -Exe $logman -Arguments 'query ReadyBoot -ets' -TimeoutSec 30
+            $active = ($q.exit -eq 0)
+            if ($null -eq $rec.active_at_start) {
+                $rec.active_at_start = $active
+                $rec.first_query = [ordered]@{ exit = $q.exit; out = @("$($q.stdout)$($q.stderr)" -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 6) }
+            }
+            if (-not $active) { $rec.stopped = $true; break }
+            if (((Get-Date) - $t0).TotalSeconds -ge $MaxSec) { $rec.bounded = $true; break }
+            Start-Sleep -Seconds $PollSec
+        }
+        if ($rec.stopped -and $rec.active_at_start) { Start-Sleep -Seconds $AfterSec }
+        # Uptime floor: the shell's first-run writes after logon come later than the trace stop (Explorer
+        # TaskbarStateLastRun and Component Categories64 at uptime ~71 s in the gate run of 2026-11-16).
+        $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+        $up = ((Get-Date) - $boot).TotalSeconds
+        if ($up -lt $MinUptimeSec) {
+            $wait = [math]::Min($MinUptimeSec - $up, [math]::Max(0, $MaxSec - ((Get-Date) - $t0).TotalSeconds))
+            if ($wait -lt $MinUptimeSec - $up) { $rec.bounded = $true }
+            $rec.floor_wait_sec = [math]::Round($wait, 1)
+            Start-Sleep -Milliseconds ([int]($wait * 1000))
+        }
+        $rec.uptime_sec = [int]((Get-Date) - $boot).TotalSeconds
+    } catch { $rec.error = $_.Exception.Message }
+    $rec.waited_sec = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+    Log "settle: ReadyBoot session $(if ($rec.active_at_start) { 'was active' } else { 'not active' }); $(if ($rec.bounded) { "bound of $MaxSec s reached" } else { 'stopped' }); uptime floor $MinUptimeSec s (waited $($rec.floor_wait_sec) s for it); waited $($rec.waited_sec) s; uptime $($rec.uptime_sec) s$(if ($rec.error) { ' !! ' + $rec.error })"
+    $rec
+}
+
 # Deletes the launch task of a short-lived medium-IL command that ended by itself (nothing to close or kill).
 function Remove-LaunchTask($Launch) {
     if ($Launch -and $Launch.task) { Unregister-ScheduledTask -TaskName $Launch.task -Confirm:$false -ErrorAction SilentlyContinue }
@@ -804,36 +845,117 @@ function Get-AppxRecords {
     }
 }
 
+# M1b (C-OBJECT): besides the M0 fields, each task carries hidden, logon_type (the Principal's LogonType name:
+# Password, S4U, Interactive, Group, ServiceAccount, InteractiveOrPassword, None), has_stored_password (LogonType
+# Password or InteractiveOrPassword) and actions_detail (one record per action: kind exec | com_handler | other,
+# path, arguments, working_dir, clsid, data; 'actions' keeps its M0 string form). -Tasks: test input.
 function Get-TaskRecords {
-    foreach ($t in @(Get-ScheduledTask -ErrorAction Stop)) {
+    param($Tasks = $null)
+    if ($null -eq $Tasks) { $Tasks = @(Get-ScheduledTask -ErrorAction Stop) }
+    foreach ($t in @($Tasks)) {
+        if (-not $t) { continue }
         $acts = @()
+        $detail = @()
         foreach ($a in @($t.Actions)) {
             if (-not $a) { continue }
-            if ($a.CimClass.CimClassName -eq 'MSFT_TaskExecAction') { $acts += ("$($a.Execute) $($a.Arguments)").Trim() }
-            elseif ($a.CimClass.CimClassName -eq 'MSFT_TaskComHandlerAction') { $acts += ("com:$($a.ClassId) $($a.Data)").Trim() }
-            else { $acts += "$($a.CimClass.CimClassName)" }
+            $cls = "$($a.CimClass.CimClassName)"
+            if ($cls -eq 'MSFT_TaskExecAction') {
+                $acts += ("$($a.Execute) $($a.Arguments)").Trim()
+                $detail += [pscustomobject][ordered]@{ kind = 'exec'; path = $a.Execute; arguments = $a.Arguments; working_dir = $a.WorkingDirectory; clsid = $null; data = $null }
+            } elseif ($cls -eq 'MSFT_TaskComHandlerAction') {
+                $acts += ("com:$($a.ClassId) $($a.Data)").Trim()
+                $detail += [pscustomobject][ordered]@{ kind = 'com_handler'; path = $null; arguments = $null; working_dir = $null; clsid = $a.ClassId; data = $a.Data }
+            } else {
+                $acts += $cls
+                $detail += [pscustomobject][ordered]@{ kind = 'other'; path = $null; arguments = $null; working_dir = $null; clsid = $null; data = $cls }
+            }
         }
-        [pscustomobject][ordered]@{ path = "$($t.TaskPath)$($t.TaskName)"; actions = $acts; enabled = ("$($t.State)" -ne 'Disabled') }
+        $logon = $(if ($t.Principal -and $null -ne $t.Principal.LogonType) { "$($t.Principal.LogonType)" } else { $null })
+        [pscustomobject][ordered]@{
+            path = "$($t.TaskPath)$($t.TaskName)"; actions = $acts; enabled = ("$($t.State)" -ne 'Disabled')
+            hidden = [bool]($t.Settings -and $t.Settings.Hidden); logon_type = $logon
+            has_stored_password = (@('Password', 'InteractiveOrPassword') -contains $logon); actions_detail = $detail
+        }
     }
 }
 
+# M1b (C-OBJECT): besides the M0 fields (WMI view), each service carries the registry view of
+# HKLM\SYSTEM\CurrentControlSet\Services\<name>: image_path_raw (ImagePath as stored, REG_EXPAND_SZ not expanded),
+# service_dll (Parameters\ServiceDll, else the top-level ServiceDll, as stored), service_type (Type), start_value
+# (Start), object_name, depend_on_service (array), and state (WMI State). A value that is absent is null.
+# -Services / -Drivers / -OpenKey: test input (OpenKey: { param($canon) <RegistryKey-like or $null> }).
 function Get-ServiceRecords {
-    foreach ($s in @(Get-CimInstance Win32_Service -ErrorAction Stop)) {
-        [pscustomobject][ordered]@{ name = $s.Name; display = $s.DisplayName; image_path = $s.PathName; start = $s.StartMode; type = $s.ServiceType }
+    param($Services = $null, $Drivers = $null, [scriptblock]$OpenKey = $null)
+    if ($null -eq $Services) { $Services = @(Get-CimInstance Win32_Service -ErrorAction Stop) }
+    if ($null -eq $Drivers) { $Drivers = @(Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue) }
+    if (-not $OpenKey) { $OpenKey = { param($c) Open-RegKey $c } }
+    $raw = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+    $reg = {
+        param([string]$Name)
+        $r = [ordered]@{ image_path_raw = $null; service_dll = $null; service_type = $null; start_value = $null; object_name = $null; depend_on_service = @() }
+        $k = $null
+        try { $k = & $OpenKey "HKLM\SYSTEM\CurrentControlSet\Services\$Name" } catch { }
+        if (-not $k) { return $r }
+        try {
+            $r.image_path_raw = $k.GetValue('ImagePath', $null, $raw)
+            $ty = $k.GetValue('Type', $null); if ($null -ne $ty) { $r.service_type = [uint32]([int64]$ty -band [int64]4294967295) }
+            $st = $k.GetValue('Start', $null); if ($null -ne $st) { $r.start_value = [uint32]([int64]$st -band [int64]4294967295) }
+            $r.object_name = $k.GetValue('ObjectName', $null, $raw)
+            $dep = $k.GetValue('DependOnService', $null); if ($null -ne $dep) { $r.depend_on_service = @($dep | Where-Object { "$_" -ne '' }) }
+            $r.service_dll = $k.GetValue('ServiceDll', $null, $raw)
+            $p = $null
+            try { $p = $k.OpenSubKey('Parameters', $false) } catch { }
+            if ($p) { try { $d = $p.GetValue('ServiceDll', $null, $raw); if ($null -ne $d) { $r.service_dll = $d } } finally { $p.Dispose() } }
+        } catch { } finally { $k.Dispose() }
+        $r
     }
-    foreach ($s in @(Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue)) {
-        [pscustomobject][ordered]@{ name = $s.Name; display = $s.DisplayName; image_path = $s.PathName; start = $s.StartMode; type = "driver:$($s.ServiceType)" }
+    foreach ($s in @($Services)) {
+        if (-not $s) { continue }
+        $g = & $reg $s.Name
+        [pscustomobject][ordered]@{ name = $s.Name; display = $s.DisplayName; image_path = $s.PathName; start = $s.StartMode; type = $s.ServiceType
+            image_path_raw = $g.image_path_raw; service_dll = $g.service_dll; service_type = $g.service_type; start_value = $g.start_value
+            object_name = $g.object_name; depend_on_service = $g.depend_on_service; state = $s.State }
+    }
+    foreach ($s in @($Drivers)) {
+        if (-not $s) { continue }
+        $g = & $reg $s.Name
+        [pscustomobject][ordered]@{ name = $s.Name; display = $s.DisplayName; image_path = $s.PathName; start = $s.StartMode; type = "driver:$($s.ServiceType)"
+            image_path_raw = $g.image_path_raw; service_dll = $g.service_dll; service_type = $g.service_type; start_value = $g.start_value
+            object_name = $g.object_name; depend_on_service = $g.depend_on_service; state = $s.State }
     }
 }
 
 # One call for all application filters, joined to rules by InstanceID (per-rule filter calls take minutes).
+# M1b (C-OBJECT): each rule also carries value_name (the registry value name, = id, when the rule is in one of the
+# rule stores below: value name = rule id = WMI InstanceID; else null), raw (that value's string, as stored) and
+# reg_key (the key it was found in). -Rules / -Filters / -RegRules (hashtable id -> @{ raw; key }): test input.
 function Get-FirewallRecords {
+    param($Rules = $null, $Filters = $null, [hashtable]$RegRules = $null)
+    if ($null -eq $Filters) { $Filters = @(Get-NetFirewallApplicationFilter -All -ErrorAction Stop) }
+    if ($null -eq $Rules) { $Rules = @(Get-NetFirewallRule -ErrorAction Stop) }
+    if ($null -eq $RegRules) {
+        $RegRules = @{}
+        $fp = 'HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy'
+        foreach ($kp in "$fp\FirewallRules", "$fp\RestrictedServices\AppIso\FirewallRules", "$fp\RestrictedServices\Configurable\System") {
+            $k = Open-RegKey $kp
+            if (-not $k) { continue }
+            try {
+                foreach ($n in $k.GetValueNames()) {
+                    if (-not $RegRules.ContainsKey($n)) { $RegRules[$n] = @{ raw = "$($k.GetValue($n, $null, 'DoNotExpandEnvironmentNames'))"; key = $kp } }
+                }
+            } finally { $k.Dispose() }
+        }
+    }
     $prog = @{}
-    foreach ($f in @(Get-NetFirewallApplicationFilter -All -ErrorAction Stop)) { $prog[[string]$f.InstanceID] = $f.Program }
-    foreach ($r in @(Get-NetFirewallRule -ErrorAction Stop)) {
+    foreach ($f in @($Filters)) { if ($f) { $prog[[string]$f.InstanceID] = $f.Program } }
+    foreach ($r in @($Rules)) {
+        if (-not $r) { continue }
+        $id = [string]$r.Name
+        $rr = $(if ($id -and $RegRules.ContainsKey($id)) { $RegRules[$id] } else { $null })
         [pscustomobject][ordered]@{
             id = $r.Name; display = $r.DisplayName; program = $prog[[string]$r.InstanceID]
             direction = "$($r.Direction)"; enabled = ("$($r.Enabled)" -eq 'True')
+            value_name = $(if ($rr) { $id } else { $null }); raw = $(if ($rr) { $rr.raw } else { $null }); reg_key = $(if ($rr) { $rr.key } else { $null })
         }
     }
 }
@@ -1452,7 +1574,11 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
 # Snapshot roots of the objects an m2 manifest describes (its `roots`: paths and keys), plus the store, the
 # Session Manager key (PATH, PendingFileRenameOperations) and the user's Environment key. For the crash loop and
 # the race runs, where a full default snap per iteration would take too long.
-function Get-M2SnapRoots([string[]]$Manifests) {
+# -BootStable (m2-crash power-off rounds, whose snap B is taken after a boot): the Session Manager key is replaced
+# by its Environment subkey, since Windows rewrites Executive, kernel\RNG, Memory Management(\PrefetchParameters)
+# and Power at every boot (gate run 2026-11-16: 12 to 20 collateral records per round, all boot churn); the
+# round compares PendingFileRenameOperations itself instead (Get-PfroList before and after).
+function Get-M2SnapRoots([string[]]$Manifests, [switch]$BootStable) {
     $set = New-Object System.Collections.ArrayList
     $add = { param($v) $s = "$v"; if ($s -match '^[A-Za-z]:\\' -or $s -match '^HK(LM|U)\\') { if (-not ($set -contains $s)) { [void]$set.Add($s) } } }
     foreach ($m in $Manifests) {
@@ -1460,7 +1586,8 @@ function Get-M2SnapRoots([string[]]$Manifests) {
         $d = [IO.File]::ReadAllText($m) | ConvertFrom-Json
         if ($d.roots) { foreach ($p in $d.roots.PSObject.Properties) { foreach ($v in @($p.Value)) { & $add $v } } }
     }
-    foreach ($x in @($RigPurgeData, $RigPfroKey, "HKU\$RigUserSid\Environment")) { & $add $x }
+    $sm = $(if ($BootStable) { "$RigPfroKey\Environment" } else { $RigPfroKey })
+    foreach ($x in @($RigPurgeData, $sm, "HKU\$RigUserSid\Environment")) { & $add $x }
     @($set)
 }
 
@@ -1629,6 +1756,43 @@ function Save-M2Run($R, [switch]$Finished) {
 }
 
 function Set-M2Result($R, [string]$Key, $Value) { $R.S.results[$Key] = $Value; Save-M2Run $R }
+
+# Hard power-off rounds (m2-crash -HardPowerOff), right before the paused exec starts: makes the state the round
+# built durable, so the power cut can only lose what the engine itself wrote afterwards. Flushes volume C: (every
+# file and the NTFS log; Write-VolumeCache) and the registry hives the fixtures live in (RegFlushKey, P/Invoke:
+# HKLM\SOFTWARE, HKLM\SYSTEM, HKU\<sid>, HKU\<sid>_Classes). Without it the gate run of 2026-11-16
+# lost the fixture keys created seconds before the cut (HKLM\SOFTWARE\PurgeFixtureApp gone after the boot, HKU keys
+# with older write times), and every power-off row failed on state the engine never touched. Elevated.
+function Save-RigDurableState([string]$Sid = $RigUserSid) {
+    $r = [ordered]@{ volume = $null; hives = [ordered]@{} }
+    if (-not ('PurgeRig.RegFlush' -as [type])) {
+        Add-Type -Namespace PurgeRig -Name RegFlush -MemberDefinition '[DllImport("advapi32.dll")] public static extern int RegFlushKey(Microsoft.Win32.SafeHandles.SafeRegistryHandle hKey);'
+    }
+    try { Write-VolumeCache -DriveLetter C -ErrorAction Stop; $r.volume = 'flushed' } catch { $r.volume = "failed: $($_.Exception.Message)" }
+    $hives = @(@([Microsoft.Win32.Registry]::LocalMachine, 'SOFTWARE'), @([Microsoft.Win32.Registry]::LocalMachine, 'SYSTEM'),
+        @([Microsoft.Win32.Registry]::Users, $Sid), @([Microsoft.Win32.Registry]::Users, "$Sid`_Classes"))
+    foreach ($h in $hives) {
+        $name = "$($h[0].Name)\$($h[1])"
+        # RegFlushKey itself: .NET's RegistryKey.Flush() calls it only for a key this process wrote through that object.
+        try { $k = $h[0].OpenSubKey($h[1], $false); if ($k) { try { $e = [PurgeRig.RegFlush]::RegFlushKey($k.Handle); $r.hives[$name] = $(if ($e -eq 0) { 'flushed' } else { "error $e" }) } finally { $k.Close() } } else { $r.hives[$name] = 'absent' } }
+        catch { $r.hives[$name] = "failed: $($_.Exception.Message)" }
+    }
+    Log "durable state before the paused exec: volume $($r.volume); hives $(@($r.hives.Keys | ForEach-Object { "$_ $($r.hives[$_])" }) -join ', ')"
+    $r
+}
+
+# Hard power-off rounds (m2-crash -HardPowerOff): the restored snapshot's boot entry ignores failed boots and has
+# no automatic recovery, so back-to-back power cuts do not end in WinRE. Elevated; throws when bcdedit fails.
+function Set-RigBootPolicyIgnoreFailures {
+    $out = [ordered]@{}
+    foreach ($a in @('/set {current} bootstatuspolicy IgnoreAllFailures', '/set {current} recoveryenabled No')) {
+        $b = Invoke-Native -Exe (Join-Path $env:SystemRoot 'System32\bcdedit.exe') -Arguments $a -TimeoutSec 60
+        Log "bcdedit $a`: exit $($b.exit)"
+        $out[$a] = $b.exit
+        if ($b.exit -ne 0) { throw "bcdedit $a exited $($b.exit)" }
+    }
+    $out
+}
 
 function Invoke-RigShutdown([int]$DelaySec, [string]$Reason) {
     $r = Invoke-Native -Exe (Join-Path $env:SystemRoot 'System32\shutdown.exe') -Arguments ('/r /t ' + $DelaySec + ' /d p:4:1 /c ' + (ConvertTo-EngineArg $Reason)) -TimeoutSec 60

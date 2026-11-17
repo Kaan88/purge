@@ -175,7 +175,7 @@ fn ctx(selected: &[ExecOp]) -> GateCtx {
 }
 
 /// The exemptions of an item read from the file system in long form.
-fn long() -> Exemptions {
+fn long() -> Exemptions<'static> {
     Exemptions {
         long_names_resolved: true,
         ..Exemptions::default()
@@ -2629,6 +2629,7 @@ fn exemptions_survive_the_journal_round_trip() {
             environment_segment_edit: bits & 2 != 0,
             tier_a_start_menu_entry: bits & 4 != 0,
             long_names_resolved: bits & 8 != 0,
+            ..Exemptions::default()
         };
         let journal = exemptions_to_journal(&guard);
         assert_eq!(
@@ -2650,5 +2651,162 @@ fn exemptions_survive_the_journal_round_trip() {
         let text = serde_json::to_string(&journal).unwrap();
         let read: GateExemptions = serde_json::from_str(&text).unwrap();
         assert_eq!(exemptions_from_journal(&read), guard);
+    }
+}
+
+/// Review R3b S3: a program root of a run passes the guard's root rule, as the harvest's roots do;
+/// S2: no roots (or only blank ones) is "no roots".
+#[test]
+fn root_refusal_applies_the_guards_root_rule() {
+    let deny = DenyList::compile(&GuardEnv::sample());
+    for root in [
+        r"C:\Program Files",
+        r"C:\Program Files\",
+        r"C:\Program Files (x86)",
+        r"C:\ProgramData",
+        r"C:\Windows",
+        r"C:\Windows\System32\Vendor",
+        r"C:\",
+        "C:",
+        r"C:\Program Files\..\Windows",
+        r"C:\PROGRA~1\Vendor",
+        r"Vendor\app",
+        "",
+        "  ",
+    ] {
+        assert!(
+            root_refusal(root, &deny, None).is_some(),
+            "{root:?} accepted"
+        );
+    }
+    for root in [
+        r"C:\Program Files\Vendor",
+        r#""C:\Program Files\Vendor""#,
+        r"C:\Program Files (x86)\Vendor App",
+        r"D:\Apps\Tool",
+    ] {
+        assert_eq!(root_refusal(root, &deny, None), None, "{root:?}");
+    }
+    assert!(no_program_roots(&[]));
+    assert!(no_program_roots(&[" ".to_owned()]));
+    assert!(!no_program_roots(&[r"C:\Program Files\Vendor".to_owned()]));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The run's M1b lists per op (R4 S8)
+// ---------------------------------------------------------------------------------------------------
+
+/// Review R4 S8 (the executor half of R3a B1): the act-time gate gave every op the flat list of gone MSI
+/// products, so `UserData\<another user's SID>\...` of the same ProductCode passed the guard. Now an op
+/// on a registration filed under a SID gets only the products the run journalled for that SID, as the
+/// plan's decide step does; every other op gets the flat list. The same holds for the validate pass
+/// (`with_gone`), for records accepted before or after the lists are set, and for lists read back from
+/// a journal; a journal without the per-SID lists keeps every SID closed.
+#[test]
+fn gone_msi_products_follow_the_sid_a_registration_is_filed_under() {
+    const P: &str = "0123456789ABCDEF0123456789ABCDEF";
+    let me = current_user_sid().unwrap();
+    let other = "S-1-5-21-1111111111-2222222222-3333333333-1002";
+    let user_data = |sid: &str| {
+        format!(
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\{sid}\Components\FEDCBA9876543210FEDCBA9876543210"
+        )
+    };
+    let value = |key: String| ExecOp::DeleteValue {
+        key,
+        name: P.to_owned(),
+    };
+    let own = value(user_data(&me));
+    let foreign = value(user_data(other));
+    let machine = value(user_data("S-1-5-18"));
+    let hkcu = value(
+        r"HKCU\Software\Microsoft\Installer\Products\FEDCBA9876543210FEDCBA9876543210".to_owned(),
+    );
+    let flat = value(
+        r"HKLM\SOFTWARE\Classes\Installer\Products\FEDCBA9876543210FEDCBA9876543210".to_owned(),
+    );
+    let ops = [
+        own.clone(),
+        foreign.clone(),
+        machine.clone(),
+        hkcu.clone(),
+        flat.clone(),
+    ];
+    let lists = crate::plan_in::GoneLists {
+        msi_products: vec![P.to_owned()],
+        msi_by_sid: vec![(prefix::fold(&me), vec![P.to_owned()])],
+        ..crate::plan_in::GoneLists::default()
+    };
+    let want: [&[&str]; 5] = [&[P], &[], &[], &[P], &[P]];
+    let gone = |ex: Exemptions<'static>| -> Vec<&str> {
+        ex.gone_msi_products.iter().map(String::as_str).collect()
+    };
+    let journalled = |op: &ExecOp, id: u32| Validated {
+        op: OpId(id),
+        item: CandidateId(format!("c-{id:03}")),
+        target: op.target(),
+        facts: ItemFacts::Value(ValueFacts {
+            value_type: REG_SZ,
+            size: 0,
+            data_sha256: Sha256Hex::from([0u8; 32]),
+        }),
+        exemptions: GateExemptions::default(),
+    };
+
+    // Validate pass, and records accepted after the lists are set.
+    let mut ctx = ctx(&ops);
+    ctx.bind_user(Some(&me));
+    ctx.set_gone(&lists);
+    for (n, (op, want)) in ops.iter().zip(want).enumerate() {
+        assert_eq!(
+            gone(ctx.with_gone(Exemptions::default(), op)),
+            want,
+            "{op:?}"
+        );
+        let id = u32::try_from(n).unwrap() + 1;
+        ctx.record(op, &journalled(op, id), 1).unwrap();
+        assert_eq!(gone(ctx.exemptions(OpId(id)).unwrap()), want, "{op:?}");
+    }
+
+    // Records accepted before the lists, the user bound last (resume and undo order may differ).
+    let mut late = self::ctx(&ops);
+    for (n, op) in ops.iter().enumerate() {
+        let id = u32::try_from(n).unwrap() + 1;
+        late.record(op, &journalled(op, id), 1).unwrap();
+        assert!(gone(late.exemptions(OpId(id)).unwrap()).is_empty());
+    }
+    late.set_gone(&lists);
+    late.bind_user(Some(&me));
+    for (n, (op, want)) in ops.iter().zip(want).enumerate() {
+        let id = u32::try_from(n).unwrap() + 1;
+        assert_eq!(gone(late.exemptions(OpId(id)).unwrap()), want, "{op:?}");
+    }
+
+    // Read back from the journal's settings record: the same choice.
+    let settings = crate::plan_in::ExecSettings {
+        gone: lists.clone(),
+        ..crate::plan_in::ExecSettings::default()
+    }
+    .to_journal();
+    assert_eq!(settings.gone_msi_by_sid.len(), 1);
+    let back = crate::plan_in::GoneLists::from_journal(&settings);
+    assert_eq!(back, lists);
+
+    // A journal written before the per-SID lists existed: every SID stays closed, the rest as before.
+    let mut old = settings.clone();
+    old.gone_msi_by_sid.clear();
+    let old_json = serde_json::to_string(&old).unwrap();
+    assert!(!old_json.contains("gone_msi_by_sid"), "{old_json}");
+    let old: purge_model::exec::journal::RunSettings = serde_json::from_str(&old_json).unwrap();
+    let mut from_old = self::ctx(&ops);
+    from_old.bind_user(Some(&me));
+    from_old.set_gone(&crate::plan_in::GoneLists::from_journal(&old));
+    let want_old: [&[&str]; 5] = [&[], &[], &[], &[], &[P]];
+    for (op, want) in ops.iter().zip(want_old) {
+        assert_eq!(
+            gone(from_old.with_gone(Exemptions::default(), op)),
+            want,
+            "{op:?}"
+        );
     }
 }

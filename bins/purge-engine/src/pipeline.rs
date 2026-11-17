@@ -47,12 +47,13 @@ use purge_guard::canon::{GuardEnv, OtherAppRoot, canon_path};
 use purge_guard::deny::DenyList;
 use purge_guard::prefix;
 use purge_harvest::coproducts;
-use purge_harvest::harvest::{HarvestReport, harvest_report};
+use purge_harvest::harvest::{HarvestOpts, HarvestReport, harvest_report_with};
 use purge_harvest::refsnap::HarvestCtx;
 use purge_harvest::roots::guard_env;
 use purge_identity::kbdata::Kb;
 use purge_index::baseline::{Baseline, RecordCounts};
 use purge_index::matcher::AnchorSet;
+use purge_index::ownership::{DiskTableCache, MemTableCache, OwnershipLimits, TableCache};
 use purge_inventory::arp::Inventory;
 use purge_inventory::runner::{ProcessHost, RunError, RunOptions, RunReport, RunRequest};
 use purge_inventory::verify_gone::{self, VerifyTarget};
@@ -60,10 +61,13 @@ use purge_model::{
     AnchorKind, AnchorRef, Candidate, Fingerprint, InstallScope, InstallerKind, InventoryDoc,
     InventoryEntry, OsInfo, ProgramId, RawFlags, ScanMode, VerifyGone, View, WritableBy,
 };
-use purge_plan::decide::{DecideCtx, Limits};
+use purge_plan::decide::{DecideCtx, Limits, M1bDecide, bundle_known};
 use purge_plan::emit::{Built, build};
 use purge_scan::catalog::all_scanners;
-use purge_scan::framework::{AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanLimits};
+use purge_scan::framework::{
+    AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, ScanLimits, inventory_lists_product,
+    product_known_in,
+};
 use purge_source::registry::RegistrySource;
 use purge_win::env::{EnvMap, expand_with};
 
@@ -113,6 +117,54 @@ pub struct Settings {
     /// remove them. Paths that do not canonicalise are dropped with a warning, because one bad entry
     /// would make the guard deny everything.
     pub purge_dirs: Vec<String>,
+    /// The directory of the on-disk MSI table cache, `<ProgramData>\Purge\fp\msitables` (D17). `None`:
+    /// the cache is in memory for the run. See [`table_cache`] for when the directory is used.
+    pub msi_table_dir: Option<PathBuf>,
+}
+
+/// Which MSI table cache an engine call uses ([`table_cache`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableCacheKind {
+    /// The admin-only directory of [`Settings::msi_table_dir`].
+    Disk,
+    /// Memory, for this call only.
+    Memory,
+}
+
+/// The MSI table cache of one engine call (D17, C-OWNERSHIP): the directory of
+/// [`Settings::msi_table_dir`] when `DiskTableCache::open` accepts it (only administrators and the
+/// system can write it and every ancestor), else an in-memory cache.
+///
+/// The directory is created only when the process is elevated, and only inside a Purge data root
+/// (its grandparent, `<ProgramData>\Purge`) that already exists and is itself admin-only writable: a
+/// directory created under a weaker parent would inherit the parent's write grants and could never be
+/// trusted. An unelevated run never creates it; it still reads an existing admin-only cache (its writes
+/// then fail silently, and the next elevated run fills it).
+pub fn table_cache(
+    sources: Sources<'_>,
+    settings: &Settings,
+) -> (Box<dyn TableCache>, TableCacheKind) {
+    let memory = || -> (Box<dyn TableCache>, TableCacheKind) {
+        (Box::new(MemTableCache::new()), TableCacheKind::Memory)
+    };
+    let Some(dir) = settings.msi_table_dir.as_deref() else {
+        return memory();
+    };
+    let admin_only = |p: &Path| {
+        p.to_str()
+            .is_some_and(|s| sources.fs.is_admin_only_writable(s) == Ok(true))
+    };
+    if sources.sys.elevated()
+        && !dir.is_dir()
+        && dir.parent().and_then(Path::parent).is_some_and(admin_only)
+    {
+        // Failing to create it leaves the memory cache; the next run tries again.
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match DiskTableCache::open(dir, sources.fs) {
+        Some(disk) => (Box::new(disk), TableCacheKind::Disk),
+        None => memory(),
+    }
 }
 
 /// Measures and reports the duration of one step.
@@ -289,7 +341,11 @@ pub fn harvest(
 
     let baseline = baseline_for(sources, settings, &mut warnings, &mut step);
     step.say("harvest: reading roots, Inno log, anchors and the reference snapshot");
-    let mut report = harvest_report(entry, &inv.doc, sources, baseline.as_ref(), kb);
+    let (cache, _) = table_cache(sources, settings);
+    let opts = HarvestOpts {
+        table_cache: Some(cache.as_ref()),
+    };
+    let mut report = harvest_report_with(entry, &inv.doc, sources, baseline.as_ref(), kb, &opts);
     if !sources.sys.elevated() {
         let w = not_elevated_warning("harvest");
         report.fingerprint.warnings.push(w.clone());
@@ -638,7 +694,11 @@ pub fn scan_path(
     let entry = synthetic_entry(&path, &leaf, &facts)?;
     let inv = inventory(sources);
     warnings.extend(inv.warnings.iter().map(|w| format!("inventory: {w}")));
-    let report = harvest_report(&entry, &inv.doc, sources, None, kb);
+    let (cache, _) = table_cache(sources, settings);
+    let opts = HarvestOpts {
+        table_cache: Some(cache.as_ref()),
+    };
+    let report = harvest_report_with(&entry, &inv.doc, sources, None, kb, &opts);
     if report.fingerprint.roots.is_empty() {
         let why = report
             .rejected_roots
@@ -849,8 +909,33 @@ fn run_scan(
 
     let baseline = baseline_for(sources, settings, &mut warnings, &mut step);
 
-    // Scanners.
+    // Scanners. What every scanner shares is read once, before the first (C-SCANEXT): the one
+    // reference walk, the MSI ownership index and the system objects.
     let app = AppIdentityView::from_fingerprint(fp, &env);
+    step.say("scan: reading the references, the MSI ownership and the system objects");
+    let (cache, cache_kind) = table_cache(sources, settings);
+    let ext = ScanExt::build(
+        sources.reg,
+        sources.fs,
+        sources.sys,
+        fp,
+        &app,
+        &inv.doc.entries,
+        &inv.doc.msi_only,
+        Some(cache.as_ref()),
+        OwnershipLimits::default(),
+    );
+    warnings.extend(ext_warnings(&ext));
+    step.done(&format!(
+        "scan: {} reference(s), {} MSI product(s), {} service(s); MSI table cache in {}",
+        ext.ref_hits.as_ref().map_or(0, Vec::len),
+        ext.ownership.stats().products,
+        ext.sysobj.services.len(),
+        match cache_kind {
+            TableCacheKind::Disk => "the data directory",
+            TableCacheKind::Memory => "memory",
+        }
+    ));
     let ctx = ScanCtx {
         reg: sources.reg,
         fs: sources.fs,
@@ -863,6 +948,7 @@ fn run_scan(
         guard: &guard,
         other_apps: &other_apps,
         limits: ScanLimits::default(),
+        ext: &ext,
     };
     let mut candidates = Vec::new();
     let mut per_scanner = Vec::new();
@@ -876,6 +962,24 @@ fn run_scan(
         ));
         per_scanner.push((scanner.id(), found.len()));
         candidates.extend(found);
+    }
+    warnings.extend(
+        ext.take_faults()
+            .into_iter()
+            .map(|f| format!("scan: scanner fault: {f}")),
+    );
+    warnings.extend(
+        ext.take_warnings()
+            .into_iter()
+            .map(|w| format!("scan: {w}")),
+    );
+    let unknown = ext.unknown_ownership_items();
+    if unknown > 0 {
+        warnings.push(format!(
+            "scan: {unknown} item(s) under a Classes key kept from Safe (MsiPackageUnreadable): \
+             the MSI rows of {} product(s) are unknown",
+            ext.ownership.unreadable().len()
+        ));
     }
 
     // Decide, collapse, emit.
@@ -894,6 +998,8 @@ fn run_scan(
         // Candidates also come from registry data, which may spell 8.3 names: keep the refusal on.
         long_names_resolved: false,
         limits: Limits::default(),
+        // The M1b exemption lists, from the fingerprint and fresh queries only (R2a S9).
+        m1b: m1b_lists(sources, fp, &inv),
     };
     let built = build(app_id, candidates.clone(), &decide);
     step.done(&format!(
@@ -907,6 +1013,92 @@ fn run_scan(
         per_scanner,
         warnings,
     })
+}
+
+/// The M1b exemption lists of a plan (C-GUARD, R2a S9): [`M1bDecide::from_facts`] over the fingerprint,
+/// with two fresh queries made now, never anything a candidate or a plan file says:
+///
+/// - `product_known`: Windows Installer's state of the product in every context, the fresh inventory's
+///   list of every user's products, and the product's own user
+///   ([`purge_scan::framework::product_known_in`], R3a B1);
+/// - `bundle_known`: the bundle in the fresh inventory `inv` ([`purge_plan::decide::bundle_known`]); a
+///   hive counts as read when it is loaded and no Uninstall key of it failed to list (an inventory
+///   warning on that hive's Uninstall keys, or on the list of loaded hives for a user, makes it
+///   unknown).
+///
+/// The executor never takes these lists from the plan (a plan file could then name any product or
+/// Package Cache folder): `exec --fp` computes them with this function when the run starts, over the
+/// app's fingerprint and a fresh inventory, and the run journals them in its `settings` record
+/// (`RunSettings::gone_*`), from which its act-time gate, undo and recovery read them
+/// (`GateCtx::set_gone`).
+pub fn m1b_lists(sources: Sources<'_>, fp: &Fingerprint, inv: &Inventory) -> M1bDecide {
+    let loaded = sources.reg.loaded_user_sids().ok();
+    let hive_read = |sid: Option<&str>| -> bool {
+        let unread = |prefix: &str| {
+            inv.warnings.iter().any(|w| {
+                w.location
+                    .get(..prefix.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            })
+        };
+        match sid {
+            None => !unread("HKLM\\"),
+            Some(sid) => {
+                let is_loaded = loaded
+                    .as_ref()
+                    .is_some_and(|l| l.iter().any(|s| s.eq_ignore_ascii_case(sid)));
+                is_loaded
+                    && !inv.warnings.iter().any(|w| w.location == "HKU")
+                    && !unread(&format!("HKU\\{sid}\\"))
+            }
+        }
+    };
+    // R3a B1: Windows Installer answers for the calling user only; the fresh inventory (every user's
+    // products when elevated) and the product's own user decide the rest.
+    let listed =
+        |packed: &str| inventory_lists_product(&inv.doc.entries, &inv.doc.msi_only, packed);
+    M1bDecide::from_facts(
+        fp,
+        &|code| product_known_in(sources.sys, fp, &listed, code),
+        &|bundle| bundle_known(bundle, &fp.app.program_id, &inv.doc.entries, &hive_read),
+    )
+}
+
+/// What the shared scan data could not read, as scan warnings: unknown MSI ownership blocks the
+/// targets it may concern (`MsiPackageUnreadable`), and the user should know why.
+fn ext_warnings(ext: &ScanExt) -> Vec<String> {
+    let stats = ext.ownership.stats();
+    let mut out = Vec::new();
+    // R3a S3: a walk cut by its budget or by unreadable keys may have missed a referrer; the COM
+    // scanners then stay below Tier A, and the user should know why.
+    if !ext.ref_walk_complete() {
+        out.push(
+            "scan: the reference walk did not read every key (budget or unreadable keys); \
+             registrations judged by its hits are not Safe on its word"
+                .to_owned(),
+        );
+    }
+    let unreadable = ext.ownership.unreadable();
+    if !unreadable.is_empty() {
+        out.push(format!(
+            "scan: {} MSI package(s) could not be read; what they own is unknown",
+            unreadable.len()
+        ));
+    }
+    if !stats.incomplete.is_empty() {
+        out.push(format!(
+            "scan: the MSI ownership index is incomplete ({})",
+            stats.incomplete.join(", ")
+        ));
+    }
+    out.extend(stats.errors.iter().map(|e| format!("scan: ownership: {e}")));
+    out.extend(
+        ext.sysobj
+            .errors
+            .iter()
+            .map(|e| format!("scan: system objects: {e}")),
+    );
+    out
 }
 
 /// The canonical form of each directory; ones that do not canonicalise are dropped with a warning.
@@ -1040,8 +1232,10 @@ pub fn other_apps(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purge_model::Target;
     use purge_source::fixture::Fixture;
-    use purge_source::types::RegData;
+    use purge_source::types::{KeyInfo, MsiProductState, RegData, RegValue, SourceResult};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const SID: &str = GuardEnv::SAMPLE_SID;
 
@@ -1057,6 +1251,228 @@ mod tests {
             "pipeline.rs calls a scanner directly"
         );
         assert_eq!(source.matches(&driver).count(), 1);
+    }
+
+    /// A registry that counts the reads of one key's values. Its walker is the trait's default, which
+    /// reads through the counted methods.
+    struct Counting<'f> {
+        inner: &'f Fixture,
+        probe: &'static str,
+        reads: AtomicUsize,
+        /// Listings of the subkeys of [`purge_index::ownership::USERDATA`]: one per ownership build.
+        userdata_lists: AtomicUsize,
+    }
+
+    impl RegistrySource for Counting<'_> {
+        fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+            self.inner.key_info(key)
+        }
+        fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+            if key.eq_ignore_ascii_case(purge_index::ownership::USERDATA) {
+                self.userdata_lists.fetch_add(1, Ordering::SeqCst);
+            }
+            self.inner.subkeys(key)
+        }
+        fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+            if key.eq_ignore_ascii_case(self.probe) {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+            }
+            self.inner.values(key)
+        }
+        fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+            self.inner.value(key, name)
+        }
+        fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+            self.inner.loaded_user_sids()
+        }
+        fn current_control_set(&self) -> SourceResult<u32> {
+            self.inner.current_control_set()
+        }
+    }
+
+    const PROBE: &str = r"HKLM\SOFTWARE\Acme Holder\Quiet";
+    const REFERS: &str = r"HKLM\SOFTWARE\Acme Holder\Settings";
+    const UNINSTALL: &str = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Probe";
+
+    /// A machine with one app, Probe, in `C:\Program Files\Probe`.
+    fn probe_machine() -> purge_source::fixture::FixtureBuilder {
+        Fixture::builder()
+            .os("Professional", 26340, 9882)
+            .user_sid(SID)
+            .env("SYSTEMDRIVE", "C:")
+            .env("WINDIR", r"C:\Windows")
+            .env("PROGRAMFILES", r"C:\Program Files")
+            .env("PROGRAMDATA", r"C:\ProgramData")
+            .sz(
+                r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList",
+                "ProfilesDirectory",
+                r"C:\Users",
+            )
+            .volume(r"C:\", Some(0x1234_5678), true, "NTFS")
+            .dir(r"C:\Program Files\Probe")
+            .file(r"C:\Program Files\Probe\probe.exe", 10)
+            .sz(UNINSTALL, "DisplayName", "Probe")
+            .sz(UNINSTALL, "InstallLocation", r"C:\Program Files\Probe")
+            .sz(
+                UNINSTALL,
+                "DisplayIcon",
+                r"C:\Program Files\Probe\probe.exe",
+            )
+            .sz(
+                UNINSTALL,
+                "UninstallString",
+                r"C:\Program Files\Probe\uninst.exe",
+            )
+            .key(&format!(r"HKU\{SID}\Software"))
+    }
+
+    /// The scan makes the reference walk once and builds the MSI ownership index once (C-SCANEXT): the
+    /// one `ScanExt::build` of the scan walks and lists `UserData`; every scanner reads its results. A
+    /// key only the walk reads (it refers to nothing, so no scanner looks at it again) is read once in
+    /// the whole scan; next to it, a value that refers to the app still reaches REF-ANY.
+    #[test]
+    fn pipeline_one_reference_walk_and_one_ownership_build() {
+        let components = format!(
+            r"{}\S-1-5-18\Components\0123456789ABCDEF0123456789ABCDEF",
+            purge_index::ownership::USERDATA
+        );
+        let fixture = probe_machine()
+            .sz(PROBE, "Tool", r"C:\Tools\other.exe")
+            .sz(REFERS, "Tool", r"C:\Program Files\Probe\probe.exe")
+            .sz(
+                &components,
+                "00000000000000000000000000000001",
+                r"C:\Program Files\Other\o.exe",
+            )
+            .build();
+        let counting = Counting {
+            inner: &fixture,
+            probe: PROBE,
+            reads: AtomicUsize::new(0),
+            userdata_lists: AtomicUsize::new(0),
+        };
+        let sources = Sources {
+            reg: &counting,
+            fs: &fixture,
+            sys: &fixture,
+        };
+        let settings = Settings::default();
+        let harvested = harvest(sources, "Probe", Kb::shipped(), &settings, &mut |_| {}).unwrap();
+        let fp = harvested.report.fingerprint;
+        counting.reads.store(0, Ordering::SeqCst);
+        counting.userdata_lists.store(0, Ordering::SeqCst);
+        let scanned = scan(sources, &fp, ScanMode::Forced, None, &settings, &mut |_| {}).unwrap();
+        assert_eq!(
+            counting.reads.load(Ordering::SeqCst),
+            1,
+            "the probe key is read by one walk"
+        );
+        assert_eq!(
+            counting.userdata_lists.load(Ordering::SeqCst),
+            1,
+            "the ownership index is built once"
+        );
+        assert_eq!(scanned.per_scanner.len(), all_scanners().len());
+        // The walk's hit reached REF-ANY: the value is a candidate.
+        let targets: Vec<&Target> = scanned.candidates.iter().map(|c| &c.target).collect();
+        assert!(
+            targets.iter().any(|t| matches!(
+                t,
+                Target::RegValue { path, name } if path.eq_ignore_ascii_case(REFERS) && name == "Tool"
+            )),
+            "{targets:#?}"
+        );
+    }
+
+    /// A record of an MSI product of Probe in the fingerprint (per-machine).
+    fn probe_msi(code: &str) -> purge_model::MsiFacts {
+        purge_model::MsiFacts {
+            product_code: code.to_owned(),
+            packed_code: purge_index::ownership::pack_guid(code).unwrap(),
+            upgrade_code: None,
+            context: purge_model::MsiContext::Machine,
+            user_sid: None,
+            local_package: None,
+            package_readable: false,
+            components: Vec::new(),
+            registry_rows: Vec::new(),
+            services: Vec::new(),
+            source_dirs: Vec::new(),
+            custom_actions: 0,
+            unresolved_rows: 0,
+        }
+    }
+
+    /// The MSI exemptions (the `gone_*` lists) open only when Windows Installer answers that the product
+    /// is gone; a product whose state cannot be read keeps them closed.
+    #[test]
+    fn pipeline_exemptions_closed_when_product_state_unknown() {
+        use purge_model::MsiContext::{Machine, UserManaged, UserUnmanaged};
+        const CODE: &str = "{0A0A0A0A-1111-2222-3333-444444444444}";
+        let settings = Settings::default();
+        let lists_of = |fixture: &Fixture| {
+            let sources = Sources::of(fixture);
+            let mut fp = harvest(sources, "Probe", Kb::shipped(), &settings, &mut |_| {})
+                .unwrap()
+                .report
+                .fingerprint;
+            fp.msi.push(probe_msi(CODE));
+            m1b_lists(sources, &fp, &inventory(sources))
+        };
+
+        // No MSI answer at all (the product list is not captured): unknown, closed.
+        let lists = lists_of(&probe_machine().with(|f| f.set_msi_products(None)).build());
+        assert!(lists.gone_msi_products().is_empty(), "{lists:?}");
+
+        // Every context answers "unknown" and nothing lists it: gone, open for this product only.
+        let gone = probe_machine()
+            .msi_state(CODE, Machine, MsiProductState::Unknown)
+            .msi_state(CODE, UserManaged, MsiProductState::Unknown)
+            .msi_state(CODE, UserUnmanaged, MsiProductState::Unknown)
+            .build();
+        let lists = lists_of(&gone);
+        let packed = purge_index::ownership::pack_guid(CODE).unwrap();
+        assert_eq!(lists.gone_msi_products(), [packed]);
+
+        // Still installed in one context: closed.
+        let installed = probe_machine()
+            .msi_state(CODE, Machine, MsiProductState::Default)
+            .msi_state(CODE, UserUnmanaged, MsiProductState::Unknown)
+            .build();
+        let lists = lists_of(&installed);
+        assert!(lists.gone_msi_products().is_empty(), "{lists:?}");
+    }
+
+    /// An unelevated run keeps the MSI table cache in memory and creates no directory, even when the
+    /// settings name one. Elevated, it still creates none under a data root that is not admin-only.
+    #[test]
+    fn pipeline_unelevated_uses_memory_cache_and_creates_no_dir() {
+        let base = std::env::temp_dir().join(format!("purge-tc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("Purge").join("fp").join("msitables");
+        let settings = Settings {
+            msi_table_dir: Some(dir.clone()),
+            ..Settings::default()
+        };
+        let unelevated = probe_machine().elevated(false).build();
+        let (_, kind) = table_cache(Sources::of(&unelevated), &settings);
+        assert_eq!(kind, TableCacheKind::Memory);
+        assert!(
+            !base.exists(),
+            "an unelevated run created {}",
+            dir.display()
+        );
+
+        let elevated = probe_machine().elevated(true).build();
+        let (_, kind) = table_cache(Sources::of(&elevated), &settings);
+        assert_eq!(kind, TableCacheKind::Memory);
+        assert!(
+            !base.exists(),
+            "created under a data root that is not admin-only"
+        );
+
+        let (_, kind) = table_cache(Sources::of(&unelevated), &Settings::default());
+        assert_eq!(kind, TableCacheKind::Memory);
     }
 
     fn entry(key: &str, name: &str) -> InventoryEntry {

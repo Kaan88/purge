@@ -27,8 +27,8 @@ use purge_guard::deny::DenyList;
 use purge_model::exec::op::{Inverse, ItemOutcome, OpId};
 use purge_model::exec::session::{SessionId, SessionSummary};
 use purge_model::{
-    Action, AppRef, Band, Candidate, CandidateId, Category, Decision, Harm, Origin, Reversibility,
-    ScanMode, Target, Tool,
+    Action, AppRef, Band, Candidate, CandidateId, Category, Decision, FileTime, Harm, Origin,
+    Reversibility, ScanMode, Target, Tool,
 };
 use purge_plan::emit::{ScanDoc, ScanSchema};
 use purge_win::appx::{AppxPackage, SignatureKind};
@@ -57,6 +57,12 @@ pub fn unique(tag: &str) -> String {
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+/// The current time as a FILETIME.
+pub fn filetime_now() -> FileTime {
+    let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    FileTime(116_444_736_000_000_000 + u64::try_from(since.as_nanos() / 100).unwrap())
 }
 
 /// The `\\?\` form of an absolute path.
@@ -417,6 +423,29 @@ impl TestKey {
         out
     }
 
+    /// Puts the test key back to `snap` (a [`TestKey::snap`] of it): every key below it is removed and
+    /// its values deleted, then the keys of the snapshot are created again, parent-first, with their
+    /// class and volatility and inherited security (as [`TestKey::create`] leaves it), and every key's
+    /// values set.
+    pub fn restore_snap(&self, snap: &[KeySnap]) {
+        let root = self.open("", KeyAccess::DELETE | KeyAccess::SET_VALUE);
+        for sub in root.subkey_names().unwrap() {
+            Self::nuke(&root.open_subkey(&sub, KeyAccess::DELETE).unwrap());
+        }
+        for value in root.values().unwrap() {
+            root.delete_value(&value.name).unwrap();
+        }
+        for key in snap {
+            if !key.rel.is_empty() {
+                let (parent, leaf) = key.rel.rsplit_once('\\').unwrap_or(("", &key.rel));
+                self.create_with(parent, leaf, &key.class, None, key.volatile);
+            }
+            for (name, ty, data) in &key.values {
+                self.set(&key.rel, name, *ty, data);
+            }
+        }
+    }
+
     fn nuke(key: &WKey) {
         for sub in key.subkey_names().unwrap_or_default() {
             if let Ok(child) = key.open_subkey(&sub, KeyAccess::DELETE) {
@@ -436,6 +465,37 @@ impl Drop for TestKey {
             Self::nuke(&root);
         }
     }
+}
+
+/// A registry snapshot as JSON, for a child process to hand to its parent.
+pub fn snap_json(snap: &[KeySnap]) -> String {
+    let keys: Vec<serde_json::Value> = snap
+        .iter()
+        .map(|key| {
+            serde_json::json!({
+                "rel": key.rel,
+                "class": key.class,
+                "volatile": key.volatile,
+                "sddl": key.sddl,
+                "values": key.values,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(keys).to_string()
+}
+
+/// The snapshot [`snap_json`] wrote.
+pub fn snap_from_json(text: &str) -> Vec<KeySnap> {
+    let keys: Vec<serde_json::Value> = serde_json::from_str(text).unwrap();
+    keys.into_iter()
+        .map(|key| KeySnap {
+            rel: key["rel"].as_str().unwrap().to_owned(),
+            class: key["class"].as_str().unwrap().to_owned(),
+            volatile: key["volatile"].as_bool().unwrap(),
+            sddl: key["sddl"].as_str().unwrap().to_owned(),
+            values: serde_json::from_value(key["values"].clone()).unwrap(),
+        })
+        .collect()
 }
 
 /// The bytes of a NUL-terminated UTF-16 string.
@@ -592,6 +652,9 @@ pub struct Rig {
     pub packages: FakePackages,
     pub rm: FakeRm,
     pub pending: MemoryPendingRenames,
+    /// Whether recovery takes Windows to have restarted since the run began (a power loss): the
+    /// system's start it is given is then now, else long before any run.
+    pub restarted: bool,
     pub s: Scratch,
 }
 
@@ -614,6 +677,7 @@ impl Rig {
             packages: FakePackages::new(&s.path("package.installed")),
             rm: FakeRm,
             pending: MemoryPendingRenames::with_pairs(&[]),
+            restarted: false,
             s,
         }
     }
@@ -659,8 +723,14 @@ impl Rig {
     }
 
     pub fn recover_env(&mut self) -> RecoverEnv<'_> {
+        let system_started = if self.restarted {
+            filetime_now()
+        } else {
+            FileTime(0)
+        };
         RecoverEnv {
             retry: fast_retry(),
+            system_started: Some(system_started),
             ..RecoverEnv::new(
                 &self.roots,
                 &self.deny,
@@ -775,6 +845,7 @@ pub fn safe(id: &str, target: Target, action: Action) -> Candidate {
         size_bytes: None,
         child_count: None,
         item_fp: None,
+        object_fp: None,
         decision: Some(Decision {
             band: Band::Safe,
             preselected: true,

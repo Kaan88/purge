@@ -40,7 +40,9 @@ verbs:
 executor verbs (headless, without the consent dialog: only a rig-exec build of the VM rig runs them;
 a normal build refuses them with exit code 5):
   exec --plan <plan.json> --confirm <hash> [--select <ids.json>] [--allow-irreversible]
-       [--restore-point off|high-risk|always] [-o <report.json>]
+       [--restore-point off|high-risk|always] [--fp <fingerprint.json>] [-o <report.json>]
+       --fp gives the app's roots and gone installer records: without it no service, scheduled
+       task or firewall rule is deleted.
   undo --session <id> [--items <ids.json>] [--confirm <plan_hash>] [-o <undo.json>]
   journal recover
   journal resume [--session <id>]
@@ -199,7 +201,7 @@ pub struct FromTargetsArgs {
 }
 
 /// `exec --plan <plan.json> --confirm <hash> [--select <ids.json>] [--allow-irreversible]
-/// [--restore-point m] [-o <report.json>]`.
+/// [--restore-point m] [--fp <fingerprint.json>] [-o <report.json>]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecArgs {
     /// The plan file; its sidecar is read next to it.
@@ -212,6 +214,9 @@ pub struct ExecArgs {
     pub allow_irreversible: bool,
     /// When to ask for a restore point.
     pub restore_point: RestorePointArg,
+    /// The app's fingerprint (`purge.fp/0`, harvest's output): the run's program roots and its M1b
+    /// exemption lists come from it. Without it, no object is deleted and those exemptions stay closed.
+    pub fp: Option<PathBuf>,
     /// Where the `purge.exec/1` report goes besides stdout.
     pub out: Option<PathBuf>,
 }
@@ -689,7 +694,7 @@ fn exec(args: &[String]) -> Result<ExecArgs, String> {
     let p = options(
         "exec",
         args,
-        &["plan", "confirm", "select", "restore-point", "out"],
+        &["plan", "confirm", "select", "restore-point", "fp", "out"],
         &["allow-irreversible"],
     )?;
     no_positional("exec", &p)?;
@@ -715,6 +720,7 @@ fn exec(args: &[String]) -> Result<ExecArgs, String> {
         select: p.path("select"),
         allow_irreversible: p.flag("allow-irreversible"),
         restore_point,
+        fp: p.path("fp"),
         out: p.path("out"),
     })
 }
@@ -849,7 +855,7 @@ mod tests {
         assert_eq!(
             exec_verb(
                 "exec --plan p.json --confirm abc --select s.json --allow-irreversible \
-                 --restore-point always -o r.json"
+                 --restore-point always --fp fp.json -o r.json"
             ),
             ExecVerb::Exec(ExecArgs {
                 plan: "p.json".into(),
@@ -857,6 +863,7 @@ mod tests {
                 select: Some("s.json".into()),
                 allow_irreversible: true,
                 restore_point: RestorePointArg::Always,
+                fp: Some("fp.json".into()),
                 out: Some("r.json".into())
             })
         );
@@ -868,6 +875,7 @@ mod tests {
                 select: None,
                 allow_irreversible: false,
                 restore_point: RestorePointArg::HighRisk,
+                fp: None,
                 out: None
             })
         );

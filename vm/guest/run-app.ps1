@@ -11,10 +11,16 @@
 # arp0/lists0/snap0, install (upgrade_from first), detect, launch, post-apps, plant-post, lists1,
 # [engine-inventory-1], snap1, [engine-harvest, engine-scan-live], uninstall, lists2, [engine-inventory-2], snap2,
 # edge-check, entries, [engine-scan, engine-scan-repeat].
+# M1b options (__M1B__, RIG.md section 12) add msi-tables-1 / msi-tables-2 right after snap1 / snap2 and, with traps,
+# TrapB as the first pre-app plus m1b-traps-pre (before lists1), m1b-traps-between (before uninstall) and
+# m1b-traps-post (after uninstall, before lists2).
 $Id = '__ID__'
 $Run = '__RUN__'
 $EngineFlag = '__ENGINE__'
 $ExtraFlag = '__EXTRA__'
+# M1b options (rig.ps1 ConvertTo-M1bOpts, RIG.md section 12): base64 of {msi_tables, traps, trap_a, trap_b} as UTF-8
+# JSON; empty or unreplaced = none (the M0 / M1a behaviour).
+$M1bFlag = '__M1B__'
 # Checked before anything is loaded or created. Case-sensitive, and the placeholders are built by
 # concatenation so the host's .Replace('__ID__', ...) cannot rewrite them.
 if ($Id -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or $Id -eq ('__' + 'ID__')) {
@@ -28,6 +34,11 @@ if ($Run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') {
 $Engine = ($EngineFlag -eq '1')
 # Unreplaced (an older host) = no extra checks; they need engine mode.
 $Extra = ($Engine -and $ExtraFlag -eq '1')
+$M1b = $null
+if ($M1bFlag -and $M1bFlag -ne ('__' + 'M1B__')) {
+    try { $M1b = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($M1bFlag)) | ConvertFrom-Json }
+    catch { Write-Host ("run-app.ps1: unreadable M1b options: {0}" -f $_.Exception.Message); exit 2 }
+}
 . C:\cr\guest\riglib.ps1
 . C:\cr\guest\apps.ps1
 # The plant functions of the x0 variants (apps.ps1 plant_pre / plant_post).
@@ -68,6 +79,28 @@ if ($Def) {
     $PostIds = @(@($Def.post) | Where-Object { $_ })
     $UpgradeFrom = $Def.upgrade_from
     $PlantPre = $Def.plant_pre; $PlantPost = $Def.plant_post
+}
+# M1b traps (guest\m1b-traps.ps1): TrapB is installed before snap 0 like any pre-app, unless the app already has it.
+if ($M1b -and $M1b.traps) {
+    $S.m1b = [ordered]@{ msi_tables = [bool]$M1b.msi_tables; traps = $true; trap_a = "$($M1b.trap_a)"; trap_b = "$($M1b.trap_b)"; tables = @() }
+    if ($PreIds -notcontains "$($M1b.trap_b)" -and "$($M1b.trap_b)" -ne $Id) { $PreIds = @("$($M1b.trap_b)") + $PreIds }
+} elseif ($M1b) {
+    $S.m1b = [ordered]@{ msi_tables = [bool]$M1b.msi_tables; traps = $false; tables = @() }
+}
+$M1bTraps = 'C:\cr\guest\m1b-traps.ps1'
+# Runs one phase of guest\m1b-traps.ps1 in this process (its log lines go to run.log); throws when a case failed.
+function Invoke-M1bTrapPhase([string]$Step) {
+    if (-not (Test-Path -LiteralPath $M1bTraps)) { throw "missing $M1bTraps (Push-Tools copies vm\guest\*.ps1)" }
+    $global:LASTEXITCODE = 0
+    & $M1bTraps -Phase $Step -OutDir $Dir -TrapA "$($M1b.trap_a)" -TrapB "$($M1b.trap_b)" -RunLog (Join-Path $Dir 'run.log')
+    if ($LASTEXITCODE -ne 0) { throw "m1b-traps $Step`: a case failed (exit $LASTEXITCODE, see m1b-traps-planted.json)" }
+}
+# Writes msi-tables-<run>-<phase>.json beside snap <phase> (guest\m1b-msi-tables.ps1).
+function Save-M1bMsiTables([string]$Phase) {
+    $f = Join-Path $Dir "msi-tables-$Run-$Phase.json"
+    & 'C:\cr\guest\m1b-msi-tables.ps1' -Out $f
+    if (-not (Test-Path -LiteralPath $f)) { throw "no $f written" }
+    $S.m1b.tables += (Split-Path -Leaf $f)
 }
 if ($PreIds.Count) { $S.pre = New-Object System.Collections.ArrayList }
 if ($PostIds.Count) { $S.post = New-Object System.Collections.ArrayList }
@@ -428,6 +461,8 @@ foreach ($r in @($S.post)) {
     Save-Run
 }
 if ($PlantPost) { Phase 'plant-post' { Invoke-Plant 'plant-post' $PlantPost } $S; Save-Run }
+# M1b scan traps, pre plants: after the launch, before lists 1 / snap 1 and the harvest (RIG.md section 12).
+if ($M1b -and $M1b.traps) { Phase 'm1b-traps-pre' { Invoke-M1bTrapPhase 'pre' } $S; Save-Run }
 
 Phase 'lists1' { Lists $Run 1 } $S
 # Engine inventory right after the lists of the same point (RIG.md §4a): it reads the Uninstall keys and the MSI
@@ -442,6 +477,7 @@ if ($Engine) {
     } $S
 }
 Phase 'snap1' { Snap $Run 1 } $S
+if ($M1b -and $M1b.msi_tables) { Phase 'msi-tables-1' { Save-M1bMsiTables 1 } $S }
 Save-Run
 
 # Inno Setup apps: copy the real uninstall log(s) at the snap1 point into the run dir as parser fixtures
@@ -484,6 +520,8 @@ if ($Engine) {
         Save-Run
     }
 }
+# M1b scan traps, between step: after the harvest, before the uninstall (com-shared-class is re-pointed to TrapB).
+if ($M1b -and $M1b.traps) { Phase 'm1b-traps-between' { Invoke-M1bTrapPhase 'between' } $S; Save-Run }
 
 # --------------------------------------------------------------------------------------------- uninstall
 Phase 'uninstall' {
@@ -559,6 +597,8 @@ Phase 'uninstall' {
     if ($Engine -and $engineError) { throw $engineError }
 } $S
 Save-Run
+# M1b scan traps, post plants: after the uninstall, before lists 2 / snap 2 and the scan.
+if ($M1b -and $M1b.traps) { Phase 'm1b-traps-post' { Invoke-M1bTrapPhase 'post' } $S; Save-Run }
 
 Phase 'lists2' { Lists $Run 2 } $S
 if ($Engine) {
@@ -567,6 +607,7 @@ if ($Engine) {
     } $S
 }
 Phase 'snap2' { Snap $Run 2 } $S
+if ($M1b -and $M1b.msi_tables) { Phase 'msi-tables-2' { Save-M1bMsiTables 2 } $S }
 # Proof that the Edge pause held (truth/m1a.sh compares versions_before / versions_end).
 Phase 'edge-check' {
     if (-not $S.edge_pause) { throw 'no edge_pause record' }

@@ -1,0 +1,59 @@
+{
+  "id": "python312-with-313",
+  "include": [
+    "_os.json",
+    "python.json"
+  ],
+  "note": "M1b: Python 3.13.17 installed before snap 0 (pre), then 3.12.7 installed and removed. 3.13 and the launcher stay. UNSURE: 3.13 installs the newer launcher before snap 0, so the launcher items may not be in the diff at all (gate K5 expects at least 29 kept_owner items here; check on the first run).",
+  "rules": [
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\\\.(py|pyc|pyd|pyo|pyw|pyz|pyzw)(\\\\[^|]*)?(\\|.*)?$",
+      "why": ".py* extension keys of the Python Launcher, still installed (Python 3.13, installed before snap 0). UNSURE (M1b, no capture yet).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\Python\\.(File|NoConFile|CompiledFile|ArchiveFile|NoConArchiveFile|Extension)(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Python.* ProgIDs of the Python Launcher, still installed (Python 3.13, installed before snap 0). UNSURE (M1b, no capture yet).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\CLSID\\\\\\{BEA218D2-6950-497B-9434-61683EC065FE\\}(\\\\[^|]*)?(\\|.*)?$",
+      "why": "The launcher's shell drop handler class (CLSID of the 3.12.7 launcher), still installed (Python 3.13, installed before snap 0). UNSURE.",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\WOW6432Node\\\\Python(\\\\[^|]*)?(\\|.*)?$",
+      "why": "PyLauncher settings of the 32-bit-view launcher keys, still installed (Python 3.13, installed before snap 0). UNSURE.",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^P:C:\\\\Windows\\\\(pyw?\\.exe|pyshellext\\.amd64\\.dll)$",
+      "why": "py.exe, pyw.exe and the shell extension in the Windows directory: launcher files, still installed (Python 3.13, installed before snap 0).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^P:C:\\\\ProgramData\\\\Package Cache$",
+      "why": "Burn's shared package cache root; it still holds the launcher's cached package (Python 3.13, installed before snap 0).",
+      "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Python\\\\PythonCore(\\\\[^|]*)?(\\|.*)?$",
+      "why": "PythonCore container: Python 3.13 (still installed) keeps its 3.13 subkey in it. Only the container and shared values; the 3.12 subkey is matched by the rule below first. UNSURE.",
+      "gen": true
+    },
+    {
+      "label": "leftover",
+      "first": true,
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Python\\\\PythonCore\\\\3\\.12(\\\\[^|]*)?(\\|.*)?$",
+      "why": "The removed 3.12's own PythonCore subkey.",
+      "gen": true
+    }
+  ]
+}

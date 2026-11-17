@@ -1,0 +1,29 @@
+{
+  "id": "temurin",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer(\\\\(Products|Features|Components|UpgradeCodes|Dependencies|Patches))?$",
+      "why": "Windows Installer registration containers created by the first MSI install on a clean base and left empty; owned by the Installer service, not the product."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\(Folders|UpgradeCodes|Products|Components|UserData|UserData\\\\S-1-5-18(\\\\(Products|Components))?)$",
+      "why": "Windows Installer machine-state containers created on first MSI use; the service's own keys."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows NT\\\\CurrentVersion\\\\SystemRestore$",
+      "why": "msiexec's restore-point bookkeeping key (created on the first MSI transaction); Windows state."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\[^\\\\]+\\.pf$",
+      "why": "SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state."
+    }
+  ],
+  "note": "Eclipse Temurin JDK 21.0.13+9 x64 MSI, default features (M1b, M1B-RIG-HOST). Not launched (no GUI exe). Hand rules: the MSI containers only. Not frozen until the two m1b-freeze runs are reviewed."
+}

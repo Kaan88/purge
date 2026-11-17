@@ -1,0 +1,976 @@
+{
+ "schema": "purge.m1b.spike/1",
+ "host": {
+  "caption": "Microsoft Windows 11 Enterprise LTSC Evaluation",
+  "edition": "EnterpriseSEval",
+  "version": "10.0.26100",
+  "build": "26100",
+  "ubr": 1742,
+  "display_version": "24H2",
+  "os_build": "26100.1742",
+  "powershell": "5.1.26100.1591"
+ },
+ "vm": "Inbound-Win11-Test, snapshot m2-base",
+ "run": "m1b-spike-r1",
+ "firewall": {
+  "method": "cim_create",
+  "method_detail": "wmi_context: IWbemServices::PutInstance(WBEM_FLAG_CREATE_ONLY) of MSFT_NetFirewallRule.SpawnInstance with InstanceID and the rule properties; filters (Program, Service, Protocol, LocalPort, RemotePort, LocalAddress, RemoteAddress, InterfaceType, IcmpType) as IWbemContext values beside PolicyStore=PersistentStore",
+  "exact": true,
+  "exact_by_method": {
+   "wmi_context": true,
+   "mi_options": false,
+   "cim_filters": false,
+   "new_rule_name": true
+  },
+  "delete_api": "IWbemServices::ExecQuery(\"SELECT * FROM MSFT_NetFirewallRule WHERE InstanceID = '<id>'\") + DeleteInstance, namespace ROOT\\StandardCimv2, IWbemContext PolicyStore=PersistentStore",
+  "cases": [
+   {
+    "id": "{dee51bba-69c3-4c90-9f22-faf95c857815}",
+    "case": "fw1-program",
+    "name_equal": true,
+    "same_rule": true,
+    "diff": [],
+    "raw_equal": true,
+    "version": "v2.33",
+    "delete_matched": 1,
+    "unmapped_fields": [],
+    "original": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|App=C:\\Program Files\\PurgeSpike\\app1.exe|Name=PurgeSpike F1 program|Defer=User|",
+    "by_method": {
+     "wmi_context": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "mi_options": {
+      "ok": false,
+      "name_equal": false,
+      "same_rule": false,
+      "raw_equal": false,
+      "diff": [],
+      "error": "MI InvalidParameter/4 Invalid parameter"
+     },
+     "cim_filters": {
+      "ok": false,
+      "name_equal": false,
+      "same_rule": false,
+      "raw_equal": false,
+      "diff": [],
+      "error": "WBEM Failed Generic failure"
+     },
+     "new_rule_name": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     }
+    }
+   },
+   {
+    "id": "{a0e87480-c4e8-4513-b752-0673b021f091}",
+    "case": "fw2-port",
+    "name_equal": true,
+    "same_rule": true,
+    "diff": [],
+    "raw_equal": true,
+    "version": "v2.33",
+    "delete_matched": 1,
+    "unmapped_fields": [],
+    "original": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=8080|LPort2_10=8090-8095|Name=PurgeSpike F2 port|",
+    "by_method": {
+     "wmi_context": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "mi_options": {
+      "ok": false,
+      "name_equal": false,
+      "same_rule": false,
+      "raw_equal": false,
+      "diff": [],
+      "error": "MI InvalidParameter/4 Invalid parameter"
+     },
+     "cim_filters": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "new_rule_name": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     }
+    }
+   },
+   {
+    "id": "{e64c1b72-5c3f-4f66-bf42-96fa70088d3c}",
+    "case": "fw3-remote-address-list",
+    "name_equal": true,
+    "same_rule": true,
+    "diff": [],
+    "raw_equal": true,
+    "version": "v2.33",
+    "delete_matched": 1,
+    "unmapped_fields": [],
+    "original": "v2.33|Action=Block|Active=TRUE|Dir=Out|Protocol=17|RPort=53|RA4=LocalSubnet|RA6=LocalSubnet|RA4=192.168.1.0/255.255.255.0|RA4=10.0.0.1|RA4=10.1.1.1-10.1.1.9|RA6=fe80::1|Name=PurgeSpike F3 remote|",
+    "by_method": {
+     "wmi_context": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "mi_options": {
+      "ok": false,
+      "name_equal": false,
+      "same_rule": false,
+      "raw_equal": false,
+      "diff": [],
+      "error": "MI InvalidParameter/4 Invalid parameter"
+     },
+     "cim_filters": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "new_rule_name": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     }
+    }
+   },
+   {
+    "id": "{2ac06fc7-de80-4021-b1c9-27220b311d6e}",
+    "case": "fw4-service",
+    "name_equal": true,
+    "same_rule": true,
+    "diff": [],
+    "raw_equal": true,
+    "version": "v2.33",
+    "delete_matched": 1,
+    "unmapped_fields": [],
+    "original": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=9000|App=%SystemRoot%\\System32\\svchost.exe|Svc=PurgeSpikeS1|Name=PurgeSpike F4 service|",
+    "by_method": {
+     "wmi_context": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "mi_options": {
+      "ok": false,
+      "name_equal": false,
+      "same_rule": false,
+      "raw_equal": false,
+      "diff": [],
+      "error": "MI InvalidParameter/4 Invalid parameter"
+     },
+     "cim_filters": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "new_rule_name": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     }
+    }
+   },
+   {
+    "id": "{40e45c46-b06e-4717-8b26-42aa56c07fc4}",
+    "case": "fw5-interface-type-profile",
+    "name_equal": true,
+    "same_rule": true,
+    "diff": [],
+    "raw_equal": true,
+    "version": "v2.33",
+    "delete_matched": 1,
+    "unmapped_fields": [],
+    "original": "v2.33|Action=Allow|Active=FALSE|Dir=In|Profile=Private|Profile=Public|IFType=Wireless|IFType=RemoteAccess|App=C:\\Program Files\\PurgeSpike\\app5.exe|Name=PurgeSpike F5 iftype|",
+    "by_method": {
+     "wmi_context": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "mi_options": {
+      "ok": false,
+      "name_equal": false,
+      "same_rule": false,
+      "raw_equal": false,
+      "diff": [],
+      "error": "MI InvalidParameter/4 Invalid parameter"
+     },
+     "cim_filters": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "new_rule_name": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     }
+    }
+   },
+   {
+    "id": "{bea10bad-c93b-4d6d-a89f-8682fb6c5d17}",
+    "case": "fw6-group-description",
+    "name_equal": true,
+    "same_rule": true,
+    "diff": [],
+    "raw_equal": true,
+    "version": "v2.33",
+    "delete_matched": 1,
+    "unmapped_fields": [],
+    "original": "v2.33|Action=Allow|Active=TRUE|Dir=Out|App=C:\\Program Files\\PurgeSpike\\app6.exe|Name=PurgeSpike F6 group|Desc=Purge spike rule 6: a=b, c|EmbedCtxt=PurgeSpike Group|",
+    "by_method": {
+     "wmi_context": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "mi_options": {
+      "ok": false,
+      "name_equal": false,
+      "same_rule": false,
+      "raw_equal": false,
+      "diff": [],
+      "error": "MI InvalidParameter/4 Invalid parameter"
+     },
+     "cim_filters": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     },
+     "new_rule_name": {
+      "ok": true,
+      "name_equal": true,
+      "same_rule": true,
+      "raw_equal": true,
+      "diff": [],
+      "error": null
+     }
+    }
+   }
+  ],
+  "duplicate_create": {
+   "id": "{dee51bba-69c3-4c90-9f22-faf95c857815}",
+   "tries": {
+    "wmi_context": {
+     "ok": false,
+     "error": "WBEM AlreadyExists Object or property already exists",
+     "value_unchanged": true,
+     "instances": 1
+    },
+    "mi_options": {
+     "ok": false,
+     "error": "MI InvalidParameter/4 Invalid parameter",
+     "value_unchanged": true,
+     "instances": 1
+    },
+    "new_rule_name": {
+     "ok": false,
+     "error": "MI AlreadyExists/11 Cannot create a file when that file already exists.",
+     "value_unchanged": true,
+     "instances": 1
+    }
+   }
+  },
+  "reread_stable": true,
+  "reboot_stable": true
+ },
+ "task": {
+  "exact": true,
+  "normalise": [],
+  "unexplained_differences": [],
+  "api": "capture: IRegisteredTask::get_Xml + GetSecurityDescriptor(OWNER|GROUP|DACL); delete: ITaskFolder::DeleteTask(name, 0); re-create: ITaskFolder::RegisterTask(name, xml, TASK_CREATE, user=VT_EMPTY, password=VT_EMPTY, TASK_LOGON_NONE, sddl)",
+  "register_mode": "xml_only",
+  "register_mode_note": "RegisterTask(name, xml, TASK_CREATE, VT_EMPTY, VT_EMPTY, TASK_LOGON_NONE) without the sddl argument: the XML carries RegistrationInfo/SecurityDescriptor when the task had one. Passing the GetSecurityDescriptor SDDL (with_getsd_sddl) is not exact: it adds that element to the XML and stores the SD with the AI flag and the explicit ACE moved before the inherited ones.",
+  "taskcache_regenerated": [
+   "Tasks\\{id}|DynamicInfo",
+   "Tasks\\{id}|Hash",
+   "Tasks\\{id}|Triggers",
+   "Tree|Id",
+   "Tree|SD"
+  ],
+  "taskcache_note": "Task Scheduler regenerates these TaskCache values on every registration of identical XML (Tree Id = new task GUID and Tasks\\{id} key name, DynamicInfo = registration time, Hash, Triggers bytes); they are outside the task fidelity measure (XML + SDDL) and must be ignored by an execdiff of the TaskCache.",
+  "cases": [
+   {
+    "path": "\\PurgeSpikeT1",
+    "case": "task1-exec",
+    "register_error": null,
+    "xml_equal": true,
+    "sddl_equal": true,
+    "enabled_equal": true,
+    "diff": [],
+    "sddl_before": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)",
+    "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)",
+    "file_equal": false,
+    "taskcache_id_equal": false,
+    "taskcache_diff": [
+     "Tasks\\{id}|DynamicInfo",
+     "Tasks\\{id}|Hash",
+     "Tasks\\{id}|Triggers",
+     "Tree|Id",
+     "Tree|SD"
+    ],
+    "reread_diff": [],
+    "with_getsd_sddl": {
+     "register_error": null,
+     "xml_equal": false,
+     "sddl_equal": false,
+     "diff": [
+      "+/Task/RegistrationInfo/SecurityDescriptor=O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)"
+     ],
+     "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:AI(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)"
+    }
+   },
+   {
+    "path": "\\PurgeSpikeT2",
+    "case": "task2-hidden-two-actions",
+    "register_error": null,
+    "xml_equal": true,
+    "sddl_equal": true,
+    "enabled_equal": true,
+    "diff": [],
+    "sddl_before": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;SY)",
+    "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;SY)",
+    "file_equal": false,
+    "taskcache_id_equal": false,
+    "taskcache_diff": [
+     "Tasks\\{id}|DynamicInfo",
+     "Tasks\\{id}|Hash",
+     "Tasks\\{id}|Triggers",
+     "Tree|Id",
+     "Tree|SD"
+    ],
+    "reread_diff": [],
+    "with_getsd_sddl": {
+     "register_error": null,
+     "xml_equal": false,
+     "sddl_equal": false,
+     "diff": [
+      "+/Task/RegistrationInfo/SecurityDescriptor=O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;SY)"
+     ],
+     "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:AI(A;;FR;;;SY)(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)"
+    }
+   },
+   {
+    "path": "\\PurgeSpikeT3",
+    "case": "task3-com-handler",
+    "register_error": null,
+    "xml_equal": true,
+    "sddl_equal": true,
+    "enabled_equal": true,
+    "diff": [],
+    "sddl_before": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;BU)",
+    "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;BU)",
+    "file_equal": false,
+    "taskcache_id_equal": false,
+    "taskcache_diff": [
+     "Tasks\\{id}|DynamicInfo",
+     "Tasks\\{id}|Hash",
+     "Tasks\\{id}|Triggers",
+     "Tree|Id",
+     "Tree|SD"
+    ],
+    "reread_diff": [],
+    "with_getsd_sddl": {
+     "register_error": null,
+     "xml_equal": false,
+     "sddl_equal": false,
+     "diff": [
+      "+/Task/RegistrationInfo/SecurityDescriptor=O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;BU)"
+     ],
+     "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:AI(A;;FR;;;BU)(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)"
+    }
+   },
+   {
+    "path": "\\PurgeSpikeT4",
+    "case": "task4-s4u",
+    "register_error": null,
+    "xml_equal": true,
+    "sddl_equal": true,
+    "enabled_equal": true,
+    "diff": [],
+    "sddl_before": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)",
+    "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)",
+    "file_equal": false,
+    "taskcache_id_equal": false,
+    "taskcache_diff": [
+     "Tasks\\{id}|DynamicInfo",
+     "Tasks\\{id}|Hash",
+     "Tasks\\{id}|Triggers",
+     "Tree|Id",
+     "Tree|SD"
+    ],
+    "reread_diff": [],
+    "with_getsd_sddl": {
+     "register_error": null,
+     "xml_equal": false,
+     "sddl_equal": false,
+     "diff": [
+      "+/Task/RegistrationInfo/SecurityDescriptor=O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)"
+     ],
+     "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:AI(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)"
+    }
+   },
+   {
+    "path": "\\PurgeSpikeVendor\\T5",
+    "case": "task5-subfolder-sddl",
+    "register_error": null,
+    "xml_equal": true,
+    "sddl_equal": true,
+    "enabled_equal": true,
+    "diff": [],
+    "sddl_before": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;0x1200a9;;;AU)(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)",
+    "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;0x1200a9;;;AU)(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)",
+    "file_equal": false,
+    "taskcache_id_equal": false,
+    "taskcache_diff": [
+     "Tasks\\{id}|DynamicInfo",
+     "Tasks\\{id}|Hash",
+     "Tasks\\{id}|Triggers",
+     "Tree|Id",
+     "Tree|SD"
+    ],
+    "reread_diff": [],
+    "with_getsd_sddl": {
+     "register_error": null,
+     "xml_equal": true,
+     "sddl_equal": false,
+     "diff": [],
+     "sddl_after": "O:BAG:S-1-5-21-1336749127-99101324-1432799918-513D:AI(A;;FA;;;BA)(A;;FA;;;SY)(A;;0x1200a9;;;AU)(A;;FR;;;S-1-5-21-1336749127-99101324-1432799918-1000)(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)"
+    }
+   }
+  ],
+  "create_existing": {
+   "path": "\\PurgeSpikeT1",
+   "error": "0x800700B7 Cannot create a file when that file already exists. (Exception from HRESULT: 0x800700B7)",
+   "unchanged": true
+  },
+  "stored_password": {
+   "path": "\\PurgeSpikeT6",
+   "create_error": null,
+   "logon_type": "Password",
+   "tries": {
+    "xml_only_logon_none": {
+     "registered": false,
+     "error": "0x8007052E The user name or password is incorrect. (Exception from HRESULT: 0x8007052E)",
+     "xml_equal": null,
+     "sddl_equal": null,
+     "diff": {}
+    },
+    "user_no_password_logon_password": {
+     "registered": false,
+     "error": "0x8007052E The user name or password is incorrect. (Exception from HRESULT: 0x8007052E)",
+     "xml_equal": null,
+     "sddl_equal": null,
+     "diff": {}
+    },
+    "user_and_password_logon_password": {
+     "registered": true,
+     "error": null,
+     "xml_equal": true,
+     "sddl_equal": true,
+     "diff": {}
+    }
+   }
+  },
+  "control_reread_diff": [],
+  "reboot": [
+   {
+    "path": "\\PurgeSpikeT1",
+    "xml_equal": true,
+    "sddl_equal": true,
+    "diff": [],
+    "taskcache_diff": []
+   },
+   {
+    "path": "\\PurgeSpikeT2",
+    "xml_equal": true,
+    "sddl_equal": true,
+    "diff": [],
+    "taskcache_diff": [
+     "Tasks\\{id}|DynamicInfo"
+    ]
+   },
+   {
+    "path": "\\PurgeSpikeT3",
+    "xml_equal": true,
+    "sddl_equal": true,
+    "diff": [],
+    "taskcache_diff": []
+   },
+   {
+    "path": "\\PurgeSpikeT4",
+    "xml_equal": true,
+    "sddl_equal": true,
+    "diff": [],
+    "taskcache_diff": []
+   },
+   {
+    "path": "\\PurgeSpikeVendor\\T5",
+    "xml_equal": true,
+    "sddl_equal": true,
+    "diff": [],
+    "taskcache_diff": []
+   },
+   {
+    "path": "\\PurgeSpikeTC",
+    "xml_equal": true,
+    "sddl_equal": true,
+    "diff": [],
+    "taskcache_diff": [
+     "Tasks\\{id}|DynamicInfo"
+    ]
+   }
+  ]
+ },
+ "service": {
+  "exact": true,
+  "scm_owned_values": [],
+  "write_back_needed": [
+   "|VendorTag",
+   "Parameters\\",
+   "Parameters\\Sub\\"
+  ],
+  "unexplained_differences": [],
+  "api": "capture: Services\\<name> key tree (raw RegQueryValueExW: name, type, bytes) + QueryServiceConfigW + QueryServiceConfig2W (levels 1-8, 12) + QueryServiceObjectSecurity(OWNER|GROUP|DACL); delete: DeleteService; re-create: CreateServiceW + ChangeServiceConfig2W + SetServiceObjectSecurity (+ registry write-back)",
+  "procedure": "guided: CreateServiceW(config from QueryServiceConfigW, but lpBinaryPathName = the raw ImagePath string of the key backup; password NULL) -> ChangeServiceConfig2W only for the items whose value the key backup holds -> SetServiceObjectSecurity(OWNER|GROUP|DACL) only when the key backup has a Security subkey -> write back every backed-up value/key that is absent or different (RegSetValueExW with the backed-up type and bytes)",
+  "query_config_expands_image_path": true,
+  "naive_extra_values": [
+   "|DelayedAutostart",
+   "|FailureActionsOnNonCrashFailures",
+   "|PreshutdownTimeout",
+   "|ServiceSidType",
+   "Security\\"
+  ],
+  "naive_note": "naive = CreateServiceW + every non-null config2 item + SetServiceObjectSecurity always (the M1B-X-SERVICE undo as written): each applied default item and the security call leave values/keys the original never had.",
+  "marked_for_delete": {
+   "other_handle_open": {
+    "create": 0,
+    "delete": 0,
+    "reopen_while_own_delete_handle_open": {
+     "opened": true,
+     "error": 0
+    },
+    "reopen_after_own_handle_closed": {
+     "opened": true,
+     "error": 0
+    },
+    "key_present_while_marked": true,
+    "delete_flag": "REG_DWORD:01000000",
+    "query_while_marked": "ok",
+    "delete_again": {
+     "code": 1072,
+     "stage": "delete"
+    },
+    "create_while_marked": 1072,
+    "after_last_handle_closed": {
+     "key_gone": true,
+     "open_error": 1060
+    },
+    "create_after_close": 0
+   },
+   "own_handle_only": {
+    "create": 0,
+    "delete": 0,
+    "reopen_while_own_delete_handle_open": {
+     "opened": true,
+     "error": 0
+    },
+    "reopen_after_own_handle_closed": {
+     "opened": false,
+     "error": 1060
+    },
+    "key_present_while_marked": false,
+    "delete_flag": null,
+    "query_while_marked": "absent (1060)",
+    "delete_again": {
+     "code": 1060,
+     "stage": "open"
+    },
+    "create_while_marked": "not tried: the service was already gone",
+    "after_last_handle_closed": {
+     "key_gone": true,
+     "open_error": 1060
+    },
+    "create_after_close": 0
+   }
+  },
+  "cases": [
+   {
+    "name": "PurgeSpikeS1",
+    "case": "svc1-own-process-localsystem",
+    "sc_exit": [
+     0
+    ],
+    "delete": 0,
+    "naive": {
+     "create": 0,
+     "config2": {
+      "failure_actions": 0,
+      "failure_actions_flag": 0,
+      "delayed_auto_start": 0,
+      "service_sid_type": 0,
+      "preshutdown_timeout_ms": 0,
+      "triggers": 87,
+      "launch_protected": 2
+     },
+     "security": {
+      "owner_group_dacl": 1307,
+      "dacl_only": 0
+     },
+     "reg_diff": [
+      "|DelayedAutostart extra (REG_DWORD:00000000)",
+      "|FailureActionsOnNonCrashFailures extra (REG_DWORD:00000000)",
+      "|PreshutdownTimeout extra (REG_DWORD:10270000)",
+      "|ServiceSidType extra (REG_DWORD:00000000)",
+      "Security\\ key extra"
+     ],
+     "scm_diff": [],
+     "sddl_equal": true
+    },
+    "guided": {
+     "create": 0,
+     "config2_items": null,
+     "config2": {},
+     "security": "skipped: the backup has no Security subkey",
+     "reg_diff_scm_only": [],
+     "write_back": [],
+     "reg_diff_after_write_back": [],
+     "scm_diff": [],
+     "sddl_equal": true,
+     "sddl": "O:SYG:SYD:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"
+    },
+    "reread_diff": []
+   },
+   {
+    "name": "PurgeSpikeS2",
+    "case": "svc2-localservice-config2",
+    "sc_exit": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "delete": 0,
+    "naive": {
+     "create": 0,
+     "config2": {
+      "description": 0,
+      "failure_actions": 0,
+      "failure_actions_flag": 0,
+      "delayed_auto_start": 0,
+      "service_sid_type": 0,
+      "required_privileges": 0,
+      "preshutdown_timeout_ms": 0,
+      "triggers": 87,
+      "launch_protected": 2
+     },
+     "security": {
+      "owner_group_dacl": 1307,
+      "dacl_only": 0
+     },
+     "reg_diff": [
+      "|PreshutdownTimeout extra (REG_DWORD:10270000)",
+      "Security\\ key extra"
+     ],
+     "scm_diff": [],
+     "sddl_equal": true
+    },
+    "guided": {
+     "create": 0,
+     "config2_items": [
+      "description",
+      "failure_actions",
+      "failure_actions_flag",
+      "delayed_auto_start",
+      "service_sid_type",
+      "required_privileges"
+     ],
+     "config2": {
+      "description": 0,
+      "failure_actions": 0,
+      "failure_actions_flag": 0,
+      "delayed_auto_start": 0,
+      "service_sid_type": 0,
+      "required_privileges": 0
+     },
+     "security": "skipped: the backup has no Security subkey",
+     "reg_diff_scm_only": [],
+     "write_back": [],
+     "reg_diff_after_write_back": [],
+     "scm_diff": [],
+     "sddl_equal": true,
+     "sddl": "O:SYG:SYD:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"
+    },
+    "reread_diff": []
+   },
+   {
+    "name": "PurgeSpikeS3",
+    "case": "svc3-trigger",
+    "sc_exit": [
+     0,
+     0
+    ],
+    "delete": 0,
+    "naive": {
+     "create": 0,
+     "config2": {
+      "failure_actions": 0,
+      "failure_actions_flag": 0,
+      "delayed_auto_start": 0,
+      "service_sid_type": 0,
+      "preshutdown_timeout_ms": 0,
+      "triggers": 0,
+      "launch_protected": 2
+     },
+     "security": {
+      "owner_group_dacl": 1307,
+      "dacl_only": 0
+     },
+     "reg_diff": [
+      "|DelayedAutostart extra (REG_DWORD:00000000)",
+      "|FailureActionsOnNonCrashFailures extra (REG_DWORD:00000000)",
+      "|PreshutdownTimeout extra (REG_DWORD:10270000)",
+      "|ServiceSidType extra (REG_DWORD:00000000)",
+      "Security\\ key extra"
+     ],
+     "scm_diff": [],
+     "sddl_equal": true
+    },
+    "guided": {
+     "create": 0,
+     "config2_items": "triggers",
+     "config2": {
+      "triggers": 0
+     },
+     "security": "skipped: the backup has no Security subkey",
+     "reg_diff_scm_only": [],
+     "write_back": [],
+     "reg_diff_after_write_back": [],
+     "scm_diff": [],
+     "sddl_equal": true,
+     "sddl": "O:SYG:SYD:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"
+    },
+    "reread_diff": []
+   },
+   {
+    "name": "PurgeSpikeS4",
+    "case": "svc4-parameters-extra-values",
+    "sc_exit": [
+     0
+    ],
+    "delete": 0,
+    "naive": {
+     "create": 0,
+     "config2": {
+      "failure_actions": 0,
+      "failure_actions_flag": 0,
+      "delayed_auto_start": 0,
+      "service_sid_type": 0,
+      "preshutdown_timeout_ms": 0,
+      "triggers": 87,
+      "launch_protected": 2
+     },
+     "security": {
+      "owner_group_dacl": 1307,
+      "dacl_only": 0
+     },
+     "reg_diff": [
+      "|ImagePath data REG_EXPAND_SZ:2500530079007300740065006D0052006F006F0074002500... -> REG_EXPAND_SZ:43003A005C00570049004E0044004F00570053005C005300...",
+      "|VendorTag missing (was REG_SZ:7300700069006B0065000000)",
+      "|DelayedAutostart extra (REG_DWORD:00000000)",
+      "|FailureActionsOnNonCrashFailures extra (REG_DWORD:00000000)",
+      "|PreshutdownTimeout extra (REG_DWORD:10270000)",
+      "|ServiceSidType extra (REG_DWORD:00000000)",
+      "Parameters\\ key missing",
+      "Parameters\\Sub\\ key missing",
+      "Security\\ key extra"
+     ],
+     "scm_diff": [],
+     "sddl_equal": true
+    },
+    "guided": {
+     "create": 0,
+     "config2_items": null,
+     "config2": {},
+     "security": "skipped: the backup has no Security subkey",
+     "reg_diff_scm_only": [
+      "|VendorTag missing (was REG_SZ:7300700069006B0065000000)",
+      "Parameters\\ key missing",
+      "Parameters\\Sub\\ key missing"
+     ],
+     "write_back": [
+      "|VendorTag -> 0",
+      "Parameters\\ created",
+      "Parameters|Big -> 0",
+      "Parameters|Blob -> 0",
+      "Parameters|Hosts -> 0",
+      "Parameters|ServiceDll -> 0",
+      "Parameters|ServiceDllUnloadOnStop -> 0",
+      "Parameters|ServiceMain -> 0",
+      "Parameters\\Sub\\ created",
+      "Parameters\\Sub|Level -> 0"
+     ],
+     "reg_diff_after_write_back": [],
+     "scm_diff": [],
+     "sddl_equal": true,
+     "sddl": "O:SYG:SYD:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"
+    },
+    "reread_diff": []
+   },
+   {
+    "name": "PurgeSpikeS8",
+    "case": "svc5-custom-sddl",
+    "sc_exit": [
+     0,
+     0
+    ],
+    "delete": 0,
+    "naive": {
+     "create": 0,
+     "config2": {
+      "failure_actions": 0,
+      "failure_actions_flag": 0,
+      "delayed_auto_start": 0,
+      "service_sid_type": 0,
+      "preshutdown_timeout_ms": 0,
+      "triggers": 87,
+      "launch_protected": 2
+     },
+     "security": {
+      "owner_group_dacl": 1307,
+      "dacl_only": 0
+     },
+     "reg_diff": [
+      "|DelayedAutostart extra (REG_DWORD:00000000)",
+      "|FailureActionsOnNonCrashFailures extra (REG_DWORD:00000000)",
+      "|PreshutdownTimeout extra (REG_DWORD:10270000)",
+      "|ServiceSidType extra (REG_DWORD:00000000)"
+     ],
+     "scm_diff": [],
+     "sddl_equal": true
+    },
+    "guided": {
+     "create": 0,
+     "config2_items": null,
+     "config2": {},
+     "security": {
+      "owner_group_dacl": 1307,
+      "dacl_only": 0
+     },
+     "reg_diff_scm_only": [],
+     "write_back": [],
+     "reg_diff_after_write_back": [],
+     "scm_diff": [],
+     "sddl_equal": true,
+     "sddl": "O:SYG:SYD:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)(A;;RPWPCR;;;AU)"
+    },
+    "reread_diff": []
+   }
+  ],
+  "stored_password": {
+   "name": "PurgeSpikeS6",
+   "account": ".\\purgespike",
+   "create": 0,
+   "secret_after_create": "present",
+   "delete": 0,
+   "secret_after_delete": "absent",
+   "recreate_without_password": 0,
+   "secret_after_recreate": "present",
+   "reg_diff": [],
+   "scm_diff": []
+  },
+  "reboot": [
+   {
+    "name": "PurgeSpikeS1",
+    "reg_diff": [],
+    "scm_diff": [],
+    "sddl_equal": true
+   },
+   {
+    "name": "PurgeSpikeS2",
+    "reg_diff": [],
+    "scm_diff": [],
+    "sddl_equal": true
+   },
+   {
+    "name": "PurgeSpikeS3",
+    "reg_diff": [],
+    "scm_diff": [],
+    "sddl_equal": true
+   },
+   {
+    "name": "PurgeSpikeS4",
+    "reg_diff": [],
+    "scm_diff": [],
+    "sddl_equal": true
+   },
+   {
+    "name": "PurgeSpikeS8",
+    "reg_diff": [],
+    "scm_diff": [],
+    "sddl_equal": true
+   },
+   {
+    "name": "PurgeSpikeSC",
+    "reg_diff": [],
+    "scm_diff": [],
+    "sddl_equal": true
+   }
+  ]
+ }
+}

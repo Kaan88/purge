@@ -109,6 +109,25 @@ Check 'a settings set built with -Priority 4 has Priority=4 (not registered)' ($
     Check 'New-RunJobText rejects an uppercase id' ($msg -match 'bad app id')
     $msg = $null; try { $null = New-RunJobText -Id '__ID__' } catch { $msg = $_.Exception.Message }
     Check 'New-RunJobText rejects the placeholder as an id' ($msg -match 'bad app id')
+
+    # M1b (RIG.md section 12): __M1B__ carries the options; no options leaves it empty (M0 / M1a behaviour).
+    $plain = New-RunJobText -Id '7zip' -Run 'm1b-7zip' -Engine
+    Check 'M1b: no options -> empty __M1B__' ($plain -match "\`$M1bFlag = ''" -and $plain -notmatch '__M1B__')
+    $t = New-RunJobText -Id '7zip' -Run 'm1b-traps-7zip' -Engine -M1b @{ msi_tables = $true; traps = $true; trap_a = '7zip' }
+    $b64 = [regex]::Match($t, "\`$M1bFlag = '([^']+)'").Groups[1].Value
+    $o = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64)) | ConvertFrom-Json
+    Check 'M1b: options round-trip (trap_b defaults to node)' ($o.msi_tables -and $o.traps -and $o.trap_a -eq '7zip' -and $o.trap_b -eq 'node')
+    $r = Test-IdCheck $t
+    Check 'M1b: job with options passes the id check' ($r.code -eq 7) "exit $($r.code): $($r.out)"
+    $msg = $null; try { $null = ConvertTo-M1bOpts @{ traps = $true; trap_a = 'node'; trap_b = 'node' } } catch { $msg = $_.Exception.Message }
+    Check 'M1b: TrapA = TrapB refused' ($msg -match 'same app')
+    Check 'M1b: run prefixes' ((Get-M1bRunPrefix -Base 'rig-base' -VmName 'Inbound-Win11-Test') -ceq 'm1b-' -and
+        (Get-M1bRunPrefix -Base 'dirty-base' -VmName 'Inbound-Win11-Test' -Traps) -ceq 'm1bd-traps-' -and
+        (Get-M1bRunPrefix -Base 'rig-base' -VmName 'Purge-CleanPro' -RunPrefix 'g8-') -ceq 'g8-m1bcp-' -and
+        (Get-M1bRunPrefix -Freeze 2) -ceq 'm1b-fz2-')
+    $msg = $null; try { $null = Get-M1bRunPrefix -Base 'm2-base' } catch { $msg = $_.Exception.Message }
+    Check 'M1b: a base other than rig-base / dirty-base refused' ($msg -match 'rig-base or dirty-base')
+    Check 'M1b: the gate list has the 8 apps' (@(Get-M1bGateApps).Count -eq 8 -and (Get-M1bGateApps) -contains 'python313-with-312')
 }
 
 # --------------------------------------------------- rig.ps1: run directories never mix two runs
@@ -964,6 +983,8 @@ $EnginePhases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1
     Check 'Release engine file untouched by the M2 checks' ((Get-Content -Raw $rel) -eq 'MZ release')
     $m = $null; try { Assert-RigVm 'Some-Other-VM' } catch { $m = $_.Exception.Message }
     Check 'Assert-RigVm: only the two rig VMs' ($m -match 'not a rig VM' -and $null -eq (Assert-RigVm 'Purge-CleanPro') -and $null -eq (Assert-RigVm 'Inbound-Win11-Test'))
+    $m = $null; try { $null = Get-M2AmbientFile 'Some-Other-VM' } catch { $m = $_.Exception.Message }
+    Check 'Get-M2AmbientFile: one ambient set per rig VM, none for another VM' ((Split-Path -Leaf (Get-M2AmbientFile 'Inbound-Win11-Test')) -ceq 'm2-ambient.json' -and (Split-Path -Leaf (Get-M2AmbientFile 'Purge-CleanPro')) -ceq 'm2-ambient-cleanpro.json' -and $m -match 'no M2 ambient set') $m
     Check 'Get-M2Template: exec-run / m2-crash / m2-reboot' ((Get-M2Template 'm2-traps') -eq 'exec-run.ps1' -and (Get-M2Template 'm2-install') -eq 'exec-run.ps1' -and (Get-M2Template 'm2-crash') -eq 'm2-crash.ps1' -and (Get-M2Template 'm2-reboot') -eq 'm2-reboot.ps1')
     $mo = Get-M2ModeOpts -Mode 'm2-crash' -HardPowerOff -FaultPoints @('act.after')
     Check 'Get-M2ModeOpts m2-crash: batch 10 by default, hard_poweroff, points' ($mo.opts.batch -eq 10 -and $mo.opts.hard_poweroff -eq $true -and (@($mo.opts.points) -join ',') -eq 'act.after')
@@ -996,6 +1017,7 @@ function Ev([string]$s) { [IO.File]::AppendAllText($script:FakeEv, $s + "`r`n") 
 function Start-Sleep { }
 function Suspend-EdgeUpdate { Ev 'edge-pause'; [ordered]@{ method = 'fake' } }
 function Suspend-M2Telemetry { Ev 'telemetry-pause'; [ordered]@{ service = 'DiagTrack'; after = 'Stopped' } }
+function Wait-M2BootSettle([int]$MaxSec = 300, [int]$AfterSec = 5, [int]$PollSec = 3, [int]$MinUptimeSec = 180) { Ev "settle:${MaxSec}:${MinUptimeSec}"; [ordered]@{ session = 'ReadyBoot'; stopped = $true; bounded = $false } }
 function LaunchMedium([string]$Exe, [string]$Arguments = '', [string]$WorkDir = '', [string]$TaskName = 'PurgeRigLaunch', [int]$StartTimeoutSec = 30) { Ev "medium:$Arguments"; [pscustomobject]@{ task = $TaskName; pid = 4000001; found = $true } }
 function Stop-Launch($Launch, [int]$GraceSec = 5) { [pscustomobject]@{ closed = @(); killed = @() } }
 function Start-Native([string]$Exe, [string]$Arguments = '', [string]$WorkDir = '') {
@@ -1009,6 +1031,8 @@ function Set-M2RestoreFrequency([int]$Minutes) { Ev "srfreq:$Minutes"; $Minutes 
 function Set-M2SystemProtection([bool]$On) { Ev "srprot:$On"; $On }
 function Get-RigBootId { [IO.File]::ReadAllText('@W@\bootid.txt').Trim() }
 function Invoke-RigShutdown([int]$DelaySec, [string]$Reason) { Ev "shutdown:$DelaySec" }
+function Set-RigBootPolicyIgnoreFailures { Ev 'boot-policy'; [ordered]@{ fake = 0 } }
+function Save-RigDurableState([string]$Sid = '') { Ev 'durable-state'; [ordered]@{ volume = 'fake'; hives = [ordered]@{} } }
 function Start-M2Locker([string[]]$Paths, [string]$WorkDir, [int]$TimeoutSec = 60) { Ev "lock:$($Paths -join ',')"; [pscustomobject]@{ pid = 4000003; paths = $Paths; ready = $true; stop_file = '@W@\stop' } }
 function Stop-M2Locker($Locker, [int]$WaitSec = 10) { Ev 'unlock' }
 function Get-PfroList { if (-not (Test-Path -LiteralPath '@W@\pfro.json')) { return $null }; $x = [IO.File]::ReadAllText('@W@\pfro.json') | ConvertFrom-Json; , @($x | ForEach-Object { "$_" }) }
@@ -1184,6 +1208,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'null run: ok, no exec / undo / execdiff, snap A and B taken, no app stage' ($rec.ok -and -not (Failed $j) -and -not @($j.engine.calls | Where-Object { $_.step -match '^(exec|undo)-' }).Count -and -not @($ev -match '^execdiff:').Count -and @($ev -match '^snap:snap-n1-m2-fidelity-[ab]\.tsv\.gz$').Count -eq 2 -and -not @($rec.after | Where-Object { $_ }).Count -and $j.null_run.null -eq $true) "error=$($rec.error) $(Failed $j) $(($ev -match '^(snap|engine)') -join ' | ')"
     Check 'null run: the guest ambient copy is deleted, none pushed' (($script:M2Guest -contains 'cmd del /f /q C:\cr\bin\m2-ambient.json') -and -not @($script:M2Guest -match 'copyto .*m2-ambient').Count)
     Check 'null run: DiagTrack paused before snap A, like a real run' (@($ev -match '^telemetry-pause$').Count -eq 1 -and [array]::IndexOf($ev, 'telemetry-pause') -lt [array]::IndexOf($ev, 'snap:snap-n1-m2-fidelity-a.tsv.gz') -and $j.telemetry_pause.after -eq 'Stopped') (($ev | Select-Object -First 8) -join ' | ')
+    Check 'null run: the boot settle wait runs right before snap A, like a real run' (@($ev -match '^settle:').Count -eq 1 -and [array]::IndexOf($ev, 'settle:300:180') -eq [array]::IndexOf($ev, 'snap:snap-n1-m2-fidelity-a.tsv.gz') - 1 -and $j.results.settle.start.stopped -eq $true) (($ev | Select-Object -First 12) -join ' | ')
     $m = $null; try { $null = Invoke-M2Mode -Mode 'm2-install' -Null } catch { $m = $_.Exception.Message }
     Check 'null run: refused for a mode other than m2-traps / m2-fidelity' ($m -match 'm2-traps / m2-fidelity only') $m
 
@@ -1223,15 +1248,17 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     # --- hard power-off: marker kind poweroff without -HardPowerOff is an error, with it a power cycle
     $cont = Join-Path $W 'out\pw-run'
     New-Item -ItemType Directory -Force $cont | Out-Null
-    function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy) [IO.File]::WriteAllText($LogCopy, 'log'); $script:PwJobs++
+    $script:PwNames = New-Object System.Collections.ArrayList
+    function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy) [IO.File]::WriteAllText($LogCopy, 'log'); $script:PwJobs++; [void]$script:PwNames.Add($Name)
         if ($script:PwJobs -eq 1) { [IO.File]::WriteAllText((Join-Path $cont 'continue.json'), '{"schema":"purge.rig.continue/1","seq":1,"kind":"poweroff","next":"after-poweroff","boot_before":"boot-x"}') } else { Remove-Item -LiteralPath (Join-Path $cont 'continue.json') -Force -ErrorAction SilentlyContinue }
         [pscustomobject]@{ name = $Name; done = $true; seconds = 1; log = ''; log_file = $LogCopy } }
     $script:PwJobs = 0; $script:M2Guest.Clear()
     $r = Invoke-M2Job -Run 'pw-run' -Mode 'm2-crash'
     Check 'Invoke-M2Job: a poweroff continuation without -HardPowerOff stops with an error' ($r.error -match 'HardPowerOff' -and -not ($script:M2Guest -contains 'hard power cycle'))
-    $script:PwJobs = 0; $script:M2Guest.Clear()
+    $script:PwJobs = 0; $script:M2Guest.Clear(); $script:PwNames.Clear()
     $r = Invoke-M2Job -Run 'pw-run' -Mode 'm2-crash' -HardPowerOff
     Check 'Invoke-M2Job -HardPowerOff: power cycle, then stage after-poweroff' (-not $r.error -and $r.done -and ($script:M2Guest -contains 'hard power cycle') -and (@($r.stages | ForEach-Object { $_.stage }) -join ',') -eq 'start,after-poweroff')
+    Check 'Invoke-M2Job -HardPowerOff: the run files are synced to disk by a guest job before the power cycle' ((@($script:PwNames) -join ',') -eq 'pw-run-start,pw-run-sync,pw-run-after-poweroff') (@($script:PwNames) -join ',')
     function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy) [IO.File]::WriteAllText($LogCopy, 'log'); [IO.File]::WriteAllText((Join-Path $cont 'continue.json'), '{"seq":1,"kind":"reboot","next":"matrix","boot_before":"b"}'); [pscustomobject]@{ name = $Name; done = $true; seconds = 1; log = ''; log_file = $LogCopy } }
     $r = Invoke-M2Job -Run 'pw-run' -Mode 'm2-crash'
     Check 'Invoke-M2Job: a marker the next stage does not take (same seq twice) stops the loop' ($r.error -match 'seen twice' -and @($r.stages).Count -eq 2)

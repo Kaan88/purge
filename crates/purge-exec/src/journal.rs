@@ -51,6 +51,14 @@
 //! once: its boot-move pair is the only record of the registration. Undo, reconcile and expire records
 //! are flushed one by one.
 //!
+//! **Registry durability** ([`crate::durable`]). Windows writes registry changes lazily, so before a
+//! `group_end`, `commit`, `aborted`, `undo_done`, `undo_conflict` or a boot-move `done` the writer
+//! flushes the registry hives its ops touched since the last such flush; a `group_end` written after
+//! that flush carries `registry_flushed`. A registry `done` (outcome `Done`) after the last marked
+//! `group_end` of a run that has not ended is [`JournalState::unconfirmed`]: after a possible restart
+//! recovery probes it again, and a change it does not find and cannot make again gets a `reconcile`
+//! `Retried` whose outcome replaces the `Done` (`JournalWriter::reprobed`).
+//!
 //! **Index mark (review M7).** The chain cannot tell a journal cut at a line boundary from a shorter
 //! one, so the session's index entry records how far the journal reached when the entry was written:
 //! [`SessionSummary::journal`](purge_model::exec::session::SessionSummary::journal), a
@@ -210,6 +218,10 @@ pub enum JournalError {
     /// records. Reopen with [`JournalWriter::open_append`], which cuts off a torn tail.
     #[error("an earlier journal write or flush failed; the writer takes no more records")]
     Poisoned,
+    /// A registry hive the record would vouch for could not be flushed ([`crate::durable`]); the record
+    /// was not written. The writer is not poisoned: the record may be tried again.
+    #[error(transparent)]
+    RegistryFlush(#[from] crate::durable::FlushError),
 }
 
 /// What is wrong with one complete journal line.

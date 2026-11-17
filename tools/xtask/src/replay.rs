@@ -182,6 +182,18 @@ pub struct Replayed {
     pub verify_passed: bool,
     /// Co-removed products recorded.
     pub co_removed: usize,
+    /// The fingerprint's roots read from MSI component paths (`RootSource::MsiComponent`), for
+    /// `replay-diff`'s reason `msi_root_added`.
+    pub msi_roots: Vec<String>,
+}
+
+/// The fingerprint's roots that come from MSI component paths.
+fn msi_roots(fp: &purge_model::Fingerprint) -> Vec<String> {
+    fp.roots
+        .iter()
+        .filter(|r| r.source == purge_model::RootSource::MsiComponent)
+        .map(|r| r.path.clone())
+        .collect()
 }
 
 fn load_phase(dir: &Path, run: &str, phase: u32, overlay: Option<&Path>) -> Result<Fixture> {
@@ -272,6 +284,7 @@ pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
     let settings = Settings {
         baseline_dir: opts.baselines.clone(),
         purge_dirs: Vec::new(),
+        msi_table_dir: None,
     };
     let mut progress = |line: &str| eprintln!("replay: {line}");
 
@@ -318,6 +331,7 @@ pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
             limits: limits(&before, None, overlay),
             verify_passed: false,
             co_removed: 0,
+            msi_roots: msi_roots(&fp),
         });
     }
 
@@ -371,6 +385,7 @@ pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
         limits: limits(&before, Some(&after), overlay),
         verify_passed: verify.is_passed(),
         co_removed: fp.co_removed.len(),
+        msi_roots: msi_roots(&fp),
     })
 }
 
@@ -444,7 +459,7 @@ impl Flags {
     }
 }
 
-fn default_baselines(root: &Path) -> Option<PathBuf> {
+pub(crate) fn default_baselines(root: &Path) -> Option<PathBuf> {
     let dir = root.join("kb").join("baselines");
     dir.is_dir().then_some(dir)
 }

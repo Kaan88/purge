@@ -1,0 +1,20 @@
+{
+  "schema": "purge.fixture/1",
+  "registry": {
+    "current_control_set": 1,
+    "keys": {
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\1C1C1C1C000000000000000000000010": {
+        "values": {
+          "11111111111111111111111111111111": "C:\\Program Files\\Shared\\common.dll"
+        }
+      },
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-21-1004336348-1177238915-682003330-1001\\Components\\1C1C1C1C000000000000000000000010": {
+        "values": {
+          "22222222222222222222222222222222": "C:\\Program Files\\Shared\\common.dll"
+        }
+      },
+      "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-21-1004336348-1177238915-682003330-1001\\Products": {},
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Software": {}
+    }
+  }
+}

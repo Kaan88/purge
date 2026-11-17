@@ -54,6 +54,12 @@ Principles:
   not replace the LTSC `null1` that `truth/ambient.json` uses) gives the `Professional-26340.9882` baseline. **It matches the host only when the host runs build 26340**: the host
   was on 26300.9974 when it was built, so until the host moves, the engine on the host still has no
   matching baseline (values-only + X-SYSTIDY, ENGINE_PLAN §5.7.1).
+  Snapshot `m2-base` on Purge-CleanPro (offline, child of `rig-base`, built 2026-11-16 by
+  `vm\setup-m2-base.ps1 -VmName Purge-CleanPro -NoDataDisk`): `rig-base` + System Restore on C: (shadow storage on
+  C:, 10 %) + the rig-only `SystemRestorePointCreationFrequency` = 0, as on Inbound, but **no data disk and no D:**
+  (`-NoDataDisk`: setup-m2.ps1 skips the D: part and its check). It serves m2-traps and m2-fidelity (and their null
+  runs, §11.8); m2-install's D: stage is not supported there. Its own M2 ambient set is
+  `truth\m2-ambient-cleanpro.json` (§11.8).
 - Rig-owned paths, excluded from truth and baselines (label `rig`): `C:\cr\**`, `C:\ut\**`,
   scheduled tasks `PurgeRigAgent`, `PurgeRigLaunch`, `PurgeRigInstall`, `agentstart`, `elev*`, `crshot*`, `utrun`,
   `PurgeSetup`, and their `TaskCache` entries, `%TEMP%\vmjobs\**`, and the Prefetch files of the rig's own tools
@@ -111,6 +117,14 @@ records access errors.
   "env":       { "machine_path": [segments], "user_path": [segments] },
   "processes": [ {"pid","name","path","start"} ] }
 ```
+
+M1b (C-OBJECT, `riglib.ps1`) adds fields; the ones above keep their names. `tasks[]`: `hidden`, `logon_type`
+(Principal LogonType name), `has_stored_password` (LogonType `Password` or `InteractiveOrPassword`),
+`actions_detail` [ {`kind` exec|com_handler|other, `path`, `arguments`, `working_dir`, `clsid`, `data`} ].
+`services[]` (from `HKLM\SYSTEM\CurrentControlSet\Services\<name>`, values as stored): `image_path_raw`,
+`service_dll` (Parameters\ServiceDll, else the top-level one), `service_type` (Type), `start_value` (Start),
+`object_name`, `depend_on_service` [names], `state`. `firewall[]`: `value_name` (registry value name = id),
+`raw` (the rule string as stored), `reg_key` (FirewallRules, AppIso or Configurable store); null when not found.
 
 ## 4. Run protocol (one app, `guest\run-app.ps1`, phases written to `C:\cr\out\<run>\`)
 
@@ -619,7 +633,9 @@ passed / 0 failed unelevated (Medium) and 961 / 0 elevated with --include-ignore
 ## 11. M2 executor runs (`rig.ps1 -Mode m2-*`, docs/M2_DESIGN.json gate G0-G6)
 
 Five modes, each one run from a fresh restore of `m2-base` (§1; `-Snapshot` overrides, e.g. `rig-base` for the
-G6 "System Protection off" leg or Clean-Pro, which has no `m2-base`). Only file, registry and AppX items are
+G6 "System Protection off" leg). Clean-Pro has its own `m2-base` without D: (§1; m2-traps and m2-fidelity only):
+`.\vm\rig.ps1 -VmName Purge-CleanPro -Mode m2-traps -RunPrefix cp-`. `rig-base` alone does not serve m2-fidelity:
+its G6 legs need System Restore on with the frequency value 0. Only file, registry and AppX items are
 executed in v1; service, scheduled-task and firewall items are planned but deferred, so wherever a trap or
 fixture plants one, the expected outcome is "untouched" (fidelity rows `DeleteService`, `DeleteTask`,
 `DeleteFirewallRule` with ops 0; the gate fails if one has ops).
@@ -627,7 +643,7 @@ fixture plants one, the expected outcome is "untouched" (fidelity rows `DeleteSe
     $env:VMPWFILE = '<guest password file>'
     .\vm\rig.ps1 -Mode m2-install
     .\vm\rig.ps1 -Mode m2-traps
-    .\vm\rig.ps1 -Mode m2-fidelity -Apps npp,7zip
+    .\vm\rig.ps1 -Mode m2-fidelity -Apps npp,firefox
     .\vm\rig.ps1 -Mode m2-crash -HardPowerOff [-FaultPoints act.after,intent.flushed] [-BatchSize 10]
     .\vm\rig.ps1 -Mode m2-reboot
     bash truth/m2.sh                       # from vm/: results/m2-gate.json + .md
@@ -704,8 +720,11 @@ item (engine ceb5999 on; absent with older engines).
   reverse order with the main confirm; scoped snaps before/after must not differ: `refuse-diff.json`), snap-a,
   deep-a, exec-main, snap-b, deep-b, execdiff-main (`--traps m2-traps-manifest.json --group main`, deep A/B),
   traps-check-after-exec, undo-main (every item but the expiry trap's), deep-c, fidelity-main, expiry
-  (plant-expiry-junction, `quarantine expiring` with the clock override env, `quarantine purge --ids` of the
-  entries naming the expiry item: `expiring.json`, `expiry-*` store), traps-check-after-expiry, race-a / race-b
+  (plant-expiry-junction: the junction and the file symlink replace the quarantined item's two own files, so the
+  item holds no more entries than the engine counted at the move and the purge reaches the walk; an item that
+  gained entries is refused before any walk, `Refused MoreEntriesThanCounted`, exit 10, which the gate run of
+  2026-11-16 met while the plant still added the links; `quarantine expiring` with the clock override env,
+  `quarantine purge --ids` of the entries naming the expiry item: `expiring.json`, `expiry-*` store), traps-check-after-expiry, race-a / race-b
   (each its own plan, exec with the manifest's `helper.env` PURGE_FAULT_PAUSE and the swap helper in the
   background, scoped snaps, deep, `execdiff-race-*.json`), forged-fp (`scan --fp <user-store fp> --mode post`
   -> `plan-forged.json`; no canary path Safe or preselected), traps-check-final, store.
@@ -719,12 +738,15 @@ item (engine ceb5999 on; absent with older engines).
   report Throttled; the engine never touches the value), restore-point-off (G6 "System Protection off": protection
   on C: disabled, an exec with `--restore-point always` must report the restore point Disabled and still execute
   the plan, per docs\M2_DESIGN.json "never blocks the batch on failure"; undone, protection enabled again:
-  `results.restore_point_off`). Per app (`-Apps`, default npp, 7zip): the M1a engine run `<run>-<id>` (run-app.ps1
+  `results.restore_point_off`). Per app (`-Apps`, default npp, firefox): the M1a engine run `<run>-<id>` (run-app.ps1
   installs, uninstalls, scans), then stage `app`: its `plan-purge.json` with every item the plan offers for removal
   selected (bands `app_bands`, default Safe, Likely and Weak, preselected or not; Blocked never), so real leftovers
   go through exec and undo even when the scan ticks nothing; snap/deep A, exec, snap B, execdiff, undo, deep C,
-  fidelity (`*-app-<id>.*`). A plan with no such item is recorded as skipped (7-Zip's post scan was empty on
-  m2-base in the smoke run).
+  fidelity (`*-app-<id>.*`). A plan with no such item is recorded as skipped. 7-Zip (until 2026-11-16 the
+  second default app) is always skipped: its MSI writes no InstallLocation and no DisplayIcon, so the engine's
+  harvest finds no root and no exe (`0 roots, 0 exes`) and the post scan offers nothing, though the uninstall
+  leaves `HKU\<sid>\Software\7-Zip` (the frozen M1a score has purge recall 0/3 for 7zip). Firefox (NSIS, official
+  download, frozen M1a: 20 items offered) replaced it.
 - **null runs** (`-Null`, m2-traps / m2-fidelity, stage `start` only; §11.8): the mode's phases up to snap A /
   deep A, then `null-wait` (opts `null_wait`, default 3 s, where exec would run), snap B, deep B, store; no exec,
   undo, execdiff, refusals or app stage, no ambient set pushed.
@@ -736,9 +758,32 @@ item (engine ceb5999 on; absent with older engines).
   each (the second must change nothing); `journal resume --session` (then scoped snap B, execdiff, undo) or
   `journal rollback --session`; deep C, fidelity A/C, fixtures check. `crash-<tag>.json` per iteration, all in
   `crash-matrix.json` (`purge.rig.crashmatrix/1`). A point the plan never reaches is `hit: false` (recorded, not
-  failed). `-HardPowerOff`: for intent.flushed, regdelete.mid, commit.before an exec is started detached with
+  failed). Two points have their own rows (since 2026-11-16; before, both were never hit): `expiry.mid` (phase
+  `expiry`, one row): exec of `nested-dirs.dir` alone, `quarantine expiring` with the clock override, scoped snap X,
+  `quarantine purge --ids` with `PURGE_FAULT_AT=expiry.mid:2`; passes when it crashed with part of the item left,
+  recover twice changes nothing, `expiring` lists the item `unfinished`, a second purge ends `Purged` without a
+  second expire record, the item is gone and nothing outside `C:\ProgramData\Purge` was removed or changed between
+  snap X and snap Y (`diff-<tag>-xy.json`). `bootmove.registered` (x {resume, rollback}): `file-ads.file` alone, its
+  file held by the locker (no FILE_SHARE_DELETE), exec with the fault; passes when the pair is in PFRO after the
+  crash, recover twice changes nothing, resume reports `PendingReboot` with `confirmed: true` (pair still there once)
+  and undo before any reboot exits 0, or rollback exits 0; PFRO as before, fidelity A/C and the fixtures check pass.
+  No execdiff for these rows (a move waiting for a boot). `-HardPowerOff`: for intent.flushed, regdelete.mid, commit.before an exec is started detached with
   `PURGE_FAULT_PAUSE=<point>:600000`; once its journal is stable for 6 s the stage asks for a `poweroff`
-  continuation; `after-poweroff` checks the boot id changed, recovers twice, resumes, undoes, fidelity. Last, torn
+  continuation; `after-poweroff` checks the boot id changed, recovers twice, resumes, undoes, fidelity. Three
+  rig rules keep a power cut from testing the rig instead of the engine (gate run 2026-11-16): the paused exec is
+  started by shell execute, without handle inheritance (inheriting the job's output pipe kept the agent waiting
+  for the engine, which sleeps 600 s at every hit, so the job never ended); right before it starts, riglib
+  `Save-RigDurableState` flushes volume C: and the registry hives the fixtures live in (the cut otherwise lost
+  fixture keys created seconds earlier); before each `controlvm poweroff` the host's `Sync-GuestRunFiles` flushes
+  the files of `C:\cr\out\<run>` and `C:\cr\work\<run>` (the continuation marker read back as NULs after the
+  boot otherwise). The start stage also sets the boot entry to `bootstatuspolicy IgnoreAllFailures` and
+  `recoveryenabled No` (`Set-RigBootPolicyIgnoreFailures`): two cuts within a minute of boot otherwise stop the
+  guest in WinRE. The scoped snaps of a power-off round take `Session Manager\Environment` instead of the whole
+  Session Manager key (`Get-M2SnapRoots -BootStable`: Windows rewrites its Executive, kernel\RNG, Memory
+  Management and Power subkeys at every boot) and the row compares PendingFileRenameOperations itself
+  (`pfro_unchanged`, part of its pass). After the exec starts the rig flushes no registry hive and no file of the engine's store; the
+  run-file flush commits the NTFS log, though, so file-system metadata (the engine's renames) up to the cut is
+  durable in these rounds, while registry changes since the last lazy flush can be lost. Last, torn
   journals (`crash-torn.json`): after an act.after crash the journal's last record cut in half (recover must
   accept it, rollback, fidelity) and, separately, one byte of a middle record changed (recover must refuse and
   change nothing).
@@ -759,6 +804,8 @@ Trap expectations settled by the smoke run (2026-11-16): `odd-names.*` (`name.`,
 `Skipped/GateBlocked/DenyListed` (engine rule `canon.trailing-dot-or-space`): refusing a name Win32 would normalise
 onto a sibling is the safe direction for M2. Fixture after-undo check: a directory a RemoveDirIfEmpty item removed
 is recreated by undo with a new FileId by design, so `file_id` is not compared for it (every other field is).
+(Until the gate run of 2026-11-16 the after-undo check reused the list-value variable for its per-field diff and
+always reported `list values bad=1`, ok false, with no mismatch listed.)
 
 ### 11.4 Engine command lines (M2-CLI)
 
@@ -774,6 +821,12 @@ is recreated by undo with a new FileId by design, so `file_id` is not compared f
 the selected ids, de-duplicated, sorted ordinally, joined with LF (riglib Get-M2Confirm). `--select` / `--items`
 files are JSON arrays of candidate ids. The session is `report.session`, else the new directory under
 `C:\ProgramData\Purge\sessions`; its `journal.jsonl` and `report.json` are read from there.
+
+M1b system objects (services, tasks, firewall rules): `plan from-targets` makes no object plan (its candidates
+carry no object digest, so `exec` skips them "no object fingerprint"), and `exec --fp` needs a fingerprint that is
+the owner of every selected object and records each in `sys` with the plan's digest; its install roots pass the
+guard's root rule or are dropped. A rig mode with objects (`m1b-x-crash`, M1B-RIG-EXEC) therefore drives harvest
+and scan, never `plan from-targets` (M1b reviews R3b M9, S3).
 
 ### 11.5 Gate report (`truth/m2.sh`)
 
@@ -861,6 +914,15 @@ key. Two rules cover them without narrowing the snapshots:
   run.json `telemetry_pause`). Its occasional upload rewrote `HKLM\...\Diagnostics\DiagTrack` (LastSuccessful*
   UploadTime) inside an exec window while none of 12 null runs saw it; the source is removed rather than given a
   hand-written ambient entry. The snapshot restore undoes the pause.
+- **settle wait** (since 2026-11-16): right before snap A (m2-traps, m2-fidelity, their null runs, and each app
+  stage) riglib `Wait-M2BootSettle` waits until the ReadyBoot ETW session (`logman query ReadyBoot -ets`) has
+  stopped, then 5 s more, then until the guest's uptime is at least `settle_min_uptime` seconds (opts, default
+  180), all within `settle_max` seconds (default 300); run.json `results.settle.<start | app-<id>>`. Timing on
+  m2-base (gate run of 2026-11-16, `readyboot-diag` and the m2-traps execdiffs): the ReadyBoot session stops
+  about 60 s after boot and deletes `C:\WINDOWS\Prefetch\ReadyBoot\ReadyBoot.etl` (a snap A taken while it ran
+  left `~F ReadyBoot.etl` as collateral); Explorer's first-run writes (`Explorer\Advanced|TaskbarStateLastRun`,
+  `Explorer\Discardable\PostSetup\Component Categories64\...\Enum|Implementing`) landed at uptime ~71 s, in the
+  exec window of a run whose snap A came at 67 s. The 180 s floor puts both well before snap A.
 - **engine-rp** (allowed side effect): keys and values at or under
   `HKLM\SYSTEM\<CurrentControlSet|ControlSetNNN>\Services\VSS\Diag` that changed or were added, which the Volume
   Shadow Copy service writes when the engine creates its restore point in the exec window. A removal there is
@@ -871,7 +933,11 @@ key. Two rules cover them without narrowing the snapshots:
   to snap A, an idle wait instead of exec, snap B) and `rigtool ambient --m2 --null <run dirs>` records every
   removed or changed record of `diff(snap A, snap B)` as a key `<op><kind>:<path>[|<value>]`, plus a pattern where
   the key holds a random token (a GUID seen varying, a hex run of 16+, a number of 6+ digits). rig.ps1 pushes it to
-  `C:\cr\bin\m2-ambient.json`; riglib passes it to every execdiff as `--ambient`.
+  `C:\cr\bin\m2-ambient.json`; riglib passes it to every execdiff as `--ambient`. **One set per VM**
+  (rig.ps1 `Get-M2AmbientFile`, chosen by `-VmName`): Inbound `truth\m2-ambient.json`, Purge-CleanPro
+  `truth\m2-ambient-cleanpro.json` (another Windows build churns differently). `Invoke-M2NullCampaign` writes the
+  VM's own file by default; `-RunPrefix` (default `n`) names the null runs `<prefix><k>-<mode>`. For Clean-Pro:
+  `. .\vm\rig.ps1 -VmName Purge-CleanPro; Invoke-M2NullCampaign -Count 6 -RunPrefix cpn -Engine <rig-exec engine>`.
 
 Why a real collateral delete still fails the gate: the snapshots stay machine-wide, so any delete or change the
 engine makes outside its ops shows as a record. An M2 ambient entry matches one record only: the same op, the same
@@ -882,7 +948,15 @@ hidden only if Windows itself removed or changed that very object in a null run'
 trap and fixture manifests are in addition verified by content hash (deep snapshots), which no ambient rule
 touches. Records added (`+`) never fail the gate and are not part of the set.
 
-The set is tied to m2-base and the rig's timing; regenerate it when m2-base is rebuilt. Collateral that remains
+The set is tied to m2-base and the rig's timing; regenerate it when m2-base is rebuilt. The committed set was
+rebuilt in the gate run of 2026-11-16, the first with the telemetry pause before snap A, from 12 null runs of each
+mode (`n1-` to `n12-`). None of them saw `~F C:\WINDOWS\Prefetch\ReadyBoot\ReadyBoot.etl` (the boot trace,
+4 MB -> 20 MB about two minutes after boot), which one of the gate run's two m2-traps runs left as its only
+collateral record. Rebuilt again the same day after the settle wait with its 180 s uptime floor (the null runs
+take the same settle): `Invoke-M2NullCampaign -Count 6`, union 260 records and 28 patterns (456 and 67 before
+the floor: a later, quieter window). The real-app stage (`app`) has no null analog: its exec window follows an install, launch and
+uninstall, and the first gate run's npp round showed 20 records of shell churn there (AppModel HAM `LU`, bam
+UserSettings, VolatileNotifications, WER TermReason) that the repeat run did not. Collateral that remains
 after it is either churn the null runs did not see (add null runs) or a real finding: the execdiff report lists
 each record.
 
@@ -918,3 +992,122 @@ the original value, which is the after-exec expectation (`phase_values[].after_e
 user PATH ending in `...WindowsApps;` becomes `...WindowsApps;;<segment>`. (Until 2026-11-16 the build dropped
 empty elements, `...WindowsApps;` became `...WindowsApps;<segment>`, and the engine's correct result
 `...WindowsApps` could not match the expected `...WindowsApps;`.)
+
+## 12. M1b scan runs (`rig.ps1 -Mode m1b-*`, `truth/m1b.sh`, docs/M1B_DESIGN.json M1B-RIG-HOST)
+
+This section covers the scan side of the M1b gate: G1 (replay), G2 (rig-base), G3 (dirty-base), G4 (traps), G7 (budgets)
+and G8 (Purge-CleanPro). The executor side (G5, G6, K10-K13) is `vm/rig-m1b-exec.ps1` (M1B-RIG-EXEC).
+
+### 12.1 Modes
+
+| Mode | What | Runs |
+|---|---|---|
+| `m1b-app -App <id> [-Base rig-base\|dirty-base] [-Traps]` | one engine run of one app (no null runs unless `-Nulls` is given) | `m1b[d]-[traps-]<id>` |
+| `m1b-apps [-Base ...] [-Ids ...]` | the gate list `7zip python python312-with-313 python313-with-312 node vcredist powershell temurin` (the same list on dirty-base), with 3 null runs spread | `m1b[d]-<id>`, `m1b[d]-null<n>` |
+| `m1b-traps [-Base ...]` | 7zip as TrapA and node as TrapB, with every plant of `guest/m1b-traps.ps1` | `m1b[d]-traps-7zip` |
+| `m1b-freeze` | two raw runs (vendor uninstall, no engine) of powershell and temurin; Inbound rig-base only | `m1b-fz1-<id>`, `m1b-fz2-<id>` |
+| `m1b-budgets -Engine <m1b> -BaseEngine <M2 head> -Program <id>` | G7 on the host, read only (12.5) | `runs/m1b-budgets/` |
+
+- **Purge-CleanPro tag:** on Purge-CleanPro (`-VmName Purge-CleanPro`, G8) the run tag is `cp` (`m1bcp-...`).
+- **Engine:** app runs use the release engine: `-Engine`, else `$env:RIG_ENGINE`, else `target\release\purge-engine.exe`. The rig-exec build (fault injection) is refused.
+- **Installer cache:** `$env:RIG_CACHE_DIR` points the installer cache somewhere else. A worktree uses the main checkout's `vm\cache\inst`.
+- **Cache entries added for M1b** (in the git-ignored cache-sources.json; each hash comes from the vendor's published checksum):
+  - PowerShell 7.6.10 msi
+  - Temurin 21.0.13+9 msi
+  - Python 3.13.17 amd64 exe
+
+### 12.2 Guest hooks (`__M1B__` in run-app.ps1)
+
+The host passes `{msi_tables, traps, trap_a, trap_b}` to the guest as base64 UTF-8 JSON (`ConvertTo-M1bOpts`). An empty value gives the
+M0/M1a run. When options are given, run.json gets an `m1b` block and run-app adds these phases:
+
+- **`msi-tables-1` / `msi-tables-2`** run right after `snap1` / `snap2`.
+  - `guest/m1b-msi-tables.ps1` reads every installed product's LocalPackage (`UserData\*\Products\*\InstallProperties`) through WindowsInstaller COM. It only reads.
+  - It writes `msi-tables-<run>-<phase>.json` with schema `purge.rig.msi_tables/1`: `{"packages": {"<LocalPackage>": MsiTables}}`.
+  - MsiTables has the purge-source sysobj shape: properties, components, registry, remove_registry, classes, progids, extensions, typelibs, appids, service_install, custom_action_count, truncated.
+  - The limits are the same as purge-win msi_db: 200000 rows per table and 64 KiB cells. An unreadable package is written as `{"truncated": true}`.
+  - A snapshot replay reads the file next to `snap-<run>-<phase>.tsv.gz`.
+- **With traps:**
+  - TrapB is installed first as a pre-app, before snap0.
+  - `m1b-traps-pre` runs after the launch and before lists1, so the harvest sees the plants.
+  - `m1b-traps-between` runs after the harvest and before the uninstall.
+  - `m1b-traps-post` runs after the uninstall and before lists2, snap2 and the scan.
+  - Each of these phases fails when one of its cases fails.
+
+### 12.3 Trap expectations (`truth/m1b-traps.json`)
+
+The file has 26 cases (one per plant) and 44 expectations, scored by `rigtool traps --plan plan-purge.scan.json --app 7zip --sid
+<run sid>`. Where the design names a verdict, the file uses it as written. Where the design is silent, the choices below were made. The gate should check them (UNSURE):
+
+- **`com-shared-class`:** expected protected with no blocker named, because the design names none.
+- **TrapA's own twins:** expected `listed`, not `safe`. These are the shellex handler and its Approved value, the event-log source PurgeTrapA,
+  the MuiCache and PCA entries of 7zFM, and the WER report of 7zFM.
+- **`shareddlls-count`:** only the count-2 value is expected protected (SharedRefcount). The count-1 value has no
+  expectation.
+- **`instfolders`:** only TrapB's Folders value has an expectation (absent). TrapA's own value has none.
+- **Parent keys:** no expectation targets a container (parent key), because an `inside` entry would score as an escape.
+
+Smoke run on 2026-11-17 (`m1b-app 7zip -Traps`, Inbound rig-base, engine from 758d55f):
+- Every phase was ok: 26 cases ran and 37 of 44 expectations were met.
+- 1 escape: svc-svchost (the service was listed Likely).
+- 6 missed_owned:
+  - svc-owned, task-owned, fw-owned and com-owned were listed Likely, not Safe.
+  - The WER report was Blocked.
+  - The S-1-5-18 Products key was not listed.
+- These are engine results for the gate to judge, not rig faults.
+
+### 12.4 Labels (`truth/mk_labels.py`)
+
+New label files: powershell, temurin, python313, python312-with-313, python313-with-312.
+
+These rules are UNSURE because no capture exists yet:
+- the pwsh and python 3.13 jump-list hashes (computed, never seen in a capture)
+- the user_data rules for `Documents\PowerShell` and `AppData\Roaming\Microsoft\Windows\PowerShell`
+- the Launcher kept_owner rules of the two Python pairs
+- the first-leftover rule for the removed version's PythonCore key
+
+Check them against the frozen and gate captures.
+
+### 12.5 Gate script (`truth/m1b.sh`) and budgets
+
+`bash truth/m1b.sh` (run from `vm/`) has two stages.
+
+**Collect.** It writes everything into `truth/m1b-evidence/`:
+- the ambient set from each set's null runs
+- rigtool truth with the app's labels plus `_os-servicing.json`
+- the plans, with the actions from the scan sidecar
+- `rigtool score --classes` per set
+- `rigtool traps` per trap run
+- the budgets dir, the replay diff and the replay score
+
+**Evaluate.** It checks K1-K9, K14 and K16:
+- It prints one line per criterion and app, with value, limit and PASS/FAIL.
+- It writes `truth/m1b-score.json` and exits 1 on any FAIL.
+- A missing input gives a FAIL line; nothing is skipped.
+
+Options:
+- `--evaluate DIR` runs only the evaluate stage on DIR.
+- `--selftest` runs the four package tests against `truth/_m1b_sample`. That evidence is SYNTHETIC (see its manifest).
+- App, set or trap lists other than the defaults are recorded as `gate_config: custom`.
+
+`m1b-budgets` runs on the host and only reads:
+- For each engine it runs `harvest <program>` and then `scan --mode forced` with `PURGE_TIMING=1`, for 3 rounds. Round 1 is cold; rounds 2 and 3 are warm.
+- Before the M1b engine's cold round, the MSI table cache `%ProgramData%\Purge\fp\msitables` is moved aside. The moved folder is left for the operator to delete.
+- The stderr of each step goes to `runs/m1b-budgets/<engine>-<step>-<round>.log`.
+- m1b.sh reads two things from each log: the `[ N.NNNs]` end stamp (the total time) and the `timing: phase` lines (refscan count, ownership.components, ownership.tables).
+- The warm figure is the median of the warm rounds, compared with the M2 head measured in the same session.
+
+Notes on individual criteria:
+- **K5** needs n >= 29 for each of the two Python pairs. Doubt: 3.13 or 3.12 is a pre-app installed before snap0, so the
+  Launcher items may not appear in the diff at all.
+- **K6** counts leftovers outside Safe and Likely. FS-TEMP leftovers are Weak/Unchecked by design (FROZEN.md), so they fail it.
+- **K7** is checked per set and on the replay.
+
+### 12.6 Freeze
+
+1. Run `rig.ps1 -Mode m1b-freeze` (4 VM runs).
+2. Run `bash truth/m1b.sh freeze powershell`, then `bash truth/m1b.sh freeze temurin`. For each app this:
+   - computes the truth of both runs with `truth/ambient.json`, the label file and `_os-servicing.json`
+   - checks that the non-ambient item sets of the two runs agree. If they do not, it exits 1 and prints the diff.
+   - copies run 1 to `truth/frozen/<id>/{truth.json, run.json}` and run 2's truth to `truth-fz2.json`
+3. Describe the result in FROZEN.md.

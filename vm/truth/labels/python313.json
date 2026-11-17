@@ -1,0 +1,83 @@
+{
+  "id": "python313",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\Recent\\\\AutomaticDestinations\\\\e724717544c09e92\\.automaticDestinations-ms$",
+      "why": "Jump list of AppID {ProgramFilesX64}\\Python313\\python.exe (CRC-64 e724717544c09e92); FS-JUMPLISTS, Unchecked."
+    },
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\(PYTHON|PYTHONW)\\.EXE-[0-9A-F]{8}\\.pf$",
+      "why": "Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash)."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\\\.(py|pyc|pyd|pyo|pyw|pyz|pyzw)(\\\\[^|]*)?(\\|.*)?$",
+      "why": ".py* extension keys of the Python Launcher, still installed (Python 3.13 alone). UNSURE (M1b, no capture yet)."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\Python\\.(File|NoConFile|CompiledFile|ArchiveFile|NoConArchiveFile|Extension)(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Python.* ProgIDs of the Python Launcher, still installed (Python 3.13 alone). UNSURE (M1b, no capture yet)."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\CLSID\\\\\\{BEA218D2-6950-497B-9434-61683EC065FE\\}(\\\\[^|]*)?(\\|.*)?$",
+      "why": "The launcher's shell drop handler class (CLSID of the 3.12.7 launcher), still installed (Python 3.13 alone). UNSURE."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\WOW6432Node\\\\Python(\\\\[^|]*)?(\\|.*)?$",
+      "why": "PyLauncher settings of the 32-bit-view launcher keys, still installed (Python 3.13 alone). UNSURE."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^P:C:\\\\Windows\\\\(pyw?\\.exe|pyshellext\\.amd64\\.dll)$",
+      "why": "py.exe, pyw.exe and the shell extension in the Windows directory: launcher files, still installed (Python 3.13 alone)."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^P:C:\\\\ProgramData\\\\Package Cache$",
+      "why": "Burn's shared package cache root; it still holds the launcher's cached package (Python 3.13 alone)."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer(\\\\(Products|Features|Components|UpgradeCodes|Dependencies|Patches))?$",
+      "why": "Windows Installer registration containers created by the first MSI install on a clean base and left empty; owned by the Installer service, not the product."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\(Folders|UpgradeCodes|Products|Components|UserData|UserData\\\\S-1-5-18(\\\\(Products|Components))?)$",
+      "why": "Windows Installer machine-state containers created on first MSI use; the service's own keys."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows NT\\\\CurrentVersion\\\\SystemRestore$",
+      "why": "msiexec's restore-point bookkeeping key (created on the first MSI transaction); Windows state."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\[^\\\\]+\\.pf$",
+      "why": "SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKU\\\\S-1-5-21-[0-9-]+(_Classes\\\\Installer(\\\\Dependencies)?|\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\RunOnce)$",
+      "why": "Per-user Windows Installer/Burn container and the RunOnce key Burn creates for reboot resume; left empty."
+    },
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\\\.idlerc(\\\\.*)?$",
+      "why": "IDLE's per-user configuration and recent-files list, written by the launch step."
+    }
+  ],
+  "note": "Python 3.13.17 x64 (Burn bundle), base of python313-with-312 (M1b, M1B-RIG-HOST). The launcher it installs stays installed (kept_owner, as python.json L10). Not frozen: the gate scores python313-with-312 only."
+}

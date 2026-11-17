@@ -399,10 +399,12 @@ impl Rig {
         }
     }
 
-    /// The environment of a recovery or a retry: no sleeping between retries.
+    /// The environment of a recovery or a retry: no sleeping between retries, and no restart of
+    /// Windows since the system started long before any run.
     fn recover_env(&mut self) -> crate::recover::RecoverEnv<'_> {
         crate::recover::RecoverEnv {
             retry: Retry::with(RETRY_DELAYS.to_vec(), |_| {}),
+            system_started: Some(purge_model::FileTime(0)),
             ..crate::recover::RecoverEnv::new(
                 &self.roots,
                 &self.deny,
@@ -1022,9 +1024,13 @@ fn a_file_inside_a_selected_directory_runs_first_and_the_directory_follows() {
 // Skips that are not errors
 // ---------------------------------------------------------------------------------------------------
 
+/// Changed by M1B-X-INTEG: services, scheduled tasks and firewall rules have executors. One whose
+/// candidate carries no scan-time digest (`object_fp`) is still selectable and is journalled as
+/// skipped (`ChangedSinceScan`, "no object fingerprint") without any intent, and without object
+/// backends in the process.
 #[test]
-fn targets_without_an_executor_are_journalled_as_skipped() {
-    let mut rig = Rig::new("unsupported");
+fn typed_targets_without_an_object_fingerprint_are_journalled_as_skipped() {
+    let mut rig = Rig::new("no-object-fp");
     let file = rig.s.file(r"app\a.txt", b"a");
     let request = preselected(
         vec![
@@ -1033,21 +1039,21 @@ fn targets_without_an_executor_are_journalled_as_skipped() {
                 Target::Task {
                     path: r"\PurgeTest\NoSuchTask".into(),
                 },
-                Action::Quarantine,
+                Action::DeleteKey,
             ),
             safe(
                 "c-svc",
                 Target::Service {
                     name: "PurgeTestNoSuchService".into(),
                 },
-                Action::Quarantine,
+                Action::DeleteKey,
             ),
             safe(
                 "c-fw",
                 Target::FirewallRule {
                     id: "{11111111-2222-3333-4444-555555555555}".into(),
                 },
-                Action::Quarantine,
+                Action::DeleteKey,
             ),
             quarantine("c-file", &file),
         ],
@@ -1060,16 +1066,17 @@ fn targets_without_an_executor_are_journalled_as_skipped() {
     let got = outcomes(&read);
     for outcome in &got[..3] {
         assert_eq!(
-            gate_blocked(outcome.as_ref().unwrap()),
-            Some(&Blocker::CannotBackUp)
+            outcome,
+            &Some(ItemOutcome::Skipped {
+                reason: SkipReason::ChangedSinceScan
+            })
         );
     }
     assert_eq!(got[3], Some(ItemOutcome::Done));
     assert_eq!(read.state.counts().skipped, 3);
     assert!(read.records.iter().filter(|r| r.name() == "intent").count() == 1);
 
-    // Every op is an item of the report; these are listed without an executor op. (Changed: the
-    // model's item report needed an executor op, so they were left out of the items.) The items, the
+    // Every op is an item of the report; these are listed without an executor op. The items, the
     // report's counts and the journal's `done` records agree.
     let listed: Vec<(&str, bool)> = report
         .items
@@ -1092,10 +1099,10 @@ fn targets_without_an_executor_are_journalled_as_skipped() {
         assert!(matches!(
             &read.state.op(OpId(op)).unwrap().facts,
             ItemFacts::Refused {
-                blocker: Some(Blocker::CannotBackUp),
+                blocker: Some(Blocker::ChangedSinceScan),
                 reason,
                 os_error: None,
-            } if reason == "exec.unsupported"
+            } if reason == "exec.no-object-fp"
         ));
     }
     for id in ["c-task", "c-svc", "c-fw"] {
@@ -1103,7 +1110,7 @@ fn targets_without_an_executor_are_journalled_as_skipped() {
             report
                 .warnings
                 .iter()
-                .any(|w| w.contains(id) && w.contains("not supported in this version")),
+                .any(|w| w.contains(id) && w.contains(gate::reason::NO_OBJECT_FP)),
             "{id}: {:#?}",
             report.warnings
         );
@@ -1817,12 +1824,13 @@ fn an_item_that_did_not_pass_validation_is_journalled_with_refused_facts() {
             os_error: Some(5),
         }
     );
-    // No executor op: not looked at; the blocker its skip reports.
+    // No executor op (an object item without its scan-time digest): not looked at, changed since the
+    // scan as far as the run can tell.
     assert_eq!(
         refused_facts(None),
         ItemFacts::Refused {
-            blocker: Some(Blocker::CannotBackUp),
-            reason: UNSUPPORTED.into(),
+            blocker: Some(Blocker::ChangedSinceScan),
+            reason: NO_OBJECT_FP.into(),
             os_error: None,
         }
     );
@@ -2883,6 +2891,7 @@ fn the_journalled_exemptions_are_those_the_plan_derives() {
             environment_segment_edit: true,
             tier_a_start_menu_entry: true,
             long_names_resolved: true,
+            ..Exemptions::default()
         }
     );
     // Nothing was acted on.
