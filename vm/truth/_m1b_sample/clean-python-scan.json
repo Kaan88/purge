@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Windows\\py.exe"
+      },
+      "action": "ReportOnly",
+      "facts": [
+        "suggest_uninstall"
+      ]
+    }
+  ]
+}

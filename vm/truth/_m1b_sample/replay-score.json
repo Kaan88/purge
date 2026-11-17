@@ -1,0 +1,30 @@
+{
+  "apps": [
+    {
+      "id": "7zip",
+      "tools": [
+        {
+          "tool": "purge",
+          "danger_listed": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "precision_safe": 1.0,
+          "protected_n": 0,
+          "protected_correct": null,
+          "protected_wrong": [],
+          "items": [
+            {
+              "target": "K:HKU\\S-1-5-21-1000000000-2000000000-3000000000-1001\\Software\\7-Zip",
+              "band": "Likely",
+              "preselected": true,
+              "outcome": "hit",
+              "userdata": false
+            }
+          ]
+        }
+      ],
+      "dir": "runs/replay-7zip"
+    }
+  ]
+}

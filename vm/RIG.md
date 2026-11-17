@@ -992,3 +992,122 @@ the original value, which is the after-exec expectation (`phase_values[].after_e
 user PATH ending in `...WindowsApps;` becomes `...WindowsApps;;<segment>`. (Until 2026-11-16 the build dropped
 empty elements, `...WindowsApps;` became `...WindowsApps;<segment>`, and the engine's correct result
 `...WindowsApps` could not match the expected `...WindowsApps;`.)
+
+## 12. M1b scan runs (`rig.ps1 -Mode m1b-*`, `truth/m1b.sh`, docs/M1B_DESIGN.json M1B-RIG-HOST)
+
+This section covers the scan side of the M1b gate: G1 (replay), G2 (rig-base), G3 (dirty-base), G4 (traps), G7 (budgets)
+and G8 (Purge-CleanPro). The executor side (G5, G6, K10-K13) is `vm/rig-m1b-exec.ps1` (M1B-RIG-EXEC).
+
+### 12.1 Modes
+
+| Mode | What | Runs |
+|---|---|---|
+| `m1b-app -App <id> [-Base rig-base\|dirty-base] [-Traps]` | one engine run of one app (no null runs unless `-Nulls` is given) | `m1b[d]-[traps-]<id>` |
+| `m1b-apps [-Base ...] [-Ids ...]` | the gate list `7zip python python312-with-313 python313-with-312 node vcredist powershell temurin` (the same list on dirty-base), with 3 null runs spread | `m1b[d]-<id>`, `m1b[d]-null<n>` |
+| `m1b-traps [-Base ...]` | 7zip as TrapA and node as TrapB, with every plant of `guest/m1b-traps.ps1` | `m1b[d]-traps-7zip` |
+| `m1b-freeze` | two raw runs (vendor uninstall, no engine) of powershell and temurin; Inbound rig-base only | `m1b-fz1-<id>`, `m1b-fz2-<id>` |
+| `m1b-budgets -Engine <m1b> -BaseEngine <M2 head> -Program <id>` | G7 on the host, read only (12.5) | `runs/m1b-budgets/` |
+
+- **Purge-CleanPro tag:** on Purge-CleanPro (`-VmName Purge-CleanPro`, G8) the run tag is `cp` (`m1bcp-...`).
+- **Engine:** app runs use the release engine: `-Engine`, else `$env:RIG_ENGINE`, else `target\release\purge-engine.exe`. The rig-exec build (fault injection) is refused.
+- **Installer cache:** `$env:RIG_CACHE_DIR` points the installer cache somewhere else. A worktree uses the main checkout's `vm\cache\inst`.
+- **Cache entries added for M1b** (in the git-ignored cache-sources.json; each hash comes from the vendor's published checksum):
+  - PowerShell 7.6.10 msi
+  - Temurin 21.0.13+9 msi
+  - Python 3.13.17 amd64 exe
+
+### 12.2 Guest hooks (`__M1B__` in run-app.ps1)
+
+The host passes `{msi_tables, traps, trap_a, trap_b}` to the guest as base64 UTF-8 JSON (`ConvertTo-M1bOpts`). An empty value gives the
+M0/M1a run. When options are given, run.json gets an `m1b` block and run-app adds these phases:
+
+- **`msi-tables-1` / `msi-tables-2`** run right after `snap1` / `snap2`.
+  - `guest/m1b-msi-tables.ps1` reads every installed product's LocalPackage (`UserData\*\Products\*\InstallProperties`) through WindowsInstaller COM. It only reads.
+  - It writes `msi-tables-<run>-<phase>.json` with schema `purge.rig.msi_tables/1`: `{"packages": {"<LocalPackage>": MsiTables}}`.
+  - MsiTables has the purge-source sysobj shape: properties, components, registry, remove_registry, classes, progids, extensions, typelibs, appids, service_install, custom_action_count, truncated.
+  - The limits are the same as purge-win msi_db: 200000 rows per table and 64 KiB cells. An unreadable package is written as `{"truncated": true}`.
+  - A snapshot replay reads the file next to `snap-<run>-<phase>.tsv.gz`.
+- **With traps:**
+  - TrapB is installed first as a pre-app, before snap0.
+  - `m1b-traps-pre` runs after the launch and before lists1, so the harvest sees the plants.
+  - `m1b-traps-between` runs after the harvest and before the uninstall.
+  - `m1b-traps-post` runs after the uninstall and before lists2, snap2 and the scan.
+  - Each of these phases fails when one of its cases fails.
+
+### 12.3 Trap expectations (`truth/m1b-traps.json`)
+
+The file has 26 cases (one per plant) and 44 expectations, scored by `rigtool traps --plan plan-purge.scan.json --app 7zip --sid
+<run sid>`. Where the design names a verdict, the file uses it as written. Where the design is silent, the choices below were made. The gate should check them (UNSURE):
+
+- **`com-shared-class`:** expected protected with no blocker named, because the design names none.
+- **TrapA's own twins:** expected `listed`, not `safe`. These are the shellex handler and its Approved value, the event-log source PurgeTrapA,
+  the MuiCache and PCA entries of 7zFM, and the WER report of 7zFM.
+- **`shareddlls-count`:** only the count-2 value is expected protected (SharedRefcount). The count-1 value has no
+  expectation.
+- **`instfolders`:** only TrapB's Folders value has an expectation (absent). TrapA's own value has none.
+- **Parent keys:** no expectation targets a container (parent key), because an `inside` entry would score as an escape.
+
+Smoke run on 2026-11-17 (`m1b-app 7zip -Traps`, Inbound rig-base, engine from 758d55f):
+- Every phase was ok: 26 cases ran and 37 of 44 expectations were met.
+- 1 escape: svc-svchost (the service was listed Likely).
+- 6 missed_owned:
+  - svc-owned, task-owned, fw-owned and com-owned were listed Likely, not Safe.
+  - The WER report was Blocked.
+  - The S-1-5-18 Products key was not listed.
+- These are engine results for the gate to judge, not rig faults.
+
+### 12.4 Labels (`truth/mk_labels.py`)
+
+New label files: powershell, temurin, python313, python312-with-313, python313-with-312.
+
+These rules are UNSURE because no capture exists yet:
+- the pwsh and python 3.13 jump-list hashes (computed, never seen in a capture)
+- the user_data rules for `Documents\PowerShell` and `AppData\Roaming\Microsoft\Windows\PowerShell`
+- the Launcher kept_owner rules of the two Python pairs
+- the first-leftover rule for the removed version's PythonCore key
+
+Check them against the frozen and gate captures.
+
+### 12.5 Gate script (`truth/m1b.sh`) and budgets
+
+`bash truth/m1b.sh` (run from `vm/`) has two stages.
+
+**Collect.** It writes everything into `truth/m1b-evidence/`:
+- the ambient set from each set's null runs
+- rigtool truth with the app's labels plus `_os-servicing.json`
+- the plans, with the actions from the scan sidecar
+- `rigtool score --classes` per set
+- `rigtool traps` per trap run
+- the budgets dir, the replay diff and the replay score
+
+**Evaluate.** It checks K1-K9, K14 and K16:
+- It prints one line per criterion and app, with value, limit and PASS/FAIL.
+- It writes `truth/m1b-score.json` and exits 1 on any FAIL.
+- A missing input gives a FAIL line; nothing is skipped.
+
+Options:
+- `--evaluate DIR` runs only the evaluate stage on DIR.
+- `--selftest` runs the four package tests against `truth/_m1b_sample`. That evidence is SYNTHETIC (see its manifest).
+- App, set or trap lists other than the defaults are recorded as `gate_config: custom`.
+
+`m1b-budgets` runs on the host and only reads:
+- For each engine it runs `harvest <program>` and then `scan --mode forced` with `PURGE_TIMING=1`, for 3 rounds. Round 1 is cold; rounds 2 and 3 are warm.
+- Before the M1b engine's cold round, the MSI table cache `%ProgramData%\Purge\fp\msitables` is moved aside. The moved folder is left for the operator to delete.
+- The stderr of each step goes to `runs/m1b-budgets/<engine>-<step>-<round>.log`.
+- m1b.sh reads two things from each log: the `[ N.NNNs]` end stamp (the total time) and the `timing: phase` lines (refscan count, ownership.components, ownership.tables).
+- The warm figure is the median of the warm rounds, compared with the M2 head measured in the same session.
+
+Notes on individual criteria:
+- **K5** needs n >= 29 for each of the two Python pairs. Doubt: 3.13 or 3.12 is a pre-app installed before snap0, so the
+  Launcher items may not appear in the diff at all.
+- **K6** counts leftovers outside Safe and Likely. FS-TEMP leftovers are Weak/Unchecked by design (FROZEN.md), so they fail it.
+- **K7** is checked per set and on the replay.
+
+### 12.6 Freeze
+
+1. Run `rig.ps1 -Mode m1b-freeze` (4 VM runs).
+2. Run `bash truth/m1b.sh freeze powershell`, then `bash truth/m1b.sh freeze temurin`. For each app this:
+   - computes the truth of both runs with `truth/ambient.json`, the label file and `_os-servicing.json`
+   - checks that the non-ambient item sets of the two runs agree. If they do not, it exits 1 and prints the diff.
+   - copies run 1 to `truth/frozen/<id>/{truth.json, run.json}` and run 2's truth to `truth-fz2.json`
+3. Describe the result in FROZEN.md.

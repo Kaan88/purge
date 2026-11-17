@@ -89,7 +89,16 @@ param(
     # m2-traps / m2-fidelity: a null run (exec replaced by an idle wait, nothing after snap B; RIG.md section 11.8).
     [Alias('Null')] [switch] $M2Null,
     # m2-fidelity app stage: the plan bands whose items are selected (default Safe, Likely, Weak; never Blocked).
-    [Alias('AppBands')] [string[]] $M2AppBands = @()
+    [Alias('AppBands')] [string[]] $M2AppBands = @(),
+    # M1b scan modes (RIG.md section 12): m1b-app's app id, the base snapshot (rig-base or dirty-base; m1b-apps and
+    # m1b-traps too), the trap plants of guest\m1b-traps.ps1 around the run (m1b-app), and for m1b-budgets the M2-head
+    # engine and the program id measured. Prefixed for the same reason as the M2 parameters; command-line names are
+    # the aliases -App, -Base, -Traps, -BaseEngine, -Program.
+    [Alias('App')] [string] $M1bApp = '',
+    [Alias('Base')] [string] $M1bBase = 'rig-base',
+    [Alias('Traps')] [switch] $M1bTraps,
+    [Alias('BaseEngine')] [string] $M1bBaseEngine = '',
+    [Alias('Program')] [string] $M1bProgram = ''
 )
 
 # Host platform: Windows (PowerShell 5.1 or 7) or Linux (pwsh 7, RIG.md §9). 5.1 has no $IsWindows.
@@ -120,6 +129,9 @@ $script:RigDir    = $PSScriptRoot
 $script:RepoRoot  = Split-Path -Parent $PSScriptRoot
 $script:RunsDir   = Join-Path $PSScriptRoot 'runs'
 $script:FrozenDir = Join-Path $PSScriptRoot (HostPath 'truth\frozen')   # frozen M0 truth and plans, read only
+# Host installer cache (vm\cache\inst and its cache-sources.json, git-ignored). $env:RIG_CACHE_DIR points elsewhere,
+# e.g. a worktree without a cache of its own uses the main checkout's.
+$script:CacheDir  = $(if ($env:RIG_CACHE_DIR) { $env:RIG_CACHE_DIR } else { Join-Path $PSScriptRoot (HostPath 'cache\inst') })
 $script:PwFile    = $null
 $script:PwTemp    = $false
 $script:RigLogFile = $null
@@ -340,7 +352,7 @@ function Get-EnginePush {
 # installers of its pre / post / upgrade_from apps and its plant files (apps.ps1 Get-AppFiles), where the cache
 # holds them. Returns full paths.
 function Get-CachedRunFiles {
-    param([Parameter(Mandatory)][string]$Id, [string]$CacheDir = (Join-Path $script:RigDir (HostPath 'cache\inst')))
+    param([Parameter(Mandatory)][string]$Id, [string]$CacheDir = $script:CacheDir)
     if (-not (Test-Path -LiteralPath (Join-Path $CacheDir 'cache-sources.json'))) { return @() }
     $names = & { . (Join-Path $script:RigDir (HostPath 'guest\apps.ps1')); Get-AppFiles $Id }
     @($names | ForEach-Object { Join-Path $CacheDir $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
@@ -380,7 +392,7 @@ function Push-Tools {
     if ($r.code -ne 0) { throw "copy guest scripts failed: $($r.out -join ' ')" }
     $inst = @($Installers | Where-Object { $_ })
     if ($inst.Count) {
-        $man = Join-Path $script:RigDir (HostPath 'cache\inst\cache-sources.json')
+        $man = Join-Path $script:CacheDir 'cache-sources.json'
         $null = Invoke-Guest @('mkdir', '--parents', 'C:\cr\inst')
         $r = Invoke-Guest (@('copyto', '--target-directory', 'C:\cr\inst\') + @($man) + $inst)
         if ($r.code -ne 0) { throw "copy cached installers failed: $($r.out -join ' ')" }
@@ -404,14 +416,17 @@ function Push-Tools {
 # (null-run.ps1): __RUN__ = the run name (default null<n>, or <prefix>null<n>), __WAIT__ = the idle seconds per
 # wait (default 60).
 function New-RunJobText {
-    param([string]$Id = '', [int]$NullRun = 0, [string]$Run = '', [switch]$Engine, [switch]$Extra, [int]$NullWaitSec = 60)
+    param([string]$Id = '', [int]$NullRun = 0, [string]$Run = '', [switch]$Engine, [switch]$Extra, [int]$NullWaitSec = 60, $M1b = $null)
     if ($Id) {
         if ($Id -cnotmatch '^[a-z0-9][a-z0-9_-]*$') { throw "bad app id '$Id' (lowercase letters, digits, _ and -)" }
         if (-not $Run) { $Run = $Id }
         if ($Run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$Run' (lowercase letters, digits, _, . and -)" }
         if ($Extra -and -not $Engine) { throw '-Extra (extra checks) needs -Engine' }
         $tpl = [IO.File]::ReadAllText((Join-Path $script:RigDir (HostPath 'guest\run-app.ps1')))
-        return $tpl.Replace('__ID__', $Id).Replace('__RUN__', $Run).Replace('__ENGINE__', $(if ($Engine) { '1' } else { '0' })).Replace('__EXTRA__', $(if ($Extra) { '1' } else { '0' }))
+        # __M1B__ (RIG.md section 12): base64 of the M1b options as UTF-8 JSON (ConvertTo-M1bOpts); empty = none.
+        $m1bText = ''
+        if ($M1b) { $m1bText = [Convert]::ToBase64String((New-Object System.Text.UTF8Encoding($false)).GetBytes((ConvertTo-Json -InputObject (ConvertTo-M1bOpts $M1b) -Compress))) }
+        return $tpl.Replace('__ID__', $Id).Replace('__RUN__', $Run).Replace('__ENGINE__', $(if ($Engine) { '1' } else { '0' })).Replace('__EXTRA__', $(if ($Extra) { '1' } else { '0' })).Replace('__M1B__', $m1bText)
     }
     if ($NullRun -lt 1) { throw 'give -Id or -Null n (n >= 1)' }
     if (-not $Run) { $Run = "null$NullRun" }
@@ -463,11 +478,12 @@ function Invoke-Run {
         [Parameter(ParameterSetName = 'null')][int]$NullWaitSec = 60,
         [Parameter(ParameterSetName = 'app')][switch]$Engine,
         [Parameter(ParameterSetName = 'app')][switch]$ExtraChecks,
+        [Parameter(ParameterSetName = 'app')]$M1b = $null,
         [int]$TimeoutSec = 0
     )
     if ($PSCmdlet.ParameterSetName -eq 'app') {
         $run = Get-RunName -Id $Id -RunPrefix $RunPrefix -Engine:$Engine
-        $text = New-RunJobText -Id $Id -Run $run -Engine:$Engine -Extra:$ExtraChecks; $to = 5400
+        $text = New-RunJobText -Id $Id -Run $run -Engine:$Engine -Extra:$ExtraChecks -M1b $M1b; $to = 5400
     } else {
         $run = Get-NullRunName -N $NullRun -RunPrefix $RunPrefix
         $text = New-RunJobText -NullRun $NullRun -Run $run -NullWaitSec $NullWaitSec; $to = 2400
@@ -607,8 +623,11 @@ function Invoke-Campaign {
     param([string[]]$Ids = @(), [int]$Nulls = 3, [string]$Snapshot = 'rig-base', [switch]$NoRestore,
           [string]$RunPrefix = '', [string]$Engine = '', [int]$NullWaitSec = 60,
           [ValidateSet('first', 'spread')][string]$NullOrder = 'first', [switch]$ExtraChecks, [switch]$NoBaselines,
-          [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'))
+          [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'),
+          # M1b options of the app runs (ConvertTo-M1bOpts; RIG.md section 12), $null for none.
+          $M1b = $null)
     $useEngine = [bool]$Engine
+    if ($M1b) { $null = ConvertTo-M1bOpts $M1b }   # checked before anything is moved or restored
     if ($ExtraChecks -and -not $useEngine) { throw '-ExtraChecks needs -Engine' }
     if ($NoBaselines -and -not $useEngine) { throw '-NoBaselines needs -Engine' }
     # Names are checked before anything is moved or restored.
@@ -635,7 +654,7 @@ function Invoke-Campaign {
                 if (-not $NoRestore) { Restore-Base -Snapshot $Snapshot -ExecutionEngine $ExecutionEngine -No3D:$No3D } else { Wait-Agent -TimeoutSec 120 }
                 $inst = @(); if ($p.id) { $inst = @(Get-CachedRunFiles -Id $p.id) }
                 Push-Tools -Engine $Engine -NoBaselines:$NoBaselines -Installers $inst
-                if ($p.id) { $res = Invoke-Run -Id $p.id -RunPrefix $RunPrefix -Engine:$useEngine -ExtraChecks:$ExtraChecks }
+                if ($p.id) { $res = Invoke-Run -Id $p.id -RunPrefix $RunPrefix -Engine:$useEngine -ExtraChecks:$ExtraChecks -M1b $M1b }
                 else { $res = Invoke-Run -NullRun $p.null -RunPrefix $RunPrefix -NullWaitSec $NullWaitSec }
                 $rec.pulled = @($res.pulled).Count
                 $chk = Test-RunResult -Run $p.run -NotBefore $t
@@ -1146,6 +1165,159 @@ function Invoke-M2ElevatedTests {
     [pscustomobject]$doc
 }
 
+# ------------------------------------------------------------------------------ M1b scan runs (§12)
+#
+# The scan side of the M1b gate (docs\M1B_DESIGN.json M1B-RIG-HOST, gates G2-G4, G7, G8). Every VM mode is an
+# Invoke-Campaign of engine app runs (run-app.ps1) with M1b options passed as __M1B__:
+#   msi_tables  run-app writes msi-tables-<run>-<phase>.json (guest\m1b-msi-tables.ps1) right after snap 1 and snap 2,
+#               so a replay of the snapshots has the MSI tables (purge.rig.msi_tables/1, purge-source snapfixture)
+#   traps       run-app installs trap_b (node) as a pre-app and runs guest\m1b-traps.ps1: phase pre after the launch
+#               (before lists 1, so the harvest sees the plants), between after the harvest (before the uninstall),
+#               post after the uninstall (before lists 2 / snap 2 and the scan)
+# Run names: <RunPrefix>m1b[d|cp]-[traps-]<id> (d = dirty-base, cp = any base on Purge-CleanPro); null runs
+# <RunPrefix>m1b[d|cp]-null<n>; freeze runs m1b-fz<k>-<id>. Scoring: bash truth/m1b.sh (from vm\).
+#   .\vm\rig.ps1 -Mode m1b-app -App 7zip -Base rig-base [-Traps] -Engine <release purge-engine.exe>
+#   .\vm\rig.ps1 -Mode m1b-apps -Base dirty-base -Engine ...            (the gate list, 3 null runs spread)
+#   .\vm\rig.ps1 -Mode m1b-traps -Base rig-base -Engine ...             (7zip as TrapA, node as TrapB, every plant)
+#   .\vm\rig.ps1 -Mode m1b-freeze                                       (2 raw runs each of powershell, temurin)
+#   .\vm\rig.ps1 -Mode m1b-budgets -Engine <m1b engine> -BaseEngine <M2-head engine> -Program <program id>   (host only)
+
+# The gate's app list (G2, G3).
+function Get-M1bGateApps { @('7zip', 'python', 'python312-with-313', 'python313-with-312', 'node', 'vcredist', 'powershell', 'temurin') }
+# The apps whose truth m1b-freeze makes (two raw runs each, M0 method).
+function Get-M1bFreezeApps { @('powershell', 'temurin') }
+
+# Pure: the M1b options as the guest reads them: {msi_tables, traps, trap_a, trap_b}. Accepts a hashtable or an object.
+function ConvertTo-M1bOpts($In) {
+    $get = { param($n) if ($In -is [System.Collections.IDictionary]) { $In[$n] } else { $In.$n } }
+    $o = [ordered]@{ msi_tables = [bool](& $get 'msi_tables'); traps = [bool](& $get 'traps'); trap_a = $null; trap_b = $null }
+    if ($o.traps) {
+        $o.trap_a = "$(& $get 'trap_a')"; $o.trap_b = "$(& $get 'trap_b')"
+        if (-not $o.trap_b) { $o.trap_b = 'node' }
+        foreach ($t in $o.trap_a, $o.trap_b) { if ($t -cnotmatch '^[a-z0-9][a-z0-9_-]*$') { throw "bad trap app id '$t'" } }
+        if ($o.trap_a -eq $o.trap_b) { throw "TrapA and TrapB are the same app ($($o.trap_a))" }
+    }
+    $o
+}
+
+# Pure: the run-name prefix of an M1b mode (see the section header). -Freeze k: m1b-fz<k>-.
+function Get-M1bRunPrefix {
+    param([string]$Base = 'rig-base', [string]$VmName = $script:VmName, [switch]$Traps, [string]$RunPrefix = '', [int]$Freeze = 0)
+    if (@('rig-base', 'dirty-base') -cnotcontains $Base) { throw "-Base must be rig-base or dirty-base (got '$Base')" }
+    if ($Freeze -gt 0) { $p = "${RunPrefix}m1b-fz$Freeze-" }
+    else {
+        $tag = $(if ($VmName -ceq 'Purge-CleanPro') { 'cp' } elseif ($Base -eq 'dirty-base') { 'd' } else { '' })
+        $p = "${RunPrefix}m1b$tag-$(if ($Traps) { 'traps-' })"
+    }
+    if ($p -cnotmatch '^[a-z0-9][a-z0-9_.-]*-$') { throw "bad M1b run prefix '$p' (RunPrefix '$RunPrefix')" }
+    $p
+}
+
+# Pure: the release engine an M1b scan run pushes: -Engine, else $env:RIG_ENGINE, else target\release\purge-engine.exe.
+# The rig-exec build (fault injection) is refused: the scan gate measures the engine that ships.
+function Get-M1bEngine {
+    param([string]$Engine = '', [string]$RepoRoot = $script:RepoRoot)
+    if (-not $Engine) { $Engine = $env:RIG_ENGINE }
+    $ep = Get-EnginePush -Engine $Engine -RepoRoot $RepoRoot
+    if (-not $ep.engine) { throw 'no purge-engine.exe to push (cargo build --release -p purge-engine, or give -Engine / $env:RIG_ENGINE)' }
+    if ($ep.engine -match '[\\/]rig-exec[\\/]') { throw "refusing the rig-exec engine $($ep.engine) for an M1b scan run (it carries fault injection)" }
+    $ep.engine
+}
+
+# One M1b scan mode on the VM ($script:VmName): see the section header. Returns the campaign records.
+function Invoke-M1bMode {
+    param([Parameter(Mandatory)][ValidateSet('m1b-app', 'm1b-apps', 'm1b-traps', 'm1b-freeze')][string]$Mode,
+          [string]$App = '', [string]$Base = 'rig-base', [switch]$Traps, [string[]]$Ids = @(), [int]$Nulls = -1,
+          [string]$Engine = '', [string]$RunPrefix = '', [int]$NullWaitSec = 60,
+          [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'))
+    Assert-RigVm
+    $ids = @($Ids | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $common = @{ ExecutionEngine = $ExecutionEngine; No3D = $No3D; NullWaitSec = $NullWaitSec }
+    switch ($Mode) {
+        'm1b-app' {
+            if (-not $App) { throw '-Mode m1b-app needs -App <id>' }
+            $opts = @{ msi_tables = $true; traps = [bool]$Traps; trap_a = $App; trap_b = 'node' }
+            $pfx = Get-M1bRunPrefix -Base $Base -Traps:$Traps -RunPrefix $RunPrefix
+            return Invoke-Campaign -Ids @($App) -Nulls ([Math]::Max(0, $Nulls)) -NullOrder spread -Snapshot $Base -RunPrefix $pfx `
+                                   -Engine (Get-M1bEngine $Engine) -M1b $opts @common
+        }
+        'm1b-apps' {
+            if (-not $ids.Count) { $ids = @(Get-M1bGateApps) }
+            $pfx = Get-M1bRunPrefix -Base $Base -RunPrefix $RunPrefix
+            return Invoke-Campaign -Ids $ids -Nulls $(if ($Nulls -lt 0) { 3 } else { $Nulls }) -NullOrder spread -Snapshot $Base -RunPrefix $pfx `
+                                   -Engine (Get-M1bEngine $Engine) -M1b @{ msi_tables = $true } @common
+        }
+        'm1b-traps' {
+            $opts = @{ msi_tables = $true; traps = $true; trap_a = '7zip'; trap_b = 'node' }
+            $pfx = Get-M1bRunPrefix -Base $Base -Traps -RunPrefix $RunPrefix
+            return Invoke-Campaign -Ids @('7zip') -Nulls ([Math]::Max(0, $Nulls)) -Snapshot $Base -RunPrefix $pfx `
+                                   -Engine (Get-M1bEngine $Engine) -M1b $opts @common
+        }
+        'm1b-freeze' {
+            # Frozen truth is Inbound rig-base truth (FROZEN.md): the M0 method, vendor uninstall, no engine.
+            if ($script:VmName -cne 'Inbound-Win11-Test' -or $Base -ne 'rig-base') { throw 'm1b-freeze runs on Inbound-Win11-Test, rig-base only (the frozen truth is Inbound rig-base truth)' }
+            if (-not $ids.Count) { $ids = @(Get-M1bFreezeApps) }
+            $all = @()
+            foreach ($k in 1, 2) {
+                $all += @(Invoke-Campaign -Ids $ids -Nulls 0 -Snapshot 'rig-base' -RunPrefix (Get-M1bRunPrefix -Freeze $k -RunPrefix $RunPrefix) -M1b @{ msi_tables = $true } @common)
+            }
+            return $all
+        }
+    }
+}
+
+# G7 (K14), host only and read-only: purge-engine harvest and forced scan of one program with PURGE_TIMING=1, three
+# rounds per engine (round 1 cold, rounds 2-3 warm), for the M1b engine (-Engine) and the M2-head engine
+# (-BaseEngine, built from 3265797), in the same session. Cold = the M1b engine's MSI table cache
+# %ProgramData%\Purge\fp\msitables moved aside to msitables.m1b-budgets-<stamp> before round 1 (Purge's own cache,
+# nothing else is touched; the moved folder is left for the operator to delete). Each step's stderr goes to
+# vm\runs\<prefix>m1b-budgets\<engine>-<step>-<round>.log; budgets.json lists them (purge.rig.m1b-budgets/1) for
+# truth\m1b.sh. Nothing is uninstalled: harvest and scan only read (and write their -o files under the run dir).
+function Invoke-M1bBudgets {
+    param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$BaseEngine, [Parameter(Mandatory)][string]$Program,
+          [string]$RunPrefix = '', [int]$Rounds = 3, [switch]$KeepCache)
+    if ($Program -match '[\s"]') { throw "bad program id '$Program'" }
+    $engines = [ordered]@{ m1b = (Resolve-Path -LiteralPath $Engine).ProviderPath; m2 = (Resolve-Path -LiteralPath $BaseEngine).ProviderPath }
+    if ($engines.m1b -eq $engines.m2) { throw '-Engine and -BaseEngine are the same file' }
+    $run = "${RunPrefix}m1b-budgets"
+    $null = Move-RunToOld -Run $run
+    $dst = Join-Path $script:RunsDir $run
+    New-Item -ItemType Directory -Force $dst | Out-Null
+    $doc = [ordered]@{ schema = 'purge.rig.m1b-budgets/1'; program = $Program; host = $env:COMPUTERNAME; start = (Get-Date).ToString('o'); end = $null
+        engines = $engines; cold_cache = $null; runs = @() }
+    $old = $env:PURGE_TIMING
+    try {
+        $env:PURGE_TIMING = '1'
+        $cache = Join-Path $env:ProgramData 'Purge\fp\msitables'
+        foreach ($name in $engines.Keys) {
+            for ($i = 1; $i -le $Rounds; $i++) {
+                $kind = $(if ($i -eq 1) { 'cold' } else { 'warm' })
+                if ($kind -eq 'cold' -and $name -eq 'm1b' -and -not $KeepCache -and (Test-Path -LiteralPath $cache)) {
+                    $aside = "$cache.m1b-budgets-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+                    Move-Item -LiteralPath $cache -Destination $aside -ErrorAction Stop
+                    $doc.cold_cache = $aside
+                    Write-RigLog "  moved the MSI table cache aside: $aside"
+                }
+                $fp = Join-Path $dst "fp-$name-$i.json"; $plan = Join-Path $dst "plan-$name-$i.json"
+                foreach ($step in 'harvest', 'scan') {
+                    $log = Join-Path $dst "$name-$step-$i.log"
+                    $a = $(if ($step -eq 'harvest') { @('harvest', $Program, '-o', $fp) } else { @('scan', '--fp', $fp, '--mode', 'forced', '-o', $plan) })
+                    $t = Get-Date
+                    $p = Start-Process -FilePath $engines[$name] -ArgumentList $a -NoNewWindow -Wait -PassThru -RedirectStandardError $log -RedirectStandardOutput (Join-Path $dst "$name-$step-$i.out")
+                    $sec = ((Get-Date) - $t).TotalSeconds
+                    $doc.runs += [ordered]@{ engine = $name; step = $step; round = $i; kind = $kind; log = (Split-Path -Leaf $log); exit = $p.ExitCode; wall_s = [Math]::Round($sec, 3) }
+                    Write-RigLog ("  {0} {1} round {2} ({3}): exit {4}, {5:N1} s" -f $name, $step, $i, $kind, $p.ExitCode, $sec)
+                }
+            }
+        }
+    } finally {
+        $env:PURGE_TIMING = $old
+        $doc.end = (Get-Date).ToString('o')
+        [IO.File]::WriteAllText((Join-Path $dst 'budgets.json'), (ConvertTo-Json -InputObject $doc -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    }
+    [pscustomobject]$doc
+}
+
 # ------------------------------------------------------------------------------------ building rig-base
 
 # Runs guest\setup-base.ps1 elevated through the agent (after Push-Tools) and prints its log.
@@ -1172,9 +1344,21 @@ function Save-BaseSnapshot {
     Write-RigLog "snapshot $Name taken"
 }
 
+$m1bModes = @('m1b-app', 'm1b-apps', 'm1b-traps', 'm1b-freeze', 'm1b-budgets')
+if ($MyInvocation.InvocationName -ne '.' -and $m1bModes -ccontains $Mode) {
+    if ($Mode -eq 'm1b-budgets') {
+        $null = Invoke-M1bBudgets -Engine $(if ($Engine) { $Engine } else { Get-M1bEngine }) -BaseEngine $M1bBaseEngine -Program $M1bProgram -RunPrefix $RunPrefix
+        return
+    }
+    $m1bArgs = @{ Mode = $Mode; App = $M1bApp; Base = $M1bBase; Traps = $M1bTraps; Ids = $Ids; Engine = $Engine; RunPrefix = $RunPrefix
+                  NullWaitSec = $NullWaitSec; ExecutionEngine = $ExecutionEngine; No3D = $No3D }
+    if ($PSBoundParameters.ContainsKey('Nulls')) { $m1bArgs.Nulls = $Nulls }
+    $null = Invoke-M1bMode @m1bArgs
+    return
+}
 if ($MyInvocation.InvocationName -ne '.' -and $Mode -ne 'campaign') {
     $m2Modes = @('m2-traps', 'm2-fidelity', 'm2-crash', 'm2-reboot', 'm2-install', 'm2-elevated')
-    if ($m2Modes -cnotcontains $Mode) { throw "-Mode must be campaign or one of $($m2Modes -join ', ') (got '$Mode')" }
+    if ($m2Modes -cnotcontains $Mode) { throw "-Mode must be campaign, one of $($m1bModes -join ', ') or one of $($m2Modes -join ', ') (got '$Mode')" }
     $m2Snap = $(if ($PSBoundParameters.ContainsKey('Snapshot')) { $Snapshot } else { 'm2-base' })
     if ($Mode -eq 'm2-elevated') { $null = Invoke-M2ElevatedTests -Snapshot $m2Snap -RunPrefix $RunPrefix; return }
     $null = Invoke-M2Mode -Mode $Mode -Snapshot $m2Snap -Engine $Engine -RunPrefix $RunPrefix -HardPowerOff:$M2HardPowerOff -FaultPoints $M2FaultPoints `

@@ -1,0 +1,9 @@
+{
+  "schema": "purge.rig.m1b-evidence/1",
+  "note": "SYNTHETIC sample for the m1b.sh selftest (m1b_sh_passes_on_recorded_sample): hand-made in the shape stage 1 writes, not a VM capture; numbers are illustrative only.",
+  "prefixes": {
+    "clean": "m1b",
+    "dirty": "m1bd",
+    "cp": "m1bcp"
+  }
+}

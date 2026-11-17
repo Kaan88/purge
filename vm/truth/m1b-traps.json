@@ -1,0 +1,551 @@
+{
+  "schema": "purge.m1b.traps/1",
+  "cases": [
+    {
+      "id": "svc-owned",
+      "phase": "pre",
+      "plant": "Plant-OwnedService",
+      "expect": [
+        {
+          "target": {
+            "type": "Service",
+            "name": "PurgeTrapSvcA"
+          },
+          "verdict": "safe",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "svc-owned-running",
+      "phase": "pre",
+      "plant": "Plant-OwnedRunningService",
+      "expect": [
+        {
+          "target": {
+            "type": "Service",
+            "name": "PurgeTrapSvcRun"
+          },
+          "verdict": "listed",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "svc-shared",
+      "phase": "pre",
+      "plant": "Plant-SharedService",
+      "expect": [
+        {
+          "target": {
+            "type": "Service",
+            "name": "PurgeTrapSvcShared-7-Zip"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "svc-dependent",
+      "phase": "pre",
+      "plant": "Plant-DependentService",
+      "expect": [
+        {
+          "target": {
+            "type": "Service",
+            "name": "PurgeTrapSvcA2"
+          },
+          "verdict": "protected",
+          "blocker": "HasDependents"
+        },
+        {
+          "target": {
+            "type": "Service",
+            "name": "PurgeTrapSvcDep"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "svc-svchost",
+      "phase": "pre",
+      "plant": "Plant-SvchostService",
+      "expect": [
+        {
+          "target": {
+            "type": "Service",
+            "name": "PurgeTrapSvcHost"
+          },
+          "verdict": "absent",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Svchost",
+            "name": "PurgeTrapGroup"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "task-owned",
+      "phase": "pre",
+      "plant": "Plant-OwnedTask",
+      "expect": [
+        {
+          "target": {
+            "type": "Task",
+            "path": "\\PurgeTrap\\7-Zip Update"
+          },
+          "verdict": "safe",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "task-similar-name",
+      "phase": "pre",
+      "plant": "Plant-SimilarTask",
+      "expect": [
+        {
+          "target": {
+            "type": "Task",
+            "path": "\\PurgeTrap\\7-Zip Updater"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "task-interpreter",
+      "phase": "pre",
+      "plant": "Plant-InterpreterTask",
+      "expect": [
+        {
+          "target": {
+            "type": "Task",
+            "path": "\\PurgeTrap\\7-Zip Script"
+          },
+          "verdict": "not_preselected",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "fw-owned",
+      "phase": "pre",
+      "plant": "Plant-OwnedFirewall",
+      "expect": [
+        {
+          "target": {
+            "type": "FirewallRule",
+            "id": "PurgeTrapFwA"
+          },
+          "verdict": "safe",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "fw-same-display-name",
+      "phase": "pre",
+      "plant": "Plant-SameNameFirewall",
+      "expect": [
+        {
+          "target": {
+            "type": "FirewallRule",
+            "id": "PurgeTrapFwB"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "fw-no-app",
+      "phase": "pre",
+      "plant": "Plant-PortFirewall",
+      "expect": [
+        {
+          "target": {
+            "type": "FirewallRule",
+            "id": "PurgeTrapFwPort"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "com-owned",
+      "phase": "pre",
+      "plant": "Plant-ComClass",
+      "expect": [
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}"
+          },
+          "verdict": "safe",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "shellex-approved",
+      "phase": "pre",
+      "plant": "Plant-ShellexApproved",
+      "expect": [
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\PurgeTrapA"
+          },
+          "verdict": "listed",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
+            "name": "{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}"
+          },
+          "verdict": "listed",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "com-shared-class",
+      "phase": "pre",
+      "plant": "Plant-SharedComClass",
+      "expect": [
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Classes\\CLSID\\{AA0252AF-8AAD-4AAB-9CF2-50CFE0FD31DF}"
+          },
+          "verdict": "protected",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "shareddlls-count",
+      "phase": "pre",
+      "plant": "Plant-SharedDlls",
+      "expect": [
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs",
+            "name": "C:\\Program Files\\7-Zip\\PurgeTrapShared2.dll"
+          },
+          "verdict": "protected",
+          "blocker": "SharedRefcount"
+        },
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs",
+            "name": "C:\\Windows\\System32\\comctl32.dll"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "eventlog-shared-source",
+      "phase": "pre",
+      "plant": "Plant-EventLogSource",
+      "expect": [
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA"
+          },
+          "verdict": "listed",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA2"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "tracing",
+      "phase": "pre",
+      "plant": "Plant-Tracing",
+      "expect": [
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32"
+          },
+          "verdict": "not_preselected",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS"
+          },
+          "verdict": "not_preselected",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "privacy-twins",
+      "phase": "pre",
+      "plant": "Plant-MuiCacheAndFriends",
+      "expect": [
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache",
+            "name": "C:\\Program Files\\7-Zip\\7zFM.exe.FriendlyAppName"
+          },
+          "verdict": "listed",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+            "name": "C:\\Program Files\\7-Zip\\7zFM.exe"
+          },
+          "verdict": "listed",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache",
+            "name": "C:\\Program Files\\nodejs\\node.exe.FriendlyAppName"
+          },
+          "verdict": "absent",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache",
+            "name": "C:\\Program Files\\nodejs\\node.exe.ApplicationCompany"
+          },
+          "verdict": "absent",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+            "name": "C:\\Program Files\\nodejs\\node.exe"
+          },
+          "verdict": "absent",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers",
+            "name": "C:\\Program Files\\nodejs\\node.exe"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "wer-twins",
+      "phase": "pre",
+      "plant": "Plant-WerReports",
+      "expect": [
+        {
+          "target": {
+            "type": "Path",
+            "path": "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_7zFM.exe_6feb8ebc183bf561d06a69f0f9cc73a8619d2a05_6feb8ebc_619d2a05"
+          },
+          "verdict": "listed",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "Path",
+            "path": "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_node.exe_ed89c85063a9c1e6cf7892e1cd663d998ea984d1_ed89c850_8ea984d1"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "msi-remnants",
+      "phase": "post",
+      "plant": "Plant-MsiRemnants",
+      "expect": [
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000"
+          },
+          "verdict": "safe",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "msi-remnants-foreign",
+      "phase": "post",
+      "plant": "Plant-MsiRemnantsForeign",
+      "expect": [
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F"
+          },
+          "verdict": "absent",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\941D6F575B3956C4DBBA534183F3D607"
+          },
+          "verdict": "absent",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\0DF209647E2CF814AAB4A347574125FD"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "msi-shared-component",
+      "phase": "post",
+      "plant": "Plant-SharedComponent",
+      "expect": [
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\D81447BBA715AD443B803350640BA01C",
+            "name": "0DD75A3FB8D547A40A5576A0B7AA1467"
+          },
+          "verdict": "absent",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "Path",
+            "path": "C:\\Program Files\\7-Zip\\PurgeTrapComponent.dat"
+          },
+          "verdict": "protected",
+          "blocker": "OwnedByInstalledMsi"
+        }
+      ]
+    },
+    {
+      "id": "com-isimpledom",
+      "phase": "post",
+      "plant": "Plant-IsimpleDom",
+      "expect": [
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}"
+          },
+          "verdict": "protected",
+          "blocker": "SharedIid"
+        },
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}"
+          },
+          "verdict": "protected",
+          "blocker": "SharedIid"
+        }
+      ]
+    },
+    {
+      "id": "burn-shared-package",
+      "phase": "post",
+      "plant": "Plant-BurnShared",
+      "expect": [
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\PurgeTrapPkg"
+          },
+          "verdict": "protected",
+          "blocker": "BurnDependentsRemain"
+        },
+        {
+          "target": {
+            "type": "RegKey",
+            "path": "HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\PurgeTrapPkg\\Dependents\\{8F55F023-DF9B-4357-8AE7-2C820D0150CA}"
+          },
+          "verdict": "absent",
+          "blocker": null
+        },
+        {
+          "target": {
+            "type": "Path",
+            "path": "C:\\ProgramData\\Package Cache\\PurgeTrapPkg"
+          },
+          "verdict": "protected",
+          "blocker": "BurnDependentsRemain"
+        }
+      ]
+    },
+    {
+      "id": "pkgcache-foreign",
+      "phase": "post",
+      "plant": "Plant-PkgCacheForeign",
+      "expect": [
+        {
+          "target": {
+            "type": "Path",
+            "path": "C:\\ProgramData\\Package Cache\\{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}v20.18.0"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    },
+    {
+      "id": "instfolders",
+      "phase": "post",
+      "plant": "Plant-InstFolders",
+      "expect": [
+        {
+          "target": {
+            "type": "RegValue",
+            "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders",
+            "name": "C:\\Program Files\\nodejs\\"
+          },
+          "verdict": "absent",
+          "blocker": null
+        }
+      ]
+    }
+  ]
+}

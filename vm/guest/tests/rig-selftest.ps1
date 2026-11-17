@@ -109,6 +109,25 @@ Check 'a settings set built with -Priority 4 has Priority=4 (not registered)' ($
     Check 'New-RunJobText rejects an uppercase id' ($msg -match 'bad app id')
     $msg = $null; try { $null = New-RunJobText -Id '__ID__' } catch { $msg = $_.Exception.Message }
     Check 'New-RunJobText rejects the placeholder as an id' ($msg -match 'bad app id')
+
+    # M1b (RIG.md section 12): __M1B__ carries the options; no options leaves it empty (M0 / M1a behaviour).
+    $plain = New-RunJobText -Id '7zip' -Run 'm1b-7zip' -Engine
+    Check 'M1b: no options -> empty __M1B__' ($plain -match "\`$M1bFlag = ''" -and $plain -notmatch '__M1B__')
+    $t = New-RunJobText -Id '7zip' -Run 'm1b-traps-7zip' -Engine -M1b @{ msi_tables = $true; traps = $true; trap_a = '7zip' }
+    $b64 = [regex]::Match($t, "\`$M1bFlag = '([^']+)'").Groups[1].Value
+    $o = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64)) | ConvertFrom-Json
+    Check 'M1b: options round-trip (trap_b defaults to node)' ($o.msi_tables -and $o.traps -and $o.trap_a -eq '7zip' -and $o.trap_b -eq 'node')
+    $r = Test-IdCheck $t
+    Check 'M1b: job with options passes the id check' ($r.code -eq 7) "exit $($r.code): $($r.out)"
+    $msg = $null; try { $null = ConvertTo-M1bOpts @{ traps = $true; trap_a = 'node'; trap_b = 'node' } } catch { $msg = $_.Exception.Message }
+    Check 'M1b: TrapA = TrapB refused' ($msg -match 'same app')
+    Check 'M1b: run prefixes' ((Get-M1bRunPrefix -Base 'rig-base' -VmName 'Inbound-Win11-Test') -ceq 'm1b-' -and
+        (Get-M1bRunPrefix -Base 'dirty-base' -VmName 'Inbound-Win11-Test' -Traps) -ceq 'm1bd-traps-' -and
+        (Get-M1bRunPrefix -Base 'rig-base' -VmName 'Purge-CleanPro' -RunPrefix 'g8-') -ceq 'g8-m1bcp-' -and
+        (Get-M1bRunPrefix -Freeze 2) -ceq 'm1b-fz2-')
+    $msg = $null; try { $null = Get-M1bRunPrefix -Base 'm2-base' } catch { $msg = $_.Exception.Message }
+    Check 'M1b: a base other than rig-base / dirty-base refused' ($msg -match 'rig-base or dirty-base')
+    Check 'M1b: the gate list has the 8 apps' (@(Get-M1bGateApps).Count -eq 8 -and (Get-M1bGateApps) -contains 'python313-with-312')
 }
 
 # --------------------------------------------------- rig.ps1: run directories never mix two runs

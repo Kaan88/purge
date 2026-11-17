@@ -1,0 +1,53 @@
+{
+  "id": "powershell",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\Recent\\\\AutomaticDestinations\\\\9d5f66f86ab736a4\\.automaticDestinations-ms$",
+      "why": "Jump list of AppID {ProgramFilesX64}\\PowerShell\\7\\pwsh.exe (CRC-64 9d5f66f86ab736a4); FS-JUMPLISTS, Unchecked."
+    },
+    {
+      "label": "leftover",
+      "first": true,
+      "gen": true,
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\(PWSH)\\.EXE-[0-9A-F]{8}\\.pf$",
+      "why": "Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash)."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer(\\\\(Products|Features|Components|UpgradeCodes|Dependencies|Patches))?$",
+      "why": "Windows Installer registration containers created by the first MSI install on a clean base and left empty; owned by the Installer service, not the product."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\(Folders|UpgradeCodes|Products|Components|UserData|UserData\\\\S-1-5-18(\\\\(Products|Components))?)$",
+      "why": "Windows Installer machine-state containers created on first MSI use; the service's own keys."
+    },
+    {
+      "label": "ambient",
+      "match": "^K:HKLM\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows NT\\\\CurrentVersion\\\\SystemRestore$",
+      "why": "msiexec's restore-point bookkeeping key (created on the first MSI transaction); Windows state."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\[^\\\\]+\\.pf$",
+      "why": "SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state."
+    },
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\Documents\\\\PowerShell(\\\\.*)?$",
+      "why": "PowerShell 7 per-user profile scripts, modules and help (the user's own scripts): user data."
+    },
+    {
+      "label": "user_data",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\PowerShell(\\\\.*)?$",
+      "why": "PSReadLine history and settings, shared with Windows PowerShell 5.1 (which stays): user data, never preselected. UNSURE whether a bare launch writes it."
+    }
+  ],
+  "note": "PowerShell 7.6.10 LTS x64 MSI (M1b, M1B-RIG-HOST). Launched once (pwsh.exe -NoLogo). Hand rules: the MSI containers and the per-user PowerShell folders that hold user data. Not frozen until the two m1b-freeze runs are reviewed (vm/RIG.md section 12)."
+}
