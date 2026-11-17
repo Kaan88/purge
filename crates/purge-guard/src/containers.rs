@@ -12,11 +12,11 @@
 //! once it is a proven owned skeleton (§5.7.1).
 //!
 //! [`M1B_VALUE_CONTAINERS`] holds the containers of the M1b scanners: every path-keyed store of
-//! C-PATHSTORES, the `Shell Extensions\Approved` lists and the MSI `UpgradeCodes` and `Components` keys.
-//! The guard treats them as structural now ([`value_container`], [`check`]); they stay out of
-//! [`VALUE_CONTAINERS`] until the scanners that read them are in the catalog, because `purge-scan` and
-//! `xtask scanner-coverage` require the catalog's containers to equal that table (M1B-SCAN-INTEG appends
-//! them there).
+//! C-PATHSTORES, the shell-extension lists (`Shell Extensions\Approved` and `Cached`,
+//! `ShellExecuteHooks`, `SharedTaskScheduler`) and the MSI `UpgradeCodes` and `Components` keys. The
+//! guard treats them as structural ([`value_container`], [`check`]). `purge-scan` and
+//! `xtask scanner-coverage` require the catalog's containers to equal [`all_value_containers`], the two
+//! tables in order (M1B-SCAN-INTEG).
 
 use purge_model::{Blocker, Target};
 
@@ -62,6 +62,11 @@ pub const M1B_VALUE_CONTAINERS: &[&str] = &[
     r"HKU\*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage\ShowJumpView",
     // Shell extension approvals (both views, HKLM and every user).
     r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved",
+    // The other shell-extension lists COM-SHELLEX offers single values from (R3a M10): the per-user
+    // cache of approved handlers, and the Explorer hook lists (both views, HKLM and every user).
+    r"HKU\*\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Cached",
+    r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellExecuteHooks",
+    r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SharedTaskScheduler",
     // MSI upgrade codes and component client lists.
     r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UpgradeCodes\*",
     r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\*\Components\*",

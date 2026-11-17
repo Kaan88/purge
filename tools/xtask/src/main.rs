@@ -3,20 +3,26 @@
 //! - `ui-strings`: fail if any 12+ character string literal of ours equals a string of the reference
 //!   product's English language file (path in `PURGE_UT_STRINGS`, never committed).
 //! - `check-deps`: fail if `purge-mcp` depends on any Purge crate other than `purge-model` and
-//!   `purge-rpc`, in its own tree or under workspace feature unification (so never the executor).
+//!   `purge-rpc`, in its own tree or under workspace feature unification (so never the executor); also
+//!   fail if purge-win's code names a forbidden service, MSI or firewall API, `netsh` or PowerShell.
+//! - `no-new-walks`: fail if a file of `purge-scan/src` outside `ref_any.rs`, `framework.rs` and
+//!   `framework/m1b.rs` calls `.walker(` or `refscan::scan` (the scan makes one reference walk).
 //! - `scanner-coverage`: fail if a scanner declares a root the VM rig does not capture, or if the
 //!   scanners' value containers differ from the guard's table (ENGINE_PLAN.md §5.6, §5.10).
 //! - `replay`: run the engine pipeline offline over one frozen rig run (harvest at snap-1, scan at
 //!   snap-2) and write its `purge.plan/0`; `replay-all` does so for the M0 runs and scores them with
-//!   rigtool when it is built (see replay.rs).
+//!   rigtool when it is built; `replay-diff` replays the M0 runs and compares the plans with the
+//!   committed m1a.6 plans, every difference with an allowed reason (see replay.rs).
 //! - `ci`: fmt check, clippy, tests, a standalone clippy of `purge-mcp`, clippy and the feature-gated
 //!   tests of the rig-exec build (engine CLI), every purge-exec test target with its `fault-inject` and
-//!   `test-support` features (crash matrix, object ops), check-deps, ui-strings, scanner-coverage.
+//!   `test-support` features (crash matrix, object ops), check-deps, no-new-walks, ui-strings,
+//!   scanner-coverage.
 
 mod check_deps;
 mod lex;
 mod no_new_walks;
 mod replay;
+mod replay_diff;
 mod scanner_coverage;
 mod ui_strings;
 
@@ -25,17 +31,19 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, bail};
 
-const USAGE: &str =
-    "usage: cargo xtask <ui-strings | check-deps | scanner-coverage | replay | replay-all | ci>";
+const USAGE: &str = "usage: cargo xtask <ui-strings | check-deps | no-new-walks | scanner-coverage | \
+                     replay | replay-all | replay-diff | ci>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("ui-strings") => ui_strings::run(&workspace_root()),
         Some("check-deps") => check_deps::run(&workspace_root()),
+        Some("no-new-walks") => no_new_walks::run(&workspace_root()),
         Some("scanner-coverage") => scanner_coverage::run(),
         Some("replay") => replay::run_one(&workspace_root(), &args[1..]),
         Some("replay-all") => replay::run_all(&workspace_root(), &args[1..]),
+        Some("replay-diff") => replay_diff::run(&workspace_root(), &args[1..]),
         Some("ci") => ci(&workspace_root()),
         Some("-h" | "--help") => {
             println!("{USAGE}");
@@ -151,6 +159,10 @@ fn ci(root: &Path) -> Result<bool> {
     println!("xtask ci: check-deps");
     if !check_deps::run(root)? {
         bail!("step failed: check-deps");
+    }
+    println!("xtask ci: no-new-walks");
+    if !no_new_walks::run(root)? {
+        bail!("step failed: no-new-walks");
     }
     println!("xtask ci: ui-strings");
     if !ui_strings::run(root)? {

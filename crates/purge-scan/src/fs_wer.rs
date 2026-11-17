@@ -41,8 +41,8 @@
 //!
 //! # Missing data
 //!
-//! There is no scan-warning channel for scanners yet: a store or report that cannot be read
-//! (`AccessDenied`, `NotCaptured`) makes no candidate; the spots are marked `// warning:`.
+//! A store or report that cannot be read (`AccessDenied`, `NotCaptured`) makes no candidate and one
+//! scan warning (`ScanExt::warn`); "not there" is no warning.
 
 use purge_guard::canon::canon_path;
 use purge_guard::prefix;
@@ -110,12 +110,22 @@ impl Scanner for FsWer {
             let entries = match ctx.fs.list_dir(&store) {
                 Ok(entries) => entries,
                 Err(SourceError::NotFound) => continue,
-                // warning: the WER store cannot be listed (access denied, not captured, a reparse
-                // point): none of its reports is offered.
-                Err(_) => continue,
+                // The WER store cannot be listed (access denied, not captured, a reparse point):
+                // none of its reports is offered.
+                Err(e) => {
+                    warn_unlisted(ctx, &store, &e);
+                    continue;
+                }
             };
-            // warning: a store with more entries than a listing may hold is not enumerable.
+            // A store with more entries than a listing may hold is not enumerable.
             if entries.len() > ctx.limits.max_dir_entries {
+                ctx.ext.warn(
+                    ID,
+                    format!(
+                        "{store}: more than {} entries; none of its reports is offered",
+                        ctx.limits.max_dir_entries
+                    ),
+                );
                 continue;
             }
             for entry in &entries {
@@ -250,10 +260,24 @@ pub fn report_app_path(text: &str) -> Option<&str> {
     found.filter(|value| !value.is_empty())
 }
 
+/// One scan warning for a directory or file that could not be read; "not there" is no warning.
+fn warn_unlisted(ctx: &ScanCtx<'_>, path: &str, error: &SourceError) {
+    if !matches!(error, SourceError::NotFound) {
+        ctx.ext.warn(
+            ID,
+            format!("{path}: not read ({error}); nothing is offered from it"),
+        );
+    }
+}
+
 /// The candidate for the report directory `dir`, or nothing.
 fn report_candidate(ctx: &ScanCtx<'_>, dir: &str) -> Option<Candidate> {
-    // warning: a report directory that cannot be listed (access denied, not captured) is not offered.
-    let entries: Vec<DirEntry> = ctx.fs.list_dir(dir).ok()?;
+    // A report directory that cannot be listed (access denied, not captured) is not offered.
+    let entries: Vec<DirEntry> = ctx
+        .fs
+        .list_dir(dir)
+        .map_err(|e| warn_unlisted(ctx, dir, &e))
+        .ok()?;
     if entries.len() > ctx.limits.max_dir_entries {
         return None;
     }
@@ -270,10 +294,12 @@ fn report_candidate(ctx: &ScanCtx<'_>, dir: &str) -> Option<Candidate> {
     if report.meta.size > MAX_REPORT_BYTES as u64 {
         return None;
     }
-    // warning: a `Report.wer` that cannot be read (access denied, not captured) offers nothing.
+    // A `Report.wer` that cannot be read (access denied, not captured) offers nothing.
+    let file = join(dir, &report.name);
     let bytes = ctx
         .fs
-        .read_bytes(&join(dir, &report.name), MAX_REPORT_BYTES + 1)
+        .read_bytes(&file, MAX_REPORT_BYTES + 1)
+        .map_err(|e| warn_unlisted(ctx, &file, &e))
         .ok()?;
     if bytes.len() > MAX_REPORT_BYTES {
         return None;

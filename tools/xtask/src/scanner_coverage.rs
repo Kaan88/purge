@@ -18,16 +18,22 @@
 //! `*` in a pattern is one segment of any name; it is covered only by a `*` in the rig root (a user
 //! hive), never by a named key.
 //!
+//! # Places that must be claimed
+//!
+//! Each of [`MUST_CLAIM`] (keys the M1b scanners are about: the firewall's rule store, MSI and Burn
+//! dependency records) must lie at or under a declared root of some scanner, and the catalog may not
+//! shrink below [`MIN_SCANNERS`] scanners and [`MIN_ROOTS`] declared roots (the M1b figures).
+//!
 //! # Value containers
 //!
-//! The union of the scanners' `value_containers()` must equal
-//! `purge_guard::containers::VALUE_CONTAINERS` (read through the constant itself); `purge-scan`'s own unit
-//! tests compare the same two lists.
+//! The union of the scanners' `value_containers()` must equal the guard's tables,
+//! `purge_guard::containers::all_value_containers()` (`VALUE_CONTAINERS`, then `M1B_VALUE_CONTAINERS`);
+//! `purge-scan`'s own unit tests compare the same two lists.
 
 use std::collections::BTreeSet;
 
 use anyhow::{Result, bail};
-use purge_guard::containers::VALUE_CONTAINERS;
+use purge_guard::containers::all_value_containers;
 use purge_scan::catalog::{self, ScannerMeta};
 use purge_scan::framework::{RootSpec, RootSpecKind};
 
@@ -80,6 +86,37 @@ pub const RIG_EXCLUDED: &[&str] = &[
     r"HKLM\SYSTEM\CurrentControlSet\Enum",
     r"HKLM\SYSTEM\CurrentControlSet\Control\DeviceClasses",
 ];
+
+/// Places some scanner must declare a root at or above (R3a, M1B-SCAN-INTEG), in root-pattern syntax.
+pub const MUST_CLAIM: &[&str] = &[
+    r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules",
+    r"HKLM\SOFTWARE\Classes\Installer\Dependencies",
+    r"HKLM\SYSTEM\CurrentControlSet\Services",
+    r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache",
+];
+
+/// The fewest scanners the catalog may hold (M1b: 19 + 14).
+pub const MIN_SCANNERS: usize = 33;
+
+/// The fewest declared roots the catalog may hold (the M1b catalog's count).
+pub const MIN_ROOTS: usize = 97;
+
+/// Whether a declared root of `metas` lies at or above the concrete key `place` (a root pattern `*\`
+/// or `HKU\*\` covers `HKLM\` and user places through [`expand`]).
+pub fn claimed(place: &str, metas: &[ScannerMeta]) -> bool {
+    let place_segs = segments(place);
+    metas.iter().any(|meta| {
+        meta.captured_roots.iter().any(|root| {
+            expand(root).is_some_and(|paths| {
+                paths.iter().any(|p| {
+                    let r = segments(p);
+                    r.len() <= place_segs.len()
+                        && r.iter().zip(&place_segs).all(|(r, s)| seg_covers(r, s))
+                })
+            })
+        })
+    })
+}
 
 /// What the rig captures: its roots and its exclusions.
 #[derive(Debug, Clone, Copy)]
@@ -279,12 +316,27 @@ pub fn run() -> Result<bool> {
         }
     }
 
-    let guard = VALUE_CONTAINERS;
+    for place in MUST_CLAIM {
+        if !claimed(place, &metas) {
+            ok = false;
+            eprintln!("scanner-coverage: {place}: no scanner declares a root at or above it");
+        }
+    }
+    if metas.len() < MIN_SCANNERS || roots < MIN_ROOTS {
+        ok = false;
+        eprintln!(
+            "scanner-coverage: the catalog shrank: {} scanners, {roots} roots (at least {MIN_SCANNERS} and \
+             {MIN_ROOTS})",
+            metas.len()
+        );
+    }
+
+    let guard: Vec<&str> = all_value_containers().collect();
     if guard.is_empty() {
-        bail!("purge_guard::containers::VALUE_CONTAINERS holds no strings");
+        bail!("purge_guard::containers holds no value containers");
     }
     let declared = catalog::value_containers();
-    for line in compare_containers(&declared, guard) {
+    for line in compare_containers(&declared, &guard) {
         ok = false;
         eprintln!("scanner-coverage: value containers: {line}");
     }
@@ -298,9 +350,10 @@ pub fn run() -> Result<bool> {
 
     if ok {
         println!(
-            "scanner-coverage: {} scanners, {roots} roots inside the rig capture roots; {} value \
-             containers equal the guard's table",
+            "scanner-coverage: {} scanners, {roots} roots inside the rig capture roots; {} places \
+             claimed; {} value containers equal the guard's tables",
             metas.len(),
+            MUST_CLAIM.len(),
             declared.len()
         );
     }
@@ -483,5 +536,37 @@ mod tests {
     #[test]
     fn the_real_guard_table_equals_the_scanners_containers() {
         assert!(run().unwrap());
+    }
+
+    /// The firewall rule store and the dependency records are claimed by the catalog; a catalog without
+    /// the scanner that declares one does not claim it; `*\` roots claim the machine's key.
+    #[test]
+    fn places_of_the_m1b_scanners_are_claimed() {
+        let metas = catalog::metadata();
+        for place in MUST_CLAIM {
+            assert!(claimed(place, &metas), "{place}");
+        }
+        // SYS-FIREWALL alone claims the rule store; a scanner of other places does not.
+        let only = |id: &str| -> Vec<ScannerMeta> {
+            metas.iter().filter(|m| m.id == id).cloned().collect()
+        };
+        assert!(claimed(MUST_CLAIM[0], &only("SYS-FIREWALL")));
+        assert!(!claimed(MUST_CLAIM[0], &only("REG-SOFTWARE")));
+        assert!(!claimed(MUST_CLAIM[0], &[]));
+        let star = meta(vec![RootSpec::reg(
+            r"*\SOFTWARE\Classes\Installer",
+            Some(2),
+        )]);
+        assert!(claimed(
+            r"HKLM\SOFTWARE\Classes\Installer\Dependencies",
+            std::slice::from_ref(&star)
+        ));
+        assert!(!claimed(r"HKLM\SOFTWARE\Classes", &[star]));
+        let roots: usize = metas.iter().map(|m| m.captured_roots.len()).sum();
+        assert!(
+            metas.len() >= MIN_SCANNERS && roots >= MIN_ROOTS,
+            "{} {roots}",
+            metas.len()
+        );
     }
 }

@@ -1166,6 +1166,12 @@ fn value_containers_include_every_path_store() {
         r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved"
             .to_owned(),
         format!(r"{u}\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved"),
+        // The other shell-extension lists (R3a M10).
+        format!(r"{u}\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Cached"),
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellExecuteHooks".to_owned(),
+        r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Explorer\SharedTaskScheduler"
+            .to_owned(),
+        format!(r"{u}\Software\Microsoft\Windows\CurrentVersion\Explorer\ShellExecuteHooks"),
         // MSI upgrade codes and component client lists.
         format!(r"{CV}\Installer\UpgradeCodes\{U}"),
         format!(r"{CV}\Installer\UserData\S-1-5-18\Components\{C}"),

@@ -1,0 +1,3111 @@
+{
+  "schema": "purge.replay-ref/1",
+  "engine": "m1a.6 (622c64d), cargo xtask replay without overlay",
+  "apps": {
+    "firefox": [
+      {
+        "target": {
+          "name": "308046B0AF4A39CB",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated",
+          "type": "RegValue"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "{AC21D679-A9C1-47A0-B96F-A0625A9EE822}",
+          "path": "HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules",
+          "type": "RegValue"
+        },
+        "band": "Blocked",
+        "preselected": false,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": [
+          "kind"
+        ]
+      },
+      {
+        "target": {
+          "name": "308046B0AF4A39CB",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData",
+          "type": "RegValue"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "308046B0AF4A39CB;PrivateBrowsingAUMID",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData",
+          "type": "RegValue"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "",
+          "path": "HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\InProcServer32",
+          "type": "RegValue"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "",
+          "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}\\ProxyStubClsid32",
+          "type": "RegValue"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "",
+          "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\ProxyStubClsid32",
+          "type": "RegValue"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "",
+          "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}\\ProxyStubClsid32",
+          "type": "RegValue"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Mozilla\\Firefox",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Mozilla\\MaintenanceService",
+          "type": "RegKey"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\WOW6432Node\\Mozilla",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox",
+          "type": "Path"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "FS-APPDATA",
+        "absorbed": false,
+        "blockers": [
+          "kind"
+        ]
+      },
+      {
+        "target": {
+          "path": "C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox",
+          "type": "Path"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "FS-APPDATA",
+        "absorbed": false,
+        "blockers": [
+          "kind"
+        ]
+      },
+      {
+        "target": {
+          "path": "C:\\Users\\tester\\AppData\\Local\\Mozilla",
+          "type": "Path"
+        },
+        "band": "Weak",
+        "preselected": false,
+        "scanner": "FS-VENDORPARENT",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "C:\\Users\\tester\\AppData\\Roaming\\Mozilla",
+          "type": "Path"
+        },
+        "band": "Weak",
+        "preselected": false,
+        "scanner": "FS-VENDORPARENT",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates\\308046B0AF4A39CB",
+          "type": "Path"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "FS-APPDATA",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates",
+          "type": "Path"
+        },
+        "band": "Weak",
+        "preselected": false,
+        "scanner": "FS-VENDORPARENT",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "C:\\Program Files\\Mozilla Firefox",
+          "path": "HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox\\TaskBarIDs",
+          "type": "RegValue"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\DllPrefetchExperiment",
+          "type": "RegValue"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Blocklist",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\Launcher",
+          "type": "RegValue"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Enabled",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings",
+          "type": "RegValue"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Progress",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings",
+          "type": "RegValue"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "C:\\Program Files\\Mozilla Firefox\\firefox.exe|Theme",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings",
+          "type": "RegValue"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Mozilla\\Firefox\\TaskBarIDs",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      }
+    ],
+    "git": [
+      {
+        "target": {
+          "name": "1",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+          "type": "RegValue"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "2",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+          "type": "RegValue"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "CLS-VERBS",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\sh_auto_file",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\sh_auto_file\\shell\\open",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\sh_auto_file\\shell",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      }
+    ],
+    "npp": [
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\WOW6432Node\\Notepad++",
+          "type": "RegKey"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REG-SOFTWARE",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "full_name": "NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww",
+          "type": "AppxPackage"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "SYS-APPX",
+        "absorbed": false,
+        "blockers": [
+          "kind"
+        ]
+      }
+    ],
+    "vscode": [
+      {
+        "target": {
+          "name": "",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode\\shell\\open\\command",
+          "type": "RegValue"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "name": "",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode",
+          "type": "RegValue"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.ascx\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.asp\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.aspx\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.c\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cc\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cls\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cpp\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cs\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.csproj\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.css\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.csv\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cxx\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.dot\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.h\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.hpp\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.hxx\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.ini\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jav\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.java\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.js\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.json\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.log\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mk\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pl\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.ps1\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.psd1\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.psm1\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.sql\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.txt\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.xaml\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bash",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bash_login",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bash_logout",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bash_profile",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bashrc",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bib",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bowerrc",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.c++",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cfg",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cjs",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.clj",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cljs",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cljx",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.clojure",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cmake",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.code-workspace",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.coffee",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.config",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.containerfile",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cshtml",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.csx",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.ctp",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.dart",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.diff",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.dockerfile",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.dtd",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.editorconfig",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.edn",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.erb",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.eyaml",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.eyml",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.fs",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.fsi",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.fsscript",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.fsx",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gemspec",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gitattributes",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gitconfig",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gitignore",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.go",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gradle",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.groovy",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.h++",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.handlebars",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.hbs",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.hh",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.ipynb",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jade",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jscsrc",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jshintrc",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jshtm",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jsp",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jsx",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.less",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.lua",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.m",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.makefile",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.markdown",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.md",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdoc",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdown",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdtext",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdtxt",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdwn",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mjs",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mkd",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mkdn",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.ml",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mli",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.npmignore",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.php",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.phtml",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pl6",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.plist",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pm",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pm6",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pod",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pp",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.profile",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.properties",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.psgi",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.py",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pyi",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.r",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rb",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rhistory",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rprofile",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rs",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rst",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rt",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.sass",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.scss",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.sh",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.t",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.tex",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.toml",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.tsx",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.vb",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.vue",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.wxi",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.wxl",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.wxs",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.yaml",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.yml",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.zsh",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode",
+          "type": "RegKey"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "CLS-PROGID",
+        "absorbed": false,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "C:\\Users\\tester\\AppData\\Roaming\\Code",
+          "type": "Path"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "FS-APPDATA",
+        "absorbed": false,
+        "blockers": [
+          "kind"
+        ]
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bash\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bash_login\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bash_logout\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bash_profile\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bashrc\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bib\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.bowerrc\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.c++\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cfg\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cjs\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.clj\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cljs\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cljx\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.clojure\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cmake\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.code-workspace\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.coffee\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.config\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.containerfile\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.cshtml\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.csx\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.ctp\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.dart\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.diff\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.dockerfile\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.dtd\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.editorconfig\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.edn\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.erb\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.eyaml\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.eyml\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.fs\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.fsi\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.fsscript\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.fsx\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gemspec\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gitattributes\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gitconfig\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gitignore\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.go\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.gradle\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.groovy\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.h++\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.handlebars\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.hbs\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.hh\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.ipynb\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jade\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jscsrc\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jshintrc\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jshtm\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jsp\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.jsx\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.less\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.lua\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.m\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.makefile\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.markdown\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.md\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdoc\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdown\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdtext\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdtxt\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mdwn\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mjs\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mkd\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mkdn\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.ml\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.mli\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.npmignore\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.php\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.phtml\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pl6\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.plist\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pm\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pm6\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pod\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pp\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.profile\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.properties\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.psgi\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.py\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.pyi\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.r\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rb\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rhistory\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rprofile\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rs\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rst\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.rt\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.sass\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.scss\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.sh\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.t\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.tex\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.toml\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.tsx\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.vb\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.vue\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.wxi\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.wxl\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.wxs\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.yaml\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.yml\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      },
+      {
+        "target": {
+          "path": "HKLM\\SOFTWARE\\Classes\\.zsh\\OpenWithProgids",
+          "type": "RegKey"
+        },
+        "band": "Safe",
+        "preselected": true,
+        "scanner": "REF-ANY",
+        "absorbed": true,
+        "blockers": []
+      }
+    ]
+  }
+}

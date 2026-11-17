@@ -1,0 +1,51 @@
+{
+  "schema": "purge.replay-diff/1",
+  "reference": "m1a.6 (622c64d), cargo xtask replay without overlay",
+  "reasons": [
+    "new_scanner",
+    "msi_blocker_added",
+    "msi_root_added",
+    "policy_m1b"
+  ],
+  "apps": {
+    "firefox": [
+      27,
+      28
+    ],
+    "git": [
+      6,
+      6
+    ],
+    "npp": [
+      2,
+      2
+    ],
+    "vscode": [
+      244,
+      244
+    ]
+  },
+  "unexplained": 0,
+  "rows": [
+    {
+      "app": "firefox",
+      "target": {
+        "id": "{AC21D679-A9C1-47A0-B96F-A0625A9EE822}",
+        "type": "FirewallRule"
+      },
+      "before": null,
+      "after": {
+        "target": {
+          "id": "{AC21D679-A9C1-47A0-B96F-A0625A9EE822}",
+          "type": "FirewallRule"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "SYS-FIREWALL",
+        "absorbed": false,
+        "blockers": []
+      },
+      "reason": "new_scanner"
+    }
+  ]
+}

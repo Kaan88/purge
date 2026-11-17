@@ -60,8 +60,8 @@
 //!
 //! # Missing data
 //!
-//! There is no scan-warning channel for scanners yet: a key that cannot be read (`AccessDenied`,
-//! `NotCaptured`) or a value not read in full makes no candidate; the spots are marked `// warning:`.
+//! A key that cannot be read (`AccessDenied`, `NotCaptured`) or a value not read in full makes no
+//! candidate and one scan warning (`ScanExt::warn`); "not there" is no warning.
 
 use std::collections::HashSet;
 
@@ -74,6 +74,7 @@ use purge_model::{
 };
 use purge_source::types::{RegValue, SourceError};
 
+use crate::com_class::warn_unread;
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner};
 use crate::fs_installdir::{clean_path, expand_env, has_extension, stem};
 
@@ -273,7 +274,10 @@ impl AppPaths {
                     let names = match ctx.reg.subkeys(&root) {
                         Ok(names) => Ok(names),
                         Err(SourceError::NotFound) => Ok(Vec::new()),
-                        Err(_) => Err(()),
+                        Err(e) => {
+                            warn_unread(ctx, ID, &root, &e);
+                            Err(())
+                        }
                     };
                     (root, names)
                 })
@@ -282,7 +286,8 @@ impl AppPaths {
         let want = format!("{stem_text}.exe");
         roots.iter().any(|(root, names)| {
             let Ok(names) = names else {
-                // warning: an `App Paths` key cannot be read: who else has the name is unknown.
+                // An `App Paths` key cannot be read (warned when listed): who else has the name is
+                // unknown.
                 return true;
             };
             let Some(name) = names.iter().find(|n| prefix::eq_ci(n, &want)) else {
@@ -342,9 +347,12 @@ fn tracing_keys(ctx: &ScanCtx<'_>, out: &mut Vec<Candidate>) {
         let names = match ctx.reg.subkeys(root) {
             Ok(names) => names,
             Err(SourceError::NotFound) => continue,
-            // warning: the `Tracing` key of this view cannot be read (access denied, not captured):
-            // nothing is offered from it.
-            Err(_) => continue,
+            // The `Tracing` key of this view cannot be read (access denied, not captured): nothing is
+            // offered from it.
+            Err(e) => {
+                warn_unread(ctx, ID, root, &e);
+                continue;
+            }
         };
         for name in names {
             let Some(key_stem) = tracing_stem(&name) else {
@@ -426,8 +434,15 @@ fn sources_looked_at(ctx: &ScanCtx<'_>) -> Vec<Source> {
             out[at].msi_rows.push(row);
         }
     };
-    // warning: without the reference walk (`ScanExt::none`) no source is found by its message files;
-    // only the app's MSI rows are looked at.
+    // Without the reference walk (`ScanExt::none`) no source is found by its message files; only the
+    // app's MSI rows are looked at.
+    if ctx.ext.ref_hits_for(&ctx.fp.app.program_id).is_none() {
+        ctx.ext.warn(
+            ID,
+            "the shared reference walk was not run for this app; event-log sources are found by \
+             the app's MSI rows only",
+        );
+    }
     for hit in ctx.ref_hits_under(EVENTLOG_KEY) {
         let message_file = MESSAGE_FILE_VALUES
             .iter()
@@ -465,9 +480,11 @@ fn event_sources(ctx: &ScanCtx<'_>, out: &mut Vec<Candidate>) {
         let names = match ctx.reg.subkeys(&log_key) {
             Ok(names) => names,
             Err(SourceError::NotFound) => continue,
-            // warning: the log cannot be listed (access denied, not captured): none of its sources is
-            // offered.
-            Err(_) => continue,
+            // The log cannot be listed (access denied, not captured): none of its sources is offered.
+            Err(e) => {
+                warn_unread(ctx, ID, &log_key, &e);
+                continue;
+            }
         };
         for source in sources.iter().filter(|s| prefix::eq_ci(&s.log, log)) {
             // The name as stored; a source that is not there any more is not offered.
@@ -490,15 +507,22 @@ fn message_file(ctx: &ScanCtx<'_>, entry: &str) -> Option<String> {
 
 /// Every file the source's message-file values name, when there is an `EventMessageFile` and every value
 /// was read in full and names absolute paths only; `None` otherwise.
-fn message_files(ctx: &ScanCtx<'_>, values: &[RegValue]) -> Option<Vec<String>> {
+fn message_files(ctx: &ScanCtx<'_>, key: &str, values: &[RegValue]) -> Option<Vec<String>> {
     let mut files: Vec<String> = Vec::new();
     let mut event_files = 0usize;
     for value_name in MESSAGE_FILE_VALUES {
         let Some(value) = values.iter().find(|v| prefix::eq_ci(&v.name, value_name)) else {
             continue;
         };
-        // warning: a message-file value not read in full says nothing about which files it names.
+        // A message-file value not read in full says nothing about which files it names.
         if !value.data.is_complete() || value.data.has_text_after_nul() {
+            ctx.ext.warn(
+                ID,
+                format!(
+                    "{key}\\{}: not read in full; the source is not offered",
+                    value.name
+                ),
+            );
             return None;
         }
         // A message-file value that is no string is no registration this scanner understands.
@@ -528,9 +552,13 @@ fn source_candidate(
     msi_rows: &[(String, String)],
 ) -> Option<Candidate> {
     let key = format!(r"{log_key}\{name}");
-    // warning: a source whose values cannot be read (access denied, not captured) is not offered.
-    let values = ctx.reg.values(&key).ok()?;
-    let files = message_files(ctx, &values)?;
+    // A source whose values cannot be read (access denied, not captured) is not offered.
+    let values = ctx
+        .reg
+        .values(&key)
+        .map_err(|e| warn_unread(ctx, ID, &key, &e))
+        .ok()?;
+    let files = message_files(ctx, &key, &values)?;
     // Every message file must be the app's: a Windows or .NET message file makes the source not the
     // app's, whatever it is called.
     let own = |file: &str| ctx.inside_install_root(file).is_some() || ctx.is_app_file(file);

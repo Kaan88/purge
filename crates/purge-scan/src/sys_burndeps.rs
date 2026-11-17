@@ -39,8 +39,8 @@
 //!
 //! A root that cannot be read (anything but "not found"), loaded user hives that cannot be listed, and an
 //! ownership index whose Burn area is incomplete make the dependents of a provider unknown: (b) and (c)
-//! are then not offered for it. (a) is still offered where it was read. Scanners have no warning
-//! channel of their own; the index records its own read errors.
+//! are then not offered for it. (a) is still offered where it was read. Each such spot adds one scan
+//! warning (`ScanExt::warn`); the index also records its own read errors.
 //!
 //! # Reads
 //!
@@ -59,6 +59,7 @@ use purge_model::{
 };
 use purge_source::types::SourceError;
 
+use crate::com_class::warn_unread;
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner, app_trust};
 
 /// The scanner's catalog id.
@@ -321,15 +322,26 @@ fn provider_state(
         }
     };
     for DepRoot { path, offer } in roots {
-        let Ok(root) = path else {
-            state.unknown = true;
-            continue;
+        let root = match path {
+            Ok(root) => root,
+            Err(why) => {
+                ctx.ext.warn(
+                    ID,
+                    format!(
+                        "a dependency root is unknown ({why}); no package provider key and no \
+                         Dependents key is offered"
+                    ),
+                );
+                state.unknown = true;
+                continue;
+            }
         };
         let provider_key = format!(r"{root}\{provider}");
         let children = match ctx.reg.subkeys(&provider_key) {
             Ok(children) => children,
             Err(SourceError::NotFound) => continue,
-            Err(_) => {
+            Err(e) => {
+                warn_unread(ctx, ID, &provider_key, &e);
                 state.unknown = true;
                 continue;
             }
@@ -352,7 +364,10 @@ fn provider_state(
                     }
                 }
                 Err(SourceError::NotFound) => {}
-                Err(_) => state.unknown = true,
+                Err(e) => {
+                    warn_unread(ctx, ID, &key, &e);
+                    state.unknown = true;
+                }
             }
         }
         // A root read only for other dependents: its key is never offered.
@@ -366,7 +381,16 @@ fn provider_state(
                 note_other(&mut state.others, &other);
             }
         }
-        None => state.unknown = true,
+        None => {
+            ctx.ext.warn(
+                ID,
+                format!(
+                    "the MSI ownership index could not tell the dependents of {provider}; neither it \
+                     nor its Dependents key is offered"
+                ),
+            );
+            state.unknown = true;
+        }
     }
     state
 }

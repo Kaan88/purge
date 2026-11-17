@@ -11,11 +11,14 @@
 //! - `exit_codes`: failed, cancelled and timed-out uninstalls, broken preconditions, write errors and
 //!   `scan --path`;
 //! - `m1b_exec` (`rig-exec` builds): `exec --fp` and `undo` of a service, a scheduled task and a
-//!   firewall rule over in-memory object backends, and their exit codes.
+//!   firewall rule over in-memory object backends, and their exit codes;
+//! - `m1b_scan`: the M1b scanners through harvest and scan (MSI remnants, system objects, COM, Burn,
+//!   diagnostics), with the hostile shapes of R3a.
 
 mod common;
 mod exit_codes;
 mod inno;
 #[cfg(feature = "rig-exec")]
 mod m1b_exec;
+mod m1b_scan;
 mod nsis;

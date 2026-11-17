@@ -45,6 +45,7 @@
 use purge_guard::canon::canon_path;
 use purge_guard::prefix;
 use purge_model::{Action, BurnFacts, Candidate, Category, Harm, Target};
+use purge_source::types::SourceError;
 
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner};
 use crate::fs_installdir::{is_plain_dir, measure, sized};
@@ -157,8 +158,17 @@ impl Scanner for FsPkgCache {
             if kept.iter().any(|k| prefix::is_same(k, &dir)) {
                 continue;
             }
-            let Ok(meta) = ctx.fs.metadata(&dir) else {
-                continue;
+            let meta = match ctx.fs.metadata(&dir) {
+                Ok(meta) => meta,
+                Err(SourceError::NotFound) => continue,
+                // A recorded cache folder that cannot be read is not offered; say so.
+                Err(e) => {
+                    ctx.ext.warn(
+                        ID,
+                        format!("{dir}: not read ({e}); the cache folder is not offered"),
+                    );
+                    continue;
+                }
             };
             if !is_plain_dir(&meta) {
                 continue;

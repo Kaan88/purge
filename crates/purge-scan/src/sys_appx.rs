@@ -76,9 +76,18 @@ impl Scanner for SysAppx {
             return Vec::new();
         }
         // An unreadable package list offers nothing: "still registered" cannot be shown.
-        let Ok(packages) = ctx.sys.packages() else {
-            // warning: the registered packages could not be read; no linked package is checked.
-            return Vec::new();
+        let packages = match ctx.sys.packages() {
+            Ok(packages) => packages,
+            Err(e) => {
+                ctx.ext.warn(
+                    ID,
+                    format!(
+                        "the registered packages could not be read ({e}); no linked package is \
+                         checked"
+                    ),
+                );
+                return Vec::new();
+            }
         };
         let registrations = Registrations::of(ctx);
         let mut out: Vec<Candidate> = Vec::new();
@@ -86,7 +95,7 @@ impl Scanner for SysAppx {
             if !linked_family(ctx, package) || never_offered(ctx, package) {
                 continue;
             }
-            let others = registrations.others(package);
+            let others = registrations.others(ctx, package);
             let action = match others {
                 Others::None => Action::RemovePackage,
                 Others::Count(_) | Others::Unknown => Action::ReportOnly,
@@ -224,8 +233,9 @@ struct Registrations {
 
 impl Registrations {
     fn of(ctx: &ScanCtx<'_>) -> Self {
-        // warning: without elevation, or without the scanning user's SID, no package is shown to be the
-        // scanning user's alone; every linked package is ReportOnly with `other_users = unknown`.
+        // Without elevation, or without the scanning user's SID, no package is shown to be the scanning
+        // user's alone; every linked package is ReportOnly with `other_users = unknown` (warned per
+        // package in `others`).
         let scanning_user = ctx
             .sys
             .elevated()
@@ -235,23 +245,35 @@ impl Registrations {
         Self { scanning_user }
     }
 
-    fn others(&self, package: &PackageInfo) -> Others {
+    fn others(&self, ctx: &ScanCtx<'_>, package: &PackageInfo) -> Others {
+        let unknown = |why: &str| {
+            ctx.ext.warn(
+                ID,
+                format!(
+                    "{}: {why}; who else it is registered for is unknown, so it is only reported",
+                    package.full_name
+                ),
+            );
+            Others::Unknown
+        };
         let Some(me) = self.scanning_user.as_deref() else {
-            return Others::Unknown;
+            return unknown(
+                "the engine is not elevated or the scanning user's SID cannot be read, so the \
+                 listing may not show every user's registration",
+            );
         };
         let mut users: Vec<&str> = Vec::new();
         for sid in package.users.iter().map(|s| s.trim()) {
             if sid.is_empty() {
-                // warning: a registration whose user is not named; who it is cannot be known.
-                return Others::Unknown;
+                // A registration whose user is not named; who it is cannot be known.
+                return unknown("a registration names no user");
             }
             if !users.iter().any(|u| u.eq_ignore_ascii_case(sid)) {
                 users.push(sid);
             }
         }
         if users.is_empty() {
-            // warning: the listing names no user for the package.
-            return Others::Unknown;
+            return unknown("the listing names no user for the package");
         }
         let others = users.iter().filter(|u| !u.eq_ignore_ascii_case(me)).count();
         if others == 0 {

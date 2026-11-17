@@ -72,14 +72,15 @@
 //! # Unknown
 //!
 //! A store that cannot be read (anything but "not found") offers nothing; so does a hive list that
-//! cannot be read (then only the fingerprint's own user is looked at). Each such spot is marked
-//! `// warning:` for the scan-warning channel that is not wired yet.
+//! cannot be read (then only the fingerprint's own user is looked at). Each such spot adds one scan
+//! warning (`ScanExt::warn`).
 
 use purge_guard::canon::canon_path;
 use purge_guard::prefix;
 use purge_model::{Action, Blocker, Candidate, Category, RootKind, Target};
 use purge_source::types::{RegValue, SourceError};
 
+use crate::com_class::warn_unread;
 use crate::framework::{AppIdentityView, PathStore, RootSpec, ScanCtx, Scanner};
 
 /// The scanner's catalog id.
@@ -235,8 +236,11 @@ fn read_values(ctx: &ScanCtx<'_>, key: &str) -> Option<Vec<RegValue>> {
     match ctx.reg.values(key) {
         Ok(values) => Some(values),
         Err(SourceError::NotFound) => None,
-        // warning: the store could not be read (not captured, access denied): nothing is offered from it.
-        Err(_) => None,
+        // The store could not be read (not captured, access denied): nothing is offered from it.
+        Err(e) => {
+            warn_unread(ctx, ID, key, &e);
+            None
+        }
     }
 }
 
@@ -257,10 +261,17 @@ fn user_sids(ctx: &ScanCtx<'_>) -> Vec<String> {
     match ctx.fp.app.program_id.hive_sid() {
         Some(own) => sids.push(own.trim().to_owned()),
         None => {
-            // warning: when the loaded user hives cannot be listed, only the fingerprint's user and the
-            // hives the guard knows are looked at.
-            if let Ok(loaded) = ctx.reg.loaded_user_sids() {
-                sids.extend(loaded);
+            // When the loaded user hives cannot be listed, only the fingerprint's user and the hives
+            // the guard knows are looked at.
+            match ctx.reg.loaded_user_sids() {
+                Ok(loaded) => sids.extend(loaded),
+                Err(e) => ctx.ext.warn(
+                    ID,
+                    format!(
+                        "the loaded user hives could not be listed ({e}); only the fingerprint's \
+                         user and the hives the guard knows are looked at"
+                    ),
+                ),
             }
             sids.extend(ctx.guard.loaded_sids.iter().cloned());
         }
@@ -351,11 +362,15 @@ impl Scan<'_, '_> {
         reads += 1;
         match ctx.reg.values(&mui) {
             Ok(values) => self.store_values(&mui, PathStore::MuiCache, &values, at_home),
-            Err(_) => {
-                if let Some(values) = read(&mui_alias, &mut reads) {
-                    self.store_values(&mui_alias, PathStore::MuiCache, &values, at_home);
+            Err(e) => {
+                // The alias read warns by itself; the Classes spelling's error is said only when the
+                // alias did not stand in for it.
+                match read(&mui_alias, &mut reads) {
+                    Some(values) => {
+                        self.store_values(&mui_alias, PathStore::MuiCache, &values, at_home);
+                    }
+                    None => warn_unread(ctx, ID, &mui, &e),
                 }
-                // warning: neither spelling could be read when either error is not "not found".
             }
         }
         for name in FEATURE_USAGE {
@@ -376,15 +391,22 @@ impl Scan<'_, '_> {
         let guids = match ctx.reg.subkeys(&user_assist) {
             Ok(guids) => guids,
             Err(SourceError::NotFound) => Vec::new(),
-            Err(_) => {
-                // warning: the UserAssist key could not be listed: nothing is offered from it.
+            Err(e) => {
+                // The UserAssist key could not be listed: nothing is offered from it.
+                warn_unread(ctx, ID, &user_assist, &e);
                 Vec::new()
             }
         };
         for guid in guids {
             if reads >= MAX_USER_KEY_READS {
-                // warning: UserAssist has more `Count` keys than the read budget allows; the rest are
-                // not read.
+                // UserAssist has more `Count` keys than the read budget allows; the rest are not read.
+                ctx.ext.warn(
+                    ID,
+                    format!(
+                        "{user_assist}: more keys than the read budget of {MAX_USER_KEY_READS} \
+                         allows; the rest are not read"
+                    ),
+                );
                 break;
             }
             let key = format!(r"{user_assist}\{guid}\Count");

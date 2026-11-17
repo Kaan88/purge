@@ -77,9 +77,9 @@
 //!
 //! # Missing data
 //!
-//! There is no scan-warning channel for scanners yet: a place, key, value or class that cannot be read
-//! (`AccessDenied`, `NotCaptured`, data not read in full) makes no candidate, silently. Without the
-//! reference walk the scanner offers nothing.
+//! A place, key, value or class that cannot be read (`AccessDenied`, `NotCaptured`, data not read in
+//! full) makes no candidate and one scan warning (`ScanExt::warn`); "not there" is no warning. Without
+//! the reference walk or the KB the scanner offers nothing and says so.
 
 use std::collections::HashSet;
 
@@ -89,13 +89,13 @@ use purge_model::{
     Action, AnchorKind, AnchorRef, Blocker, Candidate, Category, Evidence, EvidenceKind, Facts,
     SourceTrust, Target, Tier,
 };
-use purge_source::types::{RegData, RegValue};
+use purge_source::types::{RegData, RegValue, SourceError};
 
 use crate::cls_progid::classes;
 use crate::com_class::{
-    ClassCache, ClassState, HKLM_CLASSES, Offer, Place, WALK_INCOMPLETE, anchor_ids, bare,
-    classes_roots, com_key_ownership, is_anchor, is_braced_guid, proven_not_windows, shared_iids,
-    split_classes, walk_hits, walked_user_sids,
+    ClassCache, ClassState, HKLM_CLASSES, NO_KB, NO_WALK, Offer, Place, WALK_INCOMPLETE,
+    anchor_ids, bare, classes_roots, com_key_ownership, is_anchor, is_braced_guid,
+    proven_not_windows, shared_iids, split_classes, walk_hits, walked_user_sids, warn_unread,
 };
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner, anchor_trust, weakest};
 
@@ -135,13 +135,15 @@ const ROOTS: &[RootSpec] = &[
     ),
 ];
 
-/// The value containers read here that the guard lists ([`purge_guard::containers`]). `Cached`,
-/// `ShellExecuteHooks` and `SharedTaskScheduler` are value containers too by C-GUARD, but the guard's
-/// tables do not list them yet (its deny-list keeps the keys themselves); they are left out so that the
-/// catalog's check of this list against the guard's table holds. Only single values are offered from
+/// The value containers read here, spelled as the guard lists them
+/// ([`purge_guard::containers::M1B_VALUE_CONTAINERS`], R3a M10). Only single values are offered from
 /// any of the four.
-const VALUE_CONTAINERS: &[&str] =
-    &[r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved"];
+const VALUE_CONTAINERS: &[&str] = &[
+    r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellExecuteHooks",
+    r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SharedTaskScheduler",
+    r"*\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved",
+    r"HKU\*\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Cached",
+];
 
 /// The shell objects whose handler lists are also listed by name: every file (`*`), the file-system
 /// objects, folders and their background, drives, shortcuts, libraries.
@@ -197,11 +199,13 @@ impl Scanner for ComShellex {
 
     fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
         // Without the walk no handler that names a class by its default value can be found, and
-        // without the KB no class can be judged: nothing is offered (no warning channel yet).
+        // without the KB no class can be judged: nothing is offered, with a warning.
         let Some(hits) = walk_hits(ctx) else {
+            ctx.ext.warn(ID, NO_WALK);
             return Vec::new();
         };
         let Some(kb) = shared_iids() else {
+            ctx.ext.warn(ID, NO_KB);
             return Vec::new();
         };
         if anchor_ids(&ctx.fp.anchors.clsids).is_empty() {
@@ -463,7 +467,7 @@ impl Found {
     }
 
     /// Lists each fixed handler list once, for handler keys named by one of the app's CLSIDs. A list
-    /// that cannot be read is skipped (no warning channel yet).
+    /// that cannot be read is skipped with a scan warning.
     fn take_lists(
         &mut self,
         ctx: &ScanCtx<'_>,
@@ -483,8 +487,12 @@ impl Found {
             lists.push((root.key(&BHOS), root.bits, BHO_VALUES));
         }
         for (list, bits, allowed) in lists {
-            let Ok(names) = ctx.reg.subkeys(&list) else {
-                continue;
+            let names = match ctx.reg.subkeys(&list) {
+                Ok(names) => names,
+                Err(e) => {
+                    warn_unread(ctx, ID, &list, &e);
+                    continue;
+                }
             };
             for name in names {
                 if is_braced_guid(&name) && is_anchor(&ctx.fp.anchors.clsids, &name) {
@@ -736,9 +744,10 @@ fn handler_candidate(
     handler: &HandlerKey,
 ) -> Option<Candidate> {
     let key = &handler.key;
-    // A key or a listing that cannot be read: no candidate (no warning channel yet).
-    let values: Vec<RegValue> = ctx.reg.values(key).ok()?;
-    let subkeys = ctx.reg.subkeys(key).ok()?;
+    // A key or a listing that cannot be read: no candidate, one warning.
+    let unread = |e: SourceError| warn_unread(ctx, ID, key, &e);
+    let values: Vec<RegValue> = ctx.reg.values(key).map_err(unread).ok()?;
+    let subkeys = ctx.reg.subkeys(key).map_err(unread).ok()?;
     let default = values.iter().find(|v| v.name.is_empty());
     // A default value that is there but not read in full says nothing about which class it names.
     if default.is_some_and(|v| !v.data.is_complete()) {

@@ -31,7 +31,8 @@ const KB_DIR_VAR: &str = "PURGE_KB_DIR";
 
 /// The engine's settings from the process: baselines from `%PURGE_KB_DIR%\baselines`, else from
 /// `<exe dir>\kb\baselines`; Purge's own directories are the exe's directory and
-/// `%ProgramData%\Purge`.
+/// `%ProgramData%\Purge`; the MSI table cache is `%ProgramData%\Purge\fp\msitables`
+/// (`pipeline::table_cache` decides whether it is used).
 fn settings() -> Settings {
     let exe_dir = std::env::current_exe()
         .ok()
@@ -44,12 +45,16 @@ fn settings() -> Settings {
     if let Some(dir) = exe_dir.as_ref().and_then(|d| d.to_str()) {
         purge_dirs.push(dir.to_owned());
     }
+    let mut msi_table_dir = None;
     if let Some(data) = std::env::var_os("ProgramData").and_then(|v| v.into_string().ok()) {
-        purge_dirs.push(format!("{}\\Purge", data.trim_end_matches('\\')));
+        let root = format!("{}\\Purge", data.trim_end_matches('\\'));
+        msi_table_dir = Some(PathBuf::from(format!("{root}\\fp\\msitables")));
+        purge_dirs.push(root);
     }
     Settings {
         baseline_dir,
         purge_dirs,
+        msi_table_dir,
     }
 }
 

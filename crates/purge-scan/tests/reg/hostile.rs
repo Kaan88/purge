@@ -8,8 +8,9 @@
 //! The same places with data that is wholly the app's are the controls: they must be Safe, or
 //! the table would prove nothing.
 //!
-//! A scanner that is added to the catalog must be entered in [`REGISTRY_SCANNERS`] or
-//! [`OTHER_SCANNERS`]; one that reads a new kind of place gets that place in [`places`].
+//! A scanner that is added to the catalog must be entered in [`REGISTRY_SCANNERS`],
+//! [`M1B_REGISTRY_SCANNERS`] or [`OTHER_SCANNERS`]; one that reads a new kind of place gets that place
+//! in [`places`].
 
 use purge_model::{Band, Candidate, InnoRecordKind, RefCarrier, Target};
 use purge_policy::band::{PolicyCtx, TargetScope, decide};
@@ -37,14 +38,36 @@ const REGISTRY_SCANNERS: [&str; 13] = [
     "CLS-REGAPPS",
 ];
 
-/// The scanners that offer files, folders, shortcuts and packages only.
-const OTHER_SCANNERS: [&str; 6] = [
+/// The M1b scanners that offer registry keys and values. They read places this table does not plant
+/// into (COM classes and interfaces, shell-extension lists, Windows Installer and Burn records, the
+/// privacy stores, the diagnostics keys); their own suites (`tests/com`, `tests/shellex`,
+/// `tests/msireg`, `tests/burn`, `tests/privacy`, `tests/diag`) hold their hostile values. Here they
+/// may offer registry targets, and they have no positive control.
+const M1B_REGISTRY_SCANNERS: [&str; 9] = [
+    "COM-CLASS",
+    "COM-INTERFACE",
+    "COM-SHELLEX",
+    "SYS-BURNDEPS",
+    "REG-ARP-MSI",
+    "REG-SHAREDDLLS",
+    "REG-INSTFOLDERS",
+    "REG-PRIVACY",
+    "REG-DIAG",
+];
+
+/// The scanners that offer files, folders, shortcuts, packages and system objects only.
+const OTHER_SCANNERS: [&str; 11] = [
     "FS-INSTALLDIR",
     "FS-UNINSTALLER",
     "FS-APPDATA",
     "FS-VENDORPARENT",
     "FS-SHORTCUTS",
     "SYS-APPX",
+    "SYS-SERVICE",
+    "SYS-TASK",
+    "SYS-FIREWALL",
+    "FS-PKGCACHE",
+    "FS-WER",
 ];
 
 const TOOLS: &str = r"C:\Users\tester\tools";
@@ -537,6 +560,7 @@ fn every_scanner_of_the_catalog_is_in_the_table() {
     let mut catalog: Vec<&str> = catalog::all_scanners().iter().map(|s| s.id()).collect();
     let mut table: Vec<&str> = REGISTRY_SCANNERS
         .into_iter()
+        .chain(M1B_REGISTRY_SCANNERS)
         .chain(OTHER_SCANNERS)
         .collect();
     catalog.sort_unstable();
@@ -574,7 +598,7 @@ fn no_scanner_offers_a_value_that_holds_foreign_text_as_safe() {
                         if !offering.contains(id) {
                             offering.push(id);
                         }
-                    } else {
+                    } else if !M1B_REGISTRY_SCANNERS.contains(&c.scanner.as_str()) {
                         failures.push(format!(
                             "{} offers a registry target but is not a registry scanner",
                             c.scanner
