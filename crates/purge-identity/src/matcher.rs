@@ -352,7 +352,8 @@ impl<'kb> AppMatcher<'kb> {
     }
 
     /// The segment is the app's full name (`ExactFullName`): equal full-name keys, so versions,
-    /// architecture and locale tags do not matter but every word does. For a short name the result has
+    /// architecture and locale tags and a bracketed build qualifier (`(x64 edition)`, see
+    /// [`full_name_key`]) do not matter but every other word does. For a short name the result has
     /// `needs_tier_ab_neighbour` set.
     pub fn match_full_name(&self, segment: &str) -> Option<NameMatch> {
         if is_path(segment) {
@@ -692,6 +693,73 @@ mod tests {
         // `steamapps` is another token (regression list: Steam / steamapps).
         assert_eq!(m.match_name("steamapps"), None);
         assert_eq!(m.match_full_name("steamapps"), None);
+    }
+
+    /// The 7-Zip MSI's display name carries `(x64 edition)`: its key and folder `7-Zip` are its full
+    /// name, and nothing else is. Near-misses (forks, other archivers, the name with a word added, the
+    /// qualifier or a generic word alone) never match, in either direction.
+    #[test]
+    fn build_qualifier_in_brackets_is_not_part_of_the_full_name() {
+        const ARCHIVERS: Apps = &[
+            ("7-Zip 24.08 (x64 edition)", "Igor Pavlov"),
+            ("7-Zip-zstd 24.08 (x64 edition)", "Tino Reichardt"),
+            ("NanaZip 5.0 (x64 edition)", "M2-Team"),
+            ("Tools (x64 edition)", "Igor Pavlov"),
+        ];
+        let zip = matcher(ARCHIVERS, "7-Zip 24.08 (x64 edition)");
+        assert_eq!(zip.tokens(), ["7", "zip"]);
+        for seg in [
+            "7-Zip",
+            "7-zip",
+            "7-Zip 24.08 (x64 edition)",
+            "7-Zip (x86)",
+            "7-Zip (64 bit)",
+        ] {
+            let hit = zip.match_full_name(seg).unwrap_or_else(|| panic!("{seg}"));
+            assert!(hit.needs_tier_ab_neighbour, "{seg}: short name");
+            assert_eq!(
+                zip.match_name(seg),
+                None,
+                "{seg}: short names match only in full"
+            );
+        }
+        for seg in [
+            "7-Zip-zstd",
+            "7-Zip ZS",
+            "7-Zip-zstd (x64 edition)",
+            "NanaZip",
+            "NanaZip (x64 edition)",
+            "Zip",
+            "7",
+            "7-Zip Edition",
+            "7-Zip (Edition)",
+            "7-Zip x64 Edition",
+            "7-Zip (Portable x64)",
+            "7-Zip (Home Edition x64)",
+            "Edition",
+            "(x64 edition)",
+            "x64",
+            "Tools",
+            "Igor Pavlov",
+        ] {
+            assert_eq!(zip.match_full_name(seg), None, "{seg}");
+            assert_eq!(zip.match_name(seg), None, "{seg}");
+        }
+        // The fork and the other archiver do not take 7-Zip's key either.
+        for other in [
+            "7-Zip-zstd 24.08 (x64 edition)",
+            "NanaZip 5.0 (x64 edition)",
+        ] {
+            let m = matcher(ARCHIVERS, other);
+            for seg in ["7-Zip", "7-Zip (x64 edition)", "Zip"] {
+                assert_eq!(m.match_full_name(seg), None, "{other} vs {seg}");
+                assert_eq!(m.match_name(seg), None, "{other} vs {seg}");
+            }
+        }
+        // A generic name with a qualifier has no name matching at all.
+        let tools = matcher(ARCHIVERS, "Tools (x64 edition)");
+        assert_eq!(tools.name_matching(), NameMatching::Disabled);
+        assert_eq!(tools.match_full_name("Tools"), None);
     }
 
     #[test]

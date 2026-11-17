@@ -305,11 +305,9 @@ fn e2e_7zip_msi_shape_offers_hkcu_software_key() {
     seven_zip_offers_hkcu_software_key("7-Zip 24.08 (x64)");
 }
 
-/// The same with the display name the 7-Zip MSI registers. KNOWN GAP (for the reviewer): with
-/// `(x64 edition)` the key name `7-Zip` does not match the app's full name, so REG-SOFTWARE offers
-/// nothing and only REF-ANY's `Path` value is listed. The fix belongs to the identity matcher.
+/// The same with the display name the 7-Zip MSI registers: the bracketed build qualifier
+/// `(x64 edition)` is not part of the full name, so the key name `7-Zip` is the app's full name.
 #[test]
-#[ignore = "known gap: '7-Zip 24.08 (x64 edition)' does not match the key name '7-Zip'"]
 fn e2e_7zip_msi_display_name_with_edition_offers_hkcu_software_key() {
     seven_zip_offers_hkcu_software_key("7-Zip 24.08 (x64 edition)");
 }

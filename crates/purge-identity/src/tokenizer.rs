@@ -27,7 +27,8 @@
 //!    or key names is common and does not count as distinctive.
 //!
 //! Three derived forms are used by the matcher: the significant token set, the **full-name key**
-//! ([`full_name_key`]: every non-noise token, in order, joined by one space) and the **vendor key**
+//! ([`full_name_key`]: every non-noise token, in order, joined by one space, without a bracketed build
+//! qualifier such as `(x64 edition)`) and the **vendor key**
 //! ([`vendor_key`]: the same without stopwords, so `Mozilla Corporation` and `Mozilla` are both `mozilla`).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -226,19 +227,46 @@ fn lex_chunk(chunk: &str, seen_word: &mut bool, out: &mut Vec<Token>) {
 /// Steps 1 to 3 without the knowledge base: every token of `input`, in order, classed as
 /// [`TokenClass::Noise`], [`TokenClass::Stopword`] or [`TokenClass::Significant`].
 pub fn lex(input: &str) -> Vec<Token> {
+    lex_grouped(input).into_iter().map(|(t, _)| t).collect()
+}
+
+/// Words that may stand beside a version or architecture tag in a build qualifier: `(x64 edition)`,
+/// `(64 bit)`, `(x86 version)`. All three are stopwords.
+const QUALIFIER_WORDS: &[&str] = &["bit", "edition", "version"];
+
+/// Like [`lex`], with each token's bracket group: the index of the outermost `(…)` or `[…]` it stands
+/// in, `None` outside brackets. An unclosed bracket runs to the end of the input.
+fn lex_grouped(input: &str) -> Vec<(Token, Option<usize>)> {
     let normalized = normalize(input);
-    let mut out = Vec::new();
+    let mut out: Vec<(Token, Option<usize>)> = Vec::new();
+    let mut tokens = Vec::new();
     let mut seen_word = false;
     let mut chunk = String::new();
+    let mut depth = 0usize;
+    let mut groups = 0usize;
     for c in normalized.chars().chain(std::iter::once(' ')) {
         if matches!(c, '\'' | '\u{2019}' | '\u{2018}' | '`') {
             continue;
         }
         if is_word_char(c) || matches!(c, '+' | '#' | '.' | '_' | '-') {
             chunk.push(c);
-        } else if !chunk.is_empty() {
-            lex_chunk(&chunk, &mut seen_word, &mut out);
+            continue;
+        }
+        if !chunk.is_empty() {
+            lex_chunk(&chunk, &mut seen_word, &mut tokens);
+            let group = (depth > 0).then(|| groups - 1);
+            out.extend(tokens.drain(..).map(|t| (t, group)));
             chunk.clear();
+        }
+        match c {
+            '(' | '[' => {
+                if depth == 0 {
+                    groups += 1;
+                }
+                depth += 1;
+            }
+            ')' | ']' => depth = depth.saturating_sub(1),
+            _ => {}
         }
     }
     out
@@ -279,8 +307,36 @@ fn join_tokens(input: &str, keep: impl Fn(TokenClass) -> bool) -> String {
 /// The full-name key: every non-noise token in order, joined by single spaces. `Mozilla Firefox (x64
 /// en-US) 146.0` and a folder named `Mozilla Firefox` share the key `mozilla firefox`; stopwords are kept,
 /// so `Git for Windows` (`git for windows`) is not `Git` (`git`).
+///
+/// A **build qualifier** is left out whole: a bracket group that holds at least one noise token (a
+/// version or architecture tag) and otherwise only [`QUALIFIER_WORDS`]. So `7-Zip 24.08 (x64 edition)`
+/// and `Foo (64 bit)` have the keys `7 zip` and `foo`. A group with any other word stays (`(Portable
+/// x64)`, `(Home Edition)`), and so does a qualifier word outside brackets or with no tag beside it
+/// (`Firefox Developer Edition`, `7-Zip Edition`, `Foo (Edition)`): a word alone never marks a build.
 pub fn full_name_key(input: &str) -> String {
-    join_tokens(input, |c| c != TokenClass::Noise)
+    let tokens = lex_grouped(input);
+    let qualifier = |group: usize| {
+        let mut noise = false;
+        let only = tokens
+            .iter()
+            .filter(|(_, g)| *g == Some(group))
+            .all(|(t, _)| {
+                noise |= t.class == TokenClass::Noise;
+                t.class == TokenClass::Noise || QUALIFIER_WORDS.contains(&t.text.as_str())
+            });
+        only && noise
+    };
+    let mut out = String::new();
+    for (token, group) in &tokens {
+        if token.class == TokenClass::Noise || group.is_some_and(qualifier) {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&token.text);
+    }
+    out
 }
 
 /// The vendor key: the full-name key without stopwords, so legal suffixes do not matter (`Mozilla
@@ -591,6 +647,55 @@ mod tests {
         assert_eq!(vendor_key("NV Access Limited"), "nv access");
         assert_eq!(vendor_key("mozilla.org"), "mozilla org");
         assert_eq!(vendor_key("Inc."), "");
+    }
+
+    /// A bracketed build qualifier (a version or architecture tag, plus `edition`, `bit` or `version`
+    /// only) is left out of the full-name key; nothing else is.
+    #[test]
+    fn keys_drop_build_qualifiers_only() {
+        let same = [
+            "7-Zip 24.08 (x64 edition)",
+            "7-Zip 24.08 (x64 Edition)",
+            "7-Zip (x86 edition) 24.08",
+            "7-Zip 24.08 [x64 edition]",
+            "7-Zip 24.08 (64 bit)",
+            "7-Zip 24.08 (64-bit)",
+            "7-Zip 24.08 (x86)",
+            "7-Zip 24.08 (x64 version)",
+            "7-Zip 24.08 (x64 edition",
+            "7-Zip 24.08 64-bit",
+            "7-Zip",
+        ];
+        for s in same {
+            assert_eq!(full_name_key(s), "7 zip", "{s:?}");
+        }
+        let kept = [
+            ("7-Zip-zstd 24.08 (x64 edition)", "7 zip zstd"),
+            ("7-Zip ZS (x64 edition)", "7 zip zs"),
+            ("NanaZip (x64 edition)", "nanazip"),
+            // No tag in the group: a word alone is not a build qualifier.
+            ("7-Zip (Edition)", "7 zip edition"),
+            ("7-Zip Edition", "7 zip edition"),
+            ("7-Zip x64 Edition", "7 zip edition"),
+            // Any other word keeps the group.
+            ("7-Zip (Portable x64)", "7 zip portable"),
+            ("7-Zip (Home Edition x64)", "7 zip home edition"),
+            ("7-Zip (x64 edition) Extra", "7 zip extra"),
+            ("Firefox Developer Edition", "firefox developer edition"),
+            ("Git for Windows (64-bit)", "git for windows"),
+        ];
+        for (s, want) in kept {
+            assert_eq!(full_name_key(s), want, "{s:?}");
+        }
+        // A qualifier alone is no name at all.
+        assert_eq!(full_name_key("(x64 edition)"), "");
+        // The other derived forms are unchanged.
+        assert_eq!(sig("7-Zip 24.08 (x64 edition)"), ["7", "zip"]);
+        assert_eq!(vendor_key("7-Zip 24.08 (x64 edition)"), "7 zip");
+        assert_eq!(
+            texts("7-Zip 24.08 (x64 edition)"),
+            ["7", "zip", "24.08", "x64", "edition"]
+        );
     }
 
     #[test]

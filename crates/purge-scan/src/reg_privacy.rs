@@ -66,8 +66,11 @@
 //! # Reads
 //!
 //! At most [`MAX_USER_KEY_READS`] key reads per user hive, plus one for the machine's `Layers`
-//! (M1B_DESIGN.json `budgets`: "REG-PRIVACY at most 12 keys per loaded user"). A UserAssist `Count` key
-//! beyond the budget is not read.
+//! (M1B_DESIGN.json `budgets`: "REG-PRIVACY at most 24 keys per loaded user"). The fixed stores take
+//! at most 11 (MuiCache twice when its Classes spelling is missing, and the UserAssist listing); the
+//! rest, at least 13, is for UserAssist `Count` keys. Windows 10 and 11 keep 9 UserAssist GUIDs per
+//! user, so all of them are read; a `Count` key beyond the budget is not read, with a warning. A GUID
+//! subkey that is not a UserAssist store costs nothing.
 //!
 //! # Unknown
 //!
@@ -86,8 +89,9 @@ use crate::framework::{AppIdentityView, PathStore, RootSpec, ScanCtx, Scanner};
 /// The scanner's catalog id.
 pub const ID: &str = "REG-PRIVACY";
 
-/// Most key reads (`values()`, `subkeys()`) in one user hive (M1B_DESIGN.json `budgets`).
-pub const MAX_USER_KEY_READS: usize = 12;
+/// Most key reads (`values()`, `subkeys()`) in one user hive (M1B_DESIGN.json `budgets`): 11 for the
+/// fixed stores at most, and room for every UserAssist `Count` key Windows keeps (9) with some to spare.
+pub const MAX_USER_KEY_READS: usize = 24;
 
 /// The machine's `AppCompatFlags\Layers`.
 const MACHINE_LAYERS: &str =
@@ -398,6 +402,10 @@ impl Scan<'_, '_> {
             }
         };
         for guid in guids {
+            let key = format!(r"{user_assist}\{guid}\Count");
+            if ctx.path_keyed_store(&key) != Some(PathStore::UserAssist) {
+                continue;
+            }
             if reads >= MAX_USER_KEY_READS {
                 // UserAssist has more `Count` keys than the read budget allows; the rest are not read.
                 ctx.ext.warn(
@@ -408,10 +416,6 @@ impl Scan<'_, '_> {
                     ),
                 );
                 break;
-            }
-            let key = format!(r"{user_assist}\{guid}\Count");
-            if ctx.path_keyed_store(&key) != Some(PathStore::UserAssist) {
-                continue;
             }
             if let Some(values) = read(&key, &mut reads) {
                 self.store_values(&key, PathStore::UserAssist, &values, at_home);

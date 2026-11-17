@@ -1,4 +1,4 @@
-//! REG-PRIVACY: the key-open budget (M1B_DESIGN.json `budgets`: "REG-PRIVACY at most 12 keys per
+//! REG-PRIVACY: the key-open budget (M1B_DESIGN.json `budgets`: "REG-PRIVACY at most 24 keys per
 //! loaded user"), plus one read of the machine's `AppCompatFlags\Layers`. The shared walk is not used.
 //!
 //! What is counted: every `values()`, `subkeys()` and `key_info()` call of one scan. Apart from them the
@@ -84,6 +84,12 @@ fn busy(others: usize, guids: usize) -> Fixture {
 
 /// The key reads (`values`, `subkeys`, `key_info`), the value reads and the candidates of one scan.
 fn reads(fx: Fixture) -> (u64, u64, usize) {
+    let (keys, values, found, _) = scan(fx);
+    (keys, values, found)
+}
+
+/// [`reads`] plus the scan's warnings.
+fn scan(fx: Fixture) -> (u64, u64, usize, Vec<String>) {
     let world = World::new(fx);
     let meter = Meter::new();
     let reg = MeteredRegistry::new(&world.fixture, &meter);
@@ -94,7 +100,31 @@ fn reads(fx: Fixture) -> (u64, u64, usize) {
         .iter()
         .map(|&op| snap.get(op).calls)
         .sum();
-    (keys, snap.get(Op::RegValue).calls, found.len())
+    let warnings = world.ext.take_warnings();
+    (keys, snap.get(Op::RegValue).calls, found.len(), warnings)
+}
+
+/// Key reads of one user before the UserAssist `Count` keys when MuiCache is found under its Classes
+/// spelling: 3 AppCompat stores, MuiCache, 4 FeatureUsage stores, UFH SHC and the UserAssist listing.
+const FIXED_READS: usize = 10;
+
+/// The UserAssist GUIDs Windows 10 and 11 keep per user: every one of them is read within the budget,
+/// with no warning (the developer host has all nine).
+#[test]
+fn budget_reads_every_user_assist_guid_windows_keeps() {
+    const WINDOWS_GUIDS: usize = 9;
+    const _: () = assert!(FIXED_READS + 1 + WINDOWS_GUIDS <= MAX_USER_KEY_READS);
+    let users = USERS.len() as u64;
+    let budget = MAX_USER_KEY_READS as u64 * users + 1;
+    let (keys, _, found, warnings) = scan(busy(3, WINDOWS_GUIDS));
+    assert!(keys <= budget, "{keys} key reads (budget {budget})");
+    // Per user: 8 path-store values, one UserAssist entry per GUID, 1 UFH slot; once: the machine's
+    // Layers value.
+    assert_eq!(found, (9 + WINDOWS_GUIDS) * USERS.len() + 1, "candidates");
+    assert!(
+        warnings.iter().all(|w| !w.contains("read budget")),
+        "{warnings:?}"
+    );
 }
 
 #[test]
@@ -127,8 +157,15 @@ fn budget_key_opens() {
 fn budget_holds_with_many_user_assist_guids() {
     let users = USERS.len() as u64;
     let budget = MAX_USER_KEY_READS as u64 * users + 1;
-    let (keys, _, found) = reads(busy(3, 6));
+    let (keys, _, found, warnings) = scan(busy(3, 40));
     assert!(keys <= budget, "{keys} key reads (budget {budget})");
-    // Within the budget: two `Count` keys per user.
-    assert_eq!(found, 11 * USERS.len() + 1, "candidates");
+    // Within the budget: every read left after the fixed stores is a `Count` key.
+    let counts = MAX_USER_KEY_READS - FIXED_READS;
+    assert_eq!(found, (9 + counts) * USERS.len() + 1, "candidates");
+    // The cut is said once per user.
+    let cut = warnings
+        .iter()
+        .filter(|w| w.contains("read budget"))
+        .count();
+    assert_eq!(cut, USERS.len(), "{warnings:?}");
 }

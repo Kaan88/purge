@@ -18,7 +18,7 @@
     ],
     "npp": [
       2,
-      2
+      3
     ],
     "vscode": [
       244,
@@ -42,6 +42,28 @@
         "band": "Likely",
         "preselected": false,
         "scanner": "SYS-FIREWALL",
+        "absorbed": false,
+        "blockers": []
+      },
+      "reason": "new_scanner"
+    },
+    {
+      "app": "npp",
+      "target": {
+        "name": "{6Q809377-6NS0-444O-8957-N3773S02200R}\\Abgrcnq++\\abgrcnq++.rkr",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+        "type": "RegValue"
+      },
+      "before": null,
+      "after": {
+        "target": {
+          "name": "{6Q809377-6NS0-444O-8957-N3773S02200R}\\Abgrcnq++\\abgrcnq++.rkr",
+          "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+          "type": "RegValue"
+        },
+        "band": "Likely",
+        "preselected": false,
+        "scanner": "REG-PRIVACY",
         "absorbed": false,
         "blockers": []
       },
