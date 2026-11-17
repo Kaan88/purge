@@ -217,7 +217,9 @@ dependencies = [
  "purge-model",
  "purge-source",
  "purge-win",
+ "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
