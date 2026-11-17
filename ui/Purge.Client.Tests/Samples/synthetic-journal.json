@@ -1,0 +1,25 @@
+{
+  "schema": "purge.cli.journal/1",
+  "session": "20261117-101500-ab12",
+  "header": {"app": "rig-targets", "plan_hash": "942f107d3b6f83672a3545ea4025f1a3e3def2ab022403beaefdf1a99737e27a"},
+  "finished": true,
+  "commit": {"state": "Committed"},
+  "aborted": null,
+  "counts": {"done": 1, "vanished": 0, "skipped": 1, "held_retry": 0, "pending_reboot": 0, "failed": 0},
+  "records": 7,
+  "valid_len": 2048,
+  "torn_tail": 0,
+  "head": "5d41402abc4b2a76b9719d911017c592",
+  "index_mark": "matches",
+  "open_intents": [],
+  "pending_reboot": [],
+  "held_retry": [],
+  "retries_in_flight": [],
+  "needs_attention": [2],
+  "undo_in_progress": [],
+  "ops": [
+    {"op": 1, "item": "files.dir", "target": {"type": "Path", "path": "C:\\work\\app"}, "outcome": {"kind": "Done"}, "undo_note": null},
+    {"op": 2, "item": "svc", "target": {"type": "Service", "name": "RigSvc"}, "outcome": {"kind": "Skipped", "reason": "NotSupported"}, "undo_note": "created again without its stored password"}
+  ],
+  "journal": []
+}

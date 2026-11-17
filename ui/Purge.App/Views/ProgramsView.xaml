@@ -71,14 +71,28 @@
                     <TextBlock Text="Programs" Style="{StaticResource TitleTextBlockStyle}" />
                     <TextBlock x:Name="Summary" VerticalAlignment="Bottom" Margin="0,0,0,5" Style="{StaticResource SecondaryText}" />
                 </StackPanel>
-                <Button Grid.Column="1" Style="{StaticResource AccentButtonStyle}" Click="OnCommand" Tag="uninstall" VerticalAlignment="Center">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE74D;" FontSize="14" />
-                        <TextBlock Text="Uninstall" />
-                    </StackPanel>
-                </Button>
+                <!-- UI alpha: Scan is the main action; Uninstall waits for the M3 broker (disabled, tooltip on its wrapper
+                     because a disabled button gets no pointer events). -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Border Background="Transparent" ToolTipService.ToolTip="Coming in M3">
+                        <Button x:Name="UninstallTop" Click="OnCommand" Tag="uninstall" IsEnabled="False">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <FontIcon Glyph="&#xE74D;" FontSize="14" />
+                                <TextBlock Text="Uninstall" />
+                            </StackPanel>
+                        </Button>
+                    </Border>
+                    <Button Style="{StaticResource AccentButtonStyle}" Click="OnCommand" Tag="force"
+                            ToolTipService.ToolTip="Record the program and scan for its leftovers while it is still installed (scan --mode forced). Nothing is removed.">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE721;" FontSize="14" />
+                            <TextBlock Text="Scan leftovers" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
                 <StackPanel x:Name="PlainCommands" Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                    <Button Style="{StaticResource SubtleButton}" Content="Force remove" Click="OnCommand" Tag="force" />
+                    <Button Style="{StaticResource SubtleButton}" Content="Record fingerprint" Click="OnCommand" Tag="record"
+                            ToolTipService.ToolTip="Save the program's fingerprint only (harvest), to scan it after you uninstall it yourself" />
                     <Button Style="{StaticResource SubtleButton}" Content="Modify" Click="OnCommand" Tag="modify" />
                     <Button Style="{StaticResource SubtleButton}" Click="OnCommand" Tag="more-pending" AutomationProperties.Name="More actions">
                         <FontIcon Glyph="&#xE712;" FontSize="14" />
@@ -86,9 +100,9 @@
                 </StackPanel>
                 <CommandBar x:Name="Commands" x:Load="False" Grid.Column="2" VerticalAlignment="Center"
                             DefaultLabelPosition="Right" IsDynamicOverflowEnabled="False" Background="Transparent">
-                    <AppBarButton Label="Force remove" Click="OnCommand" Tag="force"
-                                  ToolTipService.ToolTip="Remove without running its uninstaller">
-                        <AppBarButton.Icon><FontIcon Glyph="&#xE945;" /></AppBarButton.Icon>
+                    <AppBarButton Label="Record fingerprint" Click="OnCommand" Tag="record"
+                                  ToolTipService.ToolTip="Save the program's fingerprint only (harvest), to scan it after you uninstall it yourself">
+                        <AppBarButton.Icon><FontIcon Glyph="&#xE7C3;" /></AppBarButton.Icon>
                     </AppBarButton>
                     <AppBarButton Label="Modify" Click="OnCommand" Tag="modify">
                         <AppBarButton.Icon><FontIcon Glyph="&#xE9E9;" /></AppBarButton.Icon>
@@ -328,8 +342,10 @@
 
                         <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <Button Style="{StaticResource AccentButtonStyle}" Content="Uninstall" HorizontalAlignment="Stretch" Click="OnCommand" Tag="uninstall" />
-                            <Button Grid.Column="1" Content="Modify" Click="OnCommand" Tag="modify" />
+                            <Button Style="{StaticResource AccentButtonStyle}" Content="Scan leftovers" HorizontalAlignment="Stretch" Click="OnCommand" Tag="force" />
+                            <Border Grid.Column="1" Background="Transparent" ToolTipService.ToolTip="Coming in M3">
+                                <Button Content="Uninstall" Click="OnCommand" Tag="uninstall" IsEnabled="False" />
+                            </Border>
                         </Grid>
 
                         <Border Style="{StaticResource Divider}" />

@@ -1,0 +1,29 @@
+warning: inventory: HKU\S-1-5-18\Software\Microsoft\Windows\CurrentVersion\Uninstall: cannot read the Uninstall key's subkeys: reparse point not traversed
+warning: baseline: no Professional-26300.9974.tsv.gz in E:\purge-build\ui-alpha\release\kb\baselines; the scan works values-only
+warning: scan: the reference walk did not read every key (budget or unreadable keys); registrations judged by its hits are not Safe on its word
+warning: scan: 20 MSI package(s) could not be read; what they own is unknown
+warning: scan: ownership: {0158093D-F809-455B-9429-6D16A4B5D118}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {01F171AF-1F21-435E-BEE4-FCC4360C896C}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {18DF3488-2245-432B-A023-3AA05C2A00C8}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {29A6183F-228C-4370-A85B-3201A078453E}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {4B0BC91B-29A6-4B8C-A60B-6154FD3AE3AD}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {5FAC19AE-9120-4D9B-AB70-EE91A5750A9D}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {6A138749-F2A9-4B24-B384-DC423B4057AC}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {6BD0AB95-5A14-418B-9552-0636E3508078}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {75485683-EF03-41E6-BF21-D1491694548C}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {76BFDF3B-8CBB-42C5-A76D-C745EEC564DE}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {82EA641D-FA5D-4F76-AF39-619BFC40399D}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {9D09C9EF-A57C-422A-B79A-CC922079653A}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {B90F2CB7-E388-48FF-BA03-BE13F5445D45}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {CCE2CFC0-BE0F-42FE-B20B-9B6DB711A130}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {CD0A1663-DC2D-41BD-89AF-E1089E841822}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {DE12B597-D4BF-4B1B-BF5F-C5CE41AFBDFC}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {DFDDB8BD-7449-4F42-971B-30AEC110337C}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {EF4A3D60-9A53-4697-A18D-D3353F8554E6}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {F5E9FCCB-F42C-447B-9A6D-A1F10D16873C}: a per-user product whose user is not known; its rows are unknown
+warning: scan: ownership: {9AC08E99-230B-47E8-9721-4577B7F124EA}: no LocalPackage; its rows are unknown
+warning: scan: system objects: sysobj: service HidHide: Parameters\ServiceDll: access denied
+warning: scan: COM-CLASS: the shared reference walk did not read every key (budget or unreadable keys): no COM registration is Safe on the walk's word that nothing else refers to it
+warning: scan: COM-INTERFACE: the shared reference walk did not read every key (budget or unreadable keys): no COM registration is Safe on the walk's word that nothing else refers to it
+warning: scan: SYS-SERVICE: 1 service(s) could not be read (HidHide): which services depend on which is unknown, so every service offered is blocked (HasDependents)
+warning: scan: 8 item(s) under a Classes key kept from Safe (MsiPackageUnreadable): the MSI rows of 20 product(s) are unknown

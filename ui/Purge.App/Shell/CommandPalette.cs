@@ -134,15 +134,19 @@ public sealed class CommandPalette
         if (best is not null)
         {
             var name = best.Name;
-            if (verb is Verb.None or Verb.Uninstall)
+            // UI alpha: scanning is the only action on a program; uninstalling waits for the M3 broker.
+            if (Alpha.On && verb is Verb.None or Verb.Uninstall or Verb.Force or Verb.Scan)
+                actions.Add(new("Actions", $"Scan {name} for leftovers", "Records it and scans while it is still installed · nothing is removed",
+                    "", null, null, () => OnProgram(best, "force")));
+            else if (verb is Verb.None or Verb.Uninstall)
                 actions.Add(new("Actions", $"Uninstall {name}, then look for leftovers", "Runs its own uninstaller · you confirm first", "", null, null,
                     () => OnProgram(best, "uninstall")));
-            if (verb is Verb.Force or Verb.Uninstall)
+            if (!Alpha.On && verb is Verb.Force or Verb.Uninstall)
                 actions.Add(new("Actions", $"Force remove {name} without its uninstaller", "Nothing is pre-selected afterwards", "", null, null,
                     () => OnProgram(best, "force")));
             if (verb is Verb.Modify)
                 actions.Add(new("Actions", $"Modify {name}", "Opens its own setup", "", null, null, () => OnProgram(best, "modify")));
-            if (verb is Verb.Scan or Verb.Uninstall)
+            if (!Alpha.On && verb is Verb.Scan or Verb.Uninstall)
                 actions.Add(new("Actions", $"Scan {name} leftovers only", "Use after removing it another way", "", null, null,
                     () => MainWindow.Instance.Navigate("leftovers")));
         }

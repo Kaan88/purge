@@ -26,11 +26,14 @@
                     <TextBlock x:Name="SubtitleText" Text="Uninstalled 04:14 · scanned in 1.4 s · restorable for 30 days" FontSize="13" Style="{StaticResource SecondaryText}" />
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                    <Button Content="Saved fingerprints…" Style="{StaticResource SubtleButton}" Click="OnSavedFingerprints"
+                            ToolTipService.ToolTip="Scan a fingerprint recorded earlier, for example after you uninstalled the program yourself (external mode)" />
                     <Button x:Name="ExpandButton" Content="Collapse all" Style="{StaticResource SubtleButton}" Click="OnExpandAll" />
                     <Button x:Name="WeakButton" Style="{StaticResource SubtleButton}" Click="OnToggleWeak" />
                     <DropDownButton x:Name="SelectButton" Content="Select: Safe only" Background="Transparent" BorderThickness="0">
                         <DropDownButton.Flyout>
                             <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                <MenuFlyoutItem Text="As the engine ticked" Tag="engine" Click="OnSelectPreset" />
                                 <MenuFlyoutItem Text="Safe only" Tag="safe" Click="OnSelectPreset" />
                                 <MenuFlyoutItem Text="Safe and Likely, no user data" Tag="likely" Click="OnSelectPreset" />
                                 <MenuFlyoutItem Text="Nothing" Tag="none" Click="OnSelectPreset" />
@@ -46,7 +49,7 @@
                 <Grid ColumnSpacing="24">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /></Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="READY TO MOVE" FontSize="11" CharacterSpacing="50" Style="{StaticResource SecondaryText}" />
+                        <TextBlock Text="SELECTED" FontSize="11" CharacterSpacing="50" Style="{StaticResource SecondaryText}" />
                         <TextBlock x:Name="VerdictText" FontSize="20" FontWeight="SemiBold" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
@@ -68,6 +71,25 @@
                     </StackPanel>
                 </Grid>
             </Border>
+
+            <!-- Filters: text, item type, band and preselection. Groups follow the item type. -->
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MaxWidth="360" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="FilterText" PlaceholderText="Filter by path, name or scanner" TextChanged="OnFilterChanged" />
+                <ComboBox x:Name="TypeFilter" Grid.Column="1" MinWidth="190" SelectionChanged="OnFilterChanged"
+                          AutomationProperties.Name="Item type" />
+                <ComboBox x:Name="BandFilter" Grid.Column="2" MinWidth="140" SelectionChanged="OnFilterChanged"
+                          AutomationProperties.Name="Band" />
+                <ComboBox x:Name="PickFilter" Grid.Column="3" MinWidth="170" SelectionChanged="OnFilterChanged"
+                          AutomationProperties.Name="Preselection" />
+                <TextBlock x:Name="FilterCount" Grid.Column="4" VerticalAlignment="Center" FontSize="12" Style="{StaticResource SecondaryText}" />
+            </Grid>
         </StackPanel>
 
         <Grid Grid.Row="1" Padding="28,0,28,12" ColumnSpacing="16">
@@ -213,9 +235,15 @@
                             <TextBlock Grid.Row="2" Text="Found by" FontSize="13" Style="{StaticResource SecondaryText}" />
                             <TextBlock x:Name="DFoundBy" Grid.Row="2" Grid.Column="1" Style="{StaticResource Body13}" />
                         </Grid>
+                        <!-- Engine facts of the item (alpha): type, action, harm, reversibility, score, scanners, the
+                             object's recorded name and why, and the raw target identity. -->
+                        <TextBlock x:Name="DFactsTitle" Text="Engine details" FontWeight="SemiBold" FontSize="13" Visibility="Collapsed" />
+                        <TextBlock x:Name="DFacts" Style="{StaticResource Body13}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Visibility="Collapsed" />
+                        <TextBlock x:Name="DTarget" Style="{StaticResource Mono}" FontSize="12" TextWrapping="Wrap" IsTextSelectionEnabled="True" Visibility="Collapsed" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="Open folder" Click="OnSample" />
-                            <Button Content="Always keep" Style="{StaticResource SubtleButton}" Click="OnSample" />
+                            <Button x:Name="OpenLocationButton" Content="Open location" Click="OnOpenLocation"
+                                    ToolTipService.ToolTip="Show the file or folder in Explorer (read-only)" />
+                            <Button x:Name="CopyButton" Content="Copy identity" Style="{StaticResource SubtleButton}" Click="OnCopyIdentity" />
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
@@ -234,15 +262,23 @@
                 <Run x:Name="FooterCount" FontWeight="SemiBold" />
                 <Run x:Name="FooterDetail" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </TextBlock>
-            <TextBlock Grid.Column="1" Text="You'll confirm in the Purge security prompt" FontSize="12" VerticalAlignment="Center"
+            <TextBlock x:Name="FooterNote" Grid.Column="1" Text="Alpha: review only, nothing is removed" FontSize="12" VerticalAlignment="Center"
                        Style="{StaticResource SecondaryText}" />
-            <Button Grid.Column="2" Content="Skip" Click="OnSkip" />
-            <Button x:Name="MoveButton" Grid.Column="3" Style="{StaticResource AccentButtonStyle}" Click="OnMove">
+            <Button x:Name="ExportButton" Grid.Column="2" Click="OnExport" IsEnabled="False" AutomationProperties.Name="Export plan"
+                    ToolTipService.ToolTip="Save the plan, its sidecar, the fingerprint and the selection as files the engine CLI can run later (exec)">
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xEA18;" FontSize="14" />
-                    <TextBlock x:Name="MoveText" />
+                    <FontIcon Glyph="&#xEDE1;" FontSize="14" />
+                    <TextBlock Text="Export plan…" />
                 </StackPanel>
             </Button>
+            <Border x:Name="MoveHost" Grid.Column="3" Background="Transparent">
+                <Button x:Name="MoveButton" Style="{StaticResource AccentButtonStyle}" Click="OnMove" AutomationProperties.Name="Move to quarantine">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xEA18;" FontSize="14" />
+                        <TextBlock x:Name="MoveText" />
+                    </StackPanel>
+                </Button>
+            </Border>
         </Grid>
     </Grid>
 </UserControl>

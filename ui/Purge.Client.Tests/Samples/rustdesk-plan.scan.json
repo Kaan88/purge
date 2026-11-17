@@ -1,0 +1,1040 @@
+{
+ "schema": "purge.scan/0",
+ "app": "rustdesk",
+ "tool": "purge",
+ "mode": "forced",
+ "policy_version": "m1b.1",
+ "plan_hash": "076411510144b9e1a8c3c5824b2c75626d93052d5b825e1da13c65332ef2d356",
+ "items": [
+  {
+   "id": "c-ff94ebdd85337e1f",
+   "target": {
+    "type": "FirewallRule",
+    "id": "{8261834D-120D-4EDF-A2CA-58FEEBA750F8}"
+   },
+   "action": "DeleteKey",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "SYS-FIREWALL",
+   "category": "System",
+   "evidence": [
+    {
+     "kind": "OwnedSystemObject",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Object",
+     "trust": "AdminOnly",
+     "source": "sysobj:program_in_root",
+     "detail": {
+      "recorded_at_harvest": "true",
+      "unproven": "the rule's program file is not proven gone",
+      "why": "program_in_root"
+     }
+    }
+   ],
+   "blockers": [],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 8,
+    "explanation": "Runs a program that belongs to RustDesk"
+   },
+   "object_fp": {
+    "kind": "firewall_rule",
+    "sha256": "9c5276b0743e2fc80b740b5b9e519b4ef26d6f032a23c91c4cbab509a1cc591d"
+   }
+  },
+  {
+   "id": "c-cb2995e92234e47a",
+   "target": {
+    "type": "FirewallRule",
+    "id": "{F07B7C79-D0C1-4C5C-9901-9EEF16761667}"
+   },
+   "action": "DeleteKey",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "SYS-FIREWALL",
+   "category": "System",
+   "evidence": [
+    {
+     "kind": "OwnedSystemObject",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Object",
+     "trust": "AdminOnly",
+     "source": "sysobj:program_in_root",
+     "detail": {
+      "recorded_at_harvest": "true",
+      "unproven": "the rule's program file is not proven gone",
+      "why": "program_in_root"
+     }
+    }
+   ],
+   "blockers": [],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 8,
+    "explanation": "Runs a program that belongs to RustDesk"
+   },
+   "object_fp": {
+    "kind": "firewall_rule",
+    "sha256": "e0562498bf7dc643069aed4acf8d3eaa7b70b49fbcf7831bf4181d79369101d1"
+   }
+  },
+  {
+   "id": "c-fd0e8547590657b2",
+   "target": {
+    "type": "RegValue",
+    "path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+    "name": "C:\\Program Files\\RustDesk\\rustdesk.exe"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "A",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Program Files\\RustDesk\\rustdesk.exe",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:C:\\Program Files\\RustDesk\\rustdesk.exe",
+     "detail": {
+      "path": "C:\\Program Files\\RustDesk\\rustdesk.exe",
+      "root": "C:\\Program Files\\RustDesk",
+      "scanner": "REG-PRIVACY"
+     }
+    }
+   ],
+   "blockers": [],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 15,
+    "explanation": "Pointed to C:\\Program Files\\RustDesk\\RustDesk.exe before uninstall · Points to c:\\program files\\rustdesk\\rustdesk.exe in RustDesk's install folder · Points to C:\\Program Files\\RustDesk\\rustdesk.exe in RustDesk's install folder · Not ticked: the uninstaller did not run, so nothing is preselected"
+   }
+  },
+  {
+   "id": "c-a6417fa4a9eca006",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules",
+    "name": "{8261834D-120D-4EDF-A2CA-58FEEBA750F8}"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "System",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{8261834D-120D-4EDF-A2CA-58FEEBA750F8}",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe",
+      "place": "shared"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "B",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "place": "shared",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "DenyListed",
+     "rule": "fw.registry-direct"
+    }
+   ],
+   "harm": "Critical",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Blocked",
+    "preselected": false,
+    "score": 14,
+    "explanation": "Kept: protected location (rule fw.registry-direct)"
+   }
+  },
+  {
+   "id": "c-efbf3448b1c64483",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules",
+    "name": "{F07B7C79-D0C1-4C5C-9901-9EEF16761667}"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "System",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|{F07B7C79-D0C1-4C5C-9901-9EEF16761667}",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe",
+      "place": "shared"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "B",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "place": "shared",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "DenyListed",
+     "rule": "fw.registry-direct"
+    }
+   ],
+   "harm": "Critical",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Blocked",
+    "preselected": false,
+    "score": 14,
+    "explanation": "Kept: protected location (rule fw.registry-direct)"
+   }
+  },
+  {
+   "id": "c-44f014f3e3997233",
+   "target": {
+    "type": "RegValue",
+    "path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache",
+    "name": "C:\\Program Files\\RustDesk\\rustdesk.exe.ApplicationCompany"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "A",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\RustDesk\\rustdesk.exe.ApplicationCompany",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:C:\\Program Files\\RustDesk\\rustdesk.exe",
+     "detail": {
+      "path": "C:\\Program Files\\RustDesk\\rustdesk.exe",
+      "root": "C:\\Program Files\\RustDesk",
+      "scanner": "REG-PRIVACY"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "MsiPackageUnreadable"
+    }
+   ],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 15,
+    "explanation": "Pointed to C:\\Program Files\\RustDesk\\RustDesk.exe before uninstall · Points to c:\\program files\\rustdesk\\rustdesk.exe in RustDesk's install folder · Points to C:\\Program Files\\RustDesk\\rustdesk.exe in RustDesk's install folder · An installed product's package could not be read to rule it out"
+   }
+  },
+  {
+   "id": "c-f6ca66a38411299b",
+   "target": {
+    "type": "RegValue",
+    "path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache",
+    "name": "C:\\Program Files\\RustDesk\\rustdesk.exe.FriendlyAppName"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "A",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\RustDesk\\rustdesk.exe.FriendlyAppName",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:C:\\Program Files\\RustDesk\\rustdesk.exe",
+     "detail": {
+      "path": "C:\\Program Files\\RustDesk\\rustdesk.exe",
+      "root": "C:\\Program Files\\RustDesk",
+      "scanner": "REG-PRIVACY"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "MsiPackageUnreadable"
+    }
+   ],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 15,
+    "explanation": "Pointed to C:\\Program Files\\RustDesk\\RustDesk.exe before uninstall · Points to c:\\program files\\rustdesk\\rustdesk.exe in RustDesk's install folder · Points to C:\\Program Files\\RustDesk\\rustdesk.exe in RustDesk's install folder · An installed product's package could not be read to rule it out"
+   }
+  },
+  {
+   "id": "c-4c620de9736b5d3c",
+   "target": {
+    "type": "RegValue",
+    "path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache",
+    "name": "C:\\Users\\tester\\AppData\\Local\\rustdesk\\rustdesk.exe.FriendlyAppName"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Users\\tester\\AppData\\Local\\rustdesk\\rustdesk.exe.FriendlyAppName",
+     "detail": {
+      "anchor": "rustdesk",
+      "anchor_kind": "id"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "MsiPackageUnreadable"
+    }
+   ],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 8,
+    "explanation": "Pointed to rustdesk before uninstall · An installed product's package could not be read to rule it out"
+   }
+  },
+  {
+   "id": "c-2cceee8bf0077eeb",
+   "target": {
+    "type": "RegValue",
+    "path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache",
+    "name": "C:\\Users\\tester\\Downloads\\rustdesk-1.5.0-x86_64.exe.FriendlyAppName"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Users\\tester\\Downloads\\rustdesk-1.5.0-x86_64.exe.FriendlyAppName",
+     "detail": {
+      "anchor": "rustdesk",
+      "anchor_kind": "id"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "MsiPackageUnreadable"
+    }
+   ],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 8,
+    "explanation": "Pointed to rustdesk before uninstall · An installed product's package could not be read to rule it out"
+   }
+  },
+  {
+   "id": "c-d12dbd48e20c8246",
+   "target": {
+    "type": "RegValue",
+    "path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache",
+    "name": "C:\\Users\\tester\\Downloads\\rustdesk-1.5.1-x86_64.exe.FriendlyAppName"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Users\\tester\\Downloads\\rustdesk-1.5.1-x86_64.exe.FriendlyAppName",
+     "detail": {
+      "anchor": "rustdesk",
+      "anchor_kind": "id"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "MsiPackageUnreadable"
+    }
+   ],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 8,
+    "explanation": "Pointed to rustdesk before uninstall · An installed product's package could not be read to rule it out"
+   }
+  },
+  {
+   "id": "c-f118c15a80902a9f",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SOFTWARE\\Classes\\.rustdesk\\shell\\open\\command",
+    "name": ""
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SOFTWARE\\Classes\\.rustdesk\\shell\\open\\command|",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe",
+      "place": "shared"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "B",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "place": "shared",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "MsiPackageUnreadable"
+    }
+   ],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 14,
+    "explanation": "Pointed to C:\\Program Files\\RustDesk\\RustDesk.exe before uninstall · Points to c:\\program files\\rustdesk\\rustdesk.exe in RustDesk's install folder · In a place other software and you also write to; nothing shows that RustDesk put it there · An installed product's package could not be read to rule it out"
+   }
+  },
+  {
+   "id": "c-cde3340461a3a309",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SOFTWARE\\Classes\\rustdesk\\shell\\open\\command",
+    "name": ""
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "A",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SOFTWARE\\Classes\\rustdesk\\shell\\open\\command|",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "MsiPackageUnreadable"
+    }
+   ],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 14,
+    "explanation": "Pointed to C:\\Program Files\\RustDesk\\RustDesk.exe before uninstall · Points to c:\\program files\\rustdesk\\rustdesk.exe in RustDesk's install folder · An installed product's package could not be read to rule it out"
+   }
+  },
+  {
+   "id": "c-6d76bd8a12d2e04b",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk",
+    "name": "DisplayIcon"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "A",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk|DisplayIcon",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    }
+   ],
+   "blockers": [],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 14,
+    "explanation": "Pointed to C:\\Program Files\\RustDesk\\RustDesk.exe before uninstall · Points to c:\\program files\\rustdesk\\rustdesk.exe in RustDesk's install folder · Not ticked: the uninstaller did not run, so nothing is preselected"
+   }
+  },
+  {
+   "id": "c-e2644c4e7ca321ed",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk",
+    "name": "DisplayName"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk|DisplayName",
+     "detail": {
+      "anchor": "rustdesk",
+      "anchor_kind": "id"
+     }
+    }
+   ],
+   "blockers": [],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 8,
+    "explanation": "Pointed to rustdesk before uninstall"
+   }
+  },
+  {
+   "id": "c-09e8757291616f94",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk",
+    "name": "InstallLocation"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "A",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk|InstallLocation",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk",
+     "detail": {
+      "path": "c:\\program files\\rustdesk",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    }
+   ],
+   "blockers": [],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 14,
+    "explanation": "Pointed to C:\\Program Files\\RustDesk before uninstall · Points to c:\\program files\\rustdesk in RustDesk's install folder · Not ticked: the uninstaller did not run, so nothing is preselected"
+   }
+  },
+  {
+   "id": "c-2fa5183910a588c8",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk",
+    "name": "Publisher"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk|Publisher",
+     "detail": {
+      "anchor": "rustdesk",
+      "anchor_kind": "id"
+     }
+    }
+   ],
+   "blockers": [],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 8,
+    "explanation": "Pointed to rustdesk before uninstall"
+   }
+  },
+  {
+   "id": "c-255232c7a1d934fb",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk",
+    "name": "UninstallString"
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "A",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RustDesk|UninstallString",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "A",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    }
+   ],
+   "blockers": [],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 14,
+    "explanation": "Pointed to C:\\Program Files\\RustDesk\\RustDesk.exe before uninstall · Points to c:\\program files\\rustdesk\\rustdesk.exe in RustDesk's install folder · Not ticked: the uninstaller did not run, so nothing is preselected"
+   }
+  },
+  {
+   "id": "c-98bf18280279a4a4",
+   "target": {
+    "type": "RegValue",
+    "path": "HKLM\\SOFTWARE\\Classes\\.rustdesk\\DefaultIcon",
+    "name": ""
+   },
+   "action": "DeleteValue",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "REF-ANY",
+   "category": "Registration",
+   "evidence": [
+    {
+     "kind": "InPreUninstallRefSnapshot",
+     "tier": "B",
+     "weight": 8,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "refsnap:HKLM\\SOFTWARE\\Classes\\.rustdesk\\DefaultIcon|",
+     "detail": {
+      "anchor": "C:\\Program Files\\RustDesk\\RustDesk.exe",
+      "place": "shared"
+     }
+    },
+    {
+     "kind": "PointsIntoInstallRoot",
+     "tier": "B",
+     "weight": 6,
+     "scope": "Value",
+     "trust": "AdminOnly",
+     "source": "points:c:\\program files\\rustdesk\\rustdesk.exe",
+     "detail": {
+      "path": "c:\\program files\\rustdesk\\rustdesk.exe",
+      "place": "shared",
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "MsiPackageUnreadable"
+    }
+   ],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": null,
+   "child_count": null,
+   "decision": {
+    "band": "Likely",
+    "preselected": false,
+    "score": 14,
+    "explanation": "Pointed to C:\\Program Files\\RustDesk\\RustDesk.exe before uninstall · Points to c:\\program files\\rustdesk\\rustdesk.exe in RustDesk's install folder · In a place other software and you also write to; nothing shows that RustDesk put it there · An installed product's package could not be read to rule it out"
+   }
+  },
+  {
+   "id": "c-00f21bb8b30b2188",
+   "target": {
+    "type": "Path",
+    "path": "C:\\Program Files\\RustDesk"
+   },
+   "action": "Quarantine",
+   "owner": {
+    "program_id": "HKLM|64|RustDesk",
+    "display_name": "RustDesk"
+   },
+   "origin": "Scanner",
+   "scanner": "FS-INSTALLDIR",
+   "category": "AppFiles",
+   "evidence": [
+    {
+     "kind": "InsideInstallRoot",
+     "tier": "A",
+     "weight": 9,
+     "scope": "Path",
+     "trust": "AdminOnly",
+     "source": "root:C:\\Program Files\\RustDesk",
+     "detail": {
+      "root": "C:\\Program Files\\RustDesk"
+     }
+    }
+   ],
+   "blockers": [
+    {
+     "kind": "NotGone"
+    },
+    {
+     "kind": "UnmatchedChildren",
+     "n": 107
+    },
+    {
+     "kind": "UserData"
+    }
+   ],
+   "harm": "Low",
+   "reversibility": "Full",
+   "children": [],
+   "size_bytes": 83732202,
+   "child_count": 107,
+   "decision": {
+    "band": "Blocked",
+    "preselected": false,
+    "score": 9,
+    "explanation": "Kept: the app still appears to be installed"
+   },
+   "item_fp": {
+    "file_id": "53471d0000001d000000000000000000",
+    "volume_serial": 1633208402887983107
+   }
+  }
+ ],
+ "absorbed": []
+}

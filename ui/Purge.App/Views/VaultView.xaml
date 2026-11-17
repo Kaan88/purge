@@ -103,9 +103,13 @@
                                     </StackPanel>
                                 </Grid>
                                 <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" HorizontalAlignment="Right">
-                                    <Button Content="Put back…" Click="OnRestore" Visibility="{x:Bind HeldVisibility}"
-                                            AutomationProperties.Name="Put back" />
-                                    <Button Content="Details" Style="{StaticResource SubtleButton}" Click="OnDetails" />
+                                    <!-- UI alpha: undo waits for the M3 broker. -->
+                                    <Border Background="Transparent" ToolTipService.ToolTip="Coming in M3" Visibility="{x:Bind HeldVisibility}">
+                                        <Button Content="Put back…" Click="OnRestore" IsEnabled="False"
+                                                AutomationProperties.Name="Put back" />
+                                    </Border>
+                                    <Button Content="Journal" Style="{StaticResource SubtleButton}" Click="OnDetails"
+                                            ToolTipService.ToolTip="Show the session's journal (journal show, read-only)" />
                                 </StackPanel>
                             </Grid>
                         </DataTemplate>

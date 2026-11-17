@@ -102,9 +102,87 @@ public sealed class CliEngineClient : IEngineClient
         return EngineDocs.ReadIndex(index, id => ReadShared(Path.Combine(sessions, id, "report.json")), VolumeSize);
     }
 
+    /// <summary>Where recorded fingerprints are kept (<c>*.fp.json</c>).</summary>
+    public static string FingerprintDir => Path.Combine(WorkDir, "fingerprints");
+
+    public async Task<SavedFingerprint> HarvestAsync(string programId, string programName,
+        IProgress<EngineProgress>? progress = null, CancellationToken ct = default)
+    {
+        Directory.CreateDirectory(FingerprintDir);
+        var path = Path.Combine(FingerprintDir, $"{DateTime.Now:yyyyMMdd-HHmmss}-{Slug(programName)}.fp.json");
+        progress?.Report(EngineProgress.Step($"Recording {programName}"));
+        Expect(await RunAsync("harvest", ["harvest", programId, "-o", path], progress, ct).ConfigureAwait(false), ExitCodes.Ok);
+        return new SavedFingerprint(path, programId, programName, DateTimeOffset.Now);
+    }
+
+    public async Task<LeftoverPlan> ScanFingerprintAsync(SavedFingerprint fingerprint, string mode,
+        IProgress<EngineProgress>? progress = null, CancellationToken ct = default)
+    {
+        if (mode is not ("post" or "external" or "forced")) throw new ArgumentException($"unknown scan mode {mode}", nameof(mode));
+        var dir = NewWorkDir(fingerprint.Name);
+        var plan = Path.Combine(dir, "plan.json");
+        progress?.Report(EngineProgress.Step($"Scanning for leftovers ({mode})"));
+        var scan = await RunAsync("scan", ["scan", "--fp", fingerprint.Path, "--mode", mode, "-o", plan], progress, ct).ConfigureAwait(false);
+        Expect(scan, ExitCodes.Ok);
+        await File.WriteAllTextAsync(Path.Combine(dir, "scan.log"), scan.Stderr, ct).ConfigureAwait(false);
+        var sidecar = await File.ReadAllTextAsync(EngineDocs.SidecarOf(plan), ct).ConfigureAwait(false);
+        var result = EngineDocs.ReadScan(sidecar, plan, fingerprint.Name, Warnings(scan.Stderr)) with { FingerprintPath = fingerprint.Path };
+        try
+        {
+            var fp = await File.ReadAllTextAsync(fingerprint.Path, ct).ConfigureAwait(false);
+            result = EngineDocs.WithObjectNotes(result, EngineDocs.ReadFingerprintObjects(fp));
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            result.Warnings.Add($"ui: the fingerprint's system objects could not be read: {e.Message}");
+        }
+        return result;
+    }
+
+    public Task<IReadOnlyList<SavedFingerprint>> ListFingerprintsAsync(CancellationToken ct = default) =>
+        Task.Run<IReadOnlyList<SavedFingerprint>>(() =>
+        {
+            if (!Directory.Exists(FingerprintDir)) return [];
+            var list = new List<SavedFingerprint>();
+            foreach (var file in Directory.EnumerateFiles(FingerprintDir, "*.fp.json"))
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var (id, name) = EngineDocs.ReadFingerprintHead(File.ReadAllText(file));
+                    list.Add(new SavedFingerprint(file, id, name, File.GetLastWriteTime(file)));
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or JsonException) { }
+            }
+            return list.OrderByDescending(f => f.Recorded).ToList();
+        }, ct);
+
+    public async Task<string> PlanShowAsync(string planPath, CancellationToken ct = default)
+    {
+        var run = await RunAsync("plan show", ["plan", "show", planPath], null, ct).ConfigureAwait(false);
+        Expect(run, ExitCodes.Ok);
+        return run.Stdout;
+    }
+
+    public async Task<JournalView> ShowJournalAsync(string sessionId, CancellationToken ct = default)
+    {
+        var run = await RunAsync("journal show", ["journal", "show", "--session", sessionId], null, ct).ConfigureAwait(false);
+        // 9: the journal reads but does not match the index; the document is still printed and says so.
+        Expect(run, ExitCodes.Ok, ExitCodes.StoreIntegrity);
+        return EngineDocs.ReadJournal(run.Stdout);
+    }
+
     public async Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind,
         IProgress<EngineProgress>? progress = null, CancellationToken ct = default)
     {
+        if (kind == ScanKind.External)
+            throw new ArgumentException("an external scan starts from a saved fingerprint (ScanFingerprintAsync)", nameof(kind));
+        if (kind == ScanKind.ScanOnly)
+        {
+            // The fingerprint is kept, so the same program can be scanned again after it is removed elsewhere.
+            var saved = await HarvestAsync(programId, programName, progress, ct).ConfigureAwait(false);
+            return await ScanFingerprintAsync(saved, "forced", progress, ct).ConfigureAwait(false);
+        }
         var dir = NewWorkDir(programName);
         var fp = Path.Combine(dir, "fp.json");
         var plan = Path.Combine(dir, "plan.json");
@@ -123,7 +201,7 @@ public sealed class CliEngineClient : IEngineClient
         var scan = await RunAsync("scan", ["scan", "--fp", fp, "--mode", mode, "-o", plan], progress, ct).ConfigureAwait(false);
         Expect(scan, ExitCodes.Ok);
         var sidecar = await File.ReadAllTextAsync(Path.Combine(dir, "plan.scan.json"), ct).ConfigureAwait(false);
-        return EngineDocs.ReadScan(sidecar, plan, programName, Warnings(scan.Stderr));
+        return EngineDocs.ReadScan(sidecar, plan, programName, Warnings(scan.Stderr)) with { FingerprintPath = fp };
     }
 
     public async Task<ExecResult> ExecAsync(LeftoverPlan plan, IReadOnlyList<string> selectedIds,
@@ -306,11 +384,19 @@ public sealed class CliEngineClient : IEngineClient
         return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
-    private static string NewWorkDir(string programName)
+    /// <summary>A file-name-safe short form of a program name.</summary>
+    public static string Slug(string programName)
     {
         var slug = new string(programName.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
         if (slug.Length > 40) slug = slug[..40];
-        var dir = Path.Combine(WorkDir, $"{DateTime.Now:yyyyMMdd-HHmmss}-{(slug.Length > 0 ? slug : "app")}");
+        return slug.Length > 0 ? slug : "app";
+    }
+
+    private static string NewWorkDir(string programName)
+    {
+        var dir = Path.Combine(WorkDir, $"{DateTime.Now:yyyyMMdd-HHmmss}-{Slug(programName)}");
+        // Two scans in the same second must not share a folder.
+        for (var n = 2; Directory.Exists(dir); n++) dir = Path.Combine(WorkDir, $"{DateTime.Now:yyyyMMdd-HHmmss}-{Slug(programName)}-{n}");
         Directory.CreateDirectory(dir);
         return dir;
     }

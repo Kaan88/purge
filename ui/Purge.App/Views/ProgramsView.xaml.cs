@@ -415,6 +415,12 @@ public sealed partial class ProgramsView : UserControl
             Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = false });
             return;
         }
+        // The UI alpha changes nothing on the PC: the uninstaller, Modify and Remove entry only wait for the M3 broker.
+        if (Shell.Alpha.On && tag is "uninstall" or "modify" or "remove-entry")
+        {
+            ShowNotice($"{Shell.Alpha.Tooltip}. {Shell.Alpha.Note} Use Scan leftovers to see what the program would leave behind.");
+            return;
+        }
         if (Program.Engine.IsLive)
         {
             switch (tag)
@@ -425,11 +431,17 @@ public sealed partial class ProgramsView : UserControl
                 case "force" when _current is { } row:
                     _ = MainWindow.Instance.OpenReview().ScanAsync(row.Entry.ProgramId, row.Name, ScanKind.ScanOnly);
                     return;
+                case "record" when _current is { } row:
+                    _ = MainWindow.Instance.OpenReview().RecordAsync(row.Entry.ProgramId, row.Name);
+                    return;
                 case "refresh":
                     _ = ReloadAsync();
                     return;
+                case "force" or "record":
+                    ShowNotice("Pick a program first.");
+                    return;
                 default:
-                    ShowNotice("Not in this build: only Uninstall, Force remove (scan only) and Refresh list use the engine.");
+                    ShowNotice("Not in this build: only Scan leftovers, Record fingerprint and Refresh list use the engine.");
                     return;
             }
         }

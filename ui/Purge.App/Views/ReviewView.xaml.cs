@@ -24,6 +24,12 @@ public sealed partial class ReviewView : UserControl
     {
         InitializeComponent();
         AppTile.Background = ProgramRow.TileFor("Mozilla");
+        InitFilters();
+        if (Alpha.On)
+        {
+            MoveButton.IsEnabled = false;
+            ToolTipService.SetToolTip(MoveHost, Alpha.Tooltip);
+        }
         ApplyPreset(Settings.Preset);
         Refresh();
         if (Program.Engine.IsLive)
@@ -32,7 +38,8 @@ public sealed partial class ReviewView : UserControl
             TitleText.Text = "Leftovers";
             SubtitleText.Text = "No scan yet";
             ShowInfo(InfoBarSeverity.Informational, "Nothing scanned yet.",
-                "In Programs, pick a program and choose Uninstall (runs its uninstaller, then scans) or Force remove (scans only).");
+                "In Programs, pick a program and choose Scan leftovers (records it and scans while it is still installed), " +
+                "or use Saved fingerprints to scan one you recorded before uninstalling it yourself.");
         }
         else
             Items.SelectedItem = _all.First(r => r.IsUserData);
@@ -56,16 +63,94 @@ public sealed partial class ReviewView : UserControl
     {
         var visible = new List<LeftoverRow>();
         var collapsed = new HashSet<string>(_all.Where(r => r.IsGroup && !r.Expanded).Select(r => r.GroupName));
+        // A group stays when any of its items passes the filters, even while it is collapsed.
+        var shownGroups = new HashSet<string>(_all.Where(r => !r.IsGroup && Matches(r)).Select(r => r.GroupName));
+        int shown = 0, total = 0;
         foreach (var r in _all)
         {
             if (r.GroupName == Weak && !_showWeak) continue;
-            if (!r.IsGroup && collapsed.Contains(r.GroupName)) continue;
+            if (r.IsGroup)
+            {
+                if (shownGroups.Contains(r.GroupName)) visible.Add(r);
+                continue;
+            }
+            total++;
+            if (!Matches(r)) continue;
+            shown++;
+            if (collapsed.Contains(r.GroupName)) continue;
             visible.Add(r);
         }
+        FilterCount.Text = shown == total ? $"{total} {(total == 1 ? "item" : "items")}" : $"Showing {shown} of {total}";
         var selected = Items.SelectedItem;
         Items.ItemsSource = visible;
         if (selected is LeftoverRow s && visible.Contains(s)) Items.SelectedItem = s;
         UpdateCounts();
+    }
+
+    // ---- Filters (alpha) ---------------------------------------------------------------------------------------
+
+    private const string AllTypes = "All types", AllBands = "All bands", AllPicks = "Any selection";
+    private static readonly string[] BandChoices = [AllBands, "Safe", "Likely", "Weak", "Blocked / kept"];
+    private static readonly string[] PickChoices = [AllPicks, "Engine ticked", "Engine did not tick", "Ticked now", "Not ticked now"];
+    private bool _fillingFilters;
+
+    private void InitFilters()
+    {
+        _fillingFilters = true;
+        TypeFilter.ItemsSource = new List<string> { AllTypes };
+        TypeFilter.SelectedIndex = 0;
+        BandFilter.ItemsSource = BandChoices.ToList();
+        BandFilter.SelectedIndex = 0;
+        PickFilter.ItemsSource = PickChoices.ToList();
+        PickFilter.SelectedIndex = 0;
+        _fillingFilters = false;
+    }
+
+    /// <summary>The type filter lists the groups present, with their counts.</summary>
+    private void FillTypeFilter()
+    {
+        _fillingFilters = true;
+        var names = new List<string> { AllTypes };
+        names.AddRange(_all.Where(r => r.IsGroup).Select(g => g.GroupName));
+        TypeFilter.ItemsSource = names;
+        TypeFilter.SelectedIndex = 0;
+        BandFilter.SelectedIndex = 0;
+        PickFilter.SelectedIndex = 0;
+        FilterText.Text = "";
+        _fillingFilters = false;
+    }
+
+    private bool Matches(LeftoverRow r)
+    {
+        if (TypeFilter.SelectedItem is string type && type != AllTypes && r.GroupName != type) return false;
+        switch (BandFilter.SelectedIndex)
+        {
+            case 1 when r.Band != Band.Safe:
+            case 2 when r.Band != Band.Likely:
+            case 3 when r.Band != Band.Weak:
+            case 4 when r.Band != Band.Protected:
+                return false;
+        }
+        switch (PickFilter.SelectedIndex)
+        {
+            case 1 when !r.EngineTicked:
+            case 2 when r.EngineTicked:
+            case 3 when !r.Checked:
+            case 4 when r.Checked:
+                return false;
+        }
+        var text = FilterText.Text.Trim();
+        if (text.Length == 0) return true;
+        return r.Path.Contains(text, StringComparison.OrdinalIgnoreCase)
+               || r.Why.Contains(text, StringComparison.OrdinalIgnoreCase)
+               || r.FoundBy.Contains(text, StringComparison.OrdinalIgnoreCase)
+               || (r.Source?.ObjectNote?.Name.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
+
+    private void OnFilterChanged(object sender, object e)
+    {
+        if (_fillingFilters) return;
+        Refresh();
     }
 
     private void UpdateCounts()
@@ -108,7 +193,8 @@ public sealed partial class ReviewView : UserControl
         AddPart(parts, chosen.Count(c => c.Kind == LeftoverKind.Task), "task or service", "tasks and services");
         FooterDetail.Text = " · " + string.Join(", ", parts);
         MoveText.Text = chosen.Count == 1 ? "Move 1 item to quarantine…" : $"Move {chosen.Count} items to quarantine…";
-        MoveButton.IsEnabled = chosen.Count > 0 && !_promptOpen && !_busy;
+        MoveButton.IsEnabled = !Alpha.On && chosen.Count > 0 && !_promptOpen && !_busy;
+        ExportButton.IsEnabled = _plan is not null && chosen.Count > 0 && !_busy;
     }
 
     private static void AddPart(List<string> parts, int n, string one, string many)
@@ -140,6 +226,99 @@ public sealed partial class ReviewView : UserControl
             LeftoverKind.Task => "Services and tasks scanner",
             _ => "File system scanner",
         };
+        ShowEngineDetails(row.Source);
+    }
+
+    /// <summary>The alpha's details of an engine item: every fact the scan document carries about it.</summary>
+    private void ShowEngineDetails(LeftoverItem? i)
+    {
+        var on = i is not null;
+        DFactsTitle.Visibility = DFacts.Visibility = DTarget.Visibility = Vis(on);
+        OpenLocationButton.IsEnabled = i is { IsFile: true };
+        CopyButton.IsEnabled = on;
+        if (i is null) return;
+        if (i.Band == LeftoverBand.Blocked || !i.Selectable)
+            DIfRemoved.Text = i.Action == "RemovePackage" ? "Package removal cannot be undone; not offered in this build"
+                : i.Action == "ReportOnly" ? "Shown for information only" : "Purge never removes it";
+        else
+            DIfRemoved.Text = (i.Action switch
+            {
+                "Quarantine" => "Moved to quarantine",
+                "DeleteKey" when i.TargetType == "Service" => "Service deleted after its definition is stored",
+                "DeleteKey" when i.TargetType == "Task" => "Task deleted after its XML is stored",
+                "DeleteKey" when i.TargetType == "FirewallRule" => "Rule deleted after it is stored",
+                "DeleteKey" => "Key deleted after a backup",
+                "DeleteValue" => "Value deleted after a backup",
+                "EditSegment" => "One entry removed from the value",
+                "RemoveDirIfEmpty" => "Removed only if empty by then",
+                _ => i.Action,
+            }) + $" · undo: {i.Reversibility} (not in the alpha)";
+        var lines = new List<string>
+        {
+            $"Type: {i.TargetType} · group {EngineDocs.Describe(i.Type)}",
+            $"Action: {i.Action} · category {i.Category}",
+            $"Band: {i.Band} · score {i.Score} · {(i.Preselected ? "ticked by the engine" : "not ticked by the engine")}",
+            $"Harm if wrong: {i.Harm} · reversibility {i.Reversibility}",
+            $"Scanners: {string.Join(", ", i.Scanners)}",
+        };
+        if (i.Owner.Length > 0) lines.Add($"Attributed to: {i.Owner}");
+        if (i.SizeBytes is { } b) lines.Add($"Size: {ProgramRow.FormatSize(b)} ({b:N0} bytes)");
+        if (i.ChildCount is { } n) lines.Add($"Inside: {n} files or values");
+        if (i.Children > 0) lines.Add($"Nested candidates: {i.Children}");
+        if (i.ObjectWhy.Length > 0) lines.Add($"Why it is the app's object: {WhyText(i.ObjectWhy)}");
+        if (i.ObjectNote is { } note)
+        {
+            if (note.Name.Length > 0 && i.TargetType != "Task") lines.Add($"Name: {note.Name}");
+            if (note.Program.Length > 0) lines.Add($"Program: {note.Program}");
+            if (note.Details.Length > 0) lines.Add($"Recorded: {note.Details}");
+        }
+        if (i.ObjectKind.Length > 0) lines.Add($"Bound to the scan's {i.ObjectKind} digest");
+        if (i.Blockers.Count > 0) lines.Add("Blockers: " + string.Join("; ", i.Blockers));
+        lines.Add($"Id: {i.Id}");
+        DFacts.Text = string.Join(Environment.NewLine, lines);
+        DTarget.Text = i.TargetJson;
+    }
+
+    private static string WhyText(string why) => why switch
+    {
+        "program_in_root" => "its program lies in the app's folder (program_in_root)",
+        "program_is_app_exe" => "its program is one of the app's executables (program_is_app_exe)",
+        "msi_service_row" => "the app's MSI package installs it (msi_service_row)",
+        "app_com_class" => "every action is one of the app's COM classes (app_com_class)",
+        _ => why,
+    };
+
+    /// <summary>Evidence and blockers of an engine item as lines of the "why" card.</summary>
+    private static List<EvidenceLine> EvidenceLines(LeftoverItem i)
+    {
+        var lines = new List<EvidenceLine>();
+        if (i.Explanation.Length > 0) lines.Add(new("●", i.Band == LeftoverBand.Blocked ? Note : Explicit, i.Explanation));
+        foreach (var e in i.EvidenceList)
+        {
+            var detail = string.Join(" · ", e.Detail.Select(kv => $"{kv.Key}: {kv.Value}"));
+            lines.Add(new(e.Negative ? "○" : e.Tier == "A" ? "●" : "◐", e.Negative ? Note : Explicit,
+                $"{e.Kind} (tier {e.Tier}, weight {e.Weight}, {e.Scope}) · {e.Source}{(detail.Length > 0 ? " · " + detail : "")}"));
+        }
+        foreach (var b in i.Blockers) lines.Add(new("⚠", Warning, "Blocker: " + b));
+        return lines;
+    }
+
+    private void OnOpenLocation(object sender, RoutedEventArgs e)
+    {
+        if (Items.SelectedItem is not LeftoverRow { Source.IsFile: true } row) return;
+        var path = row.Path;
+        // Read-only: Explorer opens the folder with the item selected (or the parent when the item is gone).
+        var args = File.Exists(path) || Directory.Exists(path) ? $"/select,\"{path}\"" : $"\"{Path.GetDirectoryName(path)}\"";
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", args) { UseShellExecute = false }); }
+        catch (Exception ex) { ShowInfo(InfoBarSeverity.Error, "Couldn't open Explorer.", ex.Message); }
+    }
+
+    private void OnCopyIdentity(object sender, RoutedEventArgs e)
+    {
+        if (Items.SelectedItem is not LeftoverRow { Source: { } i }) return;
+        var data = new Windows.ApplicationModel.DataTransfer.DataPackage();
+        data.SetText(i.TargetJson.Length > 0 ? i.TargetJson : i.Display);
+        Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data);
     }
 
     // ---- Board 22: inline "Ask" ------------------------------------------------------------------------------
@@ -306,6 +485,13 @@ public sealed partial class ReviewView : UserControl
     private void OnSelectPreset(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuFlyoutItem { Tag: string tag, Text: string text }) return;
+        if (tag == "engine")
+        {
+            foreach (var r in _all.Where(c => !c.IsGroup && c.Selectable)) r.Checked = r.Source is null ? r.Band == Band.Safe : r.EngineTicked;
+            SelectButton.Content = "Select: as the engine ticked";
+            Refresh();
+            return;
+        }
         ApplyPreset(tag switch { "likely" => SafetyPreset.Thorough, "none" => SafetyPreset.Cautious, _ => SafetyPreset.Balanced });
         SelectButton.Content = "Select: " + text;
         UpdateCounts();
@@ -336,7 +522,7 @@ public sealed partial class ReviewView : UserControl
     private async void OnMove(object sender, RoutedEventArgs e)
     {
         var chosen = Candidates.Where(c => c.Checked).ToList();
-        if (chosen.Count == 0) return;
+        if (chosen.Count == 0 || Alpha.On) return;
         if (Program.Engine.IsLive)
         {
             await MoveLiveAsync(chosen);
@@ -369,21 +555,47 @@ public sealed partial class ReviewView : UserControl
     /// Scans a program (after running its uninstaller for <see cref="ScanKind.UninstallThenScan"/>) and shows the
     /// engine's plan: its bands and the engine's own preselection.
     /// </summary>
-    public async Task ScanAsync(string programId, string name, ScanKind kind)
+    public Task ScanAsync(string programId, string name, ScanKind kind)
+    {
+        if (Alpha.On && kind == ScanKind.UninstallThenScan)
+        {
+            ShowInfo(InfoBarSeverity.Warning, Alpha.Tooltip, Alpha.Note);
+            return Task.CompletedTask;
+        }
+        return RunScanAsync(name,
+            kind == ScanKind.UninstallThenScan ? "Uninstalling, then scanning…" : "Recording, then scanning while it is still installed (forced)…",
+            kind == ScanKind.UninstallThenScan ? "Uninstalled and scanned" : "Scanned while installed (forced mode)",
+            (progress, ct) => Program.Engine.ScanAsync(programId, name, kind, progress, ct),
+            reloadPrograms: kind == ScanKind.UninstallThenScan);
+    }
+
+    /// <summary>Scans a saved fingerprint in one of the engine's modes (post, external, forced).</summary>
+    public Task ScanFingerprintAsync(SavedFingerprint fp, string mode) =>
+        RunScanAsync(fp.Name, $"Scanning the fingerprint of {fp.Recorded:g} ({mode} mode)…", $"Scanned from a saved fingerprint ({mode} mode)",
+            (progress, ct) => Program.Engine.ScanFingerprintAsync(fp, mode, progress, ct), reloadPrograms: false);
+
+    /// <summary>
+    /// Runs one engine scan with a progress bar (step, elapsed seconds, the engine's last line) and a Cancel button,
+    /// then shows the plan with the engine's bands and preselection.
+    /// </summary>
+    private async Task RunScanAsync(string name, string running, string done,
+        Func<IProgress<EngineProgress>, CancellationToken, Task<LeftoverPlan>> scan, bool reloadPrograms)
     {
         if (_busy)
         {
-            ShowInfo(InfoBarSeverity.Warning, "Purge is still busy.", "Wait for the running scan or removal to finish.");
+            ShowInfo(InfoBarSeverity.Warning, "Purge is still busy.", "Wait for the running scan to finish.");
             return;
         }
         _busy = true;
         _plan = null;
         _all = [];
+        FillTypeFilter();
         Refresh();
+        ShowEngineDetails(null);
         AppTile.Background = ProgramRow.TileFor(name);
         AppInitial.Text = name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
         TitleText.Text = $"Leftovers of {name}";
-        SubtitleText.Text = kind == ScanKind.UninstallThenScan ? "Uninstalling, then scanning…" : "Scanning without an uninstaller…";
+        SubtitleText.Text = running;
         using var cts = new CancellationTokenSource();
         var bar = ShowInfo(InfoBarSeverity.Informational, "", "");
         bar.IsClosable = false;
@@ -393,22 +605,19 @@ public sealed partial class ReviewView : UserControl
         using var activity = new EngineActivity(bar, "Starting the engine");
         try
         {
-            var plan = await Program.Engine.ScanAsync(programId, name, kind, activity.Progress, cts.Token);
+            var plan = await scan(activity.Progress, cts.Token);
             activity.Dispose();
             LoadPlan(plan);
             var seconds = activity.Elapsed.TotalSeconds.ToString("F0", CultureInfo.CurrentCulture);
-            SubtitleText.Text = (kind == ScanKind.UninstallThenScan ? "Uninstalled and scanned" : "Scanned without an uninstaller")
-                                + $" in {seconds} s · restorable for 30 days once moved";
-            var ticked = _all.Count(r => r.Checked);
-            ShowInfo(plan.Warnings.Count > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Success,
-                $"Found {plan.Items.Count} {(plan.Items.Count == 1 ? "item" : "items")}; the engine ticked {ticked}.",
-                plan.Warnings.Count > 0 ? "Engine warnings: " + string.Join(" · ", plan.Warnings.Take(4)) : "Review the list, then move what you want to quarantine.");
+            SubtitleText.Text = $"{done} in {seconds} s · mode {plan.Mode} · policy {plan.PolicyVersion}"
+                                + (Alpha.On ? " · alpha: review only" : " · restorable for 30 days once moved");
+            ShowScanResult(plan);
         }
         catch (OperationCanceledException)
         {
             SubtitleText.Text = "Cancelled";
-            ShowInfo(InfoBarSeverity.Warning, $"Cancelled during \"{activity.StepName}\".",
-                "The engine was stopped. If the uninstaller had started, it may have finished part of its work.");
+            ShowInfo(InfoBarSeverity.Warning, $"Cancelled during \"{activity.StepName}\" after {activity.Elapsed.TotalSeconds:F0} s.",
+                "The engine was stopped. A scan changes nothing, so there is nothing to undo.");
         }
         catch (Exception ex)
         {
@@ -420,28 +629,184 @@ public sealed partial class ReviewView : UserControl
             _busy = false;
             UpdateCounts();
         }
-        if (kind == ScanKind.UninstallThenScan) _ = MainWindow.Instance.Programs.ReloadAsync();
+        if (reloadPrograms) _ = MainWindow.Instance.Programs.ReloadAsync();
     }
 
-    private static string GroupOf(LeftoverItem i) =>
-        i.Band == LeftoverBand.Weak ? Weak
-        : i.Category == "Association" ? "File associations & protocols"
-        : i.Category == "ShellCom" ? "Shell & COM"
-        : i.IsFile ? "Files & folders"
-        : i.IsRegistry ? "Registry"
-        : "Services, tasks & other";
+    /// <summary>The result bar, and a second bar when the engine says the scan did not see everything.</summary>
+    private void ShowScanResult(LeftoverPlan plan)
+    {
+        var ticked = _all.Count(r => r.Checked);
+        var byBand = plan.Items.GroupBy(i => i.Band).OrderBy(g => g.Key).Select(g => $"{g.Count()} {g.Key}");
+        var result = ShowInfo(InfoBarSeverity.Success,
+            $"Found {plan.Items.Count} {(plan.Items.Count == 1 ? "item" : "items")}; the engine ticked {ticked}.",
+            string.Join(" · ", byBand) + (plan.Absorbed > 0 ? $" · {plan.Absorbed} absorbed by a parent" : "")
+            + " · Review the list; Export plan saves it for the CLI.");
+        if (plan.Warnings.Count == 0) return;
+        var all = new Button { Content = $"All warnings ({plan.Warnings.Count})" };
+        all.Click += async (_, _) => await ShowTextAsync("Engine warnings", string.Join(Environment.NewLine + Environment.NewLine, plan.Warnings));
+        var incomplete = plan.IncompleteWarnings;
+        if (incomplete.Count == 0)
+        {
+            result.ActionButton = all;
+            return;
+        }
+        var warn = AddInfo(InfoBarSeverity.Warning, "Parts of the machine were not fully read.",
+            $"{incomplete.Count} of the engine's {plan.Warnings.Count} warnings say a walk was cut or something could not be read, so " +
+            "some items may be missing or kept from Safe: " + string.Join(" · ", incomplete.Take(3).Select(Short)));
+        warn.ActionButton = all;
+    }
 
-    private static readonly string[] GroupOrder =
-        ["Files & folders", "Registry", "File associations & protocols", "Shell & COM", "Services, tasks & other", Weak];
+    private static string Short(string s) => s.Length > 140 ? s[..137] + "…" : s;
+
+    /// <summary>Records a program's fingerprint only, for a later scan after an uninstall outside Purge.</summary>
+    public async Task RecordAsync(string programId, string name)
+    {
+        if (_busy)
+        {
+            ShowInfo(InfoBarSeverity.Warning, "Purge is still busy.", "Wait for the running scan to finish.");
+            return;
+        }
+        _busy = true;
+        using var cts = new CancellationTokenSource();
+        var bar = ShowInfo(InfoBarSeverity.Informational, "", "");
+        bar.IsClosable = false;
+        var cancel = new Button { Content = "Cancel" };
+        cancel.Click += (_, _) => { cts.Cancel(); cancel.IsEnabled = false; };
+        bar.ActionButton = cancel;
+        using var activity = new EngineActivity(bar, $"Recording {name}");
+        try
+        {
+            var fp = await Program.Engine.HarvestAsync(programId, name, activity.Progress, cts.Token);
+            activity.Dispose();
+            ShowInfo(InfoBarSeverity.Success, $"Recorded {name} in {activity.Elapsed.TotalSeconds:F0} s.",
+                $"Saved to {fp.Path}. After you uninstall it yourself, open Saved fingerprints and scan it in external mode.");
+        }
+        catch (OperationCanceledException)
+        {
+            ShowInfo(InfoBarSeverity.Warning, "Recording cancelled.", "Nothing was saved.");
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+        finally
+        {
+            _busy = false;
+            UpdateCounts();
+        }
+    }
+
+    private async void OnSavedFingerprints(object sender, RoutedEventArgs e)
+    {
+        if (!Program.Engine.IsLive)
+        {
+            ShowInfo(InfoBarSeverity.Informational, "Sample data.", "Saved fingerprints need the engine.");
+            return;
+        }
+        IReadOnlyList<SavedFingerprint> list;
+        try { list = await Program.Engine.ListFingerprintsAsync(); }
+        catch (Exception ex) { ShowError(ex); return; }
+        if (list.Count == 0)
+        {
+            ShowInfo(InfoBarSeverity.Informational, "No saved fingerprints yet.",
+                "In Programs, Record fingerprint (or Scan leftovers) saves one.");
+            return;
+        }
+        var choices = new ListView
+        {
+            ItemsSource = list.Select(f => $"{f.Name}  ·  {f.Recorded:g}  ·  {f.ProgramId}").ToList(),
+            SelectionMode = ListViewSelectionMode.Single,
+            SelectedIndex = 0,
+            MaxHeight = 320,
+        };
+        var mode = new ComboBox
+        {
+            ItemsSource = new List<string>
+            {
+                "external: the program was removed outside Purge",
+                "forced: the program is still installed",
+                "post: Purge ran its uninstaller",
+            },
+            SelectedIndex = 0,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        var panel = new StackPanel { Spacing = 12, MinWidth = 460 };
+        panel.Children.Add(choices);
+        // No style lookup from code: casting a looked-up Style throws under Native AOT (ui/README.md).
+        panel.Children.Add(new TextBlock { Text = "Scan mode", FontSize = 12, Opacity = 0.75 });
+        panel.Children.Add(mode);
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Scan a saved fingerprint",
+            Content = panel,
+            PrimaryButtonText = "Scan",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            RequestedTheme = MainWindow.Instance.ActualTheme,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary || choices.SelectedIndex < 0) return;
+        var modeName = (mode.SelectedIndex switch { 1 => "forced", 2 => "post", _ => "external" });
+        await ScanFingerprintAsync(list[choices.SelectedIndex], modeName);
+    }
+
+    /// <summary>
+    /// Saves the plan and the current selection as files the CLI's <c>exec</c> reads (Documents\Purge exports), after
+    /// <c>plan show</c> read the plan back. Nothing runs.
+    /// </summary>
+    private async void OnExport(object sender, RoutedEventArgs e)
+    {
+        if (_plan is not { } plan || _busy) return;
+        var ids = _all.Where(r => !r.IsGroup && r.Checked && r.Id.Length > 0).Select(r => r.Id).ToList();
+        if (ids.Count == 0) return;
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Purge exports",
+            $"{DateTime.Now:yyyyMMdd-HHmmss}-{Purge.Client.Cli.CliEngineClient.Slug(plan.ProgramName)}");
+        try
+        {
+            string? show = null;
+            try { show = await Program.Engine.PlanShowAsync(plan.PlanPath); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { show = "plan show failed: " + ex.Message; }
+            var result = await Task.Run(() => PlanExport.Write(plan, ids, dir, show));
+            var bar = ShowInfo(InfoBarSeverity.Success, $"Exported {result.Selected} selected {(result.Selected == 1 ? "item" : "items")}.",
+                $"{result.Directory} · confirm hash {result.ConfirmHash[..12]}… · run later with: {result.CommandLine}");
+            var open = new Button { Content = "Open folder" };
+            open.Click += (_, _) => System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{result.Directory}\"") { UseShellExecute = false });
+            bar.ActionButton = open;
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private async Task ShowTextAsync(string title, string text)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = title,
+            Content = new ScrollViewer
+            {
+                MaxHeight = 480,
+                Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 12 },
+            },
+            CloseButtonText = "Close",
+            RequestedTheme = MainWindow.Instance.ActualTheme,
+        };
+        await dialog.ShowAsync();
+    }
 
     private void LoadPlan(LeftoverPlan plan)
     {
         _plan = plan;
         var rows = new List<LeftoverRow>();
-        foreach (var group in GroupOrder)
+        // Groups follow the item type (alpha); Weak items stay in their type's group and are found by the band filter.
+        foreach (var type in Enum.GetValues<LeftoverType>())
         {
-            var items = plan.Items.Where(i => GroupOf(i) == group).ToList();
+            var items = plan.Items.Where(i => i.Type == type).ToList();
             if (items.Count == 0) continue;
+            var group = EngineDocs.Describe(type);
             rows.Add(LeftoverRow.Header(group));
             foreach (var i in items)
             {
@@ -453,23 +818,29 @@ public sealed partial class ReviewView : UserControl
                 };
                 var why = i.Explanation.Length > 0 ? i.Explanation : i.Category;
                 if (i.Action == "RemovePackage") why += " · package removal is not in this build";
+                if (i.ObjectNote is { Name.Length: > 0 } note && i.TargetType == "FirewallRule") why = $"\"{note.Name}\" · {why}";
                 var kind = i.IsFile ? LeftoverKind.File : i.IsRegistry ? LeftoverKind.Registry : LeftoverKind.Task;
-                rows.Add(new LeftoverRow(group, i.Display, why, band,
-                    i.SizeBytes is { } b ? ProgramRow.FormatSize(b) : "", i.SizeBytes ?? 0, kind)
+                var size = i.SizeBytes is { } b ? ProgramRow.FormatSize(b)
+                    : i.ChildCount is { } n ? $"{n} inside" : "";
+                rows.Add(new LeftoverRow(group, i.Display, why, band, size, i.SizeBytes ?? 0, kind)
                 {
                     Id = i.Id,
                     IsUserData = i.IsUserData,
-                    FoundBy = $"{i.Scanner} · {i.Category} · {i.Action} · {i.Evidence} evidence",
+                    FoundBy = $"{string.Join(" + ", i.Scanners)} · {i.Category} · {i.Action} · {i.Evidence} evidence",
+                    Contents = i.ChildCount is { } c ? $"{c} files or values" + (i.SizeBytes is { } sb ? $", {ProgramRow.FormatSize(sb)}" : "") : "",
                     Checked = i.Selectable && i.Preselected,
+                    Evidence = EvidenceLines(i),
+                    Source = i,
                 });
             }
         }
         _all = rows;
-        // Weak matches are shown when the engine found any: a real plan is short enough to see them all.
-        _showWeak = rows.Any(r => r.GroupName == Weak);
+        _showWeak = true;
+        WeakButton.Visibility = Visibility.Collapsed;
         _appliedPreset = Settings.Preset;
         _appliedUserData = Settings.PreSelectUserData;
         SelectButton.Content = "Select: as the engine ticked";
+        FillTypeFilter();
         Refresh();
         Items.SelectedItem = rows.FirstOrDefault(r => !r.IsGroup);
     }
@@ -563,6 +934,12 @@ public sealed partial class ReviewView : UserControl
     private InfoBar ShowInfo(InfoBarSeverity severity, string title, string message)
     {
         InfoBarHost.Children.Clear();
+        return AddInfo(severity, title, message);
+    }
+
+    /// <summary>Adds a bar below the ones already shown.</summary>
+    private InfoBar AddInfo(InfoBarSeverity severity, string title, string message)
+    {
         var bar = new InfoBar { Severity = severity, Title = title, Message = message, IsOpen = true, IsClosable = true };
         // Pin to the window theme: code-made InfoBars otherwise take the warning/info fill from the app theme
         // (Windows setting), not from Settings → Appearance.

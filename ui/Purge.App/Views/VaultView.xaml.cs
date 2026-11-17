@@ -92,7 +92,7 @@ public sealed partial class VaultView : UserControl
 
     private async void OnRestore(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not VaultBatch b || _promptOpen) return;
+        if ((sender as FrameworkElement)?.DataContext is not VaultBatch b || _promptOpen || Shell.Alpha.On) return;
         var items = Lines(b).ToList();
         if (Program.Engine.IsLive)
         {
@@ -136,7 +136,52 @@ public sealed partial class VaultView : UserControl
         }
     }
 
-    private void OnDetails(object sender, RoutedEventArgs e) => MainWindow.Instance.Navigate("history");
+    /// <summary>
+    /// The journal viewer (alpha): <c>journal show --session</c>, read-only. A release engine refuses the verb (exit 5);
+    /// the sandbox dev build answers anywhere.
+    /// </summary>
+    private async void OnDetails(object sender, RoutedEventArgs e)
+    {
+        if (!Program.Engine.IsLive)
+        {
+            MainWindow.Instance.Navigate("history");
+            return;
+        }
+        if ((sender as FrameworkElement)?.DataContext is not VaultBatch b) return;
+        string title, text;
+        try
+        {
+            var j = await Program.Engine.ShowJournalAsync(b.Source.SessionId);
+            title = $"Journal of {b.Name}";
+            var head = new List<string>
+            {
+                $"Session {j.SessionId} · {(j.Finished ? "finished" : "not finished")} · {j.Records} records" +
+                (j.TornTail ? " · ends in an unfinished line (ignored)" : ""),
+                $"Index mark: {j.IndexMark}",
+            };
+            head.AddRange(j.Summary);
+            text = string.Join(Environment.NewLine, head) + Environment.NewLine + Environment.NewLine
+                   + string.Join(Environment.NewLine, j.Ops);
+        }
+        catch (Exception ex)
+        {
+            title = "The journal could not be shown";
+            text = ex.Message;
+        }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = title,
+            Content = new ScrollViewer
+            {
+                MaxHeight = 480,
+                Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 12 },
+            },
+            CloseButtonText = "Close",
+            RequestedTheme = MainWindow.Instance.ActualTheme,
+        };
+        await dialog.ShowAsync();
+    }
 
     private void OnExport(object sender, RoutedEventArgs e) =>
         ShowInfo(InfoBarSeverity.Informational, "Export isn't connected yet.",

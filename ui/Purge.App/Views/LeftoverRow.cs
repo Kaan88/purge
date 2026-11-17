@@ -68,6 +68,12 @@ public sealed partial class LeftoverRow : INotifyPropertyChanged
     // CsWinRT can't pass to ItemsSource ("Value does not fall within the expected range").
     public List<EvidenceLine>? Evidence { get; init; }
 
+    /// <summary>The engine's candidate behind the row (live scans only).</summary>
+    public Purge.Client.Model.LeftoverItem? Source { get; init; }
+
+    /// <summary>Whether the engine ticked it (its preselection, the default of the alpha's review).</summary>
+    public bool EngineTicked => Source is { } s && s.Selectable && s.Preselected;
+
     public bool Selectable => !IsGroup && Band != Band.Protected;
 
     private bool _checked;

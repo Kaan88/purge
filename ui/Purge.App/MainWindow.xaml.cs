@@ -69,6 +69,11 @@ public sealed partial class MainWindow : Window
             Title = $"Purge · {note}";
             AppTitleBar.Title = Title;
         }
+        if (Shell.Alpha.On)
+        {
+            Title = "Purge (alpha)" + (data.Hello.BuildNote is { } n ? $" · {n}" : "");
+            AppTitleBar.Title = Title;
+        }
         if (data.Error is { } error) _programs.ShowEngineNotice(error);
     }
 

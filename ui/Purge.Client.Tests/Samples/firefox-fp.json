@@ -1,0 +1,62 @@
+{
+ "schema": "purge.fp/0",
+ "app": {
+  "program_id": "HKLM|64|Mozilla Firefox",
+  "display_name": "Mozilla Firefox (x64 en-US)"
+ },
+ "identity": {
+  "names": [
+   "Mozilla Firefox (x64 en-US)",
+   "Mozilla Firefox",
+   "firefox",
+   "Firefox Software Updater"
+  ],
+  "vendors": [
+   "Mozilla",
+   "Mozilla Corporation",
+   "Mozilla Foundation"
+  ],
+  "tokens": [
+   "firefox"
+  ],
+  "mega_vendor": false
+ },
+ "sys": {
+  "services": [],
+  "tasks": [
+   {
+    "identity": {
+     "path": "\\Mozilla\\Firefox Default Browser Agent 308046B0AF4A39CB",
+     "actions": [
+      {
+       "kind": "exec",
+       "path": "C:\\Program Files\\Mozilla Firefox\\default-browser-agent.exe",
+       "arguments": "do-task \"308046B0AF4A39CB\"",
+       "working_dir": null
+      }
+     ]
+    },
+    "program": "C:\\Program Files\\Mozilla Firefox\\default-browser-agent.exe",
+    "why": "program_in_root"
+   }
+  ],
+  "firewall_rules": [
+   {
+    "identity": {
+     "id": "{5FF5A478-9D38-4277-8F1E-6ECF334850CD}",
+     "rule": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=17|Profile=Private|App=C:\\Program Files\\Mozilla Firefox\\firefox.exe|Name=Firefox (C:\\Program Files\\Mozilla Firefox)|"
+    },
+    "program": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+    "why": "program_in_root"
+   },
+   {
+    "identity": {
+     "id": "{DE618599-D614-4603-A8BE-55A7EE9AA807}",
+     "rule": "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|Profile=Private|App=C:\\Program Files\\Mozilla Firefox\\firefox.exe|Name=Firefox (C:\\Program Files\\Mozilla Firefox)|"
+    },
+    "program": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+    "why": "program_in_root"
+   }
+  ]
+ }
+}

@@ -50,6 +50,12 @@ public static class RecoveryBar
 
         resume.Click += (_, _) => Run(false);
         rollback.Click += (_, _) => Run(true);
+        if (Shell.Alpha.On)
+        {
+            // The alpha changes nothing: recovery waits for the M3 broker (or the CLI: journal resume / rollback).
+            foreach (var b in new[] { resume, rollback }) Shell.Alpha.Disable(b);
+            bar.Message += " " + Shell.Alpha.Note;
+        }
         return bar;
     }
 }

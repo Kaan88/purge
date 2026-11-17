@@ -49,6 +49,53 @@ build tools (the AOT linker). If the publish fails with `'vswhere.exe' is not re
 The app looks for the engine next to `Purge.exe`. To use another engine, set `PURGE_ENGINE_EXE` to its full
 path. Start the app with `--sample` to see the sample data instead of the engine.
 
+## The UI alpha (branch `ui-alpha`): scan and review only
+
+Branch `ui-alpha` is this sandbox dev build merged with the M1b engine, with a UI that **only scans and
+reviews**. It needs no Sandboxie: it never runs `uninstall`, `exec`, `undo`, `journal resume` or `rollback`.
+The title bar says `Purge (alpha)` and shows an `ALPHA · review only` chip; Uninstall, Move to quarantine,
+Put back, Resume and Roll back are disabled with the tooltip "Coming in M3".
+
+What it does:
+
+- **Programs**: the installed programs from `inventory`, with search (title-bar box or Ctrl+K) and tabs.
+  **Scan leftovers** records the program (`harvest`, kept under `%LOCALAPPDATA%\PurgeSandboxDevWork\fingerprints\`)
+  and scans it while it is still installed (`scan --mode forced`). **Record fingerprint** only records it.
+- **Saved fingerprints…** (on the Leftovers page): scans a recorded fingerprint in `external` (the program was
+  removed outside Purge), `forced` or `post` mode. Record a program, uninstall it yourself, then scan it here.
+- Every scan shows the step, the seconds spent and the engine's last line, with Cancel (the engine is ended;
+  a scan changes nothing).
+- **Review**: every item the engine reports, grouped by type (files and folders, registry, file types and
+  protocols, COM and shell extensions, services, scheduled tasks, firewall rules, MSI and Burn records,
+  privacy traces, error reports and diagnostics, app packages), filterable by text, type, band (Safe, Likely,
+  Weak, Blocked) and preselection (engine ticked or not, ticked now or not). The engine's ticks are the
+  default ("Select: as the engine ticked"). The details card shows the engine's explanation, every piece of
+  evidence (kind, tier, weight, source, detail), the blockers, the scanners, harm, reversibility, score,
+  size and counts, the target identity as JSON, and for services, tasks and firewall rules the name,
+  program and reason (`ObjectWhy`) the fingerprint recorded. A warning bar lists the engine warnings that
+  say a walk was cut or something could not be read; "All warnings" shows every one.
+- **Export plan…** writes `Documents\Purge exports\<time>-<program>\` with `plan.json` and `plan.scan.json`
+  (as the engine wrote them), `fp.json`, `select.json` (the ticked ids), `plan-show.txt` (the engine's
+  `plan show` of it) and `README.txt` with the confirm hash and the `exec` command line for later.
+- **Quarantine → Journal** shows `journal show --session` of a session (read-only; the sandbox dev engine
+  answers it anywhere, a release engine refuses it with code 5).
+
+Build and run it from the repository root (keep the parallelism low when other builds run):
+
+```
+set CARGO_TARGET_DIR=E:\purge-build\ui-alpha
+cargo build -p purge-engine --release --features sandbox-dev -j 4
+dotnet build ui\Purge.slnx -m:2
+dotnet test ui\Purge.Client.Tests -m:2
+set PURGE_ENGINE_EXE=E:\purge-build\ui-alpha\release\purge-engine.exe
+ui\Purge.App\bin\Debug\net10.0-windows10.0.19041.0\win-x64\Purge.exe
+```
+
+For a folder to copy to another PC, publish as in "Build it" below and copy the engine and the baselines next
+to `Purge.exe`; `Purge-ui-alpha.zip` is such a folder. A scan reads the whole machine: run the app as
+administrator for complete results (without it, the engine warns and keeps more items from Safe). A forced
+scan of a program takes 15 to 25 s on the dev host.
+
 ## Make the box
 
 Install Sandboxie-Plus from its official site. In Sandboxie-Plus, create a new box, for example `PurgeTest`:

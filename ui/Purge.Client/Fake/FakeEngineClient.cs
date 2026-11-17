@@ -65,6 +65,19 @@ public sealed class FakeEngineClient : IEngineClient
     public Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind, IProgress<EngineProgress>? progress = null,
         CancellationToken ct = default) => NotLive<LeftoverPlan>();
 
+    public Task<SavedFingerprint> HarvestAsync(string programId, string programName, IProgress<EngineProgress>? progress = null,
+        CancellationToken ct = default) => NotLive<SavedFingerprint>();
+
+    public Task<LeftoverPlan> ScanFingerprintAsync(SavedFingerprint fingerprint, string mode, IProgress<EngineProgress>? progress = null,
+        CancellationToken ct = default) => NotLive<LeftoverPlan>();
+
+    public Task<IReadOnlyList<SavedFingerprint>> ListFingerprintsAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<SavedFingerprint>>([]);
+
+    public Task<string> PlanShowAsync(string planPath, CancellationToken ct = default) => NotLive<string>();
+
+    public Task<JournalView> ShowJournalAsync(string sessionId, CancellationToken ct = default) => NotLive<JournalView>();
+
     public Task<ExecResult> ExecAsync(LeftoverPlan plan, IReadOnlyList<string> selectedIds, IProgress<EngineProgress>? progress = null,
         CancellationToken ct = default) => NotLive<ExecResult>();
 
