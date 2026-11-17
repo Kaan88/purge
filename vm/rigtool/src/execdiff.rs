@@ -16,7 +16,9 @@
 //!   `TaskCache\Tree\<path>` key and, by the before snapshot's `Id`, `TaskCache\{Tasks,Plain,Logon,Boot,
 //!   Maintenance}\{id}`; (pending-delete) a `DeleteService` left `PendingDelete`: its `DeleteFlag` value added or
 //!   changed; (task-reregistered) for a `DeleteTask` whose Tree key is present before and after, exactly the
-//!   TaskCache values the M1b spike lists as regenerated (see `task_reregistrations`); (store) Purge's own stores:
+//!   TaskCache values the M1b spike lists as regenerated, and, when the op has an intent and the Tree `Id`
+//!   changed, the task file itself changed with kind, attributes and reparse state unchanged (see
+//!   `task_reregistrations`); (store) Purge's own stores:
 //!   `C:\ProgramData\Purge`, the header's per-volume quarantine directories and any `X:\.purge-q`; (rig) the rig's
 //!   own files (`items::RigRules`); (pending-rename) `Session Manager|PendingFileRenameOperations` when an op was
 //!   left `PendingReboot` or reconciled; (engine-rm) the engine's own Restart Manager session state, keys and
@@ -609,7 +611,13 @@ fn change_id(c: &Change) -> ChangeId {
 ///   `<category>\{old}` removed with `<category>\{new}` added, provided the old and new `Tasks` keys hold the same
 ///   value names and every value not listed by the spike has the same type and data.
 ///
-/// Anything else (the task file, other TaskCache values, a category key that does not pair) stays collateral.
+/// - the task file `System32\Tasks\<path>` (exactly), changed, when the op has an intent (the run acted on the
+///   task), the `Id` changed (a registration happened) and the file is a plain file before and after with the
+///   same attributes and no reparse point: Task Scheduler writes it again; its content is vouched for by
+///   fidelity (XML and SDDL).
+///
+/// Anything else (the task file in any other case, other TaskCache values, a category key that does not pair)
+/// stays collateral.
 fn task_reregistrations(
     ops: &[OpT],
     a: &Snap,
@@ -647,6 +655,23 @@ fn task_reregistrations(
             warnings.push(format!("task {path}: re-registered, but its TaskCache Id is unreadable before or after"));
             continue;
         };
+        // The task file (R2a S12): Task Scheduler writes it again on every registration, and the
+        // spike shows it differing while the XML and SDDL are equal. Excused exactly, and only when the
+        // run acted on the task (the op has an intent), the TaskCache Id changed (a registration
+        // happened) and the file stayed a plain file with the same attributes. Its content is vouched
+        // for by fidelity (XML and SDDL), not here.
+        if o.j.kind.is_some() && !old.eq_ignore_ascii_case(&new) {
+            let file = task_file(path);
+            if let (Some(x), Some(y)) = (a.path(&file), b.path(&file))
+                && !x.dir
+                && !y.dir
+                && x.attrs == y.attrs
+                && x.reparse == 0
+                && y.reparse == 0
+            {
+                out.insert(('~', 'F', canon::fold(&file), String::new()));
+            }
+        }
         let tasks = |id: &str| format!("{TASKCACHE}\\Tasks\\{id}");
         if old.eq_ignore_ascii_case(&new) {
             for n in &task_names {

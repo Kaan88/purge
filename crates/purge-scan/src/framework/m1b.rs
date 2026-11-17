@@ -781,23 +781,18 @@ impl<'a> ScanCtx<'a> {
         canon_key(key, None, self.guard, None).ok()
     }
 
-    /// Whether the harvest recorded the object `target` with the digest `object_fp` (`fp.sys`), or, for a
-    /// service, one of the app's MSI products installs a service of that name.
+    /// Whether the harvest recorded the object `target` with the digest `object_fp` (`fp.sys`). A
+    /// `ServiceInstall` row of the app's MSI with the service's name is not enough (R2a S3): the harvest
+    /// records such a service in `fp.sys` with its digest when its program is the app's.
     fn object_backed(&self, target: &Target, object_fp: Option<&ObjectFp>) -> bool {
         let fp = self.fp;
         let same = |recorded: ObjectFp| object_fp == Some(&recorded);
         match target {
-            Target::Service { name } => {
-                fp.sys
-                    .services
-                    .iter()
-                    .any(|s| prefix::eq_ci(&s.identity.name, name) && same(s.identity.fp()))
-                    || fp
-                        .msi
-                        .iter()
-                        .flat_map(|m| &m.services)
-                        .any(|s| prefix::eq_ci(&s.name, name))
-            }
+            Target::Service { name } => fp
+                .sys
+                .services
+                .iter()
+                .any(|s| prefix::eq_ci(&s.identity.name, name) && same(s.identity.fp())),
             Target::Task { path } => fp
                 .sys
                 .tasks
@@ -819,8 +814,8 @@ impl<'a> ScanCtx<'a> {
     ///   target's kind;
     /// - `OwnedSystemObject` may only stand on such a target, with Object scope.
     ///
-    /// `OwnedSystemObject` that no harvest record backs (the object recorded with the same digest, or a
-    /// service of the app's own MSI) is lowered to Tier B and says why: a scanner that states it by
+    /// `OwnedSystemObject` that no harvest record backs (the object recorded with the same digest) is
+    /// lowered to Tier B and says why: a scanner that states it by
     /// hand cannot make an object Safe.
     pub(super) fn seal_object(&self, scanner: &str, candidate: &mut Candidate) -> bool {
         let kind = ObjectKind::of(&candidate.target);
@@ -900,7 +895,8 @@ impl CandidateBuilder<'_> {
     /// (`why`, from [`ScanCtx::object_owner`] or an MSI `ServiceInstall` row).
     ///
     /// Granted only when the harvest recorded the object (`recorded_at_harvest`, the scanner having
-    /// compared the digests) or `why` is [`ObjectWhy::MsiServiceRow`]. Otherwise the object is the
+    /// compared the digests), whatever `why` is: an MSI `ServiceInstall` row names a service, it does
+    /// not show that the service found now is the one it installed (R2a S3). Otherwise the object is the
     /// app's by its program alone, and it gets `PointsIntoInstallRoot` with Value scope: weight 6 that
     /// does not match an Object target, so it can never make the object Safe. The sealing checks the
     /// harvest record again. Nothing for a target that is not a system object.
@@ -915,7 +911,7 @@ impl CandidateBuilder<'_> {
             .with("recorded_at_harvest", recorded_at_harvest.to_string());
         let trust = app_trust(self.ctx.fp);
         let source = format!("sysobj:{name}");
-        if recorded_at_harvest || why == ObjectWhy::MsiServiceRow {
+        if recorded_at_harvest {
             self.push(
                 EvidenceKind::OwnedSystemObject,
                 Some(Scope::Object),

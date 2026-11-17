@@ -6,14 +6,22 @@
 //! ([`purge_index::sysobj::ProgramRef::File`]), is the app's at harvest time:
 //!
 //! - [`ObjectWhy::MsiServiceRow`]: a service whose name is a `ServiceInstall` row of the app's own MSI
-//!   **and** whose program lies inside a root of the fingerprint;
-//! - [`ObjectWhy::ProgramInRoot`]: the program lies inside a root of the fingerprint;
+//!   **and** whose program lies inside an InstallRoot of the fingerprint;
+//! - [`ObjectWhy::ProgramInRoot`]: the program lies inside an InstallRoot of the fingerprint. An
+//!   inferred root (`DisplayIcon`, the uninstaller's folder) or a referenced data folder is a guess or
+//!   the app's data, never where its programs are known to be (R2a S4), as on the scan side
+//!   (`ScanCtx::object_owner`);
 //! - [`ObjectWhy::ProgramIsAppExe`]: the program is one of the app's exes or one of the files its
 //!   installer declares outside the roots.
 //!
 //! A name is never a reason: a service, task or rule named like the app but running something else is
-//! not recorded. A task is recorded only when **every** exec action runs a file of the app, no action is
-//! of an unknown kind, and every COM-handler action names one of the app's own CLSIDs. A program that is
+//! not recorded. Neither is an object whose command line names, as an argument, an absolute path that is
+//! not inside a root of the fingerprint (any kind) and not one of the app's files, or one that cannot be
+//! told to be one local file (`purge_index::sysobj::argument_paths`):
+//! `"C:\App\launcher.exe" C:\Other\svc.dll` runs another product's code (R2a S5).
+//!
+//! A task is recorded only when **every** exec action runs a file of the app, no action is of an
+//! unknown kind, and every COM-handler action names one of the app's own CLSIDs. A program that is
 //! an interpreter or host (`cmd.exe`, `rundll32.exe`, ...) is unresolved and never the app's. An object
 //! [`DenyList::check_object`] blocks (drivers, per-user services, objects marked for delete, Windows'
 //! own, AppX-bound or resource-named rules) is not recorded.
@@ -29,8 +37,8 @@ use purge_index::sysobj::{
 };
 use purge_model::object::TaskAction;
 use purge_model::{
-    AppFileOutsideRoot, ExeFile, ObjectKind, ObjectWhy, Root, SysFirewallRule, SysObjects,
-    SysService, SysTask,
+    AppFileOutsideRoot, ExeFile, ObjectKind, ObjectWhy, Root, RootKind, SysFirewallRule,
+    SysObjects, SysService, SysTask,
 };
 
 /// Most system objects recorded per fingerprint.
@@ -79,13 +87,33 @@ enum Owned {
     AppFile,
 }
 
-fn owned(file: &str, inp: &SysInput<'_>) -> Option<Owned> {
-    if inp.roots.iter().any(|r| prefix::is_inside(file, &r.path)) {
+fn is_app_file(file: &str, inp: &SysInput<'_>) -> bool {
+    inp.exes.iter().any(|e| prefix::is_same(&e.path, file))
+        || inp.outside.iter().any(|o| prefix::is_same(&o.path, file))
+}
+
+/// How the program `file` is the app's: inside an InstallRoot, or one of its files. Every absolute
+/// argument (`args`) must be a file inside a root of the app (any kind) or one of its files; an
+/// argument that does not resolve to one file, or that lies elsewhere, makes nothing the app's.
+fn owned(file: &str, args: &[ProgramRef], inp: &SysInput<'_>) -> Option<Owned> {
+    let args_own = args.iter().all(|arg| match arg {
+        ProgramRef::File(path) => {
+            inp.roots.iter().any(|r| prefix::is_inside(path, &r.path)) || is_app_file(path, inp)
+        }
+        ProgramRef::Unresolved { .. } | ProgramRef::None => false,
+    });
+    if !args_own {
+        return None;
+    }
+    let in_install_root = inp
+        .roots
+        .iter()
+        .filter(|r| r.kind == RootKind::InstallRoot)
+        .any(|r| prefix::is_inside(file, &r.path));
+    if in_install_root {
         return Some(Owned::InRoot);
     }
-    let app_file = inp.exes.iter().any(|e| prefix::is_same(&e.path, file))
-        || inp.outside.iter().any(|o| prefix::is_same(&o.path, file));
-    app_file.then_some(Owned::AppFile)
+    is_app_file(file, inp).then_some(Owned::AppFile)
 }
 
 fn why_of(owned: Owned) -> ObjectWhy {
@@ -104,7 +132,7 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
         let ProgramRef::File(program) = &service.program else {
             continue;
         };
-        let Some(how) = owned(program, inp) else {
+        let Some(how) = owned(program, &service.arg_paths, inp) else {
             continue;
         };
         let name = service.identity.name.as_str();
@@ -150,9 +178,11 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
         let Some(files) = programs.files() else {
             continue;
         };
+        // Every argument path of every action, checked with each program.
+        let args: Vec<ProgramRef> = programs.all_arg_paths().cloned().collect();
         let mut how = Owned::InRoot;
         for file in &files {
-            match owned(file, inp) {
+            match owned(file, &args, inp) {
                 None => continue 'tasks,
                 Some(Owned::AppFile) => how = Owned::AppFile,
                 Some(Owned::InRoot) => {}
@@ -183,7 +213,8 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
         let ProgramRef::File(program) = &rule.program else {
             continue;
         };
-        let Some(how) = owned(program, inp) else {
+        // A firewall rule's `App=` is a plain path: there are no arguments.
+        let Some(how) = owned(program, &[], inp) else {
             continue;
         };
         let id = rule.identity.id.as_str();

@@ -314,6 +314,46 @@ fn interpreter_action_with_app_argument_not_safe() {
     assert_eq!(band(py), (Band::Likely, false));
 }
 
+/// R2a S5 (hostile): the app's program with an argument naming another product's code is not the
+/// app's task: not offered unrecorded, and at most Tier B when recorded.
+#[test]
+fn foreign_argument_path_not_the_apps() {
+    let with_args = |args: &str| {
+        let mut fx = machine_with(&[UPDATE]);
+        let mut tasks = fx.tasks().unwrap();
+        for action in &mut tasks[0].identity.actions {
+            if let TaskAction::Exec { arguments, .. } = action {
+                *arguments = Some(args.to_owned());
+            }
+        }
+        fx.set_tasks(Some(tasks));
+        fx
+    };
+    let foreign = r#"-load "C:\Program Files\Other Vendor\plugin.dll""#;
+    assert!(World::new(with_args(foreign)).run().is_empty());
+
+    let world = World::new(with_args(foreign));
+    let recorded = world.ext.sysobj.tasks[0].identity.clone();
+    let mut world = world;
+    world
+        .fp
+        .sys
+        .tasks
+        .push(record(&recorded, ObjectWhy::ProgramIsAppExe));
+    let found = world.run();
+    let c = only(&found, UPDATE);
+    assert!(
+        !has(c, EvidenceKind::OwnedSystemObject, Tier::A),
+        "{:?}",
+        c.evidence
+    );
+    assert_ne!(band(c).0, Band::Safe);
+
+    // An argument inside the app's own root keeps it the app's.
+    let own = format!(r#"-config "{ROOT}\update.ini""#);
+    assert!(find(&World::new(with_args(&own)).run(), UPDATE).is_some());
+}
+
 /// Two exec actions, one the app's updater, one another product's program: not the app's task.
 #[test]
 fn multi_action_one_foreign_no_candidate() {

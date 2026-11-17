@@ -20,7 +20,29 @@ fn bundle(
     provider: &str,
     cache_path: &str,
 ) -> FixtureBuilder {
-    let key = format!(r"{UNINSTALL}\{id}");
+    bundle_in(b, UNINSTALL, id, name, provider, cache_path)
+}
+
+/// The Uninstall key of the user `SID`.
+fn user_uninstall() -> String {
+    format!(r"HKU\{SID}\Software\Microsoft\Windows\CurrentVersion\Uninstall")
+}
+
+/// The dependency records of the user `SID` (`HKCU\Software\Classes` is the user's Classes hive).
+fn user_deps() -> String {
+    format!(r"HKU\{SID}_Classes\Installer\Dependencies")
+}
+
+/// A Burn bundle entry under the Uninstall key `uninstall`.
+fn bundle_in(
+    b: FixtureBuilder,
+    uninstall: &str,
+    id: &str,
+    name: &str,
+    provider: &str,
+    cache_path: &str,
+) -> FixtureBuilder {
+    let key = format!(r"{uninstall}\{id}");
     b.sz(&key, "DisplayName", name)
         .sz(&key, "BundleProviderKey", provider)
         .sz(&key, "BundleCachePath", cache_path)
@@ -230,9 +252,28 @@ fn burn_cache_path_must_be_direct_child_of_package_cache() {
     let report = harvest_of(&b.build(), "Tool Suite");
     assert_eq!(report.fingerprint.burn.as_ref().unwrap().cache_path, None);
 
-    // A per-user bundle cache in the user's own Package Cache is.
+    // R2a S7: a machine bundle's folder is in the machine's Package Cache, not a user's.
     let user_cache = format!(r"C:\Users\tester\AppData\Local\Package Cache\{BUNDLE}\setup.exe");
     let b = bundle(machine(), BUNDLE, "Tool Suite", "ToolSuite", &user_cache);
+    let report = harvest_of(&b.build(), "Tool Suite");
+    assert_eq!(report.fingerprint.burn.as_ref().unwrap().cache_path, None);
+
+    // R2a S7 (hostile): another bundle's folder of the cache is not this bundle's.
+    let other = cache("{B0000000-0000-0000-0000-000000000099}");
+    let b = bundle(machine(), BUNDLE, "Tool Suite", "ToolSuite", &other);
+    let report = harvest_of(&b.build(), "Tool Suite");
+    assert_eq!(report.fingerprint.burn.as_ref().unwrap().cache_path, None);
+
+    // A per-user bundle's folder is in its own user's Package Cache, and only there.
+    let ui = user_uninstall();
+    let b = bundle_in(
+        machine(),
+        &ui,
+        BUNDLE,
+        "Tool Suite",
+        "ToolSuite",
+        &user_cache,
+    );
     let report = harvest_of(&b.build(), "Tool Suite");
     assert_eq!(
         report
@@ -243,6 +284,109 @@ fn burn_cache_path_must_be_direct_child_of_package_cache() {
             .cache_path
             .as_deref(),
         Some(format!(r"C:\Users\tester\AppData\Local\Package Cache\{BUNDLE}").as_str())
+    );
+    let b = bundle_in(
+        machine(),
+        &ui,
+        BUNDLE,
+        "Tool Suite",
+        "ToolSuite",
+        &cache(BUNDLE),
+    );
+    let report = harvest_of(&b.build(), "Tool Suite");
+    assert_eq!(report.fingerprint.burn.as_ref().unwrap().cache_path, None);
+}
+
+/// R2a S7 (hostile): `LastUsedSource` naming a folder that is not Burn's folder for the product gives
+/// no package cache folder.
+#[test]
+fn burn_package_cache_dir_must_be_named_by_its_product() {
+    let cases = [
+        (
+            format!(r"n;1;C:\ProgramData\Package Cache\{CORE}v1.0.0\"),
+            true,
+        ),
+        (format!(r"n;1;C:\ProgramData\Package Cache\{CORE}\"), true),
+        (
+            r"n;1;C:\ProgramData\Package Cache\{C0000000-0000-0000-0000-000000000002}v1\"
+                .to_owned(),
+            false,
+        ),
+        (
+            format!(r"n;1;C:\ProgramData\Package Cache\{BUNDLE}\"),
+            false,
+        ),
+        (format!(r"n;1;C:\ProgramData\Package Cache\{CORE}x\"), false),
+        (
+            format!(r"n;1;C:\Users\tester\AppData\Local\Package Cache\{CORE}v1\"),
+            false,
+        ),
+    ];
+    for (source, want) in cases {
+        let b = bundle(machine(), BUNDLE, "Tool Suite", "ToolSuite", &cache(BUNDLE));
+        let b = package(
+            b,
+            CORE,
+            "Tool Suite Core",
+            r"C:\Program Files\Tool Suite",
+            1,
+        );
+        let b = depends(b, CORE, BUNDLE).sz(
+            &format!(
+                r"HKLM\SOFTWARE\Classes\Installer\Products\{}\SourceList",
+                packed(CORE)
+            ),
+            "LastUsedSource",
+            &source,
+        );
+        let report = harvest_of(&b.build(), "Tool Suite");
+        let p = &report.fingerprint.burn.as_ref().unwrap().packages[0];
+        assert_eq!(p.cache_dir.is_some(), want, "{source}: {:?}", p.cache_dir);
+    }
+}
+
+/// R2a S6 (hostile): a standard user writes `HKCU\Software\Classes\Installer\Dependencies\{Victim}\
+/// Dependents\{machine bundle}`. The machine bundle does not see it: Victim is no package and no
+/// child. A per-user bundle sees its own user's records, but they never tie a machine product to it.
+#[test]
+fn burn_user_dependency_record_claims_nothing_for_a_machine_bundle() {
+    const VICTIM: &str = "{E0000000-0000-0000-0000-000000000001}";
+    let planted =
+        |b: FixtureBuilder| b.key(&format!(r"{}\{VICTIM}\Dependents\{BUNDLE}", user_deps()));
+    let b = bundle(machine(), BUNDLE, "Tool Suite", "ToolSuite", &cache(BUNDLE));
+    let b = package(b, VICTIM, "Victim", r"C:\Program Files\Victim", 1);
+    let report = harvest_of(&planted(b).build(), "Tool Suite");
+    let fp = &report.fingerprint;
+    let burn = fp.burn.as_ref().unwrap();
+    assert!(burn.packages.is_empty(), "{:?}", burn.packages);
+    assert!(fp.msi.is_empty(), "{:?}", fp.msi);
+    assert!(
+        !fp.roots.iter().any(|r| r.path.contains("Victim")),
+        "{:?}",
+        fp.roots
+    );
+
+    // A per-user bundle: its user's record names a product installed for the machine: not the bundle's.
+    let ui = user_uninstall();
+    let b = bundle_in(
+        machine(),
+        &ui,
+        BUNDLE,
+        "Tool Suite",
+        "ToolSuite",
+        &cache(BUNDLE),
+    );
+    let b = package(b, VICTIM, "Victim", r"C:\Program Files\Victim", 1);
+    let report = harvest_of(&planted(b).build(), "Tool Suite");
+    let fp = &report.fingerprint;
+    assert!(fp.burn.as_ref().unwrap().packages.is_empty());
+    assert!(fp.msi.is_empty(), "{:?}", fp.msi);
+    assert!(
+        fp.warnings
+            .iter()
+            .any(|w| w.contains("installed for the machine")),
+        "{:?}",
+        fp.warnings
     );
 }
 

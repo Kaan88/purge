@@ -731,6 +731,51 @@ fn execdiff_task_reregistration_only_listed_values() {
     assert_eq!(rep["counts"]["collateral"], 1, "{rep:#}");
 }
 
+/// R2a S12: after a re-registration (a new TaskCache Id) the task file differs; it is excused exactly, and only
+/// while it stays a plain file with the same attributes and the Id shows that a registration happened.
+#[test]
+fn execdiff_task_file_excused_only_after_a_reregistration() {
+    const NEW_ID: &str = "{99999999-2222-4333-8444-555555555555}";
+    let dir = Dir::new("execdiff-taskfile");
+    let before = exec_before();
+    let tree = format!("{TC}\\Tree\\PurgeTrap\\Update");
+    let file = format!("{TASKS}\\PurgeTrap\\Update");
+    let ops =
+        [(1, "DeleteTask", "\\PurgeTrap\\Update", json!({"kind": "Skipped", "reason": {"kind": "ChangedSinceScan"}}))];
+    // `new_id`: the Id the task has after; `file_line`: the task file after.
+    let after = |new_id: &str, file_line: String| -> Vec<String> {
+        before
+            .iter()
+            .map(|l| {
+                if l.starts_with(&format!("V\t{}\tId\t", esc(&tree))) {
+                    v(&tree, "Id", 1, 78, 70, new_id)
+                } else if l.starts_with(&format!("F\t{}\t", esc(&file))) {
+                    file_line.clone()
+                } else {
+                    l.replace(TASK_ID, new_id)
+                }
+            })
+            .collect()
+    };
+    let changed_file = f(&file, 3010, 99);
+    // A new Id: the TaskCache entries moved and the file was written again: no collateral.
+    let (_, err, rep) = execdiff(&dir, "moved", &before, &after(NEW_ID, changed_file.clone()), &ops);
+    assert_eq!(rep["counts"]["collateral"], 0, "{err}\n{rep:#}");
+    assert!(rep["counts"]["authorised"]["task-reregistered"].as_u64().unwrap() >= 1, "{rep:#}");
+    // The same Id: no registration is shown, the file change is collateral.
+    let (_, _, rep) = execdiff(&dir, "same-id", &before, &after(TASK_ID, changed_file), &ops);
+    assert_eq!(rep["counts"]["collateral"], 1, "{rep:#}");
+    assert!(rep["collateral"].to_string().contains("Update"), "{rep:#}");
+    // A new Id, but the file's attributes changed: collateral.
+    let attrs = format!("F\t{}\t3010\t21\t99\t0\n", esc(&file));
+    let (_, _, rep) = execdiff(&dir, "attrs", &before, &after(NEW_ID, attrs), &ops);
+    assert_eq!(rep["counts"]["collateral"], 1, "{rep:#}");
+    // A new Id, but the file became a reparse point: collateral.
+    let reparse = format!("F\t{}\t3010\t20\t99\ta0000003\n", esc(&file));
+    let (_, _, rep) = execdiff(&dir, "reparse", &before, &after(NEW_ID, reparse), &ops);
+    assert_eq!(rep["counts"]["collateral"], 1, "{rep:#}");
+}
+
 // ---------------------------------------------------------------------------------------------
 // journal: M1b records
 // ---------------------------------------------------------------------------------------------

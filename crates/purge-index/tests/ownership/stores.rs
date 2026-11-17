@@ -1,7 +1,7 @@
 //! SharedDLLs, Installer\Folders and Burn dependents.
 
 use purge_index::ownership::{
-    INSTALLER_FOLDERS, MACHINE_DEPENDENCIES, SHARED_DLL_UNKNOWN, SHARED_DLLS,
+    BurnProviderRef, INSTALLER_FOLDERS, MACHINE_DEPENDENCIES, SHARED_DLL_UNKNOWN, SHARED_DLLS,
 };
 use purge_source::types::RegData;
 
@@ -114,4 +114,51 @@ fn burn_dependents_hklm_and_hku_merged() {
     assert!(ix.burn_dependents("Unknown").is_empty());
     assert!(ix.burn_providers_of("{BUNDLE-3}").is_empty());
     assert!(ix.stats().complete("burn"));
+}
+
+/// R2a S6 (hostile): a standard user writes `HKCU\Software\Classes\Installer\Dependencies\{Victim}\
+/// Dependents\{machine bundle}`. A machine bundle sees the machine's records only; a per-user bundle
+/// sees the machine's and its own user's, never another user's.
+#[test]
+fn burn_providers_in_keeps_each_record_in_its_hive() {
+    let mut fx = base();
+    fx.add_key(&format!(
+        r"{MACHINE_DEPENDENCIES}\Vendor.Runtime,v1\Dependents\{{BUNDLE-1}}"
+    ));
+    fx.add_key(&format!(
+        r"HKU\{USER}_Classes\Installer\Dependencies\{{VICTIM}}\Dependents\{{BUNDLE-1}}"
+    ));
+    fx.add_key(&format!(
+        r"HKU\{USER}_Classes\Installer\Dependencies\User.Pkg\Dependents\{{USER-BUNDLE}}"
+    ));
+    let ix = build(&fx, &[]);
+    let names = |v: Vec<BurnProviderRef<'_>>| -> Vec<(String, bool)> {
+        v.into_iter()
+            .map(|r| (r.provider.to_owned(), r.machine))
+            .collect()
+    };
+    // The merged view still sees the planted record (it only ever keeps more).
+    assert_eq!(ix.burn_providers_of("{bundle-1}").len(), 2);
+    assert_eq!(
+        names(ix.burn_providers_in("{bundle-1}", None)),
+        vec![("Vendor.Runtime,v1".to_owned(), true)]
+    );
+    assert_eq!(
+        names(ix.burn_providers_in("{bundle-1}", Some("S-1-5-21-9-9-9-1001"))),
+        vec![("Vendor.Runtime,v1".to_owned(), true)]
+    );
+    assert_eq!(
+        names(ix.burn_providers_in("{USER-BUNDLE}", Some(USER))),
+        vec![("User.Pkg".to_owned(), false)]
+    );
+    assert!(ix.burn_providers_in("{USER-BUNDLE}", None).is_empty());
+    let mut both = names(ix.burn_providers_in("{bundle-1}", Some(USER)));
+    both.sort();
+    assert_eq!(
+        both,
+        vec![
+            ("Vendor.Runtime,v1".to_owned(), true),
+            ("{VICTIM}".to_owned(), false)
+        ]
+    );
 }

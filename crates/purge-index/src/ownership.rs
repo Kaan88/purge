@@ -264,8 +264,30 @@ pub struct OwnershipIndex {
     rows_by_key: BTreeMap<String, Vec<u32>>,
     shared_dlls: HashMap<String, u32>,
     folders: HashSet<String>,
-    /// Folded provider key -> (provider key as found, dependents).
-    burn: BTreeMap<String, (String, Vec<String>)>,
+    /// Folded provider key -> its dependents, merged and by hive.
+    burn: BTreeMap<String, BurnProvider>,
+}
+
+/// One Burn/MSI dependency provider key as found under the machine's and the loaded users' Classes.
+#[derive(Debug, Clone, Default)]
+struct BurnProvider {
+    /// The provider key as first found.
+    name: String,
+    /// Every dependent over all hives, first spelling kept.
+    dependents: Vec<String>,
+    /// Each dependent with the hive it was read from: `None` for the machine
+    /// (`HKLM\SOFTWARE\Classes`), else the user's SID.
+    records: Vec<(String, Option<String>)>,
+}
+
+/// A provider key that lists a dependent, and where the record was read (R2a S6: a user can write the
+/// records of their own Classes hive, and nothing else).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BurnProviderRef<'a> {
+    /// The provider key as found.
+    pub provider: &'a str,
+    /// The machine's records (`HKLM\SOFTWARE\Classes\Installer\Dependencies`) list the dependent.
+    pub machine: bool,
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -870,13 +892,15 @@ impl OwnershipIndex {
     }
 
     fn read_burn(&mut self, inp: &OwnershipInput, env: &GuardEnv) {
-        let mut roots = vec![MACHINE_DEPENDENCIES.to_owned()];
+        // Each root with its hive: `None` for the machine's, else the user's SID.
+        let mut roots: Vec<(String, Option<String>)> =
+            vec![(MACHINE_DEPENDENCIES.to_owned(), None)];
         match inp.reg.loaded_user_sids() {
             Ok(sids) => {
                 for sid in sids {
                     let input = format!("HKU\\{sid}\\Software\\Classes\\Installer\\Dependencies");
                     match purge_guard::canon::canon_key(&input, None, env, None) {
-                        Ok(k) => roots.push(k.key_path()),
+                        Ok(k) => roots.push((k.key_path(), Some(sid))),
                         Err(e) => self.stats.mark(area::BURN, format!("{input}: {e}")),
                     }
                 }
@@ -885,7 +909,7 @@ impl OwnershipIndex {
                 .stats
                 .mark(area::BURN, format!("loaded user hives: {e}")),
         }
-        for root in roots {
+        for (root, hive) in roots {
             let providers = match inp.reg.subkeys(&root) {
                 Ok(p) => p,
                 Err(SourceError::NotFound) => continue,
@@ -907,11 +931,19 @@ impl OwnershipIndex {
                 let slot = self
                     .burn
                     .entry(fold(&provider))
-                    .or_insert_with(|| (provider.clone(), Vec::new()));
+                    .or_insert_with(|| BurnProvider {
+                        name: provider.clone(),
+                        ..BurnProvider::default()
+                    });
                 for d in dependents {
-                    if !slot.1.iter().any(|x| purge_guard::prefix::eq_ci(x, &d)) {
-                        slot.1.push(d);
+                    if !slot
+                        .dependents
+                        .iter()
+                        .any(|x| purge_guard::prefix::eq_ci(x, &d))
+                    {
+                        slot.dependents.push(d.clone());
                     }
+                    slot.records.push((d, hive.clone()));
                 }
             }
         }
@@ -1248,20 +1280,59 @@ impl OwnershipIndex {
     }
 
     /// The dependents of a Burn/MSI dependency provider key (compared without regard to case), merged
-    /// over the machine and every loaded user.
+    /// over the machine and every loaded user. More dependents only ever keep more: this is the list
+    /// for "does anybody else still depend on it", never for "whose is it".
     pub fn burn_dependents(&self, provider_key: &str) -> &[String] {
         self.burn
             .get(&fold(provider_key))
-            .map_or(&[], |(_, d)| d.as_slice())
+            .map_or(&[], |p| p.dependents.as_slice())
     }
 
-    /// The provider keys (as found) that list `dependent` (compared without regard to case).
+    /// The provider keys (as found) that list `dependent` (compared without regard to case) in any
+    /// hive. Not an ownership answer: a user can write a record naming any dependent in their own
+    /// hive; use [`OwnershipIndex::burn_providers_in`] for that.
     pub fn burn_providers_of(&self, dependent: &str) -> Vec<&str> {
         self.burn
             .values()
-            .filter(|(_, d)| d.iter().any(|x| purge_guard::prefix::eq_ci(x, dependent)))
-            .map(|(p, _)| p.as_str())
+            .filter(|p| {
+                p.dependents
+                    .iter()
+                    .any(|x| purge_guard::prefix::eq_ci(x, dependent))
+            })
+            .map(|p| p.name.as_str())
             .collect()
+    }
+
+    /// The provider keys that list `dependent` in the machine's records, or, with `user_sid`, in that
+    /// user's records (compared without regard to case), in key order. A machine bundle passes `None`
+    /// and sees the machine's records only; a per-user bundle passes its own SID (R2a S6).
+    pub fn burn_providers_in(
+        &self,
+        dependent: &str,
+        user_sid: Option<&str>,
+    ) -> Vec<BurnProviderRef<'_>> {
+        let mut out = Vec::new();
+        for p in self.burn.values() {
+            let mut machine = false;
+            let mut user = false;
+            for (d, hive) in &p.records {
+                if !purge_guard::prefix::eq_ci(d, dependent) {
+                    continue;
+                }
+                match (hive.as_deref(), user_sid) {
+                    (None, _) => machine = true,
+                    (Some(h), Some(sid)) if h.eq_ignore_ascii_case(sid.trim()) => user = true,
+                    _ => {}
+                }
+            }
+            if machine || user {
+                out.push(BurnProviderRef {
+                    provider: p.name.as_str(),
+                    machine,
+                });
+            }
+        }
+        out
     }
 }
 

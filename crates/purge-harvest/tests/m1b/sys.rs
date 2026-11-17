@@ -181,6 +181,90 @@ fn sys_task_interpreter_action_not_recorded() {
     );
 }
 
+/// R2a S4 (hostile): an entry with only a `DisplayIcon` gets an inferred root. Another tool's service,
+/// task and rule running a program in that folder are not the app's.
+#[test]
+fn sys_objects_in_an_inferred_root_not_recorded() {
+    let dir = r"C:\Tools\bin";
+    let key = format!(r"{UNINSTALL}\IconOnly");
+    let b = machine()
+        .sz(&key, "DisplayName", "Icon Only")
+        .sz(&key, "DisplayIcon", &format!(r"{dir}\icononly.exe,0"))
+        .file(&format!(r"{dir}\icononly.exe"), 1_000)
+        .file(&format!(r"{dir}\other.exe"), 1_000)
+        .task(task(r"\Other\InBin", &[&format!(r"{dir}\other.exe")]));
+    let b = service(b, "OtherInBin", &format!(r#""{dir}\other.exe""#));
+    let b = firewall_rule(
+        b,
+        "{0000BBBB-0000-0000-0000-000000000001}",
+        "Other in bin",
+        &format!(r"{dir}\other.exe"),
+    );
+    let report = harvest_of(&b.build(), "Icon Only");
+    let fp = &report.fingerprint;
+    assert!(
+        fp.roots
+            .iter()
+            .any(|r| r.kind == purge_model::RootKind::InferredRoot && r.path == dir),
+        "{:?}",
+        fp.roots
+    );
+    assert!(fp.sys.services.is_empty(), "{:?}", fp.sys.services);
+    assert!(fp.sys.tasks.is_empty(), "{:?}", fp.sys.tasks);
+    assert!(
+        fp.sys.firewall_rules.is_empty(),
+        "{:?}",
+        fp.sys.firewall_rules
+    );
+}
+
+/// R2a S5 (hostile): a host found inside the app's folder, a host named without `.exe`, and a program
+/// of the app whose argument names another product's code.
+#[test]
+fn sys_hosts_and_foreign_arguments_not_recorded() {
+    let b = tool()
+        .file(&format!(r"{APP}\dotnet.exe"), 1_000)
+        .file(&format!(r"{APP}\launcher.exe"), 1_000);
+    let b = service(
+        b,
+        "DotnetHosted",
+        &format!(r#""{APP}\dotnet.exe" "C:\Program Files\Other\svc.dll""#),
+    );
+    let b = service(b, "BareHost", &format!(r"{APP}\python scripts\run.bat"));
+    let b = service(
+        b,
+        "Launched",
+        &format!(r#""{APP}\launcher.exe" C:\Program Files\Other\other.exe"#),
+    );
+    let b = service(
+        b,
+        "LaunchedUnc",
+        &format!(r#""{APP}\launcher.exe" \\srv\s\x.dll"#),
+    );
+    // The app's own program with an argument in its own folder is the app's.
+    let b = service(
+        b,
+        "ToolUpdater",
+        &format!(r#""{APP}\update.exe" --config "{APP}\update.ini""#),
+    );
+    let mut launched = task(r"\Tool\Launched", &[&format!(r"{APP}\launcher.exe")]);
+    if let TaskAction::Exec { arguments, .. } = &mut launched.identity.actions[0] {
+        *arguments = Some(r#"-load "C:\Program Files\Other\other.dll""#.to_owned());
+    }
+    let b = b.task(launched);
+    let report = harvest_of(&b.build(), "Tool");
+    let fp = &report.fingerprint;
+    assert_eq!(
+        fp.sys
+            .services
+            .iter()
+            .map(|s| s.identity.name.as_str())
+            .collect::<Vec<_>>(),
+        ["ToolUpdater"]
+    );
+    assert!(fp.sys.tasks.is_empty(), "{:?}", fp.sys.tasks);
+}
+
 #[test]
 fn sys_firewall_rule_app_in_root_recorded_other_rule_same_name_not() {
     let ours = "{0000BBBB-0000-0000-0000-000000000001}";

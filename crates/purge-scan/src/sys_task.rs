@@ -15,8 +15,9 @@
 //!
 //! - every action is the app's: an exec action whose path resolves to one file
 //!   (`purge_index::sysobj::task_programs`, the harvest's resolution) for which `ScanCtx::object_owner`
-//!   answers (the file lies in an InstallRoot of the app or is one of its exe or outside-root files), or a
-//!   COM-handler action whose CLSID is one of the app's (`fp.anchors.clsids`); or
+//!   answers (the file lies in an InstallRoot of the app or is one of its exe or outside-root files) and
+//!   every absolute path among its arguments is a file of the app
+//!   (`sys_service::arguments_are_the_apps`; R2a S5), or a COM-handler action whose CLSID is one of the app's (`fp.anchors.clsids`); or
 //! - the harvest recorded a task at this path (`fp.sys.tasks`).
 //!
 //! A task the harvest did not record is offered only in the first case, so an action of another product,
@@ -77,6 +78,7 @@ use purge_model::{
 use purge_source::sysobj::TaskInfo;
 
 use crate::framework::{AppIdentityView, CandidateBuilder, RootSpec, ScanCtx, Scanner};
+use crate::sys_service::arguments_are_the_apps;
 
 /// The scanner's catalog id.
 pub const ID: &str = "SYS-TASK";
@@ -183,7 +185,8 @@ fn classify(ctx: &ScanCtx<'_>, env: &Env, identity: &TaskIdentity) -> Vec<Act> {
         .actions
         .iter()
         .zip(programs.actions)
-        .map(|(action, program)| match action {
+        .zip(programs.arg_paths)
+        .map(|((action, program), args)| match action {
             TaskAction::ComHandler { clsid, .. } => {
                 let clsid = clsid.trim();
                 let own = !clsid.is_empty()
@@ -200,7 +203,10 @@ fn classify(ctx: &ScanCtx<'_>, env: &Env, identity: &TaskIdentity) -> Vec<Act> {
                 }
             }
             TaskAction::Exec { .. } => match &program {
-                ProgramRef::File(file) => match ctx.object_owner(&program) {
+                ProgramRef::File(file) => match ctx
+                    .object_owner(&program)
+                    .filter(|_| arguments_are_the_apps(ctx, &args))
+                {
                     Some(why) => Act::Own {
                         file: file.clone(),
                         why,

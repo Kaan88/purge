@@ -10,8 +10,11 @@
 //! A service is considered only when its program, resolved to one file
 //! ([`ProgramRef::File`]: the `ServiceDll` of a `svchost.exe` service of the Windows directory, else the
 //! file `ImagePath` runs), is the app's ([`ScanCtx::object_owner`]: inside an InstallRoot, or one of
-//! the app's exe or outside-root files), or when the harvest recorded a service of that name. The
-//! service's name, display name and description are never a reason.
+//! the app's exe or outside-root files) and every absolute path among `ImagePath`'s arguments is a file
+//! inside a root of the app or one of its files ([`arguments_are_the_apps`]; R2a S5:
+//! `"C:\App\launcher.exe" C:\Other\svc.dll` runs another product's code), or when the harvest
+//! recorded a service of that name. The service's name, display name and description are never a
+//! reason.
 //!
 //! # What a candidate says
 //!
@@ -116,7 +119,9 @@ fn service_candidate(
     let identity = &facts.identity;
     let name = identity.name.as_str();
     let recorded = recorded(ctx, name);
-    let owner = ctx.object_owner(&facts.program);
+    let owner = ctx
+        .object_owner(&facts.program)
+        .filter(|_| arguments_are_the_apps(ctx, &facts.arg_paths));
     if owner.is_none() && recorded.is_none() {
         return None;
     }
@@ -176,7 +181,7 @@ fn service_candidate(
             && program.is_some_and(|file| program_gone(ctx, file));
         match recorded {
             Some(r) if gone => b = b.owned_system_object(r.why, true),
-            // `MsiServiceRow` would be Tier A by itself: what is not proven gone is the program's word.
+            // Not proven gone: the program's word only, which the builder keeps at Tier B.
             _ => b = b.owned_system_object(owner, false),
         }
     } else if same_digest && let Some(r) = recorded {
@@ -227,6 +232,23 @@ fn service_candidate(
     }
     b.common_blockers();
     Some(b.build())
+}
+
+/// Whether every absolute path an object's command line names as an argument
+/// (`purge_index::sysobj::argument_paths`) is a file of the app: inside one of its roots (any kind: an
+/// argument in the app's own data folder is the app's) or one of its exe or outside-root files. An
+/// argument that does not resolve to one local file is never the app's. True when there is none.
+pub(crate) fn arguments_are_the_apps(ctx: &ScanCtx<'_>, args: &[ProgramRef]) -> bool {
+    args.iter().all(|arg| match arg {
+        ProgramRef::File(path) => {
+            ctx.fp
+                .roots
+                .iter()
+                .any(|r| !prefix::steps_back(path) && prefix::is_inside(path, &r.path))
+                || ctx.is_app_file(path)
+        }
+        ProgramRef::Unresolved { .. } | ProgramRef::None => false,
+    })
 }
 
 /// The harvest's record of the service `name` (compared ignoring case, as service names are).

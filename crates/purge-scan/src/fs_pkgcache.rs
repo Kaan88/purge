@@ -6,7 +6,10 @@
 //! or package. The scanner never lists a Package Cache: it looks only at directories the harvest recorded
 //! for the app (`fp.burn.cache_path`, `fp.burn.packages[].cache_dir`, `fp.msi[].source_dirs`), and of
 //! those only at one that is, in the guard's canonical form, a **direct child** of a Package Cache root of
-//! this machine. A Package Cache root itself is never a candidate, and neither is anything deeper.
+//! this machine. A Package Cache root itself is never a candidate, and neither is anything deeper. The
+//! directory's name must also be the owner's own (R2a S7): the bundle id for `cache_path`, the
+//! ProductCode (alone or followed by `v<version>`) for a package's or product's directory; a recorded
+//! path naming another bundle's or product's folder gives nothing.
 //!
 //! # When a directory is offered
 //!
@@ -64,8 +67,8 @@ pub struct FsPkgCache;
 enum Why {
     /// The bundle's own cache directory.
     Bundle,
-    /// The cache directory of a package of the bundle.
-    Package,
+    /// The cache directory of a package of the bundle (`{ProductCode}`).
+    Package(String),
     /// A source directory of one of the app's MSI products (`{ProductCode}`).
     MsiSource(String),
 }
@@ -94,6 +97,17 @@ impl Scanner for FsPkgCache {
             let Some(dir) = cache_entry(recorded, &roots) else {
                 return;
             };
+            // The folder's name must be the bundle's or the product's own (R2a S7): a recorded path
+            // naming another bundle's or product's folder gives nothing.
+            let named = prefix::leaf(&dir).is_some_and(|leaf| match &why {
+                Why::Bundle => burn.is_some_and(|b| {
+                    !b.bundle_id.trim().is_empty() && prefix::eq_ci(leaf, b.bundle_id.trim())
+                }),
+                Why::Package(code) | Why::MsiSource(code) => is_package_folder(leaf, code),
+            });
+            if !named {
+                return;
+            }
             match dirs.iter_mut().find(|(d, _)| prefix::is_same(d, &dir)) {
                 Some((_, whys)) => {
                     if !whys.contains(&why) {
@@ -115,7 +129,8 @@ impl Scanner for FsPkgCache {
                     continue;
                 };
                 if gone && package_released(ctx, burn, package) {
-                    add(&mut dirs, path, Why::Package);
+                    let code = package.product_code.as_deref().unwrap_or("").trim();
+                    add(&mut dirs, path, Why::Package(code.to_owned()));
                 } else if let Some(dir) = cache_entry(path, &roots) {
                     kept.push(dir);
                 }
@@ -156,7 +171,7 @@ impl Scanner for FsPkgCache {
             for why in &whys {
                 b = match (why, burn) {
                     (Why::Bundle, Some(burn)) => b.burn_registration(&burn.bundle_id, "cache_path"),
-                    (Why::Package, Some(burn)) => {
+                    (Why::Package(_), Some(burn)) => {
                         b.burn_registration(&burn.bundle_id, "package_cache_dir")
                     }
                     (Why::MsiSource(code), _) => b.msi_registration(code, "source_dir"),
@@ -210,6 +225,19 @@ fn msi_released(ctx: &ScanCtx<'_>, burn: Option<&BurnFacts>, code: &str) -> bool
         }
     }
     index_other_dependents(ctx, facts, code).is_some_and(|d| d.is_empty())
+}
+
+/// Whether a Package Cache folder name is Burn's folder for the MSI package `product_code` (`{GUID}`):
+/// the code itself, or the code followed by `v<version>` (the harvest's rule, `purge_harvest::burn`).
+fn is_package_folder(leaf: &str, product_code: &str) -> bool {
+    let code = product_code.trim();
+    if code.is_empty() {
+        return false;
+    }
+    let (Some(head), Some(rest)) = (leaf.get(..code.len()), leaf.get(code.len()..)) else {
+        return false;
+    };
+    head.eq_ignore_ascii_case(code) && (rest.is_empty() || rest.starts_with(['v', 'V']))
 }
 
 /// The Package Cache roots of this machine, canonical: `%ProgramData%\Package Cache` and the

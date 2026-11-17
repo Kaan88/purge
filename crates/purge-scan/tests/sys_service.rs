@@ -262,6 +262,28 @@ fn owned_recorded_program_present_likely() {
     assert_eq!(band(&c), (Band::Likely, false));
 }
 
+/// R2a S5 (hostile): the app's program with an argument naming another product's code, or a path that
+/// is not one local file, is not the app's service. An argument inside the app's root is.
+#[test]
+fn foreign_argument_path_makes_no_candidate() {
+    for (args, offered) in [
+        (r#""C:\Program Files\Other Vendor\plugin.dll""#, false),
+        (r"-load=D:\x\y.dll", false),
+        (r"\\server\share\y.dll", false),
+        (r#"-config "C:\Program Files\App\svc.ini""#, true),
+        ("-run", true),
+    ] {
+        let mut w = World::new();
+        w.fixture.set_value(
+            &format!(r"{SVC}\AppSvc"),
+            "ImagePath",
+            RegData::from_expand_sz(&format!(r#""{ROOT}\svc.exe" {args}"#)),
+        );
+        w.reindex();
+        assert_eq!(w.find("AppSvc").is_some(), offered, "{args}");
+    }
+}
+
 #[test]
 fn not_recorded_program_in_root_likely() {
     let mut w = World::new();

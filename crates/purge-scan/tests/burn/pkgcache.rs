@@ -173,6 +173,22 @@ impl FileSystemSource for Recording<'_> {
     }
 }
 
+/// R2a S7 (hostile): a recorded path naming another bundle's or product's folder of the cache (a
+/// fingerprint written before the harvest tied the folders, or a user-writable record) gives nothing:
+/// the folder's name must be the bundle id or the product's code.
+#[test]
+fn pkgcache_recorded_foreign_folder_not_offered() {
+    let foreign = format!(r"{CACHE}\{FOREIGN}v2.0");
+    let mut w = World::new();
+    w.burn_mut().cache_path = Some(foreign.clone());
+    w.burn_mut().packages[0].cache_dir = Some(foreign.clone());
+    w.fp.msi.push(msi_facts(CORE, vec![foreign.clone()]));
+    let found = run(&w);
+    assert!(find(&found, &dir(foreign.clone())).is_none(), "{found:?}");
+    // The foreign folder exists: it is the name that keeps it out.
+    assert!(w.fixture.metadata(&foreign).is_ok());
+}
+
 /// Trap `pkgcache-foreign`: a Package Cache directory named by another product's code, as Burn names
 /// it. Nothing records it for the app, and the Package Cache is never listed, so it is never seen.
 #[test]

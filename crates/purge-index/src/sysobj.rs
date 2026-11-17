@@ -14,8 +14,11 @@
 //! be one file:
 //!
 //! - an interpreter or host executable (`kb/hosts.json`: `cmd.exe`, `powershell.exe`, `rundll32.exe`,
-//!   `svchost.exe`, `java.exe`, ...), wherever it lies and whatever its arguments are: the program that
-//!   matters is in the arguments, and argument-only attribution is never Tier A;
+//!   `svchost.exe`, `java.exe`, `dotnet.exe`, `py.exe`, `bash.exe`, `nssm.exe`, ...), wherever it lies
+//!   and whatever its arguments are: the program that matters is in the arguments, and argument-only
+//!   attribution is never Tier A;
+//! - an unquoted command line any of whose blank-delimited prefixes names such a host
+//!   (`C:\Python312\python scripts\run.bat`: Windows runs `python.exe` when it exists);
 //! - an unquoted command line in which more than one prefix ends in a program extension
 //!   (`C:\Program Files\A.exe B\c.exe`, `C:\App\x.exe C:\Data\y.exe`): which file Windows runs depends
 //!   on which of them exists, and this module reads no file system;
@@ -41,6 +44,17 @@
 //! key below `Parameters`. [`read_firewall`] makes one `values` call on the `FirewallRules` key. Both use
 //! the `CurrentControlSet` spelling, which every source maps to the control set it reports as current;
 //! no other control set is read.
+//!
+//! # Arguments
+//!
+//! A program inside an app's root may still run another product's code that an argument names
+//! (`"C:\App\launcher.exe" C:\Other\svc.dll`). [`argument_paths`] lists every argument that names an
+//! absolute path, each as [`ProgramRef::File`] (canonical) or, when it cannot be told to be one local
+//! file (a UNC path, an unexpanded `%NAME%`, a drive root, anything `canon_path` refuses),
+//! [`ProgramRef::Unresolved`]. The index does not know any app's roots: the harvest and the scanners
+//! treat an object as the app's only when every listed argument is a file inside a root of the app
+//! (or one of its files), and never when one is `Unresolved` ([`ServiceFacts::arg_paths`],
+//! [`TaskPrograms::arg_paths`]).
 //!
 //! What cannot be read is skipped and counted in the caller's error list; [`build`] never fails. A
 //! skipped service is also missing from [`SysObjectIndex::dependents_of`]: callers that act on "no
@@ -219,13 +233,30 @@ pub fn is_host(program: &str) -> bool {
 /// one canonical file. See the module docs for what gives `Unresolved`. An empty command gives
 /// [`ProgramRef::None`].
 pub fn resolve_program(raw: &str, env: &Env) -> ProgramRef {
+    if host_prefix(raw, env) {
+        return ProgramRef::unresolved(raw);
+    }
     match command_exe(raw, env) {
         Exe::Empty => ProgramRef::None,
         Exe::Unresolved => ProgramRef::unresolved(raw),
-        Exe::Path(exe) if is_host(&exe) => ProgramRef::unresolved(raw),
-        Exe::Path(exe) => canonical_program(&exe, env)
+        Exe::Path(exe, _) if is_host(&exe) => ProgramRef::unresolved(raw),
+        Exe::Path(exe, _) => canonical_program(&exe, env)
             .map_or_else(|| ProgramRef::unresolved(raw), ProgramRef::File),
     }
+}
+
+/// Whether an unquoted command line, expanded, has a blank-delimited prefix that names an interpreter
+/// or host (`C:\Python312\python scripts\run.bat`: whichever prefix Windows tries first may be the
+/// host). A quoted command names its program exactly; [`resolve_program`] checks that one.
+fn host_prefix(raw: &str, env: &Env) -> bool {
+    let expanded = env.expand(raw.trim());
+    let command = expanded.trim();
+    !command.starts_with('"')
+        && command
+            .char_indices()
+            .filter(|(_, c)| c.is_whitespace())
+            .map(|(i, _)| &command[..i])
+            .any(|prefix| !prefix.trim().is_empty() && is_host(prefix))
 }
 
 /// The file a plain path names (`ServiceDll`, `InprocServer32`, a firewall rule's `App=`, a task's exec
@@ -257,8 +288,8 @@ enum Exe {
     Empty,
     /// No single program can be told.
     Unresolved,
-    /// The program, expanded, as written (not yet canonical).
-    Path(String),
+    /// The program, expanded, as written (not yet canonical), and the rest of the command line.
+    Path(String, String),
 }
 
 /// The one program of a command line, expanded with `env`, or why there is none.
@@ -273,7 +304,7 @@ fn command_exe(raw: &str, env: &Env) -> Exe {
     }
     if command.starts_with('"') {
         return match purge_win::cmdline::split(command) {
-            Ok(split) => Exe::Path(split.exe),
+            Ok(split) => Exe::Path(split.exe, split.args),
             Err(_) => Exe::Unresolved,
         };
     }
@@ -297,17 +328,95 @@ fn command_exe(raw: &str, env: &Env) -> Exe {
     candidates.sort_unstable();
     candidates.dedup();
     match candidates.as_slice() {
-        [] if !command.contains(char::is_whitespace) => Exe::Path(command.to_owned()),
+        [] if !command.contains(char::is_whitespace) => {
+            Exe::Path(command.to_owned(), String::new())
+        }
         // A blank and no program extension: where the program's name ends cannot be told.
         [] => Exe::Unresolved,
         [end] => {
             let exe = command[..*end].trim();
             debug_assert!(split.exe == exe || *end == command.len());
-            Exe::Path(exe.to_owned())
+            Exe::Path(exe.to_owned(), command[*end..].trim().to_owned())
         }
         // Two prefixes could each be the program: Windows runs whichever exists first.
         _ => Exe::Unresolved,
     }
+}
+
+/// The arguments of a command line (a service's `ImagePath`) that name absolute paths; see
+/// [`argument_paths`]. Empty when the command has no program or no arguments.
+pub fn command_arguments(raw: &str, env: &Env) -> Vec<ProgramRef> {
+    match command_exe(raw, env) {
+        Exe::Path(_, args) => argument_paths(&args, env),
+        Exe::Empty | Exe::Unresolved => Vec::new(),
+    }
+}
+
+/// Every argument of `args` (blank-separated, double quotes grouping and dropped) that names an
+/// absolute path, after `%NAME%` expansion with `env`: an argument that starts with `\` (UNC, `\\?\`,
+/// `\??\`, `\SystemRoot\`, a path rooted on the current drive), or that holds a drive path (`C:\x`) at
+/// its start or after a separator (`-config=C:\x`, `/p:C:\x`). Each is [`ProgramRef::File`] when it is one canonical local
+/// file, else [`ProgramRef::Unresolved`]; an argument that still holds a `%` and a path separator is
+/// `Unresolved` too. Relative arguments are not listed.
+pub fn argument_paths(args: &str, env: &Env) -> Vec<ProgramRef> {
+    let expanded = env.expand(args);
+    let mut out = Vec::new();
+    for token in arg_tokens(&expanded) {
+        let token = token.trim().trim_end_matches([',', ';']);
+        if token.is_empty() {
+            continue;
+        }
+        let path = if token.starts_with('\\') {
+            Some(token)
+        } else {
+            drive_path_start(token).map(|i| &token[i..])
+        };
+        match path {
+            Some(path) => out.push(
+                canonical_program(path, env)
+                    .map_or_else(|| ProgramRef::unresolved(path), ProgramRef::File),
+            ),
+            None if token.contains('%') && token.contains(['\\', '/']) => {
+                out.push(ProgramRef::unresolved(token));
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+/// The arguments of a command line, split at blanks outside double quotes, quotes dropped.
+fn arg_tokens(args: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for c in args.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Where a drive path (`X:\` or `X:/`) starts in `token`: at its start or right after a character that
+/// is not a letter, a digit or `/` (`=`, `:`, `,`, ...; `http://x:/` is no drive path).
+fn drive_path_start(token: &str) -> Option<usize> {
+    let b = token.as_bytes();
+    (0..b.len().saturating_sub(2)).find(|&i| {
+        b[i].is_ascii_alphabetic()
+            && b[i + 1] == b':'
+            && matches!(b[i + 2], b'\\' | b'/')
+            && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'/'))
+    })
 }
 
 /// The canonical form of a program path that `%NAME%` expansion has been applied to: `\SystemRoot\` and a
@@ -372,6 +481,9 @@ pub struct ServiceFacts {
     pub delete_flag: bool,
     /// The program: the `ServiceDll` of a `svchost.exe` service, else what `ImagePath` runs.
     pub program: ProgramRef,
+    /// The arguments of `ImagePath` that name absolute paths ([`argument_paths`]): the service is an
+    /// app's only when each is a file of that app.
+    pub arg_paths: Vec<ProgramRef>,
     /// `Type` has a driver bit (kernel, file system or recognizer driver).
     pub is_driver: bool,
     /// A per-user service: `Type` has `SERVICE_USER_SERVICE` (0x40), or the name is `<stem>_<hex>` and a
@@ -497,9 +609,9 @@ fn service_facts(
         .is_some_and(|v| v != 0);
 
     let raw = image_path.as_deref().unwrap_or("");
-    let exe = match command_exe(raw, env) {
-        Exe::Path(exe) => Some(exe),
-        Exe::Empty | Exe::Unresolved => None,
+    let (exe, arg_paths) = match command_exe(raw, env) {
+        Exe::Path(exe, args) => (Some(exe), argument_paths(&args, env)),
+        Exe::Empty | Exe::Unresolved => (None, Vec::new()),
     };
     let svchost = exe.as_deref().is_some_and(|exe| {
         exe.rsplit(['\\', '/'])
@@ -534,6 +646,7 @@ fn service_facts(
         depend_on,
         delete_flag,
         program,
+        arg_paths,
         is_driver: service_type & DRIVER_TYPE_BITS != 0,
         per_user_template: service_type & USER_SERVICE_BIT != 0,
         svchost,
@@ -654,9 +767,18 @@ pub struct TaskPrograms {
     /// ignored); [`ProgramRef::None`] for a COM handler (the scanner resolves its CLSID through the COM
     /// anchors); `Unresolved` for any other action kind.
     pub actions: Vec<ProgramRef>,
+    /// One entry per action, in action order: the arguments of an exec action that name absolute paths
+    /// ([`argument_paths`]); empty for other actions. An action is the app's only when each is a file
+    /// of that app.
+    pub arg_paths: Vec<Vec<ProgramRef>>,
 }
 
 impl TaskPrograms {
+    /// Every argument path of every action.
+    pub fn all_arg_paths(&self) -> impl Iterator<Item = &ProgramRef> {
+        self.arg_paths.iter().flatten()
+    }
+
     /// The files of the exec actions, when the task has at least one and **every** exec action (and
     /// every action of another kind than COM handler) resolved to a file. Callers test every file.
     /// `None` for a task without actions (a task the scanning user cannot read).
@@ -690,6 +812,17 @@ pub fn task_programs(task: &TaskIdentity, env: &Env) -> TaskPrograms {
                 },
                 TaskAction::ComHandler { .. } => ProgramRef::None,
                 TaskAction::Other { kind } => ProgramRef::unresolved(kind),
+            })
+            .collect(),
+        arg_paths: task
+            .actions
+            .iter()
+            .map(|action| match action {
+                TaskAction::Exec {
+                    arguments: Some(args),
+                    ..
+                } => argument_paths(args, env),
+                _ => Vec::new(),
             })
             .collect(),
     }
@@ -783,6 +916,29 @@ mod tests {
             "python.exe",
             "pythonw.exe",
             "node.exe",
+            "dotnet.exe",
+            "py.exe",
+            "pyw.exe",
+            "bash.exe",
+            "sh.exe",
+            "git-bash.exe",
+            "perl.exe",
+            "wperl.exe",
+            "ruby.exe",
+            "rubyw.exe",
+            "php.exe",
+            "php-cgi.exe",
+            "php-win.exe",
+            "deno.exe",
+            "bun.exe",
+            "nssm.exe",
+            "srvany.exe",
+            "winsw.exe",
+            "prunsrv.exe",
+            "pythonservice.exe",
+            "mshta.exe",
+            "wsl.exe",
+            "powershell_ise.exe",
         ];
         assert_eq!(host_names(), expected);
         assert!(is_host("CMD"));
@@ -791,6 +947,59 @@ mod tests {
         ));
         assert!(!is_host(r"C:\App\cmdx.exe"));
         assert!(!is_host("pwsh.exe.bak"));
+    }
+
+    fn env() -> Env {
+        Env::new([
+            ("SystemRoot", r"C:\Windows"),
+            ("ProgramData", r"C:\ProgramData"),
+        ])
+    }
+
+    #[test]
+    fn a_host_prefix_of_an_unquoted_command_is_unresolved() {
+        let env = env();
+        // R2a S5: `python` without `.exe` before a relative argument.
+        for raw in [
+            r"C:\Python312\python scripts\run.bat",
+            r"C:\Tools\dotnet C:\Other\svc.dll",
+            r"C:\Program Files\dotnet\dotnet.exe C:\Other\svc.dll",
+            r#""C:\Program Files\dotnet\dotnet.exe" C:\Other\svc.dll"#,
+            r"C:\Tools\nssm.exe run Svc",
+        ] {
+            assert!(
+                matches!(resolve_program(raw, &env), ProgramRef::Unresolved { .. }),
+                "{raw}"
+            );
+        }
+        assert_eq!(
+            resolve_program(r"C:\Python312\pythonx.exe -m x", &env),
+            ProgramRef::File(r"C:\Python312\pythonx.exe".into())
+        );
+    }
+
+    #[test]
+    fn argument_paths_lists_absolute_arguments() {
+        let env = env();
+        let got = command_arguments(
+            r#""C:\App\launcher.exe" C:\Other\svc.dll -config="C:\App\a b.ini" /p:D:\x\y.txt rel\z.dll -k netsvcs \\srv\share\q.dll %ProgramData%\App\c.ini %NOPE%\d.dll C:\"#,
+            &env,
+        );
+        assert_eq!(
+            got,
+            vec![
+                ProgramRef::File(r"C:\Other\svc.dll".into()),
+                ProgramRef::File(r"C:\App\a b.ini".into()),
+                ProgramRef::File(r"D:\x\y.txt".into()),
+                ProgramRef::unresolved(r"\\srv\share\q.dll"),
+                ProgramRef::File(r"C:\ProgramData\App\c.ini".into()),
+                ProgramRef::unresolved(r"%NOPE%\d.dll"),
+                ProgramRef::unresolved(r"C:\"),
+            ]
+        );
+        assert!(command_arguments(r"C:\App\svc.exe -run", &env).is_empty());
+        assert!(command_arguments(r"C:\App\svc.exe", &env).is_empty());
+        assert!(argument_paths("http://x:/y --n=5%", &env).is_empty());
     }
 
     #[test]

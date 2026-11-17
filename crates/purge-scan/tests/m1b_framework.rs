@@ -813,6 +813,44 @@ fn owned_system_object_without_harvest_record_is_not_tier_a() {
     assert_eq!(owned_object(&found[0])[0].tier, Tier::B);
 }
 
+/// R2a S3: a `ServiceInstall` row of the app's MSI with the service's name backs nothing by itself, and
+/// `MsiServiceRow` is no reason to grant `OwnedSystemObject` without the harvest's record.
+#[test]
+fn msi_service_row_name_alone_backs_no_object() {
+    let mut world = World::new(machine());
+    let mut msi = own_msi(&format!(r"{ROOT}\7zsvc.exe"));
+    msi.services.push(purge_model::MsiServiceRow {
+        name: "7zSvc".into(),
+        component: "Svc".into(),
+    });
+    world.fp.msi.push(msi);
+    let unrecorded = world.run(&Emit(|ctx| {
+        vec![
+            ctx.candidate("TEST-EMIT", service(), Action::DeleteKey, Category::System)
+                .object_fp(service_identity().fp())
+                .owned_system_object(ObjectWhy::MsiServiceRow, false)
+                .build(),
+        ]
+    }));
+    // Claimed as recorded, but `fp.sys` holds no such service: the MSI row does not back it.
+    let claimed = world.run(&Emit(|ctx| {
+        vec![
+            ctx.candidate("TEST-EMIT", service(), Action::DeleteKey, Category::System)
+                .object_fp(service_identity().fp())
+                .owned_system_object(ObjectWhy::MsiServiceRow, true)
+                .build(),
+        ]
+    }));
+    for found in [unrecorded, claimed] {
+        assert_eq!(found.len(), 1);
+        assert!(
+            owned_object(&found[0]).iter().all(|e| e.tier != Tier::A),
+            "{:?}",
+            found[0].evidence
+        );
+    }
+}
+
 #[test]
 fn seal_drops_typed_candidate_without_object_fp() {
     let world = World::new(machine());
