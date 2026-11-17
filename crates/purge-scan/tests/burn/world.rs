@@ -165,6 +165,7 @@ fn index(fixture: &Fixture) -> OwnershipIndex {
         fs: fixture,
         sys: fixture,
         products: &[],
+        msi_only: &[],
         cache: None,
         threads: 1,
     })

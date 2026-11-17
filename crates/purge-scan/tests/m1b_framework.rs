@@ -748,6 +748,7 @@ fn indexed(identity: ServiceIdentity) -> ScanExt {
                 depend_on: Vec::new(),
                 delete_flag: false,
                 program: ProgramRef::File(format!(r"{ROOT}\7zsvc.exe")),
+                arg_paths: Vec::new(),
                 is_driver: false,
                 per_user_template: false,
                 svchost: false,
@@ -898,6 +899,8 @@ fn owned_system_object_without_harvest_record_is_not_tier_a() {
 #[test]
 fn msi_service_row_name_alone_backs_no_object() {
     let mut world = World::new(machine());
+    // The sealing drops an object the system-object index does not hold (R2a S2).
+    world.ext = indexed(service_identity());
     let mut msi = own_msi(&format!(r"{ROOT}\7zsvc.exe"));
     msi.services.push(purge_model::MsiServiceRow {
         name: "7zSvc".into(),
