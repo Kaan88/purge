@@ -117,20 +117,40 @@ for known reasons:
 - Clean-Pro baseline: built for Pro 26340.9882 (`kb/baselines/Professional-26340.9882.tsv.gz`, 2026-11-12).
   The host is still on 26300.9974, so it has no matching baseline until it updates (docs/M0_REPORT.md).
 
-## M1b: powershell and temurin (PENDING)
+## M1b: powershell and temurin
 
-These two apps are not frozen yet. The freeze needs four VM runs, and this package (M1B-RIG-HOST) did not make them.
+Frozen on 2026-11-17 from `rig.ps1 -Mode m1b-freeze` (campaigns `campaign-20261117-123526` and `-124419`). Each round is
+one null run, then one raw run of each app (vendor MSI uninstall, MSI tables captured), on Inbound-Win11-Test, rig-base,
+Windows 11 Enterprise LTSC eval 26100. Runs `m1b-fz{1,2}-null1`, `m1b-fz{1,2}-powershell`, `m1b-fz{1,2}-temurin`: every
+phase ok, install and uninstall exit 0, ARP entry gone. Installers from the host cache, SHA-256 equal to the vendor
+checksums (PowerShell-7.6.10-win-x64.msi `7d8daea4...`, OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.msi `9dcbb8eb...`).
 
-The gate package does the freeze:
-1. Run `.\vm\rig.ps1 -Mode m1b-freeze`. It makes two raw runs of each app on Inbound-Win11-Test, rig-base, with the vendor uninstall and the MSI
-   tables captured.
-2. Run `bash truth/m1b.sh freeze powershell` and `bash truth/m1b.sh freeze temurin` (RIG.md §12.6).
+Method (`bash truth/m1b.sh freeze <app>`, RIG.md section 12.6):
+- **Ambient:** `truth/ambient.json` plus the two freeze null runs (the same campaign, as M0 and M1a did); the app's label
+  file with `_os.json`, `_os-servicing.json` and the M1b noise list `labels/_m1b-noise.json` (Windows-owned churn areas,
+  ambient only). Windows Installer temp packages named by `Installer\TempPackages` are ambient (m1b.sh `temp_packages`).
+- **Freeze rule:** both runs must be whole and give the same label to every item they share (random names normalised).
+  An item present in one run only is excluded from the frozen truth and listed under `freeze.excluded`, never kept as a
+  leftover. Here the runs agreed exactly: 0 items excluded, 0 label mismatches. The noise list alone (without the freeze
+  null runs) gives the same non-ambient items.
+- `truth/frozen/<app>/truth.json` is run 1's truth (with its `freeze` block), `truth-fz2.json` run 2's, `run.json` run 1's.
 
-The method is M0's:
-- **Ambient:** `truth/ambient.json` plus `labels/_os.json`, plus `_os-servicing.json` for the rig-base drift since M0.
-- **Labels:** from `truth/mk_labels.py` (powershell.json and temurin.json). Their UNSURE rules are listed in RIG.md §12.4.
-- **Installers** (in cache-sources.json):
-  - PowerShell-7.6.10-win-x64.msi
-  - OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.msi
+| App | Version | leftover | user_data | kept_owner | ambient |
+|---|---|---:|---:|---:|---:|
+| PowerShell | 7.6.10 MSI | 9 | 0 | 2 | 205 |
+| Temurin JDK | 21.0.13+9 MSI | 0 | 0 | 0 | 101 |
 
-Once both apps are frozen, replace this section with the campaign names, the counts per label and the open points.
+- **PowerShell leftovers:** `HKLM\SOFTWARE\Microsoft\PowerShellCore`; its event-log registration (three
+  `WINEVT\Channels\PowerShellCore/*` keys, `WINEVT\Publishers\{f90714a8...}`, the `WMI\Autologger\EventLog-Application`
+  provider key); `%LOCALAPPDATA%\Microsoft\PowerShell`; the `PWSH.EXE` Prefetch file; the UserAssist value of the launch.
+  **kept_owner:** the Microsoft Update opt-in the MSI makes by default (`WindowsUpdate\Services\7971F918-...` and
+  `WindowsUpdate\Services|DefaultService`; R4b S4 confirmed). The 72 `ProgramData\Microsoft\NetFramework\BreadcrumbStore`
+  files the bundled .NET runtime writes at launch are ambient: a Windows .NET servicing store under ProgramData\Microsoft
+  (deny `fs.programdata.microsoft`).
+- **Temurin: nothing is left.** This is not a capture fault: snap 1 holds the JDK (1179 records under `Eclipse Adoptium`,
+  the JavaSoft keys) and snap 2 none of it. The MSI uninstall removes everything it installed and the app is not
+  launched, so its truth has no leftover. The earlier attempt (fz1 7 vs fz2 21 items, 26 different) compared Windows churn
+  only: with the stale M0 ambient set and no null run of its own campaign, WNS, IRIS and Spotlight values, Defender
+  state, the Windows Installer temp package and DiagTrack files came through as "leftover", and they differ per run.
+- **Open:** PowerShell's two user_data rules and its jump-list hash stay unconfirmed (a bare launch from a task wrote
+  neither).

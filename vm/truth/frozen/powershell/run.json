@@ -1,0 +1,273 @@
+{
+  "schema": "purge.rig.run/1",
+  "id": "powershell",
+  "run": "m1b-fz1-powershell",
+  "kind": "app",
+  "tech": "MSI (WiX)",
+  "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.10/PowerShell-7.6.10-win-x64.msi",
+  "installer": "C:\\cr\\inst\\powershell.msi",
+  "installer_sha256": "7D8DAEA48B450D4D62FCD1AC4D6FAA7AC2DB5E11ABA5061EE81B7496ADCA8C07",
+  "installer_sig": "Valid CN=Microsoft Corporation",
+  "computer": "INBOUND-WIN11-T",
+  "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "os": "EnterpriseSEval 26100.1742",
+  "started": "2026-11-17T01:39:23.7563370-08:00",
+  "finished": "2026-11-17T01:41:53.9122909-08:00",
+  "main": {
+    "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+    "name": "PowerShell 7-x64",
+    "version": "7.6.10.0",
+    "publisher": "Microsoft Corporation",
+    "sys": false,
+    "parent": null,
+    "uninstall": "MsiExec.exe /X{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+    "quiet": null,
+    "loc": "",
+    "icon": null,
+    "msi": "{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+    "size": 291830,
+    "install_date": "20261117",
+    "bundle": false
+  },
+  "install": {
+    "cmd": "\"C:\\WINDOWS\\System32\\msiexec.exe\" /i \"C:\\cr\\inst\\powershell.msi\" /qn /norestart /L*v \"C:\\cr\\out\\m1b-fz1-powershell\\msi-install.log\"",
+    "start": "2026-11-17T01:39:44.0665119-08:00",
+    "end": "2026-11-17T01:39:59.7762556-08:00",
+    "exit": 0,
+    "timed_out": false,
+    "killed": [],
+    "ran_as": "elevated"
+  },
+  "launch": {
+    "done": true,
+    "exe": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+    "args": "-NoLogo",
+    "start": "2026-11-17T01:40:21.0994190-08:00",
+    "end": "2026-11-17T01:40:52.2420372-08:00",
+    "found": true,
+    "closed": [
+      "pwsh.exe[7096]"
+    ],
+    "killed": [],
+    "reason": null
+  },
+  "uninstall": {
+    "cmd": "\"C:\\WINDOWS\\System32\\msiexec.exe\" /x {2E334F2C-291A-46DA-9D05-1697F697E04D} /qn /norestart /L*v \"C:\\cr\\out\\m1b-fz1-powershell\\msi-uninstall.log\"",
+    "t0": "2026-11-17T01:41:13.8693279-08:00",
+    "t1": "2026-11-17T01:41:20.0712582-08:00",
+    "exit": 0,
+    "timed_out": false,
+    "entry_gone": true,
+    "killed": []
+  },
+  "entries_created": [
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+      "name": "PowerShell 7-x64",
+      "version": "7.6.10.0",
+      "publisher": "Microsoft Corporation",
+      "sys": false,
+      "parent": null,
+      "uninstall": "MsiExec.exe /X{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+      "quiet": null,
+      "loc": "",
+      "icon": null,
+      "msi": "{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+      "size": 291830,
+      "install_date": "20261117",
+      "bundle": false
+    }
+  ],
+  "entries_left": [],
+  "edge_pause": {
+    "method": "services stopped+disabled, MicrosoftEdgeUpdate* tasks disabled, running updater waited for/killed",
+    "start": "2026-11-17T01:39:23.8137219-08:00",
+    "end": "2026-11-17T01:39:27.5822419-08:00",
+    "services": [
+      {
+        "name": "edgeupdate",
+        "present": true,
+        "start_before": "Auto",
+        "state_before": "Stopped",
+        "start_after": "Disabled",
+        "state_after": "Stopped"
+      },
+      {
+        "name": "edgeupdatem",
+        "present": true,
+        "start_before": "Manual",
+        "state_before": "Stopped",
+        "start_after": "Disabled",
+        "state_after": "Stopped"
+      }
+    ],
+    "tasks": [
+      {
+        "path": "\\MicrosoftEdgeUpdateTaskMachineCore{CE164313-0EFA-47AA-BFE3-542DFBDC1B11}",
+        "state_before": "Ready",
+        "state_after": "Disabled"
+      },
+      {
+        "path": "\\MicrosoftEdgeUpdateTaskMachineUA{1AF5BD52-7897-43AA-9607-3B16D52A4B11}",
+        "state_before": "Ready",
+        "state_after": "Disabled"
+      }
+    ],
+    "updater_seen": [],
+    "waited_sec": 0,
+    "killed": [],
+    "errors": [],
+    "versions_before": {
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+      "EdgeUpdate|version": "1.3.315.17"
+    },
+    "versions_after": {
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+      "EdgeUpdate|version": "1.3.315.17"
+    },
+    "versions_end": {
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+      "EdgeUpdate|version": "1.3.315.17"
+    },
+    "held": true
+  },
+  "planted": [],
+  "phases": [
+    {
+      "name": "edge-pause",
+      "start": "2026-11-17T01:39:23.7898334-08:00",
+      "end": "2026-11-17T01:39:27.6047759-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "setup",
+      "start": "2026-11-17T01:39:27.6094288-08:00",
+      "end": "2026-11-17T01:39:28.2106200-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "arp0",
+      "start": "2026-11-17T01:39:28.2345518-08:00",
+      "end": "2026-11-17T01:39:28.2916607-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "lists0",
+      "start": "2026-11-17T01:39:28.2934185-08:00",
+      "end": "2026-11-17T01:39:39.5217591-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "snap0",
+      "start": "2026-11-17T01:39:39.5265878-08:00",
+      "end": "2026-11-17T01:39:43.9727070-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "install",
+      "start": "2026-11-17T01:39:43.9762274-08:00",
+      "end": "2026-11-17T01:40:19.7957141-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "detect",
+      "start": "2026-11-17T01:40:19.7981728-08:00",
+      "end": "2026-11-17T01:40:19.8586848-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "launch",
+      "start": "2026-11-17T01:40:19.8599286-08:00",
+      "end": "2026-11-17T01:41:02.2530244-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "lists1",
+      "start": "2026-11-17T01:41:02.2569115-08:00",
+      "end": "2026-11-17T01:41:08.9823181-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "snap1",
+      "start": "2026-11-17T01:41:08.9834254-08:00",
+      "end": "2026-11-17T01:41:11.0745230-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "msi-tables-1",
+      "start": "2026-11-17T01:41:11.0745230-08:00",
+      "end": "2026-11-17T01:41:13.8059628-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "uninstall",
+      "start": "2026-11-17T01:41:13.8063923-08:00",
+      "end": "2026-11-17T01:41:50.0809226-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "lists2",
+      "start": "2026-11-17T01:41:50.0824136-08:00",
+      "end": "2026-11-17T01:41:51.7580707-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "snap2",
+      "start": "2026-11-17T01:41:51.7580707-08:00",
+      "end": "2026-11-17T01:41:53.8198216-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "msi-tables-2",
+      "start": "2026-11-17T01:41:53.8216145-08:00",
+      "end": "2026-11-17T01:41:53.8340387-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "edge-check",
+      "start": "2026-11-17T01:41:53.8353786-08:00",
+      "end": "2026-11-17T01:41:53.8513459-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "entries",
+      "start": "2026-11-17T01:41:53.8527121-08:00",
+      "end": "2026-11-17T01:41:53.9110306-08:00",
+      "ok": true,
+      "error": null
+    }
+  ],
+  "m1b": {
+    "msi_tables": true,
+    "traps": false,
+    "tables": [
+      "msi-tables-m1b-fz1-powershell-1.json",
+      "msi-tables-m1b-fz1-powershell-2.json"
+    ]
+  },
+  "installer_source": "host cache",
+  "installer_version": "7.6.10"
+}
