@@ -1224,6 +1224,54 @@ function Get-M1bEngine {
     $ep.engine
 }
 
+# The build an M1b scan run is bound to (review R4b S2, as rig-m1b-exec.ps1 Get-XBuildInfo): the engine file's
+# SHA-256 (lower-case hex; $null without a file), the repository's HEAD and whether its sources differ from HEAD
+# (crates, bins, tools, kb, Cargo.toml, Cargo.lock, rust-toolchain.toml; kb is compiled into the engine, R4 M11).
+# Read-only git calls. truth\m1b.sh (BIND) requires one engine and one commit over all runs, and clean sources.
+function Get-M1bBuildInfo {
+    param([string]$Path = '', [string]$RepoRoot = $script:RepoRoot)
+    $sha = $null
+    if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) { $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
+    $commit = $null; $dirty = $null
+    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        $c = @(& git -C $RepoRoot rev-parse HEAD 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $c.Count) { $commit = "$($c[0])".Trim() }
+        $d = @(& git -C $RepoRoot status --porcelain --untracked-files=no -- crates bins tools kb Cargo.toml Cargo.lock rust-toolchain.toml 2>$null)
+        if ($LASTEXITCODE -eq 0) { $dirty = [bool]($d | Where-Object { "$_".Trim() }) }
+    } finally { $ErrorActionPreference = $old }
+    [ordered]@{ path = $Path; sha256 = $sha; commit = $commit; source_dirty = $dirty }
+}
+
+# Writes <run>\m1b-build.json (purge.rig.m1b-build/1) for each app run of a campaign (review R4b S2): the build
+# declared before the campaign, the engine's SHA-256 again after it (a rebuild in between shows) and the SHA-256 of
+# the run.json pulled for that run, so a record left beside an older or newer run.json does not bind it.
+function Save-M1bBuildRecords {
+    param($Records, $Build, [string]$ShaAfter, [string]$Mode, [string]$Base)
+    foreach ($rec in @($Records)) {
+        if (-not $rec -or -not $rec.id) { continue }    # null runs run no engine
+        $dir = Join-Path $script:RunsDir $rec.run
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+        $rj = Join-Path $dir 'run.json'
+        $rjSha = $null
+        if (Test-Path -LiteralPath $rj -PathType Leaf) { $rjSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $rj).Hash.ToLowerInvariant() }
+        $doc = [ordered]@{ schema = 'purge.rig.m1b-build/1'; run = $rec.run; mode = $Mode; base = $Base; vm = $script:VmName
+            run_json_sha256 = $rjSha; engine = $Build.path; engine_sha256 = $Build.sha256; engine_sha256_after = $ShaAfter
+            commit = $Build.commit; source_dirty = $Build.source_dirty; campaign_ok = [bool]$rec.ok; written = (Get-Date).ToString('o') }
+        [IO.File]::WriteAllText((Join-Path $dir 'm1b-build.json'), (ConvertTo-Json -InputObject $doc -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
+    }
+}
+
+# One engine campaign of an M1b mode, with its build records (Save-M1bBuildRecords). Returns the campaign records.
+function Invoke-M1bEngineCampaign {
+    param([Parameter(Mandatory)][string]$Mode, [Parameter(Mandatory)][string]$Engine, [string]$Base, [hashtable]$Campaign)
+    $build = Get-M1bBuildInfo -Path $Engine
+    if ($build.source_dirty -ne $false) { Write-RigLog "!! sources differ from HEAD $($build.commit) (or git failed): truth\m1b.sh will not bind these runs" }
+    $res = @(Invoke-Campaign @Campaign -Engine $Engine)
+    Save-M1bBuildRecords -Records $res -Build $build -ShaAfter (Get-M1bBuildInfo -Path $Engine).sha256 -Mode $Mode -Base $Base
+    $res
+}
+
 # One M1b scan mode on the VM ($script:VmName): see the section header. Returns the campaign records.
 function Invoke-M1bMode {
     param([Parameter(Mandatory)][ValidateSet('m1b-app', 'm1b-apps', 'm1b-traps', 'm1b-freeze')][string]$Mode,
@@ -1238,20 +1286,20 @@ function Invoke-M1bMode {
             if (-not $App) { throw '-Mode m1b-app needs -App <id>' }
             $opts = @{ msi_tables = $true; traps = [bool]$Traps; trap_a = $App; trap_b = 'node' }
             $pfx = Get-M1bRunPrefix -Base $Base -Traps:$Traps -RunPrefix $RunPrefix
-            return Invoke-Campaign -Ids @($App) -Nulls ([Math]::Max(0, $Nulls)) -NullOrder spread -Snapshot $Base -RunPrefix $pfx `
-                                   -Engine (Get-M1bEngine $Engine) -M1b $opts @common
+            $c = @{ Ids = @($App); Nulls = [Math]::Max(0, $Nulls); NullOrder = 'spread'; Snapshot = $Base; RunPrefix = $pfx; M1b = $opts } + $common
+            return Invoke-M1bEngineCampaign -Mode $Mode -Engine (Get-M1bEngine $Engine) -Base $Base -Campaign $c
         }
         'm1b-apps' {
             if (-not $ids.Count) { $ids = @(Get-M1bGateApps) }
             $pfx = Get-M1bRunPrefix -Base $Base -RunPrefix $RunPrefix
-            return Invoke-Campaign -Ids $ids -Nulls $(if ($Nulls -lt 0) { 3 } else { $Nulls }) -NullOrder spread -Snapshot $Base -RunPrefix $pfx `
-                                   -Engine (Get-M1bEngine $Engine) -M1b @{ msi_tables = $true } @common
+            $c = @{ Ids = $ids; Nulls = $(if ($Nulls -lt 0) { 3 } else { $Nulls }); NullOrder = 'spread'; Snapshot = $Base; RunPrefix = $pfx; M1b = @{ msi_tables = $true } } + $common
+            return Invoke-M1bEngineCampaign -Mode $Mode -Engine (Get-M1bEngine $Engine) -Base $Base -Campaign $c
         }
         'm1b-traps' {
             $opts = @{ msi_tables = $true; traps = $true; trap_a = '7zip'; trap_b = 'node' }
             $pfx = Get-M1bRunPrefix -Base $Base -Traps -RunPrefix $RunPrefix
-            return Invoke-Campaign -Ids @('7zip') -Nulls ([Math]::Max(0, $Nulls)) -Snapshot $Base -RunPrefix $pfx `
-                                   -Engine (Get-M1bEngine $Engine) -M1b $opts @common
+            $c = @{ Ids = @('7zip'); Nulls = [Math]::Max(0, $Nulls); Snapshot = $Base; RunPrefix = $pfx; M1b = $opts } + $common
+            return Invoke-M1bEngineCampaign -Mode $Mode -Engine (Get-M1bEngine $Engine) -Base $Base -Campaign $c
         }
         'm1b-freeze' {
             # Frozen truth is Inbound rig-base truth (FROZEN.md): the M0 method, vendor uninstall, no engine.
@@ -1271,8 +1319,8 @@ function Invoke-M1bMode {
 # (-BaseEngine, built from 3265797), in the same session. Cold = the M1b engine's MSI table cache
 # %ProgramData%\Purge\fp\msitables moved aside to msitables.m1b-budgets-<stamp> before round 1 (Purge's own cache,
 # nothing else is touched; the moved folder is left for the operator to delete). Each step's stderr goes to
-# vm\runs\<prefix>m1b-budgets\<engine>-<step>-<round>.log; budgets.json lists them (purge.rig.m1b-budgets/1) for
-# truth\m1b.sh. Nothing is uninstalled: harvest and scan only read (and write their -o files under the run dir).
+# vm\runs\<prefix>m1b-budgets\<engine>-<step>-<round>.log; budgets.json lists them (purge.rig.m1b-budgets/2, with
+# each run's exit code, the engines' SHA-256 and cold_cache_state) for truth\m1b.sh. Nothing is uninstalled: harvest and scan only read (and write their -o files under the run dir).
 function Invoke-M1bBudgets {
     param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$BaseEngine, [Parameter(Mandatory)][string]$Program,
           [string]$RunPrefix = '', [int]$Rounds = 3, [switch]$KeepCache)
@@ -1283,8 +1331,12 @@ function Invoke-M1bBudgets {
     $null = Move-RunToOld -Run $run
     $dst = Join-Path $script:RunsDir $run
     New-Item -ItemType Directory -Force $dst | Out-Null
-    $doc = [ordered]@{ schema = 'purge.rig.m1b-budgets/1'; program = $Program; host = $env:COMPUTERNAME; start = (Get-Date).ToString('o'); end = $null
-        engines = $engines; cold_cache = $null; runs = @() }
+    # Review R4b S6: the engines' SHA-256 (truth\m1b.sh binds the M1b one to the scan runs' engine), the M1b build,
+    # and how round 1 was made cold: 'moved' (the cache was moved aside), 'absent' (there was none) or 'kept'
+    # (-KeepCache with a cache in place: not cold, K14 fails).
+    $doc = [ordered]@{ schema = 'purge.rig.m1b-budgets/2'; program = $Program; host = $env:COMPUTERNAME; start = (Get-Date).ToString('o'); end = $null
+        engines = $engines; engine_sha256 = [ordered]@{ m1b = (Get-M1bBuildInfo -Path $engines.m1b).sha256; m2 = (Get-M1bBuildInfo -Path $engines.m2).sha256 }
+        build = (Get-M1bBuildInfo -Path $engines.m1b); cold_cache = $null; cold_cache_state = $null; runs = @() }
     $old = $env:PURGE_TIMING
     try {
         $env:PURGE_TIMING = '1'
@@ -1292,11 +1344,15 @@ function Invoke-M1bBudgets {
         foreach ($name in $engines.Keys) {
             for ($i = 1; $i -le $Rounds; $i++) {
                 $kind = $(if ($i -eq 1) { 'cold' } else { 'warm' })
-                if ($kind -eq 'cold' -and $name -eq 'm1b' -and -not $KeepCache -and (Test-Path -LiteralPath $cache)) {
-                    $aside = "$cache.m1b-budgets-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-                    Move-Item -LiteralPath $cache -Destination $aside -ErrorAction Stop
-                    $doc.cold_cache = $aside
-                    Write-RigLog "  moved the MSI table cache aside: $aside"
+                if ($kind -eq 'cold' -and $name -eq 'm1b') {
+                    if (-not (Test-Path -LiteralPath $cache)) { $doc.cold_cache_state = 'absent' }
+                    elseif ($KeepCache) { $doc.cold_cache_state = 'kept'; Write-RigLog '  -KeepCache: round 1 is not cold (K14 fails)' }
+                    else {
+                        $aside = "$cache.m1b-budgets-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+                        Move-Item -LiteralPath $cache -Destination $aside -ErrorAction Stop
+                        $doc.cold_cache = $aside; $doc.cold_cache_state = 'moved'
+                        Write-RigLog "  moved the MSI table cache aside: $aside"
+                    }
                 }
                 $fp = Join-Path $dst "fp-$name-$i.json"; $plan = Join-Path $dst "plan-$name-$i.json"
                 foreach ($step in 'harvest', 'scan') {

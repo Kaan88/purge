@@ -1,5 +1,0 @@
-[  0.010s] start scan
-timing:   phase refscan 1.200s; 1
-timing:   phase ownership.components 0.400s; 12
-timing:   phase ownership.tables 0.050s; 3
-[  9.000s] done

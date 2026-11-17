@@ -2,15 +2,19 @@
 # M1b gate, scan side (docs/M1B_DESIGN.json gate_criteria K1-K9, K14, K16 for steps G1-G4, G7, G8; vm/RIG.md
 # section 12). Run from vm/ after the campaigns of rig.ps1 -Mode m1b-apps / m1b-traps / m1b-budgets were pulled:
 #
-#   bash truth/m1b.sh                    collect (truth, plans, scores, traps) into the evidence dir, then evaluate
-#   bash truth/m1b.sh --evaluate DIR     evaluate an evidence dir only (no rigtool; the recorded sample uses this)
+#   bash truth/m1b.sh                    collect (truth, plans, scores, traps) into the evidence dir, then evaluate:
+#                                        the gate score (exit 0 only here, and only in the default configuration)
+#   bash truth/m1b.sh --evaluate DIR     evaluate an evidence dir only (no rigtool): never a gate score
 #   bash truth/m1b.sh freeze <app>       frozen truth of powershell / temurin from the m1b-freeze runs (FROZEN.md)
-#   bash truth/m1b.sh --selftest         m1b_sh_fails_on_missing_input, m1b_sh_passes_on_recorded_sample,
-#                                        traps_json_every_case_has_expectation, traps_json_matches_guest_functions
+#   bash truth/m1b.sh --config           print the configuration this environment gives ("default" or "custom VARS")
+#   bash truth/m1b.sh --selftest         the scorer against a generated passing evidence dir (truth/m1b-fixture.py)
+#                                        and one bad-run control per finding of review R4b (RIG.md section 12.5)
 #
 # Prints one line per criterion and subject: "<K> <step> <subject>: <value> (limit <limit>) PASS|FAIL", writes
-# $M1B_OUT/m1b-score.json (purge.rig.m1b-score/1) and exits 1 when any line FAILs (2 on a usage error). A criterion
-# whose input is missing is FAIL with "missing ..." as its value, never skipped.
+# $M1B_OUT/m1b-score.json (purge.rig.m1b-score/2). Exit codes: 0 the gate passes (default configuration, collected
+# by this invocation, every line PASS); 1 a line FAILs; 2 a usage error; 3 every line passes but the score is not
+# the gate's (a custom configuration or --evaluate; the last line says "not a gate score"). A criterion whose input
+# is missing is FAIL with "missing ..." as its value, never skipped.
 #
 # Stage 1, collect (from the runs; rigtool):
 #   For each set: clean = Inbound rig-base (runs <M1B_CLEAN>-<id>, G2), dirty = Inbound dirty-base (<M1B_DIRTY>-<id>,
@@ -20,38 +24,42 @@
 #   2. plans/purge.json = plan-purge.json with each item's action from its scan sidecar (as m1a.sh step 3);
 #   3. rigtool score --classes over the set -> $EVID/score-<set>.json; fp.json and plan-purge.scan.json of the apps
 #      K7 / K8 read are copied to $EVID/<set>-<id>-{fp,scan}.json.
+#   Every app run and trap run: $EVID/runs/<run>.json (purge.rig.m1b-run/1): its run.json phases, the SHA-256 of
+#   run.json and the build record m1b-build.json rig.ps1 wrote beside it (review R4b S2).
 #   Traps (G4, G8): rigtool traps --plan <run>/plan-purge.scan.json --traps truth/m1b-traps.json --app 7zip --sid <run
-#   sid> -> $EVID/traps-<run>.json, for M1B_TRAP_RUNS.
+#   sid> -> $EVID/traps-<run>.json, and the guest's m1b-traps-planted.json -> $EVID/traps-planted-<run>.json, for
+#   M1B_TRAP_RUNS.
 #   Budgets (G7): $M1B_BUDGETS (rig.ps1 -Mode m1b-budgets: budgets.json and the PURGE_TIMING logs) -> $EVID/budgets/.
-#   Replay (G1): $M1B_REPLAY_DIFF (cargo xtask replay diff, M1B-SCAN-INTEG) and $M1B_REPLAY_SCORE (rigtool score of
+#   Replay (G1): $M1B_REPLAY_DIFF (cargo xtask replay-diff, M1B-SCAN-INTEG) and $M1B_REPLAY_SCORE (rigtool score of
 #   the replayed plans, written by the gate) -> $EVID/.
-#   $EVID/manifest.json records what was collected.
-# Stage 2, evaluate (python, reads $EVID only): see the K table in RIG.md section 12.
+#   $EVID/manifest.json (purge.rig.m1b-evidence/2) records the prefixes, the configuration, the SHA-256 of the trap
+#   file, of each run's label files and of the frozen truth of powershell / temurin.
+# Stage 2, evaluate (python, reads $EVID and the committed trap / label / frozen files): see RIG.md section 12.5.
 #
 # Environment:
 #   RIGTOOL          rigtool binary (default rigtool/target/release/rigtool)
-#   M1B_RUNS         run directories (default runs)
 #   M1B_OUT          reports (default truth); M1B_EVIDENCE the evidence dir (default $M1B_OUT/m1b-evidence)
+#   The gate's inputs. Any of them set to a value other than its default makes the configuration custom, and a
+#   custom score is never the gate's (review R4b S3):
+#   M1B_RUNS         run directories (default runs)
 #   M1B_APPS         G2/G3 apps (default: the 8 of the gate); M1B_CP_APPS G8 apps (default "7zip python vcredist")
 #   M1B_CLEAN, M1B_DIRTY, M1B_CP   run prefixes without the dash (default m1b, m1bd, m1bcp)
 #   M1B_SETS         sets to collect and evaluate (default "clean dirty cp")
 #   M1B_TRAP_RUNS    trap runs (default "m1b-traps-7zip m1bd-traps-7zip m1bcp-traps-7zip")
-#   M1B_LABELS       label overrides "id=label-id ..." (as m1a.sh)
+#   M1B_LABELS       label overrides "id=label-id ..." (as m1a.sh; default none)
 #   M1B_BUDGETS      budgets run dir (default runs/m1b-budgets)
 #   M1B_REPLAY_DIFF  default truth/m1b-replay-diff.json; M1B_REPLAY_SCORE default truth/m1b-replay-score.json
-# Anything but the defaults for M1B_APPS, M1B_CP_APPS, M1B_SETS or M1B_TRAP_RUNS is recorded as gate_config "custom":
-# such a score is never the gate's.
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PY=${PYTHON:-python}
 R=${RIGTOOL:-rigtool/target/release/rigtool}
-RUNS=${M1B_RUNS:-runs}
-OUT=${M1B_OUT:-truth}
-EVID=${M1B_EVIDENCE:-$OUT/m1b-evidence}
 DEF_APPS="7zip python python312-with-313 python313-with-312 node vcredist powershell temurin"
 DEF_CP_APPS="7zip python vcredist"
 DEF_SETS="clean dirty cp"
 DEF_TRAPS="m1b-traps-7zip m1bd-traps-7zip m1bcp-traps-7zip"
+RUNS=${M1B_RUNS:-runs}
+OUT=${M1B_OUT:-truth}
+EVID=${M1B_EVIDENCE:-$OUT/m1b-evidence}
 APPS=${M1B_APPS:-$DEF_APPS}
 CP_APPS=${M1B_CP_APPS:-$DEF_CP_APPS}
 SETS=${M1B_SETS:-$DEF_SETS}
@@ -59,21 +67,139 @@ TRAP_RUNS=${M1B_TRAP_RUNS:-$DEF_TRAPS}
 BUDGETS=${M1B_BUDGETS:-$RUNS/m1b-budgets}
 REPLAY_DIFF=${M1B_REPLAY_DIFF:-truth/m1b-replay-diff.json}
 REPLAY_SCORE=${M1B_REPLAY_SCORE:-truth/m1b-replay-score.json}
-CONFIG=default
-if [ "$APPS" != "$DEF_APPS" ] || [ "$CP_APPS" != "$DEF_CP_APPS" ] || [ "$SETS" != "$DEF_SETS" ] || [ "$TRAP_RUNS" != "$DEF_TRAPS" ]; then CONFIG=custom; fi
+
+# The default of each gate input (see the header); an unset variable, or one equal to its default, is the default.
+def_of() {
+  case "$1" in
+    M1B_RUNS) echo runs ;; M1B_APPS) echo "$DEF_APPS" ;; M1B_CP_APPS) echo "$DEF_CP_APPS" ;; M1B_SETS) echo "$DEF_SETS" ;;
+    M1B_TRAP_RUNS) echo "$DEF_TRAPS" ;; M1B_LABELS) echo "" ;; M1B_CLEAN) echo m1b ;; M1B_DIRTY) echo m1bd ;; M1B_CP) echo m1bcp ;;
+    M1B_BUDGETS) echo runs/m1b-budgets ;; M1B_REPLAY_DIFF) echo truth/m1b-replay-diff.json ;;
+    M1B_REPLAY_SCORE) echo truth/m1b-replay-score.json ;;
+  esac
+}
+GATE_VARS="M1B_RUNS M1B_APPS M1B_CP_APPS M1B_SETS M1B_TRAP_RUNS M1B_LABELS M1B_CLEAN M1B_DIRTY M1B_CP M1B_BUDGETS M1B_REPLAY_DIFF M1B_REPLAY_SCORE"
+CONFIG_VARS=""
+for v in $GATE_VARS; do
+  if [ -n "${!v+x}" ] && [ "${!v}" != "$(def_of "$v")" ]; then CONFIG_VARS="$CONFIG_VARS $v"; fi
+done
+CONFIG_VARS=${CONFIG_VARS# }
+CONFIG=default; [ -n "$CONFIG_VARS" ] && CONFIG=custom
 
 prefix_of() { case "$1" in clean) echo "${M1B_CLEAN:-m1b}" ;; dirty) echo "${M1B_DIRTY:-m1bd}" ;; cp) echo "${M1B_CP:-m1bcp}" ;; esac; }
 apps_of() { if [ "$1" = cp ]; then echo "$CP_APPS"; else echo "$APPS"; fi; }
 label_of() { local m; for m in ${M1B_LABELS:-}; do if [ "${m%%=*}" = "$1" ]; then echo "${m#*=}"; return; fi; done; echo "$1"; }
 
-# ------------------------------------------------------------------------------------------- stage 2
-evaluate() { # evaluate <evidence dir> <score json out>
-  "$PY" -I - "$1" "$2" "$APPS" "$CP_APPS" "$SETS" "$TRAP_RUNS" "$CONFIG" <<'EOF'
-import datetime, glob, json, os, re, statistics, sys
+# ------------------------------------------------------------------------------------------- python part
+# pyeval <mode> args...: modes evaluate (stage 2), runsum and manifest (stage 1 helpers).
+pyeval() {
+  "$PY" -I - "$@" <<'EOF'
+import datetime, hashlib, json, os, re, statistics, sys
 
-evid, out, apps, cp_apps, sets, trap_runs, config = sys.argv[1:8]
-apps, cp_apps, sets, trap_runs = apps.split(), cp_apps.split(), sets.split(), trap_runs.split()
+MODE = sys.argv[1]
+A = sys.argv[2:]
+
+# ------------------------------------------------------------------------------------------- gate constants
+# docs/M1B_DESIGN.json gate_criteria; changing one changes the gate (design change and review), never an input file.
+TRAP_CASES = ['svc-owned', 'svc-owned-running', 'svc-shared', 'svc-dependent', 'svc-svchost', 'task-owned',
+              'task-similar-name', 'task-interpreter', 'fw-owned', 'fw-same-display-name', 'fw-no-app', 'com-owned',
+              'com-shared-class', 'com-isimpledom', 'shellex-approved', 'shareddlls-count', 'eventlog-shared-source',
+              'tracing', 'privacy-twins', 'wer-twins', 'msi-remnants', 'msi-remnants-foreign', 'msi-shared-component',
+              'burn-shared-package', 'pkgcache-foreign', 'instfolders']
+BETWEEN_CASES = ['com-shared-class']                  # guest/m1b-traps.ps1: the cases with a between step
+TRAP_A, TRAP_B = '7zip', 'node'
+K5_MIN = {'python312-with-313': 29, 'python313-with-312': 29}
+FROZEN_APPS = ['powershell', 'temurin']               # truth from the m1b-freeze runs (FROZEN.md, RIG.md 12.6)
+REPLAY_RUNS = ['vscode', 'git', 'firefox', 'npp', '7zip']
+REPLAY_SCHEMA = 'purge.replay-diff/3'
+REPLAY_REASONS = ['new_scanner', 'msi_blocker_added', 'msi_root_added', 'policy_m1b', 'promotion_justified']
+BUDGET_ENGINES, BUDGET_STEPS, BUDGET_ROUNDS = ['m1b', 'm2'], ['harvest', 'scan'], [1, 2, 3]
+BANDS = ['Safe', 'Likely', 'Weak', 'Blocked']
 STEP = {'clean': 'G2', 'dirty': 'G3', 'cp': 'G8'}
+
+
+def sha256_file(p):
+    try:
+        with open(p, 'rb') as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def label_digest(labels_dir, lid):
+    """SHA-256 over a label file, every file it includes (recursively) and _os-servicing.json; None if one is missing."""
+    seen = {}
+
+    def walk(name, depth):
+        if name in seen or depth > 4:
+            return
+        p = os.path.join(labels_dir, name)
+        seen[name] = sha256_file(p)
+        if seen[name] is None:
+            return
+        try:
+            with open(p, encoding='utf-8-sig') as f:
+                inc = json.load(f).get('include') or []
+        except (OSError, ValueError):
+            inc = []
+        for i in inc:
+            walk(i, depth + 1)
+    walk(lid + '.json', 0)
+    walk('_os-servicing.json', 0)
+    if any(h is None for h in seen.values()):
+        return None
+    return hashlib.sha256(''.join(f'{n} {h}\n' for n, h in sorted(seen.items())).encode()).hexdigest()
+
+
+def read_json(p):
+    try:
+        with open(p, encoding='utf-8-sig') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+# ------------------------------------------------------------------------------------------- stage 1 helpers
+if MODE == 'runsum':
+    # runsum <run dir> <run name> <out>: the run's record for the evaluator
+    d, run, out = A
+    rj = read_json(os.path.join(d, 'run.json'))
+    plan = read_json(os.path.join(d, 'plan-purge.json'))
+    doc = {'schema': 'purge.rig.m1b-run/1', 'run': run,
+           'run_json_sha256': sha256_file(os.path.join(d, 'run.json')),
+           'run_json': None if rj is None else {
+               'run': rj.get('run'), 'started': rj.get('started'), 'finished': rj.get('finished'),
+               'phases': [{'name': (p or {}).get('name'), 'ok': (p or {}).get('ok'), 'error': (p or {}).get('error')}
+                          for p in (rj.get('phases') or [])]},
+           'build': read_json(os.path.join(d, 'm1b-build.json')),
+           'plan_items': None if plan is None else len(plan.get('items') or [])}
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, 'w', encoding='utf-8') as f:
+        json.dump(doc, f, indent=2, ensure_ascii=False)
+    sys.exit(0)
+
+if MODE == 'manifest':
+    # manifest <out> <runs dir> <sets> <prefix clean> <prefix dirty> <prefix cp> <label map "run=lid ..."> <truth dir>
+    #          <config> <config vars> <rigtool>
+    out, runs_dir, sets, pc, pd, pcp, lmap, truth_dir, config, config_vars, rigtool = A
+    pre = {'clean': pc, 'dirty': pd, 'cp': pcp}
+    labels = {}
+    for m in lmap.split():
+        run, lid = m.split('=', 1)
+        labels[run] = {'label_id': lid, 'sha256': label_digest(os.path.join(truth_dir, 'labels'), lid)}
+    doc = {'schema': 'purge.rig.m1b-evidence/2', 'note': 'collected by vm/truth/m1b.sh from ' + runs_dir,
+           'prefixes': {s: pre[s] for s in sets.split()}, 'gate_config': config, 'config_vars': config_vars.split(),
+           'traps_sha256': sha256_file(os.path.join(truth_dir, 'm1b-traps.json')), 'labels': labels,
+           'frozen': {a: sha256_file(os.path.join(truth_dir, 'frozen', a, 'truth.json')) for a in FROZEN_APPS},
+           'rigtool': {'path': rigtool, 'sha256': sha256_file(rigtool) or sha256_file(rigtool + '.exe')}}
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, 'w', encoding='utf-8') as f:
+        json.dump(doc, f, indent=2, ensure_ascii=False)
+    sys.exit(0)
+
+# ------------------------------------------------------------------------------------------- stage 2
+assert MODE == 'evaluate', MODE
+evid, out, apps, cp_apps, sets, trap_runs, config, config_vars, how, truth_dir = A
+apps, cp_apps, sets, trap_runs = apps.split(), cp_apps.split(), sets.split(), trap_runs.split()
 rows = []
 
 
@@ -83,13 +209,7 @@ def row(k, step, subject, value, limit, ok, note=None):
 
 def load(name):
     p = os.path.join(evid, name)
-    if not os.path.isfile(p):
-        return None
-    try:
-        with open(p, encoding='utf-8-sig') as f:
-            return json.load(f)
-    except Exception:
-        return None
+    return read_json(p) if os.path.isfile(p) else None
 
 
 def miss(what):
@@ -100,8 +220,13 @@ def set_apps(s):
     return cp_apps if s == 'cp' else apps
 
 
+def is_int(x):
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
 manifest = load('manifest.json') or {}
-prefix = {s: manifest.get('prefixes', {}).get(s, {'clean': 'm1b', 'dirty': 'm1bd', 'cp': 'm1bcp'}[s]) for s in sets}
+prefix = {s: (manifest.get('prefixes') or {}).get(s, {'clean': 'm1b', 'dirty': 'm1bd', 'cp': 'm1bcp'}[s]) for s in sets}
+app_runs = [(s, id, f'{prefix[s]}-{id}') for s in sets for id in set_apps(s)]
 
 
 def purge_score(s, id):
@@ -119,17 +244,104 @@ def purge_score(s, id):
     return None
 
 
+def trap_step(run):
+    return 'G8' if run.startswith('m1bcp') or '-m1bcp' in run else 'G4'
+
+
+# RUN (review R4b S2): every scored run finished with every phase ok (a failed plant, launch or uninstall phase is
+# not scored as if it had worked).
+run_docs = {}
+for s, id, run in app_runs + [('traps', None, r) for r in trap_runs]:
+    st = trap_step(run) if s == 'traps' else STEP[s]
+    rd = load(f'runs/{run}.json')
+    run_docs[run] = rd
+    rj = (rd or {}).get('run_json')
+    if rj is None:
+        row('RUN', st, run, miss(f'runs/{run}.json with its run.json'), 'finished, every phase ok', False)
+        continue
+    ph = rj.get('phases') or []
+    bad = [str(p.get('name')) for p in ph if p.get('ok') is not True]
+    ok = rj.get('run') == run and bool(rj.get('finished')) and bool(ph) and not bad
+    note = ('failed: ' + ', '.join(bad)) if bad else (None if rj.get('run') == run else f"run.json names {rj.get('run')}")
+    row('RUN', st, run, f"finished={bool(rj.get('finished'))} phases ok {len(ph) - len(bad)}/{len(ph)}",
+        'finished, every phase ok', ok, note)
+
+# BIND (review R4b S2, as m1b-exec.sh): one engine build (SHA-256 before and after the campaign equal, one commit,
+# clean sources) for every scored run, each build record written for that very run.json; the budgets' M1b engine is
+# the same file; the trap file and each run's labels are the committed ones (the app's own label file).
+bind_problems, engines, commits = [], set(), set()
+for run, rd in run_docs.items():
+    if rd is None:
+        bind_problems.append(f'{run}: no run record')
+        continue
+    b = rd.get('build')
+    if not isinstance(b, dict):
+        bind_problems.append(f'{run}: no m1b-build.json (rig.ps1 m1b modes write it)')
+        continue
+    if b.get('run') != run:
+        bind_problems.append(f"{run}: build record names run {b.get('run')}")
+    if not b.get('run_json_sha256') or b.get('run_json_sha256') != rd.get('run_json_sha256'):
+        bind_problems.append(f"{run}: build record is for another run.json ({b.get('run_json_sha256')} vs {rd.get('run_json_sha256')})")
+    if not b.get('engine_sha256') or b.get('engine_sha256') != b.get('engine_sha256_after'):
+        bind_problems.append(f"{run}: engine sha256 {b.get('engine_sha256')} before, {b.get('engine_sha256_after')} after the campaign")
+    if not b.get('commit') or b.get('source_dirty') is not False:
+        bind_problems.append(f"{run}: commit {b.get('commit')}, source_dirty {b.get('source_dirty')}")
+    if b.get('engine_sha256'):
+        engines.add(b['engine_sha256'])
+    if b.get('commit'):
+        commits.add(b['commit'])
+if len(engines) > 1:
+    bind_problems.append(f'runs ran {len(engines)} different engines: ' + ', '.join(sorted(engines)))
+if len(commits) > 1:
+    bind_problems.append(f'runs name {len(commits)} different commits: ' + ', '.join(sorted(commits)))
+bud = load('budgets/budgets.json')
+if bud is not None:
+    be = (bud.get('engine_sha256') or {}).get('m1b')
+    if not be or (engines and be not in engines):
+        bind_problems.append(f'budgets: M1b engine sha256 {be}, scan runs {sorted(engines)}')
+traps_now = sha256_file(os.path.join(truth_dir, 'm1b-traps.json'))
+if not traps_now or manifest.get('traps_sha256') != traps_now:
+    bind_problems.append(f"trap file sha256 {manifest.get('traps_sha256')} at collect, {traps_now} committed")
+for s, id, run in app_runs:
+    lab = (manifest.get('labels') or {}).get(run) or {}
+    now = label_digest(os.path.join(truth_dir, 'labels'), id)
+    if lab.get('label_id') != id:
+        bind_problems.append(f"{run}: labels {lab.get('label_id')}, not the app's own ({id})")
+    elif not now or lab.get('sha256') != now:
+        bind_problems.append(f"{run}: label files sha256 {lab.get('sha256')} at collect, {now} committed")
+bind_ok = bool(run_docs) and not bind_problems and len(engines) == 1 and len(commits) == 1
+row('BIND', 'G2-G4, G7, G8', 'one build, committed traps and labels',
+    f'engines={len(engines)} commits={len(commits)} problems={len(bind_problems)}', 'one engine, one commit, clean, 0 problems',
+    bind_ok, '; '.join(bind_problems[:6]) or None)
+
+# FROZEN: powershell and temurin are scored only with labels their freeze checked (G2, G3; FROZEN.md M1b section).
+for app in [a for a in FROZEN_APPS if a in apps and ({'clean', 'dirty'} & set(sets))]:
+    rec = (manifest.get('frozen') or {}).get(app)
+    now = sha256_file(os.path.join(truth_dir, 'frozen', app, 'truth.json'))
+    val = 'frozen' if rec and rec == now else (f'not frozen (truth/frozen/{app}/truth.json missing)' if not now else 'frozen truth changed since collect')
+    row('FROZEN', 'G2, G3', app, val, 'truth/frozen/<app>/truth.json from m1b-freeze', bool(rec) and rec == now)
+
 # K1-K6 per set and app
 for s in sets:
     st = STEP[s]
     for id in set_apps(s):
         t = purge_score(s, id)
         subj = f'{s}/{id}'
+        ks = (['K1'] if s != 'dirty' else ['K2']) + ['K3', 'K4', 'K5'] + (['K6'] if s != 'cp' else [])
         if t is None:
-            for k in (['K1'] if s != 'dirty' else ['K2']) + ['K3', 'K4', 'K5', 'K6']:
-                if k == 'K6' and s == 'cp':
-                    continue
+            for k in ks:
                 row(k, st, subj, miss(f'score of {prefix[s]}-{id} (score-{s}.json)'), '-', False)
+            continue
+        # An empty plan proves nothing (review R4b S2): with truth leftovers and no plan item, K1-K6 all fail.
+        tn, on = t.get('truth_n'), t.get('offered_n')
+        empty = None
+        if not is_int(tn) or not is_int(on):
+            empty = f'score has no truth_n / offered_n ({tn}, {on})'
+        elif tn > 0 and on == 0:
+            empty = f'empty plan: 0 items offered, {tn} leftover/user-data truth item(s)'
+        if empty:
+            for k in ks:
+                row(k, st, subj, empty, 'a plan with items', False)
             continue
         if s == 'dirty':
             row('K2', st, subj, t.get('danger_blocking'), 0, t.get('danger_blocking') == 0)
@@ -138,22 +350,38 @@ for s in sets:
         dp, up = t.get('danger_preselected'), t.get('userdata_preselected')
         row('K3', st, subj, f'danger_preselected={dp} userdata_preselected={up}', '0 and 0', dp == 0 and up == 0)
         ps = t.get('precision_safe')
-        row('K4', st, subj, ps, 1.0, ps is None or ps == 1.0, 'no Safe item: null, not counted as a pass' if ps is None else None)
+        if s == 'clean' and id == '7zip':
+            # R4b M6: the 7-Zip MSI app must show a Safe item on rig-base (the replay offers its key Safe, K7).
+            row('K4', st, subj, ps, 1.0, ps == 1.0, 'no Safe item: 7-Zip needs one on rig-base' if ps is None else None)
+        else:
+            row('K4', st, subj, ps, 1.0, ps is None or ps == 1.0, 'no Safe item: null, not counted as a pass' if ps is None else None)
         pn, pc, pw = t.get('protected_n', 0) or 0, t.get('protected_correct'), t.get('protected_wrong') or []
-        need = 29 if id in ('python312-with-313', 'python313-with-312') else 0
+        need = K5_MIN.get(id, 0)
         if pn == 0 and need == 0:
             row('K5', st, subj, 'n/a (no kept_owner/protected truth item)', '100 %', True)
         else:
             ok = pn >= need and pc == 1.0 and not pw
             row('K5', st, subj, f'protected_correct={pc} n={pn} wrong={len(pw)}', f'100 %{f", n >= {need}" if need else ""}', ok)
         if s != 'cp':
-            bad = []
+            # K6 (ruling 2026-11-17, docs/DECISIONS.md M1b, RIG.md 12.5): a mismatch is an item whose band would offer
+            # or preselect it wrongly: preselected below Safe, a band the policy does not have, user data preselected,
+            # a protected truth item listed below Protected. A true leftover listed Weak or Blocked is a recall miss,
+            # as the M1a gate counted it (recall_visible_nd covers Safe and Likely only): reported, not a mismatch.
+            bad, low = [], []
             for it in t.get('items', []):
-                if it.get('outcome') == 'hit' and not it.get('userdata') and it.get('band') not in ('Safe', 'Likely'):
-                    bad.append(f"leftover in {it.get('band')}: {it.get('target')}")
+                band = it.get('band')
+                if band not in BANDS:
+                    bad.append(f"unknown band {band}: {it.get('target')}")
+                elif it.get('preselected') and band != 'Safe':
+                    bad.append(f"preselected at {band}: {it.get('target')}")
+                elif it.get('outcome') == 'hit' and not it.get('userdata') and band in ('Weak', 'Blocked'):
+                    low.append(it.get('target'))
             bad += [f'user data preselected x{up}'] if up else []
             bad += [f"protected below Protected: {w.get('target', w) if isinstance(w, dict) else w}" for w in pw]
-            row('K6', st, subj, len(bad), 0, not bad, '; '.join(bad[:5]) or None)
+            note = '; '.join(bad[:5])
+            if low:
+                note = (note + '; ' if note else '') + f'recall misses (leftover at Weak/Blocked, not a mismatch): {len(low)}'
+            row('K6', st, subj, len(bad), 0, not bad, note or None)
 
 # K7: 7-Zip MSI (G2): fingerprint root with source MsiComponent; plan lists HKU\<sid>\Software\7-Zip
 if 'clean' in sets and '7zip' in apps:
@@ -233,18 +461,105 @@ for s in [x for x in sets if x in ('clean', 'dirty')]:
             sg = suggestions(scan)
             row('K8', st, f'{s}/python312-with-313 suggestion', len(sg), 0, not sg)
 
-# K9: traps
-for run in trap_runs:
-    st = 'G8' if run.startswith('m1bcp') or '-m1bcp' in run else 'G4'
-    tr = load(f'traps-{run}.json')
-    if tr is None:
-        row('K9', st, run, miss(f'traps-{run}.json'), 'escapes 0, missed_owned 0, 26 cases', False)
-        continue
-    sm = tr.get('summary', {})
-    ok = sm.get('escapes') == 0 and sm.get('missed_owned') == 0 and sm.get('cases') == 26
-    row('K9', st, run, f"cases={sm.get('cases')} escapes={sm.get('escapes')} missed_owned={sm.get('missed_owned')}", 'escapes 0, missed_owned 0, 26 cases', ok)
 
-# K14: budgets
+# K9: traps. rigtool's verdicts count only when every case was planted (review R4b S1): the guest's planted record
+# holds all 26 cases (and the between step) ok, with the gate's TrapA / TrapB, and every expectation's target is among
+# the objects its case planted or found already there. A verdict on an object that was never there proves nothing.
+def norm_reg(k):
+    k = str(k).replace('/', '\\').rstrip('\\')
+    k = re.sub(r'^HKU\\S-1-5-21-[0-9-]+_Classes(?=\\|$)', lambda m: 'HKCU\\Software\\Classes', k, flags=re.I)
+    k = re.sub(r'^HKU\\S-1-5-21-[0-9-]+(?=\\|$)', lambda m: 'HKCU', k, flags=re.I)
+    k = re.sub(r'^HKCR(?=\\|$)', lambda m: 'HKLM\\SOFTWARE\\Classes', k, flags=re.I)
+    return k.lower()
+
+
+PLANT_KINDS = ('key', 'value', 'file', 'dir', 'service', 'task', 'firewall')
+
+
+def planted_objects(rec):
+    out = []
+    for p in (rec or {}).get('planted') or []:
+        if not isinstance(p, dict) or p.get('kind') not in PLANT_KINDS:
+            continue
+        t = str(p.get('target') or '')
+        if t.startswith('K:'):
+            out.append(('key', norm_reg(t[2:]), None))
+        elif t.startswith('V:'):
+            k, _, n = t[2:].partition('|')
+            out.append(('value', norm_reg(k), n.lower()))
+        elif t.startswith('P:'):
+            out.append(('path', t[2:].replace('/', '\\').rstrip('\\').lower(), None))
+        elif t.startswith('SVC:'):
+            out.append(('svc', t[4:].lower(), None))
+        elif t.startswith('TASK:'):
+            out.append(('task', t[5:].lower(), None))
+        elif t.startswith('FW:'):
+            out.append(('fw', t[3:].lower(), None))
+    return out
+
+
+def under(a, b):
+    return a == b or a.startswith(b + '\\')
+
+
+def planted(target, objs):
+    ty = target.get('type')
+    if ty == 'Service':
+        return any(o[0] == 'svc' and o[1] == str(target.get('name', '')).lower() for o in objs)
+    if ty == 'Task':
+        return any(o[0] == 'task' and o[1] == str(target.get('path', '')).lower() for o in objs)
+    if ty == 'FirewallRule':
+        return any(o[0] == 'fw' and o[1] == str(target.get('id', '')).lower() for o in objs)
+    if ty == 'RegKey':
+        k = norm_reg(target.get('path', ''))
+        return any(o[0] in ('key', 'value') and under(o[1], k) for o in objs)
+    if ty == 'RegValue':
+        k, n = norm_reg(target.get('path', '')), str(target.get('name', '')).lower()
+        return any(o[0] == 'value' and o[1] == k and o[2] == n for o in objs)
+    if ty == 'Path':
+        p = str(target.get('path', '')).replace('/', '\\').rstrip('\\').lower()
+        return any(o[0] == 'path' and under(o[1], p) for o in objs)
+    return False
+
+
+trap_def = read_json(os.path.join(truth_dir, 'm1b-traps.json')) or {}
+expect_by_case = {c.get('id'): c.get('expect') or [] for c in trap_def.get('cases') or []}
+for run in trap_runs:
+    st = trap_step(run)
+    lim = 'escapes 0, missed_owned 0, 26 cases, every case planted'
+    tr, pl = load(f'traps-{run}.json'), load(f'traps-planted-{run}.json')
+    if tr is None or pl is None:
+        row('K9', st, run, miss(f'traps-{run}.json' if tr is None else f'traps-planted-{run}.json (the guest m1b-traps-planted.json)'), lim, False)
+        continue
+    probs = []
+    if sorted(expect_by_case) != sorted(TRAP_CASES):
+        probs.append('trap file does not hold the 26 gate cases')
+    if pl.get('schema') != 'purge.rig.m1b-traps.planted/1' or pl.get('trap_a') != TRAP_A or pl.get('trap_b') != TRAP_B:
+        probs.append(f"planted record {pl.get('schema')} TrapA {pl.get('trap_a')} TrapB {pl.get('trap_b')}")
+    cases = pl.get('cases') or {}
+    pre_existing, unplanted, failed = 0, 0, 0
+    for cid in TRAP_CASES:
+        rec = cases.get(cid)
+        steps = [rec] + ([cases.get(cid + '#between')] if cid in BETWEEN_CASES else [])
+        if any(not isinstance(r, dict) or r.get('ok') is not True or r.get('error') for r in steps):
+            failed += 1
+            probs.append(f'{cid}: not planted (case record missing or failed)')
+            continue
+        pre_existing += sum(1 for p in rec.get('planted') or [] if re.search(r'existed|already', str((p or {}).get('note') or ''), re.I))
+        objs = [o for r in steps for o in planted_objects(r)]
+        for e in expect_by_case.get(cid, []):
+            if not planted(e.get('target') or {}, objs):
+                unplanted += 1
+                probs.append(f"{cid}: expectation target {json.dumps(e.get('target'))} was not planted")
+    unknown = sorted(k for k in cases if k.split('#')[0] not in TRAP_CASES)
+    if unknown:
+        probs.append('unknown cases in the planted record: ' + ', '.join(unknown))
+    sm = tr.get('summary', {})
+    ok = sm.get('escapes') == 0 and sm.get('missed_owned') == 0 and sm.get('cases') == 26 and not probs
+    row('K9', st, run, f"cases={sm.get('cases')} escapes={sm.get('escapes')} missed_owned={sm.get('missed_owned')} "
+        f'failed_cases={failed} unplanted_targets={unplanted} pre_existing_objects={pre_existing}', lim, ok, '; '.join(probs[:5]) or None)
+
+# K14: budgets (review R4b S6: every run exit 0, 3 rounds per engine and step, round 1 shown cold)
 STAMP = re.compile(r'^\[\s*([0-9.]+)s\]')
 PHASE = re.compile(r'^timing:\s+phase (\S+) ([0-9.]+)s')
 
@@ -265,20 +580,44 @@ def parse_log(p):
     return {'total': total, 'phases': phases}
 
 
-bud = load('budgets/budgets.json')
 if bud is None:
-    for what in ('reference walks per scan', 'added scan time', 'added harvest time', 'ownership.components', 'ownership.tables'):
+    for what in ('budget runs', 'reference walks per scan', 'added scan time', 'added harvest time', 'ownership.components', 'ownership.tables'):
         row('K14', 'G7', what, miss('budgets/budgets.json (rig.ps1 -Mode m1b-budgets)'), '-', False)
 else:
-    logs = {}
+    probs, seen = [], {}
     for r in bud.get('runs', []):
-        logs[(r['engine'], r['step'], r['kind'], r['round'])] = parse_log(os.path.join(evid, 'budgets', r['log']))
+        key = (r.get('engine'), r.get('step'), r.get('round'))
+        if key in seen:
+            probs.append(f'{key} twice')
+        seen[key] = r
+    want = {(e, s_, n) for e in BUDGET_ENGINES for s_ in BUDGET_STEPS for n in BUDGET_ROUNDS}
+    probs += [f'{k} missing' for k in sorted(want - set(seen), key=str)] + [f'{k} not a gate run' for k in sorted(set(seen) - want, key=str)]
+    logs = {}
+    for key in sorted(want & set(seen), key=str):
+        r = seen[key]
+        if r.get('kind') != ('cold' if key[2] == 1 else 'warm'):
+            probs.append(f"{key}: kind {r.get('kind')}")
+            continue
+        if not is_int(r.get('exit')) or r.get('exit') != 0:
+            probs.append(f"{key}: exit {r.get('exit')}")
+            continue
+        lg = parse_log(os.path.join(evid, 'budgets', str(r.get('log'))))
+        if not lg or lg['total'] is None:
+            probs.append(f'{key}: no timing in its log')
+            continue
+        logs[(key[0], key[1], r.get('kind'), key[2])] = lg
+    cold = bud.get('cold_cache_state') or ('moved' if bud.get('cold_cache') else None)
+    if cold not in ('moved', 'absent'):
+        probs.append(f'cold round not shown cold (cold_cache_state {cold})')
+    if not bud.get('program'):
+        probs.append('no program recorded')
+    row('K14', 'G7', 'budget runs', f'{len(seen)} run(s), {len(probs)} problem(s)', '12 runs (2 engines x 2 steps x 3 rounds), all exit 0, round 1 cold',
+        not probs, '; '.join(probs[:5]) or None)
 
     def times(eng, step, kind):
-        v = [x['total'] for (e, s_, k, _), x in logs.items() if e == eng and s_ == step and k == kind and x and x['total'] is not None]
-        return v
+        return [x['total'] for (e, s_, k, _), x in logs.items() if e == eng and s_ == step and k == kind]
 
-    walks = [len(x['phases'].get('refscan', [])) for (e, s_, k, _), x in logs.items() if e == 'm1b' and s_ == 'scan' and x]
+    walks = [len(x['phases'].get('refscan', [])) for (e, s_, k, _), x in logs.items() if e == 'm1b' and s_ == 'scan']
     row('K14', 'G7', 'reference walks per scan', walks if walks else miss('m1b scan logs'), '1 each', bool(walks) and all(w == 1 for w in walks))
     for step, label in (('scan', 'added scan time'), ('harvest', 'added harvest time')):
         for kind, lim in (('warm', 2.5), ('cold', 6.5)):
@@ -288,44 +627,112 @@ else:
                 continue
             d = statistics.median(a) - statistics.median(b)
             row('K14', 'G7', f'{label} ({kind})', round(d, 3), f'<= {lim} s', d <= lim, f'm1b {statistics.median(a):.3f} s vs m2 {statistics.median(b):.3f} s (median)')
-    comp = [v for (e, s_, k, _), x in logs.items() if e == 'm1b' and x for v in x['phases'].get('ownership.components', [])]
+    comp = [v for (e, s_, k, _), x in logs.items() if e == 'm1b' for v in x['phases'].get('ownership.components', [])]
     row('K14', 'G7', 'ownership.components', max(comp) if comp else miss('ownership.components phase lines'), '<= 1.5 s', bool(comp) and max(comp) <= 1.5)
     for kind, lim in (('cold', 4.0), ('warm', 0.3)):
-        tb = [v for (e, s_, k, _), x in logs.items() if e == 'm1b' and k == kind and x for v in x['phases'].get('ownership.tables', [])]
+        tb = [v for (e, s_, k, _), x in logs.items() if e == 'm1b' and k == kind for v in x['phases'].get('ownership.tables', [])]
         val = (max(tb) if kind == 'cold' else statistics.median(tb)) if tb else None
         row('K14', 'G7', f'ownership.tables ({kind})', val if tb else miss(f'{kind} ownership.tables lines'), f'<= {lim} s', bool(tb) and val <= lim)
 
-# K16: replay diff
+
+# K16: replay diff (review R4b B1), judged by its rows: every row carries one of the five reasons (DECISIONS
+# 2026-11-17: promotion_justified added to the design's four), none is unexplained, the five frozen runs are in it,
+# and every promotion (recomputed here: the band rose toward Safe, or the item became preselected) carries
+# promotion_justified and is named with a cause under justified_promotions (xtask JUSTIFIED_PROMOTIONS); a row that
+# says promotion_justified must be a promotion.
+def band_rank(b):
+    return {'Blocked': 0, 'Weak': 1, 'Likely': 2, 'Safe': 3}.get(b, 4)
+
+
+def fold(v):
+    if isinstance(v, str):
+        return v.lower()
+    if isinstance(v, list):
+        return [fold(x) for x in v]
+    if isinstance(v, dict):
+        return {k: fold(x) for k, x in v.items()}
+    return v
+
+
+def tkey(app, target):
+    return (app, json.dumps(fold(target), sort_keys=True))
+
+
 rd = load('replay-diff.json')
 if rd is None:
     row('K16', 'G1', 'replay diff', miss('replay-diff.json'), 'unexplained 0', False)
 else:
-    allowed = set(rd.get('reasons') or [])
-    bad = [r for r in rd.get('rows', []) if r.get('reason') not in allowed]
-    ok = rd.get('unexplained') == 0 and not bad and allowed <= {'new_scanner', 'msi_blocker_added', 'msi_root_added', 'policy_m1b'}
-    row('K16', 'G1', 'replay diff', f"unexplained={rd.get('unexplained')} rows_without_allowed_reason={len(bad)}", 0, ok)
+    probs = []
+    if rd.get('schema') != REPLAY_SCHEMA:
+        probs.append(f"schema {rd.get('schema')}, not {REPLAY_SCHEMA}")
+    if sorted(rd.get('reasons') or []) != sorted(REPLAY_REASONS):
+        probs.append(f"declared reasons {rd.get('reasons')}")
+    if rd.get('unexplained') != 0:
+        probs.append(f"unexplained={rd.get('unexplained')}")
+    missing_runs = [r for r in REPLAY_RUNS if r not in (rd.get('apps') or {})]
+    if missing_runs:
+        probs.append('runs not in the diff: ' + ', '.join(missing_runs))
+    just = {tkey(j.get('app'), j.get('target')) for j in rd.get('justified_promotions') or []
+            if isinstance(j, dict) and str(j.get('cause') or '').strip()}
+    rrows, promos = rd.get('rows') or [], 0
+    for r in rrows:
+        reason, b, a = r.get('reason'), r.get('before'), r.get('after')
+        if reason not in REPLAY_REASONS:
+            probs.append(f"{r.get('app')} {json.dumps(r.get('target'))}: reason {reason}")
+            continue
+        promoted = isinstance(b, dict) and isinstance(a, dict) and (
+            band_rank(a.get('band')) > band_rank(b.get('band')) or (bool(a.get('preselected')) and not b.get('preselected')))
+        promos += promoted
+        if promoted and (reason != 'promotion_justified' or tkey(r.get('app'), r.get('target')) not in just):
+            probs.append(f"{r.get('app')} {json.dumps(r.get('target'))}: promotion {b.get('band')} -> {a.get('band')} not justified ({reason})")
+        elif reason == 'promotion_justified' and not promoted:
+            probs.append(f"{r.get('app')} {json.dumps(r.get('target'))}: promotion_justified on a row that is no promotion")
+    if rd.get('promotions') != promos:
+        probs.append(f"promotions={rd.get('promotions')} declared, {promos} in the rows")
+    row('K16', 'G1', 'replay diff', f"rows={len(rrows)} unexplained={rd.get('unexplained')} promotions={promos} problems={len(probs)}",
+        'every row an allowed reason, unexplained 0, every promotion justified', not probs, '; '.join(probs[:5]) or None)
 
 fails = [r for r in rows if not r['pass']]
 for r in rows:
     print(f"{r['id']} {r['step']} {r['subject']}: {r['value']} (limit {r['limit']}) {'PASS' if r['pass'] else 'FAIL'}"
           + (f"  [{r['note']}]" if r['note'] else ''))
-doc = {'schema': 'purge.rig.m1b-score/1', 'time': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
-       'evidence': evid, 'gate_config': config, 'apps': apps, 'cp_apps': cp_apps, 'sets': sets, 'trap_runs': trap_runs,
-       'criteria': rows, 'failed': len(fails), 'pass': not fails and bool(rows)}
+passed = not fails and bool(rows)
+why_not = []
+if config != 'default':
+    why_not.append('custom configuration: ' + (config_vars or 'see gate_config'))
+if how != 'gate':
+    why_not.append('evaluate-only (--evaluate): the evidence was not collected by this invocation')
+gate = passed and not why_not
+doc = {'schema': 'purge.rig.m1b-score/2', 'time': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+       'evidence': evid, 'gate_config': config, 'config_vars': config_vars.split(), 'mode': how,
+       'apps': apps, 'cp_apps': cp_apps, 'sets': sets, 'trap_runs': trap_runs,
+       'inputs': {'traps_sha256': traps_now, 'labels': manifest.get('labels'), 'frozen': manifest.get('frozen'),
+                  'rigtool': manifest.get('rigtool'), 'engines': sorted(engines), 'commits': sorted(commits)},
+       'criteria': rows, 'failed': len(fails), 'pass': passed, 'gate': gate, 'not_gate_because': why_not}
 os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
 with open(out, 'w', encoding='utf-8') as f:
     json.dump(doc, f, indent=2, ensure_ascii=False)
-print(f"m1b: {len(rows) - len(fails)}/{len(rows)} PASS, {len(fails)} FAIL ({config} config) -> {out}")
-sys.exit(0 if doc['pass'] else 1)
+print(f"m1b: {len(rows) - len(fails)}/{len(rows)} PASS, {len(fails)} FAIL -> {out}")
+if gate:
+    print('m1b: gate PASS')
+elif passed:
+    print('m1b: not a gate score (' + '; '.join(why_not) + ')')
+sys.exit(0 if gate else (3 if passed else 1))
 EOF
+}
+
+# evaluate <evidence dir> <score json out> [gate|evaluate]: stage 2; "gate" only from the no-argument run.
+evaluate() {
+  pyeval evaluate "$1" "$2" "$APPS" "$CP_APPS" "$SETS" "$TRAP_RUNS" "$CONFIG" "$CONFIG_VARS" "${3:-evaluate}" "$HERE"
 }
 
 # ------------------------------------------------------------------------------------------- stage 1
 collect() {
-  mkdir -p "$EVID" "$EVID/budgets"
-  rm -f "$EVID"/score-*.json "$EVID"/traps-*.json "$EVID"/*-fp.json "$EVID"/*-scan.json "$EVID"/replay-*.json "$EVID"/budgets/*
+  mkdir -p "$EVID" "$EVID/budgets" "$EVID/runs"
+  rm -f "$EVID"/score-*.json "$EVID"/traps-*.json "$EVID"/*-fp.json "$EVID"/*-scan.json "$EVID"/replay-*.json "$EVID"/budgets/* \
+        "$EVID"/runs/*.json "$EVID"/manifest.json
   local labels_extra=(--labels truth/labels/_os-servicing.json)
-  local s id run d lid p n
+  local s id run d lid p n lmap=""
   for s in $SETS; do
     p=$(prefix_of "$s")
     # 0. ambient from this set's null runs
@@ -340,8 +747,9 @@ collect() {
     local dirs=()
     for id in $(apps_of "$s"); do
       run="$p-$id"; d="$RUNS/$run"
+      lid=$(label_of "$id"); lmap="$lmap $run=$lid"
+      if [ -d "$d" ]; then pyeval runsum "$d" "$run" "$EVID/runs/$run.json"; fi
       if [ ! -f "$d/run.json" ] || [ ! -f "$amb" ]; then echo "m1b: $run: no run or no ambient set" >&2; continue; fi
-      lid=$(label_of "$id")
       if [ ! -f "truth/labels/$lid.json" ]; then echo "m1b: $run: no label file truth/labels/$lid.json" >&2; continue; fi
       if ! "$R" truth --s0 "$d/snap-$run-0.tsv.gz" --s1 "$d/snap-$run-1.tsv.gz" --s2 "$d/snap-$run-2.tsv.gz" \
           --lists0 "$d/lists-$run-0.json" --lists2 "$d/lists-$run-2.json" --run "$d/run.json" \
@@ -384,6 +792,8 @@ EOF
   done
   for run in $TRAP_RUNS; do
     d="$RUNS/$run"
+    if [ -d "$d" ]; then pyeval runsum "$d" "$run" "$EVID/runs/$run.json"; fi
+    if [ -f "$d/m1b-traps-planted.json" ]; then cp "$d/m1b-traps-planted.json" "$EVID/traps-planted-$run.json"; fi
     if [ ! -f "$d/plan-purge.scan.json" ] || [ ! -f "$d/run.json" ]; then echo "m1b: trap run $run: no plan-purge.scan.json" >&2; continue; fi
     local sid; sid=$("$PY" -I -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8-sig')).get('sid') or '')" "$d/run.json")
     "$R" traps --plan "$d/plan-purge.scan.json" --traps truth/m1b-traps.json --app 7zip ${sid:+--sid "$sid"} --out "$EVID/traps-$run.json" >&2
@@ -392,38 +802,93 @@ EOF
   if [ -f "$BUDGETS/budgets.json" ]; then cp "$BUDGETS/budgets.json" "$BUDGETS"/*.log "$EVID/budgets/" 2>/dev/null; fi
   [ -f "$REPLAY_DIFF" ] && cp "$REPLAY_DIFF" "$EVID/replay-diff.json"
   [ -f "$REPLAY_SCORE" ] && cp "$REPLAY_SCORE" "$EVID/replay-score.json"
-  "$PY" -I -c "
-import json, sys
-sets = sys.argv[2].split()
-pre = {s: v for s, v in zip(('clean', 'dirty', 'cp'), sys.argv[3:6])}
-json.dump({'schema': 'purge.rig.m1b-evidence/1', 'note': 'collected by vm/truth/m1b.sh from ' + sys.argv[6],
-           'prefixes': {s: pre[s] for s in sets}}, open(sys.argv[1], 'w', encoding='utf-8'), indent=2)
-" "$EVID/manifest.json" "$SETS" "$(prefix_of clean)" "$(prefix_of dirty)" "$(prefix_of cp)" "$RUNS"
+  pyeval manifest "$EVID/manifest.json" "$RUNS" "$SETS" "$(prefix_of clean)" "$(prefix_of dirty)" "$(prefix_of cp)" "${lmap# }" \
+    "$HERE" "$CONFIG" "$CONFIG_VARS" "$R"
 }
 
 # ------------------------------------------------------------------------------------------- selftest
+# The scorer against truth/m1b-fixture.py's evidence: a passing gate-default dir (exit 0), then each bad-run control
+# of review R4b (each must exit 1 with its criterion FAIL; the positive controls must still exit 0), the configuration
+# rule (S3), the trap file checks and the guest Pester test.
 selftest() {
-  local fails=0 tmp; tmp=$(mktemp -d)
+  local fails=0 tmp rc; tmp=$(mktemp -d)
+  local fx="$HERE/m1b-fixture.py"
+  ok_() { echo "ok   $1"; }
+  no_() { echo "FAIL $1${2:+ ($2)}"; fails=$((fails + 1)); }
+  # The fixture holds a copy of the committed trap and label files (truth/) and a frozen truth for powershell and
+  # temurin; its manifest is written as collect writes it.
+  mkfix() {
+    "$PY" -I "$fx" write "$1" "$HERE" >/dev/null || return 1
+    pyeval manifest "$1/manifest.json" runs "$DEF_SETS" m1b m1bd m1bcp "$("$PY" -I "$fx" labelmap)" "$1/truth" default "" rigtool
+  }
+  # eval_gate <dir> <out>: evaluate as the gate does, against the dir's own truth/ copy
+  eval_gate() { (HERE="$1/truth"; evaluate "$1" "$2" gate); }
+
   # m1b_sh_fails_on_missing_input: an empty evidence dir -> exit 1, every line FAIL, none skipped
-  evaluate "$tmp/empty-does-not-exist" "$tmp/empty.json" >"$tmp/empty.txt" 2>&1; local rc=$?
+  eval_gate "$tmp/empty-does-not-exist" "$tmp/empty.json" >"$tmp/empty.txt" 2>&1; rc=$?
   if [ $rc -eq 1 ] && "$PY" -I -c "
 import json, sys
 d = json.load(open(sys.argv[1], encoding='utf-8'))
 rows = d['criteria']
-need = {'K1', 'K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'K8', 'K9', 'K14', 'K16'}
-assert rows and all(not r['pass'] for r in rows if r['id'] != 'K5' or 'missing' in str(r['value'])), 'a line passed on no input'
+need = {'RUN', 'BIND', 'FROZEN', 'K1', 'K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'K8', 'K9', 'K14', 'K16'}
+assert rows and all(not r['pass'] for r in rows), [r for r in rows if r['pass']]
 assert need <= {r['id'] for r in rows}, need - {r['id'] for r in rows}
-assert not d['pass']
-" "$tmp/empty.json"; then echo "ok   m1b_sh_fails_on_missing_input"; else echo "FAIL m1b_sh_fails_on_missing_input (exit $rc)"; fails=$((fails + 1)); fi
-  # m1b_sh_passes_on_recorded_sample: the committed sample (synthetic evidence, see its manifest) -> exit 0
-  # The sample covers 4 of the 8 apps and the cp set's 7zip only (a custom config, recorded as such).
-  if (APPS="7zip python python312-with-313 vcredist" CP_APPS="7zip" CONFIG=custom
-      evaluate "$HERE/_m1b_sample" "$tmp/sample.json") >"$tmp/sample.txt" 2>&1; then echo "ok   m1b_sh_passes_on_recorded_sample"
-  else echo "FAIL m1b_sh_passes_on_recorded_sample"; grep FAIL "$tmp/sample.txt" | head -10; fails=$((fails + 1)); fi
-  # the sample must also fail when one input is taken away (the evaluator reads it)
-  cp -r "$HERE/_m1b_sample" "$tmp/s2"; rm -f "$tmp/s2/traps-m1bd-traps-7zip.json"
-  if (APPS="7zip python python312-with-313 vcredist" CP_APPS="7zip" CONFIG=custom; evaluate "$tmp/s2" "$tmp/s2.json") >/dev/null 2>&1; then
-    echo "FAIL m1b_sh_fails_when_a_sample_input_is_removed"; fails=$((fails + 1)); else echo "ok   m1b_sh_fails_when_a_sample_input_is_removed"; fi
+assert not d['pass'] and not d['gate']
+" "$tmp/empty.json"; then ok_ m1b_sh_fails_on_missing_input; else no_ m1b_sh_fails_on_missing_input "exit $rc"; fi
+
+  # m1b_sh_passes_on_recorded_sample (the design's name; since R4b the evidence is generated, not the hand-made
+  # _m1b_sample): the gate-default evidence, evaluated as the gate -> exit 0, gate true
+  if mkfix "$tmp/fx" && eval_gate "$tmp/fx" "$tmp/fx.json" >"$tmp/fx.txt" 2>&1; then
+    ok_ m1b_sh_passes_on_recorded_sample
+  else no_ m1b_sh_passes_on_recorded_sample; grep -E 'FAIL|Error|error' "$tmp/fx.txt" | head -10; fi
+
+  # Bad-run controls (review R4b): "<mutation> <criterion that must FAIL>"; positive controls "<mutation> PASS".
+  local ctl
+  for ctl in \
+      "replay_committed_diff PASS" "replay_promotion_unexplained K16" "replay_justified_not_listed K16" \
+      "replay_justified_listed PASS" "replay_justified_no_promotion K16" "replay_sixth_reason K16" \
+      "replay_run_missing K16" "replay_old_schema K16" \
+      "k6_leftover_weak PASS" "k6_preselected_likely K6" "k6_unknown_band K6" \
+      "plant_missing_target K9" "plant_note_only K9" "plant_case_failed K9" "plant_between_failed K9" \
+      "plant_record_missing K9" "plant_wrong_trap_b K9" "plant_preexisting PASS" \
+      "empty_plan K1" "empty_plan_dirty K2" "score_without_counts K3" \
+      "run_phase_failed RUN" "run_unfinished RUN" "run_json_missing RUN" \
+      "unbound_engine BIND" "engine_rebuilt BIND" "build_missing BIND" "build_stale BIND" "source_dirty BIND" \
+      "two_commits BIND" "budget_engine_other BIND" "traps_changed BIND" "labels_override BIND" "labels_changed BIND" \
+      "frozen_missing FROZEN" \
+      "budget_exit K14" "budget_two_rounds K14" "budget_kept_cache K14" "budget_kind K14" \
+      "no_safe_7zip K4"; do
+    set -- $ctl
+    rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"
+    if ! "$PY" -I "$fx" mutate "$tmp/m" "$1" >"$tmp/m.txt" 2>&1; then no_ "control $1" "mutation failed: $(head -c 300 "$tmp/m.txt")"; continue; fi
+    eval_gate "$tmp/m" "$tmp/m.json" >"$tmp/m.out" 2>&1; rc=$?
+    if [ "$2" = PASS ]; then
+      if [ $rc -eq 0 ]; then ok_ "control $1 (still passes)"; else no_ "control $1" "exit $rc: $(grep FAIL "$tmp/m.out" | head -2)"; fi
+    elif [ $rc -eq 1 ] && "$PY" -I -c "
+import json, sys
+d = json.load(open(sys.argv[1], encoding='utf-8'))
+assert any(r['id'] == sys.argv[2] and not r['pass'] for r in d['criteria']), sys.argv[2]
+assert not d['gate'] and not d['pass']
+" "$tmp/m.json" "$2" 2>/dev/null; then ok_ "control $1 (fails $2)"
+    else no_ "control $1" "exit $rc, $2 not failed: $(grep FAIL "$tmp/m.out" | head -2)"; fi
+  done
+
+  # S3: the same passing evidence is not a gate score evaluate-only, or with a custom app list.
+  (HERE="$tmp/fx/truth"; evaluate "$tmp/fx" "$tmp/e.json" evaluate) >/dev/null 2>&1; rc=$?
+  if [ $rc -eq 3 ] && "$PY" -I -c "import json,sys; d=json.load(open(sys.argv[1])); assert d['pass'] and not d['gate']" "$tmp/e.json"; then
+    ok_ config_evaluate_only_is_not_a_gate_score; else no_ config_evaluate_only_is_not_a_gate_score "exit $rc"; fi
+  (HERE="$tmp/fx/truth"; APPS="7zip python"; CONFIG=custom; CONFIG_VARS=M1B_APPS; evaluate "$tmp/fx" "$tmp/c.json" gate) >/dev/null 2>&1; rc=$?
+  if [ $rc -eq 3 ] && "$PY" -I -c "import json,sys; d=json.load(open(sys.argv[1])); assert d['pass'] and not d['gate']" "$tmp/c.json"; then
+    ok_ config_custom_app_list_is_not_a_gate_score; else no_ config_custom_app_list_is_not_a_gate_score "exit $rc"; fi
+  # every gate input: custom when changed, default when unset or equal to its default
+  local v want got
+  for v in $GATE_VARS; do
+    got=$(env "$v=x-custom" bash "$HERE/m1b.sh" --config 2>/dev/null)
+    if [ "$got" != "custom $v" ]; then no_ "config_$v" "changed: got '$got'"; continue; fi
+    want=$(def_of "$v"); got=$(env "$v=$want" bash "$HERE/m1b.sh" --config 2>/dev/null)
+    if [ "$got" = default ]; then ok_ "config_$v (custom when changed, default when equal)"; else no_ "config_$v" "equal: got '$got'"; fi
+  done
+
   # traps_json_every_case_has_expectation
   if "$PY" -I - "$HERE/m1b-traps.json" <<'EOF'
 import json, sys
@@ -456,13 +921,13 @@ for k, v in must.items():
 for k in ('svc-dependent', 'com-shared-class', 'com-isimpledom', 'shareddlls-count', 'msi-shared-component', 'burn-shared-package'):
     assert any(e['verdict'] in ('protected', 'absent') for e in by[k]['expect']), k
 EOF
-  then echo "ok   traps_json_every_case_has_expectation"; else echo "FAIL traps_json_every_case_has_expectation"; fails=$((fails + 1)); fi
+  then ok_ traps_json_every_case_has_expectation; else no_ traps_json_every_case_has_expectation; fi
   # traps_json_matches_guest_functions (the M1B-RIG-GUEST Pester test, Windows only)
   if command -v powershell.exe >/dev/null 2>&1; then
     local pt; pt=$(cygpath -w "$HERE/../guest/tests/m1b-traps.tests.ps1" 2>/dev/null || echo "$HERE/../guest/tests/m1b-traps.tests.ps1")
     if powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "\$r = Invoke-Pester -Script '$pt' -PassThru -Quiet; if (\$r.FailedCount -or -not \$r.PassedCount) { exit 1 }" >/dev/null 2>&1; then
-      echo "ok   traps_json_matches_guest_functions"; else echo "FAIL traps_json_matches_guest_functions"; fails=$((fails + 1)); fi
-  else echo "FAIL traps_json_matches_guest_functions (no powershell.exe: run it on Windows)"; fails=$((fails + 1)); fi
+      ok_ traps_json_matches_guest_functions; else no_ traps_json_matches_guest_functions; fi
+  else no_ traps_json_matches_guest_functions "no powershell.exe: run it on Windows"; fi
   rm -rf "$tmp"
   echo "m1b selftest: $fails failure(s)"
   [ $fails -eq 0 ]
@@ -510,9 +975,10 @@ EOF
 
 case "${1:-}" in
   --selftest) selftest; exit $? ;;
+  --config) if [ "$CONFIG" = default ]; then echo default; else echo "custom $CONFIG_VARS"; fi; exit 0 ;;
   freeze) [ -n "${2:-}" ] || { echo "m1b: freeze needs an app id" >&2; exit 2; }; freeze "$2"; exit $? ;;
   --evaluate) [ -n "${2:-}" ] || { echo "m1b: --evaluate needs an evidence dir" >&2; exit 2; }
-              evaluate "$2" "$OUT/m1b-score.json"; exit $? ;;
-  "") collect; evaluate "$EVID" "$OUT/m1b-score.json"; exit $? ;;
-  *) echo "m1b: unknown argument $1 (--selftest, --evaluate DIR, freeze APP, or nothing)" >&2; exit 2 ;;
+              evaluate "$2" "$OUT/m1b-score.json" evaluate; exit $? ;;
+  "") collect; evaluate "$EVID" "$OUT/m1b-score.json" gate; exit $? ;;
+  *) echo "m1b: unknown argument $1 (--selftest, --evaluate DIR, --config, freeze APP, or nothing)" >&2; exit 2 ;;
 esac

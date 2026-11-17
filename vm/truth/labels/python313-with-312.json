@@ -4,7 +4,7 @@
     "_os.json",
     "python313.json"
   ],
-  "note": "M1b: Python 3.12.7 installed before snap 0 (pre), then 3.13.17 installed and removed. 3.12 stays; the launcher (upgraded to 3.13.17 by the 3.13 install) stays for it. UNSURE until the first run.",
+  "note": "M1b: Python 3.12.7 installed before snap 0 (pre), then 3.13.17 installed and removed. 3.12 stays; the launcher (upgraded to 3.13.17 by the 3.13 install) stays for it. UNSURE until the first run. R4b S4: the kept launcher's MSI registration (component clients, upgrade code, dependency key, cached package, package cache) is kept_owner by generic rules until its product code is known.",
   "rules": [
     {
       "label": "kept_owner",
@@ -54,6 +54,31 @@
       "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Python\\\\PythonCore\\\\3\\.13(\\\\[^|]*)?(\\|.*)?$",
       "why": "The removed 3.13's own PythonCore subkey.",
       "gen": true
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer\\\\UserData\\\\S-1-5-18\\\\Components\\\\[0-9A-F]{32}\\|[0-9A-F]{32}$",
+      "why": "Review R4b S4: the 3.13 install upgrades the Python Launcher (a new MSI product code, not known until a capture) and the 3.13 uninstall leaves it installed for 3.12. Kept launcher: MSI component client values (a packed product code naming a component). Generic (any product code) because the code is unknown: every other MSI of the 3.13 bundle is removed by its uninstall, so in this run such an object is the kept launcher's, or a stale record of a removed 3.13 package, which this rule then counts as protected (an offer of it fails K5: fail-closed). Narrow it to the launcher's packed code (python.json style) once a capture shows it. Not frozen."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\(Classes\\\\Installer|Microsoft\\\\Windows\\\\CurrentVersion\\\\Installer)\\\\UpgradeCodes\\\\[0-9A-F]{32}(\\|[0-9A-F]{32})?$",
+      "why": "Review R4b S4: the 3.13 install upgrades the Python Launcher (a new MSI product code, not known until a capture) and the 3.13 uninstall leaves it installed for 3.12. Kept launcher: the UpgradeCodes key and its packed product code value. Generic (any product code) because the code is unknown: every other MSI of the 3.13 bundle is removed by its uninstall, so in this run such an object is the kept launcher's, or a stale record of a removed 3.13 package, which this rule then counts as protected (an offer of it fails K5: fail-closed). Narrow it to the launcher's packed code (python.json style) once a capture shows it. Not frozen."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer\\\\Dependencies\\\\\\{[0-9A-F-]{36}\\}(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Review R4b S4: the 3.13 install upgrades the Python Launcher (a new MSI product code, not known until a capture) and the 3.13 uninstall leaves it installed for 3.12. Kept launcher: the package's Installer\\Dependencies provider key (ProductCode) with its Dependents. Generic (any product code) because the code is unknown: every other MSI of the 3.13 bundle is removed by its uninstall, so in this run such an object is the kept launcher's, or a stale record of a removed 3.13 package, which this rule then counts as protected (an offer of it fails K5: fail-closed). Narrow it to the launcher's packed code (python.json style) once a capture shows it. Not frozen."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^P:C:\\\\Windows\\\\Installer\\\\(\\{[0-9A-F-]{36}\\}(\\\\.*)?|[0-9a-f]{4,8}\\.msi|SourceHash\\{[0-9A-F-]{36}\\})$",
+      "why": "Review R4b S4: the 3.13 install upgrades the Python Launcher (a new MSI product code, not known until a capture) and the 3.13 uninstall leaves it installed for 3.12. Kept launcher: Windows Installer's cached package, icon folder and SourceHash file. Generic (any product code) because the code is unknown: every other MSI of the 3.13 bundle is removed by its uninstall, so in this run such an object is the kept launcher's, or a stale record of a removed 3.13 package, which this rule then counts as protected (an offer of it fails K5: fail-closed). Narrow it to the launcher's packed code (python.json style) once a capture shows it. Not frozen."
+    },
+    {
+      "label": "kept_owner",
+      "match": "^P:C:\\\\ProgramData\\\\Package Cache\\\\\\{[0-9A-F-]{36}\\}v[0-9.]+(\\\\.*)?$",
+      "why": "Review R4b S4: the 3.13 install upgrades the Python Launcher (a new MSI product code, not known until a capture) and the 3.13 uninstall leaves it installed for 3.12. Kept launcher: Burn's cache folder of the package ({ProductCode}v<version>; a bundle's own folder has no version and stays a leftover). Generic (any product code) because the code is unknown: every other MSI of the 3.13 bundle is removed by its uninstall, so in this run such an object is the kept launcher's, or a stale record of a removed 3.13 package, which this rule then counts as protected (an offer of it fails K5: fail-closed). Narrow it to the launcher's packed code (python.json style) once a capture shows it. Not frozen."
     }
   ]
 }

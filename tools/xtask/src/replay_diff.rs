@@ -31,7 +31,10 @@
 //!   `ObjectChangedSinceHarvest`, `ReversibilityPartial`, `ProgramUnresolved`).
 //!
 //! A row none of these explains is `unexplained`, and the command fails (after writing the file). The
-//! file also counts the promotions and the new items offered Safe, so a reader sees them at once.
+//! file also counts the promotions and the new items offered Safe, so a reader sees them at once, and lists
+//! [`JUSTIFIED_PROMOTIONS`] with their causes under `justified_promotions` (schema `purge.replay-diff/3`,
+//! review R4b B1): the gate scorer `vm/truth/m1b.sh` (K16) recomputes every promotion from the rows and
+//! accepts one only when it carries `promotion_justified` and is named there with a cause.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -139,12 +142,25 @@ pub struct Row {
     pub reason: &'static str,
 }
 
+/// The schema of the diff file.
+pub const DIFF_SCHEMA: &str = "purge.replay-diff/3";
+
+/// One entry of [`JUSTIFIED_PROMOTIONS`] as the diff file lists it.
+#[derive(Debug, Serialize)]
+struct Justified {
+    app: &'static str,
+    target: Value,
+    cause: &'static str,
+}
+
 /// The diff file.
 #[derive(Debug, Serialize)]
 struct DiffDoc<'a> {
     schema: &'static str,
     reference: &'a str,
     reasons: [&'static str; 5],
+    /// Every promotion [`JUSTIFIED_PROMOTIONS`] names, with its cause (whether or not a row matched it).
+    justified_promotions: Vec<Justified>,
     apps: BTreeMap<String, (usize, usize)>,
     unexplained: usize,
     /// Rows whose band rose or that became preselected (justified or not).
@@ -442,9 +458,17 @@ pub fn run(root: &Path, args: &[String]) -> Result<bool> {
         .filter(|r| r.before.is_none() && r.after.as_ref().is_some_and(|a| a.band == "Safe"))
         .count();
     let doc = DiffDoc {
-        schema: "purge.replay-diff/2",
+        schema: DIFF_SCHEMA,
         reference: REFERENCE_ENGINE,
         reasons: REASONS,
+        justified_promotions: JUSTIFIED_PROMOTIONS
+            .iter()
+            .map(|(app, target, cause)| Justified {
+                app,
+                target: serde_json::from_str(target).unwrap_or(Value::Null),
+                cause,
+            })
+            .collect(),
         apps,
         unexplained,
         promotions,
@@ -708,11 +732,23 @@ mod tests {
         // The committed diff: every row has an allowed reason, and the count says so.
         let text = std::fs::read_to_string(crate::workspace_root().join(DIFF)).unwrap();
         let doc: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(doc["schema"], json!(DIFF_SCHEMA));
         assert_eq!(doc["unexplained"], json!(0));
+        assert_eq!(
+            doc["justified_promotions"].as_array().map(Vec::len),
+            Some(JUSTIFIED_PROMOTIONS.len())
+        );
+        let mut promotions = 0;
         for row in doc["rows"].as_array().unwrap() {
             let r = row["reason"].as_str().unwrap();
             assert!(REASONS.contains(&r), "{row}");
+            // A promotion carries promotion_justified and nothing else (the rule m1b.sh K16 applies).
+            let side = |k: &str| serde_json::from_value::<Item>(row[k].clone()).ok();
+            let promoted = matches!((side("before"), side("after")), (Some(b), Some(a)) if is_promotion(&b, &a));
+            promotions += usize::from(promoted);
+            assert_eq!(promoted, r == PROMOTION_JUSTIFIED, "{row}");
         }
+        assert_eq!(doc["promotions"], json!(promotions));
         // Every run of the diff is in it, 7-Zip included.
         for id in DIFF_RUNS {
             assert!(

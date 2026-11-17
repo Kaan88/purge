@@ -35,8 +35,8 @@
                       it must FAIL on the named criterion. Needs Python 3 ($env:PYTHON or python). Exit 1 on a failure.
 
   Binding (review R4 S4, S6): each VM run gets opts.engine_build (engine SHA-256, repo HEAD, whether crates/bins/
-  tools/Cargo.* differ from HEAD) and records it with the SHA-256 the guest measures of the staged and installed
-  engine and of the cases bytes; m1b-x-elevated records the cases SHA-256 and the commit. truth\m1b-exec.sh requires
+  tools/kb/Cargo.*/rust-toolchain.toml differ from HEAD) and records it with the SHA-256 the guest measures of the
+  staged and installed engine and of the cases bytes; m1b-x-elevated records the cases SHA-256 and the commit. truth\m1b-exec.sh requires
   one engine, one commit, clean sources and the scored cases file in every run.
 #>
 [CmdletBinding()]
@@ -100,8 +100,9 @@ function Get-XBash {
 }
 
 # The build a run is bound to (review R4 S6): the engine file's SHA-256 (lower-case hex; $null without -Path), the
-# repository's HEAD and whether its sources (crates, bins, tools, Cargo.toml, Cargo.lock) differ from HEAD. Read-only
-# git calls. The score requires one engine and one commit over all runs, and clean sources.
+# repository's HEAD and whether its sources (crates, bins, tools, kb, Cargo.toml, Cargo.lock, rust-toolchain.toml;
+# kb is compiled into the engine, R4 M11) differ from HEAD. Read-only git calls. The score requires one engine and
+# one commit over all runs, and clean sources.
 function Get-XBuildInfo([string]$Path = '') {
     $sha = $null
     if ($Path) { $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
@@ -110,7 +111,7 @@ function Get-XBuildInfo([string]$Path = '') {
     try {
         $c = @(& git -C $XRepo rev-parse HEAD 2>$null)
         if ($LASTEXITCODE -eq 0 -and $c.Count) { $commit = "$($c[0])".Trim() }
-        $d = @(& git -C $XRepo status --porcelain --untracked-files=no -- crates bins tools Cargo.toml Cargo.lock 2>$null)
+        $d = @(& git -C $XRepo status --porcelain --untracked-files=no -- crates bins tools kb Cargo.toml Cargo.lock rust-toolchain.toml 2>$null)
         if ($LASTEXITCODE -eq 0) { $dirty = [bool]($d | Where-Object { "$_".Trim() }) }
     } finally { $ErrorActionPreference = $old }
     [ordered]@{ path = $Path; sha256 = $sha; commit = $commit; source_dirty = $dirty }

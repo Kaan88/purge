@@ -1032,7 +1032,13 @@ M0/M1a run. When options are given, run.json gets an `m1b` block and run-app add
   - `m1b-traps-pre` runs after the launch and before lists1, so the harvest sees the plants.
   - `m1b-traps-between` runs after the harvest and before the uninstall.
   - `m1b-traps-post` runs after the uninstall and before lists2, snap2 and the scan.
-  - Each of these phases fails when one of its cases fails.
+  - Each of these phases fails when one of its cases fails. A failed phase ends the run (`exit 1` after run.json is saved),
+    and m1b-traps.ps1 refuses a later phase after a failed case of an earlier one (review R4b S1).
+  - Every phase records its plants in `m1b-traps-planted.json` (`purge.rig.m1b-traps.planted/1`), which collect copies to
+    `traps-planted-<run>.json` for K9.
+- **Build record.** rig.ps1 writes `<run>\m1b-build.json` (`purge.rig.m1b-build/1`) for each app run: the engine's SHA-256
+  before and after the campaign, HEAD, whether crates/bins/tools/kb/Cargo.*/rust-toolchain.toml differ from HEAD, and the
+  SHA-256 of the pulled run.json. It does not hash the guest's copy of the engine.
 
 ### 12.3 Trap expectations (`truth/m1b-traps.json`)
 
@@ -1102,6 +1108,12 @@ These rules are UNSURE because no capture exists yet:
 - the user_data rules for `Documents\PowerShell` and `AppData\Roaming\Microsoft\Windows\PowerShell`
 - the Launcher kept_owner rules of the two Python pairs
 - the first-leftover rule for the removed version's PythonCore key
+- (R4b S4) python313-with-312's generic kept_owner rules for the kept launcher's MSI registration (component clients,
+  upgrade code, dependency key, cached package, `Package Cache\{code}v<ver>`): generic because the launcher's product code is
+  unknown; fail-closed (a stale record of a removed 3.13 package counts as protected)
+- (R4b S4) powershell's Microsoft Update opt-in (`WindowsUpdate\Services\7971F918-...`), suspected from the MSI defaults
+
+powershell and temurin stay unfrozen; no VM run was made for R4b.
 
 Check them against the frozen and gate captures.
 
@@ -1117,15 +1129,35 @@ Check them against the frozen and gate captures.
 - `rigtool traps` per trap run
 - the budgets dir, the replay diff and the replay score
 
-**Evaluate.** It checks K1-K9, K14 and K16:
+Collect also copies each run's run.json subset and build record to `runs/<run>.json` and writes `manifest.json`
+(`purge.rig.m1b-evidence/2`: config, trap file and label digests, frozen truths, rigtool).
+
+**Evaluate.** It checks RUN, BIND, FROZEN, K1-K9, K14 and K16:
 - It prints one line per criterion and app, with value, limit and PASS/FAIL.
-- It writes `truth/m1b-score.json` and exits 1 on any FAIL.
+- It writes `truth/m1b-score.json` (`purge.rig.m1b-score/2`, with `gate` and `not_gate_because`).
 - A missing input gives a FAIL line; nothing is skipped.
+- **RUN**: every app and trap run finished, every phase ok.
+- **BIND**: each run's build record names its run.json (SHA-256), the engine did not change during the campaign, the
+  sources were clean, one engine and one commit over all runs, the budgets' M1b engine is that engine, and the trap file
+  and label files are the committed ones with each run's label id equal to its app id.
+- **FROZEN**: `truth/frozen/<app>/truth.json` exists for powershell and temurin.
+- **K1-K6** fail on an empty plan (truth items but nothing offered) or a score without counts.
+- **K9** needs every case and `com-shared-class#between` planted ok, every expectation target among the planted objects
+  (an object that already existed counts and is reported; a note-only or missing one fails), TrapA 7zip and TrapB node.
+- **K14** needs exactly 12 budget runs (2 engines x 2 steps x 3 rounds), each exit 0, round 1 cold and the others warm,
+  and the M1b cold round's cache moved aside or absent (`cold_cache_state`; `kept` fails).
+- **K16** needs `purge.replay-diff/3`, exactly the five reasons, all five replay apps, 0 unexplained rows, and every
+  promotion (band rose or became preselected) marked `promotion_justified` and listed in `justified_promotions` with a cause.
+
+Exit codes: 0 the gate passed in the default configuration; 1 a FAIL; 2 usage; 3 everything passed but it is not a gate
+score (`--evaluate`, or any M1B_* list, label map or input path other than the default). `--config` prints the configuration.
 
 Options:
-- `--evaluate DIR` runs only the evaluate stage on DIR.
-- `--selftest` runs the four package tests against `truth/_m1b_sample`. That evidence is SYNTHETIC (see its manifest).
-- App, set or trap lists other than the defaults are recorded as `gate_config: custom`.
+- `--evaluate DIR` runs only the evaluate stage on DIR (exit 3 at best).
+- `--selftest` builds a SYNTHETIC passing evidence dir (`truth/m1b-fixture.py`) and checks that it exits 0, that each
+  bad-run control (missing plant, failed plant phase, empty plan, unbound or rebuilt engine, dirty sources, two commits,
+  changed traps or labels, label override, budget exit/rounds/cache, unexplained or unlisted promotion...) fails on its
+  named criterion, and that every non-default setting gives exit 3.
 
 `m1b-budgets` runs on the host and only reads:
 - For each engine it runs `harvest <program>` and then `scan --mode forced` with `PURGE_TIMING=1`, for 3 rounds. Round 1 is cold; rounds 2 and 3 are warm.
@@ -1135,9 +1167,14 @@ Options:
 - The warm figure is the median of the warm rounds, compared with the M2 head measured in the same session.
 
 Notes on individual criteria:
-- **K5** needs n >= 29 for each of the two Python pairs. Doubt: 3.13 or 3.12 is a pre-app installed before snap0, so the
-  Launcher items may not appear in the diff at all.
-- **K6** counts leftovers outside Safe and Likely. FS-TEMP leftovers are Weak/Unchecked by design (FROZEN.md), so they fail it.
+- **K5** needs n >= 29 for each of the two Python pairs (not lowered). Count from the labels (R4b S5): python312-with-313
+  reaches 0 of the 29 kept launcher/container objects in its diff, because 3.13 and the launcher are installed before
+  snap0 and the 3.12 bundle skips the older launcher; python313-with-312 has only the new launcher product's objects and
+  changed values, probably below 29. K5 for the pairs is expected to fail until the design's n is revisited.
+- **K6** (review R4b B2, following the M1a gate): a mismatch is an item whose band would offer or preselect it wrongly:
+  preselected below Safe, a band the policy does not have, user data preselected, or a protected truth item listed below
+  Protected. A true leftover listed Weak or Blocked is a recall miss, as the M1a gate counted it (recall_visible_nd covers
+  Safe and Likely only). It is reported in K6's note, not counted. M1b has no recall criterion.
 - **K7** is checked per set and on the replay.
 
 ### 12.6 Freeze

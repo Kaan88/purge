@@ -95,6 +95,12 @@ function Invoke-M1bTrapPhase([string]$Step) {
     & $M1bTraps -Phase $Step -OutDir $Dir -TrapA "$($M1b.trap_a)" -TrapB "$($M1b.trap_b)" -RunLog (Join-Path $Dir 'run.log')
     if ($LASTEXITCODE -ne 0) { throw "m1b-traps $Step`: a case failed (exit $LASTEXITCODE, see m1b-traps-planted.json)" }
 }
+# A failed m1b-traps phase ends the run (review R4b S1): nothing after it (harvest, uninstall, scan) runs, so no plan
+# is scored as if every trap had been planted.
+function Stop-RunOnFailedM1bTraps([string]$Name) {
+    $ph = @($S.phases | Where-Object { $_.name -eq $Name }) | Select-Object -Last 1
+    if ($ph -and -not $ph.ok) { Log "!! $Name failed: the run stops here (RIG.md section 12.2)"; Save-Run; exit 1 }
+}
 # Writes msi-tables-<run>-<phase>.json beside snap <phase> (guest\m1b-msi-tables.ps1).
 function Save-M1bMsiTables([string]$Phase) {
     $f = Join-Path $Dir "msi-tables-$Run-$Phase.json"
@@ -462,7 +468,7 @@ foreach ($r in @($S.post)) {
 }
 if ($PlantPost) { Phase 'plant-post' { Invoke-Plant 'plant-post' $PlantPost } $S; Save-Run }
 # M1b scan traps, pre plants: after the launch, before lists 1 / snap 1 and the harvest (RIG.md section 12).
-if ($M1b -and $M1b.traps) { Phase 'm1b-traps-pre' { Invoke-M1bTrapPhase 'pre' } $S; Save-Run }
+if ($M1b -and $M1b.traps) { Phase 'm1b-traps-pre' { Invoke-M1bTrapPhase 'pre' } $S; Save-Run; Stop-RunOnFailedM1bTraps 'm1b-traps-pre' }
 
 Phase 'lists1' { Lists $Run 1 } $S
 # Engine inventory right after the lists of the same point (RIG.md §4a): it reads the Uninstall keys and the MSI
@@ -521,7 +527,7 @@ if ($Engine) {
     }
 }
 # M1b scan traps, between step: after the harvest, before the uninstall (com-shared-class is re-pointed to TrapB).
-if ($M1b -and $M1b.traps) { Phase 'm1b-traps-between' { Invoke-M1bTrapPhase 'between' } $S; Save-Run }
+if ($M1b -and $M1b.traps) { Phase 'm1b-traps-between' { Invoke-M1bTrapPhase 'between' } $S; Save-Run; Stop-RunOnFailedM1bTraps 'm1b-traps-between' }
 
 # --------------------------------------------------------------------------------------------- uninstall
 Phase 'uninstall' {
@@ -598,7 +604,7 @@ Phase 'uninstall' {
 } $S
 Save-Run
 # M1b scan traps, post plants: after the uninstall, before lists 2 / snap 2 and the scan.
-if ($M1b -and $M1b.traps) { Phase 'm1b-traps-post' { Invoke-M1bTrapPhase 'post' } $S; Save-Run }
+if ($M1b -and $M1b.traps) { Phase 'm1b-traps-post' { Invoke-M1bTrapPhase 'post' } $S; Save-Run; Stop-RunOnFailedM1bTraps 'm1b-traps-post' }
 
 Phase 'lists2' { Lists $Run 2 } $S
 if ($Engine) {
