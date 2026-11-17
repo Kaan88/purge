@@ -32,17 +32,26 @@
 //!    guard's `check_object` with facts read now (drivers, per-user services, a set `DeleteFlag`, a
 //!    program under `%SystemRoot%`), a type that is not a plain Win32 service, dependents, a state other
 //!    than `SERVICE_STOPPED`. It hands back [`Stamp::Object`] and [`ItemFacts::Object`].
-//! 2. [`prepare`]: the whole `Services\<name>` tree is captured and its identity compared with the stamp,
-//!    the tree is written as the op's verified registry backup (`reg\<op>.regbackup.json`), the SCM
-//!    definition is read, the identity is read once more (another digest: `Skipped{ChangedSinceScan}`,
-//!    the backups stay for expiry), and `purge.svcdef/1` is written naming the key backup. The intent
-//!    carries [`Inverse::RecreateService`].
+//! 2. [`prepare`]: the whole `Services\<name>` tree is captured and its identity compared with the stamp;
+//!    a program outside the journal header's `program_roots` is `GateBlocked{CannotBackUp}` before any
+//!    backup (undo would refuse it with `ProgramOutsideRoot`); the SCM definition is read and the
+//!    identity once more (another digest: `Skipped{ChangedSinceScan}`); what undo is certain to refuse
+//!    ([`restore_refusal`]: `CreateServiceW` arguments the SCM wrapper refuses, config2 items that cannot
+//!    be applied) is `CannotBackUp`; then the tree is written as the op's verified registry backup
+//!    (`reg\<op>.regbackup.json`) and `purge.svcdef/1` naming it. The intent carries
+//!    [`Inverse::RecreateService`] (the definition) and names the key backup in its `definition` slot,
+//!    so that expiry and the report see both files (review R2b S5).
 //! 3. The executor journals the intent and hits `act.before`.
 //! 4. [`act`]: the act-time gate reads everything again (digest equal to the validated stamp, the guard,
-//!    no dependents, stopped); then the delete, fault point `objdelete.after`, a flush of `SYSTEM`, fault
-//!    point `act.after`, and [`complete`]'s verdict from a fresh read: gone is `Done`, present with
-//!    `DeleteFlag` is `PendingDelete`, present without is `Failed{ObjectApi}`. The executor then journals
-//!    `done` (`done.before`).
+//!    no dependents, stopped), then binds the act to the backups (review R2b S4): both files are read
+//!    hash-checked through the intent, the live tree must be exactly the key backup and the SCM's
+//!    definition exactly the stored one (else `ChangedSinceScan`; a missing or unusable backup is
+//!    `NoVerifiedBackup`), and the undo checks of step 2 run again. Then the delete, fault point
+//!    `objdelete.after`, a flush of `SYSTEM`, fault point `act.after`, and [`complete`]'s verdict from a
+//!    fresh read: gone is `Done`, present with `DeleteFlag` is `PendingDelete`, present without is
+//!    `Failed{ObjectApi}`. The executor then journals `done` (`done.before`). A resumed run's act
+//!    ([`SvcRemoval::from_intent`]) runs the same gate, so a backup older than the service is never
+//!    the only copy.
 //!
 //! [`probe`] says what became of an intent without a `done` (recovery): absent is done, marked is done
 //! as `PendingDelete`, present with the stamp's digest is not done, anything else needs attention.
@@ -51,7 +60,8 @@
 //! # Undo
 //!
 //! [`prepare_undo`] decides everything that needs no `undo_intent`: an op that changed nothing, a
-//! definition or key backup that is missing or does not match the journal, a key backup whose identity
+//! definition or key backup that is missing or does not match the journal (the key backup must be the
+//! file the intent names, with its hash, and the one the definition names), a key backup whose identity
 //! is not the definition's, a service that exists marked for delete (`PendingDelete`), one that exists
 //! and is exactly the backup (`AlreadyRestored`), one that exists and differs (`ObjectExists`), and a
 //! program outside the roots recorded for the run (`ProgramOutsideRoot`: a tampered store must not plant
@@ -60,14 +70,19 @@
 //! [`run_undo`] runs under the token of the flushed `undo_intent`: create, fault point
 //! `svcrestore.mid`, config2, DACL, write-back, flush of `SYSTEM`, fault point `undo.act.after`, then the
 //! exact-restore check (capture the tree again and compare it with the key backup): equal is
-//! `Restored`, anything else the conflict `ValueDiffers` with the first difference named.
+//! `Restored` (with the note that a stored password must be set again, for a service whose account is
+//! not built in: the caller journals it with `undo_done_noted`, review R2b S6), anything else the
+//! conflict `ValueDiffers` with the first difference named. A failure before or at the create is
+//! `Failed{ObjectApi}` or a conflict; every failure after it is `Failed{VerifyFailed}`.
 //!
-//! A crash at `svcrestore.mid` leaves a half-configured service that was never started. Undo is then
-//! run again (the journal holds this op's `undo_intent`: [`SvcUndoArgs::own_attempt`]); the service
-//! exists and differs, and this module recognises its own partial restore (same name, raw `ImagePath`,
-//! type, start type and account as the backup, `ServiceDll` equal or not yet written, and nothing in the
-//! key that the backup lacks) and continues from config2 instead of failing with `ObjectExists`.
-//! Without that intent record it is `ObjectExists`.
+//! A crash at `svcrestore.mid`, or a failure after the create, leaves a half-configured service that was
+//! never started. Undo is then run again with [`SvcUndoArgs::own_attempt`] (the op's last undo attempt
+//! ended open or `Failed{VerifyFailed}`: it created the service); the service exists and differs, and
+//! this module recognises its own partial restore (same name, raw `ImagePath`, type, start type and
+//! account as the backup, `ServiceDll` equal or not yet written, stopped, and nothing in the key that the
+//! backup lacks) and continues from config2 instead of failing with `ObjectExists`. Without
+//! `own_attempt` (no attempt, or one that ended before its create did anything) it is `ObjectExists`: a
+//! service another install created is never adopted.
 //!
 //! Nothing here starts, stops or controls a service: the backend has no such entry, and the restored
 //! service keeps the start type its backup records.
@@ -101,7 +116,7 @@ use crate::act_reg::already_exists;
 use crate::act_typed::TypedResult;
 use crate::durable;
 use crate::fault;
-use crate::gate::{GateCtx, Stamp, check_object_stamp_detailed, check_plan_fp_detailed};
+use crate::gate::{self, GateCtx, Stamp, check_object_stamp_detailed, check_plan_fp_detailed};
 use crate::journal::{IntentToken, UndoToken, sha256_bytes};
 use crate::objdef::{
     DefWriteError, SVCDEF_SCHEMA, SvcConfig, SvcConfig2, SvcDef, SvcFailureAction,
@@ -644,22 +659,6 @@ pub fn service_program(identity: &ServiceIdentity, env: &ProgramEnv) -> ServiceP
     canonical_program(&exe, env).map_or_else(unresolved, ServiceProgram::File)
 }
 
-/// Whether `program` is a file inside one of `roots` (canonicalised; a root that does not canonicalise
-/// counts for nothing).
-fn program_under_roots(program: &ServiceProgram, roots: &[String]) -> bool {
-    let ServiceProgram::File(file) = program else {
-        return false;
-    };
-    roots.iter().any(|root| {
-        canon_path(root, &GuardEnv::default(), None).is_ok_and(|root| {
-            !root.needs_long_name
-                && prefix::depth(&root.path) >= 2
-                && prefix::is_same_or_inside(file, &root.path)
-                && !prefix::is_same(file, &root.path)
-        })
-    })
-}
-
 // ---------------------------------------------------------------------------------------------------
 // Results
 // ---------------------------------------------------------------------------------------------------
@@ -952,10 +951,16 @@ pub struct SvcPrepareArgs<'a> {
     pub planned: Reversibility,
     /// The most keys the service's tree may hold (the run's key limit).
     pub key_limit: usize,
+    /// The program roots of the journal header (`Header::program_roots`): a service whose program is
+    /// not inside one is not deleted, since its undo would refuse to create it again.
+    pub program_roots: &'a [String],
+    /// The run's environment (the deny-list's), which the program is resolved with.
+    pub env: &'a GuardEnv,
 }
 
 /// [`prepare`] for op `op` as journalled: item, op and stamp come from the record `GateCtx::record`
-/// accepted. An op without one is `Failed{Internal}` before any call.
+/// accepted, the environment from the context's deny-list. An op without one is `Failed{Internal}`
+/// before any call. `program_roots` are the journal header's.
 pub fn prepare_recorded(
     backend: &dyn ServiceBackend,
     ctx: &GateCtx,
@@ -963,6 +968,7 @@ pub fn prepare_recorded(
     op: OpId,
     planned: Reversibility,
     key_limit: usize,
+    program_roots: &[String],
 ) -> Result<SvcPrepared, SvcPrepareError> {
     let (Some((exec_op, record)), Some(stamp)) = (ctx.journalled(op), ctx.stamp(op)) else {
         return Ok(SvcPrepared::Decided(failed(
@@ -981,6 +987,8 @@ pub fn prepare_recorded(
             validated: stamp,
             planned,
             key_limit,
+            program_roots,
+            env: ctx.deny().env(),
         },
     )
 }
@@ -1120,9 +1128,19 @@ pub fn prepare(
     if !identity.account_builtin() && args.planned == Reversibility::Full {
         return decided(partial_refusal(name, identity.object_name.as_deref()));
     }
+    // The second lock, before any backup: a program outside the run's roots is never created again.
+    if let Some(program) = program_outside_roots(&identity, args.env, args.program_roots) {
+        return decided(blocked(
+            Blocker::CannotBackUp,
+            format!(
+                "service {name} runs {program}, which is not inside a root recorded for the run; \
+                 undo would never create it again, so it is left untouched"
+            ),
+        ));
+    }
 
-    // 2. The key backup, then the SCM's definition, then the identity once more.
-    let key_backup = write_key_backup(session, args.op, &doc)?;
+    // 2. The SCM's definition, then the identity once more, then what undo would refuse, then the key
+    //    backup.
     let scm = match backend.definition(name) {
         Ok(scm) => scm,
         Err(e) => return decided(api_failed(name, &e)),
@@ -1150,8 +1168,16 @@ pub fn prepare(
             scm.config.service_start_name.as_deref(),
         ));
     }
+    if let Some(why) = restore_refusal(name, &identity, tree, &scm, args.env, args.program_roots) {
+        return decided(blocked(
+            Blocker::CannotBackUp,
+            format!("service {name}: {why}; left untouched"),
+        ));
+    }
+    let key_backup = write_key_backup(session, args.op, &doc)?;
 
-    // 3. The definition.
+    // 3. The definition. The intent names both files: the definition as the inverse's, the key backup
+    //    in `definition`, so that expiry, the byte count and the report see it (review R2b S5).
     let def = SvcDef {
         schema: SVCDEF_SCHEMA.to_owned(),
         name: name.to_owned(),
@@ -1168,7 +1194,7 @@ pub fn prepare(
         item: args.item.clone(),
         exec_op: args.exec_op.clone(),
         inverse: Inverse::RecreateService { definition },
-        definition: None,
+        definition: Some(key_backup.reference().clone()),
         pre: ItemFacts::Object {
             kind: ObjectKind::Service,
             sha256: digest.to_owned(),
@@ -1186,14 +1212,109 @@ pub fn prepare(
 // Act, complete, probe
 // ---------------------------------------------------------------------------------------------------
 
-/// Deletes the service of `removal`, whose intent `token` proves durable: the act-time gate, the delete,
-/// `objdelete.after`, the flush of `SYSTEM`, `act.after`, and [`complete`]'s verdict. A token of another
-/// op is `Failed{Internal}` and nothing is called.
+/// The backups `intent` names, bound to the service read now (M1b review R2b S4): the definition and the
+/// key backup are read hash-checked through the journal's references (the key backup must be the one
+/// both the intent and the definition name), the live `Services\<name>` tree must be exactly the key
+/// backup ([`tree_difference`]) and the SCM's definition exactly the stored one. Then the checks undo
+/// will make ([`restore_refusal`]). In a straight run this closes the window of the intent flush; in a
+/// resumed run, hours later, it is what keeps a backup older than the service from being the only copy.
+fn check_backup_binding(
+    backend: &dyn ServiceBackend,
+    session: &SessionDir,
+    intent: &Intent,
+    name: &str,
+    env: &GuardEnv,
+    roots: &[String],
+) -> Result<(), TypedResult> {
+    let no_backup = |why: String| {
+        skipped(
+            SkipReason::NoVerifiedBackup,
+            format!("service {name}: {why}; left untouched"),
+        )
+    };
+    let changed = |why: &str| {
+        skipped(
+            SkipReason::ChangedSinceScan,
+            format!("service {name}: {why} since its backup was taken; left untouched"),
+        )
+    };
+    let Inverse::RecreateService { definition } = &intent.inverse else {
+        return Err(failed(
+            FailCode::Internal,
+            None,
+            format!("the intent of service {name} is not a service delete; left untouched"),
+        ));
+    };
+    let def: SvcDef = read_def_detailed(session, definition)
+        .map_err(|e| no_backup(format!("its definition cannot be used: {}", e.detail)))?;
+    let digest = match &intent.pre {
+        ItemFacts::Object { sha256, .. } => sha256.as_str(),
+        _ => "",
+    };
+    if !eq_ci(&def.name, name) || def.identity_sha256 != digest {
+        return Err(no_backup(
+            "the definition is not the one of this op".to_owned(),
+        ));
+    }
+    if intent.definition.as_ref() != Some(&def.key_backup) {
+        return Err(no_backup(
+            "the intent and the definition do not name the same key backup".to_owned(),
+        ));
+    }
+    let (tree, identity) = match read_key_backup(session, intent.op, name, &def) {
+        Ok(found) => found,
+        Err(SvcUndoResult::Done { detail, .. } | SvcUndoResult::Conflict { detail, .. }) => {
+            return Err(no_backup(detail));
+        }
+    };
+    let live_tree = match backend.capture_key(name, tree.keys.len().max(1) * 4) {
+        Ok(Some(doc)) => doc.tree().cloned(),
+        Ok(None) | Err(CaptureError::Vanished) => {
+            return Err(result(
+                ItemOutcome::Vanished,
+                format!("service {name} was deleted before Purge deleted it"),
+            ));
+        }
+        Err(_) => None,
+    };
+    match live_tree {
+        Some(live) if tree_difference(&tree, &live).is_none() => {}
+        Some(_) => return Err(changed("its key changed")),
+        None => return Err(changed("its key cannot be read as it was")),
+    }
+    let scm = match backend.definition(name) {
+        Ok(scm) => scm,
+        Err(e) => return Err(api_failed(name, &e)),
+    };
+    let stored = ScmDefinition {
+        config: def.config.clone(),
+        config2: def.config2.clone(),
+        sddl: def.sddl.clone(),
+    };
+    if scm != stored {
+        return Err(changed("its SCM definition changed"));
+    }
+    if let Some(why) = restore_refusal(name, &identity, &tree, &stored, env, roots) {
+        return Err(blocked(
+            Blocker::CannotBackUp,
+            format!("service {name}: {why}; left untouched"),
+        ));
+    }
+    Ok(())
+}
+
+/// Deletes the service of `removal`, whose intent `token` proves durable: the act-time gate (the
+/// service read again, its digest, [`gate_blocker`], then the binding to the op's backups,
+/// [`check_backup_binding`], with the journal header's `program_roots`), the delete, `objdelete.after`,
+/// the flush of `SYSTEM`, `act.after`, and [`complete`]'s verdict. A token of another op is
+/// `Failed{Internal}` and nothing is called.
 pub fn act(
     backend: &dyn ServiceBackend,
     deny: &DenyList,
+    session: &SessionDir,
     removal: Box<SvcRemoval>,
     token: &IntentToken,
+    program_roots: &[String],
 ) -> TypedResult {
     let SvcRemoval {
         intent,
@@ -1227,6 +1348,11 @@ pub fn act(
     }
     if let Some((blocker, why)) = gate_blocker(deny, &live) {
         return blocked(blocker, format!("{why}; left untouched"));
+    }
+    if let Err(r) =
+        check_backup_binding(backend, session, &intent, &name, deny.env(), program_roots)
+    {
+        return r;
     }
 
     let deleted = backend.delete(&name);
@@ -1652,7 +1778,7 @@ fn config2_to_apply(config2: &SvcConfig2, tree: &RegTree) -> Result<Vec<Config2I
 /// account. No password.
 fn create_args(
     name: &str,
-    def: &SvcDef,
+    config: &SvcConfig,
     identity: &ServiceIdentity,
     tree: &RegTree,
 ) -> Result<ScmCreate, String> {
@@ -1664,7 +1790,7 @@ fn create_args(
         .ok_or("the key backup has no ImagePath")?;
     let error_control = match find(&root, "ErrorControl") {
         Some(v) => exact_dword(Some(v), "ErrorControl")?,
-        None => def.config.error_control,
+        None => config.error_control,
     };
     Ok(ScmCreate {
         name: name.to_owned(),
@@ -1674,10 +1800,57 @@ fn create_args(
         start_type: identity.start,
         error_control,
         binary_path,
-        load_order_group: def.config.load_order_group.clone(),
-        dependencies: def.config.dependencies.clone(),
-        service_start_name: def.config.service_start_name.clone(),
+        load_order_group: config.load_order_group.clone(),
+        dependencies: config.dependencies.clone(),
+        service_start_name: config.service_start_name.clone(),
     })
+}
+
+/// The program of `identity` when it is a file outside every root of `roots` (or cannot be told to be
+/// one file): the text for the message. `None` when it lies inside one ([`gate::file_in_roots`], the one
+/// root check of the object ops). The same check refuses the delete (prepare, act) and the re-create
+/// (undo, `ProgramOutsideRoot`).
+fn program_outside_roots(
+    identity: &ServiceIdentity,
+    env: &GuardEnv,
+    roots: &[String],
+) -> Option<String> {
+    match service_program(identity, &ProgramEnv::from_guard(env)) {
+        ServiceProgram::File(file) if gate::file_in_roots(&file, roots, env, None) => None,
+        program => Some(program.guard_text().to_owned()),
+    }
+}
+
+/// Why the undo of a delete of this service would be refused for certain, judged before the delete
+/// (M1b review R2b B1): a program outside the run's roots ([`program_outside_roots`]), `CreateServiceW`
+/// arguments the SCM wrapper refuses (`scm::check_create`: a start type other than auto, demand or
+/// disabled, an error control above 3, ...), or config2 items that cannot be applied. Undo makes the
+/// same three checks on the same data.
+fn restore_refusal(
+    name: &str,
+    identity: &ServiceIdentity,
+    tree: &RegTree,
+    scm: &ScmDefinition,
+    env: &GuardEnv,
+    roots: &[String],
+) -> Option<String> {
+    if let Some(program) = program_outside_roots(identity, env, roots) {
+        return Some(format!(
+            "its program {program} is not inside a root recorded for the run, so undo would never \
+             create it again"
+        ));
+    }
+    let create = match create_args(name, &scm.config, identity, tree) {
+        Ok(create) => create,
+        Err(why) => return Some(format!("it could not be created again: {why}")),
+    };
+    if let Err(e) = scm::check_create(&create) {
+        return Some(format!("it could not be created again: {e}"));
+    }
+    if let Err(why) = config2_to_apply(&scm.config2, tree) {
+        return Some(format!("its settings could not be applied again: {why}"));
+    }
+    None
 }
 
 /// The SCM's view of a service as a definition (`purge.svcdef/1` without the key backup).
@@ -1828,10 +2001,23 @@ pub struct SvcUndoArgs<'a> {
     pub intent: &'a Intent,
     /// The op's `done` outcome; `None` when the journal holds only its intent.
     pub done: Option<&'a ItemOutcome>,
-    /// Whether the journal holds an `undo_intent` of this op (an earlier undo attempt that may have
-    /// created the service and stopped, or failed, part way).
+    /// Whether this op's last undo attempt created the service (review R2b S3), as the caller reads it
+    /// from the journal's undo records of the op:
+    ///
+    /// - true when the op's last undo record is an `undo_intent` with nothing after it (the process
+    ///   ended inside [`run_undo`], for example at `svcrestore.mid`);
+    /// - true when that attempt ended with `undo_done` `Failed{VerifyFailed}`: [`run_undo`] ends every
+    ///   failure after a successful create (or after continuing an earlier attempt's) with that code;
+    /// - false otherwise: no attempt, an attempt that ended before or at the create (`Failed` with any
+    ///   other code, or a conflict such as `ObjectExists`, `PendingDelete`), or one that ended with
+    ///   `ValueDiffers`.
+    ///
+    /// Only then is a present service that matches the backup's identity taken for this undo's own
+    /// half-made one and configured further; otherwise it is `ObjectExists` (another install may have
+    /// created it). Its `done` outcome aside, an op with `own_attempt` is never `NothingToUndo`.
     pub own_attempt: bool,
-    /// The roots recorded for the run (the journal header's): the service's program must lie inside one.
+    /// The roots recorded for the run (the journal header's `program_roots`): the service's program must
+    /// lie inside one.
     pub program_roots: &'a [String],
 }
 
@@ -1883,8 +2069,8 @@ fn read_key_backup(
 }
 
 /// Whether `live` is what an earlier attempt of this undo left: the backup's name, raw `ImagePath`,
-/// type, start type and account, its `ServiceDll` equal or not yet written back, not marked, and nothing
-/// in its key that the backup lacks.
+/// type, start type and account, its `ServiceDll` equal or not yet written back, not marked, stopped,
+/// and nothing in its key that the backup lacks.
 fn own_partial_restore(
     backup: &ServiceIdentity,
     backup_tree: &RegTree,
@@ -1899,6 +2085,7 @@ fn own_partial_restore(
         && l.object_name == backup.object_name
         && (l.service_dll.is_none() || l.service_dll == backup.service_dll)
         && !live.delete_flag
+        && live.state == SERVICE_STOPPED
         && live_within_backup(backup_tree, live_tree)
 }
 
@@ -1954,6 +2141,16 @@ pub fn prepare_undo(
             format!("service {name}: the definition is not the one of this op"),
         ));
     }
+    // The key backup is taken from the journal's own record, and the definition must name the same
+    // file with the same hash (review R2b S5).
+    if intent.definition.as_ref() != Some(&def.key_backup) {
+        return decided(SvcUndoResult::conflict(
+            UndoConflict::BackupTampered,
+            format!(
+                "service {name}: the journal and the definition do not name the same key backup"
+            ),
+        ));
+    }
     let (tree, identity) = match read_key_backup(session, intent.op, &name, &def) {
         Ok(found) => found,
         Err(r) => return decided(r),
@@ -1968,7 +2165,7 @@ pub fn prepare_undo(
         Ok(items) => items,
         Err(why) => return tampered(format!("the definition cannot be applied: {why}")),
     };
-    let create = match create_args(&name, &def, &identity, &tree) {
+    let create = match create_args(&name, &def.config, &identity, &tree) {
         Ok(create) => create,
         Err(why) => return tampered(format!("the key backup cannot be applied: {why}")),
     };
@@ -1983,15 +2180,13 @@ pub fn prepare_undo(
         )
     };
 
-    // The second lock: the program must be one of the run's roots.
-    let program = service_program(&identity, &ProgramEnv::from_guard(env));
-    if !program_under_roots(&program, args.program_roots) {
+    // The second lock: the program must be one of the run's roots (the check prepare and the act made).
+    if let Some(program) = program_outside_roots(&identity, env, args.program_roots) {
         return decided(SvcUndoResult::conflict(
             UndoConflict::ProgramOutsideRoot,
             format!(
-                "service {name}: its program {} is not inside a root recorded for the run; nothing \
-                 is created",
-                program.guard_text()
+                "service {name}: its program {program} is not inside a root recorded for the run; \
+                 nothing is created"
             ),
         ));
     }
@@ -2081,11 +2276,17 @@ pub fn run_undo(
             ),
         );
     }
+    // Before or at the create nothing of this attempt exists: `ObjectApi` and the conflicts. After it,
+    // every failure is `VerifyFailed`, which tells the next attempt that the service present is this
+    // undo's own (`SvcUndoArgs::own_attempt`, review R2b S3).
     let api = |what: &str, e: &ObjErr| {
         SvcUndoResult::failed(
-            FailCode::ObjectApi,
+            FailCode::VerifyFailed,
             e.os_error,
-            format!("service {name}: {what}: {}", e.detail),
+            format!(
+                "service {name} was created again, but {what} failed: {}; it was not started",
+                e.detail
+            ),
         )
     };
     if let Some(args) = &create {
@@ -2099,7 +2300,11 @@ pub fn run_undo(
                     UndoConflict::PendingDelete,
                     format!("service {name} is still marked for delete; undo can run again later"),
                 ),
-                _ => api("create", &e),
+                _ => SvcUndoResult::failed(
+                    FailCode::ObjectApi,
+                    e.os_error,
+                    format!("service {name}: create: {}; nothing created", e.detail),
+                ),
             };
         }
         hit(fault::SVCRESTORE_MID);

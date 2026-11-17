@@ -85,6 +85,8 @@ struct World {
     journal: JournalWriter,
     fake: FakeServices,
     deny: DenyList,
+    /// The journal header's program roots, as the caller passes them to prepare and the act.
+    program_roots: Vec<String>,
 }
 
 fn world(tag: &str, service: FakeService) -> World {
@@ -99,6 +101,7 @@ fn world(tag: &str, service: FakeService) -> World {
         journal,
         fake: FakeServices::with([service]),
         deny: deny(),
+        program_roots: vec![ROOT.to_owned()],
     }
 }
 
@@ -116,6 +119,7 @@ fn header(session: &SessionDir) -> Header {
         items: 1,
         allow_irreversible: false,
         volumes: Vec::new(),
+        program_roots: Vec::new(),
     }
 }
 
@@ -144,6 +148,8 @@ impl World {
                 validated: stamp,
                 planned,
                 key_limit: 50,
+                program_roots: &self.program_roots,
+                env: self.deny.env(),
             },
         )
         .unwrap()
@@ -177,7 +183,14 @@ impl World {
         let (removal, intent) = self.ready(Reversibility::Full);
         let token = self.journal.intent(intent.clone()).unwrap();
         fault::point(fault::ACT_BEFORE);
-        let r = act(&self.fake, &self.deny, removal, &token);
+        let r = act(
+            &self.fake,
+            &self.deny,
+            &self.session,
+            removal,
+            &token,
+            &self.program_roots,
+        );
         self.journal.done(token, r.outcome.clone()).unwrap();
         (r.outcome, intent)
     }
@@ -215,9 +228,10 @@ impl World {
                 let token = self.journal.undo_intent(OP).unwrap();
                 let r = run_undo(&self.fake, job, &token);
                 match &r {
-                    SvcUndoResult::Done { outcome, .. } => {
-                        self.journal.undo_done(token, outcome.clone()).unwrap()
-                    }
+                    SvcUndoResult::Done { outcome, detail } => self
+                        .journal
+                        .undo_done_noted(token, outcome.clone(), detail)
+                        .unwrap(),
                     SvcUndoResult::Conflict { conflict, detail } => self
                         .journal
                         .undo_conflict(token, conflict.clone(), detail.clone())
@@ -515,9 +529,10 @@ fn prepare_identity_changed_between_backup_and_definition_skips() {
         panic!("ready");
     };
     assert_eq!(skip_reason(&r.outcome), &SkipReason::ChangedSinceScan);
-    // The key backup stays for expiry; no definition was written.
+    // Decided before any backup (the key backup is written only once every check passed, review R2b
+    // B1); no definition either.
     let rel = backup_rel(BackupKind::Registry, OP);
-    assert!(w.session.path().join(&rel).exists());
+    assert!(!w.session.path().join(&rel).exists());
     let def_rel = backup_rel(BackupKind::Definition, OP);
     assert!(!w.session.path().join(&def_rel).exists());
     assert!(!w.fake.log().iter().any(|l| l.starts_with("delete")));
@@ -605,7 +620,14 @@ fn act_gate_rechecks_state_and_digest() {
         let (removal, intent) = w.ready(Reversibility::Full);
         let token = w.journal.intent(intent).unwrap();
         w.fake.world().services.values_mut().for_each(change);
-        let r = act(&w.fake, &w.deny, removal, &token);
+        let r = act(
+            &w.fake,
+            &w.deny,
+            &w.session,
+            removal,
+            &token,
+            &w.program_roots,
+        );
         assert_eq!(skip_reason(&r.outcome), &want);
         assert!(!w.fake.log().iter().any(|l| l.starts_with("delete")));
         assert!(w.fake.service(NAME).is_some());
@@ -638,7 +660,14 @@ fn act_flushes_system_before_done() {
     let token = w.journal.intent(intent).unwrap();
     let before = w.fake.log().len();
     take_fault_trace();
-    let r = act(&w.fake, &w.deny, removal, &token);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token,
+        &w.program_roots,
+    );
     assert_eq!(r.outcome, ItemOutcome::Done);
     let log = w.fake.log()[before..].to_vec();
     let at = |line: &str| log.iter().position(|l| l == line).unwrap();
@@ -661,7 +690,14 @@ fn act_flush_failure_is_verify_failed() {
         "flush",
         ObjErr::new(ObjErrKind::Other, Some(1021), "flush failed"),
     );
-    let r = act(&w.fake, &w.deny, removal, &token);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token,
+        &w.program_roots,
+    );
     assert!(matches!(
         r.outcome,
         ItemOutcome::Failed {
@@ -694,7 +730,14 @@ fn act_with_token_of_another_op_does_nothing() {
         .unwrap();
     let token2 = other_journal.intent(other).unwrap();
     let before = w.fake.log().len();
-    let r = act(&w.fake, &w.deny, removal, &token2);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token2,
+        &w.program_roots,
+    );
     assert!(matches!(
         r.outcome,
         ItemOutcome::Failed {
@@ -757,7 +800,14 @@ fn probe_present_same_digest_not_done() {
     // A resumed run rebuilds the removal from the intent and completes it.
     let removal = SvcRemoval::from_intent(&intent).unwrap();
     let token = w.journal.intent(intent).unwrap();
-    let r = act(&w.fake, &w.deny, Box::new(removal), &token);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        Box::new(removal),
+        &token,
+        &w.program_roots,
+    );
     assert_eq!(r.outcome, ItemOutcome::Done);
 }
 
@@ -884,8 +934,10 @@ fn undo_marked_for_delete_is_pending_delete() {
 fn undo_binary_outside_recorded_root_refused() {
     let forged = FakeService::new(NAME, r"C:\Windows\System32\cmd.exe /c whoami", None);
     let mut w = world("svc-u-root", forged.clone());
-    // Prepare does not judge the program (validate did, and would have refused): the forged state is
-    // what a store rewritten with matching hashes would hold.
+    // Validate would have refused the program, and prepare and the act refuse it outside the roots
+    // they are given: the forged state is what a store rewritten with matching hashes would hold, so
+    // it is made here with a root that holds cmd.exe, and undone with the run's real one.
+    w.program_roots = vec![r"C:\Windows\System32".to_owned()];
     let (stamp, facts) = (
         Stamp::Object {
             kind: ObjectKind::Service,
@@ -967,7 +1019,14 @@ fn undo_password_account_restores_without_password() {
     let mut w = world("svc-u-pass", s.clone());
     let (removal, intent) = w.ready(Reversibility::Partial);
     let token = w.journal.intent(intent.clone()).unwrap();
-    let r = act(&w.fake, &w.deny, removal, &token);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token,
+        &w.program_roots,
+    );
     w.journal.done(token, r.outcome.clone()).unwrap();
     let u = w.undo(&intent, &r.outcome);
     let SvcUndoResult::Done { outcome, detail } = &u else {
@@ -976,6 +1035,237 @@ fn undo_password_account_restores_without_password() {
     assert_eq!(outcome, &UndoOutcome::Restored);
     assert!(detail.contains("password"), "{detail}");
     assert_same_tree(&w.fake.service(NAME).unwrap().tree, &s.tree);
+    // The note is in the journal (review R2b S6), also after it is read back from disk.
+    let noted = w.journal.state().undo_done_detail(OP).unwrap().to_owned();
+    assert!(noted.contains("password"), "{noted}");
+    w.reopen_journal();
+    assert_eq!(w.journal.state().undo_done_detail(OP), Some(noted.as_str()));
+}
+
+/// Review R2b S5: the journal names the key backup itself (with its hash), so expiry, the byte count
+/// and the report see it; an intent whose `definition` is another file is refused at undo.
+#[test]
+fn intent_names_the_key_backup_and_undo_requires_it() {
+    let mut w = world("svc-u-keyref", vendor_service());
+    let (outcome, intent) = w.run();
+    let purge_model::exec::op::Inverse::RecreateService { definition } = &intent.inverse else {
+        panic!();
+    };
+    let def: SvcDef = read_def(&w.session, definition).unwrap();
+    assert_eq!(intent.definition.as_ref(), Some(&def.key_backup));
+    let backups: Vec<_> = intent.backups().collect();
+    assert!(backups.contains(&&def.key_backup), "{backups:?}");
+    let mut other = intent.clone();
+    other.definition = None;
+    let roots = vec![ROOT.to_owned()];
+    let args = w.undo_args(&other, Some(&outcome), false, &roots);
+    let SvcUndoPrepared::Decided(r) = prepare_undo(&w.fake, &w.session, &GuardEnv::sample(), &args)
+    else {
+        panic!("ready");
+    };
+    assert_eq!(conflict(&r), &UndoConflict::BackupTampered);
+    assert!(w.fake.service(NAME).is_none());
+}
+
+/// Review R2b B1: a service whose program is outside the run's roots is not deleted (undo would refuse
+/// to create it), and no backup is written for it; with no roots at all, nothing is deleted.
+#[test]
+fn prepare_refuses_a_program_outside_the_roots() {
+    for roots in [vec![r"C:\Program Files\Other".to_owned()], Vec::new()] {
+        let mut w = world("svc-p-roots", vendor_service());
+        w.program_roots = roots;
+        let (stamp, _) = stamp_of(&w.validate(&candidate(&vendor_service())));
+        let SvcPrepared::Decided(r) = w.prepare(&stamp, Reversibility::Full) else {
+            panic!("ready");
+        };
+        assert_eq!(
+            skip_reason(&r.outcome),
+            &SkipReason::GateBlocked {
+                blocker: Blocker::CannotBackUp
+            },
+            "{}",
+            r.detail
+        );
+        assert!(
+            !w.session
+                .path()
+                .join(backup_rel(BackupKind::Registry, OP))
+                .exists()
+        );
+        assert!(
+            !w.session
+                .path()
+                .join(backup_rel(BackupKind::Definition, OP))
+                .exists()
+        );
+        assert!(!w.fake.log().iter().any(|l| l.starts_with("delete")));
+    }
+}
+
+/// Review R2b B1: arguments the SCM wrapper would refuse at undo (an error control above 3) refuse the
+/// delete.
+#[test]
+fn prepare_refuses_what_undo_could_not_create() {
+    let mut s = vendor_service();
+    s.set_value("ErrorControl", REG_DWORD, dword(7));
+    let w = world("svc-p-create", s.clone());
+    let (stamp, _) = stamp_of(&w.validate(&candidate(&s)));
+    let SvcPrepared::Decided(r) = w.prepare(&stamp, Reversibility::Full) else {
+        panic!("ready");
+    };
+    assert_eq!(
+        skip_reason(&r.outcome),
+        &SkipReason::GateBlocked {
+            blocker: Blocker::CannotBackUp
+        },
+        "{}",
+        r.detail
+    );
+    assert!(
+        !w.session
+            .path()
+            .join(backup_rel(BackupKind::Definition, OP))
+            .exists()
+    );
+}
+
+/// Review R2b S4: the act is bound to the backup, not only to the identity digest. A value added to
+/// the key, an SCM setting changed, or a definition gone after prepare: nothing is deleted.
+#[test]
+fn act_binds_to_the_backup() {
+    type Change = fn(&mut World);
+    let changes: [(Change, SkipReason); 4] = [
+        (
+            |w| {
+                w.fake.world().services.values_mut().for_each(|s| {
+                    s.set_value("Injected", REG_SZ, sz("later"));
+                })
+            },
+            SkipReason::ChangedSinceScan,
+        ),
+        (
+            |w| {
+                w.fake.world().services.values_mut().for_each(|s| {
+                    s.scm.config2.description = Some("Something else".into());
+                })
+            },
+            SkipReason::ChangedSinceScan,
+        ),
+        (
+            |w| {
+                w.session
+                    .delete_backup_file(&backup_rel(BackupKind::Definition, OP))
+                    .unwrap();
+            },
+            SkipReason::NoVerifiedBackup,
+        ),
+        (
+            |w| {
+                w.session
+                    .delete_backup_file(&backup_rel(BackupKind::Registry, OP))
+                    .unwrap();
+            },
+            SkipReason::NoVerifiedBackup,
+        ),
+    ];
+    for (change, want) in changes {
+        let mut w = world("svc-a-bind", vendor_service());
+        let (removal, intent) = w.ready(Reversibility::Full);
+        let token = w.journal.intent(intent).unwrap();
+        change(&mut w);
+        let r = act(
+            &w.fake,
+            &w.deny,
+            &w.session,
+            removal,
+            &token,
+            &w.program_roots,
+        );
+        assert_eq!(skip_reason(&r.outcome), &want, "{}", r.detail);
+        assert!(!w.fake.log().iter().any(|l| l.starts_with("delete")));
+        assert!(w.fake.service(NAME).is_some());
+    }
+    // The act made with roots that no longer hold the program (a resumed run's header): refused.
+    let mut w = world("svc-a-roots", vendor_service());
+    let (removal, intent) = w.ready(Reversibility::Full);
+    let token = w.journal.intent(intent).unwrap();
+    let r = act(&w.fake, &w.deny, &w.session, removal, &token, &[]);
+    assert_eq!(
+        skip_reason(&r.outcome),
+        &SkipReason::GateBlocked {
+            blocker: Blocker::CannotBackUp
+        }
+    );
+    assert!(w.fake.service(NAME).is_some());
+}
+
+/// Review R2b S3: a failed create is `ObjectApi` (nothing of this attempt exists, so the caller passes
+/// `own_attempt: false`); a service another install then creates with the same identity but other
+/// contents is `ObjectExists` and is not touched. A failure after the create is `VerifyFailed`.
+#[test]
+fn undo_failed_create_never_adopts_a_later_service() {
+    let mut w = world("svc-u-own", vendor_service());
+    let (outcome, intent) = w.run();
+    let roots = vec![ROOT.to_owned()];
+    let args = w.undo_args(&intent, Some(&outcome), false, &roots);
+    let SvcUndoPrepared::Ready(job) = prepare_undo(&w.fake, &w.session, &GuardEnv::sample(), &args)
+    else {
+        panic!("decided");
+    };
+    let token = w.journal.undo_intent(OP).unwrap();
+    w.fake.world().fail_next.insert(
+        "create",
+        ObjErr::new(ObjErrKind::Other, Some(5), "access denied"),
+    );
+    let r = run_undo(&w.fake, job, &token);
+    let SvcUndoResult::Done {
+        outcome: UndoOutcome::Failed { code, .. },
+        ..
+    } = &r
+    else {
+        panic!("{r:?}");
+    };
+    assert_eq!(code, &FailCode::ObjectApi);
+    assert!(w.fake.service(NAME).is_none());
+    w.journal
+        .undo_done(token, done_outcome(&r).clone())
+        .unwrap();
+
+    // Another install creates the service: same name and identity, another description and a value.
+    let mut other = vendor_service();
+    other.set_value("Description", REG_SZ, sz("Another product"));
+    w.fake.insert(other.clone());
+    let before = w.fake.log().len();
+    let args = w.undo_args(&intent, Some(&outcome), false, &roots);
+    let SvcUndoPrepared::Decided(r) = prepare_undo(&w.fake, &w.session, &GuardEnv::sample(), &args)
+    else {
+        panic!("ready");
+    };
+    assert_eq!(conflict(&r), &UndoConflict::ObjectExists);
+    assert_eq!(creates(&w.fake.log()[before..]), 0);
+    assert_eq!(w.fake.service(NAME).unwrap(), other);
+
+    // After a successful create, a failure is VerifyFailed (the next attempt may continue).
+    w.fake.world().services.clear();
+    let args = w.undo_args(&intent, Some(&outcome), false, &roots);
+    let SvcUndoPrepared::Ready(job) = prepare_undo(&w.fake, &w.session, &GuardEnv::sample(), &args)
+    else {
+        panic!("decided");
+    };
+    let token = w.journal.undo_intent(OP).unwrap();
+    w.fake
+        .world()
+        .fail_next
+        .insert("config2", ObjErr::new(ObjErrKind::Other, Some(1117), "io"));
+    let r = run_undo(&w.fake, job, &token);
+    let SvcUndoResult::Done {
+        outcome: UndoOutcome::Failed { code, .. },
+        ..
+    } = &r
+    else {
+        panic!("{r:?}");
+    };
+    assert_eq!(code, &FailCode::VerifyFailed);
 }
 
 /// A crash after the create (`svcrestore.mid`): the service exists half configured. Run again with the
@@ -1108,7 +1398,14 @@ fn undo_of_an_op_that_changed_nothing() {
         .services
         .values_mut()
         .for_each(|s| s.state = 4);
-    let r = act(&w.fake, &w.deny, removal, &token);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token,
+        &w.program_roots,
+    );
     w.journal.done(token, r.outcome.clone()).unwrap();
     let u = w.undo(&intent, &r.outcome);
     assert_eq!(done_outcome(&u), &UndoOutcome::NothingToUndo);
@@ -1175,6 +1472,7 @@ mod inject {
             journal,
             fake: FakeServices::with([vendor_service()]),
             deny: deny(),
+            program_roots: vec![ROOT.to_owned()],
         });
         let (outcome, intent) = w.run();
         let _ = w.undo(&intent, &outcome);
@@ -1285,6 +1583,13 @@ fn rig_live_delete_and_recreate_round_trip() {
     let mut journal = JournalWriter::create(&session, header(&session)).unwrap();
     let env = common::live_env(&s.path("data"));
     let deny = DenyList::compile(&env);
+    let program_roots = vec![
+        std::path::Path::new(&program)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    ];
     let op = ExecOp::DeleteService { name: name.into() };
     let mut cand = safe(
         "c-rig",
@@ -1312,6 +1617,8 @@ fn rig_live_delete_and_recreate_round_trip() {
             validated: &stamp,
             planned: Reversibility::Full,
             key_limit: 50,
+            program_roots: &program_roots,
+            env: &env,
         },
     )
     .unwrap() else {
@@ -1319,15 +1626,9 @@ fn rig_live_delete_and_recreate_round_trip() {
     };
     let intent = removal.intent().clone();
     let token = journal.intent(intent.clone()).unwrap();
-    let r = act(&live, &deny, removal, &token);
+    let r = act(&live, &deny, &session, removal, &token, &program_roots);
     assert_eq!(r.outcome, ItemOutcome::Done, "{}", r.detail);
     journal.done(token, r.outcome.clone()).unwrap();
-    let dir = std::path::Path::new(&program)
-        .parent()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let program_roots = vec![dir];
     let args = SvcUndoArgs {
         intent: &intent,
         done: Some(&r.outcome),

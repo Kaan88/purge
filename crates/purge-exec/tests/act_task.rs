@@ -331,6 +331,7 @@ impl Bench {
             items: 1,
             allow_irreversible: false,
             volumes: Vec::new(),
+            program_roots: Vec::new(),
         };
         let journal = JournalWriter::create(&session, header).unwrap();
         let deny = DenyList::compile(&live_env(roots.data_root().to_str().unwrap()));
@@ -361,7 +362,7 @@ impl Bench {
     }
 
     fn prepare(&self, fake: &dyn TaskBackend, planned: Reversibility) -> TaskPrepared {
-        prepare_task(fake, &self.ctx, &self.session, OP, planned).unwrap()
+        prepare_task(fake, &self.ctx, &self.session, OP, planned, &roots()).unwrap()
     }
 
     /// Validates, prepares, journals the intent, deletes and journals the `done`. Returns the result
@@ -391,7 +392,7 @@ impl Bench {
             TaskPrepared::Ready(ready) => {
                 let intent = ready.intent().clone();
                 let token = self.journal.intent(intent.clone()).unwrap();
-                let result = delete_task(fake, &self.ctx, &intent, &token);
+                let result = delete_task(fake, &self.ctx, &self.session, &intent, &token, &roots());
                 self.journal.done(token, result.outcome.clone()).unwrap();
                 (result, Some(intent))
             }
@@ -829,7 +830,7 @@ fn act_rechecks_digest() {
     let token = b.journal.intent(intent.clone()).unwrap();
     // The task is repointed after the intent is durable.
     fake.put(repointed(vendor_task(), OTHER_EXE));
-    let result = act_task(&fake, &b.ctx, &intent, &token).unwrap_err();
+    let result = act_task(&fake, &b.ctx, &b.session, &intent, &token, &roots()).unwrap_err();
     assert_eq!(result.outcome, changed());
     assert_eq!(fake.deletes.get(), 0);
     assert_eq!(fake.get(PATH).unwrap(), repointed(vendor_task(), OTHER_EXE));
@@ -838,16 +839,85 @@ fn act_rechecks_digest() {
     let mut t = vendor_task();
     t.live.running = true;
     fake.put(t);
-    let result = act_task(&fake, &b.ctx, &intent, &token).unwrap_err();
+    let result = act_task(&fake, &b.ctx, &b.session, &intent, &token, &roots()).unwrap_err();
     assert_eq!(result.outcome, gate_blocked(Blocker::InUse));
     assert_eq!(fake.deletes.get(), 0);
 
     // Gone now: Vanished, no delete call.
     fake.tasks.borrow_mut().clear();
-    let result = act_task(&fake, &b.ctx, &intent, &token).unwrap_err();
+    let result = act_task(&fake, &b.ctx, &b.session, &intent, &token, &roots()).unwrap_err();
     assert_eq!(result.outcome, ItemOutcome::Vanished);
     assert_eq!(fake.deletes.get(), 0);
     b.journal.done(token, result.outcome).unwrap();
+}
+
+/// Review R2b S4: the act is bound to the backup, not only to the identity digest. A trigger added
+/// after prepare (same actions, so the same digest), the task disabled, or the definition gone: nothing
+/// is deleted.
+#[test]
+fn act_binds_to_the_backup() {
+    let mut b = Bench::new("act-bind");
+    let fake = Fake::with(vec![vendor_task()]);
+    let intent = ready(&mut b, &fake);
+    let token = b.journal.intent(intent.clone()).unwrap();
+    let mut t = vendor_task();
+    t.xml.xml = xml_for(
+        &t.live.identity.actions,
+        "InteractiveToken",
+        true,
+        "<BootTrigger><Enabled>true</Enabled></BootTrigger>",
+    );
+    fake.put(t);
+    let result = act_task(&fake, &b.ctx, &b.session, &intent, &token, &roots()).unwrap_err();
+    assert_eq!(result.outcome, changed(), "{}", result.detail);
+    let mut t = vendor_task();
+    t.live.enabled = false;
+    fake.put(t);
+    let result = act_task(&fake, &b.ctx, &b.session, &intent, &token, &roots()).unwrap_err();
+    assert_eq!(result.outcome, changed(), "{}", result.detail);
+    // Roots that do not hold the program (a resumed run's header): refused.
+    fake.put(vendor_task());
+    let result = act_task(&fake, &b.ctx, &b.session, &intent, &token, &[]).unwrap_err();
+    assert_eq!(result.outcome, gate_blocked(Blocker::CannotBackUp));
+    let Inverse::RecreateTask { definition } = &intent.inverse else {
+        panic!();
+    };
+    b.session.delete_backup_file(&definition.path).unwrap();
+    let result = act_task(&fake, &b.ctx, &b.session, &intent, &token, &roots()).unwrap_err();
+    assert_eq!(
+        result.outcome,
+        ItemOutcome::Skipped {
+            reason: SkipReason::NoVerifiedBackup
+        },
+        "{}",
+        result.detail
+    );
+    assert_eq!(fake.deletes.get(), 0);
+    b.journal.done(token, result.outcome).unwrap();
+}
+
+/// Review R2b B1: a task whose program is outside the run's roots is not deleted (undo would refuse to
+/// register it), and nothing is written for it.
+#[test]
+fn prepare_refuses_a_program_outside_the_roots() {
+    for roots in [vec![r"C:\Program Files\Other".to_owned()], Vec::new()] {
+        let mut b = Bench::new("prep-roots");
+        let fake = Fake::with(vec![vendor_task()]);
+        b.validate(
+            &fake,
+            PATH,
+            &candidate(PATH, Some(&identity()), Reversibility::Full),
+        );
+        let TaskPrepared::Decided(d) =
+            prepare_task(&fake, &b.ctx, &b.session, OP, Reversibility::Full, &roots).unwrap()
+        else {
+            panic!("ready");
+        };
+        assert_eq!(d.result.outcome, gate_blocked(Blocker::CannotBackUp));
+        let def_rel = backup_rel(BackupKind::Definition, OP);
+        assert!(!b.session.path().join(&def_rel).exists());
+        assert_eq!(fake.deletes.get(), 0);
+    }
 }
 
 #[test]
@@ -858,7 +928,7 @@ fn act_done_and_flush_order() {
     let token = b.journal.intent(intent.clone()).unwrap();
     take_events();
     set_fault_observer(Some(fault_seen));
-    let result = delete_task(&fake, &b.ctx, &intent, &token);
+    let result = delete_task(&fake, &b.ctx, &b.session, &intent, &token, &roots());
     set_fault_observer(None);
     assert_eq!(result.outcome, ItemOutcome::Done);
     assert_eq!(
@@ -1267,7 +1337,7 @@ fn fault_points_reached() {
     let intent = ready(&mut b, &fake);
     let token = b.journal.intent(intent.clone()).unwrap();
     set_fault_observer(Some(fault_seen));
-    let acted = act_task(&fake, &b.ctx, &intent, &token).unwrap();
+    let acted = act_task(&fake, &b.ctx, &b.session, &intent, &token, &roots()).unwrap();
     set_fault_observer(None);
     assert_eq!(acted.delete_error, None);
     assert_eq!(
@@ -1334,7 +1404,7 @@ fn rig_live_delete_and_undo() {
     };
     let intent = ready.intent().clone();
     let token = b.journal.intent(intent.clone()).unwrap();
-    let result = delete_task(&backend, &b.ctx, &intent, &token);
+    let result = delete_task(&backend, &b.ctx, &b.session, &intent, &token, &roots());
     b.journal.done(token, result.outcome.clone()).unwrap();
     assert_eq!(result.outcome, ItemOutcome::Done, "{result:?}");
     assert!(backend.read(&path).unwrap().is_none());

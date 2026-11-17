@@ -1399,6 +1399,16 @@ fn opt_ptr(v: &Option<Vec<u16>>) -> *const u16 {
     v.as_ref().map_or(ptr::null(), |v| v.as_ptr())
 }
 
+/// Whether [`create`] would refuse `def` before any SCM call: the same checks, without touching the
+/// SCM (a name or string it cannot pass, a type that is not a plain Win32 service, a start type other
+/// than auto, demand or disabled, an error control above 3, an empty binary path or account name). The
+/// executor asks this before it deletes a service, so that a delete never runs whose undo is certain to
+/// be refused here (M1b review R2b B1).
+#[cfg(feature = "write")]
+pub fn check_create(def: &ScmCreate) -> Result<(), WinError> {
+    CreateArgs::build(def).map(|_| ())
+}
+
 /// Creates a service from a backed-up definition. The new service is never started; its start type is
 /// the one given. The password is always null, so an account with a stored password needs it set by
 /// the user afterwards. The config2 items and the DACL are separate calls ([`set_config2`],

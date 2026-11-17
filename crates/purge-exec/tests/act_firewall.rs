@@ -81,6 +81,8 @@ struct World {
     fake: FakeFirewall,
     deny: DenyList,
     rule: String,
+    /// The journal header's program roots, as the caller passes them to prepare and the act.
+    program_roots: Vec<String>,
 }
 
 /// A store, a journal and a fake holding `rule` under [`ID`] and [`TWIN_RULE`] under [`TWIN`].
@@ -97,6 +99,7 @@ fn world(tag: &str, rule: &str) -> World {
         fake: FakeFirewall::with([(ID, rule), (TWIN, TWIN_RULE)]),
         deny: deny(),
         rule: rule.to_owned(),
+        program_roots: vec![ROOT.to_owned()],
     }
 }
 
@@ -114,6 +117,7 @@ fn header(session: &SessionDir) -> Header {
         items: 1,
         allow_irreversible: false,
         volumes: Vec::new(),
+        program_roots: Vec::new(),
     }
 }
 
@@ -145,9 +149,20 @@ impl World {
                 item: &item,
                 exec_op: &op,
                 validated: stamp,
+                program_roots: &self.program_roots,
             },
         )
         .unwrap()
+    }
+
+    /// Validate, journal `validated`, prepare, for a rule prepare decides: the outcome it decided.
+    fn run_decided(&mut self) -> (ItemOutcome, String) {
+        let cand = self.candidate();
+        let (stamp, _) = stamp_of(&self.validate(&cand));
+        match self.prepare(&stamp) {
+            FwPrepared::Decided(r) => (r.outcome, r.detail),
+            FwPrepared::Ready(_) => panic!("ready"),
+        }
     }
 
     /// Validate, journal `validated`, prepare; the removal and its intent.
@@ -177,7 +192,14 @@ impl World {
         let (removal, intent) = self.ready();
         let token = self.journal.intent(intent.clone()).unwrap();
         fault::point(fault::ACT_BEFORE);
-        let r = act(&self.fake, &self.deny, removal, &token);
+        let r = act(
+            &self.fake,
+            &self.deny,
+            &self.session,
+            removal,
+            &token,
+            &self.program_roots,
+        );
         self.journal.done(token, r.outcome.clone()).unwrap();
         (r.outcome, intent)
     }
@@ -418,8 +440,12 @@ fn validate_unparseable_blocked() {
         "garbage",
         "v2.33|Action=Allow|NoEquals|Name=X|",
         // Parses, but a field has no exact re-create mapping: never deleted.
-        r"v2.33|Action=Allow|Dir=In|Protocol=6|LPort=RPC|App=C:\Program Files\Vendor\app.exe|Name=Vendor App|",
-        r"v2.33|Action=Allow|Dir=In|Future=1|Name=Vendor App|",
+        r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=RPC|App=C:\Program Files\Vendor\app.exe|Name=Vendor App|",
+        r"v2.33|Action=Allow|Active=TRUE|Dir=In|Future=1|Name=Vendor App|",
+        // Review R1 S3: Action, Active and Dir are required.
+        r"v2.33|Action=Allow|Dir=In|Name=Vendor App|",
+        r"v2.33|Active=TRUE|Dir=In|Name=Vendor App|",
+        r"v2.33|Action=Allow|Active=TRUE|Name=Vendor App|",
     ] {
         let w = world("fw-v-parse", rule);
         assert_eq!(
@@ -451,6 +477,102 @@ fn validate_unparseable_blocked() {
         fail_code(&decided(w.validate(&w.candidate()))),
         FailCode::ObjectApi
     );
+}
+
+/// Review R2b S2, B1: a rule of a form whose re-creation no VM round trip has proven yet, and a
+/// service's rule (svchost), are never deleted: validate and prepare both refuse them.
+#[test]
+fn unproven_forms_and_service_rules_are_refused() {
+    let base = r"v2.33|Action=Allow|Active=TRUE|Dir=In|App=C:\Program Files\Vendor\app.exe|Name=Vendor App|";
+    let mut rules: Vec<String> = [
+        "Edge=TRUE|",
+        "Edge=TRUE|Defer=App|",
+        "LSM=TRUE|",
+        "LOM=TRUE|",
+        "Protocol=1|ICMP4=8:*|",
+        "LA4=10.0.0.1|",
+        "Profile=Domain|",
+        "Protocol=6|RPort=80|RPort2_10=81-82|",
+        "IFType=Lan|",
+        "Protocol=47|",
+    ]
+    .iter()
+    .map(|extra| format!("{base}{extra}"))
+    .collect();
+    rules.push(
+        r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=135|App=%SystemRoot%\system32\svchost.exe|Svc=RpcSs|Name=Vendor App|"
+            .to_owned(),
+    );
+    for rule in &rules {
+        let w = world("fw-v-unproven", rule);
+        assert_eq!(
+            skip_reason(&decided(w.validate(&w.candidate()))),
+            &SkipReason::GateBlocked {
+                blocker: Blocker::CannotBackUp
+            },
+            "{rule}"
+        );
+        // Prepare judges the rule again from its own read (a stamp from before the change).
+        let stamp = Stamp::Object {
+            kind: ObjectKind::FirewallRule,
+            sha256: identity(ID, rule).fp().sha256,
+        };
+        let FwPrepared::Decided(r) = w.prepare(&stamp) else {
+            panic!("ready: {rule}");
+        };
+        assert_eq!(
+            skip_reason(&r.outcome),
+            &SkipReason::GateBlocked {
+                blocker: Blocker::CannotBackUp
+            },
+            "{rule}: {}",
+            r.detail
+        );
+        assert!(deletes(&w.fake.log()).is_empty());
+    }
+}
+
+/// Review R2b B1: an `App` outside the roots is refused at prepare and, with the roots of a resumed
+/// run, at the act; S4: a definition gone before the act refuses it.
+#[test]
+fn prepare_and_act_refuse_what_undo_would_refuse() {
+    let mut w = world("fw-p-roots", RULE);
+    w.program_roots = vec![r"C:\Program Files\Other".to_owned()];
+    let (outcome, detail) = w.run_decided();
+    assert_eq!(
+        skip_reason(&outcome),
+        &SkipReason::GateBlocked {
+            blocker: Blocker::CannotBackUp
+        },
+        "{detail}"
+    );
+    let mut w = world("fw-a-roots", RULE);
+    let (removal, intent) = w.ready();
+    let token = w.journal.intent(intent).unwrap();
+    let r = act(&w.fake, &w.deny, &w.session, removal, &token, &[]);
+    assert_eq!(
+        skip_reason(&r.outcome),
+        &SkipReason::GateBlocked {
+            blocker: Blocker::CannotBackUp
+        }
+    );
+    assert_eq!(w.fake.rule(ID).as_deref(), Some(RULE));
+    let mut w = world("fw-a-nodef", RULE);
+    let (removal, intent) = w.ready();
+    w.session
+        .delete_backup_file(&definition_of(&intent).path)
+        .unwrap();
+    let token = w.journal.intent(intent).unwrap();
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token,
+        &w.program_roots,
+    );
+    assert_eq!(skip_reason(&r.outcome), &SkipReason::NoVerifiedBackup);
+    assert!(deletes(&w.fake.log()).is_empty());
 }
 
 #[test]
@@ -562,7 +684,14 @@ fn act_gate_rechecks_the_digest() {
     let token = w.journal.intent(intent).unwrap();
     w.fake
         .set_rule(ID, &RULE.replace("Action=Allow", "Action=Block"));
-    let r = act(&w.fake, &w.deny, removal, &token);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token,
+        &w.program_roots,
+    );
     assert_eq!(skip_reason(&r.outcome), &SkipReason::ChangedSinceScan);
     assert!(deletes(&w.fake.log()).is_empty());
     w.journal.done(token, r.outcome).unwrap();
@@ -574,7 +703,14 @@ fn act_gone_before_the_act_is_vanished() {
     let (removal, intent) = w.ready();
     let token = w.journal.intent(intent).unwrap();
     w.fake.remove_rule(ID);
-    let r = act(&w.fake, &w.deny, removal, &token);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token,
+        &w.program_roots,
+    );
     assert_eq!(r.outcome, ItemOutcome::Vanished);
     assert!(deletes(&w.fake.log()).is_empty());
     w.journal.done(token, r.outcome).unwrap();
@@ -612,7 +748,14 @@ fn act_flush_before_done() {
     let token = w.journal.intent(intent).unwrap();
     let before = w.fake.log().len();
     take_fault_trace();
-    let r = act(&w.fake, &w.deny, removal, &token);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token,
+        &w.program_roots,
+    );
     assert_eq!(r.outcome, ItemOutcome::Done);
     let log = w.fake.log()[before..].to_vec();
     assert_eq!(
@@ -726,7 +869,14 @@ fn act_with_token_of_another_op_does_nothing() {
         .unwrap();
     let token2 = other_journal.intent(other).unwrap();
     let before = w.fake.log().len();
-    let r = act(&w.fake, &w.deny, removal, &token2);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token2,
+        &w.program_roots,
+    );
     assert_eq!(fail_code(&r.outcome), FailCode::Internal);
     assert_eq!(w.fake.log().len(), before);
 }
@@ -887,6 +1037,9 @@ fn undo_app_outside_root_refused() {
     let forged =
         r"v2.33|Action=Allow|Active=TRUE|Dir=In|App=%SystemRoot%\System32\cmd.exe|Name=Vendor App|";
     let mut w = world("fw-u-root", forged);
+    // Prepare and the act refuse it outside the roots they are given: made here with a root that
+    // holds cmd.exe (as a store rewritten with matching hashes would), undone with the run's real one.
+    w.program_roots = vec![r"C:\Windows\System32".to_owned()];
     let (outcome, intent) = w.run();
     assert_eq!(outcome, ItemOutcome::Done);
     let r = w.undo(&intent, &outcome);
@@ -901,16 +1054,20 @@ fn undo_app_outside_root_refused() {
     let r = w.undo_with(&intent, &outcome, &[r"C:\Program Files\Vend".to_owned()]);
     assert_eq!(conflict(&r), &UndoConflict::ProgramOutsideRoot);
     assert_eq!(creates(&w.fake.log()), 0);
-    // An unresolvable program is refused; a rule without a program needs no root.
+    // An unresolvable program is never deleted (undo would refuse it; review R2b B1); a rule without
+    // a program needs no root.
     let mut w = world(
         "fw-u-unres",
-        r"v2.33|Action=Allow|Dir=In|App=%APPDATA%\x.exe|Name=Vendor App|",
+        r"v2.33|Action=Allow|Active=TRUE|Dir=In|App=%APPDATA%\x.exe|Name=Vendor App|",
     );
-    let (outcome, intent) = w.run();
+    let (outcome, _) = w.run_decided();
     assert_eq!(
-        conflict(&w.undo(&intent, &outcome)),
-        &UndoConflict::ProgramOutsideRoot
+        skip_reason(&outcome),
+        &SkipReason::GateBlocked {
+            blocker: Blocker::CannotBackUp
+        }
     );
+    assert!(deletes(&w.fake.log()).is_empty());
     let port_rule = r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=8080|LPort2_10=8090-8095|Name=Vendor App|";
     let mut w = world("fw-u-port", port_rule);
     let (outcome, intent) = w.run();
@@ -931,6 +1088,12 @@ fn undo_half_made_rule_removed_when_check_fails() {
     let before = w.fake.log().len();
     let r = w.undo(&intent, &outcome);
     assert_eq!(conflict(&r), &UndoConflict::ValueDiffers, "{r:?}");
+    // The detail names the file that keeps the rule string (review R2b S2).
+    let FwUndoResult::Conflict { detail, .. } = &r else {
+        panic!();
+    };
+    let file = w.session.path().join(&definition_of(&intent).path);
+    assert!(detail.contains(&file.display().to_string()), "{detail}");
     assert_eq!(w.fake.rule(ID), None);
     let log = w.fake.log()[before..].to_vec();
     assert_eq!(deletes(&log), vec![format!("delete {ID}")]);
@@ -1081,7 +1244,14 @@ fn undo_of_an_op_that_changed_nothing() {
     let (removal, intent) = w.ready();
     let token = w.journal.intent(intent.clone()).unwrap();
     w.fake.remove_rule(ID);
-    let r = act(&w.fake, &w.deny, removal, &token);
+    let r = act(
+        &w.fake,
+        &w.deny,
+        &w.session,
+        removal,
+        &token,
+        &w.program_roots,
+    );
     assert_eq!(r.outcome, ItemOutcome::Vanished);
     w.journal.done(token, r.outcome.clone()).unwrap();
     let u = w.undo(&intent, &r.outcome);
@@ -1215,6 +1385,7 @@ mod inject {
             fake: FakeFirewall::with([(ID, RULE), (TWIN, TWIN_RULE)]),
             deny: deny(),
             rule: RULE.to_owned(),
+            program_roots: vec![ROOT.to_owned()],
         });
         let (outcome, intent) = w.run();
         let _ = w.undo(&intent, &outcome);
@@ -1337,6 +1508,7 @@ fn rig_live_delete_and_recreate_round_trip() {
     let mut journal = JournalWriter::create(&session, header(&session)).unwrap();
     let env = common::live_env(&s.path("data"));
     let deny = DenyList::compile(&env);
+    let program_roots = vec![r"C:\Program Files\PurgeTest".to_owned()];
     let op = ExecOp::DeleteFirewallRule { id: id.clone() };
     let mut cand = safe(
         "c-rig",
@@ -1363,6 +1535,7 @@ fn rig_live_delete_and_recreate_round_trip() {
             item: &cand.id,
             exec_op: &op,
             validated: &stamp,
+            program_roots: &program_roots,
         },
     )
     .unwrap() else {
@@ -1370,11 +1543,10 @@ fn rig_live_delete_and_recreate_round_trip() {
     };
     let intent = removal.intent().clone();
     let token = journal.intent(intent.clone()).unwrap();
-    let r = act(&live, &deny, removal, &token);
+    let r = act(&live, &deny, &session, removal, &token, &program_roots);
     assert_eq!(r.outcome, ItemOutcome::Done, "{}", r.detail);
     journal.done(token, r.outcome.clone()).unwrap();
     assert_eq!(live.read(&id).unwrap(), None);
-    let program_roots = vec![r"C:\Program Files\PurgeTest".to_owned()];
     let args = FwUndoArgs {
         intent: &intent,
         done: Some(&r.outcome),

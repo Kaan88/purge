@@ -195,6 +195,14 @@ pub struct Header {
     pub allow_irreversible: bool,
     /// The volumes the session keeps quarantine data on.
     pub volumes: Vec<VolumeRecord>,
+    /// The roots of the app the run removes leftovers of (M1b, C-EXECOP): the program a deleted
+    /// service, task or firewall rule runs must lie strictly inside one of them, or the executor neither
+    /// deletes it nor creates it again ([`UndoConflict::ProgramOutsideRoot`]). Written by the run that
+    /// journals object ops; covered by the journal's hash chain like every other field, so undo never
+    /// takes its roots from a file a user can replace. Absent in M2 journals and in runs without object
+    /// ops (empty: every object delete and re-create is refused).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub program_roots: Vec<String>,
 }
 
 /// When a run asks for a restore point (Settings S5, "Restore point"), as the journal records it.
@@ -275,8 +283,10 @@ pub struct Intent {
     pub exec_op: ExecOp,
     /// How it is undone. Any backup it names has been written, read back and hashed.
     pub inverse: Inverse,
-    /// A definition file kept for the record when the op has no inverse that reads one (the full
-    /// definition of a removed package). Undo does not read it.
+    /// A second backup file the op keeps: the full definition of a removed package (kept for the
+    /// record; undo does not read it), or the key backup of a deleted service (`reg\<op>.regbackup.json`,
+    /// which the service's definition names too; M1b review R2b S5). Naming it here makes expiry, the
+    /// kept-bytes count and the report see it ([`Intent::backups`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<BackupRef>,
     /// The item as seen through the handle the action will use.
@@ -519,6 +529,11 @@ pub struct UndoDone {
     pub op: OpId,
     /// How it ended.
     pub outcome: UndoOutcome,
+    /// What the report must still say about an inverse that ran to its end (M1b review R2b S6): for
+    /// example that a service came back without its stored password, which must be set again. May be
+    /// empty; absent in journals written before it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
 }
 
 /// An inverse was not applied. This record ends the undo of the op, with or without an `undo_intent`
@@ -1034,6 +1049,12 @@ mod tests {
             if let Record::Intent(intent) = &record {
                 assert!(intent.is_consistent(), "{line}");
                 assert!(!intent.exec_op.is_object());
+            }
+            // The M1b fields read as absent and are written as absent.
+            match &record {
+                Record::Header(h) => assert!(h.program_roots.is_empty(), "{line}"),
+                Record::UndoDone(u) => assert!(u.detail.is_empty(), "{line}"),
+                _ => {}
             }
             if !kinds.contains(&record.name()) {
                 kinds.push(record.name());

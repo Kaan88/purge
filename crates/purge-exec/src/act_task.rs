@@ -22,8 +22,12 @@
 //!    identity's actions ([`xml_binds_actions`]), refuses what could not be registered again, and writes
 //!    the definition ([`objdef::write_def`]). The [`TaskDelete::intent`] it returns names
 //!    [`Inverse::RecreateTask`].
+//!    A task with an exec program outside the journal header's `program_roots` is refused before
+//!    anything is read further (`CannotBackUp`): undo would refuse to register it again.
 //! 3. [`act_task`]: with the token of the durable intent: the act-time gate (the identity read now must
-//!    have the validated digest, the guard must still pass, the task must not run), then
+//!    have the validated digest, the guard must still pass, the task must not run, its programs must be
+//!    inside the roots, and its XML, SDDL and Enabled setting must be exactly those of the definition
+//!    the intent names, read hash-checked: review R2b B1, S4), then
 //!    `ITaskFolder::DeleteTask`, fault point `objdelete.after`, the flush of `HKLM\SOFTWARE` (TaskCache)
 //!    and of the task file's directory, fault point `act.after`.
 //! 4. [`complete_task`]: the outcome for the `done` record: the task gone is `Done`, still there is
@@ -66,7 +70,6 @@ use std::cell::Cell;
 
 use purge_guard::canon::{GuardEnv, canon_path};
 use purge_guard::deny::ObjectGuardFacts;
-use purge_guard::prefix::{is_inside, steps_back};
 use purge_model::exec::journal::{Intent, ItemFacts, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{BackupRef, ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::object::fold;
@@ -118,6 +121,10 @@ pub mod reason {
     pub const STORED_PASSWORD: &str = "task.stored-password";
     /// The task is gone.
     pub const GONE: &str = "task.gone";
+    /// An exec action runs a program outside the run's roots: undo would never register it again.
+    pub const OUTSIDE_ROOTS: &str = "task.program-outside-roots";
+    /// The definition the intent names is missing, unusable, or not the task as it is now.
+    pub const NO_DEFINITION: &str = "task.no-verified-definition";
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -752,20 +759,23 @@ pub fn program_in_roots(
     user_sid: Option<&str>,
     roots: &[String],
 ) -> bool {
-    let plain = unquote(path);
-    if plain.is_empty() || steps_back(plain) {
-        return false;
-    }
-    let Ok(program) = canon_path(plain, env, user_sid) else {
-        return false;
-    };
-    if program.needs_long_name {
-        return false;
-    }
-    roots.iter().any(|root| {
-        canon_path(unquote(root), env, user_sid).is_ok_and(|root| {
-            !root.needs_long_name && !steps_back(&root.path) && is_inside(&program.path, &root.path)
-        })
+    gate::file_in_roots(unquote(path), roots, env, user_sid)
+}
+
+/// The first exec action of `actions` whose program is not inside `roots` ([`program_in_roots`]): undo
+/// would refuse to register such a task again (`ProgramOutsideRoot`), so prepare and the act refuse to
+/// delete it (M1b review R2b B1).
+fn program_outside_roots<'a>(
+    actions: &'a [TaskAction],
+    env: &GuardEnv,
+    user_sid: Option<&str>,
+    roots: &[String],
+) -> Option<&'a str> {
+    actions.iter().find_map(|action| match action {
+        TaskAction::Exec { path, .. } if !program_in_roots(path, env, user_sid, roots) => {
+            Some(path.as_str())
+        }
+        _ => None,
     })
 }
 
@@ -969,12 +979,18 @@ impl TaskDelete {
 /// [`Reversibility::Full`] is `GateBlocked{ReversibilityPartial}`. Then the definition is written
 /// ([`objdef::write_def`]); its errors are returned as they are (journal [`DefWriteError::outcome`]
 /// without an intent, or abort on [`DefWriteError::is_storage_integrity`]).
+///
+/// Right after the first read, an exec action whose program is not inside `program_roots` (the journal
+/// header's; per-user tokens resolved for `GateCtx::user_sid`) is `GateBlocked{CannotBackUp}`: undo
+/// would refuse to register the task again (`ProgramOutsideRoot`), so it is not deleted (review R2b
+/// B1).
 pub fn prepare_task(
     backend: &dyn TaskBackend,
     ctx: &GateCtx,
     session: &SessionDir,
     op: OpId,
     planned: Reversibility,
+    program_roots: &[String],
 ) -> Result<TaskPrepared, DefWriteError> {
     let decided = |result: TypedResult, reason: &str| {
         Ok(TaskPrepared::Decided(Decision::new(result, reason)))
@@ -1032,6 +1048,23 @@ pub fn prepare_task(
         Ok(live) => live,
         Err(decision) => return Ok(TaskPrepared::Decided(decision)),
     };
+    if let Some(program) = program_outside_roots(
+        &first.identity.actions,
+        ctx.deny().env(),
+        ctx.user_sid(),
+        program_roots,
+    ) {
+        return decided(
+            blocked(
+                Blocker::CannotBackUp,
+                format!(
+                    "scheduled task {path} runs {program:?}, which is not inside a root recorded for \
+                     the run; undo would never register it again, so it is left untouched"
+                ),
+            ),
+            reason::OUTSIDE_ROOTS,
+        );
+    }
     let xml = match backend.definition(path) {
         Ok(Some(xml)) => xml,
         Ok(None) => {
@@ -1174,13 +1207,19 @@ fn intent_task(intent: &Intent) -> Option<(&str, &str)> {
 /// `Err` is decided before anything changed: a token of another op or an intent that is not a task
 /// delete (`Failed{Internal}`); no accepted stamp for the op, or a stamp other than the intent's `pre`
 /// (`ChangedSinceScan`); and the act-time gate ([`read_gated`]): gone `Vanished`, other digest or an
-/// unreadable definition `ChangedSinceScan` / `CannotBackUp`, guard refusal, running `InUse`. Nothing is
-/// ended or disabled.
+/// unreadable definition `ChangedSinceScan` / `CannotBackUp`, guard refusal, running `InUse`; an exec
+/// program outside `program_roots` (the journal header's) `CannotBackUp`; and the binding to the backup
+/// ([`check_definition`], review R2b S4): the definition the intent names must read hash-checked
+/// (`NoVerifiedBackup` otherwise) and the task read now must have exactly its XML, SDDL and Enabled
+/// setting (`ChangedSinceScan` otherwise; a trigger or principal changed since prepare is not deleted
+/// unbacked, also not by a resumed run). Nothing is ended or disabled.
 pub fn act_task(
     backend: &dyn TaskBackend,
     ctx: &GateCtx,
+    session: &SessionDir,
     intent: &Intent,
     token: &IntentToken,
+    program_roots: &[String],
 ) -> Result<Acted, TypedResult> {
     if token.op() != intent.op || token.item() != &intent.item {
         return Err(failed(
@@ -1219,7 +1258,23 @@ pub fn act_task(
             gate::reason::OBJECT_CHANGED
         )));
     }
-    read_gated(backend, ctx, path, stamp, "at the act").map_err(|d| d.result)?;
+    let live = read_gated(backend, ctx, path, stamp, "at the act").map_err(|d| d.result)?;
+    if let Some(program) = program_outside_roots(
+        &live.identity.actions,
+        ctx.deny().env(),
+        ctx.user_sid(),
+        program_roots,
+    ) {
+        return Err(blocked(
+            Blocker::CannotBackUp,
+            format!(
+                "scheduled task {path} runs {program:?}, which is not inside a root recorded for the \
+                 run ({}); left untouched",
+                reason::OUTSIDE_ROOTS
+            ),
+        ));
+    }
+    check_definition(backend, session, intent, path, sha256, &live)?;
     let delete_error = backend.delete(path).err();
     hit(fault::OBJDELETE_AFTER);
     let flush_error = backend.flush(path).err();
@@ -1289,14 +1344,72 @@ pub fn complete_task(
     }
 }
 
+/// The binding of the act to the op's backup: the definition `intent` names, read hash-checked, is the
+/// op's (path, digest `sha256`, an XML that binds its actions) and the task read now (`live`, and its
+/// XML and SDDL read once more) is exactly it: XML ([`TASK_NORMALISE`]) and SDDL byte for byte, the
+/// Enabled setting equal.
+fn check_definition(
+    backend: &dyn TaskBackend,
+    session: &SessionDir,
+    intent: &Intent,
+    path: &str,
+    sha256: &str,
+    live: &TaskLive,
+) -> Result<(), TypedResult> {
+    let no_backup = |why: String| {
+        result(
+            ItemOutcome::Skipped {
+                reason: SkipReason::NoVerifiedBackup,
+            },
+            format!(
+                "scheduled task {path}: {why} ({}); left untouched",
+                reason::NO_DEFINITION
+            ),
+        )
+    };
+    let Inverse::RecreateTask { definition } = &intent.inverse else {
+        return Err(no_backup("the intent names no task definition".to_owned()));
+    };
+    let def: TaskDef = objdef::read_def_detailed(session, definition)
+        .map_err(|e| no_backup(format!("its definition cannot be used: {}", e.detail)))?;
+    if fold(&def.path) != fold(path)
+        || def.identity_sha256 != sha256
+        || !xml_binds_actions(&def.xml, &def.actions)
+    {
+        return Err(no_backup(
+            "the definition is not the one of this op".to_owned(),
+        ));
+    }
+    match backend.definition(path) {
+        Ok(Some(now)) if same_definition(&now, &def) && live.enabled == def.enabled => Ok(()),
+        Ok(None) => Err(result(
+            ItemOutcome::Vanished,
+            format!("scheduled task {path} is gone (comparing it with its backup)"),
+        )),
+        Ok(Some(_)) => Err(skipped(format!(
+            "scheduled task {path} changed since its backup was taken ({}); left untouched",
+            reason::CHANGED
+        ))),
+        Err(e) => Err(blocked(
+            Blocker::CannotBackUp,
+            format!(
+                "the XML of scheduled task {path} cannot be read to compare it with its backup: {e}; \
+                 left untouched"
+            ),
+        )),
+    }
+}
+
 /// [`act_task`] then [`complete_task`]: the result for `JournalWriter::done` with `token`.
 pub fn delete_task(
     backend: &dyn TaskBackend,
     ctx: &GateCtx,
+    session: &SessionDir,
     intent: &Intent,
     token: &IntentToken,
+    program_roots: &[String],
 ) -> TypedResult {
-    match act_task(backend, ctx, intent, token) {
+    match act_task(backend, ctx, session, intent, token, program_roots) {
         Ok(acted) => complete_task(backend, intent, Some(&acted)),
         Err(decided) => decided,
     }

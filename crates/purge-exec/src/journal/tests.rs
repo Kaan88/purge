@@ -92,6 +92,7 @@ fn header(items: u32) -> Header {
         items,
         allow_irreversible: false,
         volumes: Vec::new(),
+        program_roots: Vec::new(),
     }
 }
 

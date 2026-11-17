@@ -10,7 +10,8 @@
 //!   snap-2) and write its `purge.plan/0`; `replay-all` does so for the M0 runs and scores them with
 //!   rigtool when it is built (see replay.rs).
 //! - `ci`: fmt check, clippy, tests, a standalone clippy of `purge-mcp`, clippy and the feature-gated
-//!   tests of the rig-exec build (engine CLI, crash matrix), check-deps, ui-strings, scanner-coverage.
+//!   tests of the rig-exec build (engine CLI), every purge-exec test target with its `fault-inject` and
+//!   `test-support` features (crash matrix, object ops), check-deps, ui-strings, scanner-coverage.
 
 mod check_deps;
 mod lex;
@@ -82,8 +83,12 @@ fn cargo_step(root: &Path, args: &[&str]) -> Result<bool> {
 /// The features of the rig's executor build, for the `ci` steps that compile it.
 const RIG_FEATURES: &str = "purge-engine/rig-exec,purge-exec/test-support";
 
+/// The features every purge-exec test target needs: the same `fault-inject` and `test-support` the rig
+/// build unifies in (`rig-exec` enables `fault-inject`), named on purge-exec alone.
+const EXEC_TEST_FEATURES: &str = "purge-exec/fault-inject,purge-exec/test-support";
+
 fn ci(root: &Path) -> Result<bool> {
-    let cargo_steps: [&[&str]; 6] = [
+    let cargo_steps: [&[&str]; 7] = [
         &["fmt", "--all", "--", "--check"],
         &[
             "clippy",
@@ -105,10 +110,11 @@ fn ci(root: &Path) -> Result<bool> {
             "-D",
             "warnings",
         ],
-        // The executor CLI and the crash matrix, which only a rig-exec build and purge-exec's
-        // fault-inject feature compile (review M2 M23). The two libraries (their unit tests include
-        // feature-gated ones), the CLI tests and the crash matrix; the other test targets of both
-        // crates do not depend on the features and ran in the workspace step.
+        // The executor CLI and every purge-exec test target, which only a rig-exec build and
+        // purge-exec's `fault-inject` and `test-support` features compile (review M2 M23, M1b R2b S1:
+        // `act_service`, `act_task`, `act_firewall`, `m1b_found`, `roundtrip` and `crash` are empty
+        // without them). purge-engine's library and CLI tests; its other targets do not depend on the
+        // features and ran in the workspace step.
         &[
             "clippy",
             "-p",
@@ -126,16 +132,13 @@ fn ci(root: &Path) -> Result<bool> {
             "test",
             "-p",
             "purge-engine",
-            "-p",
-            "purge-exec",
             "--features",
             RIG_FEATURES,
             "--lib",
             "--test",
             "exec_cli",
-            "--test",
-            "crash",
         ],
+        &["test", "-p", "purge-exec", "--features", EXEC_TEST_FEATURES],
     ];
     for step in cargo_steps {
         if !cargo_step(root, step)? {

@@ -71,6 +71,7 @@ impl Store {
                 file_system: "NTFS".into(),
                 quarantine: format!(r"D:\.purge-q\{}", self.session.id()),
             }],
+            program_roots: Vec::new(),
         };
         let mut journal = JournalWriter::create(&self.session, header).unwrap();
         for (n, (id, target)) in targets.iter().enumerate() {

@@ -33,7 +33,9 @@
 //! The spike re-created six rule shapes byte for byte (program with `Defer=User`, local ports with a
 //! `LPort2_10` range, remote address list with `LocalSubnet`, service, profiles with interface types,
 //! group with description); the other mappings (`Edge`, `Defer=App`, ICMP types, `LSM`, `LOM`, local
-//! addresses, `Profile=Domain`) are checked by the `#[ignore]`d rig tests in tests/firewall.rs.
+//! addresses, `Profile=Domain`, `RPort2_10`, `IFType=Lan`, protocols other than 6 and 17) are inferred:
+//! [`map_rule`] names them in [`RuleMap::shapes`] so that a caller can refuse them until the
+//! `#[ignore]`d rig tests in tests/firewall.rs have proven them on the VM.
 //!
 //! What this module never does: it writes no registry value, starts no process, never uses the
 //! `INetFw*` COM objects, never removes a rule by name, and never addresses any policy store other than
@@ -312,6 +314,58 @@ pub struct RuleMap {
     pub properties: Vec<(&'static str, PropValue)>,
     /// Filter values for the `IWbemContext`, in a fixed order (`PolicyStore` is added by the caller).
     pub context: Vec<(&'static str, ContextValue)>,
+    /// The field forms of the rule whose mapping is inferred, not measured, each once in declaration
+    /// order ([`RuleShape`]). Empty for every rule the spike re-created.
+    pub shapes: Vec<RuleShape>,
+}
+
+/// A field form [`map_rule`] maps by inference from the provider's value tables: the M1B spike's six
+/// rules (`vm/spikes/m1b/RESULT.json`) did not exercise it, so whether `create_with_instance_id` brings
+/// it back byte for byte is not measured (review R1 S3). [`map_rule`] names the ones a rule uses
+/// ([`RuleMap::shapes`]) so that a caller can refuse them. Which of them are proven is decided in one
+/// place, `purge_model::object::FIREWALL_UNPROVEN_SHAPES` (whose `FirewallShape` has the same variants
+/// and names); the `#[ignore]`d rig test `create_with_instance_id_round_trips_unproven_fields` is the
+/// VM proof that lifts them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RuleShape {
+    /// `Edge=TRUE`, alone or with `Defer=App`.
+    EdgeTraversal,
+    /// `Defer=App`.
+    DeferApp,
+    /// `LSM=TRUE`.
+    LooseSourceMapping,
+    /// `LOM=TRUE`.
+    LocalOnlyMapping,
+    /// `ICMP4` / `ICMP6` entries.
+    IcmpTypes,
+    /// `LA4` / `LA6` entries.
+    LocalAddresses,
+    /// `Profile=Domain`.
+    DomainProfile,
+    /// `RPort2_10`.
+    RemotePortRange,
+    /// `IFType=Lan`.
+    LanInterface,
+    /// `Protocol` other than 6 or 17.
+    OtherProtocol,
+}
+
+impl RuleShape {
+    /// A short name for messages; the same text as `purge_model::object::FirewallShape::name`.
+    pub fn name(self) -> &'static str {
+        match self {
+            RuleShape::EdgeTraversal => "Edge",
+            RuleShape::DeferApp => "Defer=App",
+            RuleShape::LooseSourceMapping => "LSM",
+            RuleShape::LocalOnlyMapping => "LOM",
+            RuleShape::IcmpTypes => "ICMP",
+            RuleShape::LocalAddresses => "local addresses",
+            RuleShape::DomainProfile => "Profile=Domain",
+            RuleShape::RemotePortRange => "RPort2_10",
+            RuleShape::LanInterface => "IFType=Lan",
+            RuleShape::OtherProtocol => "Protocol other than 6 or 17",
+        }
+    }
 }
 
 /// One address family of an address field.
@@ -360,7 +414,12 @@ const SINGLE: &[&str] = &[
 ///
 /// Everything else is refused, and so are repeats of a single-valued key or of a list value, empty
 /// values, values with a NUL, port keywords (`RPC`, `IPHTTPSIn`, ...), address keywords other than
-/// `LocalSubnet`, and a missing `Name`. The error lists every refused field with the reason.
+/// `LocalSubnet`, and a missing `Name`, `Action`, `Active` or `Dir` (the provider would fill in its
+/// default, and the rule would come back with a field it did not have). The error lists every refused
+/// field with the reason.
+///
+/// A mapped rule names the forms whose mapping is inferred, not measured ([`RuleMap::shapes`]); the
+/// caller decides whether to trust them.
 pub fn map_rule(fields: &[(String, String)]) -> Result<RuleMap, Vec<String>> {
     let mut bad: Vec<String> = Vec::new();
     let mut seen_single: Vec<&'static str> = Vec::new();
@@ -545,6 +604,13 @@ pub fn map_rule(fields: &[(String, String)]) -> Result<RuleMap, Vec<String>> {
     if name.is_none() {
         bad.push("Name (missing)".to_owned());
     }
+    // A rule string Windows writes always holds these three; without one the provider's default would
+    // become a field the rule did not have (review R1 S3).
+    for (key, shown) in [("ACTION", "Action"), ("ACTIVE", "Active"), ("DIR", "Dir")] {
+        if !seen_single.contains(&key) {
+            bad.push(format!("{shown} (missing)"));
+        }
+    }
     let edge_policy = match (edge, defer) {
         (false, None) => None,
         (true, None) => Some(1),
@@ -585,6 +651,31 @@ pub fn map_rule(fields: &[(String, String)]) -> Result<RuleMap, Vec<String>> {
     if !bad.is_empty() {
         return Err(bad);
     }
+
+    let mut shapes = Vec::new();
+    let mut shape = |used: bool, s: RuleShape| {
+        if used {
+            shapes.push(s);
+        }
+    };
+    shape(edge, RuleShape::EdgeTraversal);
+    shape(defer == Some("App"), RuleShape::DeferApp);
+    shape(lsm, RuleShape::LooseSourceMapping);
+    shape(lom, RuleShape::LocalOnlyMapping);
+    shape(!icmp.is_empty(), RuleShape::IcmpTypes);
+    shape(!laddr.values.is_empty(), RuleShape::LocalAddresses);
+    shape(profiles & 1 != 0, RuleShape::DomainProfile);
+    shape(
+        fields
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("RPort2_10")),
+        RuleShape::RemotePortRange,
+    );
+    shape(iftype & 1 != 0, RuleShape::LanInterface);
+    shape(
+        protocol.is_some_and(|p| p != "6" && p != "17"),
+        RuleShape::OtherProtocol,
+    );
 
     let mut properties: Vec<(&'static str, PropValue)> = Vec::new();
     let mut context: Vec<(&'static str, ContextValue)> = Vec::new();
@@ -651,6 +742,7 @@ pub fn map_rule(fields: &[(String, String)]) -> Result<RuleMap, Vec<String>> {
     Ok(RuleMap {
         properties,
         context,
+        shapes,
     })
 }
 
@@ -1138,6 +1230,19 @@ mod tests {
             .collect()
     }
 
+    /// `pairs` after `Action=Allow`, `Active=TRUE` and `Dir=In`, each left out when `pairs` holds its
+    /// key: the three fields every stored rule has.
+    fn full(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (k, v) in [("Action", "Allow"), ("Active", "TRUE"), ("Dir", "In")] {
+            if !pairs.iter().any(|(p, _)| p.eq_ignore_ascii_case(k)) {
+                out.push((k.to_owned(), v.to_owned()));
+            }
+        }
+        out.extend(f(pairs));
+        out
+    }
+
     fn fields_of(raw: &str) -> Vec<(String, String)> {
         parse_rule(raw).map(|r| r.fields).unwrap_or_default()
     }
@@ -1362,7 +1467,7 @@ mod tests {
         let m = map_rule(&fields_of(SPIKE_RULES[1])).unwrap();
         assert_eq!(ctx(&m, "LocalPort"), Some(&list(&["8080", "8090-8095"])));
         assert_eq!(ctx(&m, "RemotePort"), None);
-        let m = map_rule(&f(&[
+        let m = map_rule(&full(&[
             ("Name", "r"),
             ("Protocol", "17"),
             ("RPort", "53"),
@@ -1414,11 +1519,11 @@ mod tests {
 
     #[test]
     fn map_rule_keys_are_case_insensitive_values_exact() {
-        let m = map_rule(&f(&[("name", "x"), ("ACTION", "Block"), ("dIr", "Out")])).unwrap();
+        let m = map_rule(&full(&[("name", "x"), ("ACTION", "Block"), ("dIr", "Out")])).unwrap();
         assert_eq!(prop(&m, "Action"), Some(&PropValue::U16(4)));
-        let e = map_rule(&f(&[("Name", "x"), ("Action", "allow")])).unwrap_err();
+        let e = map_rule(&full(&[("Name", "x"), ("Action", "allow")])).unwrap_err();
         assert!(e[0].starts_with("Action=allow"), "{e:?}");
-        let e = map_rule(&f(&[("Name", "x"), ("Active", "true")])).unwrap_err();
+        let e = map_rule(&full(&[("Name", "x"), ("Active", "true")])).unwrap_err();
         assert_eq!(e.len(), 1);
     }
 
@@ -1427,7 +1532,7 @@ mod tests {
         let edge = |pairs: &[(&str, &str)]| {
             let mut v = vec![("Name", "x")];
             v.extend_from_slice(pairs);
-            map_rule(&f(&v)).map(|m| prop(&m, "EdgeTraversalPolicy").cloned())
+            map_rule(&full(&v)).map(|m| prop(&m, "EdgeTraversalPolicy").cloned())
         };
         assert_eq!(edge(&[]), Ok(None));
         assert_eq!(edge(&[("Edge", "TRUE")]), Ok(Some(PropValue::U16(1))));
@@ -1444,7 +1549,7 @@ mod tests {
 
     #[test]
     fn map_rule_icmp_needs_matching_protocol() {
-        let m = map_rule(&f(&[
+        let m = map_rule(&full(&[
             ("Name", "x"),
             ("Protocol", "1"),
             ("ICMP4", "8:*"),
@@ -1452,11 +1557,25 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(ctx(&m, "IcmpType"), Some(&list(&["8:*", "3:4"])));
-        assert!(map_rule(&f(&[("Name", "x"), ("Protocol", "58"), ("ICMP6", "128:*")])).is_ok());
-        assert!(map_rule(&f(&[("Name", "x"), ("Protocol", "58"), ("ICMP4", "8:*")])).is_err());
-        assert!(map_rule(&f(&[("Name", "x"), ("ICMP4", "8:*")])).is_err());
         assert!(
-            map_rule(&f(&[
+            map_rule(&full(&[
+                ("Name", "x"),
+                ("Protocol", "58"),
+                ("ICMP6", "128:*")
+            ]))
+            .is_ok()
+        );
+        assert!(
+            map_rule(&full(&[
+                ("Name", "x"),
+                ("Protocol", "58"),
+                ("ICMP4", "8:*")
+            ]))
+            .is_err()
+        );
+        assert!(map_rule(&full(&[("Name", "x"), ("ICMP4", "8:*")])).is_err());
+        assert!(
+            map_rule(&full(&[
                 ("Name", "x"),
                 ("Protocol", "1"),
                 ("ICMP4", "8:*"),
@@ -1464,7 +1583,7 @@ mod tests {
             ]))
             .is_err()
         );
-        assert!(map_rule(&f(&[("Name", "x"), ("Protocol", "1"), ("ICMP4", "8")])).is_err());
+        assert!(map_rule(&full(&[("Name", "x"), ("Protocol", "1"), ("ICMP4", "8")])).is_err());
     }
 
     #[test]
@@ -1527,14 +1646,19 @@ mod tests {
             vec![("Name", "x"), ("LSM", "FALSE")],
         ];
         for pairs in refused {
-            let r = map_rule(&f(&pairs));
+            let r = map_rule(&full(&pairs));
             assert!(r.is_err(), "{pairs:?} mapped to {r:?}");
         }
     }
 
     #[test]
     fn map_rule_lists_every_refused_field() {
-        let e = map_rule(&f(&[("PFN", "p"), ("LPort", "RPC"), ("Platform", "2:6:2")])).unwrap_err();
+        let e = map_rule(&full(&[
+            ("PFN", "p"),
+            ("LPort", "RPC"),
+            ("Platform", "2:6:2"),
+        ]))
+        .unwrap_err();
         assert_eq!(e.len(), 4, "{e:?}");
         assert!(e[0].starts_with("PFN=p"));
         assert!(e[1].starts_with("LPort=RPC"));
@@ -1544,7 +1668,7 @@ mod tests {
 
     #[test]
     fn map_rule_lsm_lom_and_domain_profile() {
-        let m = map_rule(&f(&[
+        let m = map_rule(&full(&[
             ("Name", "x"),
             ("LSM", "TRUE"),
             ("LOM", "TRUE"),
@@ -1556,5 +1680,61 @@ mod tests {
         assert_eq!(prop(&m, "LocalOnlyMapping"), Some(&PropValue::Bool(true)));
         assert_eq!(prop(&m, "Profiles"), Some(&PropValue::U16(1)));
         assert_eq!(ctx(&m, "LocalAddress"), Some(&list(&["fe80::/64"])));
+        assert_eq!(
+            m.shapes,
+            [
+                RuleShape::LooseSourceMapping,
+                RuleShape::LocalOnlyMapping,
+                RuleShape::LocalAddresses,
+                RuleShape::DomainProfile
+            ]
+        );
+    }
+
+    /// A rule without `Action`, `Active` or `Dir` is refused: the provider would add its default.
+    #[test]
+    fn map_rule_needs_action_active_and_dir() {
+        let e = map_rule(&f(&[("Name", "x")])).unwrap_err();
+        assert_eq!(
+            e,
+            ["Action (missing)", "Active (missing)", "Dir (missing)"],
+            "{e:?}"
+        );
+        let e = map_rule(&f(&[("Name", "x"), ("Action", "Allow"), ("Dir", "In")])).unwrap_err();
+        assert_eq!(e, ["Active (missing)"]);
+        assert!(map_rule(&full(&[("Name", "x")])).is_ok());
+    }
+
+    /// The spike's rules use no inferred form; each inferred form is named.
+    #[test]
+    fn map_rule_names_the_inferred_shapes() {
+        for raw in SPIKE_RULES {
+            assert_eq!(map_rule(&fields_of(raw)).unwrap().shapes, [], "{raw}");
+        }
+        for (pairs, want) in [
+            (vec![("Edge", "TRUE")], vec![RuleShape::EdgeTraversal]),
+            (
+                vec![("Edge", "TRUE"), ("Defer", "App")],
+                vec![RuleShape::EdgeTraversal, RuleShape::DeferApp],
+            ),
+            (vec![("Defer", "User")], vec![]),
+            (
+                vec![("Protocol", "1"), ("ICMP4", "8:*")],
+                vec![RuleShape::IcmpTypes, RuleShape::OtherProtocol],
+            ),
+            (
+                vec![("Protocol", "17"), ("RPort2_10", "1-9")],
+                vec![RuleShape::RemotePortRange],
+            ),
+            (vec![("Protocol", "6"), ("LPort2_10", "1-9")], vec![]),
+            (vec![("IFType", "Lan")], vec![RuleShape::LanInterface]),
+            (vec![("IFType", "Wireless")], vec![]),
+            (vec![("Profile", "Private")], vec![]),
+            (vec![("Protocol", "47")], vec![RuleShape::OtherProtocol]),
+        ] {
+            let mut all = vec![("Name", "x")];
+            all.extend(pairs.iter().copied());
+            assert_eq!(map_rule(&full(&all)).unwrap().shapes, want, "{pairs:?}");
+        }
     }
 }

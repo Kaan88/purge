@@ -50,8 +50,11 @@
 //! # What undo can do
 //!
 //! The executor deletes a rule only when it can re-create it exactly (`purge_win::firewall::map_rule`,
-//! mirrored here by [`recreate_refusal`] because this crate does not depend on `purge-win`); a rule it
-//! would refuse gets `CannotBackUp` (hard, report-only). Undo re-creates a rule only when its `App`,
+//! mirrored here by [`recreate_refusal`] because this crate does not depend on `purge-win`), when the
+//! rule uses no field form a VM round trip has not proven yet (`purge_model::FirewallShape`, the one
+//! list both read) and when it names no service (`Svc`, refused in M1b: its program is the service
+//! host, which no undo would re-create); a rule it would refuse gets `CannotBackUp` (hard,
+//! report-only). Undo re-creates a rule only when its `App`,
 //! expanded with the machine environment the way the executor expands it, is a file inside a root of
 //! the run; a rule whose `App` is not ([`undo_program_in_root`]) can be deleted but never brought back,
 //! so it carries `Reversibility::None` with the `ReversibilityNone` soft blocker and is never
@@ -70,8 +73,8 @@ use purge_guard::deny::{DenyList, ObjectGuardFacts};
 use purge_guard::prefix::{self, expand_env};
 use purge_index::sysobj::{self, FIREWALL_RULES_KEY, FirewallFacts, ProgramRef};
 use purge_model::{
-    Action, Blocker, Candidate, Category, FIREWALL_RESTORE_EXACT, FirewallRuleFields, Harm,
-    ObjectKind, ObjectWhy, Reversibility, SysFirewallRule, Target,
+    Action, Blocker, Candidate, Category, FIREWALL_RESTORE_EXACT, FirewallRuleFields,
+    FirewallShape, Harm, ObjectKind, ObjectWhy, Reversibility, SysFirewallRule, Target,
 };
 
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner};
@@ -372,8 +375,11 @@ struct AddrList {
 /// Why the executor would refuse to delete the rule because it could not re-create it exactly, or
 /// `None` when it can. The same acceptance as `purge_win::firewall::map_rule` (which this crate cannot
 /// call): every field must have an exact mapping, single-valued keys and list values must not repeat,
-/// no value may be empty or hold a NUL, and `Name` must be present. Any disagreement only costs a
-/// cleanup, never safety: the executor's gate runs `map_rule` itself before every delete.
+/// no value may be empty or hold a NUL, and `Name`, `Action`, `Active` and `Dir` must be present. Then
+/// the executor's own refusals: a field form not proven by a VM round trip
+/// ([`FirewallShape::unproven_in`]) and a service's rule (`Svc`). Any disagreement only costs a
+/// cleanup, never safety: the executor's gate runs `map_rule` and the same refusals itself before every
+/// delete.
 pub fn recreate_refusal(fields: &FirewallRuleFields) -> Option<String> {
     let mut bad: Vec<String> = Vec::new();
     let mut seen_single: Vec<&'static str> = Vec::new();
@@ -535,6 +541,22 @@ pub fn recreate_refusal(fields: &FirewallRuleFields) -> Option<String> {
     if !name {
         bad.push("Name (missing)".to_owned());
     }
+    for (key, shown) in [("ACTION", "Action"), ("ACTIVE", "Active"), ("DIR", "Dir")] {
+        if !seen_single.contains(&key) {
+            bad.push(format!("{shown} (missing)"));
+        }
+    }
+    let unproven = FirewallShape::unproven_in(&fields.fields);
+    if !unproven.is_empty() {
+        let names: Vec<&str> = unproven.iter().map(|s| s.name()).collect();
+        bad.push(format!(
+            "{} (not yet proven to come back exactly)",
+            names.join(", ")
+        ));
+    }
+    if fields.get("Svc").is_some() {
+        bad.push("Svc (a service's rule is not deleted in M1b)".to_owned());
+    }
     match (edge, defer) {
         (false, None) | (true, None) | (false, Some("User")) | (true, Some("App")) => {}
         (e, d) => bad.push(format!(
@@ -627,18 +649,41 @@ mod tests {
         recreate_refusal(&parse_firewall_rule(raw).expect("rule parses"))
     }
 
-    /// The spike's six rule shapes and the forms map_rule documents are accepted.
+    /// The spike's rule shapes (apart from its service rule) are accepted.
     #[test]
     fn mapped_rules_are_accepted() {
         for raw in [
             r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|App=C:\x\a.exe|Name=A|Defer=User|",
             r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=8080|LPort2_10=8090-8095|Name=B|",
             r"v2.33|Action=Allow|Active=TRUE|Dir=Out|App=C:\x\b.exe|Name=C|Desc=d, e|EmbedCtxt=G|",
-            r"v2.33|Action=Block|Active=FALSE|Dir=In|Profile=Domain|Profile=Public|Name=D|Edge=TRUE|Defer=App|",
-            r"v2.33|Action=Allow|Dir=In|Protocol=1|ICMP4=8:*|Name=E|LA4=10.0.0.1|LA4=LocalSubnet|LA6=LocalSubnet|",
-            r"v2.33|Action=Allow|Dir=In|IFType=Lan|IFType=Wireless|LSM=TRUE|LOM=TRUE|RA6=fe80::1|Name=F|",
+            r"v2.33|Action=Block|Active=FALSE|Dir=In|Profile=Private|Profile=Public|IFType=Wireless|IFType=RemoteAccess|Name=D|",
+            r"v2.33|Action=Block|Active=TRUE|Dir=Out|Protocol=17|RPort=53|RA4=LocalSubnet|RA6=LocalSubnet|RA4=10.0.0.1|RA6=fe80::1|Name=E|",
         ] {
             assert_eq!(refusal(raw), None, "{raw}");
+        }
+    }
+
+    /// Mapped, but not proven by a VM round trip (purge_model::FIREWALL_UNPROVEN_SHAPES), a service's
+    /// rule, and a rule without Action, Active or Dir: refused, as the executor's gate refuses them.
+    #[test]
+    fn unproven_service_and_incomplete_rules_are_refused() {
+        for raw in [
+            r"v2.33|Action=Block|Active=FALSE|Dir=In|Profile=Domain|Profile=Public|Name=D|",
+            r"v2.33|Action=Block|Active=FALSE|Dir=In|Name=D|Edge=TRUE|",
+            r"v2.33|Action=Block|Active=FALSE|Dir=In|Name=D|Edge=TRUE|Defer=App|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=1|ICMP4=8:*|Name=E|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=E|LA4=10.0.0.1|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|IFType=Lan|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|LSM=TRUE|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|LOM=TRUE|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=17|RPort2_10=1-9|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=47|Name=F|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=9000|App=%SystemRoot%\System32\svchost.exe|Svc=S1|Name=G|",
+            r"v2.33|Action=Allow|Dir=In|Name=H|",
+            r"v2.33|Active=TRUE|Dir=In|Name=H|",
+            r"v2.33|Action=Allow|Active=TRUE|Name=H|",
+        ] {
+            assert!(refusal(raw).is_some(), "{raw}");
         }
     }
 
@@ -646,21 +691,21 @@ mod tests {
     #[test]
     fn unmapped_rules_are_refused() {
         for raw in [
-            r"v2.33|Action=Allow|Dir=In|LPort=RPC|Name=A|",
-            r"v2.33|Action=Allow|Dir=In|App=C:\x\a.exe|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|Name=B|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|RA4=LocalSubnet|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|RA4=DNS|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|LA4=fe80::1|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|Protocol=6|ICMP4=8:*|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|Edge=FALSE|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|Defer=App|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|LPort=080|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|LPort=80|LPort=80|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|Profile=Any|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|AppPkgId=S-1-15-2-1|",
-            r"v2.33|Action=Allow|Dir=In|Name=A|Desc=|",
-            r"v2.33|Action=Bypass|Dir=In|Name=A|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|LPort=RPC|Name=A|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|App=C:\x\a.exe|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|Name=B|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|RA4=LocalSubnet|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|RA4=DNS|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|LA4=fe80::1|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|Protocol=6|ICMP4=8:*|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|Edge=FALSE|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|Defer=App|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|LPort=080|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|LPort=80|LPort=80|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|Profile=Any|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|AppPkgId=S-1-15-2-1|",
+            r"v2.33|Action=Allow|Active=TRUE|Dir=In|Name=A|Desc=|",
+            r"v2.33|Action=Bypass|Active=TRUE|Dir=In|Name=A|",
         ] {
             assert!(refusal(raw).is_some(), "{raw}");
         }

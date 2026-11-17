@@ -94,6 +94,7 @@ impl Session {
             items: names.len() as u32,
             allow_irreversible: true,
             volumes: Vec::new(),
+            program_roots: Vec::new(),
         };
         let mut journal = JournalWriter::create(&session, header).unwrap();
         for (i, name) in names.iter().enumerate() {

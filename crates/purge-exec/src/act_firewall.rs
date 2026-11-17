@@ -27,12 +27,18 @@
 //!    parse (else `GateBlocked{CannotBackUp}`), the guard's `check_object` with the rule's facts
 //!    (`fw.package-bound`, `fw.resource-name`), and every field must have an exact re-create mapping
 //!    (`purge_win::firewall::map_rule`; else `GateBlocked{CannotBackUp}`: a rule that cannot come back
-//!    is never deleted).
-//! 2. [`prepare`]: one read, bound to the validated stamp and judged again by [`rule_blocker`];
+//!    is never deleted), none of a form whose mapping no VM round trip has proven yet
+//!    ([`FirewallShape::unproven_in`], `purge_model::FIREWALL_UNPROVEN_SHAPES`, review R2b S2), and no
+//!    `Svc` (a service's rule runs the service host, outside every root of an app: undo could never
+//!    bring it back, review R2b B1). All `CannotBackUp`.
+//! 2. [`prepare`]: one read, bound to the validated stamp and judged again by [`rule_blocker`]; an
+//!    `App` outside the journal header's `program_roots` is `CannotBackUp` (the check undo makes);
 //!    `purge.fwdef/1` is written from that same read. The intent carries
 //!    [`Inverse::RecreateFirewallRule`].
 //! 3. The executor journals the intent and hits `act.before`.
-//! 4. [`act`]: the act-time gate (read again, digest equal to the stamp, [`rule_blocker`]), then
+//! 4. [`act`]: the act-time gate (read again, digest equal to the stamp, [`rule_blocker`], the root
+//!    check, and the definition the intent names read hash-checked and equal to the rule now, else
+//!    `NoVerifiedBackup`), then
 //!    `delete_by_instance_id(id)`. One deleted: fault point `objdelete.after`, flush of `SYSTEM`, fault
 //!    point `act.after`, and [`complete`]'s verdict from a fresh read. None deleted: a fresh read tells
 //!    `Vanished` (absent) from `Failed{ObjectApi}` (still there). A failed delete call is followed by a
@@ -56,7 +62,8 @@
 //! `fwrestore.mid`, flush of `SYSTEM`, fault point `undo.act.after`, then the exact-restore check: the
 //! value is read again and must carry exactly the id and the backup's fields (`same_rule`; version and
 //! order aside) for `Restored`. Anything else deletes the half-made rule by its id, flushes `SYSTEM`,
-//! and is the conflict `ValueDiffers`.
+//! and is the conflict `ValueDiffers`, whose detail names the definition file that keeps the rule
+//! string.
 //!
 //! A crash at `fwrestore.mid` leaves the re-created rule unchecked; the undo run again finds it present
 //! and checks it as [`prepare_undo`] checks any present rule: the backup's fields are
@@ -73,7 +80,7 @@ use purge_model::exec::journal::{Intent, ItemFacts, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
 use purge_model::{
     Blocker, Candidate, CandidateId, FIREWALL_RESTORE_EXACT, FirewallIdentity, FirewallRuleFields,
-    ObjectKind, Target, parse_firewall_rule,
+    FirewallShape, ObjectKind, Target, parse_firewall_rule,
 };
 use purge_win::firewall::{self as fw, WinError};
 use purge_win::reg::{REG_EXPAND_SZ, REG_SZ, RegRoot, RegView};
@@ -83,7 +90,7 @@ use crate::act_service::{ObjErr, ObjErrKind};
 use crate::act_typed::TypedResult;
 use crate::durable;
 use crate::fault;
-use crate::gate::{GateCtx, Stamp, check_object_stamp_detailed, check_plan_fp_detailed};
+use crate::gate::{self, GateCtx, Stamp, check_object_stamp_detailed, check_plan_fp_detailed};
 use crate::journal::{IntentToken, UndoToken};
 use crate::objdef::{DefWriteError, FWDEF_SCHEMA, FwDef, read_def_detailed, write_def};
 use crate::recover::Probe;
@@ -288,7 +295,48 @@ pub fn rule_blocker(
             ),
         ));
     }
+    // Mapped by inference only: a wrong mapping is found at undo, when the half-made rule is deleted
+    // again and the original is lost. Refused until a VM round trip proves the form (review R2b S2).
+    let unproven = FirewallShape::unproven_in(&fields.fields);
+    if !unproven.is_empty() {
+        let names: Vec<&str> = unproven.iter().map(|s| s.name()).collect();
+        return Err((
+            Blocker::CannotBackUp,
+            format!(
+                "firewall rule {id} uses fields whose re-creation is not yet proven ({}); it is not \
+                 deleted",
+                names.join(", ")
+            ),
+        ));
+    }
+    // A service's rule runs the service host: its program is never inside the app's roots, so undo
+    // would never bring it back (review R2b B1).
+    if fields.get("Svc").is_some() {
+        return Err((
+            Blocker::CannotBackUp,
+            format!(
+                "firewall rule {id} is a service's rule (Svc), which undo could not create again; it \
+                 is not deleted"
+            ),
+        ));
+    }
     Ok(fields)
+}
+
+/// Why undo would refuse to create the rule of `fields` again, judged before the delete (review R2b
+/// B1): a backed-up `App` that is not a file inside the journal header's `program_roots`
+/// ([`gate::file_in_roots`], the one root check of the object ops). A rule without a program (`App`
+/// absent or `System`) passes. Undo applies exactly this ([`UndoConflict::ProgramOutsideRoot`]).
+fn program_refusal(
+    fields: &FirewallRuleFields,
+    env: &GuardEnv,
+    roots: &[String],
+) -> Option<String> {
+    match rule_program(fields, env) {
+        RuleProgram::None => None,
+        RuleProgram::File(file) if gate::file_in_roots(&file, roots, env, None) => None,
+        RuleProgram::File(text) | RuleProgram::Unresolved(text) => Some(text),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -350,19 +398,6 @@ pub fn rule_program(fields: &FirewallRuleFields, env: &GuardEnv) -> RuleProgram 
         }
         _ => unresolved(),
     }
-}
-
-/// Whether `file` lies inside one of `roots` (canonicalised; a root that does not canonicalise, or is a
-/// drive root, counts for nothing).
-fn file_under_roots(file: &str, roots: &[String]) -> bool {
-    roots.iter().any(|root| {
-        canon_path(root, &GuardEnv::default(), None).is_ok_and(|root| {
-            !root.needs_long_name
-                && prefix::depth(&root.path) >= 2
-                && prefix::is_same_or_inside(file, &root.path)
-                && !prefix::is_same(file, &root.path)
-        })
-    })
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -564,16 +599,21 @@ pub struct FwPrepareArgs<'a> {
     pub exec_op: &'a ExecOp,
     /// The stamp of the op's `validated` record.
     pub validated: &'a Stamp,
+    /// The program roots of the journal header (`Header::program_roots`): a rule whose `App` is not
+    /// inside one is not deleted, since its undo would refuse to create it again.
+    pub program_roots: &'a [String],
 }
 
 /// [`prepare`] for op `op` as journalled: item, op and stamp come from the record `GateCtx::record`
-/// accepted. An op without one is `Failed{Internal}` before any call.
+/// accepted. An op without one is `Failed{Internal}` before any call. `program_roots` are the journal
+/// header's.
 pub fn prepare_recorded(
     backend: &dyn FirewallBackend,
     deny: &DenyList,
     ctx: &GateCtx,
     session: &SessionDir,
     op: OpId,
+    program_roots: &[String],
 ) -> Result<FwPrepared, DefWriteError> {
     let (Some((exec_op, record)), Some(stamp)) = (ctx.journalled(op), ctx.stamp(op)) else {
         return Ok(FwPrepared::Decided(failed(
@@ -591,6 +631,7 @@ pub fn prepare_recorded(
             item: &record.item,
             exec_op,
             validated: stamp,
+            program_roots,
         },
     )
 }
@@ -652,6 +693,15 @@ pub fn prepare(
         Ok(fields) => fields,
         Err((blocker, why)) => return decided(blocked(blocker, format!("{why}; left untouched"))),
     };
+    if let Some(program) = program_refusal(&fields, deny.env(), args.program_roots) {
+        return decided(blocked(
+            Blocker::CannotBackUp,
+            format!(
+                "firewall rule {id} opens the firewall for {program}, which is not inside a root \
+                 recorded for the run; undo would never create it again, so it is left untouched"
+            ),
+        ));
+    }
     let def = FwDef {
         schema: FWDEF_SCHEMA.to_owned(),
         id: live.id.clone(),
@@ -683,13 +733,36 @@ pub fn prepare(
 // Act, complete, probe
 // ---------------------------------------------------------------------------------------------------
 
-/// Deletes the rule of `removal`, whose intent `token` proves durable: see the module docs, step 4. A
-/// token of another op is `Failed{Internal}` and nothing is called.
+/// Whether the definition `intent` names is readable, hash-checked, and holds exactly the rule `live`:
+/// its id, its raw string, the parse of that string as its fields.
+fn check_definition(
+    session: &SessionDir,
+    intent: &Intent,
+    id: &str,
+    live: &FirewallIdentity,
+) -> Result<(), String> {
+    let Inverse::RecreateFirewallRule { definition } = &intent.inverse else {
+        return Err("the intent is not a firewall rule delete".to_owned());
+    };
+    let def: FwDef = read_def_detailed(session, definition)
+        .map_err(|e| format!("its definition cannot be used: {}", e.detail))?;
+    let fields_match = parse_firewall_rule(&def.rule).is_ok_and(|f| f.fields == def.fields);
+    if def.id != id || def.rule != live.rule || !fields_match {
+        return Err("the definition is not the rule as it is now".to_owned());
+    }
+    Ok(())
+}
+
+/// Deletes the rule of `removal`, whose intent `token` proves durable: see the module docs, step 4.
+/// `program_roots` are the journal header's. A token of another op is `Failed{Internal}` and nothing is
+/// called.
 pub fn act(
     backend: &dyn FirewallBackend,
     deny: &DenyList,
+    session: &SessionDir,
     removal: Box<FwRemoval>,
     token: &IntentToken,
+    program_roots: &[String],
 ) -> TypedResult {
     let FwRemoval { intent, id, stamp } = *removal;
     if token.op() != intent.op || token.item() != &intent.item {
@@ -720,8 +793,27 @@ pub fn act(
     if let Err((reason, why)) = check_object_stamp_detailed(&stamp, Some(&live.fp())) {
         return skipped(reason, format!("firewall rule {id}: {why}; left untouched"));
     }
-    if let Err((blocker, why)) = rule_blocker(deny, &live) {
-        return blocked(blocker, format!("{why}; left untouched"));
+    match rule_blocker(deny, &live) {
+        Err((blocker, why)) => return blocked(blocker, format!("{why}; left untouched")),
+        Ok(fields) => {
+            if let Some(program) = program_refusal(&fields, deny.env(), program_roots) {
+                return blocked(
+                    Blocker::CannotBackUp,
+                    format!(
+                        "firewall rule {id} opens the firewall for {program}, which is not inside a \
+                         root recorded for the run; left untouched"
+                    ),
+                );
+            }
+        }
+    }
+    // The backup the intent names must still be there and be this rule's (a resumed run acts long
+    // after prepare wrote it).
+    if let Err(why) = check_definition(session, &intent, &id, &live) {
+        return skipped(
+            SkipReason::NoVerifiedBackup,
+            format!("firewall rule {id}: {why}; left untouched"),
+        );
     }
 
     let mut note = String::new();
@@ -945,6 +1037,8 @@ pub struct FwUndoJob {
     id: String,
     backup: FirewallRuleFields,
     rule: String,
+    /// The definition file, as a path for the report (it keeps the raw rule string).
+    definition_file: String,
 }
 
 impl FwUndoJob {
@@ -1079,25 +1173,23 @@ pub fn prepare_undo(
             ),
         )),
         Ok(None) => {
-            // The second lock: a program the rule opens the firewall for must be one of the run's.
-            match rule_program(&backup, env) {
-                RuleProgram::None => {}
-                RuleProgram::File(file) if file_under_roots(&file, args.program_roots) => {}
-                RuleProgram::File(text) | RuleProgram::Unresolved(text) => {
-                    return decided(FwUndoResult::conflict(
-                        UndoConflict::ProgramOutsideRoot,
-                        format!(
-                            "firewall rule {id}: its program {text} is not inside a root recorded \
-                             for the run; nothing is created"
-                        ),
-                    ));
-                }
+            // The second lock: a program the rule opens the firewall for must be one of the run's
+            // (the check prepare and the act made).
+            if let Some(text) = program_refusal(&backup, env, args.program_roots) {
+                return decided(FwUndoResult::conflict(
+                    UndoConflict::ProgramOutsideRoot,
+                    format!(
+                        "firewall rule {id}: its program {text} is not inside a root recorded for \
+                         the run; nothing is created"
+                    ),
+                ));
             }
             FwUndoPrepared::Ready(FwUndoJob {
                 op: intent.op,
                 id,
                 backup,
                 rule: def.rule,
+                definition_file: session.path().join(&definition.path).display().to_string(),
             })
         }
     }
@@ -1110,6 +1202,7 @@ pub fn run_undo(backend: &dyn FirewallBackend, job: FwUndoJob, token: &UndoToken
         id,
         backup,
         rule,
+        definition_file,
     } = job;
     if token.op() != op {
         return FwUndoResult::failed(
@@ -1231,7 +1324,8 @@ pub fn run_undo(backend: &dyn FirewallBackend, job: FwUndoJob, token: &UndoToken
         UndoConflict::ValueDiffers,
         format!(
             "firewall rule {id} was created again, but it is not the backed-up rule (stored as \
-             {:?}); {removal}",
+             {:?}); {removal}; the backed-up rule string is kept in {definition_file} (member \
+             \"rule\")",
             live.rule
         ),
     )
@@ -1662,6 +1756,44 @@ mod tests {
         parse_firewall_rule(raw).unwrap()
     }
 
+    /// `purge_win::firewall::map_rule` and `purge_model::FirewallShape` tell the same inferred forms
+    /// apart, so the one list in purge-model decides for what map_rule maps.
+    #[test]
+    fn map_rule_shapes_agree_with_the_model() {
+        let base = "v2.33|Action=Allow|Active=TRUE|Dir=In|Name=X|";
+        for extra in [
+            "",
+            "Edge=TRUE|",
+            "Edge=TRUE|Defer=App|",
+            "Defer=User|",
+            "LSM=TRUE|LOM=TRUE|",
+            "Protocol=1|ICMP4=8:*|",
+            "Protocol=58|ICMP6=128:*|",
+            "Protocol=6|LPort=80|LPort2_10=81-82|",
+            "Protocol=17|RPort=53|RPort2_10=1-9|",
+            "LA4=10.0.0.1|LA6=fe80::1|",
+            "RA4=LocalSubnet|RA6=LocalSubnet|",
+            "Profile=Domain|Profile=Private|",
+            "Profile=Public|IFType=Lan|IFType=Wireless|",
+            "Protocol=47|",
+            r"App=C:\x\a.exe|Svc=S|",
+        ] {
+            let raw = format!("{base}{extra}");
+            let f = fields(&raw);
+            let win: Vec<&str> = fw::map_rule(&f.fields)
+                .unwrap_or_else(|e| panic!("{raw}: {e:?}"))
+                .shapes
+                .iter()
+                .map(|s| s.name())
+                .collect();
+            let model: Vec<&str> = FirewallShape::of(&f.fields)
+                .iter()
+                .map(|s| s.name())
+                .collect();
+            assert_eq!(win, model, "{raw}");
+        }
+    }
+
     #[test]
     fn exact_rule_string_refuses_what_is_not_one_string() {
         let sz = |s: &str| -> Vec<u8> {
@@ -1727,15 +1859,24 @@ mod tests {
         ) else {
             panic!("not a file");
         };
-        assert!(file_under_roots(
+        assert!(gate::file_in_roots(
             &file,
-            &[r"C:\Program Files\Vendor".to_owned()]
+            &[r"C:\Program Files\Vendor".to_owned()],
+            &env,
+            None
         ));
-        assert!(!file_under_roots(
+        assert!(!gate::file_in_roots(
             &file,
-            &[r"C:\Program Files\Other".to_owned()]
+            &[r"C:\Program Files\Other".to_owned()],
+            &env,
+            None
         ));
-        assert!(!file_under_roots(&file, &[r"C:\".to_owned()]));
+        assert!(!gate::file_in_roots(
+            &file,
+            &[r"C:\".to_owned()],
+            &env,
+            None
+        ));
         assert!(matches!(
             rule_program(&fields(r"v2.33|App=%USERPROFILE%\a.exe|Name=X|"), &env),
             RuleProgram::Unresolved(_)

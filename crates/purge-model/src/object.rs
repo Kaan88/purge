@@ -55,6 +55,129 @@ use crate::{Category, Target};
 /// rule under its own id; no re-create-under-a-new-id fallback exists.
 pub const FIREWALL_RESTORE_EXACT: bool = true;
 
+/// A form of firewall rule field whose exact re-creation the spike did not measure. The six spike rules
+/// (`vm/spikes/m1b/RESULT.json`, `firewall.cases`) came back byte for byte with `Action` (Allow, Block),
+/// `Active`, `Dir`, `Protocol` 6 and 17, `App`, `Svc`, `Name`, `Desc`, `EmbedCtxt`, `Defer=User`,
+/// `LPort`, `LPort2_10`, `RPort`, `RA4`/`RA6` (literal addresses, subnets, ranges, `LocalSubnet` in both
+/// families), `Profile` Private and Public, `IFType` Wireless and RemoteAccess. The mapping of the forms
+/// below (`purge_win::firewall::map_rule`) is inferred from the provider's value tables only (M1b
+/// reviews R1 S3, R2b S2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FirewallShape {
+    /// `Edge=TRUE` (edge traversal), alone or with `Defer=App`.
+    EdgeTraversal,
+    /// `Defer=App`.
+    DeferApp,
+    /// `LSM` (loose source mapping).
+    LooseSourceMapping,
+    /// `LOM` (local only mapping).
+    LocalOnlyMapping,
+    /// `ICMP4` / `ICMP6` type and code entries.
+    IcmpTypes,
+    /// `LA4` / `LA6` (local addresses).
+    LocalAddresses,
+    /// `Profile=Domain`.
+    DomainProfile,
+    /// `RPort2_10` (a remote port range).
+    RemotePortRange,
+    /// `IFType=Lan`.
+    LanInterface,
+    /// `Protocol` other than 6 (TCP) or 17 (UDP).
+    OtherProtocol,
+}
+
+/// The [`FirewallShape`]s not yet proven by a VM round trip (`create_with_instance_id` and a byte-equal
+/// read back). A rule that uses one is not deleted: the executor's gate and the scanner both refuse it
+/// (`CannotBackUp`), because a wrong mapping shows only at undo, when the half-made rule is deleted again
+/// and the original is lost. The one list both read: when M1B-RIG-EXEC proves a shape on the VM, its
+/// line is removed here.
+pub const FIREWALL_UNPROVEN_SHAPES: &[FirewallShape] = &[
+    FirewallShape::EdgeTraversal,
+    FirewallShape::DeferApp,
+    FirewallShape::LooseSourceMapping,
+    FirewallShape::LocalOnlyMapping,
+    FirewallShape::IcmpTypes,
+    FirewallShape::LocalAddresses,
+    FirewallShape::DomainProfile,
+    FirewallShape::RemotePortRange,
+    FirewallShape::LanInterface,
+    FirewallShape::OtherProtocol,
+];
+
+impl FirewallShape {
+    /// Every shape, in declaration order.
+    pub const ALL: [FirewallShape; 10] = [
+        FirewallShape::EdgeTraversal,
+        FirewallShape::DeferApp,
+        FirewallShape::LooseSourceMapping,
+        FirewallShape::LocalOnlyMapping,
+        FirewallShape::IcmpTypes,
+        FirewallShape::LocalAddresses,
+        FirewallShape::DomainProfile,
+        FirewallShape::RemotePortRange,
+        FirewallShape::LanInterface,
+        FirewallShape::OtherProtocol,
+    ];
+
+    /// A short name for messages; the same text as `purge_win::firewall::RuleShape::name`.
+    pub fn name(self) -> &'static str {
+        match self {
+            FirewallShape::EdgeTraversal => "Edge",
+            FirewallShape::DeferApp => "Defer=App",
+            FirewallShape::LooseSourceMapping => "LSM",
+            FirewallShape::LocalOnlyMapping => "LOM",
+            FirewallShape::IcmpTypes => "ICMP",
+            FirewallShape::LocalAddresses => "local addresses",
+            FirewallShape::DomainProfile => "Profile=Domain",
+            FirewallShape::RemotePortRange => "RPort2_10",
+            FirewallShape::LanInterface => "IFType=Lan",
+            FirewallShape::OtherProtocol => "Protocol other than 6 or 17",
+        }
+    }
+
+    /// Whether a VM round trip proved the shape (it is not in [`FIREWALL_UNPROVEN_SHAPES`]).
+    pub fn is_proven(self) -> bool {
+        !FIREWALL_UNPROVEN_SHAPES.contains(&self)
+    }
+
+    /// Whether `fields` use this shape. Keys compare ASCII case-insensitively, values exactly as stored
+    /// (as `map_rule` reads them).
+    pub fn used_by(self, fields: &[(String, String)]) -> bool {
+        fields.iter().any(|(key, value)| {
+            let k = key.to_ascii_uppercase();
+            let v = value.as_str();
+            match self {
+                FirewallShape::EdgeTraversal => k == "EDGE",
+                FirewallShape::DeferApp => k == "DEFER" && v == "App",
+                FirewallShape::LooseSourceMapping => k == "LSM",
+                FirewallShape::LocalOnlyMapping => k == "LOM",
+                FirewallShape::IcmpTypes => k == "ICMP4" || k == "ICMP6",
+                FirewallShape::LocalAddresses => k == "LA4" || k == "LA6",
+                FirewallShape::DomainProfile => k == "PROFILE" && v == "Domain",
+                FirewallShape::RemotePortRange => k == "RPORT2_10",
+                FirewallShape::LanInterface => k == "IFTYPE" && v == "Lan",
+                FirewallShape::OtherProtocol => k == "PROTOCOL" && v != "6" && v != "17",
+            }
+        })
+    }
+
+    /// The shapes `fields` use, each once, in declaration order.
+    pub fn of(fields: &[(String, String)]) -> Vec<FirewallShape> {
+        FirewallShape::ALL
+            .into_iter()
+            .filter(|s| s.used_by(fields))
+            .collect()
+    }
+
+    /// The shapes `fields` use that are not proven: a rule with any is not deleted.
+    pub fn unproven_in(fields: &[(String, String)]) -> Vec<FirewallShape> {
+        FirewallShape::of(fields)
+            .into_iter()
+            .filter(|s| !s.is_proven())
+            .collect()
+    }
+}
+
 /// The first line of every object digest input.
 const DIGEST_SCHEMA: &str = "purge.objfp/1";
 
@@ -1268,6 +1391,45 @@ mod tests {
         // The other two facts the model relies on: tasks and services re-create exactly.
         assert_eq!(result["task"]["exact"].as_bool(), Some(true));
         assert_eq!(result["service"]["exact"].as_bool(), Some(true));
+    }
+
+    /// The rules the spike re-created use only proven shapes, and every unproven shape is told apart.
+    #[test]
+    fn firewall_shapes_spike_rules_are_proven_and_each_shape_is_found() {
+        let text = include_str!("../../../vm/spikes/m1b/RESULT.json");
+        let result: serde_json::Value =
+            serde_json::from_str(text.trim_start_matches('\u{feff}')).expect("RESULT.json parses");
+        let cases = result["firewall"]["cases"].as_array().expect("cases");
+        assert_eq!(cases.len(), 6);
+        for case in cases {
+            let raw = case["original"].as_str().expect("original");
+            let fields = parse_firewall_rule(raw).expect("spike rule parses");
+            assert_eq!(FirewallShape::of(&fields.fields), [], "{raw}");
+        }
+        for (raw, want) in [
+            ("v2.33|Edge=TRUE|", FirewallShape::EdgeTraversal),
+            ("v2.33|edge=TRUE|Defer=App|", FirewallShape::DeferApp),
+            ("v2.33|LSM=TRUE|", FirewallShape::LooseSourceMapping),
+            ("v2.33|LOM=TRUE|", FirewallShape::LocalOnlyMapping),
+            ("v2.33|ICMP6=128:*|", FirewallShape::IcmpTypes),
+            ("v2.33|LA4=10.0.0.1|", FirewallShape::LocalAddresses),
+            ("v2.33|Profile=Domain|", FirewallShape::DomainProfile),
+            ("v2.33|RPort2_10=1-2|", FirewallShape::RemotePortRange),
+            ("v2.33|IFType=Lan|", FirewallShape::LanInterface),
+            ("v2.33|Protocol=47|", FirewallShape::OtherProtocol),
+        ] {
+            let fields = parse_firewall_rule(raw).unwrap().fields;
+            assert!(FirewallShape::of(&fields).contains(&want), "{raw}");
+            assert!(!want.is_proven());
+            assert!(FirewallShape::unproven_in(&fields).contains(&want), "{raw}");
+        }
+        // Defer=User, Profile=Private, IFType=Wireless, Protocol 6 and 17: proven forms.
+        let fields =
+            parse_firewall_rule("v2.33|Defer=User|Profile=Private|IFType=Wireless|Protocol=17|")
+                .unwrap()
+                .fields;
+        assert_eq!(FirewallShape::of(&fields), []);
+        assert_eq!(FIREWALL_UNPROVEN_SHAPES.len(), FirewallShape::ALL.len());
     }
 
     #[test]

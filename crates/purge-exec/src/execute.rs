@@ -819,6 +819,8 @@ impl<'a> Run<'a> {
                 items,
                 allow_irreversible: plan.allow_irreversible(),
                 volumes: volume_records(env.roots, session.id(), &volumes),
+                // M1b: the run executes no object op yet (M1B-X-INTEG fills the app's roots in here).
+                program_roots: Vec::new(),
             };
             // The selected ids in op order go into the settings record, so that a run stopped in its
             // validation is bound to its selection again without a search (`rebind_interrupted`).

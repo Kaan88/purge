@@ -59,8 +59,9 @@ pub use inventory::{
     InventoryEntry, InventorySchema, MsiContext, MsiInfo, MsiOnlyRow, RawFlags, WritableBy,
 };
 pub use object::{
-    FIREWALL_RESTORE_EXACT, FirewallIdentity, FirewallRuleFields, FwParseError, ObjectFp,
-    ObjectKind, ServiceIdentity, TaskAction, TaskIdentity, parse_firewall_rule,
+    FIREWALL_RESTORE_EXACT, FIREWALL_UNPROVEN_SHAPES, FirewallIdentity, FirewallRuleFields,
+    FirewallShape, FwParseError, ObjectFp, ObjectKind, ServiceIdentity, TaskAction, TaskIdentity,
+    parse_firewall_rule,
 };
 pub use plan::{Band, Category, Plan, PlanItem, PlanSchema, ScanMode, Tool};
 pub use root::{Root, RootKind, RootSource, SourceTrust};

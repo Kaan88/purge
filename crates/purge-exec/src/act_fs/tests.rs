@@ -260,6 +260,7 @@ impl Env {
             items: ops.len() as u32,
             allow_irreversible: false,
             volumes: Vec::new(),
+            program_roots: Vec::new(),
         };
         let mut journal = JournalWriter::create(&session, header).unwrap();
         // As the executor does: write each `validated` record, then hand the written record to the

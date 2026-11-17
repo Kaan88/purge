@@ -215,6 +215,7 @@ impl Fx {
             items: n,
             allow_irreversible: false,
             volumes: Vec::new(),
+            program_roots: Vec::new(),
         };
         let mut journal = JournalWriter::create(&session, header).unwrap();
         let ops: Vec<ExecOp> = items.iter().map(|it| mv(&it.source)).collect();

@@ -376,8 +376,9 @@ pub struct JournalState {
     open_group_intents: u32,
     open_intents: u32,
     counts: OutcomeCounts,
-    /// The free text of each op's last `undo_conflict`, while that conflict is where its undo stands.
-    conflict_details: BTreeMap<OpId, String>,
+    /// The free text of each op's last `undo_conflict` or `undo_done`, while that record is where its
+    /// undo stands.
+    undo_details: BTreeMap<OpId, String>,
     /// The ops of the last `undo_plan`, in order, and those of them an undo record was written for
     /// since.
     undo_plan: Option<(Vec<OpId>, BTreeSet<OpId>)>,
@@ -402,7 +403,7 @@ impl JournalState {
             open_group_intents: 0,
             open_intents: 0,
             counts: OutcomeCounts::default(),
-            conflict_details: BTreeMap::new(),
+            undo_details: BTreeMap::new(),
             undo_plan: None,
             unconfirmed: BTreeSet::new(),
         }
@@ -414,7 +415,19 @@ impl JournalState {
     pub fn undo_conflict_detail(&self, op: OpId) -> Option<&str> {
         match self.ops.get(&op).map(|s| &s.undo) {
             Some(UndoState::Conflict(_)) => {
-                Some(self.conflict_details.get(&op).map_or("", String::as_str))
+                Some(self.undo_details.get(&op).map_or("", String::as_str))
+            }
+            _ => None,
+        }
+    }
+
+    /// The note of the `undo_done` record that op `op`'s undo stands at ([`UndoState::Finished`]), such
+    /// as a service restored without its stored password (M1b review R2b S6); `None` when its undo did
+    /// not finish so. Empty when the record held none (every record written before the note existed).
+    pub fn undo_done_detail(&self, op: OpId) -> Option<&str> {
+        match self.ops.get(&op).map(|s| &s.undo) {
+            Some(UndoState::Finished(_)) => {
+                Some(self.undo_details.get(&op).map_or("", String::as_str))
             }
             _ => None,
         }
@@ -881,17 +894,21 @@ impl JournalState {
                 let s = self.known_mut(u.op);
                 s.undo = UndoState::InProgress;
                 s.undo_attempts = s.undo_attempts.saturating_add(1);
-                self.conflict_details.remove(&u.op);
+                self.undo_details.remove(&u.op);
                 self.reach(u.op);
             }
             Record::UndoDone(u) => {
                 self.known_mut(u.op).undo = UndoState::Finished(u.outcome.clone());
-                self.conflict_details.remove(&u.op);
+                if u.detail.is_empty() {
+                    self.undo_details.remove(&u.op);
+                } else {
+                    self.undo_details.insert(u.op, u.detail.clone());
+                }
                 self.reach(u.op);
             }
             Record::UndoConflict(c) => {
                 self.known_mut(c.op).undo = UndoState::Conflict(c.conflict.clone());
-                self.conflict_details.insert(c.op, c.detail.clone());
+                self.undo_details.insert(c.op, c.detail.clone());
                 self.reach(c.op);
             }
             Record::UndoPlan(plan) => {

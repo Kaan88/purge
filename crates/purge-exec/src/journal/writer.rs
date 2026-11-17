@@ -611,12 +611,26 @@ impl JournalWriter {
         token: UndoToken,
         outcome: UndoOutcome,
     ) -> Result<(), JournalError> {
+        self.undo_done_noted(token, outcome, "")
+    }
+
+    /// [`JournalWriter::undo_done`] with what the report must still say about the restore (M1b review
+    /// R2b S6: a service re-created without its stored password is `Restored`, and the note that the
+    /// password must be set again is journalled with it). The note is cut like a `done`'s detail
+    /// (2,048 bytes).
+    pub fn undo_done_noted(
+        &mut self,
+        token: UndoToken,
+        outcome: UndoOutcome,
+        detail: &str,
+    ) -> Result<(), JournalError> {
         self.undo_owned(&token)?;
         self.flush_registry()?;
         self.append(
             &Record::UndoDone(UndoDone {
                 op: token.op,
                 outcome,
+                detail: crate::execute::journal_detail(detail),
             }),
             true,
         )
@@ -653,7 +667,14 @@ impl JournalWriter {
     ) -> Result<(), JournalError> {
         self.no_open_undo(op)?;
         self.flush_registry()?;
-        self.append(&Record::UndoDone(UndoDone { op, outcome }), true)
+        self.append(
+            &Record::UndoDone(UndoDone {
+                op,
+                outcome,
+                detail: String::new(),
+            }),
+            true,
+        )
     }
 
     /// Writes and flushes an `undo_conflict` found before any `undo_intent` (a tampered or missing

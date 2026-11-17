@@ -649,6 +649,12 @@ impl GateCtx {
         self.user_sid = user_sid.map(str::to_owned);
     }
 
+    /// The user the scan was made for ([`GateCtx::bind_user`]), whose profile tokens a task's program
+    /// path may use; `None` when the run names none.
+    pub fn user_sid(&self) -> Option<&str> {
+        self.user_sid.as_deref()
+    }
+
     /// Why a package removal (always for the process token's user, `RemovalScope::CurrentUser`) must not
     /// run in this context: the scan was made for a user (`user_sid`) and the process token belongs to
     /// another user, or its user cannot be read (review M2 final M12: an elevated run under another
@@ -1134,6 +1140,48 @@ fn is_object_digest(s: &str) -> bool {
         sha256: s.to_owned(),
     }
     .is_well_formed()
+}
+
+/// The one root check of the object ops (M1b review R2b B1, M5): whether `file`, a program path already
+/// resolved to one canonical absolute file by the op's own rules, lies strictly inside one of `roots`,
+/// the program roots of the journal header (`Header::program_roots`). Each root is canonicalised with
+/// `env` (per-user tokens with `user_sid`); a root that does not canonicalise, needs 8.3 resolution,
+/// steps back or is a drive root counts for nothing, so no roots at all means outside. A `file` that
+/// steps back or needs 8.3 resolution is outside too.
+///
+/// The service, task and firewall modules apply exactly this before a delete (prepare and the act-time
+/// gate) and before a re-create (undo), so a delete never runs whose undo is certain to refuse with
+/// `UndoConflict::ProgramOutsideRoot`.
+pub fn file_in_roots(
+    file: &str,
+    roots: &[String],
+    env: &purge_guard::canon::GuardEnv,
+    user_sid: Option<&str>,
+) -> bool {
+    if file.trim().is_empty() || prefix::steps_back(file) {
+        return false;
+    }
+    let Ok(file) = purge_guard::canon::canon_path(file, env, user_sid) else {
+        return false;
+    };
+    if file.needs_long_name {
+        return false;
+    }
+    roots.iter().any(|root| {
+        let root = root.trim();
+        let root = root
+            .strip_prefix('"')
+            .and_then(|r| r.strip_suffix('"'))
+            .unwrap_or(root)
+            .trim();
+        !root.is_empty()
+            && !prefix::steps_back(root)
+            && purge_guard::canon::canon_path(root, env, user_sid).is_ok_and(|root| {
+                !root.needs_long_name
+                    && prefix::depth(&root.path) >= 2
+                    && prefix::is_inside(&file.path, &root.path)
+            })
+    })
 }
 
 /// The act-time check of an object: `live` is the fingerprint of the identity the act module has just
