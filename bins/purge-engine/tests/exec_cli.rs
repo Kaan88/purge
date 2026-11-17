@@ -477,6 +477,7 @@ mod rig {
             roots: Ok(roots.clone()),
             elevated,
             packages: &packages,
+            objects: None,
             lockers: &lockers,
             pending_renames: &mut pending,
             restore_points: FakeRestore,

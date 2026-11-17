@@ -1654,6 +1654,9 @@ fn run_settings() -> RunSettings {
         key_limit: 10_000,
         restore_point: RestorePointPolicy::HighRiskOnly,
         selected: Vec::new(),
+        gone_msi_products: Vec::new(),
+        gone_cache_dirs: Vec::new(),
+        gone_burn: Vec::new(),
     }
 }
 

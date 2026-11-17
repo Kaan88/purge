@@ -238,6 +238,22 @@ pub struct RunSettings {
     /// Empty in journals written before the field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected: Vec<CandidateId>,
+    /// The M1b exemption lists of the run (C-GUARD, M1B-X-INTEG): packed codes of the app's MSI products
+    /// Windows Installer no longer knows. The run's own caller computed them when the run started, from
+    /// the app's fingerprint and fresh system queries (never from the plan), and the act-time gate, undo
+    /// and recovery read them from here, so they judge with what the run was judged with. Written only
+    /// when not empty, so journals without them read and write as before (empty keeps every exemption
+    /// they open closed).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gone_msi_products: Vec<String>,
+    /// The Package Cache directories of the app's gone bundles and packages (see
+    /// [`RunSettings::gone_msi_products`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gone_cache_dirs: Vec<String>,
+    /// The bundle ids and provider keys of the app's gone Burn bundles and packages (see
+    /// [`RunSettings::gone_msi_products`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gone_burn: Vec<String>,
 }
 
 /// The deny-list exemptions an item was judged with (ENGINE_PLAN.md §5.10). The same four inputs as the

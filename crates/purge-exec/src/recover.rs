@@ -122,7 +122,7 @@ use crate::act_fs::{self, Retry};
 use crate::act_reg;
 use crate::act_typed::{self, PackageBackend};
 use crate::durable;
-use crate::execute::{self, Abort, ExecEnv, ExecError, ItemStep, Run};
+use crate::execute::{self, Abort, ExecEnv, ExecError, ItemStep, ObjectBackends, Run};
 use crate::gate::{GateCtx, GateSetupError};
 use crate::journal::{
     self, JournalError, JournalRead, JournalState, JournalWriter, OpState, OpStatus, UndoState,
@@ -146,6 +146,10 @@ pub struct RecoverEnv<'a> {
     pub deny: &'a DenyList,
     /// The package calls.
     pub packages: &'a dyn PackageBackend,
+    /// The backends of services, scheduled tasks and firewall rules; `None` (the default) in a process
+    /// that may not change them. Their open intents are then probed as needing attention, a resume that
+    /// still has one to run is refused, and their undo fails without changing anything.
+    pub objects: Option<ObjectBackends<'a>>,
     /// The Restart Manager, for the locked-file ladder of the items resume still runs.
     pub lockers: &'a dyn LockerQuery,
     /// The boot-time move list.
@@ -171,6 +175,7 @@ impl<'a> RecoverEnv<'a> {
             roots,
             deny,
             packages,
+            objects: None,
             lockers,
             pending_renames,
             retry: Retry::standard(),
@@ -532,20 +537,30 @@ pub(crate) fn probe_package(listed: Option<bool>) -> Probe {
 }
 
 /// Probes the op of `intent`, which has no `done`, through its action module: [`act_fs::probe_fs`],
-/// [`act_reg::probe_reg`] (the key checked by the undo gate in `ctx`) or [`act_typed::probe_package`].
+/// [`act_reg::probe_reg`] (the key checked by the undo gate in `ctx`), [`act_typed::probe_package`], or
+/// for a service, task or firewall rule its module's probe over `objects`
+/// ([`execute::probe_object`]: a service found marked for delete is `Done(PendingDelete)`; without
+/// backends `Attention`).
 pub(crate) fn probe_intent(
     ctx: &GateCtx,
     session: &SessionDir,
     intent: &Intent,
     pending: &dyn PendingRenames,
     packages: &dyn PackageBackend,
+    objects: Option<ObjectBackends<'_>>,
 ) -> Probe {
     match &intent.exec_op {
         ExecOp::QuarantineMove { .. } | ExecOp::RemoveDirIfEmpty { .. } => {
             act_fs::probe_fs(session, intent, pending)
         }
         ExecOp::RemovePackage { .. } => act_typed::probe_package(packages, intent),
-        _ => act_reg::probe_reg(ctx, session, intent),
+        ExecOp::DeleteService { .. }
+        | ExecOp::DeleteTask { .. }
+        | ExecOp::DeleteFirewallRule { .. } => execute::probe_object(objects, intent),
+        ExecOp::DeleteKeyTree { .. }
+        | ExecOp::DeleteKeyIfEmpty { .. }
+        | ExecOp::DeleteValue { .. }
+        | ExecOp::EditSegment { .. } => act_reg::probe_reg(ctx, session, intent),
     }
 }
 
@@ -569,6 +584,7 @@ pub fn probe(session: &SessionId, op: OpId, env: &RecoverEnv<'_>) -> Result<Prob
                 intent,
                 &*env.pending_renames,
                 env.packages,
+                env.objects,
             ))
         }
         _ => Ok(Probe::NotDone),
@@ -854,6 +870,7 @@ fn exec_env<'e>(env: &'e mut RecoverEnv<'_>) -> ExecEnv<'e> {
         env.lockers,
         &mut *env.pending_renames,
     );
+    exec.objects = env.objects;
     exec.retry = Retry::with(env.retry.delays().to_vec(), std::thread::sleep);
     exec
 }
@@ -1046,7 +1063,14 @@ fn rollback_run(
         let Some(intent) = &op.intent else {
             continue;
         };
-        let probe = probe_intent(&ctx, &session, intent, &*env.pending_renames, env.packages);
+        let probe = probe_intent(
+            &ctx,
+            &session,
+            intent,
+            &*env.pending_renames,
+            env.packages,
+            env.objects,
+        );
         let Some(token) = journal.resume_intent(op.op) else {
             continue;
         };
@@ -1084,6 +1108,7 @@ fn rollback_run(
             ctx: &ctx,
             pending: &mut *env.pending_renames,
             retry: &env.retry,
+            objects: env.objects,
         };
         driver.reconcile(&mut out.warnings)?;
         driver.run(&undo_order(&read.records, &all))
@@ -1226,6 +1251,7 @@ fn finish_tail(
                     ctx: &ctx,
                     pending: &mut *env.pending_renames,
                     retry: &env.retry,
+                    objects: env.objects,
                 };
                 driver.reconcile(&mut out.warnings)?;
                 driver.run(&undo_order(&read.records, &undoing))

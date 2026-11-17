@@ -31,6 +31,17 @@
 //!
 //! `journal fault-points` prints one line per fault point: `<name>` TAB `<description>`.
 //!
+//! # System objects
+//!
+//! An elevated process gets the live backends of services, scheduled tasks and firewall rules
+//! ([`ObjectBackends`]); an unelevated one gets none and is refused before it reads anything anyway.
+//! `exec --fp <fingerprint.json>` names the app's fingerprint: its install roots become the journal
+//! header's program roots (a service, task or firewall rule whose program lies outside them is neither
+//! deleted nor created again), and its MSI and Burn records give the run's M1b exemption lists, judged
+//! now by [`pipeline::m1b_lists`] over a fresh inventory (never taken from the plan). The fingerprint
+//! must be of an owner of the plan's items. Without `--fp` the roots and lists are empty: every object
+//! delete is refused and those exemptions stay closed.
+//!
 //! # The rig's targets
 //!
 //! `plan from-targets` turns a `purge.rig.targets/0` document (`targets[]` of `{id, target, action}`,
@@ -57,8 +68,11 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use purge_exec::act_firewall::LiveFirewall;
+use purge_exec::act_service::LiveServices;
+use purge_exec::act_task::WinTasks;
 use purge_exec::act_typed::{PackageBackend, WinPackages};
-use purge_exec::execute::{ExecEnv, ExecError, Progress, execute};
+use purge_exec::execute::{ExecEnv, ExecError, ObjectBackends, Progress, execute};
 use purge_exec::expiry::{
     self, ExpiringBackup, ExpiringItem, ExpiryId, ExpiryListing, IndexUpdate, PurgeConsent,
     PurgeOutcome,
@@ -66,7 +80,7 @@ use purge_exec::expiry::{
 use purge_exec::fault;
 use purge_exec::journal::{self, JournalError};
 use purge_exec::locked::{PendingRenames, SystemPendingRenames};
-use purge_exec::plan_in::{self, ExecRequest, ExecSettings, Selection};
+use purge_exec::plan_in::{self, ExecRequest, ExecSettings, GoneLists, Selection};
 use purge_exec::prepare::{
     LockerQuery, RestartManager, RestorePointBackend, RestorePointSetting, SystemRestore,
 };
@@ -83,8 +97,8 @@ use purge_harvest::roots::guard_env;
 use purge_model::exec::op::{ItemOutcome, OpId, Sha256Hex, SkipReason};
 use purge_model::exec::session::{ExecReport, SessionId, SessionState, UndoCounts};
 use purge_model::{
-    Action, AppRef, Band, Candidate, CandidateId, Category, Decision, FileTime, Harm, Origin, Plan,
-    ProgramId, Reversibility, ScanMode, Target, Tool,
+    Action, AppRef, Band, Candidate, CandidateId, Category, Decision, FileTime, Fingerprint, Harm,
+    Origin, Plan, ProgramId, Reversibility, RootKind, ScanMode, Target, Tool,
 };
 use purge_plan::emit::{ScanDoc, ScanSchema, to_plan0};
 use purge_plan::hash::plan_hash;
@@ -137,6 +151,8 @@ pub struct ExecHost<'a, R> {
     pub elevated: bool,
     /// Package enumeration and removal.
     pub packages: &'a dyn PackageBackend,
+    /// Services, scheduled tasks and firewall rules; `None` for a process that may not change them.
+    pub objects: Option<ObjectBackends<'a>>,
     /// Restart Manager, query only.
     pub lockers: &'a dyn LockerQuery,
     /// The boot-time move list.
@@ -152,10 +168,21 @@ pub fn run_live(verb: ExecVerb, env: &mut Env<'_>) -> Exit {
     let packages = WinPackages::new();
     let lockers = RestartManager;
     let mut pending_renames = SystemPendingRenames;
+    let elevated = env.sources.sys.elevated();
+    let services = LiveServices;
+    let firewall = LiveFirewall;
+    // The task files' directory comes from the machine's own layout.
+    let tasks = WinTasks::from_env(&guard_env(env.sources.reg, env.sources.sys).0);
+    let objects = elevated.then_some(ObjectBackends {
+        services: &services,
+        tasks: &tasks,
+        firewall: &firewall,
+    });
     let mut host = ExecHost {
         roots: StorageRoots::installed(),
-        elevated: env.sources.sys.elevated(),
+        elevated,
         packages: &packages,
+        objects,
         lockers: &lockers,
         pending_renames: &mut pending_renames,
         restore_points: SystemRestore,
@@ -277,6 +304,7 @@ fn journal_exit(e: &JournalError) -> Exit {
 fn exec_error_exit(e: &ExecError) -> Exit {
     match e {
         ExecError::Plan(_) => Exit::PlanRefused,
+        ExecError::NeedsElevation(_) => Exit::NeedsElevation,
         ExecError::Store(s) => storage_exit(s),
         ExecError::Journal(j) => journal_exit(j),
         _ => Exit::Runtime,
@@ -709,6 +737,13 @@ fn exec<R: RestorePointBackend + Clone>(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    let (program_roots, gone) = match &a.fp {
+        None => (Vec::new(), GoneLists::default()),
+        Some(path) => match app_facts(env, path, &owners) {
+            Ok(facts) => facts,
+            Err(exit) => return exit,
+        },
+    };
     let request = ExecRequest {
         scan,
         confirm: a.confirm.clone(),
@@ -723,6 +758,8 @@ fn exec<R: RestorePointBackend + Clone>(
             user_sid: purge_win::sid::current_user_sid().ok(),
             // As the scan decided: candidates may spell 8.3 names, so the refusal stays on.
             long_names_resolved: false,
+            program_roots,
+            gone,
             ..ExecSettings::default()
         },
     };
@@ -766,6 +803,7 @@ fn exec<R: RestorePointBackend + Clone>(
             host.lockers,
             &mut *host.pending_renames,
         );
+        exec_env.objects = host.objects;
         exec_env.progress = Some(&progress);
         execute(request, exec_env, host.restore_points.clone())
     };
@@ -790,6 +828,46 @@ fn exec<R: RestorePointBackend + Clone>(
         written,
         with_record(env, "exec", report_exit(report), recorded),
     )
+}
+
+/// The program roots and the M1b exemption lists of the run, from the app's fingerprint at `path`
+/// (`exec --fp`): its install roots, and [`pipeline::m1b_lists`] judged now over a fresh inventory.
+/// Refused ([`Exit::PlanRefused`]) when the fingerprint is not of an owner of the plan's items.
+fn app_facts(
+    env: &mut Env<'_>,
+    path: &Path,
+    owners: &[ProgramId],
+) -> Result<(Vec<String>, GoneLists), Exit> {
+    let fp: Fingerprint = output::read_json(path).map_err(|e| {
+        env.error(&format!("cannot read the fingerprint: {e}"));
+        Exit::Usage
+    })?;
+    if !owners.contains(&fp.app.program_id) {
+        env.error(&format!(
+            "the fingerprint {} is of {}, which owns no item of the plan; nothing was done",
+            path.display(),
+            fp.app.program_id
+        ));
+        return Err(Exit::PlanRefused);
+    }
+    let roots: Vec<String> = fp
+        .roots
+        .iter()
+        .filter(|root| root.kind == RootKind::InstallRoot)
+        .map(|root| root.path.clone())
+        .collect();
+    let inventory = pipeline::inventory(env.sources);
+    let lists = pipeline::m1b_lists(env.sources, &fp, &inventory);
+    env.note(&format!(
+        "fingerprint of {}: {} install root(s); gone: {} MSI product(s), {} Package Cache dir(s), {} \
+         Burn record(s)",
+        fp.app.program_id,
+        roots.len(),
+        lists.gone_msi_products().len(),
+        lists.gone_cache_dirs().len(),
+        lists.gone_burn().len()
+    ));
+    Ok((roots, GoneLists::from_decide(&lists)))
 }
 
 /// [`Exit::Unrecorded`], with a warning for each part missing, unless the run's session is closed
@@ -899,10 +977,11 @@ fn undo_verb<R>(a: &UndoArgs, env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> 
         selection,
         plan_hash,
     };
-    let result = undo::undo(
-        &request,
-        UndoEnv::new(&roots, &deny, &mut *host.pending_renames),
-    );
+    let undo_env = UndoEnv {
+        objects: host.objects,
+        ..UndoEnv::new(&roots, &deny, &mut *host.pending_renames)
+    };
+    let result = undo::undo(&request, undo_env);
     let out = match result {
         Ok(out) => out,
         Err(e) => {
@@ -1031,13 +1110,16 @@ fn journal_recover<R>(env: &mut Env<'_>, host: &mut ExecHost<'_, R>) -> Exit {
     for s in &list.sessions {
         let mut probes = Vec::new();
         if let Some(deny) = &deny {
-            let probe_env = RecoverEnv::new(
-                &roots,
-                deny,
-                host.packages,
-                host.lockers,
-                &mut *host.pending_renames,
-            );
+            let probe_env = RecoverEnv {
+                objects: host.objects,
+                ..RecoverEnv::new(
+                    &roots,
+                    deny,
+                    host.packages,
+                    host.lockers,
+                    &mut *host.pending_renames,
+                )
+            };
             for &op in s.open_intents.iter().chain(&s.unconfirmed) {
                 probes.push(match recover::probe(&s.session, op, &probe_env) {
                     Ok(p) => json!({ "op": op, "result": probe_json(&p) }),
@@ -1233,13 +1315,16 @@ fn journal_recover_run<R>(
     let mut results = Vec::new();
     for id in &targets {
         let Some(deny) = &deny else { break };
-        let recover_env = RecoverEnv::new(
-            &roots,
-            deny,
-            host.packages,
-            host.lockers,
-            &mut *host.pending_renames,
-        );
+        let recover_env = RecoverEnv {
+            objects: host.objects,
+            ..RecoverEnv::new(
+                &roots,
+                deny,
+                host.packages,
+                host.lockers,
+                &mut *host.pending_renames,
+            )
+        };
         let result = match mode {
             RecoverMode::Resume => recover::resume(id, recover_env),
             RecoverMode::Rollback => recover::rollback(id, recover_env),
@@ -1431,13 +1516,16 @@ fn journal_retry_held<R>(session: &str, env: &mut Env<'_>, host: &mut ExecHost<'
         Ok(d) => d,
         Err(exit) => return exit,
     };
-    let recover_env = RecoverEnv::new(
-        &roots,
-        &deny,
-        host.packages,
-        host.lockers,
-        &mut *host.pending_renames,
-    );
+    let recover_env = RecoverEnv {
+        objects: host.objects,
+        ..RecoverEnv::new(
+            &roots,
+            &deny,
+            host.packages,
+            host.lockers,
+            &mut *host.pending_renames,
+        )
+    };
     let out = match recover::retry_held(&id, recover_env) {
         Ok(out) => out,
         Err(e) => {

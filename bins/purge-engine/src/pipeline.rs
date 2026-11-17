@@ -963,9 +963,11 @@ fn run_scan(
 ///   warning on that hive's Uninstall keys, or on the list of loaded hives for a user, makes it
 ///   unknown).
 ///
-/// M1B-X-INTEG hook: the executor must not take these lists from the plan or the journal (a plan file
-/// could then name any product or Package Cache folder). At act time it computes them itself with this
-/// function, over the fingerprint it stored and a fresh inventory, and passes them to its gate.
+/// The executor never takes these lists from the plan (a plan file could then name any product or
+/// Package Cache folder): `exec --fp` computes them with this function when the run starts, over the
+/// app's fingerprint and a fresh inventory, and the run journals them in its `settings` record
+/// (`RunSettings::gone_*`), from which its act-time gate, undo and recovery read them
+/// (`GateCtx::set_gone`).
 pub fn m1b_lists(sources: Sources<'_>, fp: &Fingerprint, inv: &Inventory) -> M1bDecide {
     let loaded = sources.reg.loaded_user_sids().ok();
     let hive_read = |sid: Option<&str>| -> bool {

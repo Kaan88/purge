@@ -4,7 +4,7 @@
 use purge_model::exec::op::{ExecOp, Mismatch, OpId};
 use purge_model::{
     Action, AppRef, Band, Blocker, Candidate, CandidateId, Category, Decision, Harm, Origin,
-    Reversibility, ScanMode, Target, Tool,
+    Reversibility, ScanMode, Target, TaskIdentity, Tool,
 };
 use purge_plan::emit::{ScanDoc, ScanSchema};
 
@@ -478,8 +478,24 @@ fn a_preselection_of_nothing_is_refused() {
     );
 }
 
+/// Changed by M1B-X-INTEG: a service, task or firewall item resolves to its object op when it carries
+/// its scan-time digest; without one it stays selectable and unresolved (the run skips it); a wrong
+/// action on it is refused like on any other target.
 #[test]
-fn targets_without_an_executor_are_selectable_and_unresolved() {
+fn typed_targets_resolve_with_their_digest_and_stay_selectable_without_it() {
+    let task_fp = TaskIdentity {
+        path: r"\Vendor\Update".into(),
+        actions: Vec::new(),
+    }
+    .fp();
+    let mut with_fp = safe(
+        "task-fp",
+        Target::Task {
+            path: r"\Vendor\Update".into(),
+        },
+        Action::DeleteKey,
+    );
+    with_fp.object_fp = Some(task_fp);
     let scan = scan_doc(
         vec![
             safe(
@@ -492,17 +508,25 @@ fn targets_without_an_executor_are_selectable_and_unresolved() {
             safe(
                 "task",
                 Target::Task {
-                    path: r"\Vendor\Update".into(),
+                    path: r"\Vendor\Other".into(),
                 },
-                Action::Quarantine,
+                Action::DeleteKey,
             ),
             safe(
                 "fw",
                 Target::FirewallRule {
                     id: "{11111111-2222-3333-4444-555555555555}".into(),
                 },
+                Action::DeleteKey,
+            ),
+            safe(
+                "fw-wrong",
+                Target::FirewallRule {
+                    id: "{11111111-2222-3333-4444-666666666666}".into(),
+                },
                 Action::Quarantine,
             ),
+            with_fp,
         ],
         Vec::new(),
     );
@@ -511,9 +535,23 @@ fn targets_without_an_executor_are_selectable_and_unresolved() {
         not_selectable(bind(&request(&scan, ids(&["svc"])))),
         NotSelectable::ReportOnly
     );
+    // No digest: selectable, no executor op.
     let bound = bind(&request(&scan, ids(&["task", "fw"]))).unwrap();
     assert!(bound.items().iter().all(|item| item.exec_op.is_none()));
     assert!(bound.exec_ops().is_empty());
+    // A wrong action is refused.
+    assert_eq!(
+        not_selectable(bind(&request(&scan, ids(&["fw-wrong"])))),
+        NotSelectable::Unresolvable(Mismatch::WrongAction)
+    );
+    // With its digest: the object op.
+    let bound = bind(&request(&scan, ids(&["task-fp"]))).unwrap();
+    assert_eq!(
+        bound.exec_ops(),
+        vec![ExecOp::DeleteTask {
+            path: r"\Vendor\Update".into()
+        }]
+    );
 }
 
 #[test]

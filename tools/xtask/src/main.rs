@@ -113,7 +113,8 @@ fn ci(root: &Path) -> Result<bool> {
         // The executor CLI and every purge-exec test target, which only a rig-exec build and
         // purge-exec's `fault-inject` and `test-support` features compile (review M2 M23, M1b R2b S1:
         // `act_service`, `act_task`, `act_firewall`, `m1b_found`, `roundtrip` and `crash` are empty
-        // without them). purge-engine's library and CLI tests; its other targets do not depend on the
+        // without them). purge-engine's library and CLI tests, and its engine tests, whose `m1b_exec`
+        // module (M1B-X-INTEG) only a rig-exec build compiles; its other targets do not depend on the
         // features and ran in the workspace step.
         &[
             "clippy",
@@ -137,6 +138,8 @@ fn ci(root: &Path) -> Result<bool> {
             "--lib",
             "--test",
             "exec_cli",
+            "--test",
+            "engine",
         ],
         &["test", "-p", "purge-exec", "--features", EXEC_TEST_FEATURES],
     ];

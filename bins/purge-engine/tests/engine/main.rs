@@ -9,9 +9,13 @@
 //! - `nsis`: an NSIS app that takes a co-product with it while a sibling product of the same vendor
 //!   stays, through the pipeline functions, with a golden plan;
 //! - `exit_codes`: failed, cancelled and timed-out uninstalls, broken preconditions, write errors and
-//!   `scan --path`.
+//!   `scan --path`;
+//! - `m1b_exec` (`rig-exec` builds): `exec --fp` and `undo` of a service, a scheduled task and a
+//!   firewall rule over in-memory object backends, and their exit codes.
 
 mod common;
 mod exit_codes;
 mod inno;
+#[cfg(feature = "rig-exec")]
+mod m1b_exec;
 mod nsis;

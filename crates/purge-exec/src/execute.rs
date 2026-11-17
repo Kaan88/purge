@@ -36,16 +36,20 @@
 //!
 //! 1. The journal already holds a `done` for the op: nothing to do. It holds an intent without a done:
 //!    nothing is done here (recovery probes such an op).
-//! 2. **Route.** A target without an executor in this version (service, scheduled task, firewall rule)
-//!    is `done` as skipped ([`act_typed::unsupported_target`]). An op without a recorded `validated`
-//!    record (it was gone, refused or unreadable at validation) is `done` with what a fresh read-only
-//!    look says and is never acted on.
-//! 3. **Gate and backup** (`prepare_fs`, `prepare_reg`, `prepare_remove_package`): the act-time gate
-//!    on the handle the action will use, the quarantine directory or the verified backup file
-//!    (`backup.written`, `backup.verified`). A decision here is a `done` without an intent.
-//! 4. **Intent** (`intent`, flushed; `intent.flushed`), which yields the token.
-//! 5. **Act** (`act.before`, then `act_fs` / `act_reg` / `remove_package`, which hit `act.after`,
-//!    `regdelete.mid` and verify).
+//! 2. **Route.** A service, scheduled task or firewall rule without its scan-time digest
+//!    (`Candidate::object_fp`) is `done` as `Skipped{ChangedSinceScan}` ("no object fingerprint")
+//!    before any backup. An op without a recorded `validated` record (it was gone, refused or
+//!    unreadable at validation) is `done` with what a fresh read-only look says and is never acted on.
+//! 3. **Gate and backup** (`prepare_fs`, `prepare_reg`, `prepare_remove_package`, and for an object
+//!    `act_service::prepare_recorded`, `act_task::prepare_task`, `act_firewall::prepare_recorded`): the
+//!    act-time gate on the handle the action will use, the quarantine directory or the verified backup
+//!    or definition file (`backup.written`, `backup.verified`). A decision here is a `done` without an
+//!    intent.
+//! 4. **Intent** (`intent`, flushed; `intent.flushed`), which yields the token. An object op's intent
+//!    marks its hive (`SYSTEM` for a service or firewall rule, `SOFTWARE` for a task) for the flush
+//!    before the next `group_end`, `commit` or `aborted`.
+//! 5. **Act** (`act.before`, then `act_fs` / `act_reg` / `remove_package` / the object's `act`, which
+//!    hit `act.after`, `regdelete.mid` or `objdelete.after`, flush the object's hive, and verify).
 //! 6. **Done** (`done.before`, `done` with the token; `group_end` after 64 intents).
 //!
 //! Registry items of one run may depend on each other (a key deleted if empty after the values and
@@ -54,6 +58,19 @@
 //! its `done` (`GateCtx::note_done`); a resumed run notes the journal's completed ops when it is made,
 //! and again after recovery wrote through [`Run::journal_mut`] (`GateCtx::note_journal`). The act-time
 //! gate then accepts exactly the changes those own ops explain; see `crate::gate`.
+//!
+//! # System objects
+//!
+//! A service, scheduled task or firewall rule (`ExecOp::DeleteService`, `DeleteTask`,
+//! `DeleteFirewallRule`) runs through its action module over the backends of [`ExecEnv::objects`]: the
+//! validate pass reads it (its digest against the candidate's `object_fp`), the item writes its
+//! definition, journals the intent, re-reads and gates it at act time and deletes it. Only the roots of
+//! the journal header (`Header::program_roots`, from [`ExecSettings::program_roots`]) count as the
+//! app's: a service or task whose program, or a rule whose `App`, is outside them is not deleted. A
+//! process without object backends (not elevated) cannot run a plan that selects one: the run is
+//! refused before its session exists ([`ExecError::NeedsElevation`]). Nothing is stopped or ended: a
+//! running service or task is `Skipped{GateBlocked{InUse}}`. A service another handle keeps open is
+//! `PendingDelete`: it goes at the next restart at the latest.
 //!
 //! A file that stays locked goes to the ladder ([`crate::locked`]): Restart Manager names the holders
 //! (nothing is closed), then the item is held for the next run (`HeldRetry`) or a boot-time move into
@@ -94,14 +111,17 @@ use purge_model::exec::journal::{
 };
 use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::session::{ExecReport, SessionId, SessionIndex, SessionState, VolumeUsage};
-use purge_model::{Candidate, CandidateId};
+use purge_model::{Candidate, CandidateId, ObjectKind, Reversibility};
 use purge_plan::emit::ScanDoc;
 
+use crate::act_firewall::{self, FirewallBackend, FwPrepared, FwRemoval, FwValidated};
 use crate::act_fs::{self, FsActed, FsCompletion, FsPrepared, Retry, act_fs, prepare_fs};
 use crate::act_reg::{self, BackupWriteError, RegPrepared, act_reg, prepare_reg};
+use crate::act_service::{self, ServiceBackend, SvcPrepared, SvcRemoval, SvcValidated};
+use crate::act_task::{self, TaskBackend, TaskPrepared, TaskValidate};
 use crate::act_typed::{
-    self, DefinitionError, IrreversibleAck, PackageBackend, prepare_remove_package_recorded,
-    remove_package,
+    self, DefinitionError, IrreversibleAck, PackageBackend, TypedResult,
+    prepare_remove_package_recorded, remove_package,
 };
 use crate::fault;
 use crate::gate::{self, GateCtx, GateItem, GateOutcome, GateSetupError};
@@ -165,6 +185,25 @@ pub enum Progress<'a> {
     },
 }
 
+/// The backends of the system objects a run may delete: services, scheduled tasks, firewall rules. The
+/// engine passes the live ones (`act_service::LiveServices`, `act_task::WinTasks`,
+/// `act_firewall::LiveFirewall`) only to an elevated process; the tests pass scripted fakes.
+#[derive(Clone, Copy)]
+pub struct ObjectBackends<'a> {
+    /// The Service Control Manager and the `Services` keys.
+    pub services: &'a dyn ServiceBackend,
+    /// The Task Scheduler.
+    pub tasks: &'a dyn TaskBackend,
+    /// The firewall rules (WMI and their registry values).
+    pub firewall: &'a dyn FirewallBackend,
+}
+
+impl std::fmt::Debug for ObjectBackends<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ObjectBackends").finish_non_exhaustive()
+    }
+}
+
 /// Everything outside the request that a run works with. The backends are trait objects so that the rig
 /// and the tests can script them.
 pub struct ExecEnv<'a> {
@@ -174,6 +213,9 @@ pub struct ExecEnv<'a> {
     pub deny: &'a DenyList,
     /// Package enumeration and removal.
     pub packages: &'a dyn PackageBackend,
+    /// The backends of services, scheduled tasks and firewall rules; `None` (the default) in a process
+    /// that may not change them (not elevated), which then refuses a plan that selects one.
+    pub objects: Option<ObjectBackends<'a>>,
     /// Restart Manager, query only.
     pub lockers: &'a dyn LockerQuery,
     /// Who answers the "close these programs?" question. Nothing is closed whatever the answer.
@@ -207,6 +249,7 @@ impl<'a> ExecEnv<'a> {
             roots,
             deny,
             packages,
+            objects: None,
             lockers,
             consent: &DenyAll,
             pending_renames,
@@ -251,6 +294,13 @@ pub enum ExecError {
     /// The session cannot be resumed.
     #[error("the session cannot be resumed: {0}")]
     NotResumable(String),
+    /// The plan selects this many service, scheduled task or firewall rule items and the process has no
+    /// backends to change them ([`ExecEnv::objects`]: it is not elevated). Raised before the session
+    /// exists (a resumed run: before anything is read or written).
+    #[error(
+        "the plan selects {0} service, scheduled task or firewall rule item(s), which only an elevated process can remove; nothing was done"
+    )]
+    NeedsElevation(usize),
 }
 
 /// Why a run stops early.
@@ -665,13 +715,18 @@ impl Ledger {
 const OPEN_FAILED: &str = "gate.open-failed";
 /// The rule of a `Refused` validated record for an item the validate pass found in use.
 const LOCKED_AT_VALIDATION: &str = "gate.locked";
-/// The rule of a `Refused` validated record for an item with no executor in this version.
-const UNSUPPORTED: &str = "exec.unsupported";
+/// The rule of a `Refused` validated record for a service, task or firewall item without its scan-time
+/// digest (`Candidate::object_fp`).
+const NO_OBJECT_FP: &str = "exec.no-object-fp";
+/// The rule of a `Refused` validated record for an object op in a process without object backends.
+const NO_OBJECT_BACKENDS: &str = "exec.no-object-backends";
+/// The rule of a `Refused` validated record for an object op its module refused at validation.
+const OBJECT_REFUSED: &str = "exec.object-refused";
 
 /// The facts of the `validated` record of an item that did not pass the validate pass: `Absent` when it
 /// is gone, else [`ItemFacts::Refused`] with the blocker and rule of a refusal, the Win32 error of a
-/// failed or locked open, or (`None`: an item with no executor op, which is not looked at) the blocker
-/// its skip reports.
+/// failed or locked open, or (`None`: an object item without its scan-time digest, which is not looked
+/// at) [`Blocker::ChangedSinceScan`].
 fn refused_facts(outcome: Option<&GateOutcome<gate::Validation>>) -> ItemFacts {
     let refused = |blocker, reason: &str, os_error| ItemFacts::Refused {
         blocker,
@@ -689,8 +744,196 @@ fn refused_facts(outcome: Option<&GateOutcome<gate::Validation>>) -> ItemFacts {
         }
         // A pass is journalled with its own facts; one arriving here binds nothing.
         Some(GateOutcome::Pass(_)) => refused(None, "exec.internal", None),
-        None => refused(Some(Blocker::CannotBackUp), UNSUPPORTED, None),
+        None => refused(Some(Blocker::ChangedSinceScan), NO_OBJECT_FP, None),
     }
+}
+
+/// The facts of the `validated` record of an object op its module decided at validation: `Absent` for
+/// `Vanished`, else [`ItemFacts::Refused`] with the blocker of a gate refusal
+/// ([`Blocker::ChangedSinceScan`] for another digest) and the error code of a failed read.
+fn object_decided_facts(result: &TypedResult) -> ItemFacts {
+    let refused = |blocker, reason: &str, os_error| ItemFacts::Refused {
+        blocker,
+        reason: reason.to_owned(),
+        os_error,
+    };
+    match &result.outcome {
+        ItemOutcome::Vanished => ItemFacts::Absent,
+        ItemOutcome::Skipped {
+            reason: SkipReason::GateBlocked { blocker },
+        } => refused(Some(blocker.clone()), OBJECT_REFUSED, None),
+        ItemOutcome::Skipped {
+            reason: SkipReason::ChangedSinceScan,
+        } => refused(
+            Some(Blocker::ChangedSinceScan),
+            gate::reason::OBJECT_CHANGED,
+            None,
+        ),
+        ItemOutcome::Failed { os_error, .. } => refused(None, OPEN_FAILED, *os_error),
+        _ => refused(None, OBJECT_REFUSED, None),
+    }
+}
+
+/// The validate pass for an object op (`exec_op` of plan item `cand`): its module's `validate`, read
+/// only, over `objects`. `Ok` with the object facts that bind the act to its digest; `Err` with the
+/// facts to journal ([`object_decided_facts`]) and the module's result, for an item that is never acted
+/// on. Without backends nothing is read and the item is refused.
+fn validate_object(
+    objects: Option<ObjectBackends<'_>>,
+    ctx: &GateCtx,
+    exec_op: &ExecOp,
+    cand: &Candidate,
+) -> Result<ItemFacts, (ItemFacts, TypedResult)> {
+    let Some(objects) = objects else {
+        let facts = ItemFacts::Refused {
+            blocker: None,
+            reason: NO_OBJECT_BACKENDS.to_owned(),
+            os_error: None,
+        };
+        return Err((facts, no_backends(exec_op)));
+    };
+    let decided = |result: TypedResult| (object_decided_facts(&result), result);
+    match exec_op {
+        ExecOp::DeleteService { .. } => {
+            match act_service::validate(objects.services, ctx.deny(), exec_op, cand) {
+                SvcValidated::Validated { facts, .. } => Ok(facts),
+                SvcValidated::Decided(result) => Err(decided(result)),
+            }
+        }
+        ExecOp::DeleteFirewallRule { .. } => {
+            match act_firewall::validate(objects.firewall, ctx.deny(), exec_op, cand) {
+                FwValidated::Validated { facts, .. } => Ok(facts),
+                FwValidated::Decided(result) => Err(decided(result)),
+            }
+        }
+        ExecOp::DeleteTask { .. } => {
+            let validated = act_task::validate_task(objects.tasks, ctx, exec_op, cand);
+            let facts = validated.journal_facts();
+            match validated {
+                TaskValidate::Validated { .. } => Ok(facts),
+                TaskValidate::Decided(decision) => Err((facts, decision.result)),
+            }
+        }
+        _ => {
+            let (outcome, detail) = internal(format!("{} is not an object op", exec_op.name()));
+            let facts = ItemFacts::Refused {
+                blocker: None,
+                reason: "exec.internal".to_owned(),
+                os_error: None,
+            };
+            Err((facts, TypedResult { outcome, detail }))
+        }
+    }
+}
+
+/// The result for an object op in a process without object backends: nothing is read or changed.
+fn no_backends(exec_op: &ExecOp) -> TypedResult {
+    let (outcome, detail) = internal(format!(
+        "{} on {:?}: this process has no backends for services, scheduled tasks and firewall rules \
+         (it is not elevated); nothing was read or changed",
+        exec_op.name(),
+        exec_op.target()
+    ));
+    TypedResult { outcome, detail }
+}
+
+/// The program roots of the journal header of `state` (`Header::program_roots`).
+fn header_roots(state: &JournalState) -> Vec<String> {
+    state.header().program_roots.clone()
+}
+
+/// The forward completion of an object op whose intent recovery found not done: the op's act again,
+/// bound to the journalled intent and run under its resumed `token`, so the act-time gate (the object
+/// read again, its digest against the intent's, the guard, the program roots, the definition binding)
+/// runs again before anything is deleted. Without backends nothing is called: `Failed{VerifyFailed}`,
+/// the item left as it is.
+pub(crate) fn complete_object(
+    objects: Option<ObjectBackends<'_>>,
+    ctx: &GateCtx,
+    session: &SessionDir,
+    intent: &Intent,
+    token: &IntentToken,
+    program_roots: &[String],
+) -> TypedResult {
+    let Some(objects) = objects else {
+        let detail = format!(
+            "{} was interrupted and this process has no backends for services, scheduled tasks and \
+             firewall rules (it is not elevated); the item was left as it is",
+            intent.exec_op.name()
+        );
+        return TypedResult {
+            outcome: ItemOutcome::Failed {
+                code: FailCode::VerifyFailed,
+                os_error: None,
+                detail: detail.clone(),
+            },
+            detail,
+        };
+    };
+    let not_bound = || {
+        let (outcome, detail) = internal(format!(
+            "the intent of op {} does not hang together; nothing done",
+            intent.op
+        ));
+        TypedResult { outcome, detail }
+    };
+    match &intent.exec_op {
+        ExecOp::DeleteService { .. } => match SvcRemoval::from_intent(intent) {
+            Some(removal) => act_service::act(
+                objects.services,
+                ctx.deny(),
+                session,
+                Box::new(removal),
+                token,
+                program_roots,
+            ),
+            None => not_bound(),
+        },
+        ExecOp::DeleteFirewallRule { .. } => match FwRemoval::from_intent(intent) {
+            Some(removal) => act_firewall::act(
+                objects.firewall,
+                ctx.deny(),
+                session,
+                Box::new(removal),
+                token,
+                program_roots,
+            ),
+            None => not_bound(),
+        },
+        ExecOp::DeleteTask { .. } => {
+            act_task::delete_task(objects.tasks, ctx, session, intent, token, program_roots)
+        }
+        _ => not_bound(),
+    }
+}
+
+/// What became of the object op of `intent`, an intent without its `done` (recovery), through its
+/// module's probe. Without backends: `Attention` (nothing can be read).
+pub(crate) fn probe_object(objects: Option<ObjectBackends<'_>>, intent: &Intent) -> Probe {
+    let Some(objects) = objects else {
+        return Probe::Attention {
+            detail:
+                "this process has no backends for services, scheduled tasks and firewall rules \
+                     (it is not elevated); what became of the item cannot be read"
+                    .to_owned(),
+        };
+    };
+    match &intent.exec_op {
+        ExecOp::DeleteService { .. } => act_service::probe(objects.services, intent),
+        ExecOp::DeleteTask { .. } => act_task::probe_task(objects.tasks, intent),
+        ExecOp::DeleteFirewallRule { .. } => act_firewall::probe(objects.firewall, intent),
+        _ => Probe::Attention {
+            detail: "the intent is not an object op".to_owned(),
+        },
+    }
+}
+
+/// How many selected items of `plan` are object ops.
+fn object_ops(plan: &BoundPlan) -> usize {
+    plan.items()
+        .iter()
+        .filter(|item| item.exec_op.as_ref().is_some_and(ExecOp::is_object))
+        .count()
 }
 
 fn internal(detail: impl Into<String>) -> (ItemOutcome, String) {
@@ -711,8 +954,8 @@ fn internal(detail: impl Into<String>) -> (ItemOutcome, String) {
 
 /// Which part of the pipeline an op goes through.
 enum Route {
-    /// No executor in this version: journalled as skipped.
-    Unsupported(act_typed::TypedResult),
+    /// A service, task or firewall item without its scan-time digest: journalled as skipped.
+    NoObjectFp,
     /// No recorded `validated` record: never acted on.
     NotValidated,
     /// A quarantine move or a remove-dir-if-empty.
@@ -721,6 +964,8 @@ enum Route {
     Registry,
     /// A package removal.
     Package,
+    /// A service, scheduled task or firewall rule delete.
+    Object,
 }
 
 /// A run in progress: the session, its journal, and the gate context filled from the journal.
@@ -784,6 +1029,10 @@ impl<'a> Run<'a> {
     /// a failure of that cleanup leaves the directory, which holds no journal and so describes no run.
     fn start(request: ExecRequest, env: ExecEnv<'a>) -> Result<Run<'a>, ExecError> {
         let plan = plan_in::bind(&request)?;
+        let objects = object_ops(&plan);
+        if objects > 0 && env.objects.is_none() {
+            return Err(ExecError::NeedsElevation(objects));
+        }
         gate::expose_placeholders()?;
         env.roots.check()?;
         let volumes = plan_volumes(env.roots, &plan);
@@ -806,6 +1055,7 @@ impl<'a> Run<'a> {
             let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
             ctx.set_run_ops(run_ops(&plan));
             ctx.bind_user(request.settings.user_sid.as_deref());
+            ctx.set_gone(&request.settings.gone);
             let header = Header {
                 schema: JournalSchema,
                 session: session.id().clone(),
@@ -819,8 +1069,13 @@ impl<'a> Run<'a> {
                 items,
                 allow_irreversible: plan.allow_irreversible(),
                 volumes: volume_records(env.roots, session.id(), &volumes),
-                // M1b: the run executes no object op yet (M1B-X-INTEG fills the app's roots in here).
-                program_roots: Vec::new(),
+                // Recorded only for a run that selects an object op, so that every other run's header
+                // stays as M2 wrote it.
+                program_roots: if objects > 0 {
+                    request.settings.program_roots.clone()
+                } else {
+                    Vec::new()
+                },
             };
             // The selected ids in op order go into the settings record, so that a run stopped in its
             // validation is bound to its selection again without a search (`rebind_interrupted`).
@@ -899,9 +1154,24 @@ impl<'a> Run<'a> {
                     .into(),
             ));
         };
-        let settings = ExecSettings::from_journal(journalled);
+        let mut settings = ExecSettings::from_journal(journalled);
+        settings.program_roots = header_roots(state);
         let validated: Vec<Validated> = state.ops().map(OpState::validated).collect();
         let plan = plan_in::rebind_interrupted(scan, state)?;
+        // An object op that may still run needs the backends; nothing is written before this.
+        let open_objects = plan
+            .items()
+            .iter()
+            .filter(|item| item.exec_op.as_ref().is_some_and(ExecOp::is_object))
+            .filter(|item| {
+                state
+                    .op(item.op)
+                    .is_none_or(|op| !matches!(op.status(), OpStatus::Done(_)))
+            })
+            .count();
+        if open_objects > 0 && env.objects.is_none() {
+            return Err(ExecError::NeedsElevation(open_objects));
+        }
         let volume_roots: Vec<&str> = state
             .header()
             .volumes
@@ -912,6 +1182,7 @@ impl<'a> Run<'a> {
         let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
         ctx.set_run_ops(run_ops(&plan));
         ctx.bind_user(settings.user_sid.as_deref());
+        ctx.set_gone(&settings.gone);
         let mut notes = RunNotes::default();
         let data_volume = report::data_volume(env.roots);
         let index = read_index_for_cap(env.roots, &mut notes.warnings)?;
@@ -1009,10 +1280,11 @@ impl<'a> Run<'a> {
 
     /// The plan-time exemptions of op `op`'s item: `purge_plan::decide::deny_exemptions`, the
     /// derivation the plan's decide step uses, with the machine layout of the deny-list and the run's
-    /// `user_sid` and `long_names_resolved`. The act is gated with the journalled copy of these, never
-    /// with this value.
+    /// `user_sid` and `long_names_resolved`, and the run's M1b lists ([`GateCtx::set_gone`]). The act is
+    /// gated with the journalled copy of these, never with this value.
     fn exemptions(&self, op: OpId) -> Exemptions<'static> {
-        self.op_candidate(op)
+        let exemptions = self
+            .op_candidate(op)
             .map_or_else(Exemptions::default, |candidate| {
                 purge_plan::decide::deny_exemptions(
                     candidate,
@@ -1020,7 +1292,9 @@ impl<'a> Run<'a> {
                     self.settings.user_sid.as_deref(),
                     self.settings.long_names_resolved,
                 )
-            })
+            });
+        // The run's M1b lists, which the plan's decide step gives every candidate too.
+        self.ctx.with_gone(exemptions)
     }
 
     /// The gate's view of op `op` (`exec_op`) at validation: its exemptions ([`Run::exemptions`]), the
@@ -1060,7 +1334,8 @@ impl<'a> Run<'a> {
         let outcomes: BTreeMap<OpId, GateOutcome<gate::Validation>> = gate::validate_all(
             &self.ctx,
             todo.iter().filter_map(|item| {
-                let exec_op = item.exec_op.as_ref()?;
+                // An object op is validated by its module below.
+                let exec_op = item.exec_op.as_ref().filter(|op| !op.is_object())?;
                 Some((item.op, self.gate_item(item.op, exec_op)))
             }),
         )
@@ -1080,18 +1355,35 @@ impl<'a> Run<'a> {
                 .exec_op
                 .as_ref()
                 .map_or_else(|| candidate.target.clone(), ExecOp::target);
-            let record = match outcomes.get(&item.op) {
-                Some(GateOutcome::Pass(validation)) => {
+            let exemptions_of = |op: OpId| {
+                gate::exemptions_to_journal(&exemptions.get(&op).copied().unwrap_or_default())
+            };
+            let object = item.exec_op.as_ref().filter(|op| op.is_object());
+            let record = match (object, outcomes.get(&item.op)) {
+                (Some(exec_op), _) => Validated {
+                    op: item.op,
+                    item: candidate.id.clone(),
+                    target,
+                    facts: match validate_object(self.env.objects, &self.ctx, exec_op, candidate) {
+                        Ok(facts) => facts,
+                        Err((facts, result)) => {
+                            if !result.detail.is_empty() {
+                                self.ledger.notes.details.insert(item.op, result.detail);
+                            }
+                            facts
+                        }
+                    },
+                    exemptions: exemptions_of(item.op),
+                },
+                (None, Some(GateOutcome::Pass(validation))) => {
                     validation.to_journal(item.op, candidate.id.clone(), target)
                 }
-                outcome => Validated {
+                (None, outcome) => Validated {
                     op: item.op,
                     item: candidate.id.clone(),
                     target,
                     facts: refused_facts(outcome),
-                    exemptions: gate::exemptions_to_journal(
-                        &exemptions.get(&item.op).copied().unwrap_or_default(),
-                    ),
+                    exemptions: exemptions_of(item.op),
                 },
             };
             self.ledger
@@ -1158,11 +1450,22 @@ impl<'a> Run<'a> {
         }
         self.emit(Progress::ItemStarting { op, item: &item });
         let outcome = match self.route(op) {
-            Route::Unsupported(result) => self.ledger.decided(op, result.outcome, result.detail),
+            Route::NoObjectFp => self.ledger.decided(
+                op,
+                ItemOutcome::Skipped {
+                    reason: SkipReason::ChangedSinceScan,
+                },
+                format!(
+                    "{}: the scan recorded no digest of the object, so it cannot be told that it is \
+                     the one the scan saw; left untouched",
+                    gate::reason::NO_OBJECT_FP
+                ),
+            ),
             Route::NotValidated => self.unvalidated_item(op),
             Route::File => self.file_item(op),
             Route::Registry => self.registry_item(op),
             Route::Package => self.package_item(op),
+            Route::Object => self.object_item(op),
         }?;
         self.emit(Progress::ItemFinished {
             op,
@@ -1207,6 +1510,7 @@ impl<'a> Run<'a> {
             &intent,
             &*self.env.pending_renames,
             self.env.packages,
+            self.env.objects,
         );
         let size = self.move_size(op);
         let outcome = match &probe {
@@ -1295,6 +1599,18 @@ impl<'a> Run<'a> {
                     }
                 }
             }
+            exec_op if exec_op.is_object() => {
+                let roots = header_roots(self.ledger.journal.state());
+                let result = complete_object(
+                    self.env.objects,
+                    &self.ctx,
+                    &self.session,
+                    intent,
+                    &token,
+                    &roots,
+                );
+                self.ledger.done(token, result.outcome, result.detail)
+            }
             ExecOp::RemovePackage { .. } => {
                 let result = act_typed::complete_package(
                     self.env.packages,
@@ -1316,12 +1632,12 @@ impl<'a> Run<'a> {
     fn route(&self, op: OpId) -> Route {
         let bound = self.plan.item(op);
         if let Some(item) = bound.filter(|item| item.exec_op.is_none()) {
-            let unsupported = self
+            let object = self
                 .plan
                 .candidate(item)
-                .and_then(|candidate| act_typed::unsupported_target(&candidate.target));
-            if let Some(result) = unsupported {
-                return Route::Unsupported(result);
+                .is_some_and(|candidate| ObjectKind::of(&candidate.target).is_some());
+            if object {
+                return Route::NoObjectFp;
             }
         }
         match self.ctx.journalled(op) {
@@ -1330,6 +1646,7 @@ impl<'a> Run<'a> {
                 Route::File
             }
             Some((ExecOp::RemovePackage { .. }, _)) => Route::Package,
+            Some((exec_op, _)) if exec_op.is_object() => Route::Object,
             Some(_) => Route::Registry,
         }
     }
@@ -1354,6 +1671,27 @@ impl<'a> Run<'a> {
                     .cloned()
                     .unwrap_or_else(|| "the gate holds no record of its validation".into()),
             ),
+            Some(exec_op) if exec_op.is_object() => {
+                // The same read-only look as the validate pass, through the op's module.
+                let candidate = self.op_candidate(op);
+                let look = candidate.map(|candidate| {
+                    validate_object(self.env.objects, &self.ctx, &exec_op, candidate)
+                });
+                match look {
+                    Some(Err((_, result))) if result.outcome.allowed_without_intent() => {
+                        (result.outcome, result.detail)
+                    }
+                    Some(Err((_, result))) => internal(result.detail),
+                    Some(Ok(_)) => (
+                        ItemOutcome::Skipped {
+                            reason: SkipReason::ChangedSinceScan,
+                        },
+                        "it did not pass validation when the run started; left for the next scan"
+                            .into(),
+                    ),
+                    None => internal("the op has no plan item"),
+                }
+            }
             Some(exec_op) => {
                 // The same view as the validate pass, scan-time identity included, so an item refused
                 // for its identity is reported as such again.
@@ -1374,7 +1712,7 @@ impl<'a> Run<'a> {
                     ),
                 }
             }
-            None => internal("the plan item has no executor op and no skip rule"),
+            None => internal("the plan item has no executor op"),
         };
         self.ledger.decided(op, outcome, detail)
     }
@@ -1597,6 +1935,155 @@ impl<'a> Run<'a> {
                 let token = self.ledger.intent(removal.intent().clone())?;
                 fault::point(fault::ACT_BEFORE);
                 let result = remove_package(backend, removal, &token);
+                self.ledger.done(token, result.outcome, result.detail)
+            }
+        }
+    }
+
+    /// A service, scheduled task or firewall rule delete (C-ACT): its module's prepare (the object read
+    /// and gated against the journalled stamp, the definition written and verified), intent, `act.before`,
+    /// the module's act (read and gated again, delete, `objdelete.after`, flush of the object's hive,
+    /// `act.after`, verdict from a fresh read), done. Op, plan item and stamp come from the op's
+    /// journalled `validated` record; the program roots from the journal header. A definition that
+    /// cannot be written as verified skips the item (`NoVerifiedBackup`); a store that fails its
+    /// integrity check aborts the run.
+    fn object_item(&mut self, op: OpId) -> Result<ItemOutcome, Abort> {
+        let Some(objects) = self.env.objects else {
+            let exec_op = self.ctx.journalled(op).map(|(exec_op, _)| exec_op.clone());
+            let result = exec_op.map_or_else(
+                || TypedResult {
+                    outcome: internal("no journalled op").0,
+                    detail: "no journalled op".into(),
+                },
+                |exec_op| no_backends(&exec_op),
+            );
+            return self.ledger.decided(op, result.outcome, result.detail);
+        };
+        let Some(planned) = self
+            .op_candidate(op)
+            .map(|candidate| candidate.reversibility)
+        else {
+            let (outcome, detail) = internal("the op has no plan item");
+            return self.ledger.decided(op, outcome, detail);
+        };
+        let roots = header_roots(self.ledger.journal.state());
+        let kind = self.ctx.journalled(op).map(|(exec_op, _)| exec_op.clone());
+        match kind {
+            Some(ExecOp::DeleteService { .. }) => {
+                self.service_item(objects.services, op, planned, &roots)
+            }
+            Some(ExecOp::DeleteTask { .. }) => self.task_item(objects.tasks, op, planned, &roots),
+            Some(ExecOp::DeleteFirewallRule { .. }) => {
+                self.firewall_item(objects.firewall, op, &roots)
+            }
+            _ => {
+                let (outcome, detail) = internal("the op is not an object op");
+                self.ledger.decided(op, outcome, detail)
+            }
+        }
+    }
+
+    fn service_item(
+        &mut self,
+        backend: &dyn ServiceBackend,
+        op: OpId,
+        planned: Reversibility,
+        roots: &[String],
+    ) -> Result<ItemOutcome, Abort> {
+        let prepared = act_service::prepare_recorded(
+            backend,
+            &self.ctx,
+            &self.session,
+            op,
+            planned,
+            self.settings.key_limit,
+            roots,
+        );
+        match prepared {
+            Err(e) if e.is_storage_integrity() => Err(Abort::backup(true, e.to_string())),
+            Err(e) => self.ledger.decided(op, e.outcome(), e.to_string()),
+            Ok(SvcPrepared::Decided(result)) => {
+                self.ledger.decided(op, result.outcome, result.detail)
+            }
+            Ok(SvcPrepared::Ready(removal)) => {
+                let token = self.ledger.intent(removal.intent().clone())?;
+                fault::point(fault::ACT_BEFORE);
+                let result = act_service::act(
+                    backend,
+                    self.ctx.deny(),
+                    &self.session,
+                    removal,
+                    &token,
+                    roots,
+                );
+                self.ledger.done(token, result.outcome, result.detail)
+            }
+        }
+    }
+
+    fn task_item(
+        &mut self,
+        backend: &dyn TaskBackend,
+        op: OpId,
+        planned: Reversibility,
+        roots: &[String],
+    ) -> Result<ItemOutcome, Abort> {
+        let prepared =
+            act_task::prepare_task(backend, &self.ctx, &self.session, op, planned, roots);
+        match prepared {
+            Err(e) if e.is_storage_integrity() => Err(Abort::backup(true, e.to_string())),
+            Err(e) => self.ledger.decided(op, e.outcome(), e.to_string()),
+            Ok(TaskPrepared::Decided(decision)) => {
+                self.ledger
+                    .decided(op, decision.result.outcome, decision.result.detail)
+            }
+            Ok(TaskPrepared::Ready(delete)) => {
+                let token = self.ledger.intent(delete.intent().clone())?;
+                fault::point(fault::ACT_BEFORE);
+                let result = act_task::delete_task(
+                    backend,
+                    &self.ctx,
+                    &self.session,
+                    delete.intent(),
+                    &token,
+                    roots,
+                );
+                self.ledger.done(token, result.outcome, result.detail)
+            }
+        }
+    }
+
+    fn firewall_item(
+        &mut self,
+        backend: &dyn FirewallBackend,
+        op: OpId,
+        roots: &[String],
+    ) -> Result<ItemOutcome, Abort> {
+        let prepared = act_firewall::prepare_recorded(
+            backend,
+            self.ctx.deny(),
+            &self.ctx,
+            &self.session,
+            op,
+            roots,
+        );
+        match prepared {
+            Err(e) if e.is_storage_integrity() => Err(Abort::backup(true, e.to_string())),
+            Err(e) => self.ledger.decided(op, e.outcome(), e.to_string()),
+            Ok(FwPrepared::Decided(result)) => {
+                self.ledger.decided(op, result.outcome, result.detail)
+            }
+            Ok(FwPrepared::Ready(removal)) => {
+                let token = self.ledger.intent(removal.intent().clone())?;
+                fault::point(fault::ACT_BEFORE);
+                let result = act_firewall::act(
+                    backend,
+                    self.ctx.deny(),
+                    &self.session,
+                    removal,
+                    &token,
+                    roots,
+                );
                 self.ledger.done(token, result.outcome, result.detail)
             }
         }

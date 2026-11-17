@@ -1069,8 +1069,10 @@ fn a_definition_file_a_crash_left_is_adopted_or_written_anew() {
 // Unsupported targets and undo
 // ---------------------------------------------------------------------------------------------------
 
+/// M1B-X-INTEG: services, scheduled tasks and firewall rules have their executors; no target is
+/// skipped as unsupported any more.
 #[test]
-fn services_tasks_and_firewall_rules_are_not_supported() {
+fn every_target_has_an_executor() {
     for target in [
         Target::Service {
             name: "VendorSvc".into(),
@@ -1081,35 +1083,15 @@ fn services_tasks_and_firewall_rules_are_not_supported() {
         Target::FirewallRule {
             id: "{0F1E2D3C-0000-0000-0000-000000000000}".into(),
         },
+        Target::AppxPackage {
+            full_name: NAME.into(),
+        },
+        Target::Path {
+            path: r"C:\x".into(),
+        },
     ] {
-        let r = unsupported_target(&target).unwrap();
-        assert_eq!(
-            r.outcome,
-            ItemOutcome::Skipped {
-                reason: SkipReason::GateBlocked {
-                    blocker: Blocker::CannotBackUp
-                }
-            }
-        );
-        assert!(
-            r.detail.contains("not supported in this version"),
-            "{}",
-            r.detail
-        );
-        assert!(r.outcome.allowed_without_intent());
+        assert_eq!(unsupported_target(&target), None, "{target:?}");
     }
-    assert_eq!(
-        unsupported_target(&Target::AppxPackage {
-            full_name: NAME.into()
-        }),
-        None
-    );
-    assert_eq!(
-        unsupported_target(&Target::Path {
-            path: r"C:\x".into()
-        }),
-        None
-    );
 }
 
 #[test]

@@ -342,6 +342,48 @@ pub struct GateCtx {
     effects: BTreeMap<OpId, OwnEffect>,
     /// The user the scan was made for (the run's `user_sid` setting, [`GateCtx::bind_user`]).
     user_sid: Option<String>,
+    /// The run's M1b exemption lists ([`GateCtx::set_gone`]), applied to every recorded op.
+    gone: Gone,
+}
+
+/// The run's M1b exemption lists as the guard's [`Exemptions`] take them (`&'static` slices, interned
+/// once per distinct list for the process: [`intern`]).
+#[derive(Debug, Clone, Copy, Default)]
+struct Gone {
+    msi_products: &'static [String],
+    cache_dirs: &'static [String],
+    burn: &'static [String],
+}
+
+impl Gone {
+    /// `exemptions` with these lists in place of its own.
+    fn apply(self, exemptions: Exemptions<'static>) -> Exemptions<'static> {
+        Exemptions {
+            gone_msi_products: self.msi_products,
+            gone_cache_dirs: self.cache_dirs,
+            gone_burn: self.burn,
+            ..exemptions
+        }
+    }
+}
+
+/// A process-lifetime copy of `list`, shared by every caller with an equal list. The guard's
+/// [`Exemptions`] borrow their lists for `'static`; a process runs a handful of sessions, each with one
+/// set of lists, so the copies stay few.
+fn intern(list: &[String]) -> &'static [String] {
+    static INTERNED: std::sync::Mutex<Vec<&'static [String]>> = std::sync::Mutex::new(Vec::new());
+    if list.is_empty() {
+        return &[];
+    }
+    let mut interned = INTERNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(found) = interned.iter().find(|known| **known == list) {
+        return found;
+    }
+    let leaked: &'static [String] = Box::leak(list.to_vec().into_boxed_slice());
+    interned.push(leaked);
+    leaked
 }
 
 /// One op of the run, with the canonical address of the key it acts on (the key itself for a key op,
@@ -550,11 +592,12 @@ fn own_effect(
             };
             Some(effect(probe.ancestors.last()?.clone(), 0, 1, None, content))
         }
+        // Not a key: nothing a later registry op is bound to changes. An object op's hive is flushed by
+        // its own module.
         ExecOp::QuarantineMove { .. }
         | ExecOp::RemoveDirIfEmpty { .. }
-        | ExecOp::RemovePackage { .. } => None,
-        // M1b: wired by M1B-X-INTEG
-        ExecOp::DeleteService { .. }
+        | ExecOp::RemovePackage { .. }
+        | ExecOp::DeleteService { .. }
         | ExecOp::DeleteTask { .. }
         | ExecOp::DeleteFirewallRule { .. } => None,
     }
@@ -639,7 +682,32 @@ impl GateCtx {
             run_ops: Vec::new(),
             effects: BTreeMap::new(),
             user_sid: None,
+            gone: Gone::default(),
         })
+    }
+
+    /// Sets the run's M1b exemption lists (C-GUARD): the ones its `settings` record holds
+    /// (`RunSettings::gone_*`, [`crate::plan_in::GoneLists`]), which the run's caller computed from the
+    /// app's fingerprint and fresh system queries when the run started. They apply to every op of the
+    /// run, as the plan's decide step gives them to every candidate: to the records accepted before and
+    /// after this call ([`GateCtx::exemptions`]) and to [`GateCtx::with_gone`]. Without a call they
+    /// are empty, which keeps every exemption they open closed.
+    pub fn set_gone(&mut self, lists: &crate::plan_in::GoneLists) {
+        self.gone = Gone {
+            msi_products: intern(&lists.msi_products),
+            cache_dirs: intern(&lists.cache_dirs),
+            burn: intern(&lists.burn),
+        };
+        let gone = self.gone;
+        for recorded in self.validated.values_mut() {
+            recorded.exemptions = gone.apply(recorded.exemptions);
+        }
+    }
+
+    /// `exemptions` with the run's M1b exemption lists ([`GateCtx::set_gone`]) in place of its own: what
+    /// the validate pass judges an item with.
+    pub fn with_gone(&self, exemptions: Exemptions<'static>) -> Exemptions<'static> {
+        self.gone.apply(exemptions)
     }
 
     /// Tells the gate whom the scan was made for: the run's `user_sid` setting (journalled with the
@@ -880,7 +948,9 @@ impl GateCtx {
                 op: op.clone(),
                 record: validated.clone(),
                 stamp,
-                exemptions: exemptions_from_journal(&validated.exemptions),
+                exemptions: self
+                    .gone
+                    .apply(exemptions_from_journal(&validated.exemptions)),
                 max_files,
             },
         );
@@ -892,7 +962,8 @@ impl GateCtx {
         self.validated.get(&op).map(|recorded| &recorded.stamp)
     }
 
-    /// The exemptions recorded for `op` (those of its journal `validated` record).
+    /// The exemptions recorded for `op`: those of its journal `validated` record, with the run's M1b
+    /// exemption lists ([`GateCtx::set_gone`]).
     pub fn exemptions(&self, op: OpId) -> Option<Exemptions<'static>> {
         self.validated.get(&op).map(|recorded| recorded.exemptions)
     }
@@ -932,9 +1003,9 @@ pub fn exemptions_for(
 /// `validated` record's `exemptions` field. Every field is carried over unchanged;
 /// [`exemptions_from_journal`] is the exact inverse.
 pub fn exemptions_to_journal(exemptions: &Exemptions<'_>) -> GateExemptions {
-    // Destructured without `..`, so a field added to either type fails to compile here.
-    // M1b: wired by M1B-X-FOUND. The three gone lists (M1B-GUARD) are not journalled yet; the act-time
-    // gate then sees them empty, which keeps their exemptions closed (fail closed).
+    // Destructured without `..`, so a field added to either type fails to compile here. The three M1b
+    // gone lists are the run's, not the item's: they are journalled once, in the run's `settings`
+    // record (`RunSettings::gone_*`), and `GateCtx::set_gone` applies them to every record.
     let Exemptions {
         proven_owned_skeleton,
         environment_segment_edit,
@@ -972,7 +1043,7 @@ pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions<'stati
         tier_a_start_menu_entry,
         long_names_resolved,
         shared_com_value,
-        // M1b: wired by M1B-X-FOUND (see `exemptions_to_journal`).
+        // The run's lists, journalled in its `settings` record: `GateCtx::set_gone` fills them in.
         gone_burn: &[],
         gone_msi_products: &[],
         gone_cache_dirs: &[],
@@ -1319,7 +1390,9 @@ fn validate_as(ctx: &GateCtx, item: &GateItem<'_>, op: Option<OpId>) -> GateOutc
             facts: ItemFacts::Package,
             exemptions: item.exemptions,
         }),
-        // M1b: wired by M1B-X-INTEG
+        // An object op is validated by its action module (`act_service::validate`,
+        // `act_task::validate_task`, `act_firewall::validate`), which the run calls with the object
+        // backends; never by the location gate.
         ExecOp::DeleteService { .. }
         | ExecOp::DeleteTask { .. }
         | ExecOp::DeleteFirewallRule { .. } => GateOutcome::Refused(rule(reason::OP_KIND)),

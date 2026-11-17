@@ -365,7 +365,7 @@ fn key_of(exec_op: &ExecOp) -> &str {
         | ExecOp::EditSegment { key, .. } => key,
         ExecOp::QuarantineMove { path } | ExecOp::RemoveDirIfEmpty { path } => path,
         ExecOp::RemovePackage { full_name } => full_name,
-        // M1b: wired by M1B-X-INTEG (object ops never reach the registry act)
+        // Object ops never reach the registry act; named for the message only.
         ExecOp::DeleteService { name } => name,
         ExecOp::DeleteTask { path } => path,
         ExecOp::DeleteFirewallRule { id } => id,
@@ -646,9 +646,8 @@ pub fn prepare_reg(
         },
         ExecOp::QuarantineMove { .. }
         | ExecOp::RemoveDirIfEmpty { .. }
-        | ExecOp::RemovePackage { .. } => unreachable!("checked by is_registry above"),
-        // M1b: wired by M1B-X-INTEG
-        ExecOp::DeleteService { .. }
+        | ExecOp::RemovePackage { .. }
+        | ExecOp::DeleteService { .. }
         | ExecOp::DeleteTask { .. }
         | ExecOp::DeleteFirewallRule { .. } => unreachable!("checked by is_registry above"),
     };
@@ -1418,11 +1417,10 @@ pub fn prepare_undo_reg_with(
             written_value_hash: *written_value_hash,
             original: backup.as_ref().and_then(|b| b.value().cloned()),
         }),
-        Inverse::MoveBack { .. } | Inverse::RecreateDir { .. } | Inverse::None => {
-            unreachable!("Inverse::undoes accepts only the registry inverses for a registry op")
-        }
-        // M1b: wired by M1B-X-INTEG
-        Inverse::RecreateService { .. }
+        Inverse::MoveBack { .. }
+        | Inverse::RecreateDir { .. }
+        | Inverse::None
+        | Inverse::RecreateService { .. }
         | Inverse::RecreateTask { .. }
         | Inverse::RecreateFirewallRule { .. } => {
             unreachable!("Inverse::undoes accepts only the registry inverses for a registry op")

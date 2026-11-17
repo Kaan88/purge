@@ -507,3 +507,52 @@ fn the_labels_document_names_its_schema_and_reads_back() {
     assert!(text.contains(r#""schema":"purge.undo-labels/1""#), "{text}");
     assert_eq!(serde_json::from_str::<UndoLabels>(&text).unwrap(), labels);
 }
+
+/// M1B-X-INTEG: the run deletes a service's registry values and keys before the service (stage order
+/// RegistryValue, RegistryKey < Service), so the undo, in reverse journal order, puts the service back
+/// first and the values into the key the recreated service made. A value or key below its
+/// `Services\<name>` key selected alone pulls the service in; another service, or a key elsewhere,
+/// does not.
+#[test]
+fn undo_reverse_order_service_before_its_registry_values() {
+    let svc = || ExecOp::DeleteService {
+        name: "VendorSvc".to_owned(),
+    };
+    let under = r"HKLM\SYSTEM\CurrentControlSet\Services\VendorSvc\Parameters";
+    let sub = r"HKLM\SYSTEM\ControlSet001\services\vendorsvc\Sub";
+    let records = vec![
+        Record::Intent(intent(1, value(under))),
+        done(1, ItemOutcome::Done),
+        Record::Intent(intent(2, key(sub))),
+        done(2, ItemOutcome::Done),
+        Record::Intent(intent(3, svc())),
+        done(3, ItemOutcome::Done),
+    ];
+    assert_eq!(order(&records, &[1, 2, 3]), [3, 2, 1]);
+    let ops = vec![
+        op_state(1, value(under), Some(ItemOutcome::Done)),
+        op_state(2, key(sub), Some(ItemOutcome::Done)),
+        op_state(3, svc(), Some(ItemOutcome::Done)),
+        op_state(
+            4,
+            ExecOp::DeleteService {
+                name: "VendorSvcOther".to_owned(),
+            },
+            Some(ItemOutcome::Done),
+        ),
+        op_state(
+            5,
+            key(r"HKLM\SOFTWARE\Services\VendorSvc"),
+            Some(ItemOutcome::Done),
+        ),
+    ];
+    assert_eq!(pulled(&ops, &[1]), [3]);
+    assert_eq!(pulled(&ops, &[2]), [3]);
+    assert!(pulled(&ops, &[5]).is_empty());
+    assert!(pulled(&ops, &[3]).is_empty());
+    // Not a control set: no service.
+    assert!(!depends_on(
+        &key(r"HKLM\SYSTEM\ControlSetX\Services\VendorSvc"),
+        &svc()
+    ));
+}
