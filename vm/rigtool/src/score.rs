@@ -371,6 +371,81 @@ pub struct Missed {
     pub size: Option<u64>,
 }
 
+/// A protected truth item (`kept_owner` / `protected`) that a plan item lists below Protected.
+#[derive(Serialize, Clone, Debug)]
+pub struct ProtectedWrong {
+    /// The truth item.
+    pub target: String,
+    pub label: String,
+    /// The plan item that lists it.
+    pub by: String,
+    /// `equal`, `covers` (the plan item contains the truth item) or `inside` (the plan item lies inside it).
+    pub relation: String,
+    pub band: String,
+    pub preselected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+/// Labels whose items must stay: `protected_correct`'s denominator.
+pub fn is_protected_label(l: &str) -> bool {
+    l == "kept_owner" || l == "protected"
+}
+
+/// The band a protected item may be listed in: Protected, which plans spell `Blocked` (purge-model `Band::Blocked`:
+/// "listed under Protected"); `Protected` is accepted as the same.
+pub fn is_protected_band(b: &str) -> bool {
+    b.eq_ignore_ascii_case("blocked") || b.eq_ignore_ascii_case("protected")
+}
+
+/// `protected_correct` (C-RIG, gate K5): per protected truth item, every plan item that lists it below Protected.
+/// "Lists" is the relation alone, whatever the item's outcome or action: the plan item equals the truth item,
+/// contains it, or lies inside it (a partial removal). A `gone` or delete-if-empty item is still a listing, and so
+/// is a report-only one: the criterion is about the band the item is shown in.
+fn protected_listings(t: &TruthIdx, evals: &[Eval], plan: &Plan, s2: &Snap) -> BTreeMap<usize, Vec<ProtectedWrong>> {
+    let mut out: BTreeMap<usize, Vec<ProtectedWrong>> = BTreeMap::new();
+    for (e, it) in evals.iter().zip(&plan.items) {
+        if is_protected_band(&it.band) {
+            continue;
+        }
+        let mut rel: BTreeMap<usize, &'static str> = BTreeMap::new();
+        for p in &e.prims {
+            for i in t.covers(p) {
+                let r = if canon::fold(&t.items[i].target.canon_string()) == canon::fold(&p.canon_string()) {
+                    "equal"
+                } else {
+                    "covers"
+                };
+                rel.entry(i).or_insert(r);
+            }
+            for i in t.partial(p) {
+                rel.entry(i).or_insert("inside");
+            }
+        }
+        if let Target::AppxPackage { full_name } = &e.o {
+            for i in package_covers(t, full_name, s2) {
+                rel.entry(i).or_insert("covers");
+            }
+        }
+        for (i, r) in rel {
+            let ti = &t.items[i];
+            if !is_protected_label(&ti.label) {
+                continue;
+            }
+            out.entry(i).or_default().push(ProtectedWrong {
+                target: ti.target.canon_string(),
+                label: ti.label.clone(),
+                by: e.o.canon_string(),
+                relation: r.to_string(),
+                band: it.band.clone(),
+                preselected: it.preselected,
+                action: it.action.clone(),
+            });
+        }
+    }
+    out
+}
+
 #[derive(Serialize, Clone, Debug, Default)]
 pub struct ToolScore {
     pub app: String,
@@ -414,6 +489,17 @@ pub struct ToolScore {
     /// would have made danger. Reported next to danger, not inside it.
     pub noop_if_nonempty: usize,
     pub noop_would_be_danger: usize,
+    /// M1b (C-RIG): truth items labelled `kept_owner` or `protected`.
+    pub protected_n: usize,
+    /// Of those, the ones the plan does not list or lists only as Protected (band `Blocked`).
+    pub protected_correct_n: usize,
+    /// `protected_correct_n / protected_n` (a fraction, like the recall fields); `null` when the app has no such
+    /// truth item: not applicable, never a pass.
+    pub protected_correct: Option<f64>,
+    /// The same in percent.
+    pub protected_correct_pct: Option<f64>,
+    /// Every listing of a protected truth item below Protected (one row per truth item and plan item).
+    pub protected_wrong: Vec<ProtectedWrong>,
     /// The run's snap0 holds an earlier install of the same product (run.json `pre` entry with the run's own ARP
     /// key, removed before snap0): the clean run whose snap0 / lists-0 decided "existed before" instead, and the
     /// offered targets that existed in this run's snap0 only through that earlier install (not danger).
@@ -906,6 +992,13 @@ pub fn score_plan(cx: &Ctx, app: &str, plan: &Plan, plan_file: &str) -> ToolScor
         e.partial.clear();
     }
 
+    let wrong = protected_listings(t, &evals, plan, cx.s2);
+    sc.protected_n = t.items.iter().filter(|i| is_protected_label(&i.label)).count();
+    sc.protected_correct_n = sc.protected_n - wrong.len();
+    sc.protected_correct = ratio(sc.protected_correct_n, sc.protected_n);
+    sc.protected_correct_pct = sc.protected_correct.map(|r| (r * 10000.0).round() / 100.0);
+    sc.protected_wrong = wrong.into_values().flatten().collect();
+
     let n = t.items.len();
     let mut cov_any = vec![false; n];
     let mut cov_vis = vec![false; n];
@@ -1385,6 +1478,49 @@ pub fn render_md(apps: &[AppScore], macros: &[MacroScore]) -> String {
     }
     if apps.iter().any(|a| a.tools.iter().any(|t| t.classes.is_some())) {
         render_classes_md(&mut m, apps);
+    }
+    if apps.iter().any(|a| a.tools.iter().any(|t| t.protected_n > 0)) {
+        let _ = writeln!(m, "\n## Protected items (protected_correct)\n");
+        let _ = writeln!(
+            m,
+            "Truth items labelled `kept_owner` or `protected` that the plan does not list or lists only as Protected \
+             (band Blocked), over all such items. Listed = a plan item equal to, containing or inside the truth item, \
+             whatever its outcome or action. `-` = the app has no such item (not applicable, never a pass).\n"
+        );
+        let _ = writeln!(m, "| app | tool | protected_n | correct | protected_correct |");
+        let _ = writeln!(m, "|---|---|---:|---:|---:|");
+        for a in apps {
+            for t in &a.tools {
+                let _ = writeln!(
+                    m,
+                    "| {} | {} | {} | {} | {} |",
+                    a.id,
+                    tool_label(t),
+                    t.protected_n,
+                    t.protected_correct_n,
+                    pct(t.protected_correct)
+                );
+            }
+        }
+        for a in apps {
+            for t in &a.tools {
+                for w in &t.protected_wrong {
+                    let _ = writeln!(
+                        m,
+                        "- {} / {}: `{}` [{}] listed by `{}` ({}, {}{}{})",
+                        a.id,
+                        tool_label(t),
+                        md_escape(&w.target),
+                        w.label,
+                        md_escape(&w.by),
+                        w.relation,
+                        w.band,
+                        if w.preselected { ", preselected" } else { "" },
+                        w.action.as_deref().map(|x| format!(", {x}")).unwrap_or_default()
+                    );
+                }
+            }
+        }
     }
     let _ = writeln!(m, "\n## Missed truth items (first 50 per app and tool; full list in the JSON)\n");
     for a in apps {

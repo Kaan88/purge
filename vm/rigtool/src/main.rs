@@ -19,9 +19,9 @@ mod jsonio;
 mod score;
 mod snap;
 mod target;
-mod traps;
 #[cfg(test)]
 mod testutil;
+mod traps;
 mod truth;
 
 use err::{Context, Result, bail};
@@ -57,6 +57,10 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
                    [--deep-before A.json --deep-after B.json] [--sid SID] -o execdiff.json
                 (exit 1 = a guard escape, collateral, a missing effect, a trap outcome mismatch,
                  an unverified canary or a report/journal inconsistency)
+  rigtool traps --plan scan.json --traps m1b-traps.json --app ID [--sid SID] --out out.json
+                (M1b scan traps; --plan: purge.scan/0 or purge.plan/0; --app: the run's app id, a plan of
+                 another app is an error. exit 1 = escapes or missed_owned > 0; exit 2 = an input error,
+                 including a trap file with zero cases)
 ";
 
 struct Args {
@@ -342,8 +346,35 @@ fn run(argv: Vec<String>) -> Result<()> {
     }
 }
 
+/// `rigtool traps`: exit code 0 = every expectation passed, 1 = escapes or missed owned items, 2 = an input error.
+fn run_traps(rest: &[String]) -> i32 {
+    let go = || -> Result<bool> {
+        let a = Args::parse(rest, &[], &[], &["--plan", "--traps", "--app", "--sid", "--out", "-o"])?;
+        let out = a.path("--out").or_else(|| a.path("-o")).with_context(|| format!("missing --out\n\n{USAGE}"))?;
+        let rep = traps::cmd_traps(&traps::TrapsArgs {
+            plan: a.req("--plan")?,
+            traps: a.req("--traps")?,
+            app: a.get("--app").with_context(|| format!("missing --app (the run's app id)\n\n{USAGE}"))?,
+            sid: a.get("--sid"),
+            out,
+        })?;
+        Ok(rep.ok)
+    };
+    match go() {
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(e) => {
+            eprintln!("rigtool traps: {e}");
+            2
+        }
+    }
+}
+
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("traps") {
+        std::process::exit(run_traps(&argv[1..]));
+    }
     if let Err(e) = run(argv) {
         eprintln!("rigtool: {e}");
         std::process::exit(1);
