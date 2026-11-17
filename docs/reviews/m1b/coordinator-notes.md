@@ -135,3 +135,12 @@ S-MSIREG (wave 4, for R3):
 - REG-SHAREDDLLS DROPS framework SharedRefcount (sums both views, no non-MSI minimum) and counts each view alone; if SharedDLLs is WOW64-shared the views are one key -> check with R2a S1 fix
 - MSI app count limit = components keyed on the file, can be 0
 - INSTFOLDERS values guard-blocked unless a gone MSI product
+
+S-BURN (wave 4, for R3):
+- bundle gone = verify_gone.arp_gone and no other app's Uninstall key named after bundle id (ScanCtx has no inventory)
+- shared-component check against package provider key, not ARP key (kb lists Python Launcher ARP keys)
+- suggestion carries Tier A Burn evidence on another app's ARP key, no blockers (plan drops evidence on ReportOnly at merge)
+- M1bDecide never adds fp.msi source dirs to gone_cache_dirs -> guard blocks those FS-PKGCACHE candidates
+- ScanExt::none() reports Burn area complete and empty
+- read budget (<=8/provider) exceeded beyond ~6 loaded user hives
+- framework adds MsiPackageUnreadable to Dependencies keys when ownership incomplete
