@@ -1088,7 +1088,9 @@ impl<'a> ScanCtx<'a> {
     /// facts the index holds and the baseline:
     ///
     /// - a service: its type (a type without a driver or Win32 bit is unknown, `sys.driver`), its
-    ///   `DeleteFlag`, per-user template flag, resolved program and `Services\<name>` in the baseline;
+    ///   `DeleteFlag`, per-user template flag, program as the guard judges it (the `ImagePath` command
+    ///   of a service hosted by svchost, `ServiceFacts::guard_program`) and `Services\<name>` in the
+    ///   baseline;
     /// - a task: its path and `TaskCache\Tree\<path>` in the baseline, then every exec action's path as
     ///   the executor's gate checks it (unquoted, canonical when it canonicalises), then every program
     ///   file the actions resolve to;
@@ -1119,7 +1121,7 @@ impl<'a> ScanCtx<'a> {
                 let ty = facts.identity.service_type;
                 let guard = ObjectGuardFacts {
                     name_or_path_or_id: &facts.identity.name,
-                    program: facts.program.file(),
+                    program: facts.guard_program(),
                     service_type: (ty & KNOWN_SERVICE_TYPE_BITS != 0).then_some(ty),
                     delete_flag: facts.delete_flag,
                     per_user_template: facts.per_user_template,

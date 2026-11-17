@@ -23,8 +23,10 @@
 //!
 //! 1. `DeleteFlag` already set: no candidate (Windows removes the service when its last handle closes).
 //! 2. The guard's object rules (`DenyList::check_object`: drivers, per-user services, Windows' own
-//!    services and programs, the baseline). A blocked service the harvest recorded is listed with that
-//!    blocker (and `Driver` for a driver), so the user sees why it stays; a blocked service the harvest
+//!    services and programs, the baseline). A service hosted by svchost is judged by its host
+//!    (`ServiceFacts::guard_program`), so `sys.service.windows` blocks it wherever its `ServiceDll`
+//!    lies: it shares a Windows process and is never offered. A blocked service the harvest
+//!    recorded is listed with that blocker (and `Driver` for a driver), so the user sees why it stays; a blocked service the harvest
 //!    did not record is not listed at all.
 //! 3. Recorded with an equal digest: `recorded_at_harvest`. Recorded with a different digest: the hard
 //!    `ObjectChangedSinceHarvest` (something re-registered or edited the service after the harvest).

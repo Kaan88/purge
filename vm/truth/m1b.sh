@@ -442,9 +442,12 @@ for c in d['cases']:
     for e in c['expect']:
         assert e['verdict'] in V and e['target'].get('type'), c['id']
         assert e.get('blocker') is None or e['verdict'] == 'protected', c['id']
-# the design's verdicts for the named cases
-must = {'svc-owned': 'safe', 'task-owned': 'safe', 'fw-owned': 'safe', 'com-owned': 'safe', 'msi-remnants': 'safe',
-        'svc-owned-running': 'listed', 'svc-shared': 'absent', 'svc-svchost': 'absent', 'task-similar-name': 'absent',
+# the design's verdicts for the named cases, except where RIG.md section 12.3 (smoke 2026-11-17) says why not:
+# svc-owned, task-owned, fw-owned, com-owned 'listed' (the plants leave files in TrapA's root: no program is proven
+# gone), msi-remnants 'absent' (Windows Installer reports the re-registered product installed for another user),
+# svc-svchost 'protected' (REF-ANY lists the ServiceDll value inside the service key, Blocked)
+must = {'svc-owned': 'listed', 'task-owned': 'listed', 'fw-owned': 'listed', 'com-owned': 'listed', 'msi-remnants': 'absent',
+        'svc-owned-running': 'listed', 'svc-shared': 'absent', 'svc-svchost': 'protected', 'task-similar-name': 'absent',
         'fw-same-display-name': 'absent', 'fw-no-app': 'absent', 'msi-remnants-foreign': 'absent', 'pkgcache-foreign': 'absent',
         'task-interpreter': 'not_preselected', 'tracing': 'not_preselected'}
 by = {c['id']: c for c in d['cases']}

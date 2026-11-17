@@ -347,21 +347,23 @@ fn svchost_service_with_app_dll_in_root() {
     let facts = w.facts("AppHost");
     assert!(facts.svchost);
     assert_eq!(facts.program.file(), Some(file("apphost.dll").as_str()));
-    let c = w.get("AppHost");
-    assert_eq!(band(&c), (Band::Likely, false));
-
-    // svchost.exe is not the program: its absence proves nothing.
-    w.record("AppHost", ObjectWhy::ProgramInRoot);
-    w.remove_file(r"C:\WINDOWS\System32\svchost.exe");
-    let c = w.get("AppHost");
-    assert!(!has_owned_object(&c));
-    assert_eq!(band(&c), (Band::Likely, false));
-
-    // The DLL is.
+    // Smoke trap svc-svchost (escape at 3b17232: listed Likely): a service hosted by svchost shares a
+    // Windows process and is judged by its host, svchost.exe under %SystemRoot%, not by its DLL. Not
+    // recorded, it is not listed at all.
+    assert!(w.find("AppHost").is_none());
     w.remove_root();
+    assert!(w.find("AppHost").is_none());
+
+    // A forged (or pre-fix) harvest record lists it, protected by the guard: never offered, even with
+    // the DLL proven gone.
+    w.record("AppHost", ObjectWhy::ProgramInRoot);
     let c = w.get("AppHost");
-    assert!(has_owned_object(&c), "{:?}", c.evidence);
-    assert_eq!(band(&c), (Band::Safe, true));
+    assert!(
+        c.blockers.contains(&deny("sys.service.windows")),
+        "{:?}",
+        c.blockers
+    );
+    assert_eq!(band(&c).0, Band::Blocked);
 }
 
 /// Hostile (trap svc-svchost): a svchost service of the app's name whose DLL is in System32.

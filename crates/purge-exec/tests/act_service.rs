@@ -438,6 +438,39 @@ fn validate_program_moved_under_systemroot_blocked() {
     }
 }
 
+/// Hostile (smoke trap svc-svchost): a service hosted by svchost whose `ServiceDll` lies in the app's
+/// folder is judged by its host, `svchost.exe` under `%SystemRoot%`, not by the DLL: never deleted.
+#[test]
+fn validate_svchost_service_with_dll_in_app_folder_blocked() {
+    for image in [
+        r"%SystemRoot%\System32\svchost.exe -k VendorGroup",
+        r"C:\Windows\system32\svchost.exe -k VendorGroup -p",
+    ] {
+        let mut s = FakeService::new(NAME, image, None);
+        s.set_value("Type", REG_DWORD, dword(0x20));
+        s.scm.config.service_type = 0x20;
+        s.add_key(
+            0,
+            "Parameters",
+            vec![(
+                "ServiceDll",
+                REG_EXPAND_SZ,
+                sz(&format!(r"{ROOT}\vendorsvc.dll")),
+            )],
+        );
+        let w = world("svc-v-svchost", s.clone());
+        assert_eq!(
+            skip_reason(&decided(w.validate(&candidate(&s)))),
+            &SkipReason::GateBlocked {
+                blocker: Blocker::DenyListed {
+                    rule: ids::SYS_SERVICE_WINDOWS.into()
+                }
+            },
+            "{image}"
+        );
+    }
+}
+
 #[test]
 fn validate_unusable_names_refused_before_any_read() {
     let w = world("svc-v-name", vendor_service());

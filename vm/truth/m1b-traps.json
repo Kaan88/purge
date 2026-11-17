@@ -11,7 +11,7 @@
             "type": "Service",
             "name": "PurgeTrapSvcA"
           },
-          "verdict": "safe",
+          "verdict": "listed",
           "blocker": null
         }
       ]
@@ -79,7 +79,7 @@
             "type": "Service",
             "name": "PurgeTrapSvcHost"
           },
-          "verdict": "absent",
+          "verdict": "protected",
           "blocker": null
         },
         {
@@ -103,7 +103,7 @@
             "type": "Task",
             "path": "\\PurgeTrap\\7-Zip Update"
           },
-          "verdict": "safe",
+          "verdict": "listed",
           "blocker": null
         }
       ]
@@ -148,7 +148,7 @@
             "type": "FirewallRule",
             "id": "PurgeTrapFwA"
           },
-          "verdict": "safe",
+          "verdict": "listed",
           "blocker": null
         }
       ]
@@ -193,7 +193,7 @@
             "type": "RegKey",
             "path": "HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}"
           },
-          "verdict": "safe",
+          "verdict": "listed",
           "blocker": null
         }
       ]
@@ -379,8 +379,8 @@
             "type": "Path",
             "path": "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_7zFM.exe_6feb8ebc183bf561d06a69f0f9cc73a8619d2a05_6feb8ebc_619d2a05"
           },
-          "verdict": "listed",
-          "blocker": null
+          "verdict": "protected",
+          "blocker": "DenyListed"
         },
         {
           "target": {
@@ -402,7 +402,7 @@
             "type": "RegKey",
             "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000"
           },
-          "verdict": "safe",
+          "verdict": "absent",
           "blocker": null
         }
       ]

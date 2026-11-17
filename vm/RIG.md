@@ -1041,7 +1041,8 @@ The file has 26 cases (one per plant) and 44 expectations, scored by `rigtool tr
 
 - **`com-shared-class`:** expected protected with no blocker named, because the design names none.
 - **TrapA's own twins:** expected `listed`, not `safe`. These are the shellex handler and its Approved value, the event-log source PurgeTrapA,
-  the MuiCache and PCA entries of 7zFM, and the WER report of 7zFM.
+  the MuiCache and PCA entries of 7zFM. The WER report of 7zFM was in this list too; it is now `protected`
+  (see the smoke corrections below).
 - **`shareddlls-count`:** only the count-2 value is expected protected (SharedRefcount). The count-1 value has no
   expectation.
 - **`instfolders`:** only TrapB's Folders value has an expectation (absent). TrapA's own value has none.
@@ -1055,6 +1056,42 @@ Smoke run on 2026-11-17 (`m1b-app 7zip -Traps`, Inbound rig-base, engine from 75
   - The WER report was Blocked.
   - The S-1-5-18 Products key was not listed.
 - These are engine results for the gate to judge, not rig faults.
+
+The smoke was run again on 2026-11-17 to check the findings above. The outputs are in
+`E:\purge-build\gate-evidence\m1b-smoke-7zip\{before,after}`.
+- `before` used the m1b head 3b17232 and gave the same 37 of 44.
+- `after` used the fixed engine and gave 44 of 44 against the corrected file below. Against the old file it gives
+  37 of 44: the escape is gone, but a new one is counted (see svc-svchost below).
+
+What each finding turned out to be:
+
+- **svc-svchost (engine defect, fixed).** The index resolves a service hosted by svchost to its `ServiceDll`.
+  The guard's `sys.service.windows` judged that DLL, which lies in TrapA's folder, so the rule did not apply. Harvest
+  recorded the service and SYS-SERVICE offered it.
+  - The fix: the guard now judges such a service by its host command (`ServiceFacts::guard_program`), in the scan
+    sealing, the harvest and the executor gate. Such a service is now never recorded or offered.
+  - The expectation changes from `absent` to `protected`. REF-ANY still lists the `Parameters|ServiceDll` value inside
+    the service key, Blocked (`reg.hklm.system`). Under `absent`, that Blocked entry alone scores as an escape. Under
+    `protected`, any equal, covering or inside entry that can be acted on still fails.
+- **svc-owned, task-owned, fw-owned, com-owned (expectation error, now `listed`).**
+  - The design rule (D10, R3a S1): Safe needs the harvest record, the same digest, and the program proven gone. A
+    program in an InstallRoot counts as gone only when the whole root is gone, on a fixed NTFS or ReFS volume with the
+    recorded serial.
+  - The plants copy PurgeTrap*.exe and *.dll files into `C:\Program Files\7-Zip`, and the vendor uninstall does not
+    remove them. So the root survives, and so do the service exe and the COM dll themselves.
+  - Likely is therefore the right answer. Safe needs a plant whose root is removed completely (not done).
+- **wer-twins, 7zFM report (design rule, now `protected` with `DenyListed`).** Reports under `%ProgramData%` are
+  denied by `fs.programdata.microsoft`, as the FS-WER module documents. The plan lists the report Blocked.
+- **msi-remnants (design rule, now `absent`).**
+  - The plant writes `UserData\S-1-5-18\Products\<P>\InstallProperties` (with `LocalPackage`) and a Components value.
+  - A read-only probe of the guest after the scan (`after\msi-state-probe.log`, WindowsInstaller COM
+    `ProductState`) returned 2 (`INSTALLSTATE_ABSENT`, "installed for a different user") for both 7-Zip's code and the
+    foreign code. `Products` does not list either code.
+  - REG-ARP-MSI offers a product's registration only when Windows Installer reports it unknown in every context
+    (`ScanCtx::product_known`). A product another user may have installed is never treated as gone. So nothing is
+    offered, and nothing may be.
+  - To test the Safe path, the plant would have to leave a registration that Windows Installer reports as unknown
+    (not done).
 
 ### 12.4 Labels (`truth/mk_labels.py`)
 
