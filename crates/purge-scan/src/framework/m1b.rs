@@ -29,20 +29,26 @@
 //! every scanner, after the M1a rules. A scanner cannot opt out.
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
+use std::collections::BTreeSet;
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
 use purge_guard::canon::{CanonKey, GuardEnv, canon_key, canon_path};
 use purge_guard::containers::value_container;
+use purge_guard::deny::{DenyList, ObjectGuardFacts};
 use purge_guard::prefix::{self, Relation};
 use purge_index::ownership::{
-    OwnershipIndex, OwnershipInput, OwnershipLimits, TableCache, area, pack_guid, unpack_guid,
+    OwnershipIndex, OwnershipInput, OwnershipLimits, SHARED_DLL_UNKNOWN, TableCache, area,
+    pack_guid, unpack_guid,
 };
 use purge_index::refscan::RefHit;
 use purge_index::sysobj::{self, ProgramRef, SERVICES_KEY, SysObjectIndex};
+use purge_model::object::TaskAction;
 use purge_model::{
     Blocker, Candidate, EvidenceKind, Facts, Fingerprint, Hive, InventoryEntry, ManifestKind,
-    MsiFacts, MsiKeyPath, ObjectFp, ObjectKind, ObjectWhy, ProgramId, Scope, Target, Tier,
+    MsiFacts, MsiKeyPath, MsiOnlyRow, ObjectFp, ObjectKind, ObjectWhy, ProgramId, Scope, Target,
+    Tier,
 };
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
@@ -74,6 +80,12 @@ pub struct ScanExt {
     hits_app: Option<ProgramId>,
     /// Scanner faults found while sealing, for the scan's warnings.
     faults: Mutex<Vec<String>>,
+    /// What scanners could not read (a source answering `NotCaptured` or `AccessDenied`, an object the
+    /// index could not read), for the scan's warnings ([`ScanExt::warn`]).
+    warnings: Mutex<Vec<String>>,
+    /// The registry targets under a Classes root that got `MsiPackageUnreadable` (folded spelling), for
+    /// the count in the scan's warnings.
+    unknown_ownership: Mutex<BTreeSet<String>>,
 }
 
 /// Writes a `PURGE_TIMING` phase line when a source meter is installed (the format of
@@ -121,6 +133,8 @@ impl ScanExt {
             sysobj,
             hits_app: None,
             faults: Mutex::new(Vec::new()),
+            warnings: Mutex::new(Vec::new()),
+            unknown_ownership: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -143,8 +157,8 @@ impl ScanExt {
     }
 
     /// Reads the shared data (C-SCANEXT): runs the one reference walk for `app` (the walk REF-ANY makes,
-    /// same scope, options and prune list), builds the ownership index over `inventory` and the
-    /// system-object index. Writes the `PURGE_TIMING` phases `refscan`, `ownership.components`,
+    /// same scope, options and prune list), builds the ownership index over `inventory` and `msi_only`
+    /// (the inventory's MSI products without an Uninstall key) and the system-object index. Writes the `PURGE_TIMING` phases `refscan`, `ownership.components`,
     /// `ownership.tables` (from the index) and `ext.sysobj`. Never fails: what cannot be read is
     /// recorded in the index statistics and errors.
     #[allow(clippy::too_many_arguments)]
@@ -155,6 +169,7 @@ impl ScanExt {
         fp: &Fingerprint,
         app: &AppIdentityView,
         inventory: &[InventoryEntry],
+        msi_only: &[MsiOnlyRow],
         cache: Option<&dyn TableCache>,
         limits: OwnershipLimits,
     ) -> ScanExt {
@@ -172,6 +187,7 @@ impl ScanExt {
                 fs,
                 sys,
                 products: inventory,
+                msi_only,
                 cache,
                 threads: 0,
             },
@@ -196,14 +212,47 @@ impl ScanExt {
         std::mem::take(&mut *self.faults.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// Whether some MSI ownership is unknown: a product's package could not be read, or the component
-    /// clients, the rows or the SharedDLLs counts were not read completely. Unknown is never "none".
-    fn ownership_unknown(&self) -> bool {
+    /// The scan-warning channel of the scanners (S-COMMON: "when a needed source answers NotCaptured or
+    /// AccessDenied the scanner emits nothing for that part and adds one scan warning"). Records
+    /// `<scanner>: <message>` once: the same line from the same scanner is kept one time, so a scanner
+    /// may call this for every object it skips. The pipeline prints them as `scan: <line>`.
+    pub fn warn(&self, scanner: &str, message: impl AsRef<str>) {
+        let line = format!("{scanner}: {}", message.as_ref());
+        let mut lines = self.warnings.lock().unwrap_or_else(PoisonError::into_inner);
+        if !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+
+    /// The scanner warnings recorded so far ([`ScanExt::warn`]), in the order first given, emptied.
+    pub fn take_warnings(&self) -> Vec<String> {
+        std::mem::take(&mut *self.warnings.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// How many distinct registry targets under a Classes root got `MsiPackageUnreadable` so far
+    /// (R2a S11: reported in the scan's warnings, so that the cost of an unreadable package is seen).
+    pub fn unknown_ownership_items(&self) -> usize {
+        self.unknown_ownership
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+
+    /// Whether the MSI rows of some product are unknown: its package could not be read (or it has
+    /// none), or the rows were not read completely. Concerns registry targets: rows write keys and
+    /// values. Unknown is never "none".
+    fn rows_unknown(&self) -> bool {
+        !self.ownership.unreadable().is_empty() || !self.ownership.stats().complete(area::ROWS)
+    }
+
+    /// Whether the component clients or the SharedDLLs counts were not read completely. Concerns paths:
+    /// the clients of a file come from the registry (`UserData\<sid>\Components`), not from a package,
+    /// so an unreadable package hides no owner of a path while these two areas are complete.
+    fn file_ownership_unknown(&self) -> bool {
         let stats = self.ownership.stats();
-        !self.ownership.unreadable().is_empty()
-            || [area::COMPONENTS, area::ROWS, area::SHARED_DLLS]
-                .iter()
-                .any(|a| !stats.complete(a))
+        [area::COMPONENTS, area::SHARED_DLLS]
+            .iter()
+            .any(|a| !stats.complete(a))
     }
 }
 
@@ -463,6 +512,37 @@ fn bind_any_user<'r>(row_key: &'r str, key: &str) -> Cow<'r, str> {
     }
 }
 
+/// Service type bits the guard knows a service by: the driver bits and the two Win32 process kinds. A
+/// type with none of them (absent, or 0) is unknown and handed to the guard as such (`sys.driver`), as
+/// SYS-SERVICE does.
+const KNOWN_SERVICE_TYPE_BITS: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20;
+
+/// The tasks' tree in the registry, where the baseline records which tasks Windows has (followed by the
+/// task path), as SYS-TASK and the harvest use it.
+const TASK_TREE: &str =
+    r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree";
+
+/// `path` without one pair of surrounding double quotes and outer blanks (the executor gate's form of
+/// an exec action's path).
+fn unquote(path: &str) -> &str {
+    let t = path.trim();
+    t.strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(t)
+        .trim()
+}
+
+/// [`ScanCtx::product_known`] over a system source: one `msi_product_state_all` query. Public for the
+/// pipeline (and, at act time, the executor), which need the same answer outside a scan context.
+pub fn product_known_in(sys: &dyn SystemSource, product_code: &str) -> Option<bool> {
+    let code = packed_code(product_code).and_then(|p| unpack_guid(&p))?;
+    match sys.msi_product_state_all(&code) {
+        Ok(states) if states.is_empty() => None,
+        Ok(states) => Some(!states.iter().all(|s| s.state.is_unknown())),
+        Err(_) => None,
+    }
+}
+
 /// The packed form of a product code given as `{GUID}` or packed (32 hex digits), upper case.
 fn packed_code(code: &str) -> Option<String> {
     let code = code.trim();
@@ -611,13 +691,15 @@ impl<'a> ScanCtx<'a> {
     /// [`SystemSource::msi_product_state_all`] answers with at least one context and all are unknown.
     /// A source error, an empty answer and a code that is no GUID are "not gone".
     pub fn product_gone(&self, product_code: &str) -> bool {
-        let Some(code) = packed_code(product_code).and_then(|p| unpack_guid(&p)) else {
-            return false;
-        };
-        match self.sys.msi_product_state_all(&code) {
-            Ok(states) => !states.is_empty() && states.iter().all(|s| s.state.is_unknown()),
-            Err(_) => false,
-        }
+        self.product_known(product_code) == Some(false)
+    }
+
+    /// Whether Windows Installer knows the product (`{GUID}` or packed) now: `Some(true)` in some
+    /// context, `Some(false)` in none (an answer with at least one context, all unknown), `None` when
+    /// that cannot be told (a source error, an empty answer, a code that is no GUID). The
+    /// `product_known` of `purge_plan::decide::M1bDecide::from_facts`.
+    pub fn product_known(&self, product_code: &str) -> Option<bool> {
+        product_known_in(self.sys, product_code)
     }
 
     /// The app's MSI product (of `fp.msi`) with this code (`{GUID}` or packed).
@@ -634,8 +716,9 @@ impl<'a> ScanCtx<'a> {
     /// - a **path**: for every component whose key path is the file, or lies in or is the directory,
     ///   each client that is not a product of the app's fingerprint (an installed product, a stale
     ///   registration, the permanent marker: any other client counts) gives `OwnedByInstalledMsi`
-    ///   with the row `Component:<id>`; `SharedRefcount` when SharedDLLs counts the file more often
-    ///   than the app's own components keyed on it explain;
+    ///   with the row `Component:<id>`; `SharedRefcount` when SharedDLLs counts the file, or for a
+    ///   directory any file below it, more often than the app accounts for
+    ///   ([`ScanCtx::shared_count_unexplained`]);
     /// - a **value** (or an entry of one): `OwnedByInstalledMsi` for every row that owns it, or that
     ///   owns its key whole;
     /// - a **key**: `OwnedByInstalledMsi` for every row at the key or below it, and every whole-key row
@@ -643,9 +726,13 @@ impl<'a> ScanCtx<'a> {
     /// - a **service**: the same as its key under `Services`.
     ///
     /// A client or row of one of the app's own products that Windows still lists as installed gives
-    /// `MsiProductStillRegistered` instead. While some ownership is unknown (an unreadable package, an
-    /// incomplete component, row or SharedDLLs read), a registry target under a `SOFTWARE\Classes` root
-    /// and a path under a Program Files directory get the soft `MsiPackageUnreadable`.
+    /// `MsiProductStillRegistered` instead. While some ownership is unknown, the soft
+    /// `MsiPackageUnreadable` goes to what it can hide: a registry target under a `SOFTWARE\Classes`
+    /// root while some product's rows are unknown (an unreadable or missing package, an incomplete row
+    /// read; the number of such targets is in [`ScanExt::unknown_ownership_items`]), and a path under a
+    /// Program Files directory while the component clients or the SharedDLLs counts were not read
+    /// completely. An unreadable package alone does not touch paths: the clients of a file are in the
+    /// registry, not in the package.
     ///
     /// One blocker per product (the first row found names it). Empty for [`ScanExt::none`].
     pub fn msi_blockers(&self, target: &Target) -> Vec<Blocker> {
@@ -693,11 +780,17 @@ impl<'a> ScanCtx<'a> {
                             }
                         }
                     }
-                    if let Some(count) = ix.shared_dll_count(path)
-                        && count > 0
-                        && u64::from(count) > self.own_components_keyed_on(path)
-                    {
-                        push(Blocker::SharedRefcount);
+                    // The file itself, and for a directory every counted file below it.
+                    let counted = ix
+                        .shared_dll_count(path)
+                        .map(|count| (path, count))
+                        .into_iter()
+                        .chain(ix.shared_dlls_under(path));
+                    for (file, count) in counted {
+                        if self.shared_count_unexplained(file, count, false) {
+                            push(Blocker::SharedRefcount);
+                            break;
+                        }
                     }
                 }
             }
@@ -728,10 +821,70 @@ impl<'a> ScanCtx<'a> {
             }
             Target::Task { .. } | Target::FirewallRule { .. } | Target::AppxPackage { .. } => {}
         }
-        if (in_classes || in_program_files) && self.ext.ownership_unknown() {
+        // Unknown ownership, scoped to what it can hide (R2a S11): the rows of an unreadable package can
+        // only write registry keys and values; the owners of a path come from the component clients and
+        // the SharedDLLs counts, which the registry holds whatever the packages.
+        let unknown = (in_classes && self.ext.rows_unknown())
+            || (in_program_files && self.ext.file_ownership_unknown());
+        if unknown {
+            if in_classes {
+                self.ext
+                    .unknown_ownership
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(prefix::fold(&format!("{target:?}")));
+            }
             push(Blocker::MsiPackageUnreadable);
         }
         out
+    }
+
+    /// Whether SharedDLLs counts `file` (canonical) more often than the app accounts for (C-SCANEXT, R2a
+    /// S1). `count` is the file's count summed over both views (the views are two keys,
+    /// `purge_index::ownership::SHARED_DLLS`); [`SHARED_DLL_UNKNOWN`] is never accounted for.
+    ///
+    /// The app accounts for one count per component of its MSI products (`fp.msi`) keyed on the file
+    /// **that the fresh index still lists one of those products as a client of**: Windows Installer
+    /// lowers the count when it removes the component, so after a normal uninstall every count that
+    /// remains is another install's. The harvest-time component list alone explains nothing.
+    ///
+    /// An app without MSI products accounts for one count only when `file_absent` (the file is proven
+    /// gone, so the count protects nothing on disk; REG-SHAREDDLLS passes it for a counter of a missing
+    /// file). For a path target the file is there, and any count blocks.
+    pub fn shared_count_unexplained(&self, file: &str, count: u32, file_absent: bool) -> bool {
+        if count == 0 {
+            return false;
+        }
+        if count == SHARED_DLL_UNKNOWN {
+            return true;
+        }
+        u64::from(count) > self.shared_count_explained(file, file_absent)
+    }
+
+    /// The SharedDLLs count of `file` the app accounts for (see [`ScanCtx::shared_count_unexplained`]).
+    fn shared_count_explained(&self, file: &str, file_absent: bool) -> u64 {
+        let ix = &self.ext.ownership;
+        let fp = self.fp;
+        let live = fp
+            .msi
+            .iter()
+            .flat_map(|m| m.components.iter().map(move |c| (m, c)))
+            .filter(|(_, c)| {
+                matches!(&c.key_path, MsiKeyPath::File { path: p } if prefix::is_same(p, file))
+            })
+            .filter(|(m, c)| {
+                let own = packed_code(&m.packed_code);
+                ix.clients_of(&c.component_id)
+                    .iter()
+                    .any(|client| packed_code(client) == own)
+            })
+            .count();
+        let live = u64::try_from(live).unwrap_or(u64::MAX);
+        if fp.msi.is_empty() && file_absent {
+            live.max(1)
+        } else {
+            live
+        }
     }
 
     /// The blocker a component client gives: none of the app's products is `OwnedByInstalledMsi`; one
@@ -760,20 +913,6 @@ impl<'a> ScanCtx<'a> {
             product: row.product.product_code.clone(),
             row: format!("{}:{}", row.table, row.row),
         }
-    }
-
-    /// How many components of the app's MSI products have the file `path` as their key path.
-    fn own_components_keyed_on(&self, path: &str) -> u64 {
-        let n = self
-            .fp
-            .msi
-            .iter()
-            .flat_map(|m| &m.components)
-            .filter(
-                |c| matches!(&c.key_path, MsiKeyPath::File { path: p } if prefix::is_same(p, path)),
-            )
-            .count();
-        u64::try_from(n).unwrap_or(u64::MAX)
     }
 
     /// The guard's canonical form of a registry key; `None` when it does not canonicalise.
@@ -807,17 +946,151 @@ impl<'a> ScanCtx<'a> {
         }
     }
 
+    /// The guard's object rules for the system object `target`, judged centrally from the system-object
+    /// index (R2a S2), so that no scanner can skip them: the object is looked up in [`ScanExt::sysobj`]
+    /// (a service by name and a task by path, ignoring case; a firewall rule by its exact id) and its
+    /// digest now must equal `digest`, the candidate's. `Err` names why the candidate cannot stand: the
+    /// object is not in the index, or it is another object than the one the scanner described.
+    /// `Ok(Some(blocker))` is the first object rule that applies ([`DenyList::check_object`]) with the
+    /// facts the index holds and the baseline:
+    ///
+    /// - a service: its type (a type without a driver or Win32 bit is unknown, `sys.driver`), its
+    ///   `DeleteFlag`, per-user template flag, resolved program and `Services\<name>` in the baseline;
+    /// - a task: its path and `TaskCache\Tree\<path>` in the baseline, then every exec action's path as
+    ///   the executor's gate checks it (unquoted, canonical when it canonicalises), then every program
+    ///   file the actions resolve to;
+    /// - a firewall rule: package binding, a resource-reference `Name` or `EmbedCtxt`, its resolved
+    ///   program and its value in the baseline.
+    ///
+    /// `Ok(None)` for any other target.
+    pub fn object_guard(
+        &self,
+        deny: &DenyList,
+        target: &Target,
+        digest: Option<&ObjectFp>,
+    ) -> Result<Option<Blocker>, &'static str> {
+        const NOT_FOUND: &str = "not in the system-object index";
+        const OTHER: &str = "its digest is not the digest of the object the index holds";
+        let index = &self.ext.sysobj;
+        let baseline = self.baseline;
+        match target {
+            Target::Service { name } => {
+                let facts = index
+                    .services
+                    .iter()
+                    .find(|s| prefix::eq_ci(&s.identity.name, name))
+                    .ok_or(NOT_FOUND)?;
+                if digest != Some(&facts.identity.fp()) {
+                    return Err(OTHER);
+                }
+                let ty = facts.identity.service_type;
+                let guard = ObjectGuardFacts {
+                    name_or_path_or_id: &facts.identity.name,
+                    program: facts.program.file(),
+                    service_type: (ty & KNOWN_SERVICE_TYPE_BITS != 0).then_some(ty),
+                    delete_flag: facts.delete_flag,
+                    per_user_template: facts.per_user_template,
+                    in_baseline: baseline
+                        .is_some_and(|b| b.has_key(&format!(r"{SERVICES_KEY}\{name}"))),
+                    ..ObjectGuardFacts::default()
+                };
+                Ok(deny.check_object(ObjectKind::Service, &guard))
+            }
+            Target::Task { path } => {
+                let task = index
+                    .tasks
+                    .iter()
+                    .find(|t| prefix::eq_ci(&t.identity.path, path))
+                    .ok_or(NOT_FOUND)?;
+                let identity = &task.identity;
+                if digest != Some(&identity.fp()) {
+                    return Err(OTHER);
+                }
+                let base = ObjectGuardFacts {
+                    name_or_path_or_id: &identity.path,
+                    in_baseline: baseline
+                        .is_some_and(|b| b.has_key(&format!("{TASK_TREE}{}", identity.path))),
+                    ..ObjectGuardFacts::default()
+                };
+                if let Some(blocker) = deny.check_object(ObjectKind::Task, &base) {
+                    return Ok(Some(blocker));
+                }
+                let check = |program: &str| {
+                    deny.check_object(
+                        ObjectKind::Task,
+                        &ObjectGuardFacts {
+                            program: Some(program),
+                            ..base
+                        },
+                    )
+                };
+                for action in &identity.actions {
+                    if let TaskAction::Exec { path, .. } = action {
+                        let plain = unquote(path);
+                        let as_gate = canon_path(plain, self.guard, None)
+                            .map(|c| c.path)
+                            .unwrap_or_else(|_| plain.to_owned());
+                        if let Some(blocker) = check(&as_gate) {
+                            return Ok(Some(blocker));
+                        }
+                    }
+                }
+                let programs = sysobj::task_programs(identity, &sysobj::Env::new(self.env.iter()));
+                Ok(programs
+                    .actions
+                    .iter()
+                    .filter_map(ProgramRef::file)
+                    .find_map(check))
+            }
+            Target::FirewallRule { id } => {
+                let rule = index
+                    .firewall
+                    .iter()
+                    .find(|r| r.identity.id == *id)
+                    .ok_or(NOT_FOUND)?;
+                if digest != Some(&rule.identity.fp()) {
+                    return Err(OTHER);
+                }
+                let resource_named = ["Name", "EmbedCtxt"].iter().any(|key| {
+                    rule.fields
+                        .get_all(key)
+                        .iter()
+                        .any(|v| v.trim_start().starts_with('@'))
+                });
+                let guard = ObjectGuardFacts {
+                    name_or_path_or_id: id,
+                    program: rule.program.file(),
+                    package_bound: rule.package_bound,
+                    resource_name: rule.resource_name || resource_named,
+                    in_baseline: baseline
+                        .is_some_and(|b| b.has_value(sysobj::FIREWALL_RULES_KEY, id)),
+                    ..ObjectGuardFacts::default()
+                };
+                Ok(deny.check_object(ObjectKind::FirewallRule, &guard))
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// The object checks of the sealing (C-SCANEXT); `false` drops the candidate, recorded as a fault
     /// of `scanner`:
     ///
     /// - a candidate on a service, task or firewall rule must carry a well-formed `object_fp` of the
     ///   target's kind;
+    /// - the object must be in the system-object index with that digest, and the guard's object rules
+    ///   are applied to it there ([`ScanCtx::object_guard`]): a rule that applies is added as a blocker,
+    ///   whatever the scanner did (R2a S2);
     /// - `OwnedSystemObject` may only stand on such a target, with Object scope.
     ///
     /// `OwnedSystemObject` that no harvest record backs (the object recorded with the same digest) is
     /// lowered to Tier B and says why: a scanner that states it by
     /// hand cannot make an object Safe.
-    pub(super) fn seal_object(&self, scanner: &str, candidate: &mut Candidate) -> bool {
+    pub(super) fn seal_object(
+        &self,
+        scanner: &str,
+        candidate: &mut Candidate,
+        deny: &OnceCell<DenyList>,
+    ) -> bool {
         let kind = ObjectKind::of(&candidate.target);
         if let Some(kind) = kind {
             let ok = candidate
@@ -830,6 +1103,20 @@ impl<'a> ScanCtx<'a> {
                     candidate.target
                 ));
                 return false;
+            }
+            let deny = deny.get_or_init(|| DenyList::compile(self.guard));
+            match self.object_guard(deny, &candidate.target, candidate.object_fp.as_ref()) {
+                Ok(Some(blocker)) => {
+                    if !candidate.blockers.contains(&blocker) {
+                        candidate.blockers.push(blocker);
+                    }
+                }
+                Ok(None) => {}
+                Err(why) => {
+                    self.ext
+                        .fault(format!("{scanner}: dropped {:?}: {why}", candidate.target));
+                    return false;
+                }
             }
         }
         let owned = |e: &purge_model::Evidence| e.kind == EvidenceKind::OwnedSystemObject;

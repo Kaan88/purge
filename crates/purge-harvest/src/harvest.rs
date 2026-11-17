@@ -366,6 +366,7 @@ pub fn harvest_report_with(
             fs,
             sys,
             products: &inventory.entries,
+            msi_only: &inventory.msi_only,
             cache: opts.table_cache,
             threads: 0,
         })

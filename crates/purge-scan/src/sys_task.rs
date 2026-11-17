@@ -91,6 +91,9 @@ const TASK_CACHE: &str = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sch
 const TASK_TREE: &str =
     r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree";
 
+/// The prefix of the index's error line for a task list it could not read (`purge_index::sysobj`).
+const LIST_UNREADABLE: &str = "sysobj: tasks:";
+
 /// The scanner reads the task list of `SystemSource::tasks` through `ScanExt`; the rig captures it
 /// together with Task Scheduler's registry cache.
 const ROOTS: &[RootSpec] = &[RootSpec::reg(TASK_CACHE, None)];
@@ -118,8 +121,47 @@ impl Scanner for SysTask {
 
     fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
         let tasks = &ctx.ext.sysobj.tasks;
+        let recorded_tasks = &ctx.fp.sys.tasks;
+        // The list itself could not be read: the index's error is a scan warning; what it hides of the
+        // app is said here.
+        if ctx
+            .ext
+            .sysobj
+            .errors
+            .iter()
+            .any(|e| e.starts_with(LIST_UNREADABLE))
+            && !recorded_tasks.is_empty()
+        {
+            ctx.ext.warn(
+                ID,
+                format!(
+                    "the task list could not be read; the {} task(s) recorded at harvest are not \
+                     offered",
+                    recorded_tasks.len()
+                ),
+            );
+        }
         if tasks.is_empty() {
             return Vec::new();
+        }
+        // A task whose definition cannot be read is attributed only through the harvest's record; the
+        // others are left out, which is said once.
+        let unread = tasks
+            .iter()
+            .filter(|t| {
+                t.identity.actions.is_empty()
+                    && !recorded_tasks
+                        .iter()
+                        .any(|r| prefix::eq_ci(&r.identity.path, &t.identity.path))
+            })
+            .count();
+        if unread > 0 {
+            ctx.ext.warn(
+                ID,
+                format!(
+                    "{unread} task(s) whose definition could not be read are not attributed to any app"
+                ),
+            );
         }
         let env = Env::new(ctx.env.iter());
         let deny = DenyList::compile(ctx.guard);

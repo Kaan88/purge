@@ -940,6 +940,7 @@ pub fn exemptions_to_journal(exemptions: &Exemptions<'_>) -> GateExemptions {
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
         gone_burn: _,
         gone_msi_products: _,
         gone_cache_dirs: _,
@@ -949,6 +950,7 @@ pub fn exemptions_to_journal(exemptions: &Exemptions<'_>) -> GateExemptions {
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
     }
 }
 
@@ -962,12 +964,14 @@ pub fn exemptions_from_journal(exemptions: &GateExemptions) -> Exemptions<'stati
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
     } = *exemptions;
     Exemptions {
         proven_owned_skeleton,
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
         // M1b: wired by M1B-X-FOUND (see `exemptions_to_journal`).
         gone_burn: &[],
         gone_msi_products: &[],

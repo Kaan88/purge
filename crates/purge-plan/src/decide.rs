@@ -44,11 +44,12 @@
 use std::collections::HashMap;
 
 use purge_guard::canon::{GuardEnv, canon_key, canon_target};
-use purge_guard::deny::{DenyList, Exemptions};
+use purge_guard::deny::{DenyList, Exemptions, ObjectGuardFacts};
 use purge_guard::{containers, prefix};
 use purge_model::{
     Action, Band, Blocker, Candidate, Category, Evidence, EvidenceKind, Fingerprint, Hive,
-    ObjectKind, Origin, Reversibility, ScanMode, Scope, Target, Tier, VerifyGone,
+    InventoryEntry, ObjectKind, Origin, ProgramId, Reversibility, ScanMode, Scope, SourceTrust,
+    Target, Tier, VerifyGone,
 };
 use purge_policy::band::{self, PolicyCtx, TargetScope};
 use purge_policy::score::effective_weight;
@@ -197,6 +198,34 @@ impl M1bDecide {
             && self.gone_cache_dirs.is_empty()
             && self.gone_burn.is_empty()
     }
+}
+
+/// The `bundle_known` of [`M1bDecide::from_facts`] (R2a S9): whether the Burn bundle `bundle_id` is in the
+/// fresh inventory `entries`, for the bundle whose own entry was `home` (the fingerprint's app).
+///
+/// - `Some(true)`: some entry's key is named `bundle_id` (Burn registers a bundle under its bundle id),
+///   in any hive and view, compared ignoring case.
+/// - `Some(false)`: no such entry, and the Uninstall keys of the bundle's own hive were read completely
+///   (`hive_read(None)` for a per-machine bundle, `hive_read(Some(sid))` for a bundle of the user
+///   `sid`): the hive is loaded and no Uninstall key of it failed to list.
+/// - `None` otherwise: an id that is not a `{GUID}`, a hive that is not loaded (a per-user bundle of a
+///   user who is not logged on) or was not read completely. Unknown keeps the bundle out of every list.
+#[must_use]
+pub fn bundle_known(
+    bundle_id: &str,
+    home: &ProgramId,
+    entries: &[InventoryEntry],
+    hive_read: &dyn Fn(Option<&str>) -> bool,
+) -> Option<bool> {
+    let id = bundle_id.trim();
+    pack_guid(id)?;
+    if entries
+        .iter()
+        .any(|e| e.program_id.key_name().trim().eq_ignore_ascii_case(id))
+    {
+        return Some(true);
+    }
+    hive_read(home.hive_sid()).then_some(false)
 }
 
 /// `{GUID}` (braces required, any case) to the packed form Windows Installer stores in the registry: 32
@@ -429,6 +458,10 @@ pub fn exemptions<'c>(candidate: &Candidate, ctx: &'c DecideCtx<'_>) -> Exemptio
 ///   that carries `EmptyAfterPlan` (every item in it is a Safe item of the plan). The guard cannot tell a
 ///   file from a folder, so nothing else below the all-users Start Menu is exempted.
 /// - `long_names_resolved`: as passed.
+/// - `shared_com_value` (R2a S10): a whole-value delete whose Value-scope evidence (a pre-uninstall
+///   reference to the app, a reference into its InstallRoot, a dangling reference) counts at Tier A or B
+///   after Rule T and comes from an admin-only source (or from any source on a per-user target): the
+///   value's data was the app's. It lifts only the shared-COM rules, for that value.
 ///
 /// The three M1b lists are left empty: no evidence earns them; they come from the plan's system facts
 /// ([`M1bDecide`]) and [`exemptions`] adds them.
@@ -472,11 +505,25 @@ pub fn deny_exemptions(
         }
         _ => false,
     };
+    let shared_com_value = candidate.action == Action::DeleteValue
+        && matches!(candidate.target, Target::RegValue { .. })
+        && candidate.evidence.iter().any(|e| {
+            matches!(
+                e.kind,
+                EvidenceKind::InPreUninstallRefSnapshot
+                    | EvidenceKind::PointsIntoInstallRoot
+                    | EvidenceKind::DanglingRef
+            ) && e.scope == Scope::Value
+                && (e.trust == SourceTrust::AdminOnly || scope == TargetScope::PerUser)
+                && matches!(band::effective_tier(e, scope), Tier::A | Tier::B)
+                && effective_weight(e) > 0
+        });
     Exemptions {
         proven_owned_skeleton,
         environment_segment_edit,
         tier_a_start_menu_entry,
         long_names_resolved,
+        shared_com_value,
         // M1b: the three lists come from the plan's system facts, not from evidence (`exemptions`).
         ..Exemptions::default()
     }
@@ -500,6 +547,9 @@ pub fn guard_and_policy(mut candidate: Candidate, ctx: &DecideCtx<'_>) -> Candid
             if let Some(blocker) = containers::check(&candidate.target, env) {
                 push_blocker(&mut candidate, blocker);
             }
+            if let Some(blocker) = object_rules(&candidate, ctx) {
+                push_blocker(&mut candidate, blocker);
+            }
         }
         Err(error) => push_blocker(
             &mut candidate,
@@ -513,6 +563,42 @@ pub fn guard_and_policy(mut candidate: Candidate, ctx: &DecideCtx<'_>) -> Candid
     }
     redecide(&mut candidate, ctx);
     candidate
+}
+
+/// The rule id of a typed object that reaches the plan without a well-formed digest of its kind.
+pub const OBJECT_NO_FP: &str = "object.no-fp";
+
+/// The object rules the plan applies itself to a system object (R2a S2), on top of the blockers the
+/// scan's sealing added from the system-object index (`purge_scan` `ScanCtx::object_guard`), which
+/// the plan cannot read:
+///
+/// - the candidate must carry a well-formed `object_fp` of the target's kind, else the hard
+///   `DenyListed { rule: "object.no-fp" }` (the act would be bound to nothing);
+/// - a task's path is judged by `DenyList::check_object` (`sys.task.windows` for the folders of
+///   Windows, Office and Edge's updater), the one object rule the target alone decides.
+///
+/// `None` for a target that is no system object.
+fn object_rules(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Option<Blocker> {
+    let kind = ObjectKind::of(&candidate.target)?;
+    let bound = candidate
+        .object_fp
+        .as_ref()
+        .is_some_and(|fp| fp.kind == kind && fp.is_well_formed());
+    if !bound {
+        return Some(Blocker::DenyListed {
+            rule: OBJECT_NO_FP.to_owned(),
+        });
+    }
+    match &candidate.target {
+        Target::Task { path } => ctx.deny.check_object(
+            ObjectKind::Task,
+            &ObjectGuardFacts {
+                name_or_path_or_id: path,
+                ..ObjectGuardFacts::default()
+            },
+        ),
+        _ => None,
+    }
 }
 
 /// Runs the policy over `candidate` as it stands and stores the decision. The target must already be
@@ -1132,14 +1218,85 @@ mod tests {
             owned_path("short", r"C:\PROGRA~1\App\app.exe"),
             owned_path("app", r"C:\Program Files\Vendor\App\app.exe"),
             owned_key("app-key", r"HKLM\SOFTWARE\Vendor\App"),
+            Candidate {
+                object_fp: Some(purge_model::ObjectFp {
+                    kind: ObjectKind::Service,
+                    sha256: "a".repeat(64),
+                }),
+                ..cand(
+                    "svc",
+                    Target::Service {
+                        name: "AppSvc".into(),
+                    },
+                    "SYS",
+                )
+            },
+        ]
+    }
+
+    /// R2a S2: a typed object without a well-formed digest of its kind is `object.no-fp`; a task path
+    /// under Windows' own task folder is denied by the object rules in the plan itself.
+    #[test]
+    fn object_rules_bind_and_judge_typed_targets() {
+        let deny = deny();
+        let ctx = ctx(&deny);
+        let rule = |c: &Candidate| {
+            c.blockers
+                .iter()
+                .filter_map(|b| match b {
+                    Blocker::DenyListed { rule } => Some(rule.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let fp = |kind, sha: &str| {
+            Some(purge_model::ObjectFp {
+                kind,
+                sha256: sha.into(),
+            })
+        };
+        let svc = || {
             cand(
                 "svc",
                 Target::Service {
                     name: "AppSvc".into(),
                 },
                 "SYS",
-            ),
-        ]
+            )
+        };
+        for bad in [
+            None,
+            fp(ObjectKind::Service, "A".repeat(64).as_str()),
+            fp(ObjectKind::Task, "a".repeat(64).as_str()),
+        ] {
+            let c = guard_and_policy(
+                Candidate {
+                    object_fp: bad.clone(),
+                    ..svc()
+                },
+                &ctx,
+            );
+            assert_eq!(rule(&c), vec![OBJECT_NO_FP.to_owned()], "{bad:?}");
+        }
+        let good = guard_and_policy(
+            Candidate {
+                object_fp: fp(ObjectKind::Service, &"a".repeat(64)),
+                ..svc()
+            },
+            &ctx,
+        );
+        assert!(rule(&good).is_empty());
+        let task = |path: &str| {
+            guard_and_policy(
+                Candidate {
+                    object_fp: fp(ObjectKind::Task, &"b".repeat(64)),
+                    ..cand("task", Target::Task { path: path.into() }, "SYS")
+                },
+                &ctx,
+            )
+        };
+        assert!(!rule(&task(r"\Microsoft\Windows\Defrag\ScheduledDefrag")).is_empty());
+        assert!(rule(&task(r"\VendorAppUpdate")).is_empty());
     }
 
     /// `deny_exemptions` is `exemptions` with the inputs spelled out: equal under every context, whatever

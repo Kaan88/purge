@@ -21,6 +21,7 @@ fn build_limited(
             fs: fx,
             sys: fx,
             products,
+            msi_only: &[],
             cache: None,
             threads: 4,
         },
@@ -118,6 +119,7 @@ fn budget_key_opens() {
         fs: &fx,
         sys: &fx,
         products: &products,
+        msi_only: &[],
         cache: None,
         threads: 8,
     });

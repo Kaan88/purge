@@ -19,6 +19,7 @@
 //! Reads: one `values()` of the store.
 
 use purge_model::{Action, Blocker, Candidate, Category, RootKind, Target};
+use purge_source::types::SourceError;
 
 use crate::framework::{AppIdentityView, PathStore, RootSpec, ScanCtx, Scanner};
 
@@ -60,9 +61,17 @@ impl Scanner for RegInstFolders {
         if !ctx.fp.roots.iter().any(|r| r.kind == RootKind::InstallRoot) {
             return Vec::new();
         }
-        // Missing, or unknown: nothing.
-        let Ok(values) = ctx.reg.values(FOLDERS) else {
-            return Vec::new();
+        // Missing, or unknown: nothing (unknown is said).
+        let values = match ctx.reg.values(FOLDERS) {
+            Ok(values) => values,
+            Err(SourceError::NotFound) => return Vec::new(),
+            Err(e) => {
+                ctx.ext.warn(
+                    ID,
+                    format!("{FOLDERS}: not read ({e}); nothing is offered from it"),
+                );
+                return Vec::new();
+            }
         };
         let mut out = Vec::new();
         for value in values {

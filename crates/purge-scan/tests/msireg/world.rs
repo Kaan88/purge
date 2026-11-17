@@ -300,6 +300,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             products: &self.inventory,
+            msi_only: &[],
             cache: None,
             threads: 1,
         });

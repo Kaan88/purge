@@ -37,9 +37,9 @@ use purge_model::{Action, Blocker, Candidate, Category, Evidence, Target, Tier};
 use purge_source::types::SourceError;
 
 use crate::com_class::{
-    ClassCache, ClassState, Offer, Place, TypeLibScan, classes_roots, foreign_class_owner,
-    is_anchor, is_braced_guid, scan_typelib, shared_iids, split_classes, walk_hits,
-    walked_user_sids,
+    ClassCache, ClassState, NO_KB, NO_WALK, Offer, Place, TypeLibScan, classes_roots,
+    foreign_class_owner, is_anchor, is_braced_guid, scan_typelib, shared_iids, split_classes,
+    walk_hits, walked_user_sids, warn_unread,
 };
 use crate::framework::{AppIdentityView, RootSpec, ScanCtx, Scanner};
 
@@ -72,9 +72,11 @@ impl Scanner for ComInterface {
 
     fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
         let Some(hits) = walk_hits(ctx) else {
+            ctx.ext.warn(ID, NO_WALK);
             return Vec::new();
         };
         let Some(kb) = shared_iids() else {
+            ctx.ext.warn(ID, NO_KB);
             return Vec::new();
         };
         let mut classes = ClassCache::new(hits, kb);
@@ -276,19 +278,26 @@ fn read(ctx: &ScanCtx<'_>, key: &str) -> Read {
     let names = match ctx.reg.subkeys(key) {
         Ok(names) => names,
         Err(SourceError::NotFound) => return Read::Absent,
-        Err(_) => return Read::Unreadable,
+        Err(e) => {
+            warn_unread(ctx, ID, key, &e);
+            return Read::Unreadable;
+        }
     };
     let guid_of = |sub: &str| -> Result<Option<String>, ()> {
         let Some(name) = names.iter().find(|n| prefix::eq_ci(n, sub)) else {
             return Ok(None);
         };
-        match ctx.reg.value(&format!(r"{key}\{name}"), "") {
+        let sub_key = format!(r"{key}\{name}");
+        match ctx.reg.value(&sub_key, "") {
             Ok(data) => Ok(data
                 .string()
                 .map(|s| s.trim().to_owned())
                 .filter(|s| is_braced_guid(s))),
             Err(SourceError::NotFound) => Ok(None),
-            Err(_) => Err(()),
+            Err(e) => {
+                warn_unread(ctx, ID, &sub_key, &e);
+                Err(())
+            }
         }
     };
     let mut proxy = None;

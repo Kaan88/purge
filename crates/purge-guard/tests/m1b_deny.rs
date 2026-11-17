@@ -1031,6 +1031,43 @@ fn shared_proxy_clsid_never_owner() {
     assert!(!data.is_shared_proxy_clsid("{0A1B2C3D-0000-1111-2222-333344445555}"));
 }
 
+/// R2a S10: `shared_com_value` lifts the shared-COM rules for a single value only; every key at or
+/// below a shared interface or proxy stays denied, and the flag lifts no other rule.
+#[test]
+fn shared_com_value_lifts_values_only() {
+    let data = shared_iids().unwrap();
+    let ex = Exemptions {
+        shared_com_value: true,
+        ..Exemptions::default()
+    };
+    let iid = format!(r"HKLM\SOFTWARE\Classes\Interface\{}", data.iids[0].iid);
+    let proxy = format!(
+        r"HKLM\SOFTWARE\Classes\CLSID\{}",
+        data.shared_proxy_clsids[0].clsid
+    );
+    for target in [
+        v(format!(r"{iid}\ProxyStubClsid32"), ""),
+        v(&iid, ""),
+        v(format!(r"{proxy}\InprocServer32"), ""),
+    ] {
+        assert!(rule(&target).is_some(), "{target:?}");
+        assert_eq!(rule_with(&target, &ex), None, "{target:?}");
+    }
+    for target in [
+        k(&iid),
+        k(format!(r"{iid}\ProxyStubClsid32")),
+        k(&proxy),
+        k(format!(r"{proxy}\InprocServer32")),
+    ] {
+        assert!(rule_with(&target, &ex).is_some(), "{target:?}");
+    }
+    // Another rule is not lifted by it.
+    assert_eq!(
+        rule_with(&k(format!(r"{CV}\Uninstall")), &ex),
+        rule(&k(format!(r"{CV}\Uninstall")))
+    );
+}
+
 #[test]
 fn other_m1b_roots_are_denied_but_their_children_are_not() {
     let shared = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs";

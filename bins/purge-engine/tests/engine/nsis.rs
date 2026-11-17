@@ -336,10 +336,11 @@ fn com_class_older_than_the_install_is_not_offered() {
     assert_eq!(listed, Vec::<String>::new());
 }
 
-/// The control: the browser's own class is an anchor and its server value and interface values are
-/// listed, never Safe or ticked. Since M1b the class is the shared Gecko proxy of `kb/shared-iids.json`
-/// and the interfaces are shared IIDs, so the guard blocks all four (`com.shared-proxy`,
-/// `com.shared-iid`); in M1a the interface values were Likely.
+/// The control: the browser's own class is an anchor. Its server value is offered, and the interface
+/// values, known only through the class id, are never Safe or ticked. The class is the shared Gecko
+/// proxy of `kb/shared-iids.json` and the interfaces are shared IIDs, but the values' data was the
+/// browser's, so `com.shared-proxy` and `com.shared-iid` are lifted for these values only (R2a S10):
+/// the bands are M1a's. The shared keys themselves stay denied.
 #[test]
 fn com_class_of_the_app_itself_is_offered_with_unticked_interface_values() {
     let (anchor, listed) = class_items(ClassStory::BrowsersOwn);
@@ -350,7 +351,7 @@ fn com_class_of_the_app_itself_is_offered_with_unticked_interface_values() {
     );
     let interfaces: Vec<&String> = listed.iter().filter(|l| l.contains("Interface")).collect();
     assert_eq!(interfaces.len(), 3, "{listed:#?}");
-    for line in &listed {
-        assert!(line.ends_with("Blocked false"), "{line}");
+    for line in interfaces {
+        assert!(line.ends_with("Likely false"), "{line}");
     }
 }

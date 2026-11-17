@@ -49,7 +49,7 @@
 use purge_guard::prefix;
 use purge_index::ownership::{MACHINE_SID, USERDATA, area, pack_guid};
 use purge_model::{Action, Blocker, Candidate, Category, MsiContext, MsiFacts, Target};
-use purge_source::types::KeyInfo;
+use purge_source::types::{KeyInfo, SourceError};
 
 use crate::framework::{AppIdentityView, CandidateBuilder, RootSpec, ScanCtx, Scanner};
 
@@ -116,8 +116,20 @@ impl Scanner for RegArpMsi {
             if !packed.eq_ignore_ascii_case(msi.packed_code.trim()) {
                 continue;
             }
-            if !ctx.product_gone(&msi.product_code) {
-                continue;
+            match ctx.product_known(&msi.product_code) {
+                Some(false) => {}
+                Some(true) => continue,
+                None => {
+                    ctx.ext.warn(
+                        ID,
+                        format!(
+                            "{}: Windows Installer's state of the product could not be read; \
+                             its registration is not offered",
+                            msi.product_code
+                        ),
+                    );
+                    continue;
+                }
             }
             let sids = sids.get_or_insert_with(|| userdata_sids(ctx));
             for candidate in product_candidates(ctx, msi, &packed, sids) {
@@ -138,7 +150,21 @@ impl Scanner for RegArpMsi {
 fn userdata_sids(ctx: &ScanCtx<'_>) -> Vec<String> {
     match ctx.reg.subkeys(USERDATA) {
         Ok(names) => names.into_iter().filter(|s| is_sid(s)).collect(),
-        Err(_) => Vec::new(),
+        Err(e) => {
+            warn_unread(ctx, USERDATA, &e);
+            Vec::new()
+        }
+    }
+}
+
+/// One scan warning for a key or value the scanner needed and could not read (S-COMMON); "not there"
+/// is no warning.
+fn warn_unread(ctx: &ScanCtx<'_>, what: &str, error: &SourceError) {
+    if !matches!(error, SourceError::NotFound) {
+        ctx.ext.warn(
+            ID,
+            format!("{what}: not read ({error}); nothing is offered from it"),
+        );
     }
 }
 
@@ -196,9 +222,13 @@ fn product_candidates(
         ));
     }
     for (key, store) in keys {
-        // Absent, or unknown: no candidate.
-        let Ok(info) = ctx.reg.key_info(&key) else {
-            continue;
+        // Absent, or unknown: no candidate (unknown is said).
+        let info = match ctx.reg.key_info(&key) {
+            Ok(info) => info,
+            Err(e) => {
+                warn_unread(ctx, &key, &e);
+                continue;
+            }
         };
         let mut b = ctx.candidate(
             ID,
@@ -228,7 +258,8 @@ fn product_candidates(
             ),
         ] {
             let key = format!(r"{base}\{upgrade}");
-            if ctx.reg.value(&key, packed).is_err() {
+            if let Err(e) = ctx.reg.value(&key, packed) {
+                warn_unread(ctx, &format!(r"{key}|{packed}"), &e);
                 continue;
             }
             out.push(value_candidate(ctx, code, store, key, packed));
@@ -238,6 +269,15 @@ fn product_candidates(
     // Component client values, from the ownership index. An incomplete component read lists some
     // components and not others: nothing is offered from it.
     let ix = &ctx.ext.ownership;
+    if !ix.stats().complete(area::COMPONENTS) {
+        ctx.ext.warn(
+            ID,
+            format!(
+                "{code}: the component clients were not read completely; \
+                 no component client value is offered"
+            ),
+        );
+    }
     if let Some(sid) = context_sid(msi)
         && ix.stats().complete(area::COMPONENTS)
         && sids.iter().any(|s| prefix::eq_ci(s, sid))

@@ -1062,7 +1062,22 @@ fn object_fp_emitted_and_read_back() {
         .count();
     assert_eq!(carriers, 2);
 
-    // The digest is outside the plan hash: the same plan without it has the same hash and plan.
+    // The digest is outside the plan hash: the same plan with other digests has the same hash and
+    // plan. (Without any digest a typed item is `object.no-fp`, R2a S2, so the digests are replaced,
+    // not removed.)
+    let other: Vec<Candidate> = with_fp()
+        .into_iter()
+        .map(|mut c| {
+            if let Some(fp) = c.object_fp.as_mut() {
+                fp.sha256 = "0".repeat(64);
+            }
+            c
+        })
+        .collect();
+    let plain = build("vendor-app", other, &ctx);
+    assert_eq!(plain.plan, built.plan);
+    assert_eq!(plain.scan.plan_hash, built.scan.plan_hash);
+    // Without a digest, a typed item is Blocked by the plan itself.
     let stripped: Vec<Candidate> = with_fp()
         .into_iter()
         .map(|mut c| {
@@ -1070,11 +1085,111 @@ fn object_fp_emitted_and_read_back() {
             c
         })
         .collect();
-    let plain = build("vendor-app", stripped, &ctx);
-    assert_eq!(plain.plan, built.plan);
-    assert_eq!(plain.scan.plan_hash, built.scan.plan_hash);
+    let unbound = build("vendor-app", stripped, &ctx);
+    for item in unbound.plan.items.iter().filter(|i| {
+        matches!(
+            i.target,
+            Target::Service { .. } | Target::FirewallRule { .. }
+        )
+    }) {
+        assert_eq!(item.band, Band::Blocked, "{:?}", item.target);
+    }
     assert_eq!(
         plan_hash(&back.items, &back.policy_version, back.mode),
         built.scan.plan_hash
     );
+}
+
+/// R2a S10: a whole-value delete under a shared COM key is let through when admin-trust Value-scope
+/// evidence ties the value's data to the app; without it, or for a key, the shared-COM rule holds.
+#[test]
+fn shared_com_value_is_earned_by_the_values_own_evidence() {
+    let deny = deny();
+    let ctx = ctx(&deny);
+    let data = purge_guard::deny::shared_iids().unwrap();
+    let iid = format!(r"HKLM\SOFTWARE\Classes\Interface\{}", data.iids[0].iid);
+    let stub = format!(r"{iid}\ProxyStubClsid32");
+    let with = |target: Target, evidence: Vec<Evidence>| {
+        let mut c = cand("c", target, "COM-INTERFACE");
+        c.evidence = evidence;
+        one(c, &ctx)
+    };
+    for kind in [
+        EvidenceKind::InPreUninstallRefSnapshot,
+        EvidenceKind::PointsIntoInstallRoot,
+        EvidenceKind::DanglingRef,
+    ] {
+        assert_eq!(
+            deny_rule(&with(value(&stub, ""), vec![ev(kind, Scope::Value, "x")])),
+            None,
+            "{kind:?}"
+        );
+    }
+    // No such evidence: denied.
+    assert_eq!(
+        deny_rule(&with(value(&stub, ""), Vec::new())),
+        Some("com.shared-iid")
+    );
+    // User-writable evidence for a machine value is not admin trust: denied.
+    let mut user = ev(
+        EvidenceKind::InPreUninstallRefSnapshot,
+        Scope::Value,
+        "refsnap",
+    );
+    user.trust = SourceTrust::UserWritable;
+    assert_eq!(
+        deny_rule(&with(value(&stub, ""), vec![user])),
+        Some("com.shared-iid")
+    );
+    // A key is never lifted, whatever its evidence.
+    let k = msi_owned("k", key(&stub), "COM-INTERFACE");
+    assert_eq!(deny_rule(&one(k, &ctx)), Some("com.shared-iid"));
+}
+
+/// R2a S9: `bundle_known` reads the fresh inventory and is unknown unless the bundle's hive was read.
+#[test]
+fn bundle_known_rule() {
+    use purge_model::{InstallScope, InstallerKind, InventoryEntry, RawFlags, WritableBy};
+    use purge_plan::decide::bundle_known;
+    let bundle = "{B0B0B0B0-0000-0000-0000-000000000001}";
+    let machine = ProgramId::machine(View::K64, bundle).unwrap();
+    let entry = |id: ProgramId| InventoryEntry {
+        key_path: id.key_path(),
+        program_id: id,
+        hive_sid: None,
+        view: View::K32,
+        display_name: "Bundle".into(),
+        version: None,
+        publisher: None,
+        flags: RawFlags::default(),
+        installer_kind: InstallerKind::Burn,
+        scope: InstallScope::Machine,
+        product_code: None,
+        upgrade_code: None,
+        inno_app_id: None,
+        writable_by: WritableBy::Admin,
+        install_location: None,
+        uninstall_string: None,
+        quiet_uninstall_string: None,
+        display_icon: None,
+        install_time_evidence: Vec::new(),
+        msi: None,
+    };
+    let read = |_: Option<&str>| true;
+    let unread = |_: Option<&str>| false;
+    let present = [entry(
+        ProgramId::machine(View::K32, bundle.to_ascii_lowercase()).unwrap(),
+    )];
+    assert_eq!(
+        bundle_known(bundle, &machine, &present, &unread),
+        Some(true)
+    );
+    assert_eq!(bundle_known(bundle, &machine, &[], &read), Some(false));
+    assert_eq!(bundle_known(bundle, &machine, &[], &unread), None);
+    assert_eq!(bundle_known("not-a-guid", &machine, &[], &read), None);
+    // A per-user bundle asks for its own hive.
+    let user = ProgramId::user(SID.to_owned(), View::K64, bundle).unwrap();
+    let only_user = |sid: Option<&str>| sid == Some(SID);
+    assert_eq!(bundle_known(bundle, &user, &[], &only_user), Some(false));
+    assert_eq!(bundle_known(bundle, &machine, &[], &only_user), None);
 }

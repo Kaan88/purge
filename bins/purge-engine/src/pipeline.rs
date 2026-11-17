@@ -61,10 +61,12 @@ use purge_model::{
     AnchorKind, AnchorRef, Candidate, Fingerprint, InstallScope, InstallerKind, InventoryDoc,
     InventoryEntry, OsInfo, ProgramId, RawFlags, ScanMode, VerifyGone, View, WritableBy,
 };
-use purge_plan::decide::{DecideCtx, Limits};
+use purge_plan::decide::{DecideCtx, Limits, M1bDecide, bundle_known};
 use purge_plan::emit::{Built, build};
 use purge_scan::catalog::all_scanners;
-use purge_scan::framework::{AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, ScanLimits};
+use purge_scan::framework::{
+    AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, ScanLimits, product_known_in,
+};
 use purge_source::registry::RegistrySource;
 use purge_win::env::{EnvMap, expand_with};
 
@@ -861,6 +863,7 @@ fn run_scan(
         fp,
         &app,
         &inv.doc.entries,
+        &inv.doc.msi_only,
         None,
         OwnershipLimits::default(),
     );
@@ -903,6 +906,19 @@ fn run_scan(
             .into_iter()
             .map(|f| format!("scan: scanner fault: {f}")),
     );
+    warnings.extend(
+        ext.take_warnings()
+            .into_iter()
+            .map(|w| format!("scan: {w}")),
+    );
+    let unknown = ext.unknown_ownership_items();
+    if unknown > 0 {
+        warnings.push(format!(
+            "scan: {unknown} item(s) under a Classes key kept from Safe (MsiPackageUnreadable): \
+             the MSI rows of {} product(s) are unknown",
+            ext.ownership.unreadable().len()
+        ));
+    }
 
     // Decide, collapse, emit.
     let deny = DenyList::compile(&guard);
@@ -920,8 +936,8 @@ fn run_scan(
         // Candidates also come from registry data, which may spell 8.3 names: keep the refusal on.
         long_names_resolved: false,
         limits: Limits::default(),
-        // M1b lists stay closed until M1B-SCAN-INTEG calls `M1bDecide::from_facts` here.
-        m1b: Default::default(),
+        // The M1b exemption lists, from the fingerprint and fresh queries only (R2a S9).
+        m1b: m1b_lists(sources, fp, &inv),
     };
     let built = build(app_id, candidates.clone(), &decide);
     step.done(&format!(
@@ -934,6 +950,46 @@ fn run_scan(
         built,
         per_scanner,
         warnings,
+    })
+}
+
+/// The M1b exemption lists of a plan (C-GUARD, R2a S9): [`M1bDecide::from_facts`] over the fingerprint,
+/// with two fresh queries made now, never anything a candidate or a plan file says:
+///
+/// - `product_known`: Windows Installer's state of the product in every context
+///   ([`purge_scan::framework::product_known_in`]);
+/// - `bundle_known`: the bundle in the fresh inventory `inv` ([`purge_plan::decide::bundle_known`]); a
+///   hive counts as read when it is loaded and no Uninstall key of it failed to list (an inventory
+///   warning on that hive's Uninstall keys, or on the list of loaded hives for a user, makes it
+///   unknown).
+///
+/// M1B-X-INTEG hook: the executor must not take these lists from the plan or the journal (a plan file
+/// could then name any product or Package Cache folder). At act time it computes them itself with this
+/// function, over the fingerprint it stored and a fresh inventory, and passes them to its gate.
+pub fn m1b_lists(sources: Sources<'_>, fp: &Fingerprint, inv: &Inventory) -> M1bDecide {
+    let loaded = sources.reg.loaded_user_sids().ok();
+    let hive_read = |sid: Option<&str>| -> bool {
+        let unread = |prefix: &str| {
+            inv.warnings.iter().any(|w| {
+                w.location
+                    .get(..prefix.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            })
+        };
+        match sid {
+            None => !unread("HKLM\\"),
+            Some(sid) => {
+                let is_loaded = loaded
+                    .as_ref()
+                    .is_some_and(|l| l.iter().any(|s| s.eq_ignore_ascii_case(sid)));
+                is_loaded
+                    && !inv.warnings.iter().any(|w| w.location == "HKU")
+                    && !unread(&format!("HKU\\{sid}\\"))
+            }
+        }
+    };
+    M1bDecide::from_facts(fp, &|code| product_known_in(sources.sys, code), &|bundle| {
+        bundle_known(bundle, &fp.app.program_id, &inv.doc.entries, &hive_read)
     })
 }
 

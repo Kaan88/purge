@@ -104,9 +104,11 @@ impl Scanner for ComClass {
 
     fn scan(&self, ctx: &ScanCtx<'_>, app: &AppIdentityView) -> Vec<Candidate> {
         let Some(hits) = walk_hits(ctx) else {
+            ctx.ext.warn(ID, NO_WALK);
             return Vec::new();
         };
         let Some(kb) = shared_iids() else {
+            ctx.ext.warn(ID, NO_KB);
             return Vec::new();
         };
         let mut out = Vec::new();
@@ -210,6 +212,24 @@ const STANDARD_APPID_VALUES: &[&str] = &[
 
 /// The platform subkeys of a type library's locale key.
 const TYPELIB_PLATFORMS: &[&str] = &["win16", "win32", "win64", "arm64"];
+
+/// The scan warning when the context holds no reference walk for the app (S-COMMON).
+pub(crate) const NO_WALK: &str =
+    "the shared reference walk was not run for this app; no COM registration is offered";
+/// The scan warning when `kb/shared-iids.json` does not load.
+pub(crate) const NO_KB: &str =
+    "kb/shared-iids.json could not be read; no COM registration is offered";
+
+/// One scan warning for a key the scanner needed and could not read (S-COMMON: what it would have
+/// offered from that key is left out). "Not there" is no warning.
+pub(crate) fn warn_unread(ctx: &ScanCtx<'_>, scanner: &str, key: &str, error: &SourceError) {
+    if !matches!(error, SourceError::NotFound) {
+        ctx.ext.warn(
+            scanner,
+            format!("{key}: not read ({error}); nothing is offered from it"),
+        );
+    }
+}
 
 /// The `kb/shared-iids.json` lists, read once; `None` when they do not load (then nothing is offered).
 pub(crate) fn shared_iids() -> Option<&'static SharedIids> {
@@ -828,7 +848,10 @@ fn read_class(ctx: &ScanCtx<'_>, key: &str) -> (ClassState, Vec<String>) {
     let names = match ctx.reg.subkeys(key) {
         Ok(names) => names,
         Err(SourceError::NotFound) => return (ClassState::Absent, Vec::new()),
-        Err(_) => return (ClassState::Unreadable, Vec::new()),
+        Err(e) => {
+            warn_unread(ctx, ID, key, &e);
+            return (ClassState::Unreadable, Vec::new());
+        }
     };
     if ctx.in_baseline(&Target::RegKey {
         path: key.to_owned(),
@@ -903,7 +926,10 @@ fn default_string(ctx: &ScanCtx<'_>, key: &str) -> Result<Option<String>, ()> {
     match ctx.reg.value(key, "") {
         Ok(data) => Ok(string_of(&data)),
         Err(SourceError::NotFound) => Ok(None),
-        Err(_) => Err(()),
+        Err(e) => {
+            warn_unread(ctx, ID, key, &e);
+            Err(())
+        }
     }
 }
 
@@ -923,7 +949,10 @@ fn inproc_servers(ctx: &ScanCtx<'_>, key: &str, env: &Env) -> Result<Vec<FileSta
     let values = match ctx.reg.values(key) {
         Ok(values) => values,
         Err(SourceError::NotFound) => return Ok(Vec::new()),
-        Err(_) => return Err(ClassState::Unreadable),
+        Err(e) => {
+            warn_unread(ctx, ID, key, &e);
+            return Err(ClassState::Unreadable);
+        }
     };
     let get = |values: &[purge_source::types::RegValue], name: &str| {
         values
@@ -943,12 +972,19 @@ fn inproc_servers(ctx: &ScanCtx<'_>, key: &str, env: &Env) -> Result<Vec<FileSta
         let versions = match ctx.reg.subkeys(key) {
             Ok(v) => v,
             Err(SourceError::NotFound) => Vec::new(),
-            Err(_) => return Err(ClassState::Unreadable),
+            Err(e) => {
+                warn_unread(ctx, ID, key, &e);
+                return Err(ClassState::Unreadable);
+            }
         };
         for version in versions.iter().take(MAX_CLR_VERSIONS) {
-            match ctx.reg.values(&format!(r"{key}\{version}")) {
+            let version_key = format!(r"{key}\{version}");
+            match ctx.reg.values(&version_key) {
                 Ok(values) => code_bases.extend(get(&values, "CodeBase")),
-                Err(_) => return Err(ClassState::Unreadable),
+                Err(e) => {
+                    warn_unread(ctx, ID, &version_key, &e);
+                    return Err(ClassState::Unreadable);
+                }
             }
         }
         if versions.len() > MAX_CLR_VERSIONS {
@@ -1031,11 +1067,19 @@ fn appid_candidate(
         return None;
     }
     let key = place.key("AppID", appid);
-    let values = ctx.reg.values(&key).ok()?;
+    let values = ctx
+        .reg
+        .values(&key)
+        .map_err(|e| warn_unread(ctx, ID, &key, &e))
+        .ok()?;
     if ctx.in_baseline(&Target::RegKey { path: key.clone() }) {
         return None;
     }
-    let subkeys = ctx.reg.subkeys(&key).ok()?;
+    let subkeys = ctx
+        .reg
+        .subkeys(&key)
+        .map_err(|e| warn_unread(ctx, ID, &key, &e))
+        .ok()?;
     // Every class that names it: one of the app's, offered under (a).
     let hits = classes.hits;
     let referrers: Vec<(Place, String)> = hits
@@ -1155,16 +1199,24 @@ fn appid_exe_candidates(ctx: &ScanCtx<'_>, offered: &[OfferedAppId]) -> Vec<Cand
     let mut out = Vec::new();
     for root in roots {
         let parent = format!(r"{root}\AppID");
-        let Ok(names) = ctx.reg.subkeys(&parent) else {
-            continue;
+        let names = match ctx.reg.subkeys(&parent) {
+            Ok(names) => names,
+            Err(e) => {
+                warn_unread(ctx, ID, &parent, &e);
+                continue;
+            }
         };
         for name in names {
             if is_braced_guid(&name) || !exe_names.iter().any(|e| prefix::eq_ci(e, &name)) {
                 continue;
             }
             let key = format!(r"{parent}\{name}");
-            let (Ok(values), Ok(subkeys)) = (ctx.reg.values(&key), ctx.reg.subkeys(&key)) else {
-                continue;
+            let (values, subkeys) = match (ctx.reg.values(&key), ctx.reg.subkeys(&key)) {
+                (Ok(values), Ok(subkeys)) => (values, subkeys),
+                (Err(e), _) | (_, Err(e)) => {
+                    warn_unread(ctx, ID, &key, &e);
+                    continue;
+                }
             };
             let named = values
                 .iter()
@@ -1241,8 +1293,12 @@ pub(crate) fn scan_typelib(ctx: &ScanCtx<'_>, place: &Place, id: &str) -> TypeLi
     {
         return scan;
     }
-    let Ok(versions) = ctx.reg.subkeys(&key) else {
-        return scan;
+    let versions = match ctx.reg.subkeys(&key) {
+        Ok(versions) => versions,
+        Err(e) => {
+            warn_unread(ctx, ID, &key, &e);
+            return scan;
+        }
     };
     let mut all = !versions.is_empty();
     let mut ids: Vec<CandidateId> = Vec::new();
@@ -1309,8 +1365,12 @@ fn scan_version(ctx: &ScanCtx<'_>, version_key: &str) -> VersionScan {
     }) {
         return out;
     }
-    let Ok(children) = ctx.reg.subkeys(version_key) else {
-        return out;
+    let children = match ctx.reg.subkeys(version_key) {
+        Ok(children) => children,
+        Err(e) => {
+            warn_unread(ctx, ID, version_key, &e);
+            return out;
+        }
     };
     let env = env_for(ctx, version_key);
     let mut own: Vec<(String, String, SourceTrust, ExistsState)> = Vec::new();
@@ -1324,8 +1384,12 @@ fn scan_version(ctx: &ScanCtx<'_>, version_key: &str) -> VersionScan {
             continue;
         }
         let lcid_key = format!(r"{version_key}\{child}");
-        let Ok(platforms) = ctx.reg.subkeys(&lcid_key) else {
-            return out;
+        let platforms = match ctx.reg.subkeys(&lcid_key) {
+            Ok(platforms) => platforms,
+            Err(e) => {
+                warn_unread(ctx, ID, &lcid_key, &e);
+                return out;
+            }
         };
         for platform in &platforms {
             let platform_key = format!(r"{lcid_key}\{platform}");

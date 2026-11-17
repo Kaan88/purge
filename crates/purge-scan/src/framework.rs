@@ -56,7 +56,7 @@ use crate::skeleton;
 
 mod m1b;
 
-pub use m1b::{PathStore, ScanExt};
+pub use m1b::{PathStore, ScanExt, product_known_in};
 
 // ---------------------------------------------------------------------------------------------------------
 // Scanner trait and root specs
@@ -674,8 +674,10 @@ impl<'a> ScanCtx<'a> {
     /// M1b (C-SCANEXT) adds, for every candidate of every scanner, M1a scanners included:
     ///
     /// - a candidate on a service, task or firewall rule without a well-formed `object_fp` of its
-    ///   kind is dropped, and so is a candidate that carries `OwnedSystemObject` on a target that is
-    ///   not a system object; each drop is a scanner fault ([`ScanExt::take_faults`]);
+    ///   kind is dropped, and so is one whose object the system-object index does not hold with that
+    ///   digest, and a candidate that carries `OwnedSystemObject` on a target that is not a system
+    ///   object; each drop is a scanner fault ([`ScanExt::take_faults`]); the guard's object rules are
+    ///   applied to every system object here, from the index ([`ScanCtx::object_guard`]);
     ///   `OwnedSystemObject` that no harvest record backs is lowered to Tier B
     ///   ([`ScanCtx::seal_object`]);
     /// - after the rule about what a value holds, the MSI blockers of the target
@@ -683,6 +685,8 @@ impl<'a> ScanCtx<'a> {
     pub fn run(&self, scanner: &dyn Scanner, app: &AppIdentityView) -> Vec<Candidate> {
         let found = scanner.scan(self, app);
         let mut sealed = Vec::with_capacity(found.len());
+        // Compiled once per run, and only when a system object needs the guard's object rules.
+        let deny = std::cell::OnceCell::new();
         for mut candidate in found {
             self.record_item_fp(&mut candidate);
             // A candidate of a co-removed product is judged as that product's: its paths and
@@ -700,7 +704,7 @@ impl<'a> ScanCtx<'a> {
                 Some(fp) => ScanCtx { fp, ..*self },
                 None => *self,
             };
-            if !ctx.seal_object(scanner.id(), &mut candidate) {
+            if !ctx.seal_object(scanner.id(), &mut candidate, &deny) {
                 continue;
             }
             ctx.seal(&mut candidate);

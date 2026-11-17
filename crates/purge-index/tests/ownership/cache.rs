@@ -45,6 +45,7 @@ fn metered_build(fx: &Fixture, cache: &dyn TableCache) -> (OwnershipIndex, u64) 
         fs: fx,
         sys: &sys,
         products: &products,
+        msi_only: &[],
         cache: Some(cache),
         threads: 2,
     });
@@ -168,6 +169,7 @@ fn disk_cache_corrupt_file_is_miss() {
         fs: &fx,
         sys: &sys,
         products: &products,
+        msi_only: &[],
         cache: Some(&cache),
         threads: 1,
     });

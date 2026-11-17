@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
 use purge_index::ownership::{MACHINE_SID, OwnershipLimits, USERDATA, pack_guid};
-use purge_index::sysobj::ProgramRef;
+use purge_index::sysobj::{ProgramRef, ServiceFacts, SysObjectIndex};
 use purge_model::{
     Action, Anchors, AppRef, Blocker, Candidate, Category, Evidence, EvidenceKind, ExeFile,
     Fingerprint, FingerprintSchema, IdentitySnapshot, InstallScope, InstallerKind, InventoryEntry,
@@ -151,6 +151,7 @@ impl World {
             &self.fp,
             &app,
             inventory,
+            &[],
             None,
             OwnershipLimits::default(),
         );
@@ -736,6 +737,79 @@ fn service() -> Target {
     }
 }
 
+/// The system-object index holding `identity` as a plain own-process service of the app.
+fn indexed(identity: ServiceIdentity) -> ScanExt {
+    ScanExt::new(
+        Default::default(),
+        SysObjectIndex {
+            services: vec![ServiceFacts {
+                identity,
+                display_name: None,
+                depend_on: Vec::new(),
+                delete_flag: false,
+                program: ProgramRef::File(format!(r"{ROOT}\7zsvc.exe")),
+                is_driver: false,
+                per_user_template: false,
+                svchost: false,
+            }],
+            ..SysObjectIndex::default()
+        },
+    )
+}
+
+/// R2a S2: sealing judges a system object against the index it was read from. Not in the index, or
+/// with a digest that is not the indexed object's: dropped with a fault. A service the object rules
+/// deny (a per-user template) gets the rule's hard blocker.
+#[test]
+fn seal_applies_the_object_rules_and_the_index_digest() {
+    let emit = Emit(|ctx| {
+        vec![
+            ctx.candidate("TEST-EMIT", service(), Action::DeleteKey, Category::System)
+                .object_fp(service_identity().fp())
+                .build(),
+        ]
+    });
+    // Not in the index.
+    let world = World::new(machine());
+    assert!(world.run(&emit).is_empty());
+    assert_eq!(world.ext.take_faults().len(), 1);
+    // In the index with another digest.
+    let mut world = World::new(machine());
+    let mut changed = service_identity();
+    changed.start = 3;
+    world.ext = indexed(changed);
+    assert!(world.run(&emit).is_empty());
+    assert_eq!(world.ext.take_faults().len(), 1);
+    // In the index, the same digest: kept, no object-rule blocker.
+    let mut world = World::new(machine());
+    world.ext = indexed(service_identity());
+    let found = world.run(&emit);
+    assert_eq!(found.len(), 1);
+    assert!(
+        !found[0]
+            .blockers
+            .iter()
+            .any(|b| matches!(b, Blocker::DenyListed { .. })),
+        "{:?}",
+        found[0].blockers
+    );
+    // A per-user service template: the object rule blocks it.
+    let mut world = World::new(machine());
+    let mut ext = indexed(service_identity());
+    ext.sysobj.services[0].per_user_template = true;
+    world.ext = ext;
+    let found = world.run(&emit);
+    assert_eq!(found.len(), 1);
+    assert!(
+        found[0]
+            .blockers
+            .iter()
+            .any(|b| matches!(b, Blocker::DenyListed { .. }) && b.is_hard()),
+        "{:?}",
+        found[0].blockers
+    );
+}
+
 fn owned_object(c: &Candidate) -> Vec<&Evidence> {
     c.evidence
         .iter()
@@ -746,7 +820,8 @@ fn owned_object(c: &Candidate) -> Vec<&Evidence> {
 #[test]
 fn owned_system_object_without_harvest_record_is_not_tier_a() {
     // Not recorded at harvest: the builder grants no OwnedSystemObject.
-    let world = World::new(machine());
+    let mut world = World::new(machine());
+    world.ext = indexed(service_identity());
     let found = world.run(&Emit(|ctx| {
         vec![
             ctx.candidate("TEST-EMIT", service(), Action::DeleteKey, Category::System)
@@ -781,6 +856,7 @@ fn owned_system_object_without_harvest_record_is_not_tier_a() {
 
     // Recorded with the same digest: Tier A, Object scope.
     let mut world = World::new(machine());
+    world.ext = indexed(service_identity());
     world.fp.sys.services.push(SysService {
         identity: service_identity(),
         program: Some(format!(r"{ROOT}\7zsvc.exe")),
@@ -799,7 +875,11 @@ fn owned_system_object_without_harvest_record_is_not_tier_a() {
     assert_eq!(owned[0].tier, Tier::A);
     assert_eq!(owned[0].scope, Scope::Object);
 
-    // Recorded, but the object changed since: the digest differs, Tier B.
+    // Recorded, but the object changed since (the index holds the changed one): the digest differs
+    // from the harvest's, Tier B.
+    let mut changed = service_identity();
+    changed.start = 3;
+    world.ext = indexed(changed);
     let found = world.run(&Emit(|ctx| {
         let mut changed = service_identity();
         changed.start = 3;
@@ -1039,9 +1119,8 @@ fn msi_blockers_unreadable_is_soft() {
     let world = World::new(machine()).with_ext(&[msi_entry(OTHER, LP_OTHER)]);
     assert!(!world.ext.ownership.unreadable().is_empty());
     let ctx = world.ctx();
+    // R2a S11: an unreadable package hides its registry rows only; under Classes that is said.
     for target in [
-        path(&format!(r"{ROOT}\7z.dll")),
-        path(r"C:\Program Files (x86)\7-Zip\x.dll"),
         Target::RegKey {
             path: r"HKLM\SOFTWARE\Classes\7-Zip.7z".into(),
         },
@@ -1054,7 +1133,11 @@ fn msi_blockers_unreadable_is_soft() {
         assert_eq!(blockers, vec![Blocker::MsiPackageUnreadable], "{target:?}");
         assert!(!blockers[0].is_hard());
     }
+    assert_eq!(world.ext.unknown_ownership_items(), 2);
+    // Its files are known from the registry's component clients, which were read: no demotion.
     for target in [
+        path(&format!(r"{ROOT}\7z.dll")),
+        path(r"C:\Program Files (x86)\7-Zip\x.dll"),
         path(r"C:\Users\me\AppData\Roaming\7-Zip"),
         Target::RegKey {
             path: r"HKLM\SOFTWARE\7-Zip".into(),
@@ -1062,6 +1145,59 @@ fn msi_blockers_unreadable_is_soft() {
     ] {
         assert!(ctx.msi_blockers(&target).is_empty(), "{target:?}");
     }
+}
+
+/// R2a S1: a SharedDLLs count is explained only by the app's own components whose live clients still
+/// name the app; anything above that is another installer's reference. A directory with a counted
+/// file inside is SharedRefcount too.
+#[test]
+fn shared_refcount_is_explained_by_the_apps_live_components() {
+    let dll = format!(r"{ROOT}\7z.dll");
+    let shared = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs";
+    let world_with = |count: u32, own_client: bool| {
+        let mut fx = machine();
+        fx.set_value(shared, &dll, RegData::from_dword(count));
+        if own_client {
+            client(&mut fx, OWN, &dll);
+        }
+        let mut world = World::new(fx);
+        world.fp.msi = vec![own_msi(&dll)];
+        world.with_ext(&[])
+    };
+    let refcount = |world: &World, target: &Target| {
+        world
+            .ctx()
+            .msi_blockers(target)
+            .contains(&Blocker::SharedRefcount)
+    };
+    // Count 1, the app's live component explains it.
+    let world = world_with(1, true);
+    assert!(!refcount(&world, &path(&dll)));
+    assert!(!refcount(&world, &path(ROOT)));
+    // Count 2: one reference is someone else's; the file and its folder are blocked.
+    let world = world_with(2, true);
+    assert!(refcount(&world, &path(&dll)));
+    assert!(refcount(&world, &path(ROOT)));
+    // Count 1 but the component's clients no longer name the app: unexplained.
+    let world = world_with(1, false);
+    assert!(refcount(&world, &path(&dll)));
+}
+
+/// The scan-warning channel: each line once, prefixed with the scanner, drained by the pipeline.
+#[test]
+fn warnings_are_recorded_once_and_drained() {
+    let world = World::new(machine());
+    world.ext.warn("TEST", "a list could not be read");
+    world.ext.warn("TEST", "a list could not be read");
+    world.ext.warn("OTHER", "x");
+    assert_eq!(
+        world.ext.take_warnings(),
+        vec![
+            "TEST: a list could not be read".to_owned(),
+            "OTHER: x".to_owned()
+        ]
+    );
+    assert!(world.ext.take_warnings().is_empty());
 }
 
 /// Every candidate of every scanner gets the MSI blockers, M1a scanners included.

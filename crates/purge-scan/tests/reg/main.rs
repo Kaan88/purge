@@ -2603,6 +2603,7 @@ fn ref_any_same_output_with_shared_hits() {
             &world.fp,
             &app,
             &[],
+            &[],
             None,
             OwnershipLimits::default(),
         );

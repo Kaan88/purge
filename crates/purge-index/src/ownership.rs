@@ -47,7 +47,7 @@ use std::time::Instant;
 
 use purge_guard::canon::{GuardEnv, canon_path};
 use purge_guard::prefix::{ancestors, fold};
-use purge_model::{InventoryEntry, MsiContext, MsiKeyPath};
+use purge_model::{InventoryEntry, MsiContext, MsiKeyPath, MsiOnlyRow};
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::sysobj::MsiTables;
@@ -60,6 +60,11 @@ use msi_rows::{ANY_USER, ResolvedRow, RowContext, RowValue};
 pub const USERDATA: &str = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData";
 
 /// The two SharedDLLs keys (64-bit and 32-bit view).
+///
+/// They are two keys, not one: `SharedDLLs` is redirected by WOW64, not shared. Checked on Windows 11
+/// 26300 (x64): `reg query ...\SharedDLLs /reg:64` lists 5,839 values and `/reg:32` (the same as
+/// `WOW6432Node\...\SharedDLLs`) 150 different ones. A 64-bit install counts a file in the first, a
+/// 32-bit install in the second, so the number of installs that use a file is the sum over both.
 pub const SHARED_DLLS: [&str; 2] = [
     r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs",
     r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\SharedDLLs",
@@ -138,6 +143,10 @@ pub struct OwnershipInput<'a> {
     pub sys: &'a dyn SystemSource,
     /// The inventory; every entry with MSI information is a product of the index.
     pub products: &'a [InventoryEntry],
+    /// The MSI products Windows Installer lists without an Uninstall key (`InventoryDoc::msi_only`):
+    /// products of the index too, read like the others. Leaving them out would make what they own
+    /// "nothing" instead of "unknown" (R2a S8).
+    pub msi_only: &'a [MsiOnlyRow],
     /// A table cache.
     pub cache: Option<&'a dyn TableCache>,
     /// Reader threads; zero means [`DEFAULT_THREADS`].
@@ -262,7 +271,8 @@ pub struct OwnershipIndex {
     rows: Vec<Row>,
     /// Folded key -> rows (every spelling the row is looked up under).
     rows_by_key: BTreeMap<String, Vec<u32>>,
-    shared_dlls: HashMap<String, u32>,
+    /// Folded file path -> count summed over both views.
+    shared_dlls: BTreeMap<String, u32>,
     folders: HashSet<String>,
     /// Folded provider key -> its dependents, merged and by hive.
     burn: BTreeMap<String, BurnProvider>,
@@ -625,7 +635,7 @@ impl OwnershipIndex {
                 GuardEnv::default()
             }
         };
-        ix.collect_products(inp.products);
+        ix.collect_products(inp);
 
         let phase = Phase::start("ownership.components");
         ix.read_components(inp, threads, &env, limits);
@@ -645,27 +655,21 @@ impl OwnershipIndex {
         ix
     }
 
-    fn collect_products(&mut self, entries: &[InventoryEntry]) {
-        for e in entries {
-            let (Some(msi), Some(code)) = (&e.msi, &e.product_code) else {
-                continue;
-            };
+    fn collect_products(&mut self, inp: &OwnershipInput) {
+        for input in product_inputs(inp) {
+            let code = input.code;
             let Some(packed) = pack_guid(code.trim()) else {
                 self.stats
                     .errors
                     .push(format!("product {code:?}: not a GUID"));
                 continue;
             };
-            let user_sid = match msi.context {
-                MsiContext::Machine => None,
-                _ => e.hive_sid.clone(),
-            };
             let product = ProductRef {
                 product_code: unpack_guid(&packed).unwrap_or_default(),
                 packed_code: packed.clone(),
-                name: e.display_name.clone(),
-                context: msi.context,
-                user_sid,
+                name: input.name,
+                context: input.context,
+                user_sid: input.user_sid,
             };
             if self.products.contains(&product) {
                 continue;
@@ -850,6 +854,7 @@ impl OwnershipIndex {
         }
     }
 
+    /// Both views of SharedDLLs, summed per file: they are two keys ([`SHARED_DLLS`]).
     fn read_shared_dlls(&mut self, inp: &OwnershipInput) {
         for key in SHARED_DLLS {
             let values = match inp.reg.values(key) {
@@ -958,27 +963,35 @@ impl OwnershipIndex {
     ) {
         // The products with a package, each read once (the same product in two entries is one product).
         let mut todo: Vec<(u32, String)> = Vec::new();
-        for entry in inp.products {
-            let (Some(msi), Some(code)) = (&entry.msi, &entry.product_code) else {
+        let mut unknown: Vec<u32> = Vec::new();
+        for input in product_inputs(inp) {
+            let Some(packed) = pack_guid(input.code.trim()) else {
                 continue;
-            };
-            let Some(packed) = pack_guid(code.trim()) else {
-                continue;
-            };
-            let user_sid = match msi.context {
-                MsiContext::Machine => None,
-                _ => entry.hive_sid.clone(),
             };
             let Some(p) = self.products.iter().position(|p| {
-                p.packed_code == packed && p.context == msi.context && p.user_sid == user_sid
+                p.packed_code == packed
+                    && p.context == input.context
+                    && p.user_sid == input.user_sid
             }) else {
                 continue;
             };
             let p = u32::try_from(p).unwrap_or(u32::MAX);
-            if todo.iter().any(|(q, _)| *q == p) {
+            if todo.iter().any(|(q, _)| *q == p) || unknown.contains(&p) {
                 continue;
             }
-            match msi.local_package.as_deref().map(str::trim) {
+            // A per-user product whose user is not known (an entry in another hive than the product's
+            // user, as a code-only match gives): its per-user rows could not be placed in any hive and
+            // would be dropped one by one. Its rows are unknown, said once here (R2a S8).
+            if input.context != MsiContext::Machine && input.user_sid.is_none() {
+                self.stats.errors.push(format!(
+                    "{}: a per-user product whose user is not known; its rows are unknown",
+                    self.products[p as usize].product_code
+                ));
+                self.unreadable.push(self.products[p as usize].clone());
+                unknown.push(p);
+                continue;
+            }
+            match input.local_package.map(str::trim) {
                 Some(lp) if !lp.is_empty() => todo.push((p, lp.to_owned())),
                 _ => {
                     self.stats.errors.push(format!(
@@ -986,6 +999,7 @@ impl OwnershipIndex {
                         self.products[p as usize].product_code
                     ));
                     self.unreadable.push(self.products[p as usize].clone());
+                    unknown.push(p);
                 }
             }
         }
@@ -1273,6 +1287,21 @@ impl OwnershipIndex {
         self.shared_dlls.get(&key_of(path)).copied()
     }
 
+    /// The files strictly below the directory `dir` (canonical) that SharedDLLs counts, each with its
+    /// count summed over both views ([`SHARED_DLL_UNKNOWN`] when a count is not a `REG_DWORD`), as
+    /// folded paths in path order. A sibling with a longer name (`C:\AppData` beside `C:\App`) is not
+    /// below.
+    pub fn shared_dlls_under(&self, dir: &str) -> Vec<(&str, u32)> {
+        debug_assert_canonical_path(dir);
+        let k = key_of(dir);
+        let lo = format!("{k}\\");
+        let hi = format!("{k}]");
+        self.shared_dlls
+            .range(lo..hi)
+            .map(|(file, count)| (file.as_str(), *count))
+            .collect()
+    }
+
     /// The directory (canonical) is listed in `Installer\Folders`.
     pub fn installer_folder(&self, dir: &str) -> bool {
         debug_assert_canonical_path(dir);
@@ -1334,6 +1363,53 @@ impl OwnershipIndex {
         }
         out
     }
+}
+
+/// One installed MSI product as the index takes it: from an inventory entry with MSI information or from
+/// a product without an Uninstall key.
+struct ProductInput<'a> {
+    code: &'a str,
+    context: MsiContext,
+    /// The product's user; `None` for the machine context, and for a per-user product whose user is
+    /// not known (see `read_tables`).
+    user_sid: Option<String>,
+    name: String,
+    local_package: Option<&'a str>,
+}
+
+/// The products of the index, entries first, then the products without an Uninstall key. A per-user
+/// product takes its user from the entry's hive (`None` when the entry is in `HKLM`) or from Windows
+/// Installer's row.
+fn product_inputs<'a>(inp: &OwnershipInput<'a>) -> Vec<ProductInput<'a>> {
+    let entries = inp.products.iter().filter_map(|e| {
+        let (Some(msi), Some(code)) = (&e.msi, &e.product_code) else {
+            return None;
+        };
+        Some(ProductInput {
+            code,
+            context: msi.context,
+            user_sid: match msi.context {
+                MsiContext::Machine => None,
+                _ => e.hive_sid.clone(),
+            },
+            name: e.display_name.clone(),
+            local_package: msi.local_package.as_deref(),
+        })
+    });
+    let msi_only = inp.msi_only.iter().map(|row| ProductInput {
+        code: &row.product_code,
+        context: row.context,
+        user_sid: match row.context {
+            MsiContext::Machine => None,
+            _ => row.user_sid.clone(),
+        },
+        name: row
+            .product_name
+            .clone()
+            .unwrap_or_else(|| row.product_code.clone()),
+        local_package: row.local_package.as_deref(),
+    });
+    entries.chain(msi_only).collect()
 }
 
 /// Reads one package's tables, from the cache when it has them. Never fails.

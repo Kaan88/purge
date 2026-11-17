@@ -263,14 +263,20 @@ fn com_rules() -> Result<Vec<Rule>, String> {
             return Err(format!("kb/shared-iids.json: bad IID {:?}", entry.iid));
         }
         let pattern = format!(r"HKCR\Interface\{}", entry.iid);
-        out.push(Rule::key("com.shared-iid", S, &pattern, &entry.why)?);
+        out.push(
+            Rule::key("com.shared-iid", S, &pattern, &entry.why)?
+                .with_exempt(Exempt::SharedComValue),
+        );
     }
     for entry in &data.shared_proxy_clsids {
         if !is_braced_guid(&entry.clsid) {
             return Err(format!("kb/shared-iids.json: bad CLSID {:?}", entry.clsid));
         }
         let pattern = format!(r"HKCR\CLSID\{}", entry.clsid);
-        out.push(Rule::key("com.shared-proxy", S, &pattern, &entry.why)?);
+        out.push(
+            Rule::key("com.shared-proxy", S, &pattern, &entry.why)?
+                .with_exempt(Exempt::SharedComValue),
+        );
     }
     Ok(out)
 }

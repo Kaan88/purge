@@ -210,6 +210,13 @@ pub struct Exemptions<'a> {
     /// this, a path with a segment that looks like a short name is denied, because the lexical tests
     /// cannot see what it aliases.
     pub long_names_resolved: bool,
+    /// The target is one value (a whole-value delete, never a key, a segment or an edit) and the
+    /// candidate's admin-trust evidence ties that value's data to the app before the uninstall (R2a
+    /// S10). Lifts `com.shared-iid` and `com.shared-proxy` for exactly that value; the shared keys
+    /// themselves stay denied. Such a value was last written for the app (its data named the app's file
+    /// or one of its anchors): any other product that shares the interface already points at what the
+    /// app's uninstall removed, so removing the value takes nothing from it that still works.
+    pub shared_com_value: bool,
     /// Bundle ids and provider keys of Burn bundles and packages that are gone. Lets through, under
     /// `reg.installer`, exactly the keys `<Classes>\Installer\Dependencies\<P>` with `P` listed and
     /// `<Classes>\Installer\Dependencies\<P>\Dependents\<B>` with `B` listed, where `<Classes>` is
@@ -235,6 +242,9 @@ pub(crate) enum Exempt {
     GoneInstaller,
     /// The Package Cache subtree rule: lifted inside a listed direct child of a cache root.
     GoneCache,
+    /// The shared COM rules (`com.shared-iid`, `com.shared-proxy`): lifted for a single value at or below
+    /// the shared key when [`Exemptions::shared_com_value`] is set; never for a key.
+    SharedComValue,
 }
 
 #[derive(Debug, Clone)]
@@ -715,6 +725,11 @@ impl DenyList {
             let lifted = match rule.exempt {
                 Some(Exempt::Skeleton) => ex.proven_owned_skeleton && is_key && rel == Rel::Exact,
                 Some(Exempt::GoneInstaller) => installer_lift,
+                Some(Exempt::SharedComValue) => {
+                    ex.shared_com_value
+                        && matches!(target, Target::RegValue { .. })
+                        && matches!(rel, Rel::Exact | Rel::Inside)
+                }
                 _ => false,
             };
             (!lifted && rule.denies(rel, !is_key)).then_some((rule, rel))

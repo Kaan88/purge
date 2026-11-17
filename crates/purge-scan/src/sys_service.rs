@@ -73,6 +73,9 @@ const KNOWN_TYPE_BITS: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20;
 /// The prefix of the index's error line for one service it could not read (`purge_index::sysobj`).
 const UNREADABLE_SERVICE: &str = "sysobj: service ";
 
+/// The prefix of the index's error line for a service list it could not read.
+const LIST_UNREADABLE: &str = "sysobj: services:";
+
 /// The SYS-SERVICE scanner.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SysService;
@@ -88,11 +91,46 @@ impl Scanner for SysService {
 
     fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
         let index = &ctx.ext.sysobj;
+        let recorded_services = &ctx.fp.sys.services;
+        // The list itself could not be read: the index's error is a scan warning; what it hides of the
+        // app is said here.
+        if index.errors.iter().any(|e| e.starts_with(LIST_UNREADABLE))
+            && !recorded_services.is_empty()
+        {
+            ctx.ext.warn(
+                ID,
+                format!(
+                    "the service list could not be read; the {} service(s) recorded at harvest are \
+                     not offered",
+                    recorded_services.len()
+                ),
+            );
+        }
         if index.services.is_empty() {
             return Vec::new();
         }
         let deny = DenyList::compile(ctx.guard);
         let unreadable = unreadable_services(&index.errors);
+        if !unreadable.is_empty() {
+            ctx.ext.warn(
+                ID,
+                format!(
+                    "{} service(s) could not be read ({}): which services depend on which is \
+                     unknown, so every service offered is blocked (HasDependents)",
+                    unreadable.len(),
+                    unreadable.join(", ")
+                ),
+            );
+        }
+        for recorded in recorded_services {
+            let name = recorded.identity.name.as_str();
+            if unreadable.iter().any(|u| prefix::eq_ci(u, name)) {
+                ctx.ext.warn(
+                    ID,
+                    format!("recorded service {name} could not be read now; it is not offered"),
+                );
+            }
+        }
         let mut out: Vec<Candidate> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
         for facts in &index.services {

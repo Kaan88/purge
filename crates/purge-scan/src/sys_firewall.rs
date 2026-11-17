@@ -91,6 +91,10 @@ const ROOTS: &[RootSpec] = &[RootSpec::reg(
 /// The error line prefix `purge_index::sysobj::build` writes when the rule list cannot be read.
 const LIST_UNREADABLE: &str = "sysobj: firewall rules:";
 
+/// The prefix of the index's error line for one rule it left out (`purge_index::sysobj`), before the
+/// rule's id.
+const RULE_UNREADABLE: &str = "sysobj: firewall rule ";
+
 /// The SYS-FIREWALL scanner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SysFirewall {
@@ -124,9 +128,35 @@ impl Scanner for SysFirewall {
 
     fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
         let sysobj = &ctx.ext.sysobj;
-        // Unknown is never "none": an unreadable list offers nothing (its warning is the index's).
+        let recorded_rules = &ctx.fp.sys.firewall_rules;
+        // Unknown is never "none": an unreadable list offers nothing (the index's error is a scan
+        // warning too); what that hides of the app is said here.
         if sysobj.errors.iter().any(|e| e.starts_with(LIST_UNREADABLE)) {
+            if !recorded_rules.is_empty() {
+                ctx.ext.warn(
+                    ID,
+                    format!(
+                        "the firewall rule list could not be read; the {} rule(s) recorded at \
+                         harvest are not offered",
+                        recorded_rules.len()
+                    ),
+                );
+            }
             return Vec::new();
+        }
+        // A recorded rule the index left out (it could not be read or parsed) is not offered.
+        for rule in recorded_rules {
+            let id = rule.identity.id.as_str();
+            if sysobj
+                .errors
+                .iter()
+                .any(|e| e.starts_with(&format!("{RULE_UNREADABLE}{id}:")))
+            {
+                ctx.ext.warn(
+                    ID,
+                    format!("recorded rule {id} could not be read now; it is not offered"),
+                );
+            }
         }
         if sysobj.firewall.is_empty() {
             return Vec::new();

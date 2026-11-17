@@ -125,6 +125,7 @@ pub fn build_with(
         fs: fx,
         sys: fx,
         products,
+        msi_only: &[],
         cache,
         threads: 3,
     })

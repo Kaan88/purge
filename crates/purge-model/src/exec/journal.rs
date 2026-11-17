@@ -252,6 +252,10 @@ pub struct GateExemptions {
     pub tier_a_start_menu_entry: bool,
     /// The path had its 8.3 names resolved.
     pub long_names_resolved: bool,
+    /// A whole-value delete under a shared COM key whose data was the app's (M1b, R2a S10). Written only
+    /// when set, so journals without it read and write as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared_com_value: bool,
 }
 
 /// The state of one selected item when the run started. The per-item re-check compares against this.

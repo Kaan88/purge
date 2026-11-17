@@ -8,22 +8,27 @@
 //! whatever its name holds, and a match on the value's data never counts. Each value of each view is its
 //! own candidate.
 //!
-//! - The count must be accounted for by the app: at most the number of the app's MSI components keyed
-//!   on that file (`fp.msi[].components`), or 1 when the app has no MSI product. A greater count means
-//!   other installs still use the file: hard `SharedRefcount`. Data that is not a complete `REG_DWORD`
-//!   is an unknown count: `SharedRefcount` too.
+//! - The count must be accounted for by the app, by the framework's rule
+//!   ([`ScanCtx::shared_count_unexplained`], the one `msi_blockers` applies to paths): the file's count
+//!   summed over **both views** (the two views are two keys, not one: WOW64 redirects `SharedDLLs`; an
+//!   install counted in either still uses the file), against the app's MSI components keyed on the
+//!   file that the fresh index still lists one of its products as a client of, or 1 for an app without
+//!   MSI products when the file is proven gone. A greater count means other installs still use the
+//!   file: hard `SharedRefcount`. Data that is not a complete `REG_DWORD` is an unknown count:
+//!   `SharedRefcount` too.
 //! - File proven absent: `path_named_value(file_missing = true)` (can be Safe when the whole root is
 //!   gone); file present or unknown: Likely.
-//! - [`ScanCtx::msi_blockers`] on the file, without its own `SharedRefcount` (the index sums both views
-//!   and does not know the non-MSI minimum; the count rule above replaces it): another product's
-//!   component keyed on the file blocks.
+//! - [`ScanCtx::msi_blockers`] on the file, without its own `SharedRefcount` (the same rule for a file
+//!   that is there; the counter's verdict above knows whether it is): another product's component keyed
+//!   on the file blocks.
 //! - Another app's root around the file, or a reference of another app to it, blocks.
 //!
-//! Reads: one `values()` of each view's store.
+//! Reads: one `values()` of each view's store. A view that cannot be read (any error but "not there")
+//! gives nothing from that view and one scan warning.
 
-use purge_guard::prefix;
-use purge_model::{Action, Blocker, Candidate, Category, MsiKeyPath, RootKind, Target};
-use purge_source::types::{REG_DWORD, RegValue};
+use purge_index::ownership::{SHARED_DLL_UNKNOWN, area};
+use purge_model::{Action, Blocker, Candidate, Category, RootKind, Target};
+use purge_source::types::{REG_DWORD, RegValue, SourceError};
 
 use crate::framework::{AppIdentityView, PathStore, RootSpec, ScanCtx, Scanner};
 
@@ -62,9 +67,17 @@ impl Scanner for RegSharedDlls {
         }
         let mut out = Vec::new();
         for key in purge_index::ownership::SHARED_DLLS {
-            // Missing, or unknown: nothing from this view.
-            let Ok(values) = ctx.reg.values(key) else {
-                continue;
+            // Missing, or unknown: nothing from this view; unknown is said.
+            let values = match ctx.reg.values(key) {
+                Ok(values) => values,
+                Err(SourceError::NotFound) => continue,
+                Err(e) => {
+                    ctx.ext.warn(
+                        ID,
+                        format!("{key}: not read ({e}); its counters are not offered"),
+                    );
+                    continue;
+                }
             };
             for value in &values {
                 if let Some(candidate) = counter_candidate(ctx, key, value) {
@@ -95,15 +108,30 @@ fn counter_candidate(ctx: &ScanCtx<'_>, key: &str, value: &RegValue) -> Option<C
         return None;
     }
 
+    // This counter, then the file's count over both views (the views are two keys, and an install in
+    // either still uses the file), judged by the framework's rule.
     let count = (value.data.ty == REG_DWORD && value.data.is_complete())
         .then(|| value.data.dword())
         .flatten();
-    match count {
-        Some(count) if u64::from(count) <= allowed_count(ctx, &file) => {}
-        _ => {
-            b.blocker(Blocker::SharedRefcount);
+    let held = match count {
+        None => true,
+        Some(count) => {
+            let total = match ctx.ext.ownership.shared_dll_count(&file) {
+                Some(total) => total.max(count),
+                // The index did not see this counter: the other view is unknown unless it read both.
+                None if !ctx.ext.ownership.stats().complete(area::SHARED_DLLS) => {
+                    SHARED_DLL_UNKNOWN
+                }
+                None => count,
+            };
+            ctx.shared_count_unexplained(&file, total, missing)
         }
+    };
+    if held {
+        b.blocker(Blocker::SharedRefcount);
     }
+    // The file's other MSI owners. Their `SharedRefcount` is the same rule for a file that is there;
+    // the counter's verdict above knows whether it is.
     for blocker in ctx.msi_blockers(&Target::Path { path: file.clone() }) {
         if blocker != Blocker::SharedRefcount {
             b.blocker(blocker);
@@ -121,22 +149,6 @@ fn counter_candidate(ctx: &ScanCtx<'_>, key: &str, value: &RegValue) -> Option<C
         .existed_before_blocker()
         .other_app_blockers();
     Some(b.build())
-}
-
-/// The count the app accounts for: its MSI components keyed on the file, or 1 for an app with no MSI
-/// product.
-fn allowed_count(ctx: &ScanCtx<'_>, file: &str) -> u64 {
-    let fp = ctx.fp;
-    if fp.msi.is_empty() {
-        return 1;
-    }
-    let n = fp
-        .msi
-        .iter()
-        .flat_map(|m| &m.components)
-        .filter(|c| matches!(&c.key_path, MsiKeyPath::File { path } if prefix::is_same(path, file)))
-        .count();
-    u64::try_from(n).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

@@ -503,3 +503,72 @@ fn truncated_tables_are_unreadable() {
     assert!(ix.key_owners(r"HKLM\SOFTWARE\Trunc").is_empty());
     assert_eq!(ix.stats().rows, 0);
 }
+
+/// R2a S8: a product Windows Installer lists without an Uninstall entry (an `msi_only` row of the
+/// inventory, e.g. `ARPSYSTEMCOMPONENT`) owns its rows like any other; one whose package cannot be read
+/// is listed unreadable, never silently owning nothing.
+#[test]
+fn msi_only_products_own_their_rows() {
+    let row_of =
+        |code: &str, context, user_sid: Option<&str>, lp: Option<&str>| purge_model::MsiOnlyRow {
+            product_code: code.into(),
+            context,
+            user_sid: user_sid.map(str::to_owned),
+            product_name: None,
+            version: None,
+            publisher: None,
+            install_location: None,
+            local_package: lp.map(str::to_owned),
+            install_date: None,
+        };
+    let mut fx = base();
+    fx.set_msi_tables(
+        LP1,
+        tables(vec![row(
+            "hidden",
+            2,
+            r"SOFTWARE\Hidden",
+            Some("V"),
+            Some("1"),
+        )]),
+    );
+    let msi_only = [
+        row_of(P1, MsiContext::Machine, None, Some(LP1)),
+        row_of(
+            P2,
+            MsiContext::Machine,
+            None,
+            Some(r"C:\Windows\Installer\missing.msi"),
+        ),
+        // Per-user, but the user is not known: its rows cannot be placed.
+        row_of(P3, MsiContext::UserManaged, None, Some(LP1)),
+    ];
+    let ix = OwnershipIndex::build(&purge_index::ownership::OwnershipInput {
+        reg: &fx,
+        fs: &fx,
+        sys: &fx,
+        products: &[],
+        msi_only: &msi_only,
+        cache: None,
+        threads: 2,
+    });
+    assert_eq!(
+        rows_of(&ix.key_owners(r"HKLM\SOFTWARE\Hidden")),
+        vec!["hidden"]
+    );
+    let mut unreadable: Vec<&str> = ix
+        .unreadable()
+        .iter()
+        .map(|p| p.product_code.as_str())
+        .collect();
+    unreadable.sort();
+    assert_eq!(unreadable, vec![P2, P3]);
+    assert!(
+        ix.stats()
+            .errors
+            .iter()
+            .any(|e| e.contains("whose user is not known")),
+        "{:?}",
+        ix.stats().errors
+    );
+}

@@ -50,14 +50,33 @@ fn shareddlls_count_one_file_missing_safe() {
     assert!(c.blockers.is_empty(), "{:?}", c.blockers);
     assert_eq!(band(&c), (Band::Safe, true));
 
-    // The file still there: Likely.
+    // The file still there, and no component of the app explains the count (R2a S1: the framework
+    // rule): someone else's reference, Blocked.
     let mut fx = with_counters(&[(SHARED, &lib, RegData::from_dword(1))]);
     fx.add_file(&lib, 10);
     let w = non_msi(fx);
-    assert_eq!(
-        band(&w.get(&Scanner, &value(SHARED, &lib))),
-        (Band::Likely, false)
+    let c = w.get(&Scanner, &value(SHARED, &lib));
+    assert!(
+        c.blockers.contains(&Blocker::SharedRefcount),
+        "{:?}",
+        c.blockers
     );
+    assert_eq!(band(&c), (Band::Blocked, false));
+
+    // SharedDLLs is redirected by WOW64: a count in each view is two installs. The app's one
+    // component explains one of them, so both values are Blocked.
+    let w = World::with(with_counters(&[
+        (SHARED, &exe, RegData::from_dword(1)),
+        (SHARED32, &exe, RegData::from_dword(1)),
+    ]));
+    for key in [SHARED, SHARED32] {
+        let c = w.get(&Scanner, &value(key, &exe));
+        assert!(
+            c.blockers.contains(&Blocker::SharedRefcount),
+            "{key}: {:?}",
+            c.blockers
+        );
+    }
 
     // A component of a product the app no longer records is keyed on the file: a stale client blocks.
     let w = non_msi(with_counters(&[(SHARED, &exe, RegData::from_dword(1))]));

@@ -229,6 +229,7 @@ fn root_parts(
         fs: f,
         sys: f,
         products: &doc.entries,
+        msi_only: &doc.msi_only,
         cache: None,
         threads: 1,
     });
