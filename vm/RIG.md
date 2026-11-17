@@ -1011,6 +1011,10 @@ and G8 (Purge-CleanPro). The executor side (G5, G6, K10-K13) is `vm/rig-m1b-exec
 - **Purge-CleanPro tag:** on Purge-CleanPro (`-VmName Purge-CleanPro`, G8) the run tag is `cp` (`m1bcp-...`).
 - **Engine:** app runs use the release engine: `-Engine`, else `$env:RIG_ENGINE`, else `target\release\purge-engine.exe`. The rig-exec build (fault injection) is refused.
 - **Installer cache:** `$env:RIG_CACHE_DIR` points the installer cache somewhere else. A worktree uses the main checkout's `vm\cache\inst`.
+  - A pinned app (`sha256` in apps.ps1) is checked against that hash in the guest too, with or without a cache entry: a
+    same-named file of another version is deleted and downloaded again, and a mismatch after that fails the phase.
+    (G3, 2026-11-17: without a cache, dirty-base's `C:\cr\inst\python313.exe` is setup-dirty's Python 3.13.1; it ran as
+    the 3.13.17 install, a no-op over the installed 3.13.1, and both Python pairs found no 3.13.17 ARP entry.)
 - **Cache entries added for M1b** (in the git-ignored cache-sources.json; each hash comes from the vendor's published checksum):
   - PowerShell 7.6.10 msi
   - Temurin 21.0.13+9 msi

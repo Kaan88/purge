@@ -187,6 +187,11 @@ function Resolve-Installer($App, $Rec) {
             if ($h -eq "$($m.sha256)".ToUpperInvariant()) { $Rec.url = $m.url; $Rec.installer_source = 'host cache' }
             else { Log "!! $file sha256 $h != cache manifest $($m.sha256): deleting, downloading again"; Remove-Item -LiteralPath $file -Force }
         }
+    } elseif ($App.sha256 -and (Test-Path -LiteralPath $file)) {
+        # A pinned app (apps.ps1 'sha256') without a cache entry: a same-named file of another version in the
+        # snapshot (dirty-base holds setup-dirty's Python 3.13.1 as python313.exe) is deleted and downloaded again.
+        $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
+        if ($h -ne "$($App.sha256)".ToUpperInvariant()) { Log "!! $file sha256 $h != pinned $($App.sha256): deleting, downloading again"; Remove-Item -LiteralPath $file -Force }
     }
     if (-not (Test-InstallerFile $file)) {
         Log "installer $file missing or invalid; downloading"
@@ -200,6 +205,7 @@ function Resolve-Installer($App, $Rec) {
     $info = Get-FileInfoRecord $file $Rec.url
     $Rec.installer = $file; $Rec.installer_sha256 = $info.sha256; $Rec.installer_sig = "$($info.sig) $($info.signer)".Trim()
     if ($m -and $info.sha256 -ne "$($m.sha256)".ToUpperInvariant()) { Log "!! $($App.file): sha256 differs from the cache manifest (version drift?)"; $Rec.installer_version = $null }
+    if ($App.sha256 -and $info.sha256 -ne "$($App.sha256)".ToUpperInvariant()) { throw "$($App.file): sha256 $($info.sha256) != pinned $($App.sha256)" }
     Log "installer $file sha256=$($info.sha256) sig=$($Rec.installer_sig) source=$($Rec.installer_source)"
     $file
 }
