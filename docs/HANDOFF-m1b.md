@@ -1,5 +1,16 @@
 # M1b handoff
 
+## Paused for the laptop migration (2026-11-19 00:30)
+
+- Gate5 fix done and pushed (834819c + 8e1a1d2); Fable check R7 clean (no blocker). Smoke run on Clean-Pro python:
+  Defender wait ended current after 3 busy answers + 1 exit-0 update, 131 s; snap0/snap2 versions equal.
+- G7 precheck on a settled host at 8e1a1d2: added scan +1.80 s, harvest +1.86 s (limit 2.5), ownership.components max
+  1.22 s (limit 1.5): the gate5 K14 miss was host load. Evidence `E:\purge-build\gate-evidence\m1b-g7-precheck\`.
+- Scan campaign 4 at 8e1a1d2, stopped on the user's request after G4a: G1 replay pass, G2 11/11 ok, G3 10/10 ok,
+  G4a rig-base traps 1/1 ok. Not run: G4 dirty-base traps, G8, G7, `m1b.sh`. Logs `E:\purge-build\gate-evidence\m1b-gate6\`;
+  runs still in `vm\runs`.
+- Next: migrate the rig to the laptop (`docs/MIGRATION-laptop.md`), then continue campaign 4 or rerun it in full there.
+
 ## Current state (2026-11-18 17:30): scan gate fix round 3, then full rerun
 
 - Branch `m1b` head = this commit (on c388dd1), pushed to origin on the user's request 2026-11-18.
