@@ -12,7 +12,7 @@
 //! | `sys.service.peruser` | service | a per-user template or instance (flag, or type bit `0x40`/`0x80`) |
 //! | `sys.service.marked` | service | `DeleteFlag` is already set |
 //! | `WindowsBaseline` | any | the object is in the Windows baseline |
-//! | `sys.service.windows` | service | the resolved program is under `%SystemRoot%`, at any depth |
+//! | `sys.service.windows` | service | the program is under `%SystemRoot%`, at any depth (for a service hosted by svchost the callers pass its `ImagePath` command, the host, never its `ServiceDll`: every such service is Windows') |
 //! | `sys.task.windows` | task | the task is under `\Microsoft\Windows\`, `\Microsoft\Office\` or `\Microsoft\EdgeUpdate*`, or its program is under `%SystemRoot%` |
 //! | `fw.package-bound` | firewall rule | bound to an AppX package or AppContainer |
 //! | `fw.resource-name` | firewall rule | its name is a resource reference (`@...`) |
@@ -35,7 +35,8 @@ pub struct ObjectGuardFacts<'a> {
     /// The service name, the task path (`\Folder\Name`, as Task Scheduler returns it) or the firewall
     /// rule's id.
     pub name_or_path_or_id: &'a str,
-    /// The object's program resolved to one file (C-SYSOBJ `ProgramRef::File`), when it has one. `None`
+    /// The object's program resolved to one file (C-SYSOBJ `ProgramRef::File`), when it has one; for a
+    /// service hosted by svchost, its `ImagePath` command (C-SYSOBJ `ServiceFacts::guard_program`). `None`
     /// when unresolved or absent: then no program rule applies here (the scanners treat an unresolved
     /// program as `ProgramUnresolved`).
     pub program: Option<&'a str>,

@@ -218,6 +218,37 @@ public sealed class EngineDocsTests
         await client.DisposeAsync();
     }
 
+    /// <summary>
+    /// sys_burndeps rule (c): a ReportOnly suggestion to uninstall a product the removed bundle left installed
+    /// (fact <c>suggest_uninstall</c>). It reads as a notice and is never selectable, whatever its band.
+    /// </summary>
+    [Fact]
+    public void UninstallSuggestionIsANoticeNeverSelectable()
+    {
+        const string json = """
+        {
+          "schema": "purge.scan/0", "app": "python", "mode": "post", "plan_hash": "h", "policy_version": "p",
+          "items": [{
+            "id": "c-1",
+            "target": { "type": "RegKey", "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{X}" },
+            "action": "ReportOnly", "scanner": "SYS-BURNDEPS", "category": "Registration",
+            "evidence": [{ "kind": { "InstallerManifest": "Burn" }, "tier": "A", "weight": 5, "scope": "Key",
+                           "source": "burn:{B}:related_product",
+                           "detail": { "bundle": "{B}", "what": "related_product", "product": "{X}",
+                                       "suggest_uninstall": "Python Launcher" } }],
+            "blockers": [], "harm": "Low", "reversibility": "None", "children": [],
+            "decision": { "band": "Likely", "preselected": true, "score": 5, "explanation": "related product" }
+          }],
+          "absorbed": []
+        }
+        """;
+        var item = EngineDocs.ReadScan(json, "p.json", "Python", []).Items.Single();
+        Assert.True(item.IsUninstallNotice);
+        Assert.Equal("Python Launcher", item.SuggestUninstall);
+        Assert.False(item.Selectable);
+        Assert.DoesNotContain(EngineDocs.ReadScan(Sample("rig-plan.scan.json"), "p", "x", []).Items, i => i.IsUninstallNotice);
+    }
+
     [Fact]
     public void SelectionFileIsAJsonArray()
     {

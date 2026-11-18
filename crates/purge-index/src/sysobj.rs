@@ -35,7 +35,9 @@
 //!
 //! A `svchost.exe` service runs its `ServiceDll`: its program is that DLL ([`ServiceFacts::svchost`]).
 //! Only the `svchost.exe` of `%SystemRoot%\System32` (or `SysWOW64`) is taken to load the DLL; a file
-//! named `svchost.exe` anywhere else is just a host executable, and the service is `Unresolved`.
+//! named `svchost.exe` anywhere else is just a host executable, and the service is `Unresolved`. The
+//! guard judges such a service by its host, not by the DLL ([`ServiceFacts::guard_program`]): a service
+//! hosted by svchost shares a Windows process and is never offered.
 //!
 //! # Reads
 //!
@@ -541,6 +543,21 @@ pub struct ServiceFacts {
     pub svchost: bool,
 }
 
+impl ServiceFacts {
+    /// The program text the guard's object rules judge (`purge_guard::deny::ObjectGuardFacts::program`):
+    /// for a service whose `ImagePath` runs a file named `svchost.exe`, the `ImagePath` command itself,
+    /// so that the host (the Windows `svchost.exe`) is what `sys.service.windows` sees and a service
+    /// hosted by svchost is never offered, whatever folder its `ServiceDll` is in (smoke trap
+    /// svc-svchost: the DLL in the app's folder made it the app's). Else the resolved program file.
+    pub fn guard_program(&self) -> Option<&str> {
+        if self.svchost {
+            self.identity.image_path.as_deref()
+        } else {
+            self.program.file()
+        }
+    }
+}
+
 /// The value named `name` (case-insensitive) of a key's value list.
 fn find<'a>(values: &'a [RegValue], name: &str) -> Option<&'a RegData> {
     values
@@ -666,6 +683,8 @@ fn service_facts(
             .next()
             .is_some_and(|leaf| leaf.trim().eq_ignore_ascii_case("svchost.exe"))
     });
+    // The DLL says whose code the service runs (attribution, undo's root check). The guard never judges
+    // it: `ServiceFacts::guard_program` gives the host, so no svchost service is offered (DECISIONS.md).
     let program = if svchost {
         let system = exe
             .as_deref()

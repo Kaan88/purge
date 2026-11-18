@@ -69,6 +69,7 @@ public static class EngineDocs
                 Scanners = scanners,
                 ObjectWhy = evidence.SelectMany(e => e.Detail).FirstOrDefault(kv => kv.Key == "why").Value ?? "",
                 ObjectKind = Str(objectFp, "kind"),
+                SuggestUninstall = evidence.SelectMany(e => e.Detail).FirstOrDefault(kv => kv.Key == "suggest_uninstall").Value ?? "",
             };
             items.Add(item with { Type = TypeOf(item) });
         }

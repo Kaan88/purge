@@ -1,0 +1,271 @@
+{
+  "schema": "purge.rig.run/1",
+  "id": "temurin",
+  "run": "m1b-fz1-temurin",
+  "kind": "app",
+  "tech": "MSI (WiX)",
+  "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.msi",
+  "installer": "C:\\cr\\inst\\temurin21.msi",
+  "installer_sha256": "9DCBB8EBE24AA9EE5A47A7FAB2106A7C8988D7ACEE461260FEF107411DF91DC5",
+  "installer_sig": "Valid CN=Eclipse Foundation",
+  "computer": "INBOUND-WIN11-T",
+  "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "os": "EnterpriseSEval 26100.1742",
+  "started": "2026-11-17T01:42:35.2498672-08:00",
+  "finished": "2026-11-17T01:44:16.9565346-08:00",
+  "main": {
+    "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+    "name": "Eclipse Temurin JDK with Hotspot 21.0.13+9 (x64)",
+    "version": "21.0.13.9",
+    "publisher": "Eclipse Adoptium",
+    "sys": false,
+    "parent": null,
+    "uninstall": "MsiExec.exe /I{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+    "quiet": null,
+    "loc": "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.13.9-hotspot\\",
+    "icon": null,
+    "msi": "{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+    "size": 337532,
+    "install_date": "20261117",
+    "bundle": false
+  },
+  "install": {
+    "cmd": "\"C:\\WINDOWS\\System32\\msiexec.exe\" /i \"C:\\cr\\inst\\temurin21.msi\" /qn /norestart /L*v \"C:\\cr\\out\\m1b-fz1-temurin\\msi-install.log\"",
+    "start": "2026-11-17T01:42:56.5987966-08:00",
+    "end": "2026-11-17T01:43:06.7660907-08:00",
+    "exit": 0,
+    "timed_out": false,
+    "killed": [],
+    "ran_as": "elevated"
+  },
+  "launch": {
+    "done": false,
+    "exe": null,
+    "args": null,
+    "start": null,
+    "end": null,
+    "found": false,
+    "closed": [],
+    "killed": [],
+    "reason": "app defines no launch"
+  },
+  "uninstall": {
+    "cmd": "\"C:\\WINDOWS\\System32\\msiexec.exe\" /x {CE89C965-83BD-413A-9EF6-7F5F0B3E741E} /qn /norestart /L*v \"C:\\cr\\out\\m1b-fz1-temurin\\msi-uninstall.log\"",
+    "t0": "2026-11-17T01:43:37.7105374-08:00",
+    "t1": "2026-11-17T01:43:42.6261785-08:00",
+    "exit": 0,
+    "timed_out": false,
+    "entry_gone": true,
+    "killed": []
+  },
+  "entries_created": [
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+      "name": "Eclipse Temurin JDK with Hotspot 21.0.13+9 (x64)",
+      "version": "21.0.13.9",
+      "publisher": "Eclipse Adoptium",
+      "sys": false,
+      "parent": null,
+      "uninstall": "MsiExec.exe /I{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+      "quiet": null,
+      "loc": "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.13.9-hotspot\\",
+      "icon": null,
+      "msi": "{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+      "size": 337532,
+      "install_date": "20261117",
+      "bundle": false
+    }
+  ],
+  "entries_left": [],
+  "edge_pause": {
+    "method": "services stopped+disabled, MicrosoftEdgeUpdate* tasks disabled, running updater waited for/killed",
+    "start": "2026-11-17T01:42:35.2984953-08:00",
+    "end": "2026-11-17T01:42:39.2722140-08:00",
+    "services": [
+      {
+        "name": "edgeupdate",
+        "present": true,
+        "start_before": "Auto",
+        "state_before": "Stopped",
+        "start_after": "Disabled",
+        "state_after": "Stopped"
+      },
+      {
+        "name": "edgeupdatem",
+        "present": true,
+        "start_before": "Manual",
+        "state_before": "Stopped",
+        "start_after": "Disabled",
+        "state_after": "Stopped"
+      }
+    ],
+    "tasks": [
+      {
+        "path": "\\MicrosoftEdgeUpdateTaskMachineCore{CE164313-0EFA-47AA-BFE3-542DFBDC1B11}",
+        "state_before": "Ready",
+        "state_after": "Disabled"
+      },
+      {
+        "path": "\\MicrosoftEdgeUpdateTaskMachineUA{1AF5BD52-7897-43AA-9607-3B16D52A4B11}",
+        "state_before": "Ready",
+        "state_after": "Disabled"
+      }
+    ],
+    "updater_seen": [],
+    "waited_sec": 0,
+    "killed": [],
+    "errors": [],
+    "versions_before": {
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+      "EdgeUpdate|version": "1.3.315.17"
+    },
+    "versions_after": {
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+      "EdgeUpdate|version": "1.3.315.17"
+    },
+    "versions_end": {
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+      "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+      "EdgeUpdate|version": "1.3.315.17"
+    },
+    "held": true
+  },
+  "planted": [],
+  "phases": [
+    {
+      "name": "edge-pause",
+      "start": "2026-11-17T01:42:35.2788248-08:00",
+      "end": "2026-11-17T01:42:39.2967091-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "setup",
+      "start": "2026-11-17T01:42:39.3018051-08:00",
+      "end": "2026-11-17T01:42:40.3005868-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "arp0",
+      "start": "2026-11-17T01:42:40.3287448-08:00",
+      "end": "2026-11-17T01:42:40.4252324-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "lists0",
+      "start": "2026-11-17T01:42:40.4268804-08:00",
+      "end": "2026-11-17T01:42:51.6757409-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "snap0",
+      "start": "2026-11-17T01:42:51.6757409-08:00",
+      "end": "2026-11-17T01:42:56.4766748-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "install",
+      "start": "2026-11-17T01:42:56.4783556-08:00",
+      "end": "2026-11-17T01:43:26.7809309-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "detect",
+      "start": "2026-11-17T01:43:26.7821025-08:00",
+      "end": "2026-11-17T01:43:26.8609957-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "launch",
+      "start": "2026-11-17T01:43:26.8627693-08:00",
+      "end": "2026-11-17T01:43:26.8803182-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "lists1",
+      "start": "2026-11-17T01:43:26.8837506-08:00",
+      "end": "2026-11-17T01:43:34.0150712-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "snap1",
+      "start": "2026-11-17T01:43:34.0167245-08:00",
+      "end": "2026-11-17T01:43:36.2906752-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "msi-tables-1",
+      "start": "2026-11-17T01:43:36.2924349-08:00",
+      "end": "2026-11-17T01:43:37.6443375-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "uninstall",
+      "start": "2026-11-17T01:43:37.6457643-08:00",
+      "end": "2026-11-17T01:44:12.6322496-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "lists2",
+      "start": "2026-11-17T01:44:12.6344255-08:00",
+      "end": "2026-11-17T01:44:14.7071716-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "snap2",
+      "start": "2026-11-17T01:44:14.7089224-08:00",
+      "end": "2026-11-17T01:44:16.8735932-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "msi-tables-2",
+      "start": "2026-11-17T01:44:16.8754422-08:00",
+      "end": "2026-11-17T01:44:16.8863134-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "edge-check",
+      "start": "2026-11-17T01:44:16.8863134-08:00",
+      "end": "2026-11-17T01:44:16.9032631-08:00",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "entries",
+      "start": "2026-11-17T01:44:16.9032631-08:00",
+      "end": "2026-11-17T01:44:16.9547781-08:00",
+      "ok": true,
+      "error": null
+    }
+  ],
+  "m1b": {
+    "msi_tables": true,
+    "traps": false,
+    "tables": [
+      "msi-tables-m1b-fz1-temurin-1.json",
+      "msi-tables-m1b-fz1-temurin-2.json"
+    ]
+  },
+  "installer_source": "host cache",
+  "installer_version": "21.0.13+9"
+}

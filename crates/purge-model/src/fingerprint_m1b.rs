@@ -118,6 +118,26 @@ pub struct BurnFacts {
     pub packages: Vec<BurnPackage>,
     /// Provider keys of the bundles that depended on this bundle at harvest.
     pub dependents_at_harvest: Vec<String>,
+    /// Shared components the bundle installed as packages without a dependency provider record (kb
+    /// `shared-components.json`, `burn_link`): the Python Launcher of a CPython bundle. Absent in
+    /// documents written before this field existed and when there is none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked: Vec<BurnLinked>,
+}
+
+/// A shared component's product that a Burn bundle installed without writing a dependency provider
+/// record for it. The harvest records it only when the bundle's provider key is one the kb entry names,
+/// the product is installed for the machine with one of the entry's UpgradeCodes, and Windows Installer
+/// installed it from Burn's folder for it in the machine's Package Cache, `{ProductCode}v<version>`,
+/// whose version is the bundle's own `BundleVersion`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct BurnLinked {
+    /// The kb shared component's id, e.g. `python-launcher`.
+    pub component: String,
+    /// The product's ProductCode, `{GUID}` in upper case.
+    pub product_code: String,
+    /// The product's folder in the machine's Package Cache (`SourceList\LastUsedSource`).
+    pub cache_dir: String,
 }
 
 /// One package of a Burn bundle.

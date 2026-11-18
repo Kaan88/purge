@@ -1,0 +1,1401 @@
+{
+  "schema": "purge.rig.truth/1",
+  "id": "temurin",
+  "run": {
+    "schema": "purge.rig.run/1",
+    "id": "temurin",
+    "run": "m1b-fz2-temurin",
+    "kind": "app",
+    "tech": "MSI (WiX)",
+    "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.msi",
+    "installer": "C:\\cr\\inst\\temurin21.msi",
+    "installer_sha256": "9DCBB8EBE24AA9EE5A47A7FAB2106A7C8988D7ACEE461260FEF107411DF91DC5",
+    "installer_sig": "Valid CN=Eclipse Foundation",
+    "computer": "INBOUND-WIN11-T",
+    "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os": "EnterpriseSEval 26100.1742",
+    "started": "2026-11-17T01:51:18.4491176-08:00",
+    "finished": "2026-11-17T01:52:55.6142525-08:00",
+    "main": {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+      "name": "Eclipse Temurin JDK with Hotspot 21.0.13+9 (x64)",
+      "version": "21.0.13.9",
+      "publisher": "Eclipse Adoptium",
+      "sys": false,
+      "parent": null,
+      "uninstall": "MsiExec.exe /I{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+      "quiet": null,
+      "loc": "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.13.9-hotspot\\",
+      "icon": null,
+      "msi": "{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+      "size": 337532,
+      "install_date": "20261117",
+      "bundle": false
+    },
+    "install": {
+      "cmd": "\"C:\\WINDOWS\\System32\\msiexec.exe\" /i \"C:\\cr\\inst\\temurin21.msi\" /qn /norestart /L*v \"C:\\cr\\out\\m1b-fz2-temurin\\msi-install.log\"",
+      "start": "2026-11-17T01:51:36.4984828-08:00",
+      "end": "2026-11-17T01:51:45.2509286-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "killed": [],
+      "ran_as": "elevated"
+    },
+    "launch": {
+      "done": false,
+      "exe": null,
+      "args": null,
+      "start": null,
+      "end": null,
+      "found": false,
+      "closed": [],
+      "killed": [],
+      "reason": "app defines no launch"
+    },
+    "uninstall": {
+      "cmd": "\"C:\\WINDOWS\\System32\\msiexec.exe\" /x {CE89C965-83BD-413A-9EF6-7F5F0B3E741E} /qn /norestart /L*v \"C:\\cr\\out\\m1b-fz2-temurin\\msi-uninstall.log\"",
+      "t0": "2026-11-17T01:52:16.9529005-08:00",
+      "t1": "2026-11-17T01:52:21.7782337-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "entry_gone": true,
+      "killed": []
+    },
+    "entries_created": [
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+        "name": "Eclipse Temurin JDK with Hotspot 21.0.13+9 (x64)",
+        "version": "21.0.13.9",
+        "publisher": "Eclipse Adoptium",
+        "sys": false,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+        "quiet": null,
+        "loc": "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.13.9-hotspot\\",
+        "icon": null,
+        "msi": "{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}",
+        "size": 337532,
+        "install_date": "20261117",
+        "bundle": false
+      }
+    ],
+    "entries_left": [],
+    "edge_pause": {
+      "method": "services stopped+disabled, MicrosoftEdgeUpdate* tasks disabled, running updater waited for/killed",
+      "start": "2026-11-17T01:51:18.5006729-08:00",
+      "end": "2026-11-17T01:51:21.9468006-08:00",
+      "services": [
+        {
+          "name": "edgeupdate",
+          "present": true,
+          "start_before": "Auto",
+          "state_before": "Stopped",
+          "start_after": "Disabled",
+          "state_after": "Stopped"
+        },
+        {
+          "name": "edgeupdatem",
+          "present": true,
+          "start_before": "Manual",
+          "state_before": "Stopped",
+          "start_after": "Disabled",
+          "state_after": "Stopped"
+        }
+      ],
+      "tasks": [
+        {
+          "path": "\\MicrosoftEdgeUpdateTaskMachineCore{CE164313-0EFA-47AA-BFE3-542DFBDC1B11}",
+          "state_before": "Ready",
+          "state_after": "Disabled"
+        },
+        {
+          "path": "\\MicrosoftEdgeUpdateTaskMachineUA{1AF5BD52-7897-43AA-9607-3B16D52A4B11}",
+          "state_before": "Ready",
+          "state_after": "Disabled"
+        }
+      ],
+      "updater_seen": [],
+      "waited_sec": 0,
+      "killed": [],
+      "errors": [],
+      "versions_before": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "versions_after": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "versions_end": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "held": true
+    },
+    "planted": [],
+    "phases": [
+      {
+        "name": "edge-pause",
+        "start": "2026-11-17T01:51:18.4782747-08:00",
+        "end": "2026-11-17T01:51:21.9703885-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "setup",
+        "start": "2026-11-17T01:51:21.9745997-08:00",
+        "end": "2026-11-17T01:51:22.8297071-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "arp0",
+        "start": "2026-11-17T01:51:22.8526808-08:00",
+        "end": "2026-11-17T01:51:22.9155258-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists0",
+        "start": "2026-11-17T01:51:22.9460353-08:00",
+        "end": "2026-11-17T01:51:32.7364155-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap0",
+        "start": "2026-11-17T01:51:32.7381391-08:00",
+        "end": "2026-11-17T01:51:36.4307552-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "install",
+        "start": "2026-11-17T01:51:36.4325022-08:00",
+        "end": "2026-11-17T01:52:05.2726737-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "detect",
+        "start": "2026-11-17T01:52:05.2742799-08:00",
+        "end": "2026-11-17T01:52:05.3436036-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "launch",
+        "start": "2026-11-17T01:52:05.3455108-08:00",
+        "end": "2026-11-17T01:52:05.3590269-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists1",
+        "start": "2026-11-17T01:52:05.3619945-08:00",
+        "end": "2026-11-17T01:52:13.2138377-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap1",
+        "start": "2026-11-17T01:52:13.2155336-08:00",
+        "end": "2026-11-17T01:52:15.4645217-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "msi-tables-1",
+        "start": "2026-11-17T01:52:15.4663167-08:00",
+        "end": "2026-11-17T01:52:16.8978935-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "uninstall",
+        "start": "2026-11-17T01:52:16.8992825-08:00",
+        "end": "2026-11-17T01:52:51.7900911-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists2",
+        "start": "2026-11-17T01:52:51.7925841-08:00",
+        "end": "2026-11-17T01:52:53.4530031-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap2",
+        "start": "2026-11-17T01:52:53.4530031-08:00",
+        "end": "2026-11-17T01:52:55.5294542-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "msi-tables-2",
+        "start": "2026-11-17T01:52:55.5312684-08:00",
+        "end": "2026-11-17T01:52:55.5425080-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "edge-check",
+        "start": "2026-11-17T01:52:55.5442809-08:00",
+        "end": "2026-11-17T01:52:55.5761632-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "entries",
+        "start": "2026-11-17T01:52:55.5761632-08:00",
+        "end": "2026-11-17T01:52:55.6115065-08:00",
+        "ok": true,
+        "error": null
+      }
+    ],
+    "m1b": {
+      "msi_tables": true,
+      "traps": false,
+      "tables": [
+        "msi-tables-m1b-fz2-temurin-1.json",
+        "msi-tables-m1b-fz2-temurin-2.json"
+      ]
+    },
+    "installer_source": "host cache",
+    "installer_version": "21.0.13+9"
+  },
+  "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "counts": {
+    "ambient": 84
+  },
+  "counts_by_kind": {
+    "Path": {
+      "ambient": 28,
+      "leftover": 1
+    },
+    "RegKey": {
+      "ambient": 10
+    },
+    "RegValue": {
+      "ambient": 10
+    },
+    "RegValueChanged": {
+      "ambient": 35
+    }
+  },
+  "ambient_by_run": {
+    "m1b-fz1-null1": 42,
+    "m1b-fz2-null1": 68,
+    "null1": 48,
+    "null2": 23,
+    "null3": 22
+  },
+  "deny_hits": [],
+  "snaps": {
+    "s0": {
+      "file": "runs/m1b-fz2-temurin/snap-m1b-fz2-temurin-0.tsv.gz",
+      "header": {
+        "time": "2026-11-17T09:51:33Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "s1": "runs/m1b-fz2-temurin/snap-m1b-fz2-temurin-1.tsv.gz",
+    "s2": {
+      "file": "runs/m1b-fz2-temurin/snap-m1b-fz2-temurin-2.tsv.gz",
+      "header": {
+        "time": "2026-11-17T09:52:53Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "kept_entries": []
+  },
+  "items": [
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\DirectX\\{CC6BEB52-DBC0-11F1-8785-806E6F6E6963}",
+        "name": "LastSeen",
+        "before": "134393826566867754",
+        "after": "134393827170877165"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827171013449,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\DirectX\\{CC6BEB62-DBC0-11F1-8785-806E6F6E6963}",
+        "name": "LastSeen",
+        "before": "134393826566867754",
+        "after": "134393827170877165"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827171013449,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\DirectX",
+        "name": "LastSeen",
+        "before": "134393826566867754",
+        "after": "134393827170877165"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827171013449,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\Certificates\\0563B8630D62D75ABBC8AB1E4BDFB5A899B24D43",
+        "name": "Blob",
+        "before": "#8a12659390651c0b",
+        "after": "#c99c6e13f87206c4"
+      },
+      "label": "ambient",
+      "rule": "labels: Machine certificate stores (root auto-update, pin rules) written while verifying signatures; never a cleaner target.",
+      "size": 1423,
+      "lwt": 134393826977586143,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\ROOT\\Certificates\\3B1EFD3A66EA28B16697394703A72CA340A05BD5",
+        "name": "Blob",
+        "before": "#5fdf037296bd02df",
+        "after": "#c5ff2542de1c77d7"
+      },
+      "label": "ambient",
+      "rule": "labels: Machine certificate stores (root auto-update, pin rules) written while verifying signatures; never a cleaner target.",
+      "size": 1885,
+      "lwt": 134393826977597868,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\CIMOM",
+        "name": "List of event-active namespaces",
+        "before": "#df4d9c5d4e14550a",
+        "after": "#0290261605bf956c"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 46,
+      "lwt": 134393827707055294,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Reporting",
+        "name": "LastHeartbeatReportTime",
+        "before": "#e785f9043ac29bdd",
+        "after": "#dd69946891ecd540"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827001497335,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Spynet",
+        "name": "LastMAPSSuccessTime",
+        "before": "#0eb444fa3c16dcec",
+        "after": "#286f8d2d5c280548"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827002780033,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418A073AA3BC1C75",
+        "before": "#ce73467bf58f6082",
+        "after": "#5a1fff3a4e8e61a1"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 320,
+      "lwt": 134393827241525619,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{0C9E24B1-FA69-4154-B7F3-041454657229}",
+        "name": "DynamicInfo",
+        "before": "#8e3de53b000f2fde",
+        "after": "#2830b771d4630cfb"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393827191332466,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{9200022F-FF5A-4D61-8B33-B217C79086ED}",
+        "name": "DynamicInfo",
+        "before": "#3e436a08b597f1e4",
+        "after": "#73406c2f259c2c65"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393827475552488,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{B86F17B7-0298-4679-9BEA-3567E58A7D51}",
+        "name": "DynamicInfo",
+        "before": "#755934ca2598e176",
+        "after": "#b519ce8fb7da9631"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393827026171874,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{F49854D8-60F3-475E-8F40-E85C4EC04138}",
+        "name": "DynamicInfo",
+        "before": "#8d2883b9f2575b90",
+        "after": "#52bb22e85db38c04"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393827171031364,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{EBBD491B-D054-4669-AB31-07F0B5970A6F}",
+        "name": "Hash",
+        "before": "#495a1377e398653a",
+        "after": "#cf976dcd7c70f388"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 32,
+      "lwt": 134393827151550079,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{EBBD491B-D054-4669-AB31-07F0B5970A6F}",
+        "name": "Triggers",
+        "before": "#2fd85327b46ef5bd",
+        "after": "#e1a677a834181416"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 320,
+      "lwt": 134393827151550079,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Search\\UsnNotifier\\Windows\\Catalogs\\SystemIndex",
+        "name": "{3EAED263-1148-4E92-9C3C-80D5C50BD3D1}",
+        "before": "18482048",
+        "after": "20616568"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Search indexer state (USN positions).",
+      "size": 18,
+      "lwt": 134393827393303889,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Notifications",
+        "name": "LastModified_UTC",
+        "before": "2026/11/08/11:10:31",
+        "after": "2026/11/17/09:51:42"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 40,
+      "lwt": 134393827024741708,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Packages\\Windows-Defender-AM-Default-Definitions-OptionalWrapper-Package~31bf3856ad364e35~amd64~~10.0.26100.1\\Updates",
+        "name": "Windows-Defender-Default-Definitions",
+        "before": "255",
+        "after": "0"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393827024724219,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing",
+        "name": "LastModified_UTC",
+        "before": "2026/11/11/01:19:07",
+        "after": "2026/11/17/09:51:42"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 40,
+      "lwt": 134393827024741708,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing",
+        "name": "NextExecutionSequence",
+        "before": "18",
+        "after": "19"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393827024741708,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing",
+        "name": "SessionIdHigh",
+        "before": "31289832",
+        "after": "31291001"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393827024741708,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing",
+        "name": "SessionIdLow",
+        "before": "67586703",
+        "after": "1050785493"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393827024741708,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SideBySide",
+        "name": "PublisherPolicyChangeTime",
+        "before": "134386098306528935",
+        "after": "134393827014198988"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827023840623,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\VFUProvider",
+        "name": "StartTime",
+        "before": "134393826600167980",
+        "after": "134393827200042070"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827200042070,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\BitLocker\\Telemetry",
+        "name": "AADBackupCheckTimestamp",
+        "before": "13438649285",
+        "after": "13439382710"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827107146137,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\MUI\\StringCacheSettings",
+        "name": "StringCacheGeneration",
+        "before": "1",
+        "after": "3"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI string cache generation counter.",
+      "size": 4,
+      "lwt": 134393827382396773,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Configuration Manager\\Defrag",
+        "name": "TotalBytesSaved",
+        "before": "8192",
+        "after": "20480"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827010307458,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\BITS",
+        "name": "Start",
+        "before": "3",
+        "after": "2"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393827709765659,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DsmSvc\\State",
+        "name": "LastActiveTime",
+        "before": "#3040a4cb66626087",
+        "after": "#510a8046ab4f1462"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827060150493,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\rdyboost\\Diagnostics",
+        "name": "ReadyBootTrainingCountSinceLastServicing",
+        "before": "6",
+        "after": "7"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393827080441550,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\rdyboost\\Parameters",
+        "name": "BootPlan",
+        "before": "#8ad3603113fc0f1a",
+        "after": "#79b28c903ffb54a0"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 106148,
+      "lwt": 134393827080331006,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\rdyboost\\Parameters",
+        "name": "LastBootPlanUserTime",
+        "before": "‎Wed‎, ‎Nov ‎11 ‎26, 06:13:42 AM",
+        "after": "‎Tue‎, ‎Nov ‎17 ‎26, 01:51:48 AM"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 128,
+      "lwt": 134393827080331006,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\rdyboost\\Parameters",
+        "name": "ReadyBootPlanAge",
+        "before": "2",
+        "after": "0"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393827080331006,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        "name": "TaskbarStateLastRun",
+        "before": "#d4f0444b3bcdf4e8",
+        "after": "#f465f30a1212ea6b"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393827198021865,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Discardable\\PostSetup\\Component Categories64\\{00021492-0000-0000-C000-000000000046}\\Enum",
+        "name": "Implementing",
+        "before": "#75dc94970e9fca3a",
+        "after": "#5ceedc3e17a1a362"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 60,
+      "lwt": 134393827199502533,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Notifications\\OptionalFeatures"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393827024741708,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RemovedEditionBasedSelectableUpdates"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393827024452529,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\SessionsPending\\31291001_1050785493"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^K:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Component Based Servicing\\\\SessionsPending\\\\[0-9]{6,}_[0-9]{6,}(?:\\\\.*)?$",
+      "lwt": 134393827024741708,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\TiRunning"
+      },
+      "label": "ambient",
+      "rule": "labels: Component Based Servicing (TrustedInstaller) session state; the component store is never a cleaner target.",
+      "lwt": 134393827003092594,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\TempPackages"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Installer's list of temp packages it deletes itself after a transaction (the .msi files it names are relabelled by m1b.sh temp_packages).",
+      "lwt": 134393827396535693,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Installer machine-state containers created on first MSI use; the service's own keys.",
+      "lwt": 134393826993282323,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH"
+      },
+      "label": "ambient",
+      "rule": "labels: UFH (shortcut/usage history) service state.",
+      "lwt": 134393827050263313,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\.DEFAULT\\Software\\Classes\\Local Settings\\MuiCache\\3"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI resource-string cache generation key (not the shell MuiCache of exe names, which lives under Local Settings/Software/Microsoft/Windows/Shell/MuiCache).",
+      "lwt": 134393827382396773,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\RestartManager"
+      },
+      "label": "ambient",
+      "rule": "labels: Restart Manager session scratch, created by any MSI/Burn/NSIS session.",
+      "lwt": 134393827386149416,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\MuiCache\\3"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI resource-string cache generation key (not the shell MuiCache of exe names, which lives under Local Settings/Software/Microsoft/Windows/Shell/MuiCache).",
+      "lwt": 134393827725381421,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\02916d03f60c595e6ce4dcaa0580cd79aa9f9f0d"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002727339,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\02a8d349b0f4306c6c0da685621df55927c85051"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002744986,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\2150d30cd93700829a18f35c0e281641c4f73311"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002762398,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\26518fb8c56f593aced65538cb683ab9f95bcc3e"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002676790,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\2825ec5f6fa7e98a09d7d53387e211277397f44d"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002709784,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\2b0b71c1dcebf8df280f0a28063605740e07974b"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002676790,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\3b4defd224396f5a27b2bc6a7a75eae56f44f4f8"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002709784,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\445694f654c4fe3711ec83776cbbfdc830d6beda"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002780033,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\485b6d89604f47c659bdcc26eb5ac44cba27dcc2"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002762398,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\5ed5abcd77a689c9f69b616359667486a4702d5f"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002780033,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\5fe2b7454af72a37c565d75952e40f9d43e9482c"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002744986,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\64a852bab03e6861d0204145d81fce58d45e0761"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 304,
+      "lwt": 134393827002780033,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\741bc9bcb5f48080ed9aed4f75ede84ed8e98800"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002762398,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\a982e6f9087d52e98e937fdb82dfe764dc974353"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002744986,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\b315ba6088efffec19b2d26c6a64379084b46579"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002762398,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\c3a25520b0f2fb61edc19aae7ac2fffbc0d25ad5"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002727339,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\c54a6d867b8e7adea13ca8a51231dccbba23c95f"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002762398,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\c665c701567a83519b63e58b86054e6c1a655cea"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002727339,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\cc178123e93b36fca66aa212adc06f629af0c622"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002762398,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\cfa0a48a5965b92940621c65cc8de3f6074730c2"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002709784,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\d130235b44b99765f78867480941e173b2d93d30"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002676790,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\e041cc07b4340dbbf9c77293c50b42f5fa069b17"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002727339,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\ec0e9cba4ee99a08ad0a1bf111738f9d46df558f"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002744986,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\ec63931d60609df28542763a8964c41028920db5"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002744986,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\f425e50e446f81050c8e359e147c920dba3296d9"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002709784,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\f7103acba706c538126005a786838128913d9f25"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 300,
+      "lwt": 134393827002762398,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\b384.msi"
+      },
+      "label": "ambient",
+      "rule": "temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)",
+      "size": 179666944,
+      "lwt": 134393826735185410,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\MSIEXEC.EXE-7D20CFB0.pf"
+      },
+      "label": "ambient",
+      "rule": "labels: SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state.",
+      "size": 36077,
+      "lwt": 134393827396599842,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\ReadyBoot\\Trace6.fx"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 1480570,
+      "lwt": 134393827078330056,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler",
+        "name": "134393827259380869"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134393827724789753,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\SCM Event Provider @ root/CIMV2",
+        "name": "134393827707290445"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\SCM Event Provider @ root/CIMV2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134393827707290445,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\Win32_WIN32_TERMINALSERVICE_Prov @ root/CIMV2",
+        "name": "134393827271620525"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\Win32_WIN32_TERMINALSERVICE_Prov @ root/CIMV2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134393827725381421,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\CoreService",
+        "name": "SdpFeatures"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 2,
+      "lwt": 134393827001220459,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\BITS",
+        "name": "PerfMMFileName"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 104,
+      "lwt": 134393827707258884,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\CatalogsToUninstall",
+        "name": "Windows-Defender-AM-Default-Definitions-Package~31bf3856ad364e35~amd64~~10.0.26100.1.cat"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 178,
+      "lwt": 134393827024724219,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist",
+        "name": "\\REGISTRY\\MACHINE\\COMPONENTS"
+      },
+      "label": "ambient",
+      "rule": "labels: hivelist entry of the COMPONENTS hive, loaded by Windows servicing (null runs, 2026-11-15).",
+      "size": 120,
+      "lwt": 134393827026470717,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        "name": "C:\\Windows\\System32\\msiexec.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: PCA record for msiexec.exe itself.",
+      "size": 108,
+      "lwt": 134393827417035374,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+        "name": "ParseAutoexec"
+      },
+      "label": "ambient",
+      "rule": "labels: Winlogon flag rewritten at logon.",
+      "size": 4,
+      "lwt": 134393827029168547,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows NT\\CurrentVersion\\SoftwareProtectionPlatform\\PersistedSystemState",
+        "name": "StartupLoggedAlready"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393827152052590,
+      "in_s1": true
+    }
+  ],
+  "temp_packages": [
+    "C:\\WINDOWS\\Installer\\b384.msi"
+  ],
+  "freeze": {
+    "schema": "purge.rig.m1b-freeze/1",
+    "app": "temurin",
+    "runs": [
+      "m1b-fz1-temurin",
+      "m1b-fz2-temurin"
+    ],
+    "ambient": "truth/ambient.json + m1b-fz1-null1 m1b-fz2-null1",
+    "rule": "present in one freeze run only (Windows churn or chance): excluded from the frozen truth, never a leftover",
+    "compared_with": "fz1",
+    "excluded": []
+  }
+}

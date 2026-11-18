@@ -1,4 +1,41 @@
-# M1b handoff (2026-11-16)
+# M1b handoff
+
+## Current state (2026-11-17 16:30): paused before the gate campaign
+
+- Branch `m1b` head 59ac127, local only (not pushed since f209730). Tree clean.
+- Done: all 38 design packages (waves 0-6); Fable reviews R1, R2a, R2b, R3a, R3b, R4, R4b, R4c with every finding
+  fixed or recorded (`docs/reviews/m1b/`); 7-Zip smoke on Inbound 44/44, 0 escapes; frozen truth for powershell and
+  temurin; K5 pairs reach 42 / 44 kept_owner.
+- Unelevated `cargo xtask ci` PASSED at b1fcd97 (log `E:\purge-build\ci-unelev.log`). G0 passed at abe3645 (elevated,
+  five known skips). G1 replay passed (K16 unexplained 0, K7 7-Zip key offered).
+- Paused by the user during the G1 rerun at 59ac127; no VM ran. Only `vm/` changed since G0 (59ac127: guest checks
+  pinned installer hashes; caused G3's Python failure, a stale 3.13.1 installer on dirty-base).
+
+### To resume the gate
+
+1. Scan campaign at the m1b head (Haiku babysits, stop on any non-infrastructure failure): G1, G2 (rig-base), G3
+   (dirty-base), G4 traps both bases, G8 Purge-CleanPro, G7 budgets on the host vs M2 head 3265797, then
+   `bash vm/truth/m1b.sh evaluate`. Set `RIG_CACHE_DIR=<main checkout>m\cache` (a worktree has no cache),
+   `PURGE_RUNS_DIR=<main checkout>muns` for G1. One background shell and one waiter only: the Claude Code memory
+   reaper killed a long run once (DietPi, the user's VM, may be running; never touch it).
+2. Executor campaign: G5 (`vm/rig-m1b-exec.ps1` m1b-x-elevated, -fidelity, -traps, -undo-traps) and G6
+   (m1b-x-crash, 74 rounds incl. 15 power-offs), scored by `vm/truth/m1b-exec.sh`.
+3. `docs/M1B_GATE.md`, DECISIONS, ask the user before pushing `m1b`. Evidence under `E:\purge-build\gate-evidence\`.
+
+### Also done this session, outside the gate
+
+- UI alpha (scan + review, no deletes) on local branch `ui-alpha` 9369255; `Desktop\Purge-ui-alpha.zip`.
+- Local-baseline design (`docs/BASELINE_LOCAL_DESIGN.md`/`.json`, open questions decided in DECISIONS "Post-M1b"):
+  implement after the gate. Release-build baseline packs = future maintenance.
+- M3 notes: test broker elevation with the UAC prompt on (the host runs ConsentPromptBehaviorAdmin=0); the
+  `kbaselines` admin-only check and `PURGE_KB_DIR` restriction go to the M3 broker review; UI alpha's wanted engine
+  changes (object display name/program in the scan output, typed warning kinds, firewall names in `plan show`).
+
+Milestones after M1b: local baseline + M3 (UI + broker).
+
+---
+
+## Earlier notes (2026-11-16, before wave 2)
 
 Pickup notes for whoever continues M1b. The design is `docs/M1B_DESIGN.json` (one-page summary `docs/M1B_DESIGN.md`).
 M2 is closed: `docs/M2_GATE.md`, branch `m2` pushed to origin.

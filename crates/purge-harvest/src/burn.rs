@@ -23,16 +23,27 @@
 //!   only ever keeps more). `cache_dir` is the product's `SourceList\LastUsedSource` directory when it is
 //!   a direct child of the entry's Package Cache named by the ProductCode, alone or followed by
 //!   `v<version>` (Burn's folder for an MSI package).
+//! - `linked`: the products of a kb shared component with a `burn_link` (the Python Launcher) that the
+//!   bundle installed without writing a dependency provider record for them, so that `packages` cannot
+//!   name them. The real CPython bundles (3.12.7, 3.13.17) write only their own record
+//!   (`<Classes>\Installer\Dependencies\CPython-3.12\Dependents\{bundle}`), none for launcher.msi. Only
+//!   when the bundle's provider key is one the entry names, and for a product installed for the
+//!   machine, registered under one of the entry's UpgradeCodes, whose `SourceList\LastUsedSource` is
+//!   Burn's folder `{ProductCode}v<BundleVersion>` in the machine's Package Cache: the folder Burn made
+//!   when this version of the bundle installed it. Per bundle: one value of the Uninstall key, one
+//!   `values()` per UpgradeCode, one value per product found.
 //!
 //! A package is the app's ([`BurnHarvest::children`]) only when no other bundle or product depends on it
 //! and Windows Installer lists its product as installed: the Python Launcher shared by two Pythons is
 //! nobody's in particular.
 
 use purge_guard::canon::{GuardEnv, canon_key};
+use purge_guard::deny::{BurnLink, shared_components};
 use purge_guard::prefix;
 use purge_index::ownership::{MACHINE_DEPENDENCIES, OwnershipIndex, pack_guid};
-use purge_model::{BurnFacts, BurnPackage, InventoryEntry, MsiContext};
+use purge_model::{BurnFacts, BurnLinked, BurnPackage, InventoryEntry, MsiContext};
 use purge_source::registry::RegistrySource;
+use purge_source::types::SourceError;
 use purge_win::env::EnvMap;
 
 use crate::msi::braced_upper;
@@ -129,6 +140,31 @@ fn product_of_provider(
         .and_then(|value| braced_upper(&value))
 }
 
+/// The `SourceList` key of a machine product (`packed`: its packed ProductCode).
+fn machine_source_list(packed: &str) -> String {
+    format!(r"HKLM\SOFTWARE\Classes\Installer\Products\{packed}\SourceList")
+}
+
+/// The directory Windows Installer last installed a product from (`LastUsedSource` of its `SourceList`
+/// key, `n;<index>;<path>`), canonical, when it is a direct child of `cache_root` whose name `leaf_ok`
+/// accepts.
+fn last_used_cache_dir(
+    reg: &dyn RegistrySource,
+    source_list: &str,
+    guard: &GuardEnv,
+    cache_root: Option<&str>,
+    leaf_ok: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let raw = string_value(reg, source_list, "LastUsedSource")?;
+    let mut parts = raw.splitn(3, ';');
+    let (kind, _, path) = (parts.next()?, parts.next()?, parts.next()?);
+    if !kind.eq_ignore_ascii_case("n") {
+        return None;
+    }
+    let dir = canon_file(path.trim().trim_end_matches('\\'), guard)?;
+    cache_child(&dir, cache_root, leaf_ok).then_some(dir)
+}
+
 /// The Package Cache directory Windows Installer last installed the product from
 /// (`SourceList\LastUsedSource`, `n;<index>;<path>`), when it is Burn's folder for the product in the
 /// entry's own Package Cache (`cache_root`).
@@ -141,22 +177,124 @@ fn product_cache_dir(
 ) -> Option<String> {
     let packed = pack_guid(product_code)?;
     let key = match entry.hive_sid.as_deref() {
-        None => format!(r"HKLM\SOFTWARE\Classes\Installer\Products\{packed}\SourceList"),
+        None => machine_source_list(&packed),
         Some(sid) => {
             format!(r"HKU\{sid}\Software\Microsoft\Installer\Products\{packed}\SourceList")
         }
     };
-    let raw = string_value(reg, &key, "LastUsedSource")?;
-    let mut parts = raw.splitn(3, ';');
-    let (kind, _, path) = (parts.next()?, parts.next()?, parts.next()?);
-    if !kind.eq_ignore_ascii_case("n") {
-        return None;
-    }
-    let dir = canon_file(path.trim().trim_end_matches('\\'), guard)?;
-    cache_child(&dir, cache_root, |leaf| {
+    last_used_cache_dir(reg, &key, guard, cache_root, |leaf| {
         is_package_folder(leaf, product_code)
     })
-    .then_some(dir)
+}
+
+/// The machine's product registrations by UpgradeCode: one value per product, named by its packed
+/// ProductCode.
+const MACHINE_UPGRADE_CODES: &str = r"HKLM\SOFTWARE\Classes\Installer\UpgradeCodes";
+
+/// The shared components the bundle installed as packages without a dependency provider record (kb
+/// `shared-components.json`, `burn_link`; see [`purge_model::BurnLinked`] for what is required).
+///
+/// Every fact the link rests on but the bundle's own provider key and version is a machine record only
+/// administrators write: the product's registration under its UpgradeCode, its machine install, and its
+/// `SourceList`. A per-user bundle can still name itself after a CPython bundle; what it gains is a
+/// report-only suggestion, never an action. A product installed per user is not looked at.
+fn linked_components(
+    reg: &dyn RegistrySource,
+    entry: &InventoryEntry,
+    provider_key: Option<&str>,
+    ix: &OwnershipIndex,
+    guard: &GuardEnv,
+    warnings: &mut Vec<String>,
+) -> Vec<BurnLinked> {
+    let Some(provider_key) = provider_key else {
+        return Vec::new();
+    };
+    let components = match shared_components() {
+        Ok(components) => components,
+        Err(e) => {
+            warnings.push(format!(
+                "burn: kb/shared-components.json cannot be read ({e}); no package without a \
+                 provider record is linked"
+            ));
+            return Vec::new();
+        }
+    };
+    let links: Vec<(&str, &BurnLink)> = components
+        .iter()
+        .filter_map(|c| Some((c.id.as_str(), c.burn_link.as_ref()?)))
+        .filter(|(_, link)| link.bundle_matches(provider_key))
+        .collect();
+    if links.is_empty() {
+        return Vec::new();
+    }
+    let Some(version) = string_value(reg, &entry.key_path, "BundleVersion") else {
+        warnings.push(
+            "burn: the bundle has no BundleVersion; no package without a provider record is linked"
+                .into(),
+        );
+        return Vec::new();
+    };
+    let machine_cache = canon_file(
+        &format!(
+            "{}\\Package Cache",
+            guard.program_data.trim().trim_end_matches('\\')
+        ),
+        guard,
+    )
+    .filter(|_| !guard.program_data.trim().is_empty());
+    let mut out: Vec<BurnLinked> = Vec::new();
+    for (component, link) in links {
+        for upgrade in &link.upgrade_codes {
+            let Some(packed_upgrade) = pack_guid(upgrade.trim()) else {
+                continue;
+            };
+            let key = format!(r"{MACHINE_UPGRADE_CODES}\{packed_upgrade}");
+            let mut products: Vec<String> = match reg.values(&key) {
+                Ok(values) => values.into_iter().map(|v| v.name).collect(),
+                Err(SourceError::NotFound) => continue,
+                Err(e) => {
+                    warnings.push(format!(
+                        "burn: {key} cannot be read ({e}); the {component} products are not linked"
+                    ));
+                    continue;
+                }
+            };
+            products.sort_by_key(|p| p.to_ascii_uppercase());
+            for packed in products {
+                // Only a product installed for the machine: the registration read is the machine's.
+                let Some(product) = ix
+                    .installed(&packed)
+                    .filter(|p| p.context == MsiContext::Machine)
+                else {
+                    continue;
+                };
+                let code = product.product_code.clone();
+                let own_folder = |leaf: &str| {
+                    is_package_folder(leaf, &code)
+                        && leaf
+                            .get(code.len() + 1..)
+                            .is_some_and(|v| v.eq_ignore_ascii_case(&version))
+                };
+                let Some(cache_dir) = last_used_cache_dir(
+                    reg,
+                    &machine_source_list(&product.packed_code),
+                    guard,
+                    machine_cache.as_deref(),
+                    own_folder,
+                ) else {
+                    continue;
+                };
+                if !out.iter().any(|l| l.product_code == code) {
+                    out.push(BurnLinked {
+                        component: component.to_owned(),
+                        product_code: code,
+                        cache_dir,
+                    });
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Harvests the bundle of `entry`. See the module documentation.
@@ -287,6 +425,14 @@ pub fn harvest(
         .cloned()
         .collect();
     dependents_at_harvest.sort_by_key(|d| prefix::fold(d));
+    let linked = linked_components(
+        reg,
+        entry,
+        provider_key.as_deref(),
+        ix,
+        guard,
+        &mut warnings,
+    );
 
     BurnHarvest {
         facts: BurnFacts {
@@ -295,6 +441,7 @@ pub fn harvest(
             cache_path,
             packages,
             dependents_at_harvest,
+            linked,
         },
         children,
         warnings,

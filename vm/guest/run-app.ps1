@@ -95,6 +95,12 @@ function Invoke-M1bTrapPhase([string]$Step) {
     & $M1bTraps -Phase $Step -OutDir $Dir -TrapA "$($M1b.trap_a)" -TrapB "$($M1b.trap_b)" -RunLog (Join-Path $Dir 'run.log')
     if ($LASTEXITCODE -ne 0) { throw "m1b-traps $Step`: a case failed (exit $LASTEXITCODE, see m1b-traps-planted.json)" }
 }
+# A failed m1b-traps phase ends the run (review R4b S1): nothing after it (harvest, uninstall, scan) runs, so no plan
+# is scored as if every trap had been planted.
+function Stop-RunOnFailedM1bTraps([string]$Name) {
+    $ph = @($S.phases | Where-Object { $_.name -eq $Name }) | Select-Object -Last 1
+    if ($ph -and -not $ph.ok) { Log "!! $Name failed: the run stops here (RIG.md section 12.2)"; Save-Run; exit 1 }
+}
 # Writes msi-tables-<run>-<phase>.json beside snap <phase> (guest\m1b-msi-tables.ps1).
 function Save-M1bMsiTables([string]$Phase) {
     $f = Join-Path $Dir "msi-tables-$Run-$Phase.json"
@@ -181,6 +187,11 @@ function Resolve-Installer($App, $Rec) {
             if ($h -eq "$($m.sha256)".ToUpperInvariant()) { $Rec.url = $m.url; $Rec.installer_source = 'host cache' }
             else { Log "!! $file sha256 $h != cache manifest $($m.sha256): deleting, downloading again"; Remove-Item -LiteralPath $file -Force }
         }
+    } elseif ($App.sha256 -and (Test-Path -LiteralPath $file)) {
+        # A pinned app (apps.ps1 'sha256') without a cache entry: a same-named file of another version in the
+        # snapshot (dirty-base holds setup-dirty's Python 3.13.1 as python313.exe) is deleted and downloaded again.
+        $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
+        if ($h -ne "$($App.sha256)".ToUpperInvariant()) { Log "!! $file sha256 $h != pinned $($App.sha256): deleting, downloading again"; Remove-Item -LiteralPath $file -Force }
     }
     if (-not (Test-InstallerFile $file)) {
         Log "installer $file missing or invalid; downloading"
@@ -192,8 +203,12 @@ function Resolve-Installer($App, $Rec) {
         $Rec.installer_source = 'download'
     }
     $info = Get-FileInfoRecord $file $Rec.url
-    $Rec.installer = $file; $Rec.installer_sha256 = $info.sha256; $Rec.installer_sig = "$($info.sig) $($info.signer)".Trim()
+    $Rec.installer_sha256 = $info.sha256; $Rec.installer_sig = "$($info.sig) $($info.signer)".Trim()
     if ($m -and $info.sha256 -ne "$($m.sha256)".ToUpperInvariant()) { Log "!! $($App.file): sha256 differs from the cache manifest (version drift?)"; $Rec.installer_version = $null }
+    # Review R4d S4: the pin is checked before the record names the file, so a mismatch leaves $Rec.installer empty
+    # and the install phase (which refuses an empty installer) never runs a file of another version.
+    if ($App.sha256 -and $info.sha256 -ne "$($App.sha256)".ToUpperInvariant()) { throw "$($App.file): sha256 $($info.sha256) != pinned $($App.sha256)" }
+    $Rec.installer = $file
     Log "installer $file sha256=$($info.sha256) sig=$($Rec.installer_sig) source=$($Rec.installer_source)"
     $file
 }
@@ -415,6 +430,7 @@ Save-Run
 Phase 'install' {
     $a = $e.app
     if (-not $a) { throw 'no app definition (setup failed)' }
+    if (-not $S.installer) { throw 'no installer (setup failed: missing, or not the pinned file)' }
     if ($UpgradeFrom) {
         # apps.ps1 upgrade_from: the older build first, then the main installer over it (an in-place upgrade).
         $u = Get-App $UpgradeFrom
@@ -462,7 +478,7 @@ foreach ($r in @($S.post)) {
 }
 if ($PlantPost) { Phase 'plant-post' { Invoke-Plant 'plant-post' $PlantPost } $S; Save-Run }
 # M1b scan traps, pre plants: after the launch, before lists 1 / snap 1 and the harvest (RIG.md section 12).
-if ($M1b -and $M1b.traps) { Phase 'm1b-traps-pre' { Invoke-M1bTrapPhase 'pre' } $S; Save-Run }
+if ($M1b -and $M1b.traps) { Phase 'm1b-traps-pre' { Invoke-M1bTrapPhase 'pre' } $S; Save-Run; Stop-RunOnFailedM1bTraps 'm1b-traps-pre' }
 
 Phase 'lists1' { Lists $Run 1 } $S
 # Engine inventory right after the lists of the same point (RIG.md §4a): it reads the Uninstall keys and the MSI
@@ -521,7 +537,7 @@ if ($Engine) {
     }
 }
 # M1b scan traps, between step: after the harvest, before the uninstall (com-shared-class is re-pointed to TrapB).
-if ($M1b -and $M1b.traps) { Phase 'm1b-traps-between' { Invoke-M1bTrapPhase 'between' } $S; Save-Run }
+if ($M1b -and $M1b.traps) { Phase 'm1b-traps-between' { Invoke-M1bTrapPhase 'between' } $S; Save-Run; Stop-RunOnFailedM1bTraps 'm1b-traps-between' }
 
 # --------------------------------------------------------------------------------------------- uninstall
 Phase 'uninstall' {
@@ -598,7 +614,7 @@ Phase 'uninstall' {
 } $S
 Save-Run
 # M1b scan traps, post plants: after the uninstall, before lists 2 / snap 2 and the scan.
-if ($M1b -and $M1b.traps) { Phase 'm1b-traps-post' { Invoke-M1bTrapPhase 'post' } $S; Save-Run }
+if ($M1b -and $M1b.traps) { Phase 'm1b-traps-post' { Invoke-M1bTrapPhase 'post' } $S; Save-Run; Stop-RunOnFailedM1bTraps 'm1b-traps-post' }
 
 Phase 'lists2' { Lists $Run 2 } $S
 if ($Engine) {

@@ -72,7 +72,7 @@ public sealed record LeftoverItem(
     /// Whether the user may tick it: not blocked, not report-only, and not a package removal (irreversible; this
     /// build never passes --allow-irreversible).
     /// </summary>
-    public bool Selectable => Band != LeftoverBand.Blocked && Action is not ("ReportOnly" or "RemovePackage");
+    public bool Selectable => Band != LeftoverBand.Blocked && Action is not ("ReportOnly" or "RemovePackage") && !IsUninstallNotice;
 
     /// <summary>A file or folder (quarantined), as opposed to a registry entry or a system object.</summary>
     public bool IsFile => TargetType == "Path";
@@ -122,6 +122,15 @@ public sealed record LeftoverItem(
 
     /// <summary>What the fingerprint says about the object (name, program), when it is a service, task or rule.</summary>
     public SystemObjectNote? ObjectNote { get; init; }
+
+    /// <summary>
+    /// The product the engine suggests uninstalling (evidence fact <c>suggest_uninstall</c>, sys_burndeps), or empty.
+    /// Only a notice: the engine writes it as <c>ReportOnly</c>, and the UI never offers it for removal.
+    /// </summary>
+    public string SuggestUninstall { get; init; } = "";
+
+    /// <summary>A suggestion to uninstall another product: a notice, never something Purge removes.</summary>
+    public bool IsUninstallNotice => SuggestUninstall.Length > 0;
 }
 
 /// <summary>A scanned plan: the files the engine wrote, its hash and its items.</summary>

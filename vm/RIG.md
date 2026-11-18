@@ -389,7 +389,12 @@ be removed through an API, e.g. a package's rows through Remove-AppxPackage).
 
 Union of `diff(snap-0, snap-2)` over the null runs, as canonical target strings, plus generalized patterns:
 a GUID, a hex run of 16+ chars, or a number of 6+ digits in a path segment becomes a wildcard, so churn
-with random names still matches. Output `vm\truth\ambient.json`: `{ runs: [...], exact: [...], patterns:
+with random names still matches. Two narrow folder rules for files (ruling 2026-11-18, dirty-base noise): a
+`<...\Temp>\<3-8 hex>.tmp` file (Windows' GetTempFileName name) becomes `<that Temp>\<3-8 hex>.tmp` with any
+children, and a `.txt` or `.log` file directly in a folder named `logs` (Steam's `logs\service_log.txt`) becomes
+any `.txt` / `.log` directly in that folder. A generic "any file in this folder" rule is not used: a null run
+touching `%TEMP%` or `Prefetch` would make every app's file there ambient. Other temp names (`DEL<hex>.tmp`,
+`tem<hex>.tmp`, `~nsu*.tmp`, `is-*.tmp`) stay as they are; frozen truths hold such leftovers. Output `vm\truth\ambient.json`: `{ runs: [...], exact: [...], patterns:
 [...] }`. The scorer prints how many truth items each run's ambient set removed.
 
 ## 7. Plan JSON (what a cleaner offers) and scoring (`rigtool score`)
@@ -1003,7 +1008,7 @@ and G8 (Purge-CleanPro). The executor side (G5, G6, K10-K13) is `vm/rig-m1b-exec
 | Mode | What | Runs |
 |---|---|---|
 | `m1b-app -App <id> [-Base rig-base\|dirty-base] [-Traps]` | one engine run of one app (no null runs unless `-Nulls` is given) | `m1b[d]-[traps-]<id>` |
-| `m1b-apps [-Base ...] [-Ids ...]` | the gate list `7zip python python312-with-313 python313-with-312 node vcredist powershell temurin` (the same list on dirty-base), with 3 null runs spread | `m1b[d]-<id>`, `m1b[d]-null<n>` |
+| `m1b-apps [-Base ...] [-Ids ...]` | the gate list `7zip python python312-with-313 python313-with-312 node vcredist powershell temurin`; on dirty-base the same list without node (dirty-base has Node.js 20.18.0, so the install is a no-op; ruling 2026-11-18, m1b.sh `M1B_DIRTY_APPS`), with 3 null runs spread | `m1b[d]-<id>`, `m1b[d]-null<n>` |
 | `m1b-traps [-Base ...]` | 7zip as TrapA and node as TrapB, with every plant of `guest/m1b-traps.ps1` | `m1b[d]-traps-7zip` |
 | `m1b-freeze` | two raw runs (vendor uninstall, no engine) of powershell and temurin; Inbound rig-base only | `m1b-fz1-<id>`, `m1b-fz2-<id>` |
 | `m1b-budgets -Engine <m1b> -BaseEngine <M2 head> -Program <id>` | G7 on the host, read only (12.5) | `runs/m1b-budgets/` |
@@ -1011,6 +1016,10 @@ and G8 (Purge-CleanPro). The executor side (G5, G6, K10-K13) is `vm/rig-m1b-exec
 - **Purge-CleanPro tag:** on Purge-CleanPro (`-VmName Purge-CleanPro`, G8) the run tag is `cp` (`m1bcp-...`).
 - **Engine:** app runs use the release engine: `-Engine`, else `$env:RIG_ENGINE`, else `target\release\purge-engine.exe`. The rig-exec build (fault injection) is refused.
 - **Installer cache:** `$env:RIG_CACHE_DIR` points the installer cache somewhere else. A worktree uses the main checkout's `vm\cache\inst`.
+  - A pinned app (`sha256` in apps.ps1) is checked against that hash in the guest too, with or without a cache entry: a
+    same-named file of another version is deleted and downloaded again, and a mismatch after that fails the phase.
+    (G3, 2026-11-17: without a cache, dirty-base's `C:\cr\inst\python313.exe` is setup-dirty's Python 3.13.1; it ran as
+    the 3.13.17 install, a no-op over the installed 3.13.1, and both Python pairs found no 3.13.17 ARP entry.)
 - **Cache entries added for M1b** (in the git-ignored cache-sources.json; each hash comes from the vendor's published checksum):
   - PowerShell 7.6.10 msi
   - Temurin 21.0.13+9 msi
@@ -1032,7 +1041,17 @@ M0/M1a run. When options are given, run.json gets an `m1b` block and run-app add
   - `m1b-traps-pre` runs after the launch and before lists1, so the harvest sees the plants.
   - `m1b-traps-between` runs after the harvest and before the uninstall.
   - `m1b-traps-post` runs after the uninstall and before lists2, snap2 and the scan.
-  - Each of these phases fails when one of its cases fails.
+  - Each of these phases fails when one of its cases fails. A failed phase ends the run (`exit 1` after run.json is saved),
+    and m1b-traps.ps1 refuses a later phase after a failed case of an earlier one (review R4b S1).
+  - Every phase records its plants in `m1b-traps-planted.json` (`purge.rig.m1b-traps.planted/1`), which collect copies to
+    `traps-planted-<run>.json` for K9.
+- **Build record.** rig.ps1 writes `<run>\m1b-build.json` (`purge.rig.m1b-build/1`) for each app run: the engine's SHA-256
+  before and after the campaign, HEAD, whether crates/bins/tools/kb/Cargo.*/rust-toolchain.toml differ from HEAD, and the
+  SHA-256 of the pulled run.json. It does not hash the guest's copy of the engine. Since review R4c S3 it also holds
+  the rig inputs (`Get-M1bRigInputs`): the SHA-256 of `truth/m1b-traps.json`, every `truth/labels/*.json`,
+  `truth/deny.json` and every file under `truth/frozen` (review R4d S1), every file of `guest/` (not `guest/tests`)
+  and `rig.ps1`, before (`inputs`) and after (`inputs_after`) the campaign, and
+  whether they differ from HEAD, untracked files included (`inputs_dirty`).
 
 ### 12.3 Trap expectations (`truth/m1b-traps.json`)
 
@@ -1041,7 +1060,8 @@ The file has 26 cases (one per plant) and 44 expectations, scored by `rigtool tr
 
 - **`com-shared-class`:** expected protected with no blocker named, because the design names none.
 - **TrapA's own twins:** expected `listed`, not `safe`. These are the shellex handler and its Approved value, the event-log source PurgeTrapA,
-  the MuiCache and PCA entries of 7zFM, and the WER report of 7zFM.
+  the MuiCache and PCA entries of 7zFM. The WER report of 7zFM was in this list too; it is now `protected`
+  (see the smoke corrections below).
 - **`shareddlls-count`:** only the count-2 value is expected protected (SharedRefcount). The count-1 value has no
   expectation.
 - **`instfolders`:** only TrapB's Folders value has an expectation (absent). TrapA's own value has none.
@@ -1056,6 +1076,50 @@ Smoke run on 2026-11-17 (`m1b-app 7zip -Traps`, Inbound rig-base, engine from 75
   - The S-1-5-18 Products key was not listed.
 - These are engine results for the gate to judge, not rig faults.
 
+The smoke was run again on 2026-11-17 to check the findings above. The outputs are in
+`E:\purge-build\gate-evidence\m1b-smoke-7zip\{before,after}`.
+- `before` used the m1b head 3b17232 and gave the same 37 of 44.
+- `after` used the fixed engine and gave 44 of 44 against the corrected file below. Against the old file it gives
+  37 of 44: the escape is gone, but a new one is counted (see svc-svchost below).
+
+What each finding turned out to be:
+
+- **svc-svchost (engine defect, fixed).** The index resolves a service hosted by svchost to its `ServiceDll`.
+  The guard's `sys.service.windows` judged that DLL, which lies in TrapA's folder, so the rule did not apply. Harvest
+  recorded the service and SYS-SERVICE offered it.
+  - The fix: the guard now judges such a service by its host command (`ServiceFacts::guard_program`), in the scan
+    sealing, the harvest and the executor gate. Such a service is now never recorded or offered.
+  - The expectation changes from `absent` to `protected`. REF-ANY still lists the `Parameters|ServiceDll` value inside
+    the service key, Blocked (`reg.hklm.system`). Under `absent`, that Blocked entry alone scores as an escape. Under
+    `protected`, any equal, covering or inside entry that can be acted on still fails.
+- **svc-owned, task-owned, fw-owned, com-owned (expectation error, now `listed`).**
+  - The design rule (D10, R3a S1): Safe needs the harvest record, the same digest, and the program proven gone. A
+    program in an InstallRoot counts as gone only when the whole root is gone, on a fixed NTFS or ReFS volume with the
+    recorded serial.
+  - The plants copy PurgeTrap*.exe and *.dll files into `C:\Program Files\7-Zip`, and the vendor uninstall does not
+    remove them. So the root survives, and so do the service exe and the COM dll themselves.
+  - Likely is therefore the right answer. Safe needs a plant whose root is removed completely (not done).
+  - `listed` passes at Weak too, so K9's note reports the band of the four (`owned bands: ...`) for the gate report.
+    Ruling: docs/DECISIONS.md, M1b, review R4c S1.
+- **wer-twins, 7zFM report (design rule, now `protected` with `DenyListed`).** Reports under `%ProgramData%` are
+  denied by `fs.programdata.microsoft`, as the FS-WER module documents. The plan lists the report Blocked.
+- **msi-remnants (engine recall limit, now `not_preselected`; review R4c S1 corrected the smoke fix's `absent`).**
+  - The plant writes `UserData\S-1-5-18\Products\<P>\InstallProperties` (with `LocalPackage`) and a Components value.
+  - A read-only probe of the guest after the scan (`after\msi-state-probe.log`, WindowsInstaller COM
+    `ProductState`) returned 2 (`INSTALLSTATE_ABSENT`, "installed for a different user") for both 7-Zip's code and the
+    foreign code. `Products` does not list either code.
+  - REG-ARP-MSI offers a product's registration only when Windows Installer reports it unknown in every context
+    (`ScanCtx::product_known`). A product another user may have installed is never treated as gone. So nothing is
+    offered.
+  - **Known limit (REG-ARP-MSI recall).** The plant is the remnant the scanner is for, and its usual shape: that key
+    with its `InstallProperties` is enough for Windows Installer to report any code as installed for another user.
+    So REG-ARP-MSI never offers it. This is safe, but it is a gap of the engine, not a design rule (docs/DECISIONS.md,
+    M1b, review R4c S1).
+  - `absent` would score a later engine that offers the app's own remnant (not preselected) as an escape, and made the
+    case the same as msi-remnants-foreign. `not_preselected` allows that offer and still fails a Safe or preselected one.
+  - To test the Safe path, the plant would have to leave a registration that Windows Installer reports as unknown
+    (not done).
+
 ### 12.4 Labels (`truth/mk_labels.py`)
 
 New label files: powershell, temurin, python313, python312-with-313, python313-with-312.
@@ -1065,10 +1129,70 @@ These rules are UNSURE because no capture exists yet:
 - the user_data rules for `Documents\PowerShell` and `AppData\Roaming\Microsoft\Windows\PowerShell`
 - the Launcher kept_owner rules of the two Python pairs
 - the first-leftover rule for the removed version's PythonCore key
+- (R4b S4) python313-with-312's generic kept_owner rules for the kept launcher's MSI registration (component clients,
+  upgrade code, dependency key, cached package, `Package Cache\{code}v<ver>`): generic because the launcher's product code is
+  unknown; fail-closed (a stale record of a removed 3.13 package counts as protected)
+- (R4b S4) powershell's Microsoft Update opt-in (`WindowsUpdate\Services\7971F918-...`), suspected from the MSI defaults
+
+powershell and temurin stay unfrozen; no VM run was made for R4b.
 
 Check them against the frozen and gate captures.
 
+Checked on 2026-11-17 (m1b-freeze, 12.6): the Microsoft Update opt-in is real (service key plus
+`WindowsUpdate\Services|DefaultService`, both kept_owner now); the pwsh jump list and the two PowerShell user_data rules
+matched nothing (a bare launch writes neither). powershell and temurin are frozen (FROZEN.md).
+
+**Pre-state kept_owner (review R4b S5, ruling 2026-11-17).** A product that stays installed and that the removed app
+shared can predate snap 0: in python312-with-313 the 3.13 bundle installs the Python Launcher before snap 0, and in
+python313-with-312 the 3.12 bundle does (the 3.13 install then upgrades it). A diff never sees those objects, so K5
+had nothing to count (0 of 29). The design labels them kept_owner, so the truth now takes them from the pre-state:
+- A label file may hold a hand-written top-level `prestate` block (`mk_labels.py` keeps it):
+  `{"products": "<ARP name regex>", "rules": [{"label": "kept_owner", "match", "why"}]}`. The two Python pair files
+  have one for the launcher (the same object families as the M0 python truth's 29: `.py*` classes, `Python.*`
+  ProgIDs, the drop-handler CLSID, `WOW6432Node\Python`, `py.exe`, `pyw.exe`, the shell extension, the Package Cache
+  root, the three `Classes\Installer` and three `CurrentVersion\Installer` containers, and the launcher's own MSI
+  registration).
+- `m1b.sh` (collect and freeze, after `rigtool truth`; pyeval `prestate`) adds every object that is in snap 0 **and**
+  in snap 2 and that a rule matches as a kept_owner truth item (`"prestate": true`): top-most per rule (a match whose
+  parent the same rule matches is part of the parent's item), never an object that already is a truth item, and
+  never one that is or holds a leftover or user_data truth item (that object is opened to its matching children and
+  listed under `prestate.opened`). An object gone by snap 2 is not kept and not added.
+- Product rules use `{CODE}`, `{PACKED}`, `{LOCALPACKAGE}` (the cached package named by the product's
+  `InstallProperties|LocalPackage`) and `{DEPKEY}` (the `Classes\Installer\Dependencies` key whose default value is
+  the product code). They expand for each ARP entry the `products` regex names that is in lists-0 and lists-2 under
+  the same key with the same product code. In python313-with-312 the launcher changes product code inside the run, so
+  only the code-free rules apply there; its new registration is in the diff (the generic S4 rules above).
+- truth.json gets a `prestate` summary (products, rules, matches, added, opened, skipped rules).
+- The selftest checks it on a synthetic run (`k5_prestate_counts_kept_launcher`).
+- First pair runs (2026-11-17, campaign `campaign-20261117-125320`, engine mode, clean set, ambient = M0 set +
+  `m1b-null1`): python312-with-313 has **42** kept_owner items, all from the pre-state (36 of the launcher's own objects
+  and 6 shared containers); python313-with-312 has **44**: 20 from the diff (the upgraded launcher's new MSI
+  registration and cached packages, generic S4 rules) plus 24 code-free pre-state objects. Both meet K5's 29. A
+  Windows Installer temp package (`ad01.msi` and the like) that a generic cached-package rule labelled kept_owner is
+  ambient now unless snap 2 names it as an installed product's `LocalPackage`.
+
 ### 12.5 Gate script (`truth/m1b.sh`) and budgets
+
+**G1 first (review R4c S2).** `bash truth/m1b.sh replay` (from `vm/`, on the host, at the gate's commit) writes the
+two G1 inputs: it rewrites `truth/m1b-replay-diff.json` (`cargo xtask replay-diff`), replays the five frozen runs
+(vscode, git, firefox, npp, 7zip from `$PURGE_RUNS_DIR`, else `runs/`) with `cargo xtask replay` into
+`runs/m1b-replay/<id>/` (copies of the run's snaps, lists-0 and run.json, the committed `truth/frozen/<id>/truth.json`,
+the plan with its sidecar actions; the frozen run directory is not written), scores them with `rigtool score --classes`
+and writes `truth/m1b-replay-score.json` (+ `.md`) with a `replay` block (`purge.rig.m1b-replay/1`: runs, HEAD, engine
+sources clean, frozen truth SHA-256). Review R4d S3: the old diff is deleted first, and the block records the SHA-256
+of the diff this replay wrote (`diff_sha256`, null when replay-diff wrote none) and replay-diff's exit code
+(`diff_exit`). Exit 1 when a run could not be replayed or the diff has unexplained rows.
+
+Review R5 N3: after `m1b.sh replay`, never restore or re-checkout `truth/m1b-replay-diff.json` (it is tracked) before
+collect: BIND compares the bytes of the diff collect copies with the `diff_sha256` of the replay block, so a restored
+committed diff fails BIND. Replay again instead.
+
+Review R5 S1: collect and replay first check the rigtool they score with (`rigtool_check`): `$RIGTOOL version` must
+report the SHA-256 of the sources it was built from (`vm/rigtool/build.rs`: `Cargo.toml`, `Cargo.lock`, `build.rs` and
+`src/**`, CRLF read as LF) equal to the tree's (`pyeval rigtoolsrc`), and `git status` must show `vm/rigtool` clean
+against HEAD. Otherwise m1b.sh prints why and exits 2 without collecting: rebuild with
+`(cd vm/rigtool && cargo build --release)` (the default target dir, `rigtool/target/release/rigtool`). The manifest
+records both hashes (`rigtool.source_sha256`, `rigtool.tree_sha256`); BIND fails when they are missing or differ.
 
 `bash truth/m1b.sh` (run from `vm/`) has two stages.
 
@@ -1080,34 +1204,177 @@ Check them against the frozen and gate captures.
 - `rigtool traps` per trap run
 - the budgets dir, the replay diff and the replay score
 
-**Evaluate.** It checks K1-K9, K14 and K16:
+Collect also copies each run's run.json subset and build record to `runs/<run>.json` (null runs too), each run's
+truth to `truth-<set>-<id>.json`, and writes `manifest.json` (`purge.rig.m1b-evidence/2`: config, trap file and label
+digests, frozen truths, rigtool, the null runs per set).
+
+**Evaluate.** It checks RUN, BIND, FROZEN, SANITY, K1-K9, K14 and K16:
 - It prints one line per criterion and app, with value, limit and PASS/FAIL.
-- It writes `truth/m1b-score.json` and exits 1 on any FAIL.
+- It writes `truth/m1b-score.json` (`purge.rig.m1b-score/2`, with `gate` and `not_gate_because`).
 - A missing input gives a FAIL line; nothing is skipped.
+- **RUN**: every app and trap run finished, every phase ok; each set has at least 2 null runs for its ambient set, each
+  finished with every phase ok (R4b S2 rest). Ruling 2026-11-18: each app and trap run must have installed its
+  target: collect records run.json's `main` entry and `entries_created` against `lists-<run>-0.json` (same key, or
+  same MSI product code); a target already in lists-0, no entry created, or either unreadable is "INVALID RUN"
+  (FAIL). Null runs install nothing and are excepted. A trap run judges TrapA (7zip, run.json `main`) only: TrapB
+  (node) is a pre-app installed before lists-0 on purpose, so its entry in lists-0 is expected (on dirty-base an
+  already-installed node serves as the app that stays); the run is invalid when `main` is a `pre` entry, when the pre
+  record is missing, or when TrapA's entry is not among `entries_created`. Review R5 S2: runsum writes `main_is_pre`
+  null (not false) when run.json has no `pre` or an empty one, so "no pre record" is INVALID through the real runsum.
+- **BIND**: each run's build record names its run.json (SHA-256), the engine did not change during the campaign, the
+  sources were clean, one engine and one commit over all runs, the budgets' M1b engine is that engine, and the trap file
+  and label files are the committed ones with each run's label id equal to its app id. Review R4c S3: every run holds
+  the same rig input hashes (12.2), unchanged during the campaign, clean against HEAD, and their trap and label files
+  are the files scored with. Review R4c S2: the replay score has its `replay` block for the five runs, the runs'
+  commit, clean engine sources and the current frozen truths. Review R4d S1: `truth/deny.json` (also against the
+  manifest's `deny_sha256`) and every file under `truth/frozen` are rig inputs as well and must be the committed
+  files. Review R4d S3: the replay block's `diff_sha256` is the SHA-256 of the evidence's `replay-diff.json` and
+  `diff_exit` is 0.
+- **FROZEN**: `truth/frozen/<app>/truth.json` exists for powershell and temurin.
+- **SANITY** (review R4c S4, as m1a.sh's sanity step): each rig-base run's truth against `truth/frozen/<id>/truth.json`
+  where one exists (7zip, python, node, vcredist, powershell, temurin), items keyed with random names normalised as the
+  freeze compares them. A frozen leftover or user_data item that the run labels otherwise fails. Items on one side only
+  (a launch that did nothing, an uninstall that removed more or less) are counted and listed in the note for the gate
+  report, not failed. The dirty and Clean-Pro sets have no frozen truth. Review R4d S2: a frozen item is matched by
+  its exact target first; only when the run has no item with that exact target does the normalised key decide, and
+  then the run's ambient items under that key do not count (a key with only ambient items is "frozen only"), so
+  Windows' `%TEMP%\<hex>.tmp` beside the bundle's `DEL<hex>.tmp` is no relabel. R4d N2: an app of those six whose
+  frozen truth cannot be read FAILS.
+- **K4/K7 G1**: the replay score must hold a purge score for each of the five runs (one row each); another app fails.
+  R4d N1: a replayed plan without `truth_n` / `offered_n`, or with truth items and nothing offered, fails K4 G1.
+- **K1 and K8 vcredist** (ruling 2026-11-18) count danger offered: rigtool's `danger_offered`, the danger items listed
+  in any band but Blocked. A danger item listed Blocked (deny-listed, report only, e.g. REF-ANY's hit on the bam
+  `UserSettings` value naming the Package Cache) is `danger_kept` and is named in the note. `danger_listed`,
+  `danger_offered`, `danger_kept` and the `danger` list must be present and agree, else FAIL. K8 runs over each set's
+  own app list. Review R5 S3: a Blocked danger item is accepted only when its blockers, read from the run's scan
+  sidecar (`<set>-<id>-scan.json`, matched by target: case, hive spellings, `HKU\<sid>` as HKCU, CurrentControlSet as
+  ControlSet001), include `DenyListed`; another blocker (`NotGone`, `TooLarge`, ...), none, or no scan item FAILS, and
+  the note names the blockers. Review R5b N1: blockers are never merged. The scan items of the exact key (the SID of
+  `HKU\<sid>` kept) are taken first; only when there is none, the `HKU\<sid>` -> HKCU fold, and then only items whose
+  SID agrees with the target's (HKCU or the same SID); matched items in two different users' hives FAIL. Every matched
+  scan item must carry `DenyListed`, so a deny-listed item in one hive never covers another blocked otherwise.
+- **Notices** (user ruling 2026-11-18, review R5 B1): a plan item whose action is `ReportOnly` and that carries
+  `suggest_uninstall` (SYS-BURNDEPS rule (c), "uninstall the Python Launcher yourself") is a notice, not an offer or a
+  listing. Collect's plan step copies the fact from the scan item's evidence into the plan item (`suggest_uninstall`);
+  rigtool score takes such items out of every count (danger offered, listed and kept, precision, recall,
+  `protected_correct`, `offered_n`, `items`) and lists them under `notices` (target, band, `suggest_uninstall`, what it
+  would have scored, the truth items it lies on), also in the score's markdown. Narrow: any other action, no
+  `suggest_uninstall`, a preselected item or a Safe band keeps the item an ordinary one (on a kept_owner target: danger,
+  K1/K5/K6 fail). Only K8 scores notices.
+- **K8 python** (review R5 B1, B2): rig-base (G2) and Clean-Pro (G8) python, where the Launcher is left orphaned: at
+  least one suggestion in the scan sidecar, all `ReportOnly`, and each a notice in the score (same `suggest_uninstall`
+  names; a score without `notices` fails). dirty-base python (G3): Python 3.11.9 and 3.13.1 stay and the Launcher is
+  3.13.1's, so the correct result is no suggestion (coordinator ruling 2026-11-18, a design fact, not a loosening); a
+  suggestion, or any scan item on the Launcher (its product codes, or `C:\Windows\py.exe`, `pyw.exe`,
+  `pyshellext.amd64.dll`) listed in any band but Blocked with an action other than `ReportOnly`, FAILS. Blocked
+  Launcher items are the design's "stays Protected". python312-with-313 (G2, G3): no suggestion.
+  Review R5b S1: rigtool takes notices out of K1-K6 for every app, so K8 scores all of them. On rig-base and
+  Clean-Pro each python notice must sit on the Launcher's own Uninstall key (`K:` HKLM or HKCU, optional
+  `WOW6432Node`, `...\CurrentVersion\Uninstall\{<code>}` with one of the Launcher product codes the dirty check uses);
+  any other notice FAILS. One more K8 row per set, "notices elsewhere": every other app of the set must have
+  `notices == []` (a missing list FAILS).
+- **K1-K6** fail on an empty plan (truth items but nothing offered) or a score without counts.
+- **K9** needs every case and `com-shared-class#between` planted ok, every expectation target among the planted objects
+  (an object that already existed counts and is reported; a note-only or missing one fails), TrapA 7zip and TrapB node.
+- **K14** needs exactly 12 budget runs (2 engines x 2 steps x 3 rounds), each exit 0, round 1 cold and the others warm,
+  and the M1b cold round's cache moved aside or absent (`cold_cache_state`; `kept` fails). Review R5 B3: per cold
+  step too (`cold_cache_steps` `harvest` and `scan` each `moved` or `absent`; a record without them, budgets/2, fails):
+  the cold harvest fills the cache, so a cold scan after it without a second move reads no tables. Ruling 2026-11-18:
+  - **warm MSI table cache**: every warm M1b log has `timing: msi_table_cache disk <path> hits=N misses=M` with
+    N >= 1 (a `memory` line or no line fails), and its `timing: total:` line reads fewer `sys.msi_tables` than the
+    cold round of the same step (a total line without the counter counts 0; a missing total line, or a cold round
+    with 0, fails).
+  - **like for like**: every harvest log of both engines has the summary line `harvest: ...; N root(s), ...;
+    K co-product candidate(s); ...`, with the same N >= 1 throughout and K = 0; else "not like for like".
+- **K16** needs `purge.replay-diff/3`, exactly the five reasons, all five replay apps, 0 unexplained rows, and every
+  promotion (band rose or became preselected) marked `promotion_justified` and listed in `justified_promotions` with a cause.
+
+Exit codes: 0 the gate passed in the default configuration; 1 a FAIL; 2 usage; 3 everything passed but it is not a gate
+score (`--evaluate`, or any M1B_* list, label map or input path other than the default). `--config` prints the configuration.
 
 Options:
-- `--evaluate DIR` runs only the evaluate stage on DIR.
-- `--selftest` runs the four package tests against `truth/_m1b_sample`. That evidence is SYNTHETIC (see its manifest).
-- App, set or trap lists other than the defaults are recorded as `gate_config: custom`.
+- `--evaluate DIR` runs only the evaluate stage on DIR (exit 3 at best).
+- `--selftest` builds a SYNTHETIC passing evidence dir (`truth/m1b-fixture.py`) and checks that it exits 0, that each
+  bad-run control (missing plant, failed plant phase, empty plan, unbound or rebuilt engine, dirty sources, two commits,
+  changed traps or labels, label override, budget exit/rounds/cache, unexplained or unlisted promotion; since R4c a
+  replay score short of a run or unbound, rig inputs missing, dirty, differing between runs or edited before the
+  campaign, a frozen leftover relabelled, a missing run truth, too few or broken null runs; since 2026-11-18 danger
+  offered at Likely or Safe and danger counts that disagree (K1, K8), a target already in lists-0, no entry created or
+  lists-0 unreadable (RUN), a relabel by normalised name and an unreadable frozen truth (SANITY), a changed or unbound
+  deny list or frozen truth, an unbound or failed replay diff (BIND), an empty replayed plan (K4), and a memory or
+  missing cache line, a warm round without hits or reading the tables, a root count that differs, a co-product, a
+  missing harvest line (K14); since R5 a Blocked danger item whose scan blocker is not DenyListed or unknown (K1,
+  K8), a suggestion that is no notice in the score, a score without notices, a suggestion not ReportOnly, no Clean-Pro
+  suggestion, a suggestion or an offered Launcher item on dirty-base (K8), a cold scan that read no tables or whose
+  cache was not moved (K14), a rigtool not bound to its sources (BIND); since R5b a notice on another app or on a key
+  that is not the Launcher's Uninstall key, a missing notices list on another app (K8), a deny-listed scan item in
+  another user's hive or beside a non-deny-listed one on the same key (K1)) fails on its named criterion, while the positive controls (a Blocked danger item, an
+  ambient item sharing a frozen leftover's normalised name, ...) still pass; that every non-default setting gives
+  exit 3; that `replay` with stub cargo xtask, rigtool and git writes a score the gate passes with (fails K4 G1 when
+  a run is missing; with a failing replay-diff the stale diff is gone and K16 and BIND fail); that `runsum`
+  records the target against lists-0 (and, R5 S2, a trap run without a pre record is INVALID through it); that
+  `rigtool_check` refuses a binary with other or no source hash and a dirty `vm/rigtool`, and collect then exits 2
+  (R5 S1); and that `plan_actions` copies `suggest_uninstall` only onto the suggestion (R5 B1).
 
 `m1b-budgets` runs on the host and only reads:
+- It must run elevated (review R5 N1): unelevated it refuses with "run elevated" (users cannot read the data root's DACL,
+  and the engine cannot recreate `fp\msitables` after it is moved aside).
+- It refuses to start unless `%ProgramData%\Purge` is the admin-only data root (`Get-PurgeDataRootVerdict`: install.ps1's
+  `Test-Tree` against `Get-PurgeDataLayout` gives `good`; run `install\install.ps1` first). Without it the engine's MSI
+  table cache falls back to memory and every round is cold (ruling 2026-11-18).
+- The program (`-Program`) is one MSI app that both engines find an install root for and that has no co-product
+  candidate (ruling 2026-11-18; K14 "like for like" checks it). PuTTY is not one: the M2 head found no root for it
+  and skipped the anchor pass the M1b engine ran.
 - For each engine it runs `harvest <program>` and then `scan --mode forced` with `PURGE_TIMING=1`, for 3 rounds. Round 1 is cold; rounds 2 and 3 are warm.
-- Before the M1b engine's cold round, the MSI table cache `%ProgramData%\Purge\fp\msitables` is moved aside. The moved folder is left for the operator to delete.
+- Before each step of the M1b engine's cold round (the harvest, and again the scan: review R5 B3, the cold harvest
+  fills the cache), the MSI table cache `%ProgramData%\Purge\fp\msitables` is moved aside to
+  `msitables.m1b-budgets-<step>-<stamp>`; budgets.json (`purge.rig.m1b-budgets/3`) records `cold_cache_steps` and
+  `cold_cache` per step. Warm rounds keep the cache the cold scan rebuilt. The moved folders are left for the operator
+  to delete.
 - The stderr of each step goes to `runs/m1b-budgets/<engine>-<step>-<round>.log`.
-- m1b.sh reads two things from each log: the `[ N.NNNs]` end stamp (the total time) and the `timing: phase` lines (refscan count, ownership.components, ownership.tables).
+- m1b.sh reads from each log: the `[ N.NNNs]` end stamp (the total time), the `timing: phase` lines (refscan count,
+  ownership.components, ownership.tables), the `timing: msi_table_cache` line, the `sys.msi_tables` count of the
+  `timing: total:` line and the `harvest:` summary line (root and co-product counts).
 - The warm figure is the median of the warm rounds, compared with the M2 head measured in the same session.
 
 Notes on individual criteria:
-- **K5** needs n >= 29 for each of the two Python pairs. Doubt: 3.13 or 3.12 is a pre-app installed before snap0, so the
-  Launcher items may not appear in the diff at all.
-- **K6** counts leftovers outside Safe and Likely. FS-TEMP leftovers are Weak/Unchecked by design (FROZEN.md), so they fail it.
+- **K5** needs n >= 29 for each of the two Python pairs (not lowered). Before 2026-11-17 python312-with-313 reached 0 of
+  the 29 (R4b S5): 3.13 and the launcher are installed before snap 0, so the diff never saw them. The truth now adds
+  the kept launcher's pre-state objects (section 12.4, `prestate`); the counts of the first pair runs are in 12.4.
+- **K6** (review R4b B2, following the M1a gate): a mismatch is an item whose band would offer or preselect it wrongly:
+  preselected below Safe, a band the policy does not have, user data preselected, or a protected truth item listed below
+  Protected. A true leftover listed Weak or Blocked is a recall miss, as the M1a gate counted it (recall_visible_nd covers
+  Safe and Likely only). It is reported in K6's note, not counted. M1b has no recall criterion.
 - **K7** is checked per set and on the replay.
 
 ### 12.6 Freeze
 
-1. Run `rig.ps1 -Mode m1b-freeze` (4 VM runs).
+1. Run `rig.ps1 -Mode m1b-freeze` (6 VM runs: per round one null run `m1b-fz<k>-null1`, then the two apps; `-Nulls n`
+   for more null runs).
 2. Run `bash truth/m1b.sh freeze powershell`, then `bash truth/m1b.sh freeze temurin`. For each app this:
-   - computes the truth of both runs with `truth/ambient.json`, the label file and `_os-servicing.json`
-   - checks that the non-ambient item sets of the two runs agree. If they do not, it exits 1 and prints the diff.
-   - copies run 1 to `truth/frozen/<id>/{truth.json, run.json}` and run 2's truth to `truth-fz2.json`
+   - builds the freeze's ambient set: `truth/ambient.json` plus the freeze null runs (`rigtool ambient`), as M0 and M1a
+     built theirs from the null runs of the same campaign (the M0 set alone is stale: the first attempt on 2026-11-17
+     differed in 35 and 26 items, all Windows churn)
+   - computes the truth of both runs with that set, the label file, `_os-servicing.json` and `_m1b-noise.json`, then
+     the m1b.sh post step (temp packages, `prestate`)
+   - applies the freeze rule (pyeval `freezecmp`): both runs must be whole (every phase ok, install and uninstall exit 0
+     or 3010, ARP entry gone) and give the same label to every item they share, compared with random names normalised
+     (GUIDs, numbers of 6+ digits, the random part of `%TEMP%` names, as m1a.sh's sanity step); else exit 1. An item
+     present in **one run only** is churn or chance: it is excluded from the frozen truth and listed under
+     `freeze.excluded` with the label it had. It is never frozen as a leftover.
+   - writes `truth/frozen/<id>/{truth.json, truth-fz2.json, run.json}` (the truths carry a `freeze` block)
 3. Describe the result in FROZEN.md.
+
+**Noise list** (`truth/labels/_m1b-noise.json`, hand-written, ruling 2026-11-17). Windows-owned areas whose state
+changes on Windows' own schedule or belongs to a Windows store, seen in the freeze captures: WNS channel backups and
+SystemAppData activity of inbox Windows components (`MicrosoftWindows.*_cw5n1h2txyewy` only; an app's own channel stays
+the app's), IRIS, Desktop Spotlight, the rules engine, the shell's component-category cache and `TaskbarStateLastRun`,
+the font cache, BitLocker telemetry, the hive defrag counter, Security Center provider state, DiagTrack downloaded
+settings, `Installer\TempPackages`, the Windows Update SLS cache and the .NET servicing `BreadcrumbStore`. Every rule is
+`ambient` (never `first`), so it can only take an item out of the leftover set. m1b.sh passes it to every M1b truth
+(collect and freeze) and hashes it into each run's label digest (BIND). A leftover `C:\Windows\Installer\<x>.msi`
+that snap 2's `Installer\TempPackages` names (msiexec deletes it itself) is relabelled ambient by m1b.sh. A
+`kept_owner` rule cannot be overridden by it in practice: the selftest
+(`churn_noise_list_windows_owned_and_never_an_app_item`) checks that every rule lies under a Windows-owned root, matches
+its recorded churn samples, and matches no leftover, user_data or kept_owner item of any frozen truth (M0 and M1b), nor
+a PowerShell or Temurin object. The selftest's `churn_*` controls check the freeze rule on synthetic runs.

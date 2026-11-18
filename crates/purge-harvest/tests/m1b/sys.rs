@@ -130,6 +130,30 @@ fn sys_service_under_systemroot_not_recorded() {
     );
 }
 
+/// Hostile (smoke trap svc-svchost): a service hosted by svchost whose `ServiceDll` is a file in the
+/// app's root shares a Windows process; the guard judges it by its host and it is not recorded.
+#[test]
+fn sys_service_svchost_with_dll_in_root_not_recorded() {
+    let key = r"HKLM\SYSTEM\ControlSet001\Services\ToolSvcHost";
+    let b = service(
+        tool().file(&format!(r"{APP}\toolhost.dll"), 1_000),
+        "ToolSvcHost",
+        r"%SystemRoot%\System32\svchost.exe -k ToolGroup",
+    )
+    .expand_sz(
+        &format!(r"{key}\Parameters"),
+        "ServiceDll",
+        &format!(r"{APP}\toolhost.dll"),
+    )
+    .dword(key, "Type", 0x20);
+    let report = harvest_of(&b.build(), "Tool");
+    assert!(
+        report.fingerprint.sys.services.is_empty(),
+        "{:?}",
+        report.fingerprint.sys.services
+    );
+}
+
 #[test]
 fn sys_task_all_actions_must_be_owned() {
     let tool_exe = format!(r"{APP}\tool.exe");

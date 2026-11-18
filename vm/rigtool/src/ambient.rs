@@ -109,12 +109,54 @@ impl GuidVariation {
     }
 }
 
+/// A random temp name: `<3 to 8 hex digits>.tmp` directly in a folder named `Temp` (`%TEMP%\6D5C.tmp`, what
+/// `GetTempFileName` makes; m1b.sh's freeze normalises the same part, FZ_TEMP). Group 1 is the folder.
+fn temp_name_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)^(.*\\temp)\\[0-9a-f]{3,8}\.tmp$").unwrap())
+}
+
+/// A log file directly in a folder named `logs` (`C:\Program Files (x86)\Steam\logs\service_log.txt`). Group 1 is
+/// the folder.
+fn log_dir_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)^(.*\\logs)\\[^\\]+\.(?:txt|log)$").unwrap())
+}
+
+/// Folder-level rules for paths a null run created (ruling 2026-11-18, M1b G3: dirty-base truth noise), each needing
+/// a null run's item as its evidence, the folder kept literal (its own random tokens generalised as usual):
+/// - a `%TEMP%`-style random temp name (`temp_name_re`) matches any other `<3 to 8 hex>.tmp` in the same `Temp`
+///   folder, and what lies below it. Every dirty-base run, null runs too, leaves one (`6D5C.tmp`, `6194.tmp`); the
+///   token rules leave a 4-digit hex name literal. Names with other letters (`DELEAE3.tmp`, `tem5A6A.tmp`,
+///   `~nsuA.tmp`) are not covered: frozen truths hold such names as app leftovers.
+/// - a new `.txt` / `.log` file directly in a folder named `logs` (`log_dir_re`) matches any new `.txt` / `.log`
+///   file directly in that folder: a program running in the background (the Steam client that setup-dirty installs)
+///   writes a different set of logs in each run. Narrow on purpose: a folder-level rule for every folder a null run
+///   adds files to would also cover `%TEMP%` and `C:\Windows\Prefetch`, where every app leaves its own objects.
+fn generalize_folder(kind: &str, body: &str, var: &GuidVariation) -> Option<String> {
+    if kind != "P" {
+        return None;
+    }
+    let folder = |dir: &str| generalize_body("P", dir, var).unwrap_or_else(|| regex::escape(dir));
+    if let Some(c) = temp_name_re().captures(body) {
+        return Some(format!(r"^P:{}\\[0-9a-f]{{3,8}}\.tmp(?:\\.*)?$", folder(&c[1])));
+    }
+    if let Some(c) = log_dir_re().captures(body) {
+        return Some(format!(r"^P:{}\\[^\\]+\.(?:txt|log)$", folder(&c[1])));
+    }
+    None
+}
+
 /// Generalize a canonical target string: hex runs of 16+ and numbers of 6+ digits become typed wildcards, and a
-/// GUID does too where `var` saw it vary (see `GuidVariation`); other GUIDs stay literal. Returns an anchored
-/// regex (case-insensitive use), or None if nothing was random. Path/key patterns also match descendants; value
+/// GUID does too where `var` saw it vary (see `GuidVariation`); other GUIDs stay literal. A path that one of the
+/// folder-level rules covers (`generalize_folder`) gets that rule instead. Returns an anchored regex
+/// (case-insensitive use), or None if nothing was random. Path/key patterns also match descendants; value
 /// patterns match `V:` and `C:` alike.
 pub fn generalize(cs: &str, var: &GuidVariation) -> Option<String> {
     let (kind, body) = cs.split_once(':')?;
+    if let Some(p) = generalize_folder(kind, body, var) {
+        return Some(p);
+    }
     let out = generalize_body(kind, body, var)?;
     let prefix = match kind {
         "V" | "C" => "[VC]:".to_string(),
@@ -590,6 +632,49 @@ mod tests {
                 .is_some()
         );
         assert!(r.matches(&k("HKLM\\SOFTWARE\\Other\\Tasks\\{0C1B2C3D-0000-1111-2222-333344445555}")).is_none());
+    }
+
+    /// Ruling 2026-11-18 (M1b G3): the dirty-base null runs' `%TEMP%\<hex>.tmp` and Steam client logs cover the
+    /// same churn in an app run, and nothing else: no other folder, no other name shape, no frozen app leftover.
+    #[test]
+    fn folder_rules_temp_names_and_log_folders() {
+        let t = |p: &str| Target::Path { path: p.into() };
+        let temp = "C:\\Users\\tester\\AppData\\Local\\Temp";
+        let steam = "C:\\Program Files (x86)\\Steam\\logs";
+        // m1bd-null1 / m1bd-null2 of the failed campaign
+        let null = vec![format!("P:{temp}\\6D5C.tmp"), format!("P:{steam}\\appinfo_log.txt")];
+        let var = GuidVariation::from_items(null.iter());
+        let pats: Vec<String> = null.iter().filter_map(|c| generalize(c, &var)).collect();
+        assert_eq!(pats.len(), 2, "{pats:?}");
+        let m = Matcher::new("n", &null, &pats).unwrap();
+        // the dirty temurin run's two "leftovers"
+        assert!(m.matches(&t(&format!("{temp}\\6194.tmp"))).is_some());
+        assert!(m.matches(&t(&format!("{steam}\\service_log.txt"))).is_some());
+        // other temp-name lengths of the same shape (GetTempFileName: up to 4 hex digits; 3 to 8 allowed)
+        assert!(m.matches(&t(&format!("{temp}\\abc.TMP"))).is_some());
+        assert!(m.matches(&t(&format!("{temp}\\0123abcd.tmp\\x.dat"))).is_some());
+        assert!(m.matches(&t(&format!("{temp}\\0123abcde.tmp"))).is_none());
+        assert!(m.matches(&t(&format!("{temp}\\ab.tmp"))).is_none());
+        // frozen app leftovers keep their label: other name shapes in %TEMP% (python, vcredist, npp, firefox, git)
+        for leftover in
+            ["DELEAE3.tmp", "DEL3917.tmp", "tem5A6A.tmp", "~nsuA.tmp", "is-TU8SYANY8F-uninstall.tmp", "6D5C.log"]
+        {
+            assert!(m.matches(&t(&format!("{temp}\\{leftover}"))).is_none(), "{leftover}");
+        }
+        // another folder named Temp is not covered by this folder's rule
+        assert!(m.matches(&t("C:\\Windows\\Temp\\6194.tmp")).is_none());
+        // the log rule: new .txt / .log files directly in that logs folder only
+        assert!(m.matches(&t(&format!("{steam}\\webhelper.log"))).is_some());
+        assert!(m.matches(&t(&format!("{steam}\\crash.dmp"))).is_none());
+        assert!(m.matches(&t(&format!("{steam}\\sub\\x.txt"))).is_none());
+        assert!(m.matches(&t(&format!("{steam}\\x.txt\\y"))).is_none());
+        assert!(m.matches(&t("C:\\Program Files (x86)\\Steam\\service_log.txt")).is_none());
+        assert!(m.matches(&t("C:\\Program Files\\App\\logs\\a.txt")).is_none());
+        assert!(m.matches(&Target::RegKey { path: format!("HKLM\\SOFTWARE\\{steam}\\a.txt") }).is_none());
+        // no evidence, no rule: a run without such items gives no folder pattern
+        assert_eq!(generalize("P:C:\\Program Files\\App\\app.exe", &var), None);
+        assert_eq!(generalize("P:C:\\Program Files\\App\\logs", &var), None);
+        assert_eq!(generalize("K:HKLM\\SOFTWARE\\Temp\\6D5C.tmp", &var), None);
     }
 
     fn run_matcher(cs: &[String], var: &GuidVariation) -> Matcher {

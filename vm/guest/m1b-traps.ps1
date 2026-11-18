@@ -771,6 +771,14 @@ function Invoke-M1bPhase([string]$Step, [string[]]$Ids, [string]$Dir) {
     $doc = Read-M1bJson $plantF
     $cases = [ordered]@{}
     if ($doc) { foreach ($p in $doc.cases.PSObject.Properties) { $cases[$p.Name] = $p.Value } }
+    # A failed plant phase stops the run (review R4b S1): after a failed case of an earlier phase, a later phase plants
+    # nothing and fails too (run-app.ps1 ends the run at the first failed m1b-traps phase; truth\m1b.sh K9 needs every
+    # case planted).
+    $earlier = @($cases.Values | Where-Object { $_ -and -not $_.ok } | ForEach-Object { "$($_.id) ($($_.phase))" })
+    if ($Step -ne 'pre' -and $earlier.Count) {
+        Log ("  !! m1b-traps {0}: refused, an earlier phase failed: {1}" -f $Step, ($earlier -join ', '))
+        return $earlier.Count
+    }
     $todo = New-Object System.Collections.ArrayList
     if ($Step -eq 'post') {
         # A between step the host did not run goes first.

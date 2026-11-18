@@ -223,6 +223,7 @@ fn msi_released(ctx: &ScanCtx<'_>, burn: Option<&BurnFacts>, code: &str) -> bool
         cache_path: None,
         packages: Vec::new(),
         dependents_at_harvest: Vec::new(),
+        linked: Vec::new(),
     };
     let facts = burn.unwrap_or(&empty);
     let as_package = facts.packages.iter().filter(|p| {

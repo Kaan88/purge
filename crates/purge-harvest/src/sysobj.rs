@@ -31,7 +31,8 @@
 //! app's own MSI whose component has no other client). A handler of any other class, or one without a
 //! CLSID, records nothing, as before; a task without actions (unreadable) records nothing. An object
 //! [`DenyList::check_object`] blocks (drivers, per-user services, objects marked for delete, Windows'
-//! own, AppX-bound or resource-named rules) is not recorded.
+//! own, a service hosted by svchost whatever folder its DLL is in, AppX-bound or resource-named rules)
+//! is not recorded.
 //!
 //! Every recorded object stores its identity as read; the scanner compares its digest after the
 //! uninstall. At most [`MAX_OBJECTS`] objects are recorded; beyond that the lists are cut with a warning.
@@ -145,7 +146,8 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
         let name = service.identity.name.as_str();
         let facts = ObjectGuardFacts {
             name_or_path_or_id: name,
-            program: Some(program),
+            // The host command of a service hosted by svchost, not its DLL: never recorded.
+            program: service.guard_program(),
             service_type: Some(service.identity.service_type),
             delete_flag: service.delete_flag,
             per_user_template: service.per_user_template,

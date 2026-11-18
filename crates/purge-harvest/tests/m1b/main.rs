@@ -3,6 +3,7 @@
 //! fixture built in code; the M1a golden documents are in `tests/data/m1b/`.
 
 mod burn;
+mod coshared;
 mod golden;
 mod msi;
 mod shapes;

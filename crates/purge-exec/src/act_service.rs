@@ -630,6 +630,30 @@ fn resolve_file(raw: &str, env: &ProgramEnv) -> Option<String> {
     canonical_program(&path, env)
 }
 
+/// Whether a program path names a file called `svchost.exe` (the index's `ServiceFacts::svchost`).
+fn is_svchost_exe(exe: &str) -> bool {
+    exe.rsplit(['\\', '/'])
+        .next()
+        .is_some_and(|leaf| leaf.trim().eq_ignore_ascii_case("svchost.exe"))
+}
+
+/// The text the guard's object rules judge for a service (the index's `ServiceFacts::guard_program`):
+/// the `ImagePath` command itself when it runs a file called `svchost.exe`, so that a service hosted
+/// by svchost is judged by its host (`sys.service.windows`), never by its `ServiceDll`; else the
+/// program ([`ServiceProgram::guard_text`]).
+fn guard_program_text<'a>(
+    identity: &'a ServiceIdentity,
+    program: &'a ServiceProgram,
+    env: &ProgramEnv,
+) -> &'a str {
+    let raw = identity.image_path.as_deref().unwrap_or("");
+    if command_exe(raw, env).is_some_and(|exe| is_svchost_exe(&exe)) {
+        raw
+    } else {
+        program.guard_text()
+    }
+}
+
 /// The program of a service identity (see [`ServiceProgram`]).
 pub fn service_program(identity: &ServiceIdentity, env: &ProgramEnv) -> ServiceProgram {
     let raw = identity.image_path.as_deref().unwrap_or("");
@@ -637,11 +661,7 @@ pub fn service_program(identity: &ServiceIdentity, env: &ProgramEnv) -> ServiceP
     let Some(exe) = command_exe(raw, env) else {
         return unresolved();
     };
-    let is_svchost = exe
-        .rsplit(['\\', '/'])
-        .next()
-        .is_some_and(|leaf| leaf.trim().eq_ignore_ascii_case("svchost.exe"));
-    if is_svchost {
+    if is_svchost_exe(&exe) {
         let system = canonical_program(&exe, env).is_some_and(|exe| {
             env.windir.as_deref().is_some_and(|windir| {
                 ["System32", "SysWOW64"].iter().any(|dir| {
@@ -705,7 +725,8 @@ fn api_failed(name: &str, e: &ObjErr) -> TypedResult {
 
 /// Why `live` must not be deleted, judged on facts read now, in this order: the guard's `check_object`
 /// (`sys.driver` for a driver or unknown type, `sys.service.peruser`, `sys.service.marked`, the
-/// baseline, `sys.service.windows` for a program under `%SystemRoot%`), a type that is not a plain Win32
+/// baseline, `sys.service.windows` for a program under `%SystemRoot%`, which a service hosted by
+/// svchost always is: it is judged by its host, not its `ServiceDll`), a type that is not a plain Win32
 /// service (`sys.driver`), dependents (`HasDependents`), a state other than stopped (`InUse`).
 ///
 /// The baseline fact is not known to the executor and is passed as false: the scan applied it, and the
@@ -716,7 +737,7 @@ pub fn gate_blocker(deny: &DenyList, live: &ServiceLive) -> Option<(Blocker, Str
     let program = service_program(&live.identity, &env);
     let facts = ObjectGuardFacts {
         name_or_path_or_id: name,
-        program: Some(program.guard_text()),
+        program: Some(guard_program_text(&live.identity, &program, &env)),
         service_type: Some(live.identity.service_type),
         delete_flag: live.delete_flag,
         per_user_template: live.per_user_instance,

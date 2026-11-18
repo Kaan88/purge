@@ -238,7 +238,8 @@ public sealed partial class ReviewView : UserControl
         CopyButton.IsEnabled = on;
         if (i is null) return;
         if (i.Band == LeftoverBand.Blocked || !i.Selectable)
-            DIfRemoved.Text = i.Action == "RemovePackage" ? "Package removal cannot be undone; not offered in this build"
+            DIfRemoved.Text = i.IsUninstallNotice ? $"Notice only: consider uninstalling {i.SuggestUninstall} yourself; Purge removes nothing here"
+                : i.Action == "RemovePackage" ? "Package removal cannot be undone; not offered in this build"
                 : i.Action == "ReportOnly" ? "Shown for information only" : "Purge never removes it";
         else
             DIfRemoved.Text = (i.Action switch
@@ -641,6 +642,12 @@ public sealed partial class ReviewView : UserControl
             $"Found {plan.Items.Count} {(plan.Items.Count == 1 ? "item" : "items")}; the engine ticked {ticked}.",
             string.Join(" · ", byBand) + (plan.Absorbed > 0 ? $" · {plan.Absorbed} absorbed by a parent" : "")
             + " · Review the list; Export plan saves it for the CLI.");
+        var suggestions = plan.Items.Where(i => i.IsUninstallNotice).Select(i => i.SuggestUninstall)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (suggestions.Count > 0)
+            AddInfo(InfoBarSeverity.Informational, "Consider uninstalling: " + string.Join(", ", suggestions),
+                "The removed program's installer put it there and left it installed, and no other installer still depends on it. This is a suggestion only: Purge does not remove it; " +
+                "uninstall it from Programs (or Windows Settings) if you no longer need it.");
         if (plan.Warnings.Count == 0) return;
         var all = new Button { Content = $"All warnings ({plan.Warnings.Count})" };
         all.Click += async (_, _) => await ShowTextAsync("Engine warnings", string.Join(Environment.NewLine + Environment.NewLine, plan.Warnings));
@@ -818,6 +825,7 @@ public sealed partial class ReviewView : UserControl
                 };
                 var why = i.Explanation.Length > 0 ? i.Explanation : i.Category;
                 if (i.Action == "RemovePackage") why += " · package removal is not in this build";
+                if (i.IsUninstallNotice) why = $"Notice: consider uninstalling {i.SuggestUninstall} (Programs) · {why}";
                 if (i.ObjectNote is { Name.Length: > 0 } note && i.TargetType == "FirewallRule") why = $"\"{note.Name}\" · {why}";
                 var kind = i.IsFile ? LeftoverKind.File : i.IsRegistry ? LeftoverKind.Registry : LeftoverKind.Task;
                 var size = i.SizeBytes is { } b ? ProgramRow.FormatSize(b)

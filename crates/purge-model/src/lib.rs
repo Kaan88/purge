@@ -50,8 +50,8 @@ pub use fingerprint::{
     VendorBackup,
 };
 pub use fingerprint_m1b::{
-    BurnFacts, BurnPackage, MsiComponentFact, MsiFacts, MsiKeyPath, MsiRegRow, MsiServiceRow,
-    ObjectWhy, SysFirewallRule, SysObjects, SysService, SysTask,
+    BurnFacts, BurnLinked, BurnPackage, MsiComponentFact, MsiFacts, MsiKeyPath, MsiRegRow,
+    MsiServiceRow, ObjectWhy, SysFirewallRule, SysObjects, SysService, SysTask,
 };
 pub use ids::{CandidateId, FileTime, ProgramId, ProgramIdError, SourceId};
 pub use inventory::{

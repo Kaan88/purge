@@ -154,7 +154,15 @@
       "*\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
       "*\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{7102CAE5-270C-4E81-AC25-27699156D8AE}"
     ],
-    "packages": []
+    "packages": [],
+    "burn_link": {
+      "bundle_providers": [
+        "CPython-*"
+      ],
+      "upgrade_codes": [
+        "{1B68A0EC-4DD3-5134-840E-73854B0863F1}"
+      ]
+    }
   },
   {
     "id": "vcredist-files",

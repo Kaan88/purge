@@ -53,6 +53,7 @@ impl World {
             inventory: &self.inventory,
             target: &self.inventory[0],
             cutoff: None,
+            shared: None,
         }
     }
 

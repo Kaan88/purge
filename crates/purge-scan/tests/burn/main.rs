@@ -11,7 +11,11 @@
 //! | per-user part | `AppBundle_User` (in the user's Classes) | `{F0F0...}` | gone |
 //!
 //! Each test changes what it needs and records what the harvest would have recorded.
+//!
+//! `tests/data/burn/python.json` is the real shape of a removed CPython bundle (vm/runs/m1b-python): no
+//! package provider record at all, the Python Launcher linked through the kb ([`world::World::python`]).
 
 mod burndeps;
+mod launcher;
 mod pkgcache;
 mod world;

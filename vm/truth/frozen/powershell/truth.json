@@ -1,0 +1,3073 @@
+{
+  "schema": "purge.rig.truth/1",
+  "id": "powershell",
+  "run": {
+    "schema": "purge.rig.run/1",
+    "id": "powershell",
+    "run": "m1b-fz1-powershell",
+    "kind": "app",
+    "tech": "MSI (WiX)",
+    "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.10/PowerShell-7.6.10-win-x64.msi",
+    "installer": "C:\\cr\\inst\\powershell.msi",
+    "installer_sha256": "7D8DAEA48B450D4D62FCD1AC4D6FAA7AC2DB5E11ABA5061EE81B7496ADCA8C07",
+    "installer_sig": "Valid CN=Microsoft Corporation",
+    "computer": "INBOUND-WIN11-T",
+    "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os": "EnterpriseSEval 26100.1742",
+    "started": "2026-11-17T01:39:23.7563370-08:00",
+    "finished": "2026-11-17T01:41:53.9122909-08:00",
+    "main": {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+      "name": "PowerShell 7-x64",
+      "version": "7.6.10.0",
+      "publisher": "Microsoft Corporation",
+      "sys": false,
+      "parent": null,
+      "uninstall": "MsiExec.exe /X{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+      "quiet": null,
+      "loc": "",
+      "icon": null,
+      "msi": "{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+      "size": 291830,
+      "install_date": "20261117",
+      "bundle": false
+    },
+    "install": {
+      "cmd": "\"C:\\WINDOWS\\System32\\msiexec.exe\" /i \"C:\\cr\\inst\\powershell.msi\" /qn /norestart /L*v \"C:\\cr\\out\\m1b-fz1-powershell\\msi-install.log\"",
+      "start": "2026-11-17T01:39:44.0665119-08:00",
+      "end": "2026-11-17T01:39:59.7762556-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "killed": [],
+      "ran_as": "elevated"
+    },
+    "launch": {
+      "done": true,
+      "exe": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      "args": "-NoLogo",
+      "start": "2026-11-17T01:40:21.0994190-08:00",
+      "end": "2026-11-17T01:40:52.2420372-08:00",
+      "found": true,
+      "closed": [
+        "pwsh.exe[7096]"
+      ],
+      "killed": [],
+      "reason": null
+    },
+    "uninstall": {
+      "cmd": "\"C:\\WINDOWS\\System32\\msiexec.exe\" /x {2E334F2C-291A-46DA-9D05-1697F697E04D} /qn /norestart /L*v \"C:\\cr\\out\\m1b-fz1-powershell\\msi-uninstall.log\"",
+      "t0": "2026-11-17T01:41:13.8693279-08:00",
+      "t1": "2026-11-17T01:41:20.0712582-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "entry_gone": true,
+      "killed": []
+    },
+    "entries_created": [
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+        "name": "PowerShell 7-x64",
+        "version": "7.6.10.0",
+        "publisher": "Microsoft Corporation",
+        "sys": false,
+        "parent": null,
+        "uninstall": "MsiExec.exe /X{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+        "size": 291830,
+        "install_date": "20261117",
+        "bundle": false
+      }
+    ],
+    "entries_left": [],
+    "edge_pause": {
+      "method": "services stopped+disabled, MicrosoftEdgeUpdate* tasks disabled, running updater waited for/killed",
+      "start": "2026-11-17T01:39:23.8137219-08:00",
+      "end": "2026-11-17T01:39:27.5822419-08:00",
+      "services": [
+        {
+          "name": "edgeupdate",
+          "present": true,
+          "start_before": "Auto",
+          "state_before": "Stopped",
+          "start_after": "Disabled",
+          "state_after": "Stopped"
+        },
+        {
+          "name": "edgeupdatem",
+          "present": true,
+          "start_before": "Manual",
+          "state_before": "Stopped",
+          "start_after": "Disabled",
+          "state_after": "Stopped"
+        }
+      ],
+      "tasks": [
+        {
+          "path": "\\MicrosoftEdgeUpdateTaskMachineCore{CE164313-0EFA-47AA-BFE3-542DFBDC1B11}",
+          "state_before": "Ready",
+          "state_after": "Disabled"
+        },
+        {
+          "path": "\\MicrosoftEdgeUpdateTaskMachineUA{1AF5BD52-7897-43AA-9607-3B16D52A4B11}",
+          "state_before": "Ready",
+          "state_after": "Disabled"
+        }
+      ],
+      "updater_seen": [],
+      "waited_sec": 0,
+      "killed": [],
+      "errors": [],
+      "versions_before": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "versions_after": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "versions_end": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "held": true
+    },
+    "planted": [],
+    "phases": [
+      {
+        "name": "edge-pause",
+        "start": "2026-11-17T01:39:23.7898334-08:00",
+        "end": "2026-11-17T01:39:27.6047759-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "setup",
+        "start": "2026-11-17T01:39:27.6094288-08:00",
+        "end": "2026-11-17T01:39:28.2106200-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "arp0",
+        "start": "2026-11-17T01:39:28.2345518-08:00",
+        "end": "2026-11-17T01:39:28.2916607-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists0",
+        "start": "2026-11-17T01:39:28.2934185-08:00",
+        "end": "2026-11-17T01:39:39.5217591-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap0",
+        "start": "2026-11-17T01:39:39.5265878-08:00",
+        "end": "2026-11-17T01:39:43.9727070-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "install",
+        "start": "2026-11-17T01:39:43.9762274-08:00",
+        "end": "2026-11-17T01:40:19.7957141-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "detect",
+        "start": "2026-11-17T01:40:19.7981728-08:00",
+        "end": "2026-11-17T01:40:19.8586848-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "launch",
+        "start": "2026-11-17T01:40:19.8599286-08:00",
+        "end": "2026-11-17T01:41:02.2530244-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists1",
+        "start": "2026-11-17T01:41:02.2569115-08:00",
+        "end": "2026-11-17T01:41:08.9823181-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap1",
+        "start": "2026-11-17T01:41:08.9834254-08:00",
+        "end": "2026-11-17T01:41:11.0745230-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "msi-tables-1",
+        "start": "2026-11-17T01:41:11.0745230-08:00",
+        "end": "2026-11-17T01:41:13.8059628-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "uninstall",
+        "start": "2026-11-17T01:41:13.8063923-08:00",
+        "end": "2026-11-17T01:41:50.0809226-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists2",
+        "start": "2026-11-17T01:41:50.0824136-08:00",
+        "end": "2026-11-17T01:41:51.7580707-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap2",
+        "start": "2026-11-17T01:41:51.7580707-08:00",
+        "end": "2026-11-17T01:41:53.8198216-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "msi-tables-2",
+        "start": "2026-11-17T01:41:53.8216145-08:00",
+        "end": "2026-11-17T01:41:53.8340387-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "edge-check",
+        "start": "2026-11-17T01:41:53.8353786-08:00",
+        "end": "2026-11-17T01:41:53.8513459-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "entries",
+        "start": "2026-11-17T01:41:53.8527121-08:00",
+        "end": "2026-11-17T01:41:53.9110306-08:00",
+        "ok": true,
+        "error": null
+      }
+    ],
+    "m1b": {
+      "msi_tables": true,
+      "traps": false,
+      "tables": [
+        "msi-tables-m1b-fz1-powershell-1.json",
+        "msi-tables-m1b-fz1-powershell-2.json"
+      ]
+    },
+    "installer_source": "host cache",
+    "installer_version": "7.6.10"
+  },
+  "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "counts": {
+    "ambient": 205,
+    "kept_owner": 2,
+    "leftover": 9
+  },
+  "counts_by_kind": {
+    "Path": {
+      "ambient": 81,
+      "leftover": 3
+    },
+    "RegKey": {
+      "ambient": 16,
+      "kept_owner": 1,
+      "leftover": 6
+    },
+    "RegValue": {
+      "ambient": 19,
+      "kept_owner": 1,
+      "leftover": 1
+    },
+    "RegValueChanged": {
+      "ambient": 88
+    }
+  },
+  "ambient_by_run": {
+    "m1b-fz1-null1": 104,
+    "m1b-fz2-null1": 105,
+    "null1": 64,
+    "null2": 67,
+    "null3": 65
+  },
+  "deny_hits": [],
+  "snaps": {
+    "s0": {
+      "file": "runs/m1b-fz1-powershell/snap-m1b-fz1-powershell-0.tsv.gz",
+      "header": {
+        "time": "2026-11-17T09:39:40Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "s1": "runs/m1b-fz1-powershell/snap-m1b-fz1-powershell-1.tsv.gz",
+    "s2": {
+      "file": "runs/m1b-fz1-powershell/snap-m1b-fz1-powershell-2.tsv.gz",
+      "header": {
+        "time": "2026-11-17T09:41:51Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "kept_entries": []
+  },
+  "items": [
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\DirectX\\{CC6BEB52-DBC0-11F1-8785-806E6F6E6963}",
+        "name": "LastSeen",
+        "before": "134393819419469885",
+        "after": "134393820023791358"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820023927748,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\DirectX\\{CC6BEB62-DBC0-11F1-8785-806E6F6E6963}",
+        "name": "LastSeen",
+        "before": "134393819419469885",
+        "after": "134393820023791358"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820023927748,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\DirectX",
+        "name": "LastSeen",
+        "before": "134393819419469885",
+        "after": "134393820023791358"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820023927748,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\ROOT\\Certificates\\8F43288AD272F3103B6FB1428485EA3014C0BCFE",
+        "name": "Blob",
+        "before": "#bb5b422ca98d923d",
+        "after": "#b5b8a052efa23e15"
+      },
+      "label": "ambient",
+      "rule": "labels: Machine certificate stores (root auto-update, pin rules) written while verifying signatures; never a cleaner target.",
+      "size": 1885,
+      "lwt": 134393819845040456,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\CIMOM",
+        "name": "List of event-active namespaces",
+        "before": "#df4d9c5d4e14550a",
+        "after": "#ae009118f7042aaa"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 46,
+      "lwt": 134393820560478451,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\CoreService",
+        "name": "MdLastHeartbeat",
+        "before": "#c1e4118c1d6a883c",
+        "after": "#345d93d4028c2b09"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820624890448,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Reporting",
+        "name": "LastHeartbeatReportTime",
+        "before": "#e785f9043ac29bdd",
+        "after": "#655f07939981add5"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393819854562204,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Spynet",
+        "name": "LastMAPSSuccessTime",
+        "before": "#3b58eafada4367ea",
+        "after": "#12124fd34772eedb"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393819955304346,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418A073AA3BC1C75",
+        "before": "#9c00144c213c0a28",
+        "after": "#0ff8865c938de1b7"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 748,
+      "lwt": 134393821086392824,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418A073AA3BC3475",
+        "before": "#8af628798bfb8d4f",
+        "after": "#7617e44568b7ac4c"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 168,
+      "lwt": 134393821086392824,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{0C9E24B1-FA69-4154-B7F3-041454657229}",
+        "name": "DynamicInfo",
+        "before": "#8e3de53b000f2fde",
+        "after": "#ab76e95a7fd58648"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820042526830,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{7F6F3E07-9CB5-42F1-AF2B-9331F44F776B}",
+        "name": "DynamicInfo",
+        "before": "#7a314118eabafa4e",
+        "after": "#e93b9a0ac30d1c39"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820754997956,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{9200022F-FF5A-4D61-8B33-B217C79086ED}",
+        "name": "DynamicInfo",
+        "before": "#4d4b8d067a38f155",
+        "after": "#e917ecab5b76eaa6"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820328579384,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{B86F17B7-0298-4679-9BEA-3567E58A7D51}",
+        "name": "DynamicInfo",
+        "before": "#81ba27bb0df65d4e",
+        "after": "#c1280c2ca17ac098"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393819876420947,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{CD644B8B-7297-4AA8-96A4-F4EC1FD24615}",
+        "name": "DynamicInfo",
+        "before": "#bcdfac5dfe0daefc",
+        "after": "#ef4508894c8c7349"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820616390144,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{F49854D8-60F3-475E-8F40-E85C4EC04138}",
+        "name": "DynamicInfo",
+        "before": "#25adeeb73b949803",
+        "after": "#ae1cb25774434cee"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820023944887,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{EBBD491B-D054-4669-AB31-07F0B5970A6F}",
+        "name": "Hash",
+        "before": "#495a1377e398653a",
+        "after": "#701a2eb2ec23c1ef"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 32,
+      "lwt": 134393820934072682,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{EBBD491B-D054-4669-AB31-07F0B5970A6F}",
+        "name": "Triggers",
+        "before": "#2fd85327b46ef5bd",
+        "after": "#3efb2297d785c028"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 320,
+      "lwt": 134393820934072682,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SoftwareProtectionPlatform",
+        "name": "ServiceSessionId",
+        "before": "#604a8ca2819805ba",
+        "after": "#7807122d5f8c2497"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 16,
+      "lwt": 134393820625932386,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Search\\UsnNotifier\\Windows\\Catalogs\\SystemIndex",
+        "name": "{3EAED263-1148-4E92-9C3C-80D5C50BD3D1}",
+        "before": "18482048",
+        "after": "21069224"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Search indexer state (USN positions).",
+      "size": 18,
+      "lwt": 134393820769584425,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Notifications",
+        "name": "LastModified_UTC",
+        "before": "2026/11/08/11:10:31",
+        "after": "2026/11/17/09:39:47"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 40,
+      "lwt": 134393819875680433,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Packages\\Windows-Defender-AM-Default-Definitions-OptionalWrapper-Package~31bf3856ad364e35~amd64~~10.0.26100.1\\Updates",
+        "name": "Windows-Defender-Default-Definitions",
+        "before": "255",
+        "after": "0"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393819875648597,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing",
+        "name": "LastModified_UTC",
+        "before": "2026/11/11/01:19:07",
+        "after": "2026/11/17/09:39:47"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 40,
+      "lwt": 134393821086378980,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing",
+        "name": "NextExecutionSequence",
+        "before": "18",
+        "after": "19"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393821086378980,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing",
+        "name": "SessionIdHigh",
+        "before": "31289832",
+        "after": "31290999"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393821086378980,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing",
+        "name": "SessionIdLow",
+        "before": "67586703",
+        "after": "2492854338"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393821086378980,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+        "name": "GlobalAssocChangedCounter",
+        "before": "1",
+        "after": "2"
+      },
+      "label": "ambient",
+      "rule": "labels: Shell association change counter (SHChangeNotify).",
+      "size": 4,
+      "lwt": 134393819965139550,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SideBySide",
+        "name": "PublisherPolicyChangeTime",
+        "before": "134386098306528935",
+        "after": "134393819865491772"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393819874132387,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\VFUProvider",
+        "name": "StartTime",
+        "before": "134388838200554326",
+        "after": "134393820600093662"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820600093662,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\WinREUninstallList",
+        "name": "Timestamp",
+        "before": "2026-11-11T14:14:51Z",
+        "after": "2026-11-17T09:41:01Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134393820613635912,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\BitLocker\\Telemetry",
+        "name": "AADBackupCheckTimestamp",
+        "before": "13438649285",
+        "after": "13439381996"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393819960975002,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\MUI\\StringCacheSettings",
+        "name": "StringCacheGeneration",
+        "before": "1",
+        "after": "3"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI string cache generation counter.",
+      "size": 4,
+      "lwt": 134393820761972411,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Configuration Manager\\Defrag",
+        "name": "TotalBytesSaved",
+        "before": "8192",
+        "after": "20480"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393819861495624,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "MicrosoftWindows.Client.CBS_cw5n1h2txyewy",
+        "before": "#7cd619a167a2d718",
+        "after": "#e0a106cb6a7fd419"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 24,
+      "lwt": 134393820617225251,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "SequenceNumber",
+        "before": "9",
+        "after": "10"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 4,
+      "lwt": 134393820617225251,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\BITS",
+        "name": "Start",
+        "before": "3",
+        "after": "2"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393820562774054,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DsmSvc\\State",
+        "name": "LastActiveTime",
+        "before": "#3040a4cb66626087",
+        "after": "#ec48b9a431de2f91"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393819914258848,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\rdyboost\\Diagnostics",
+        "name": "ReadyBootTrainingCountSinceLastServicing",
+        "before": "6",
+        "after": "7"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393819940961881,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\rdyboost\\Parameters",
+        "name": "BootPlan",
+        "before": "#8ad3603113fc0f1a",
+        "after": "#906e7b7ce926598f"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 106137,
+      "lwt": 134393819940853022,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\rdyboost\\Parameters",
+        "name": "LastBootPlanUserTime",
+        "before": "‎Wed‎, ‎Nov ‎11 ‎26, 06:13:42 AM",
+        "after": "‎Tue‎, ‎Nov ‎17 ‎26, 01:39:54 AM"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 128,
+      "lwt": 134393819940853022,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\rdyboost\\Parameters",
+        "name": "ReadyBootPlanAge",
+        "before": "2",
+        "after": "0"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393819940853022,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits\\RunTime",
+        "name": "SecureTimeConfidence",
+        "before": "7",
+        "after": "6"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393820638846571,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits\\RunTime",
+        "name": "SecureTimeTickCount",
+        "before": "7828",
+        "after": "127843"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820638846571,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "name": "SecureTimeEstimated",
+        "before": "134394970205470000",
+        "after": "134393820636430906"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820638838401,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "name": "SecureTimeHigh",
+        "before": "134395100185470000",
+        "after": "134393856636430906"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820638838401,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "name": "SecureTimeLow",
+        "before": "134392822205470000",
+        "after": "134393784636430906"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820638838401,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\Cache\\DefaultAccount\\$de${a4e98711-2506-4a5b-8f96-0f510ed03cf4}$$windows.data.unifiedtile.localstarttilepropertiesmap\\Current",
+        "name": "Data",
+        "before": "#2f517b0aefaa1096",
+        "after": "#dca5149f51011889"
+      },
+      "label": "ambient",
+      "rule": "labels: CloudStore (Start layout/tiles) blobs; rewritten whenever the app list changes.",
+      "size": 6420,
+      "lwt": 134393819985791937,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\DesktopSpotlight",
+        "name": "State",
+        "before": "{\n  \"Version\":0,\n  \"RetrieveIrisContentSuccess\":false,\n  \"RetrieveIrisContentStatusCode\":0,\n  \"RetrieveIrisContentSuccessDate\":\"\",\n  \"RetrieveIrisContentLastAttemptDate\":\"\",\n  \"RetrieveIrisContentRetryCount\":0,\n  \"RetrieveIrisContentRetryDate\":\"\",\n  \"RetryTaskCount\":0,\n  \"LastTriggerType\":3,\n  \"LastBackgroundTaskRunDate\":\"2026-11-11T15:00:51Z\"\n}",
+        "after": "{\n  \"Version\":0,\n  \"RetrieveIrisContentSuccess\":false,\n  \"RetrieveIrisContentStatusCode\":0,\n  \"RetrieveIrisContentSuccessDate\":\"\",\n  \"RetrieveIrisContentLastAttemptDate\":\"\",\n  \"RetrieveIrisContentRetryCount\":0,\n  \"RetrieveIrisContentRetryDate\":\"\",\n  \"RetryTaskCount\":0,\n  \"LastTriggerType\":0,\n  \"LastBackgroundTaskRunDate\":\"2026-11-17T09:41:01Z\"\n}"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 696,
+      "lwt": 134393820618880716,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\DesktopSpotlight",
+        "name": "UpdateTimer",
+        "before": "2026-11-11T01:00:11Z",
+        "after": "2026-11-17T09:41:01Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134393820618880716,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        "name": "TaskbarStateLastRun",
+        "before": "#d4f0444b3bcdf4e8",
+        "after": "#25453eb77c4e0042"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820047381263,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Discardable\\PostSetup\\Component Categories64\\{00021492-0000-0000-C000-000000000046}\\Enum",
+        "name": "Implementing",
+        "before": "#75dc94970e9fca3a",
+        "after": "#548f072718e71355"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 60,
+      "lwt": 134393820048851630,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+        "name": "HRZR_PGYFRFFVBA",
+        "before": "#b0207836a77877f6",
+        "after": "#8d1b821624995fb2"
+      },
+      "label": "ambient",
+      "rule": "labels: UserAssist session counter (ROT13 of UEME_CTLSESSION), updated by every launch.",
+      "size": 1612,
+      "lwt": 134393820242246925,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService",
+        "name": "IrisActionCreatives",
+        "before": "{\n  \"batchrsp\":{\n    \"ver\":\"1.0\",\n    \"items\":\n    [\n      {\n        \"item\":\"{\n          \\\"f\\\":\\\"raf\\\",\n          \\\"v\\\":\\\"1.0\\\",\n          \\\"rdr\\\":\n          [\n            {\n              \\\"c\\\":\\\"CDM\\\",\n              \\\"u\\\":\\\"ActionContent\\\"\n            }\n          ],\n          \\\"ad\\\":{\n            \\\"hst\\\":\n            [\n              \n            ]\n          },\n          \\\"tracking\\\":{\n            \\\"baseUri\\\":\\\"https://ris.api.iris.microsoft.com/v1/a/{\n              ACTION\n            }?CID=128000000004231069&region=US&lang=&oem=&devFam=WINDOWS.DESKTOP&ossku=ENTERPRISESEVAL&cmdVer=&mo=&cap=&EID={\n              EID\n            }&&PID=425848101&UIT=P-&TargetID=1&AN=716336754&PG=IRIS000001.0000000677&REQASID=27FD48156BD94912B91B39E4A7AC9EDC&UNID=88000677&ID=1070E9D717A41DBFBA27D16A42D714CC&ASID={\n              ASID\n            }&REQT=20261111T010011&TIME={\n              DATETIME\n            }&RV=&RS=&DEVOSVER=10.0.26100.1742&PERSID=1070E9D717A41DBFBA27D16A42D714CC&GLOBALDEVICEID=6755519120749112&LOCALID=w:4A7AB6",
+        "after": "{\n  \"batchrsp\":{\n    \"ver\":\"1.0\",\n    \"items\":\n    [\n      {\n        \"item\":\"{\n          \\\"f\\\":\\\"raf\\\",\n          \\\"v\\\":\\\"1.0\\\",\n          \\\"rdr\\\":\n          [\n            {\n              \\\"c\\\":\\\"CDM\\\",\n              \\\"u\\\":\\\"ActionContent\\\"\n            }\n          ],\n          \\\"ad\\\":{\n            \\\"hst\\\":\n            [\n              \n            ]\n          },\n          \\\"tracking\\\":{\n            \\\"baseUri\\\":\\\"https://ris.api.iris.microsoft.com/v1/a/{\n              ACTION\n            }?CID=128000000004231069&region=US&lang=&oem=&devFam=WINDOWS.DESKTOP&ossku=ENTERPRISESEVAL&cmdVer=&mo=&cap=&EID={\n              EID\n            }&&PID=425848101&UIT=P-&TargetID=1&AN=1954062355&PG=IRIS000001.0000000677&REQASID=E57398AE7DE34585A19A0A80A1CD6178&UNID=88000677&ID=1070E9D717A41DBFBA27D16A42D714CC&ASID={\n              ASID\n            }&REQT=20261117T094103&TIME={\n              DATETIME\n            }&RV=&RS=&DEVOSVER=10.0.26100.1742&PERSID=1070E9D717A41DBFBA27D16A42D714CC&GLOBALDEVICEID=6755519120749112&LOCALID=w:4A7AB"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 6124,
+      "lwt": 134393820629702786,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService",
+        "name": "LastContext",
+        "before": "&country=US&locale=en-US&poptin=0&fmt=json&clr=cdmlite&AllowAutoUpdate=1&MX_FlightIds=MD%3A283BAEF%2CME%3A2E30985%2CME%3A2E30A2A%2CME%3A3036FD6%2CMD%3A3037091&UpdateOptions=1&arch=AMD64&concp=0&d3dfl=D3D_FEATURE_LEVEL_11_1&devfam=Windows.Desktop&devfm=0&devosver=10.0.26100.1742&dinst=1794136152&dmret=0&drgng=244&flightbranch=&flightring=Retail&icluc=0&iepe=1&iste=1&localid=w%3A4A7AB615-C997-2237-71AF-ED4E445C5249&oem=VirtualBox&oemmsf=Virtual%20Machine&oemn=innotek%20GmbH&oemname=innotek%20GmbH&osbranch=ge_release&oslocale=en-US&osret=1&ossku=EnterpriseSEval&osskuid=129&prccn=4&prccs=3418&prcmf=GenuineIntel&procm=Intel%28R%29%20Core%28TM%29%20i7-14700KF&ram=4076&smbiosdm=VirtualBox&tinst=Client&tl=1&usri=-2&pat=0&smc=0&sac=0&disphorzres=1024&dispsize=13.3&dispvertres=765&ldisphorzres=1024&ldispvertres=765&moncnt=1&cpdsk=64362&frdsk=53841&lo=12869&tsu=12869",
+        "after": "&country=US&locale=en-US&poptin=0&fmt=json&clr=cdmlite&AllowAutoUpdate=1&MX_FlightIds=MD%3A283BAEF%2CME%3A2E30985%2CME%3A2E30A2A%2CME%3A3036FD6%2CMD%3A3037091&UpdateOptions=1&arch=AMD64&concp=0&d3dfl=D3D_FEATURE_LEVEL_11_1&devfam=Windows.Desktop&devfm=0&devosver=10.0.26100.1742&dinst=1794136152&dmret=0&drgng=244&flightbranch=&flightring=Retail&icluc=0&iepe=1&iste=1&localid=w%3A4A7AB615-C997-2237-71AF-ED4E445C5249&oem=VirtualBox&oemmsf=Virtual%20Machine&oemn=innotek%20GmbH&oemname=innotek%20GmbH&osbranch=ge_release&oslocale=en-US&osret=1&ossku=EnterpriseSEval&osskuid=129&prccn=4&prccs=3418&prcmf=GenuineIntel&procm=Intel%28R%29%20Core%28TM%29%20i7-14700KF&ram=4076&smbiosdm=VirtualBox&tinst=Client&tl=1&usri=-2&pat=0&smc=0&sac=0&disphorzres=1024&dispsize=13.3&dispvertres=765&ldisphorzres=1024&ldispvertres=765&moncnt=1&cpdsk=64362&frdsk=53841&lo=12871&tsu=12871"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 1738,
+      "lwt": 134393820629702786,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService",
+        "name": "LastContextDate",
+        "before": "2026-11-17T09:39:05Z",
+        "after": "2026-11-17T09:41:02Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134393820629702786,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService",
+        "name": "State",
+        "before": "{\n  \"Version\":4,\n  \"WnsChannelSuccess\":true,\n  \"WnsChannelSuccessDate\":\"2026-11-11T01:00:11Z\",\n  \"WnsChannelLastAttemptDate\":\"2026-11-11T01:00:11Z\",\n  \"WnsChannelRetryCount\":0,\n  \"WnsChannelRetryDate\":\"2026-12-08T11:10:27Z\",\n  \"WnsChannelUri\":\"https://wns2-par02p.notify.windows.com/?token=AwYAAACQ%2fvt73Jq4NH%2buZPjBOvHLXgOBLuqSjwk52NZBnu6oHN7lEb5OPJLbTCp59sXyOhdHgRnZBTrV2qcgpSV4KQf6IYtHhsksmYNo%2bAhEBCSW17GK60nDiY8%2bO2pKkJS1lcwNLX9sZcQtNDzCezyHjLNQ\",\n  \"WnsChannelExpiryDate\":\"2026-12-08T11:10:27Z\",\n  \"WnsChannelContext\":\"9383838126652282458\",\n  \"WnsLastEtag\":\"\",\n  \"WnsLastTrackingId\":\"\",\n  \"WnsInstallationId\":\"A3A2B34041384E7B8873ECA88AB60E91\",\n  \"IrisWnsSuccess\":true,\n  \"IrisWnsStatusCode\":200,\n  \"IrisWnsSuccessDate\":\"2026-11-08T11:10:27Z\",\n  \"IrisWnsLastAttemptDate\":\"2026-11-08T11:10:27Z\",\n  \"IrisWnsRetryCount\":0,\n  \"IrisWnsRetryDate\":\"2026-12-06T11:10:27Z\",\n  \"IrisActionSuccess\":true,\n  \"IrisActionStatusCode\":200,\n  \"IrisActionSuccessDate\":\"2026-11-11T01:00:11Z\",\n  \"IrisActionLastAttemptDate\":\"2026-11-11",
+        "after": "{\n  \"Version\":4,\n  \"WnsChannelSuccess\":true,\n  \"WnsChannelSuccessDate\":\"2026-11-17T09:41:01Z\",\n  \"WnsChannelLastAttemptDate\":\"2026-11-17T09:41:01Z\",\n  \"WnsChannelRetryCount\":0,\n  \"WnsChannelRetryDate\":\"2026-12-15T09:41:01Z\",\n  \"WnsChannelUri\":\"https://wns2-am3p.notify.windows.com/?token=AwYAAACMmglnx4267RsuNj00pTghGEh%2fWY5vX1AeehPKEKxCPxJY7Jh%2fpvh4iJ5WP9Ve6voTZprcvfqHzzNVy3PedoTisZwzEqiEghs0tNakpov2oTIc%2bPqa3XSi6C490I%2fvvmP%2b7Fr5XPltGtfM7Q%2bNeGHV\",\n  \"WnsChannelExpiryDate\":\"2026-12-17T09:41:02Z\",\n  \"WnsChannelContext\":\"11013690613096250373\",\n  \"WnsLastEtag\":\"\",\n  \"WnsLastTrackingId\":\"\",\n  \"WnsInstallationId\":\"A3A2B34041384E7B8873ECA88AB60E91\",\n  \"IrisWnsSuccess\":true,\n  \"IrisWnsStatusCode\":200,\n  \"IrisWnsSuccessDate\":\"2026-11-17T09:41:01Z\",\n  \"IrisWnsLastAttemptDate\":\"2026-11-17T09:41:01Z\",\n  \"IrisWnsRetryCount\":0,\n  \"IrisWnsRetryDate\":\"2026-12-15T09:41:01Z\",\n  \"IrisActionSuccess\":true,\n  \"IrisActionStatusCode\":200,\n  \"IrisActionSuccessDate\":\"2026-11-17T09:41:01Z\",\n  \"IrisActionLastAttemptDate\":\"2026-11"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 2486,
+      "lwt": 134393820629702786,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService",
+        "name": "UpdateTimer",
+        "before": "2026-11-11T01:00:12Z",
+        "after": "2026-11-17T09:41:02Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134393820629702786,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications\\Backup\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy!Global.IrisService",
+        "name": "channelCreation",
+        "before": "134386098275718473",
+        "after": "134393820618534352"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 38,
+      "lwt": 134393820618554611,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications\\Backup\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy!Global.IrisService",
+        "name": "channelExpiry",
+        "before": "134412018270000000",
+        "after": "134419740620000000"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 38,
+      "lwt": 134393820618554611,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications\\Backup\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy!Global.IrisService",
+        "name": "channelId",
+        "before": "㬱〷ㄲ㤳〰ㄳㄴ㌳ㄷ㤷8",
+        "after": "㬱〷ㄲ㤳〰ㄳㄴ㌳ㄷ㤷8"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 24,
+      "lwt": 134393820618554611,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications\\Backup\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy!Global.IrisService",
+        "name": "channelUri",
+        "before": "瑨灴㩳⼯湷㉳瀭牡㈰⹰潮楴祦眮湩潤獷挮浯㼯潴敫㵮睁䅙䅁元㈥癦㝴䨳㑱䡎㈥畢做䉪癏䱈杘䉏界危睪㕫串䉚畮漶么氷扅伵䩐扌䍔㕰猹祘桏䡤剧婮呂噲焲杣印㑖克㙦奉䡴獨獫奭潎㈥䅢䕨䍂坓㜱䭇〶䑮奩┸戲㉏䭰䩫ㅓ捬乷塌猹捚瑑䑎䍺穥䡹䱪兎",
+        "after": "瑨灴㩳⼯湷㉳愭㍭⹰潮楴祦眮湩潤獷挮浯㼯潴敫㵮睁䅙䅁䵃杭湬㑸㘲刷畳橎〰呰桧䕇╨昲套瘵ㅘ敁桥䭐䭅䍸硐奊䨷╨昲癰㑨䩩圵㥐敖瘶呯灚捲晶䡱空噎㍹敐潤楔婳穷煅䕩桧び乴歡潰㉶呯捉㈥偢慱堳楓䌶㤴䤰㈥癦浶═戲䘷㕲偘瑬瑇䵦儷㈥乢䝥噈"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 213,
+      "lwt": 134393820618554611,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData",
+        "name": "_now_",
+        "before": "2026-11-11T02:56:46Z",
+        "after": "2026-11-17T09:41:02Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134393820625168535,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData",
+        "name": "Data",
+        "before": "{\"f\":\"raf\",\"v\":\"1.0\",\"rdr\":[{\"c\":\"Windows Engagement\",\"u\":\"Engine v1 Template\"}],\"ad\":{\"Rules\":\"{\\\"ver\\\":1,\\\"consentcategories\\\":[\\\"datasharing\\\"],\\\"*\\\":{\\\"rules\\\":[{\\\"id\\\":\\\"1\\\",\\\"name\\\":\\\"MSA Token failure to be resolved for successful MSA sign in\\\",\\\"type\\\":\\\"alert\\\",\\\"severity\\\":2,\\\"priority\\\":1,\\\"maximpressioncount\\\":7,\\\"maxdismissalcount\\\":7,\\\"delaybetweenimpressions\\\":0,\\\"delaybetweendismisses\\\":1440,\\\"delaybetweeninvokes\\\":1440,\\\"delayaftermaximpression\\\":20160,\\\"delayaftermaxdismiss\\\":20160,\\\"delayaftersnooze\\\":4320,\\\"condition\\\":\\\"{useraccount.accounttype == Msa} && {useraccount.validtoken == false}\\\",\\\"defaultproperties\\\":{\\\"icon\\\":\\\"&#xEB90;\\\",\\\"title\\\":\\\"Sign in again\\\",\\\"description\\\":\\\"Something happened, and we weren't able to sign you in to this device.\\\",\\\"snoozeText\\\":\\\"Remind me later\\\",\\\"ctaText\\\":\\\"Sign in\\\",\\\"ctaLink\\\":\\\"ms-cxh-wam://\\\"}},{\\\"id\\\":\\\"2\\\",\\\"name\\\":\\\"Convert local users to MSA attached state for non-backed up devices\\\",\\\"type\\\":\\\"alert\\\",\\\"severity\\\":1,\\\"priority\\\":2,\\\"maxi",
+        "after": "{\"f\":\"raf\",\"v\":\"1.0\",\"rdr\":[{\"c\":\"Windows Engagement\",\"u\":\"Engine v1 Template\"}],\"ad\":{\"Rules\":\"{\\\"ver\\\":1,\\\"consentcategories\\\":[\\\"datasharing\\\"],\\\"*\\\":{\\\"rules\\\":[{\\\"id\\\":\\\"1\\\",\\\"name\\\":\\\"MSA Token failure to be resolved for successful MSA sign in\\\",\\\"type\\\":\\\"alert\\\",\\\"severity\\\":2,\\\"priority\\\":1,\\\"maximpressioncount\\\":7,\\\"maxdismissalcount\\\":7,\\\"delaybetweenimpressions\\\":0,\\\"delaybetweendismisses\\\":1440,\\\"delaybetweeninvokes\\\":1440,\\\"delayaftermaximpression\\\":20160,\\\"delayaftermaxdismiss\\\":20160,\\\"delayaftersnooze\\\":4320,\\\"condition\\\":\\\"{useraccount.accounttype == Msa} && {useraccount.validtoken == false}\\\",\\\"defaultproperties\\\":{\\\"icon\\\":\\\"&#xEB90;\\\",\\\"title\\\":\\\"Sign in again\\\",\\\"description\\\":\\\"Something happened, and we weren't able to sign you in to this device.\\\",\\\"snoozeText\\\":\\\"Remind me later\\\",\\\"ctaText\\\":\\\"Sign in\\\",\\\"ctaLink\\\":\\\"ms-cxh-wam://\\\"}},{\\\"id\\\":\\\"2\\\",\\\"name\\\":\\\"Convert local users to MSA attached state for non-backed up devices\\\",\\\"type\\\":\\\"alert\\\",\\\"severity\\\":1,\\\"priority\\\":2,\\\"maxi"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 111536,
+      "lwt": 134393820625168535,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData",
+        "name": "ReportStateTimestamp",
+        "before": "2026-11-08T11:10:28Z",
+        "after": "2026-11-17T09:41:02Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134393820625168535,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData",
+        "name": "State",
+        "before": "{\n  \"RetrieveIrisContentSuccess\":true,\n  \"RetrieveIrisContentStatusCode\":200,\n  \"RetrieveIrisContentSuccessDate\":\"2026-11-11T14:14:11Z\",\n  \"RetrieveIrisContentLastAttemptDate\":\"2026-11-11T14:14:11Z\",\n  \"RetrieveIrisContentRetryCount\":0,\n  \"RetrieveIrisContentRetryDate\":\"2026-11-12T13:14:11Z\",\n  \"LastTriggerType\":0,\n  \"LastBackgroundTaskRunDate\":\"2026-11-11T14:14:11Z\"\n}",
+        "after": "{\n  \"RetrieveIrisContentSuccess\":true,\n  \"RetrieveIrisContentStatusCode\":200,\n  \"RetrieveIrisContentSuccessDate\":\"2026-11-17T09:41:01Z\",\n  \"RetrieveIrisContentLastAttemptDate\":\"2026-11-17T09:41:01Z\",\n  \"RetrieveIrisContentRetryCount\":0,\n  \"RetrieveIrisContentRetryDate\":\"2026-11-18T08:41:01Z\",\n  \"LastTriggerType\":0,\n  \"LastBackgroundTaskRunDate\":\"2026-11-17T09:41:01Z\"\n}"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 744,
+      "lwt": 134393820625168535,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\BackgroundData",
+        "name": "UpdateTimer",
+        "before": "2026-11-11T14:14:11Z",
+        "after": "2026-11-17T09:41:02Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134393820625168535,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\RulesEngine\\Metadata",
+        "name": "IrisUpdateTimestamp",
+        "before": "2026-11-11T02:56:46Z",
+        "after": "2026-11-17T09:41:02Z"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 42,
+      "lwt": 134393820624960376,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+        "name": "InstalledWin32AppsRevision",
+        "before": "{E41BBC30-4137-4ED0-9BD4-872468CD0BEA}",
+        "after": "{B4F2F2BD-52A1-4F95-AE5A-E81F0A643BE5}"
+      },
+      "label": "ambient",
+      "rule": "labels: Search app-list revision GUID.",
+      "size": 78,
+      "lwt": 134393820770885665,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{C8E6F269-B90A-4053-A3BE-499AFCEC98C4}.check.0",
+        "name": "CheckSetting",
+        "before": "#aaa2a1ad448dbe1c",
+        "after": "#b87ccef63de7e658"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820646734657,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{852FB1F8-5CC6-4567-9C0E-7C330F8807C2}.check.100",
+        "name": "CheckSetting",
+        "before": "#f81b2a0202168f0e",
+        "after": "#77faf4a0b3b98068"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820646567801,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.100",
+        "name": "CheckSetting",
+        "before": "#e20d6ff0157d2119",
+        "after": "#aaa2a1ad448dbe1c"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820673987876,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.101",
+        "name": "CheckSetting",
+        "before": "#8677c8d4c3c28e7b",
+        "after": "#f81b2a0202168f0e"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820694172378,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.102",
+        "name": "CheckSetting",
+        "before": "#f81b2a0202168f0e",
+        "after": "#fed9a80b07f0a630"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134393820694172378,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start",
+        "name": "Config",
+        "before": "#2ccc8ea929e54154",
+        "after": "#a15e8cc070d68f1b"
+      },
+      "label": "ambient",
+      "rule": "labels: Start menu config blob.",
+      "size": 796,
+      "lwt": 134393820791055863,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "0",
+        "before": "C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Inbound Download Manager.lnk\u0000C:\\Users\\tester\\AppData\\Local\\Programs\\Inbound Download Manager\\app\\DownloadManager.Host.exe\u0000--open",
+        "after": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PowerShell\\PowerShell 7 (x64).lnk\u0000C:\\Program Files\\PowerShell\\7\\pwsh.exe\u0000-WorkingDirectory ~"
+      },
+      "label": "ambient",
+      "rule": "labels: UFH keys and changed SHC slots (a slot that existed before the install now names another shortcut: editing it back is not possible, deleting it is danger). New SHC values name the app's own shortcut and exe and stay leftover (REF-ANY).",
+      "size": 294,
+      "lwt": 134393819985689813,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.DesktopSpotlight\\V1\\LU",
+        "name": "PCT",
+        "before": "134388828514686753",
+        "after": "134393820616477294"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820616477294,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.IrisService\\V1\\LU",
+        "name": "PCT",
+        "before": "134388324115591072",
+        "after": "134393820616753594"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820616753594,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.RulesEngine\\V1\\LU",
+        "name": "PCT",
+        "before": "134388800513182698",
+        "after": "134393820616770389"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820616770389,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WebExperienceHost\\V1\\LU",
+        "name": "PCT",
+        "before": "134388800513266329",
+        "after": "134393820616876522"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820616876522,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WindowsBackup\\V1\\LU",
+        "name": "PCT",
+        "before": "134388324116013008",
+        "after": "134393820617242721"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820617242721,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.OOBE_cw5n1h2txyewy\\HAM\\AUI\\OobeHost\\V1\\LU",
+        "name": "PCT",
+        "before": "134388800512937680",
+        "after": "134393820616076329"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820616076329,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-19\\Software\\Microsoft\\Windows\\CurrentVersion\\FontCache\\SystemFontProvider",
+        "name": "ConfigExpiration",
+        "before": "134392146407149666",
+        "after": "134399868606371672"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820606371672,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Config",
+        "name": "KVFileExpirationTime",
+        "before": "134390533937117309",
+        "after": "134395548931150888"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820931149691,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "CacheSizeBytes",
+        "before": "530932957",
+        "after": "0"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820935450070,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "CPUpct",
+        "before": "0.269051",
+        "after": "0.000000"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 18,
+      "lwt": 134393820935450070,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "MemoryUsageKB",
+        "before": "5028",
+        "after": "5800"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134393820935450070,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "SwarmCount",
+        "before": "5",
+        "after": "0"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393820935450070,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "UploadCount",
+        "before": "5",
+        "after": "0"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393820935450070,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\PowerShellCore"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134393820750226457,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Security Center\\Svc\\Vol"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393820632665223,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageVolumes\\1\\MutablePackagesOnline"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393820631810836,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageVolumes\\1\\UserMutablePackagesOnline"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393820631810836,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Notifications\\OptionalFeatures"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393819875680433,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RemovedEditionBasedSelectableUpdates"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393819875299056,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\SessionsPending\\31290999_2492854338"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^K:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Component Based Servicing\\\\SessionsPending\\\\[0-9]{6,}_[0-9]{6,}(?:\\\\.*)?$",
+      "lwt": 134393819875680433,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\TempPackages"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Installer's list of temp packages it deletes itself after a transaction (the .msi files it names are relabelled by m1b.sh temp_packages).",
+      "lwt": 134393820778836457,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Installer machine-state containers created on first MSI use; the service's own keys.",
+      "lwt": 134393819877948500,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH"
+      },
+      "label": "ambient",
+      "rule": "labels: UFH (shortcut/usage history) service state.",
+      "lwt": 134393819995727205,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Services\\7971F918-A847-4430-9279-4A52D1EFE18D"
+      },
+      "label": "kept_owner",
+      "rule": "labels: Review R4b S4: the MSI defaults (USE_MU=1 / ENABLE_MU=1) opt the machine into Microsoft Update (service 7971F918-...). Windows Update state that other products' updates use; the uninstall leaves it and it must stay. Seen in both m1b-freeze runs (2026-11-17).",
+      "lwt": 134393819952806071,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\SLS\\{7971F918-A847-4430-9279-4A52D1EFE18D}"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Update service-locator (SLS) cache, e.g. of the Microsoft Update service an MSI opts the machine into; Windows Update state.",
+      "lwt": 134393819952651754,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\PowerShellCore/Analytic"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134393819960295987,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\PowerShellCore/Debug"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134393819960295987,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\PowerShellCore/Operational"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134393819960295987,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134393819960455320,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\WMI\\Autologger\\EventLog-Application\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "lwt": 134393819960295987,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\VSS\\Diag\\BITS Writer"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393820604104417,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\.DEFAULT\\Software\\Classes\\Local Settings\\MuiCache\\3"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI resource-string cache generation key (not the shell MuiCache of exe names, which lives under Local Settings/Software/Microsoft/Windows/Shell/MuiCache).",
+      "lwt": 134393820761972411,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\RestartManager"
+      },
+      "label": "ambient",
+      "rule": "labels: Restart Manager session scratch, created by any MSI/Burn/NSIS session.",
+      "lwt": 134393820768497284,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService\\Cache\\10714124874704668345"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393820624652324,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService\\Cache\\204422930584329971"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134393820624908002,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\MuiCache\\3"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI resource-string cache generation key (not the shell MuiCache of exe names, which lives under Local Settings/Software/Microsoft/Windows/Shell/MuiCache).",
+      "lwt": 134393820926365809,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Diagnosis\\AggregatorStorage\\Triggers\\9229153479643334637_data.dat"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 2268,
+      "lwt": 134393820103114029,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Diagnosis\\AggregatorStorage\\Triggers\\9229153479643334637_trigger.dat"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10048,
+      "lwt": 134393820103105858,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Humanizer.Core"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920019275,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Humanizer.Core,2.14.1"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920019275,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Json.More.Net"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920019275,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Json.More.Net,2.1.1"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920019275,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,JsonPointer.Net"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920019275,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,JsonPointer.Net,5.3.1"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,JsonSchema.Net"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,JsonSchema.Net,7.4.0"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Markdig.Signed"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Markdig.Signed,0.44.0"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.ApplicationInsights"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.ApplicationInsights,2.23.0"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920002898,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.Bcl.AsyncInterfaces"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.Bcl.AsyncInterfaces,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.CodeAnalysis.Common"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.CodeAnalysis.Common,5.0.0"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.CodeAnalysis.CSharp"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.CodeAnalysis.CSharp,5.0.0"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.Extensions.ObjectPool"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.Extensions.ObjectPool,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.Management.Infrastructure.Runtime.Win"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.Management.Infrastructure.Runtime.Win,3.0.0"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.PowerShell.MarkdownRender"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.PowerShell.MarkdownRender,7.2.1"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.PowerShell.Native"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.PowerShell.Native,700.0.2"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.Security.Extensions"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Microsoft.Security.Extensions,1.4.0"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Newtonsoft.Json"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,Newtonsoft.Json,13.0.4"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,runtime.win-x64.Microsoft.NETCore.DotNetHostPolicy,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920019275,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,runtime.win-x64.runtime.native.System.Data.SqlClient.sni"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920109732,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,runtime.win-x64.runtime.native.System.Data.SqlClient.sni,4.4.0"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920109732,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ComponentModel.Composition"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ComponentModel.Composition,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920019275,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ComponentModel.Composition.Registration"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920002898,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ComponentModel.Composition.Registration,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920002898,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Data.Odbc"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Data.Odbc,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Data.OleDb"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Data.OleDb,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Data.SqlClient"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Data.SqlClient,4.9.1"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920019275,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.DirectoryServices.AccountManagement"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.DirectoryServices.AccountManagement,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.DirectoryServices.Protocols"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.DirectoryServices.Protocols,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920019275,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.IO.Ports"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.IO.Ports,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Management"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920057708,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Management,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Net.Http.WinHttpHandler"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Net.Http.WinHttpHandler,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Reflection.Context"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Reflection.Context,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Runtime.Caching"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Runtime.Caching,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.Http"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.Http,10.0.652802"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.NetFramingBase"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.NetFramingBase,10.0.652802"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.NetTcp"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.NetTcp,10.0.652802"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.Primitives"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920074570,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.Primitives,10.0.652802"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.Syndication"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceModel.Syndication,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920038703,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceProcess.ServiceController"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.ServiceProcess.ServiceController,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Speech"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Speech,10.0.15"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Web.Services.Description"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\NetFramework\\BreadcrumbStore\\netcore,System.Web.Services.Description,8.1.2"
+      },
+      "label": "ambient",
+      "rule": "labels: .NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target.",
+      "size": 0,
+      "lwt": 134393819920092485,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Microsoft\\PowerShell"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 136742,
+      "lwt": 134393820352836359,
+      "dir": true,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\Caches\\{3DA71D5A-20CC-432F-A115-DFE92379E91F}.3.ver0x0000000000000011.db"
+      },
+      "label": "ambient",
+      "rule": "labels: Shell/Search per-user cache database, regenerated with a new version suffix whenever the Start menu app list changes.",
+      "size": 57824,
+      "lwt": 134393820770872725,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\3c3871276e149215.automaticDestinations-ms"
+      },
+      "label": "ambient",
+      "rule": "labels: Jump-list file whose AppID hash (CRC-64 of the AppID) the rig could not resolve to an exe or AUMID of the app. Resolved ones are labelled leftover by `first` rules in the app file (FS-JUMPLISTS attributes them the same way).",
+      "size": 2560,
+      "lwt": 134393820750451892,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\bcab.msi"
+      },
+      "label": "ambient",
+      "rule": "temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)",
+      "size": 117518336,
+      "lwt": 134393819581136791,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\MSIEXEC.EXE-7D20CFB0.pf"
+      },
+      "label": "ambient",
+      "rule": "labels: SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state.",
+      "size": 33494,
+      "lwt": 134393819843734267,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\MSIEXEC.EXE-BAE57A74.pf"
+      },
+      "label": "ambient",
+      "rule": "labels: SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state.",
+      "size": 7597,
+      "lwt": 134393819974882213,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\PWSH.EXE-28EDFA52.pf"
+      },
+      "label": "leftover",
+      "rule": "labels: Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash).",
+      "size": 47791,
+      "lwt": 134393820312655143,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\ReadyBoot\\Trace6.fx"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 1486460,
+      "lwt": 134393819938762662,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\SVCHOST.EXE-B34B6FD4.pf"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 9437,
+      "lwt": 134393820661234001,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler",
+        "name": "134393821104546537"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134393821107688006,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\SCM Event Provider @ root/CIMV2",
+        "name": "134393820560696306"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\SCM Event Provider @ root/CIMV2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134393820560696306,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\wfascim @ root/standardcimv2",
+        "name": "134393820684216658"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\wfascim @ root/standardcimv2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134393821115062560,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\Win32_WIN32_TERMINALSERVICE_Prov @ root/CIMV2",
+        "name": "134393821108356353"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\Win32_WIN32_TERMINALSERVICE_Prov @ root/CIMV2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134393821108375679,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\CoreService",
+        "name": "SdpFeatures"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 2,
+      "lwt": 134393820624890448,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications",
+        "name": "41C64E6DA385F855"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\VolatileNotifications\\|[0-9a-f]{16,}$",
+      "size": 96,
+      "lwt": 134393820616943763,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications",
+        "name": "41C64E6DA3862055"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\VolatileNotifications\\|[0-9a-f]{16,}$",
+      "size": 96,
+      "lwt": 134393820616943763,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications",
+        "name": "41C64E6DA3864055"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\VolatileNotifications\\|[0-9a-f]{16,}$",
+      "size": 96,
+      "lwt": 134393820616943763,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications",
+        "name": "41C64E6DA3865855"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\VolatileNotifications\\|[0-9a-f]{16,}$",
+      "size": 96,
+      "lwt": 134393820616943763,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications",
+        "name": "41C64E6DA3867855"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\VolatileNotifications\\|[0-9a-f]{16,}$",
+      "size": 96,
+      "lwt": 134393820616943763,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications",
+        "name": "41C64E6DA386C055"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\VolatileNotifications\\|[0-9a-f]{16,}$",
+      "size": 96,
+      "lwt": 134393820616943763,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\BITS",
+        "name": "PerfMMFileName"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 104,
+      "lwt": 134393820560662670,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\CatalogsToUninstall",
+        "name": "Windows-Defender-AM-Default-Definitions-Package~31bf3856ad364e35~amd64~~10.0.26100.1.cat"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 178,
+      "lwt": 134393819875648597,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartPage",
+        "name": "FavoritesRemovedChanges"
+      },
+      "label": "ambient",
+      "rule": "labels: Start/taskband pin bookkeeping counter.",
+      "size": 4,
+      "lwt": 134393820750730846,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Services",
+        "name": "DefaultService"
+      },
+      "label": "kept_owner",
+      "rule": "labels: Windows Update's default-service value, written with the Microsoft Update opt-in above and left by the uninstall (both m1b-freeze runs, 2026-11-17): Windows Update state, must stay.",
+      "size": 74,
+      "lwt": 134393819952791011,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FeatureManagement\\Overrides\\4\\3587817613",
+        "name": "ImpressionTime"
+      },
+      "label": "ambient",
+      "rule": "labels: Feature-flag (velocity) impression telemetry.",
+      "size": 8,
+      "lwt": 134393820752430750,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Program Files\\PowerShell\\7\\pwsh.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134393820617225251,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        "name": "C:\\Windows\\System32\\msiexec.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: PCA record for msiexec.exe itself.",
+      "size": 108,
+      "lwt": 134393820799771114,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+        "name": "ParseAutoexec"
+      },
+      "label": "ambient",
+      "rule": "labels: Winlogon flag rewritten at logon.",
+      "size": 4,
+      "lwt": 134393819965275633,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+        "name": "Zvpebfbsg.NhgbTrarengrq.{N49227RN-5NS0-Q494-N3S1-0918N278RQ71}"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 72,
+      "lwt": 134393820242246925,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows NT\\CurrentVersion\\SoftwareProtectionPlatform\\PersistedSystemState",
+        "name": "StartupLoggedAlready"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134393820008821468,
+      "in_s1": true
+    }
+  ],
+  "temp_packages": [
+    "C:\\WINDOWS\\Installer\\bcab.msi"
+  ],
+  "freeze": {
+    "schema": "purge.rig.m1b-freeze/1",
+    "app": "powershell",
+    "runs": [
+      "m1b-fz1-powershell",
+      "m1b-fz2-powershell"
+    ],
+    "ambient": "truth/ambient.json + m1b-fz1-null1 m1b-fz2-null1",
+    "rule": "present in one freeze run only (Windows churn or chance): excluded from the frozen truth, never a leftover",
+    "compared_with": "fz2",
+    "excluded": []
+  }
+}

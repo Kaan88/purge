@@ -34,6 +34,14 @@
 //!   whose evidence carries the fact `suggest_uninstall = <product name>`. Never a deleting action. A
 //!   package another dependent still keeps (the Python Launcher while another Python is installed) gets
 //!   no suggestion.
+//! - **(c) without a provider record**: a shared component the bundle installed without writing a
+//!   dependency provider record for it (`fp.burn.linked`, kb `burn_link`: the Python Launcher of the real
+//!   CPython bundles, which register only their own provider key). The same `ReportOnly` suggestion on
+//!   the product's Uninstall key, only when the product is still installed and it is known that no
+//!   bundle of the family the kb entry names (`CPython-*`) is left: the ownership index's Burn area is
+//!   complete, the index holds no provider key of the family other than this bundle's own, and every
+//!   profile of the machine has its hive loaded (another user's bundle registers in that user's
+//!   Classes). Anything not known gives no suggestion.
 //!
 //! # Unknown is never "none"
 //!
@@ -45,17 +53,18 @@
 //! # Reads
 //!
 //! Per recorded provider key and root: one `subkeys()` of `P` and, when `P` has a `Dependents` subkey,
-//! one `subkeys()` of it. Once per scan, for a machine bundle: the loaded user hives. The candidates' common blockers add one
-//! `key_info()` each. Everything else (the other apps, the MSI ownership index, the product state)
-//! needs no key open.
+//! one `subkeys()` of it. Once per scan, for a machine bundle: the loaded user hives; with a linked
+//! component, the loaded user hives once more. The candidates' common blockers add one `key_info()`
+//! each. Everything else (the other apps, the MSI ownership index, the product state) needs no key
+//! open.
 
 use purge_guard::canon::canon_key;
-use purge_guard::deny::SharedComponents;
+use purge_guard::deny::{BurnLink, SharedComponents};
 use purge_guard::prefix;
 use purge_index::ownership::{MACHINE_DEPENDENCIES, area, pack_guid};
 use purge_model::{
-    Action, BurnFacts, BurnPackage, Candidate, Category, Evidence, EvidenceKind, Facts, Harm,
-    ManifestKind, Scope, Target,
+    Action, BurnFacts, BurnLinked, BurnPackage, Candidate, Category, Evidence, EvidenceKind, Facts,
+    Harm, ManifestKind, Scope, Target,
 };
 use purge_source::types::SourceError;
 
@@ -161,6 +170,13 @@ impl Scanner for SysBurnDeps {
                 && let Some(c) = related_product(ctx, burn, package, shared.as_ref())
             {
                 // (c) The product is still installed and nothing keeps it any more.
+                push(&mut out, c);
+            }
+        }
+
+        // (c) for a shared component installed without a provider record.
+        for linked in &burn.linked {
+            if let Some(c) = linked_product(ctx, burn, linked, shared.as_ref()) {
                 push(&mut out, c);
             }
         }
@@ -437,11 +453,22 @@ fn related_product(
     if shared.find(&provider_target).is_some() {
         return None;
     }
+    suggestion(
+        ctx,
+        burn,
+        code,
+        Facts::new().with("provider", package.provider_key.clone()),
+    )
+}
+
+/// The `ReportOnly` suggestion to uninstall the product `code` (rule (c)): on its Uninstall key in the
+/// fresh inventory, with the fact [`SUGGEST_UNINSTALL`] = its name; `None` when the fresh inventory has
+/// no Uninstall key for it. `link` says how the bundle was tied to the product.
+fn suggestion(ctx: &ScanCtx<'_>, burn: &BurnFacts, code: &str, link: Facts) -> Option<Candidate> {
     let (arp_key, name) = uninstall_entry(ctx, code)?;
-    let detail = Facts::new()
+    let detail = link
         .with("bundle", burn.bundle_id.clone())
         .with("what", "related_product")
-        .with("provider", package.provider_key.clone())
         .with("product", code.to_owned())
         .with(SUGGEST_UNINSTALL, name);
     let evidence = Evidence::new(
@@ -459,6 +486,106 @@ fn related_product(
     );
     b.evidence_also([evidence]);
     Some(b.build())
+}
+
+/// The suggestion for a shared component the bundle installed without a provider record (rule (c),
+/// `fp.burn.linked`): its product is installed and it is known that no bundle of the family its kb
+/// entry names is left ([`family_left`]). Without the shared-component list, or when the kb entry has
+/// no link any more, nothing is suggested.
+fn linked_product(
+    ctx: &ScanCtx<'_>,
+    burn: &BurnFacts,
+    linked: &BurnLinked,
+    shared: Option<&SharedComponents>,
+) -> Option<Candidate> {
+    let component = shared?
+        .components()
+        .iter()
+        .find(|c| c.id == linked.component)?;
+    let link = component.burn_link.as_ref()?;
+    let code = linked.product_code.trim();
+    let packed = pack_guid(code)?;
+    if !product_installed(ctx, code, &packed) {
+        return None;
+    }
+    if family_left(ctx, burn, link, &component.id) != Some(false) {
+        return None;
+    }
+    suggestion(
+        ctx,
+        burn,
+        code,
+        Facts::new()
+            .with("component", component.id.clone())
+            .with("cache_dir", linked.cache_dir.clone()),
+    )
+}
+
+/// Whether a bundle of the family `link` names, other than this one, is still registered: `Some(true)`
+/// when the ownership index holds a provider key of the family other than the bundle's own (with or
+/// without dependents: a key that is there is not known to be unused), or the bundle's own provider
+/// key with anything but this bundle's own records in its own hive (another bundle depending on it,
+/// another user's install of the same bundle, or no dependent at all, whose hive cannot be told);
+/// `Some(false)` when there is none and the index saw every place one could be; `None` (with a scan
+/// warning) when it did not: its Burn area is incomplete, the loaded user hives cannot be listed, or a
+/// profile of the machine has no hive loaded (a bundle that user installed registers in that user's
+/// Classes, which nobody read).
+fn family_left(
+    ctx: &ScanCtx<'_>,
+    burn: &BurnFacts,
+    link: &BurnLink,
+    component: &str,
+) -> Option<bool> {
+    let unknown = |why: String| {
+        ctx.ext.warn(
+            ID,
+            format!(
+                "{why}; it is not known whether {component} is still used, it is not suggested"
+            ),
+        );
+        None
+    };
+    let ix = &ctx.ext.ownership;
+    if !ix.stats().complete(area::BURN) {
+        return unknown("the MSI ownership index could not read every dependency record".into());
+    }
+    let loaded = match ctx.reg.loaded_user_sids() {
+        Ok(loaded) => loaded,
+        Err(e) => return unknown(format!("the loaded user hives cannot be listed ({e})")),
+    };
+    if ctx.guard.profiles.is_empty() {
+        return unknown("the machine's profiles are not known".into());
+    }
+    if let Some(profile) = ctx.guard.profiles.iter().find(|p| {
+        !loaded
+            .iter()
+            .any(|sid| prefix::eq_ci(sid.trim(), p.sid.trim()))
+    }) {
+        return unknown(format!(
+            "the hive of the profile {} is not loaded",
+            profile.sid
+        ));
+    }
+    // The hive of the bundle's own records: the machine's for a machine bundle, else its user's.
+    let own_hive = ctx.fp.app.program_id.hive_sid().map(str::trim);
+    let own_record = |(dependent, hive): &(String, Option<String>)| {
+        is_ours(burn, dependent)
+            && match (hive.as_deref(), own_hive) {
+                (None, None) => true,
+                (Some(hive), Some(own)) => prefix::eq_ci(hive.trim(), own),
+                _ => false,
+            }
+    };
+    Some(
+        ix.burn_providers()
+            .filter(|(provider, _)| link.bundle_matches(provider))
+            .any(|(provider, records)| {
+                // Another bundle of the family; or this bundle's own provider key that another
+                // bundle depends on, that the same bundle registered in another hive (another
+                // user's install of the same Python), or whose hive cannot be told (no dependent).
+                !is_ours(burn, provider) || records.is_empty() || !records.iter().all(own_record)
+            }),
+    )
 }
 
 /// Whether the product is installed: the ownership index lists it, or Windows Installer knows it in
@@ -518,6 +645,7 @@ mod tests {
             cache_path: None,
             packages: Vec::new(),
             dependents_at_harvest: Vec::new(),
+            linked: Vec::new(),
         };
         assert!(is_ours(&burn, "{b}"));
         assert!(is_ours(&burn, "cpython-3.12"));

@@ -31,6 +31,37 @@ pub struct SharedComponent {
     /// Globs over package full names or family names.
     #[serde(default)]
     pub packages: Vec<String>,
+    /// How WiX Burn bundles install the component as a package of theirs without a dependency
+    /// provider record, so that SYS-BURNDEPS may suggest uninstalling it once no such bundle is left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burn_link: Option<BurnLink>,
+}
+
+/// The link between a shared component and the WiX Burn bundles that install it as a package without
+/// writing a dependency provider record for it (the CPython bundles and the Python Launcher: the
+/// bundle registers only its own provider key). The harvest records the component as the bundle's
+/// ([`purge_model::BurnLinked`]) only from Windows Installer's own records; this entry says which
+/// bundles and which products to look at, never whose they are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BurnLink {
+    /// Globs (`*` only, compared ignoring case) over the `BundleProviderKey` of the bundles that
+    /// install the component, e.g. `CPython-*`.
+    pub bundle_providers: Vec<String>,
+    /// The MSI UpgradeCodes of the component's products, `{GUID}`.
+    pub upgrade_codes: Vec<String>,
+}
+
+impl BurnLink {
+    /// Whether a bundle provider key is one of [`BurnLink::bundle_providers`] (ignoring case).
+    pub fn bundle_matches(&self, provider_key: &str) -> bool {
+        let name = fold(provider_key.trim());
+        !name.is_empty()
+            && self
+                .bundle_providers
+                .iter()
+                .any(|glob| glob_match(&fold(glob.trim()), &name))
+    }
 }
 
 /// The components embedded from `kb/shared-components.json`.

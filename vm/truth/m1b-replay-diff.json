@@ -1,5 +1,5 @@
 {
-  "schema": "purge.replay-diff/2",
+  "schema": "purge.replay-diff/3",
   "reference": "m1a.6 (622c64d), cargo xtask replay without overlay",
   "reasons": [
     "new_scanner",
@@ -8,6 +8,7 @@
     "policy_m1b",
     "promotion_justified"
   ],
+  "justified_promotions": [],
   "apps": {
     "7zip": [
       0,

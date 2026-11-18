@@ -14,6 +14,9 @@ cargo test
 
 `.cargo\config.toml` sets `+crt-static` for `x86_64-pc-windows-msvc`.
 
+`build.rs` records the SHA-256 of the sources (`Cargo.toml`, `Cargo.lock`, `build.rs`, `src\**`, CRLF read as LF);
+`rigtool version` prints it. `vm\truth\m1b.sh` refuses to collect with a binary built from other sources (review R5 S1).
+
 ## Commands
 
 ### snap
@@ -123,6 +126,9 @@ rigtool score --plan a.json [--plan b.json] --truth truth.json --s0 snap-0 --s2 
 - `recall_listed/visible/safe` follow RIG.md §7 (covered by any offered item, `danger` ones included).
   `recall_listed_nd/visible_nd/safe_nd` count only coverage by offered items whose outcome is not `danger`,
   so a tool that offers a broad pre-existing folder or key does not earn recall for what lies below it.
+- Notices (ruling 2026-11-18, review R5 B1): an item with action `ReportOnly` and a `suggest_uninstall` field
+  (not preselected, not Safe) suggests uninstalling a related product. It is not scored (no danger, precision,
+  recall, `protected_correct`, `offered_n`) and is listed under `notices` with what it would have scored.
 
 Deny file: an array (or `{ "deny": [...] }`) of regex strings on the canonical target string, or objects
 `{ "match": "<regex>", "why": "..." }` or `{ "target": {"type": "Path", "path": "..."}, "why": "..." }`
