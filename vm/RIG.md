@@ -1436,7 +1436,7 @@ The user's ruling was a proper fix and a full rerun. The fix has three parts.
    RUN (`defender_invalid`) calls a run **INVALID** in two cases:
    - It has no antivirus signature version at snap 0 and snap 2. Every run from before this fix is in this case.
    - Its signature, engine or platform version differs between the two snaps. A version is compared only when both
-     ends have it, so a registry fallback at one end is not an update.
+     ends have it, so a registry fallback at one end is not an update; the platform is compared without the `-N` suffix the registry fallback's folder name carries (review R6 S1).
 
    The rule applies to app, trap and null runs alike. The note says `INVALID RUN: Defender update between snap 0 and
    snap 2: ...` or `no Defender signature version recorded ...`.

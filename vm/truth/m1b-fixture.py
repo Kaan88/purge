@@ -670,6 +670,8 @@ MUTATIONS = {
     'null_defender_missing': lambda d: edit(d, 'runs/m1bd-null1.json', lambda doc: doc['run_json'].update(defender=None)),
     # positive: the registry fallback at one end (no platform version there), the same signatures: not an update
     'run_defender_registry_fallback': defender('m1b-python', 'snap2', platform=None, source='registry', error='MSFT_MpComputerStatus: timeout'),
+    # positive (review R6 S1): the registry fallback's folder spelling of the same platform is not an update
+    'run_defender_platform_folder_spelling': defender('m1b-python', 'snap2', platform='4.18.25100.9-0', source='registry'),
     # trap runs judge TrapA only (coordinator ruling 2026-11-18)
     'trap_main_is_pre': target('m1bd-traps-7zip', main_is_pre=True),
     'trap_main_not_created': target('m1bcp-traps-7zip', main_created=False),

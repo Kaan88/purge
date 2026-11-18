@@ -238,7 +238,10 @@ def defender_invalid(rec):
     if not isinstance(a, dict) or not isinstance(b, dict) or not a.get('av_signature') or not b.get('av_signature'):
         return 'no Defender signature version recorded at snap 0 and snap 2 (run.json defender)'
     # compared where both ends have the version (the antivirus signature always: checked above)
-    ch = [f'{k} {a.get(k)} -> {b.get(k)}' for k in DEFENDER_KEYS if a.get(k) and b.get(k) and a.get(k) != b.get(k)]
+    # review R6 S1: the registry fallback names the platform after its folder (4.18.x.y-0), CIM without the suffix
+    nv = lambda k, v: re.sub(r'-\d+$', '', str(v)) if k == 'platform' else v
+    ch = [f'{k} {a.get(k)} -> {b.get(k)}' for k in DEFENDER_KEYS
+          if a.get(k) and b.get(k) and nv(k, a.get(k)) != nv(k, b.get(k))]
     return ('Defender update between snap 0 and snap 2: ' + ', '.join(ch)) if ch else None
 
 
@@ -1974,7 +1977,7 @@ assert not d['pass'] and not d['gate']
       "run_defender_updated RUN" "run_defender_engine_updated RUN" "run_defender_platform_updated RUN" \
       "run_defender_missing RUN" "run_defender_snap2_missing RUN" "run_defender_no_signature RUN" \
       "trap_defender_updated RUN" "null_defender_updated RUN" "null_defender_missing RUN" \
-      "run_defender_registry_fallback PASS"; do
+      "run_defender_registry_fallback PASS" "run_defender_platform_folder_spelling PASS"; do
     set -- $ctl
     rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"
     if ! "$PY" -I "$fx" mutate "$tmp/m" "$1" >"$tmp/m.txt" 2>&1; then no_ "control $1" "mutation failed: $(head -c 300 "$tmp/m.txt")"; continue; fi

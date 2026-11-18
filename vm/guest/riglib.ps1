@@ -838,7 +838,7 @@ function Get-DefenderVersions {
                 } finally { $k.Dispose() }
             }
             $loc = "$(Get-RegRaw 'HKLM\SOFTWARE\Microsoft\Windows Defender' 'InstallLocation')"
-            if ($loc -match '\\Platform\\([0-9][0-9.\-]*)\\?$') { $v.platform = $Matches[1] }
+            if ($loc -match '\\Platform\\([0-9][0-9.\-]*)\\?$') { $v.platform = $Matches[1] -replace '-\d+$', '' }
         } catch { $v.error += "; registry: $($_.Exception.Message)" }
     }
     foreach ($n in 'av_signature', 'as_signature', 'nis_signature', 'engine', 'platform') { if (-not "$($v[$n])".Trim()) { $v[$n] = $null } }
