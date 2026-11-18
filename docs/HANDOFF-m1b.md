@@ -1,6 +1,35 @@
 # M1b handoff
 
-## Current state (2026-11-17 16:30): paused before the gate campaign
+## Current state (2026-11-18 17:30): scan gate fix round 3, then full rerun
+
+- Branch `m1b` head = this commit (on c388dd1), pushed to origin on the user's request 2026-11-18.
+- Scan campaign 1 (gate3, at ee43fa2): 133/153. Causes: K1 counted a Blocked, deny-listed bam value as danger; the
+  Python Launcher suggestion could never fire (CPython writes no package provider record); dirty-base node was
+  preinstalled; dirty truth noise (`%TEMP%\<hex>.tmp`, Steam logs); K14 measured with no disk cache and an unfair
+  program; co-product harvest rebuilt every index. Evidence `E:\purge-build\gate-evidence\m1b-gate3\`.
+- Fixes: engine ba48ae7 (Burn link via kb `burn_link`, shared co-product indexes, `msi_table_cache` timing line); rig
+  b89ffde, a954d90; Fable reviews R4d, R5, R5b (`docs/reviews/m1b/`) and fixes 5a6fd2b, c388dd1. User rulings in
+  DECISIONS M1b (2026-11-18): K1/K8 count danger_offered; node dropped from G3 + RUN invalid-run check; a ReportOnly
+  `suggest_uninstall` item is a notice scored only by K8; K14 needs a warm disk cache and a like-for-like program;
+  `install\install.ps1` was run on the host. Unelevated `cargo xtask ci` PASS at c388dd1 (scheduled task with
+  `/rl LIMITED /it`; `runas /trustlevel` did not start).
+- Scan campaign 2 (gate4, at c388dd1): 148/153. Only K1, K3-K6 clean/temurin failed: a Defender signature update
+  landed inside the capture window of 4 of 8 clean runs (232 MB of definitions about 20 s after snap 0), and its
+  items were labelled leftover; temurin's correct empty plan then failed. G7 program: Virtual Desktop Service
+  `HKLM|64|{03A5EEF8-32BE-429C-AA3F-DE8C632F0218}` (the only candidate with one root in both engines and no
+  co-product). Evidence `E:\purge-build\gate-evidence\m1b-gate4\`.
+- User ruling: proper fix + full rerun. In progress: Defender ambient rules in `truth/labels/_m1b-noise.json`, the guest
+  waits for Defender updates before snap 0 and records the signature version at snap 0 and snap 2, and a RUN check
+  voids a run whose version changed. Then: Fable check, unelevated ci, full scan campaign, then G5/G6, M1B_GATE.md.
+- Infrastructure lessons: keep the guest password file (VMPWFILE) outside any Temp or scratchpad folder
+  (the old copy in a Temp scratchpad was wiped); power off leftover rig VMs before each campaign step (low-memory
+  reaper); VirtualBox start failures with `SystemExtendedHandleInformation failed: 0xc0000004` mean a host handle leak
+  (two orphaned `find /` processes held 9 M handles).
+- UI alpha rebuilt on c388dd1: branch `ui-alpha` 5d7df3c, `Desktop\Purge-ui-alpha-2.zip` (notices for uninstall
+  suggestions, never selectable).
+- Future-version ideas: `docs/FUTURE_IDEAS.md`.
+
+## Earlier state (2026-11-17 16:30): paused before the gate campaign
 
 - Branch `m1b` head 59ac127, local only (not pushed since f209730). Tree clean.
 - Done: all 38 design packages (waves 0-6); Fable reviews R1, R2a, R2b, R3a, R3b, R4, R4b, R4c with every finding
