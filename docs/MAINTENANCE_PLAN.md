@@ -12,6 +12,11 @@ current with as little load on the user's PC as possible. To be designed in deta
   for the Windows 11 client gates.
 - **Windows 11 client runs** where needed (gates, new Windows builds): a cheap dedicated rig box (a used mini PC), or
   cloud Windows 11 VMs on demand (Azure, paid per hour). Either way the user's PC stays free.
+- **The user's unused laptop as the rig host** (user, 2026-11-18): the first candidate for the dedicated box. Needs:
+  hardware virtualization on, 16 GB RAM or more (one 4 GB rig VM at a time plus the host), about 150-250 GB free SSD for
+  the VMs, their snapshots and the installer cache, mains power with sleep off, wired network if possible. Move the
+  VMs by copying their folders (or OVA export with snapshots) and install the same VirtualBox version. Run Claude Code
+  (or a scheduled agent) on the laptop itself, so campaigns never touch the main PC.
 - If the rig stays on this PC: campaigns only at night or when idle (scheduled task), one VM, lower priority, a memory
   floor check before each step, and a handle-count check.
 
