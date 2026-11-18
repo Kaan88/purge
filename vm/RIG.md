@@ -153,8 +153,9 @@ and `<prefix>null<n>` with one (§4a).
    step 3 (`pre[].launch`), with `pre_uninstall` removed with its vendor uninstaller as in step 5
    (`pre[].uninstall`). Then `plant_pre` (§4b).
 0b. **Defender signature idle** (phase `defender-idle`, right before `arp0` / `lists 0` / `snap 0`, app and null
-   runs alike; `riglib.ps1` `Wait-DefenderIdle`; ruling 2026-11-18, section 12.7): one Defender signature update is
-   triggered and waited for, then Defender's state must hold still. The versions are recorded at `snap 0` and
+   runs alike; `riglib.ps1` `Wait-DefenderIdle`; ruling 2026-11-18, section 12.7): Defender signature updates are
+   triggered until the last one succeeds, the state holds still for 60 s and the signatures are current (at most
+   600 s; details in 12.7). The versions are recorded at `snap 0` and
    `snap 2` (`run.json` `defender`).
 1. `lists 0`, `snap 0` (clean, from `rig-base`).
 2. Install silently. Record `install_start`, `install_end`, exit code and `ran_as`: `elevated` (the agent's token)
