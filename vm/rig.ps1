@@ -1182,8 +1182,15 @@ function Invoke-M2ElevatedTests {
 #   .\vm\rig.ps1 -Mode m1b-freeze                                       (2 raw runs each of powershell, temurin)
 #   .\vm\rig.ps1 -Mode m1b-budgets -Engine <m1b engine> -BaseEngine <M2-head engine> -Program <program id>   (host only)
 
-# The gate's app list (G2, G3).
-function Get-M1bGateApps { @('7zip', 'python', 'python312-with-313', 'python313-with-312', 'node', 'vcredist', 'powershell', 'temurin') }
+# The gate's app list: G2 (rig-base) the eight apps; G3 (dirty-base) the same without node (ruling 2026-11-18):
+# dirty-base already holds Node.js 20.18.0 (guest\setup-dirty.ps1), so a node run there installs nothing new and
+# scores a no-op. truth\m1b.sh's defaults are the same lists (DEF_APPS, DEF_DIRTY_APPS).
+function Get-M1bGateApps {
+    param([string]$Base = 'rig-base')
+    $all = @('7zip', 'python', 'python312-with-313', 'python313-with-312', 'node', 'vcredist', 'powershell', 'temurin')
+    if ($Base -eq 'dirty-base') { return @($all | Where-Object { $_ -ne 'node' }) }
+    $all
+}
 # The apps whose truth m1b-freeze makes (two raw runs each, M0 method).
 function Get-M1bFreezeApps { @('powershell', 'temurin') }
 
@@ -1239,8 +1246,9 @@ function Get-M1bBuildInfo {
         if ($LASTEXITCODE -eq 0 -and $c.Count) { $commit = "$($c[0])".Trim() }
         $d = @(& git -C $RepoRoot status --porcelain --untracked-files=no -- crates bins tools kb Cargo.toml Cargo.lock rust-toolchain.toml 2>$null)
         if ($LASTEXITCODE -eq 0) { $dirty = [bool]($d | Where-Object { "$_".Trim() }) }
-        # review R4c S3: the rig inputs (untracked files count: a new label file is hashed too)
-        $d = @(& git -C $RepoRoot status --porcelain -- vm/truth/m1b-traps.json vm/truth/labels vm/guest vm/rig.ps1 2>$null)
+        # review R4c S3: the rig inputs (untracked files count: a new label file is hashed too); R4d S1: the deny
+        # list and the frozen truths too
+        $d = @(& git -C $RepoRoot status --porcelain -- vm/truth/m1b-traps.json vm/truth/labels vm/truth/deny.json vm/truth/frozen vm/guest vm/rig.ps1 2>$null)
         if ($LASTEXITCODE -eq 0) { $inDirty = [bool]($d | Where-Object { "$_".Trim() }) } else { $inDirty = $null }
     } finally { $ErrorActionPreference = $old }
     [ordered]@{ path = $Path; sha256 = $sha; commit = $commit; source_dirty = $dirty
@@ -1248,14 +1256,17 @@ function Get-M1bBuildInfo {
 }
 
 # The rig inputs an M1b run depends on (review R4c S3): the SHA-256 (lower-case hex) of the trap file, every label
-# file, every file of vm\guest (not its tests) and rig.ps1, keyed by the path from the repository root
-# ('vm/guest/run-app.ps1'). truth\m1b.sh (BIND) requires one set over all runs, unchanged during the campaign and clean
-# against HEAD, whose trap and label files are those it scores with.
+# file, the deny list truth\deny.json and every file under truth\frozen (review R4d S1: rigtool truth / score read the
+# deny list, SANITY and the replay read the frozen truths), every file of vm\guest (not its tests) and rig.ps1, keyed
+# by the path from the repository root ('vm/guest/run-app.ps1'). truth\m1b.sh (BIND) requires one set over all runs,
+# unchanged during the campaign and clean against HEAD, whose trap, label, deny and frozen files are those it scores
+# with.
 function Get-M1bRigInputs {
     param([string]$RepoRoot = $script:RepoRoot)
     $vm = Join-Path $RepoRoot 'vm'
-    $files = @(Get-Item -LiteralPath (Join-Path $vm 'truth\m1b-traps.json'), (Join-Path $vm 'rig.ps1') -ErrorAction SilentlyContinue)
+    $files = @(Get-Item -LiteralPath (Join-Path $vm 'truth\m1b-traps.json'), (Join-Path $vm 'truth\deny.json'), (Join-Path $vm 'rig.ps1') -ErrorAction SilentlyContinue)
     $files += @(Get-ChildItem -LiteralPath (Join-Path $vm 'truth\labels') -Filter '*.json' -File -ErrorAction SilentlyContinue)
+    $files += @(Get-ChildItem -LiteralPath (Join-Path $vm 'truth\frozen') -Recurse -File -ErrorAction SilentlyContinue)
     $files += @(Get-ChildItem -LiteralPath (Join-Path $vm 'guest') -File -ErrorAction SilentlyContinue)
     $out = [ordered]@{}
     foreach ($f in @($files | Sort-Object FullName)) {
@@ -1315,7 +1326,7 @@ function Invoke-M1bMode {
             return Invoke-M1bEngineCampaign -Mode $Mode -Engine (Get-M1bEngine $Engine) -Base $Base -Campaign $c
         }
         'm1b-apps' {
-            if (-not $ids.Count) { $ids = @(Get-M1bGateApps) }
+            if (-not $ids.Count) { $ids = @(Get-M1bGateApps -Base $Base) }
             $pfx = Get-M1bRunPrefix -Base $Base -RunPrefix $RunPrefix
             $c = @{ Ids = $ids; Nulls = $(if ($Nulls -lt 0) { 3 } else { $Nulls }); NullOrder = 'spread'; Snapshot = $Base; RunPrefix = $pfx; M1b = @{ msi_tables = $true } } + $common
             return Invoke-M1bEngineCampaign -Mode $Mode -Engine (Get-M1bEngine $Engine) -Base $Base -Campaign $c
@@ -1343,6 +1354,24 @@ function Invoke-M1bMode {
     }
 }
 
+# The verdict install\install.ps1 -Check gives the Purge data root (Test-Tree over Get-PurgeDataLayout: owner,
+# protected admin-only DACL of every object, no reparse point): 'good', 'absent', 'incomplete', 'reject', or
+# 'error: ...'. Only the data root: the engine under test runs from its build folder, not from Program Files. Runs
+# install.ps1 dot-sourced in a child powershell.exe, so its script-scope state stays out of rig.ps1. Read-only.
+function Get-PurgeDataRootVerdict {
+    param([string]$DataRoot = (Join-Path $env:ProgramData 'Purge'), [string]$RepoRoot = $script:RepoRoot)
+    $inst = Join-Path $RepoRoot 'install\install.ps1'
+    if (-not (Test-Path -LiteralPath $inst -PathType Leaf)) { return "error: no $inst" }
+    $q = { param($s) "'" + $s.Replace("'", "''") + "'" }
+    $cmd = "`$ErrorActionPreference = 'Stop'; try { . $(& $q $inst); Initialize-PurgeNative; " +
+           "`$v = Test-Tree $(& $q $DataRoot) (Get-PurgeDataLayout) 'data-root'; 'VERDICT=' + `$v.verdict } catch { 'VERDICT=error: ' + `$_.Exception.Message }"
+    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $out = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $cmd 2>$null) } finally { $ErrorActionPreference = $old }
+    $line = @($out | Where-Object { "$_" -like 'VERDICT=*' } | Select-Object -Last 1)
+    if (-not $line.Count) { return "error: no verdict from install.ps1 (exit $LASTEXITCODE)" }
+    "$($line[0])".Substring(8)
+}
+
 # G7 (K14), host only and read-only: purge-engine harvest and forced scan of one program with PURGE_TIMING=1, three
 # rounds per engine (round 1 cold, rounds 2-3 warm), for the M1b engine (-Engine) and the M2-head engine
 # (-BaseEngine, built from 3265797), in the same session. Cold = the M1b engine's MSI table cache
@@ -1350,10 +1379,23 @@ function Invoke-M1bMode {
 # nothing else is touched; the moved folder is left for the operator to delete). Each step's stderr goes to
 # vm\runs\<prefix>m1b-budgets\<engine>-<step>-<round>.log; budgets.json lists them (purge.rig.m1b-budgets/2, with
 # each run's exit code, the engines' SHA-256 and cold_cache_state) for truth\m1b.sh. Nothing is uninstalled: harvest and scan only read (and write their -o files under the run dir).
+# Ruling 2026-11-18 (K14 warm cache): the engine keeps the MSI table cache on disk only under an admin-only
+# %ProgramData%\Purge, else in memory for one process, so "warm" rounds would be cold. The mode refuses to start
+# unless that data root is exactly as install\install.ps1 creates it (Get-PurgeDataRootVerdict 'good': run
+# install\install.ps1 elevated first). truth\m1b.sh checks the logs as well (a disk-cache line in every warm M1b log).
+# Program (ruling 2026-11-18, G7 like for like): one MSI app for which both engines' harvest finds an install root
+# (the same count) and no co-product candidate. PuTTY (no InstallLocation) made the M2 head skip the anchor pass the
+# M1b engine runs. Pick it on the host from both engines' harvest lines ("N root(s) ... 0 co-product candidate(s)");
+# truth\m1b.sh fails K14 "not like for like" otherwise.
 function Invoke-M1bBudgets {
     param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$BaseEngine, [Parameter(Mandatory)][string]$Program,
           [string]$RunPrefix = '', [int]$Rounds = 3, [switch]$KeepCache)
     if ($Program -match '[\s"]') { throw "bad program id '$Program'" }
+    $dataRoot = Join-Path $env:ProgramData 'Purge'
+    $verdict = Get-PurgeDataRootVerdict -DataRoot $dataRoot
+    if ($verdict -ne 'good') {
+        throw "m1b-budgets: $dataRoot is not the admin-only data root install\install.ps1 creates (verdict: $verdict); without it the MSI table cache is never warm (K14). Run install\install.ps1 elevated, then again"
+    }
     $engines = [ordered]@{ m1b = (Resolve-Path -LiteralPath $Engine).ProviderPath; m2 = (Resolve-Path -LiteralPath $BaseEngine).ProviderPath }
     if ($engines.m1b -eq $engines.m2) { throw '-Engine and -BaseEngine are the same file' }
     $run = "${RunPrefix}m1b-budgets"

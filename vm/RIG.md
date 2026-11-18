@@ -389,7 +389,12 @@ be removed through an API, e.g. a package's rows through Remove-AppxPackage).
 
 Union of `diff(snap-0, snap-2)` over the null runs, as canonical target strings, plus generalized patterns:
 a GUID, a hex run of 16+ chars, or a number of 6+ digits in a path segment becomes a wildcard, so churn
-with random names still matches. Output `vm\truth\ambient.json`: `{ runs: [...], exact: [...], patterns:
+with random names still matches. Two narrow folder rules for files (ruling 2026-11-18, dirty-base noise): a
+`<...\Temp>\<3-8 hex>.tmp` file (Windows' GetTempFileName name) becomes `<that Temp>\<3-8 hex>.tmp` with any
+children, and a `.txt` or `.log` file directly in a folder named `logs` (Steam's `logs\service_log.txt`) becomes
+any `.txt` / `.log` directly in that folder. A generic "any file in this folder" rule is not used: a null run
+touching `%TEMP%` or `Prefetch` would make every app's file there ambient. Other temp names (`DEL<hex>.tmp`,
+`tem<hex>.tmp`, `~nsu*.tmp`, `is-*.tmp`) stay as they are; frozen truths hold such leftovers. Output `vm\truth\ambient.json`: `{ runs: [...], exact: [...], patterns:
 [...] }`. The scorer prints how many truth items each run's ambient set removed.
 
 ## 7. Plan JSON (what a cleaner offers) and scoring (`rigtool score`)
@@ -1003,7 +1008,7 @@ and G8 (Purge-CleanPro). The executor side (G5, G6, K10-K13) is `vm/rig-m1b-exec
 | Mode | What | Runs |
 |---|---|---|
 | `m1b-app -App <id> [-Base rig-base\|dirty-base] [-Traps]` | one engine run of one app (no null runs unless `-Nulls` is given) | `m1b[d]-[traps-]<id>` |
-| `m1b-apps [-Base ...] [-Ids ...]` | the gate list `7zip python python312-with-313 python313-with-312 node vcredist powershell temurin` (the same list on dirty-base), with 3 null runs spread | `m1b[d]-<id>`, `m1b[d]-null<n>` |
+| `m1b-apps [-Base ...] [-Ids ...]` | the gate list `7zip python python312-with-313 python313-with-312 node vcredist powershell temurin`; on dirty-base the same list without node (dirty-base has Node.js 20.18.0, so the install is a no-op; ruling 2026-11-18, m1b.sh `M1B_DIRTY_APPS`), with 3 null runs spread | `m1b[d]-<id>`, `m1b[d]-null<n>` |
 | `m1b-traps [-Base ...]` | 7zip as TrapA and node as TrapB, with every plant of `guest/m1b-traps.ps1` | `m1b[d]-traps-7zip` |
 | `m1b-freeze` | two raw runs (vendor uninstall, no engine) of powershell and temurin; Inbound rig-base only | `m1b-fz1-<id>`, `m1b-fz2-<id>` |
 | `m1b-budgets -Engine <m1b> -BaseEngine <M2 head> -Program <id>` | G7 on the host, read only (12.5) | `runs/m1b-budgets/` |
@@ -1043,8 +1048,9 @@ M0/M1a run. When options are given, run.json gets an `m1b` block and run-app add
 - **Build record.** rig.ps1 writes `<run>\m1b-build.json` (`purge.rig.m1b-build/1`) for each app run: the engine's SHA-256
   before and after the campaign, HEAD, whether crates/bins/tools/kb/Cargo.*/rust-toolchain.toml differ from HEAD, and the
   SHA-256 of the pulled run.json. It does not hash the guest's copy of the engine. Since review R4c S3 it also holds
-  the rig inputs (`Get-M1bRigInputs`): the SHA-256 of `truth/m1b-traps.json`, every `truth/labels/*.json`, every file
-  of `guest/` (not `guest/tests`) and `rig.ps1`, before (`inputs`) and after (`inputs_after`) the campaign, and
+  the rig inputs (`Get-M1bRigInputs`): the SHA-256 of `truth/m1b-traps.json`, every `truth/labels/*.json`,
+  `truth/deny.json` and every file under `truth/frozen` (review R4d S1), every file of `guest/` (not `guest/tests`)
+  and `rig.ps1`, before (`inputs`) and after (`inputs_after`) the campaign, and
   whether they differ from HEAD, untracked files included (`inputs_dirty`).
 
 ### 12.3 Trap expectations (`truth/m1b-traps.json`)
@@ -1173,7 +1179,9 @@ two G1 inputs: it rewrites `truth/m1b-replay-diff.json` (`cargo xtask replay-dif
 `runs/m1b-replay/<id>/` (copies of the run's snaps, lists-0 and run.json, the committed `truth/frozen/<id>/truth.json`,
 the plan with its sidecar actions; the frozen run directory is not written), scores them with `rigtool score --classes`
 and writes `truth/m1b-replay-score.json` (+ `.md`) with a `replay` block (`purge.rig.m1b-replay/1`: runs, HEAD, engine
-sources clean, frozen truth SHA-256). Exit 1 when a run could not be replayed or the diff has unexplained rows.
+sources clean, frozen truth SHA-256). Review R4d S3: the old diff is deleted first, and the block records the SHA-256
+of the diff this replay wrote (`diff_sha256`, null when replay-diff wrote none) and replay-diff's exit code
+(`diff_exit`). Exit 1 when a run could not be replayed or the diff has unexplained rows.
 
 `bash truth/m1b.sh` (run from `vm/`) has two stages.
 
@@ -1194,25 +1202,47 @@ digests, frozen truths, rigtool, the null runs per set).
 - It writes `truth/m1b-score.json` (`purge.rig.m1b-score/2`, with `gate` and `not_gate_because`).
 - A missing input gives a FAIL line; nothing is skipped.
 - **RUN**: every app and trap run finished, every phase ok; each set has at least 2 null runs for its ambient set, each
-  finished with every phase ok (R4b S2 rest).
+  finished with every phase ok (R4b S2 rest). Ruling 2026-11-18: each app and trap run must have installed its
+  target: collect records run.json's `main` entry and `entries_created` against `lists-<run>-0.json` (same key, or
+  same MSI product code); a target already in lists-0, no entry created, or either unreadable is "INVALID RUN"
+  (FAIL). Null runs install nothing and are excepted.
 - **BIND**: each run's build record names its run.json (SHA-256), the engine did not change during the campaign, the
   sources were clean, one engine and one commit over all runs, the budgets' M1b engine is that engine, and the trap file
   and label files are the committed ones with each run's label id equal to its app id. Review R4c S3: every run holds
   the same rig input hashes (12.2), unchanged during the campaign, clean against HEAD, and their trap and label files
   are the files scored with. Review R4c S2: the replay score has its `replay` block for the five runs, the runs'
-  commit, clean engine sources and the current frozen truths.
+  commit, clean engine sources and the current frozen truths. Review R4d S1: `truth/deny.json` (also against the
+  manifest's `deny_sha256`) and every file under `truth/frozen` are rig inputs as well and must be the committed
+  files. Review R4d S3: the replay block's `diff_sha256` is the SHA-256 of the evidence's `replay-diff.json` and
+  `diff_exit` is 0.
 - **FROZEN**: `truth/frozen/<app>/truth.json` exists for powershell and temurin.
 - **SANITY** (review R4c S4, as m1a.sh's sanity step): each rig-base run's truth against `truth/frozen/<id>/truth.json`
   where one exists (7zip, python, node, vcredist, powershell, temurin), items keyed with random names normalised as the
   freeze compares them. A frozen leftover or user_data item that the run labels otherwise fails. Items on one side only
   (a launch that did nothing, an uninstall that removed more or less) are counted and listed in the note for the gate
-  report, not failed. The dirty and Clean-Pro sets have no frozen truth.
+  report, not failed. The dirty and Clean-Pro sets have no frozen truth. Review R4d S2: a frozen item is matched by
+  its exact target first; only when the run has no item with that exact target does the normalised key decide, and
+  then the run's ambient items under that key do not count (a key with only ambient items is "frozen only"), so
+  Windows' `%TEMP%\<hex>.tmp` beside the bundle's `DEL<hex>.tmp` is no relabel. R4d N2: an app of those six whose
+  frozen truth cannot be read FAILS.
 - **K4/K7 G1**: the replay score must hold a purge score for each of the five runs (one row each); another app fails.
+  R4d N1: a replayed plan without `truth_n` / `offered_n`, or with truth items and nothing offered, fails K4 G1.
+- **K1 and K8 vcredist** (ruling 2026-11-18) count danger offered: rigtool's `danger_offered`, the danger items listed
+  in any band but Blocked. A danger item listed Blocked (deny-listed, report only, e.g. REF-ANY's hit on the bam
+  `UserSettings` value naming the Package Cache) is `danger_kept` and is named in the note. `danger_listed`,
+  `danger_offered`, `danger_kept` and the `danger` list must be present and agree, else FAIL. K8 runs over each set's
+  own app list.
 - **K1-K6** fail on an empty plan (truth items but nothing offered) or a score without counts.
 - **K9** needs every case and `com-shared-class#between` planted ok, every expectation target among the planted objects
   (an object that already existed counts and is reported; a note-only or missing one fails), TrapA 7zip and TrapB node.
 - **K14** needs exactly 12 budget runs (2 engines x 2 steps x 3 rounds), each exit 0, round 1 cold and the others warm,
-  and the M1b cold round's cache moved aside or absent (`cold_cache_state`; `kept` fails).
+  and the M1b cold round's cache moved aside or absent (`cold_cache_state`; `kept` fails). Ruling 2026-11-18:
+  - **warm MSI table cache**: every warm M1b log has `timing: msi_table_cache disk <path> hits=N misses=M` with
+    N >= 1 (a `memory` line or no line fails), and its `timing: total:` line reads fewer `sys.msi_tables` than the
+    cold round of the same step (a total line without the counter counts 0; a missing total line, or a cold round
+    with 0, fails).
+  - **like for like**: every harvest log of both engines has the summary line `harvest: ...; N root(s), ...;
+    K co-product candidate(s); ...`, with the same N >= 1 throughout and K = 0; else "not like for like".
 - **K16** needs `purge.replay-diff/3`, exactly the five reasons, all five replay apps, 0 unexplained rows, and every
   promotion (band rose or became preselected) marked `promotion_justified` and listed in `justified_promotions` with a cause.
 
@@ -1225,15 +1255,30 @@ Options:
   bad-run control (missing plant, failed plant phase, empty plan, unbound or rebuilt engine, dirty sources, two commits,
   changed traps or labels, label override, budget exit/rounds/cache, unexplained or unlisted promotion; since R4c a
   replay score short of a run or unbound, rig inputs missing, dirty, differing between runs or edited before the
-  campaign, a frozen leftover relabelled, a missing run truth, too few or broken null runs...) fails on its named
-  criterion, that every non-default setting gives exit 3, and that `replay` with stub cargo xtask, rigtool and git
-  writes a score the gate passes with (and fails K4 G1 when a run is missing).
+  campaign, a frozen leftover relabelled, a missing run truth, too few or broken null runs; since 2026-11-18 danger
+  offered at Likely or Safe and danger counts that disagree (K1, K8), a target already in lists-0, no entry created or
+  lists-0 unreadable (RUN), a relabel by normalised name and an unreadable frozen truth (SANITY), a changed or unbound
+  deny list or frozen truth, an unbound or failed replay diff (BIND), an empty replayed plan (K4), and a memory or
+  missing cache line, a warm round without hits or reading the tables, a root count that differs, a co-product, a
+  missing harvest line (K14)) fails on its named criterion, while the positive controls (a Blocked danger item, an
+  ambient item sharing a frozen leftover's normalised name, ...) still pass; that every non-default setting gives
+  exit 3; that `replay` with stub cargo xtask, rigtool and git writes a score the gate passes with (fails K4 G1 when
+  a run is missing; with a failing replay-diff the stale diff is gone and K16 and BIND fail); and that `runsum`
+  records the target against lists-0.
 
 `m1b-budgets` runs on the host and only reads:
+- It refuses to start unless `%ProgramData%\Purge` is the admin-only data root (`Get-PurgeDataRootVerdict`: install.ps1's
+  `Test-Tree` against `Get-PurgeDataLayout` gives `good`; run `install\install.ps1` first). Without it the engine's MSI
+  table cache falls back to memory and every round is cold (ruling 2026-11-18).
+- The program (`-Program`) is one MSI app that both engines find an install root for and that has no co-product
+  candidate (ruling 2026-11-18; K14 "like for like" checks it). PuTTY is not one: the M2 head found no root for it
+  and skipped the anchor pass the M1b engine ran.
 - For each engine it runs `harvest <program>` and then `scan --mode forced` with `PURGE_TIMING=1`, for 3 rounds. Round 1 is cold; rounds 2 and 3 are warm.
 - Before the M1b engine's cold round, the MSI table cache `%ProgramData%\Purge\fp\msitables` is moved aside. The moved folder is left for the operator to delete.
 - The stderr of each step goes to `runs/m1b-budgets/<engine>-<step>-<round>.log`.
-- m1b.sh reads two things from each log: the `[ N.NNNs]` end stamp (the total time) and the `timing: phase` lines (refscan count, ownership.components, ownership.tables).
+- m1b.sh reads from each log: the `[ N.NNNs]` end stamp (the total time), the `timing: phase` lines (refscan count,
+  ownership.components, ownership.tables), the `timing: msi_table_cache` line, the `sys.msi_tables` count of the
+  `timing: total:` line and the `harvest:` summary line (root and co-product counts).
 - The warm figure is the median of the warm rounds, compared with the M2 head measured in the same session.
 
 Notes on individual criteria:

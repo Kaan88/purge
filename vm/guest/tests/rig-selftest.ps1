@@ -128,12 +128,30 @@ Check 'a settings set built with -Priority 4 has Priority=4 (not registered)' ($
     $msg = $null; try { $null = Get-M1bRunPrefix -Base 'm2-base' } catch { $msg = $_.Exception.Message }
     Check 'M1b: a base other than rig-base / dirty-base refused' ($msg -match 'rig-base or dirty-base')
     Check 'M1b: the gate list has the 8 apps' (@(Get-M1bGateApps).Count -eq 8 -and (Get-M1bGateApps) -contains 'python313-with-312')
+    # ruling 2026-11-18: dirty-base has Node.js 20.18.0 already, so G3 runs the list without node
+    $dl = @(Get-M1bGateApps -Base 'dirty-base')
+    Check 'M1b: the dirty-base list is the gate list without node' ($dl.Count -eq 7 -and $dl -notcontains 'node' -and ($dl -join ',') -eq (@(Get-M1bGateApps | Where-Object { $_ -ne 'node' }) -join ',')) ($dl -join ',')
+    # ruling 2026-11-18 (K14): m1b-budgets refuses without the admin-only data root, before anything runs
+    $msg = $null
+    & {
+        function Get-PurgeDataRootVerdict { param([string]$DataRoot, [string]$RepoRoot) 'absent' }
+        try { $null = Invoke-M1bBudgets -Engine 'C:\nonexistent\a.exe' -BaseEngine 'C:\nonexistent\b.exe' -Program 'p' } catch { $script:budgetMsg = $_.Exception.Message }
+    }
+    Check 'M1b: m1b-budgets refuses without an admin-only %ProgramData%\Purge' ("$script:budgetMsg" -match 'not the admin-only data root.*verdict: absent') "$script:budgetMsg"
+    $absent = Join-Path $Work 'no-purge-data-root'
+    $plain = Join-Path $Work 'plain-purge-data-root'; New-Item -ItemType Directory $plain | Out-Null
+    $va = Get-PurgeDataRootVerdict -DataRoot $absent; $vp = Get-PurgeDataRootVerdict -DataRoot $plain
+    Check 'M1b: data root verdict as install.ps1 -Check (absent; an inherited-DACL folder is rejected)' ($va -eq 'absent' -and $vp -eq 'reject') "absent: $va; plain: $vp"
     # review R4c S3: the build record carries the rig inputs' hashes (read-only git and file reads)
     $in = Get-M1bRigInputs -RepoRoot (Split-Path -Parent $Vm)
     $trapSha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Vm 'truth\m1b-traps.json')).Hash.ToLowerInvariant()
     $nLab = @(Get-ChildItem -LiteralPath (Join-Path $Vm 'truth\labels') -Filter '*.json' -File).Count
-    Check 'M1b: rig inputs hash the trap file, every label file, the guest scripts and rig.ps1' (
+    $nFz = @(Get-ChildItem -LiteralPath (Join-Path $Vm 'truth\frozen') -Recurse -File).Count
+    $denySha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Vm 'truth\deny.json')).Hash.ToLowerInvariant()
+    Check 'M1b: rig inputs hash the trap file, every label file, deny.json, every frozen file, the guest scripts and rig.ps1' (
         $in['vm/truth/m1b-traps.json'] -ceq $trapSha -and $in.Contains('vm/rig.ps1') -and $in.Contains('vm/guest/m1b-traps.ps1') -and
+        $in['vm/truth/deny.json'] -ceq $denySha -and $in.Contains('vm/truth/frozen/temurin/truth.json') -and
+        @($in.Keys | Where-Object { $_ -like 'vm/truth/frozen/*' }).Count -eq $nFz -and $nFz -gt 0 -and
         @($in.Keys | Where-Object { $_ -like 'vm/truth/labels/*.json' }).Count -eq $nLab -and
         -not @($in.Keys | Where-Object { $_ -like 'vm/guest/tests/*' }).Count) "keys: $(@($in.Keys).Count)"
     $bi = Get-M1bBuildInfo -Path '' -RepoRoot (Split-Path -Parent $Vm)
@@ -708,6 +726,15 @@ $EnginePhases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1
     Check 'run-app M0: vendor uninstall, no engine call, no engine record' ($r.engine.Count -eq 0 -and ($r.events -contains 'start:uninst-npp.exe /S') -and -not ($r.run.PSObject.Properties.Name -contains 'engine') -and $r.run.uninstall.entry_gone -eq $true) (Steps $r)
     Check 'run-app M0: every tree wait has the PID-reuse guard (-Preexisting)' (-not ($r.events -contains 'waittree:no-preexisting')) ($r.events -join ' | ')
     Check 'run-app M0: outputs under the app id, installer ran elevated' ((Files $r.dir) -eq 'lists-npp-0.json,lists-npp-1.json,lists-npp-2.json,run.json,run.log,snap-npp-0.tsv.gz,snap-npp-1.tsv.gz,snap-npp-2.tsv.gz' -and $r.run.install.ran_as -eq 'elevated') (Files $r.dir)
+
+    # Review R4d S4 / N5: a pinned app (temurin, apps.ps1 sha256) whose file does not hash to the pin (the fake
+    # Get-FileInfoRecord gives 'FAKE'): setup fails, the record names no installer, the install phase refuses and
+    # nothing is installed.
+    $r = Invoke-FakeRunApp 'pin' 'temurin'
+    Check 'run-app pin mismatch: setup and install fail, no installer recorded, nothing installed' (
+        $r.code -eq 1 -and ($r.failed -contains 'setup') -and ($r.failed -contains 'install') -and -not $r.run.installer -and
+        -not @($r.events | Where-Object { $_ -match '^start:msiexec\.exe /i' -or $_ -match 'temurin21' }).Count -and
+        (@($r.run.phases) | Where-Object { $_.name -eq 'install' }).error -match 'no installer') "exit $($r.code); failed: $($r.failed -join ','); installer: $($r.run.installer); $($r.events -join ' | ')"
 
     # Engine mode, every call ok.
     $r = Invoke-FakeRunApp 'engine' 'npp' 'r0-npp' -EngineMode

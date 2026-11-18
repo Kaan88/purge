@@ -203,9 +203,12 @@ function Resolve-Installer($App, $Rec) {
         $Rec.installer_source = 'download'
     }
     $info = Get-FileInfoRecord $file $Rec.url
-    $Rec.installer = $file; $Rec.installer_sha256 = $info.sha256; $Rec.installer_sig = "$($info.sig) $($info.signer)".Trim()
+    $Rec.installer_sha256 = $info.sha256; $Rec.installer_sig = "$($info.sig) $($info.signer)".Trim()
     if ($m -and $info.sha256 -ne "$($m.sha256)".ToUpperInvariant()) { Log "!! $($App.file): sha256 differs from the cache manifest (version drift?)"; $Rec.installer_version = $null }
+    # Review R4d S4: the pin is checked before the record names the file, so a mismatch leaves $Rec.installer empty
+    # and the install phase (which refuses an empty installer) never runs a file of another version.
     if ($App.sha256 -and $info.sha256 -ne "$($App.sha256)".ToUpperInvariant()) { throw "$($App.file): sha256 $($info.sha256) != pinned $($App.sha256)" }
+    $Rec.installer = $file
     Log "installer $file sha256=$($info.sha256) sig=$($Rec.installer_sig) source=$($Rec.installer_source)"
     $file
 }
@@ -427,6 +430,7 @@ Save-Run
 Phase 'install' {
     $a = $e.app
     if (-not $a) { throw 'no app definition (setup failed)' }
+    if (-not $S.installer) { throw 'no installer (setup failed: missing, or not the pinned file)' }
     if ($UpgradeFrom) {
         # apps.ps1 upgrade_from: the older build first, then the main installer over it (an in-place upgrade).
         $u = Get-App $UpgradeFrom

@@ -46,7 +46,8 @@
 #   The gate's inputs. Any of them set to a value other than its default makes the configuration custom, and a
 #   custom score is never the gate's (review R4b S3):
 #   M1B_RUNS         run directories (default runs)
-#   M1B_APPS         G2/G3 apps (default: the 8 of the gate); M1B_CP_APPS G8 apps (default "7zip python vcredist")
+#   M1B_APPS         G2 apps (default: the 8 of the gate); M1B_DIRTY_APPS G3 apps (default: the 8 without node, ruling
+#                    2026-11-18: dirty-base already holds Node.js 20.18.0); M1B_CP_APPS G8 apps (default "7zip python vcredist")
 #   M1B_CLEAN, M1B_DIRTY, M1B_CP   run prefixes without the dash (default m1b, m1bd, m1bcp)
 #   M1B_SETS         sets to collect and evaluate (default "clean dirty cp")
 #   M1B_TRAP_RUNS    trap runs (default "m1b-traps-7zip m1bd-traps-7zip m1bcp-traps-7zip")
@@ -58,6 +59,9 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PY=${PYTHON:-python}
 R=${RIGTOOL:-rigtool/target/release/rigtool}
 DEF_APPS="7zip python python312-with-313 python313-with-312 node vcredist powershell temurin"
+# G3 (ruling 2026-11-18): dirty-base already has Node.js 20.18.0 (guest/setup-dirty.ps1), so a node run there is a
+# no-op install; node is scored on rig-base (G2) only. rig.ps1 Get-M1bGateApps -Base dirty-base gives the same list.
+DEF_DIRTY_APPS="7zip python python312-with-313 python313-with-312 vcredist powershell temurin"
 DEF_CP_APPS="7zip python vcredist"
 DEF_SETS="clean dirty cp"
 DEF_TRAPS="m1b-traps-7zip m1bd-traps-7zip m1bcp-traps-7zip"
@@ -65,6 +69,7 @@ RUNS=${M1B_RUNS:-runs}
 OUT=${M1B_OUT:-truth}
 EVID=${M1B_EVIDENCE:-$OUT/m1b-evidence}
 APPS=${M1B_APPS:-$DEF_APPS}
+DIRTY_APPS=${M1B_DIRTY_APPS:-$DEF_DIRTY_APPS}
 CP_APPS=${M1B_CP_APPS:-$DEF_CP_APPS}
 SETS=${M1B_SETS:-$DEF_SETS}
 TRAP_RUNS=${M1B_TRAP_RUNS:-$DEF_TRAPS}
@@ -79,13 +84,14 @@ M1B_TRUTH_LABELS=(--labels truth/labels/_os-servicing.json --labels truth/labels
 # The default of each gate input (see the header); an unset variable, or one equal to its default, is the default.
 def_of() {
   case "$1" in
-    M1B_RUNS) echo runs ;; M1B_APPS) echo "$DEF_APPS" ;; M1B_CP_APPS) echo "$DEF_CP_APPS" ;; M1B_SETS) echo "$DEF_SETS" ;;
+    M1B_RUNS) echo runs ;; M1B_APPS) echo "$DEF_APPS" ;; M1B_DIRTY_APPS) echo "$DEF_DIRTY_APPS" ;; M1B_CP_APPS) echo "$DEF_CP_APPS" ;;
+    M1B_SETS) echo "$DEF_SETS" ;;
     M1B_TRAP_RUNS) echo "$DEF_TRAPS" ;; M1B_LABELS) echo "" ;; M1B_CLEAN) echo m1b ;; M1B_DIRTY) echo m1bd ;; M1B_CP) echo m1bcp ;;
     M1B_BUDGETS) echo runs/m1b-budgets ;; M1B_REPLAY_DIFF) echo truth/m1b-replay-diff.json ;;
     M1B_REPLAY_SCORE) echo truth/m1b-replay-score.json ;;
   esac
 }
-GATE_VARS="M1B_RUNS M1B_APPS M1B_CP_APPS M1B_SETS M1B_TRAP_RUNS M1B_LABELS M1B_CLEAN M1B_DIRTY M1B_CP M1B_BUDGETS M1B_REPLAY_DIFF M1B_REPLAY_SCORE"
+GATE_VARS="M1B_RUNS M1B_APPS M1B_DIRTY_APPS M1B_CP_APPS M1B_SETS M1B_TRAP_RUNS M1B_LABELS M1B_CLEAN M1B_DIRTY M1B_CP M1B_BUDGETS M1B_REPLAY_DIFF M1B_REPLAY_SCORE"
 CONFIG_VARS=""
 for v in $GATE_VARS; do
   if [ -n "${!v+x}" ] && [ "${!v}" != "$(def_of "$v")" ]; then CONFIG_VARS="$CONFIG_VARS $v"; fi
@@ -94,7 +100,7 @@ CONFIG_VARS=${CONFIG_VARS# }
 CONFIG=default; [ -n "$CONFIG_VARS" ] && CONFIG=custom
 
 prefix_of() { case "$1" in clean) echo "${M1B_CLEAN:-m1b}" ;; dirty) echo "${M1B_DIRTY:-m1bd}" ;; cp) echo "${M1B_CP:-m1bcp}" ;; esac; }
-apps_of() { if [ "$1" = cp ]; then echo "$CP_APPS"; else echo "$APPS"; fi; }
+apps_of() { case "$1" in cp) echo "$CP_APPS" ;; dirty) echo "$DIRTY_APPS" ;; *) echo "$APPS" ;; esac; }
 label_of() { local m; for m in ${M1B_LABELS:-}; do if [ "${m%%=*}" = "$1" ]; then echo "${m#*=}"; return; fi; done; echo "$1"; }
 
 # ------------------------------------------------------------------------------------------- python part
@@ -118,6 +124,8 @@ OWNED_LISTED = ['svc-owned', 'task-owned', 'fw-owned', 'com-owned']   # design `
 TRAP_A, TRAP_B = '7zip', 'node'
 K5_MIN = {'python312-with-313': 29, 'python313-with-312': 29}
 FROZEN_APPS = ['powershell', 'temurin']               # truth from the m1b-freeze runs (FROZEN.md, RIG.md 12.6)
+# the gate apps with a frozen truth (truth/frozen/<id>/truth.json): SANITY fails, never skips, one it cannot read (R4d N2)
+SANITY_APPS = ['7zip', 'python', 'node', 'vcredist', 'powershell', 'temurin']
 REPLAY_RUNS = ['vscode', 'git', 'firefox', 'npp', '7zip']
 REPLAY_SCHEMA = 'purge.replay-diff/3'
 REPLAY_REASONS = ['new_scanner', 'msi_blocker_added', 'msi_root_added', 'policy_m1b', 'promotion_justified']
@@ -170,12 +178,32 @@ def read_json(p):
 
 
 # ------------------------------------------------------------------------------------------- stage 1 helpers
+def target_entry(rj, lists0):
+    """The run's target ARP entry against lists-0 (ruling 2026-11-18, RUN): the main entry run-app found, whether it
+    was already in lists-0 (same key, or same MSI product code), and how many entries the install created. A target
+    already there means the install was a no-op (G3 node: dirty-base had Node.js 20.18.0)."""
+    if not isinstance(rj, dict):
+        return None
+    m = rj.get('main') if isinstance(rj.get('main'), dict) else None
+    created = rj.get('entries_created')
+    out = {'main_key': (m or {}).get('key'), 'main_name': (m or {}).get('name'), 'main_msi': (m or {}).get('msi'),
+           'entries_created': [str((e or {}).get('key')) for e in created] if isinstance(created, list) else None,
+           'in_lists0': None}
+    if m and isinstance(lists0, dict) and isinstance(lists0.get('uninstall'), list):
+        key, code = str(m.get('key') or '').lower(), str(m.get('msi') or '').strip('{}').lower()
+        out['in_lists0'] = any(isinstance(e, dict) and ((key and str(e.get('key') or '').lower() == key)
+                                                        or (code and str(e.get('msi') or '').strip('{}').lower() == code))
+                               for e in lists0['uninstall'])
+    return out
+
+
 if MODE == 'runsum':
     # runsum <run dir> <run name> <out>: the run's record for the evaluator
     d, run, out = A
     rj = read_json(os.path.join(d, 'run.json'))
     plan = read_json(os.path.join(d, 'plan-purge.json'))
     doc = {'schema': 'purge.rig.m1b-run/1', 'run': run,
+           'target': target_entry(rj, read_json(os.path.join(d, f'lists-{run}-0.json'))),
            'run_json_sha256': sha256_file(os.path.join(d, 'run.json')),
            'run_json': None if rj is None else {
                'run': rj.get('run'), 'started': rj.get('started'), 'finished': rj.get('finished'),
@@ -200,6 +228,7 @@ if MODE == 'manifest':
     doc = {'schema': 'purge.rig.m1b-evidence/2', 'note': 'collected by vm/truth/m1b.sh from ' + runs_dir,
            'prefixes': {s: pre[s] for s in sets.split()}, 'gate_config': config, 'config_vars': config_vars.split(),
            'traps_sha256': sha256_file(os.path.join(truth_dir, 'm1b-traps.json')), 'labels': labels,
+           'deny_sha256': sha256_file(os.path.join(truth_dir, 'deny.json')),   # review R4d S1
            'frozen': {a: sha256_file(os.path.join(truth_dir, 'frozen', a, 'truth.json')) for a in FROZEN_APPS},
            'rigtool': {'path': rigtool, 'sha256': sha256_file(rigtool) or sha256_file(rigtool + '.exe')},
            # the null runs each set's ambient set was built from (review R4c, R4b S2 rest): RUN checks them too
@@ -210,14 +239,17 @@ if MODE == 'manifest':
     sys.exit(0)
 
 if MODE == 'replaybind':
-    # replaybind <replay score> <truth dir> <runs "id ..."> <commit> <source dirty true|false|unknown>: review R4c S2
-    out, truth_dir, runs, commit, dirty = A
+    # replaybind <replay score> <truth dir> <runs "id ..."> <commit> <source dirty true|false|unknown> <replay diff>
+    #            <replay-diff exit code>: review R4c S2; R4d S3 binds the diff this replay wrote (its SHA-256, None
+    #            when replay-diff wrote none) and replay-diff's exit code, which BIND checks
+    out, truth_dir, runs, commit, dirty, diff, diff_rc = A
     sc = read_json(out)
     if not isinstance(sc, dict):
         print(f'm1b replay: cannot read {out}', file=sys.stderr)
         sys.exit(1)
     sc['replay'] = {'schema': 'purge.rig.m1b-replay/1', 'runs': runs.split(), 'commit': commit or None,
                     'source_dirty': {'true': True, 'false': False}.get(dirty),
+                    'diff_sha256': sha256_file(diff), 'diff_exit': int(diff_rc) if diff_rc.lstrip('-').isdigit() else None,
                     'frozen': {r: sha256_file(os.path.join(truth_dir, 'frozen', r, 'truth.json')) for r in runs.split()},
                     'written': datetime.datetime.now().astimezone().isoformat(timespec='seconds')}
     with open(out, 'w', encoding='utf-8') as f:
@@ -601,8 +633,8 @@ if MODE == 'freezecmp':
 
 # ------------------------------------------------------------------------------------------- stage 2
 assert MODE == 'evaluate', MODE
-evid, out, apps, cp_apps, sets, trap_runs, config, config_vars, how, truth_dir = A
-apps, cp_apps, sets, trap_runs = apps.split(), cp_apps.split(), sets.split(), trap_runs.split()
+evid, out, apps, dirty_apps, cp_apps, sets, trap_runs, config, config_vars, how, truth_dir = A
+apps, dirty_apps, cp_apps, sets, trap_runs = apps.split(), dirty_apps.split(), cp_apps.split(), sets.split(), trap_runs.split()
 rows = []
 
 
@@ -620,7 +652,7 @@ def miss(what):
 
 
 def set_apps(s):
-    return cp_apps if s == 'cp' else apps
+    return {'cp': cp_apps, 'dirty': dirty_apps}.get(s, apps)
 
 
 def is_int(x):
@@ -664,10 +696,26 @@ for s, id, run in app_runs + [('traps', None, r) for r in trap_runs]:
         continue
     ph = rj.get('phases') or []
     bad = [str(p.get('name')) for p in ph if p.get('ok') is not True]
-    ok = rj.get('run') == run and bool(rj.get('finished')) and bool(ph) and not bad
-    note = ('failed: ' + ', '.join(bad)) if bad else (None if rj.get('run') == run else f"run.json names {rj.get('run')}")
-    row('RUN', st, run, f"finished={bool(rj.get('finished'))} phases ok {len(ph) - len(bad)}/{len(ph)}",
-        'finished, every phase ok', ok, note)
+    # Ruling 2026-11-18: the install must have created the target. A target ARP entry already in lists-0 (G3 node:
+    # dirty-base had Node.js 20.18.0) or no created entry at all is a no-op install: the run is invalid. Unknown
+    # (no target record, lists-0 unreadable) fails too.
+    tg = (rd or {}).get('target')
+    inval = []
+    if not isinstance(tg, dict) or not tg.get('main_key'):
+        inval.append('no target ARP entry recorded (run.json main)')
+    else:
+        if tg.get('in_lists0') is not False:
+            inval.append('target ARP entry already in lists-0: a no-op install' if tg.get('in_lists0') is True
+                         else 'lists-0 unreadable: cannot tell whether the target was installed by this run')
+        if not isinstance(tg.get('entries_created'), list) or not tg.get('entries_created'):
+            inval.append('the install created no ARP entry (entries_created empty)')
+    ok = rj.get('run') == run and bool(rj.get('finished')) and bool(ph) and not bad and not inval
+    note = '; '.join((['failed: ' + ', '.join(bad)] if bad else [])
+                     + ([] if rj.get('run') == run else [f"run.json names {rj.get('run')}"])
+                     + ([f"INVALID RUN: {', '.join(inval)} ({(tg or {}).get('main_name')} {(tg or {}).get('main_key')})"] if inval else []))
+    row('RUN', st, run, f"finished={bool(rj.get('finished'))} phases ok {len(ph) - len(bad)}/{len(ph)}"
+        + (' INVALID: target not installed by this run' if inval else ''),
+        'finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty)', ok, note or None)
 
 # RUN for the null runs each set's ambient set came from (review R4c; the rest of R4b S2): at least 2, each finished
 # with every phase ok. They run no engine, so BIND has nothing to bind.
@@ -719,6 +767,10 @@ if bud is not None:
 traps_now = sha256_file(os.path.join(truth_dir, 'm1b-traps.json'))
 if not traps_now or manifest.get('traps_sha256') != traps_now:
     bind_problems.append(f"trap file sha256 {manifest.get('traps_sha256')} at collect, {traps_now} committed")
+# review R4d S1: the deny list (rigtool truth and score read it: one of the four sources of danger), as the trap file
+deny_now = sha256_file(os.path.join(truth_dir, 'deny.json'))
+if not deny_now or manifest.get('deny_sha256') != deny_now:
+    bind_problems.append(f"deny list sha256 {manifest.get('deny_sha256')} at collect, {deny_now} committed")
 for s, id, run in app_runs:
     lab = (manifest.get('labels') or {}).get(run) or {}
     now = label_digest(os.path.join(truth_dir, 'labels'), id)
@@ -749,14 +801,21 @@ if len(input_sets) > 1:
     bind_problems.append(f'runs hold {len(input_sets)} different sets of rig input hashes (trap, label or guest files, rig.ps1)')
 elif input_sets:
     inp = json.loads(next(iter(input_sets)))
-    LP = 'vm/truth/labels/'
-    ldir = os.path.join(truth_dir, 'labels')
-    now_in = {'vm/truth/m1b-traps.json': traps_now}
+    LP, FP = 'vm/truth/labels/', 'vm/truth/frozen/'
+    ldir, fdir = os.path.join(truth_dir, 'labels'), os.path.join(truth_dir, 'frozen')
+    now_in = {'vm/truth/m1b-traps.json': traps_now, 'vm/truth/deny.json': deny_now}
     now_in.update({LP + f: sha256_file(os.path.join(ldir, f)) for f in (os.listdir(ldir) if os.path.isdir(ldir) else []) if f.endswith('.json')})
-    run_in = {k: v for k, v in inp.items() if k == 'vm/truth/m1b-traps.json' or k.startswith(LP)}
+    # review R4d S1: every file under truth/frozen (rig.ps1 Get-M1bRigInputs hashes them all), as the label files
+    for root, _, files in os.walk(fdir):
+        for f in files:
+            p = os.path.join(root, f)
+            now_in[FP + os.path.relpath(p, fdir).replace(os.sep, '/')] = sha256_file(p)
+    run_in = {k: v for k, v in inp.items() if k in ('vm/truth/m1b-traps.json', 'vm/truth/deny.json') or k.startswith(LP) or k.startswith(FP)}
     differ = sorted(k for k in set(now_in) | set(run_in) if now_in.get(k) != run_in.get(k))
     if differ:
-        bind_problems.append('trap / label files at run time differ from those scored with: ' + ', '.join(differ[:4]))
+        bind_problems.append('trap / label / deny / frozen files at run time differ from those scored with: ' + ', '.join(differ[:4]))
+    if not any(k.startswith(FP) for k in now_in) or not deny_now:
+        bind_problems.append('no deny list or no frozen truth to score with')
     if not any(k.startswith('vm/guest/') for k in inp) or 'vm/rig.ps1' not in inp:
         bind_problems.append('rig input hashes hold no guest script or no rig.ps1')
 # The replay score (review R4c S2): written by `m1b.sh replay` for the gate's commit, clean engine sources, the five
@@ -777,6 +836,12 @@ if rs is not None:
                or (rb.get('frozen') or {}).get(r) != sha256_file(os.path.join(truth_dir, 'frozen', r, 'truth.json'))]
         if fzd:
             bind_problems.append('replay score: frozen truth changed or missing since the replay: ' + ', '.join(fzd))
+        # review R4d S3: K16 judges the diff this replay wrote, and replay-diff exited 0
+        dsha = sha256_file(os.path.join(evid, 'replay-diff.json'))
+        if not rb.get('diff_sha256') or rb.get('diff_sha256') != dsha:
+            bind_problems.append(f"replay diff is not the one the replay wrote (sha256 {dsha}, replay block {rb.get('diff_sha256')})")
+        if rb.get('diff_exit') != 0 or isinstance(rb.get('diff_exit'), bool):
+            bind_problems.append(f"replay: cargo xtask replay-diff exit {rb.get('diff_exit')}, not 0")
 bind_ok = bool(run_docs) and not bind_problems and len(engines) == 1 and len(commits) == 1
 row('BIND', 'G2-G4, G7, G8', 'one build, committed traps and labels',
     f'engines={len(engines)} commits={len(commits)} problems={len(bind_problems)}', 'one engine, one commit, clean, 0 problems',
@@ -794,33 +859,80 @@ for app in [a for a in FROZEN_APPS if a in apps and ({'clean', 'dirty'} & set(se
 # as the freeze compares them. A frozen leftover or user_data item that the run labels otherwise FAILS (the run's
 # labels or the frozen truth are wrong). Items on one side only are counted and listed in the note (a launch that did
 # nothing, an uninstall that removed more or less): the gate report judges them.
+# Review R4d S2: a frozen item is matched by its exact target first; only when the run has no item with that exact
+# target (a random name) does the normalised key decide, and then only the run's non-ambient labels count: another
+# object of the same normalised name that the run labels ambient (Windows' %TEMP%\<hex>.tmp beside the bundle's
+# DEL<hex>.tmp) is not a relabel, and a key holding only ambient items is "frozen only". R4d N2: an app of
+# SANITY_APPS whose frozen truth cannot be read FAILS.
 if 'clean' in sets:
+    def ckey(t):
+        return (canon_of(t) or json.dumps(t, sort_keys=True)).lower()
+
     for id in apps:
         fz = read_json(os.path.join(truth_dir, 'frozen', id, 'truth.json'))
-        if fz is None:
-            continue
-        rt = load(f'truth-clean-{id}.json')
         subj = f'clean/{id}'
         lim = 'no frozen leftover/user_data item labelled otherwise'
-        if rt is None:
+        if not isinstance(fz, dict) or not isinstance(fz.get('items'), list):
+            if id in SANITY_APPS:
+                row('SANITY', 'G2', subj, miss(f'a readable truth/frozen/{id}/truth.json'), lim, False)
+            continue
+        rt = load(f'truth-clean-{id}.json')
+        if not isinstance(rt, dict) or not isinstance(rt.get('items'), list):
             row('SANITY', 'G2', subj, miss(f'truth-clean-{id}.json (the run truth)'), lim, False)
             continue
-
-        def labs(t):
-            out = {}
-            for it in t.get('items') or []:
-                out.setdefault(fz_norm(it.get('target') or {}), set()).add(it.get('label'))
-            return out
-        lf, lr = labs(fz), labs(rt)
-        real = lambda m: {k for k, v in m.items() if v & {'leftover', 'user_data'}}
-        rf, rr = real(lf), real(lr)
-        relab = sorted(k for k in rf if k in lr and lr[k] != lf[k])
-        only_f, only_r = sorted(rf - set(lr)), sorted(rr - set(lf))
-        note = '; '.join([f"relabelled: {k} {sorted(lf[k])} -> {sorted(lr[k])}" for k in relab[:3]]
+        REAL, AMB = {'leftover', 'user_data'}, {'ambient', 'rig'}
+        r_exact, r_norm = {}, {}
+        for it in rt['items']:
+            t = it.get('target') or {}
+            r_exact.setdefault(ckey(t), set()).add(it.get('label'))
+            r_norm.setdefault(fz_norm(t), set()).add(it.get('label'))
+        relab, only_f, f_norm = [], [], set()
+        for it in fz['items']:
+            t, lab = it.get('target') or {}, it.get('label')
+            f_norm.add(fz_norm(t))
+            if lab not in REAL:
+                continue
+            ex = r_exact.get(ckey(t))
+            if ex is not None:
+                if ex != {lab}:
+                    relab.append(f'{canon_of(t)} {lab} -> {sorted(ex)}')
+                continue
+            nl = r_norm.get(fz_norm(t), set()) - AMB
+            if not nl:
+                only_f.append(canon_of(t) or fz_norm(t))
+            elif lab not in nl or nl - REAL:
+                relab.append(f'{fz_norm(t)} {lab} -> {sorted(nl)} (by normalised name)')
+        nf = sum(1 for it in fz['items'] if it.get('label') in REAL)
+        rr = {fz_norm(it.get('target') or {}) for it in rt['items'] if it.get('label') in REAL}
+        only_r = sorted(rr - f_norm)
+        note = '; '.join([f'relabelled: {x}' for x in relab[:3]]
                          + ([f"frozen only ({len(only_f)}): " + ', '.join(only_f[:3])] if only_f else [])
                          + ([f"run only ({len(only_r)}): " + ', '.join(only_r[:3])] if only_r else []))
-        row('SANITY', 'G2', subj, f'leftover+user_data frozen {len(rf)} run {len(rr)}, relabelled {len(relab)}, '
+        row('SANITY', 'G2', subj, f'leftover+user_data frozen {nf} run {len(rr)}, relabelled {len(relab)}, '
             f'frozen only {len(only_f)}, run only {len(only_r)}', lim, not relab, note or None)
+
+# K1 and K8's vcredist danger (ruling 2026-11-18): danger OFFERED, danger listed in any band but Blocked
+# (rigtool score danger_offered). A danger item the engine lists Blocked is a read-only report line (ENGINE_PLAN.md
+# 1.2: BAM and the other Windows-managed stores are reported only; REF-ANY lists such a hit Blocked, DenyListed
+# reg.hklm.system; deny.json marks bam as danger), so it is kept, not
+# offered: counted as danger_kept and named in the note. Fail-closed: the counts must be integers and agree with the
+# score's danger list (danger_listed = every danger item, danger_offered = those not Blocked).
+def danger_offered(t):
+    dl, do, dk, items = t.get('danger_listed'), t.get('danger_offered'), t.get('danger_kept'), t.get('danger')
+    if not (is_int(dl) and is_int(do) and is_int(dk)) or not isinstance(items, list):
+        return {'value': miss(f'danger_listed / danger_offered / danger_kept / danger in the score ({dl}, {do}, {dk})'),
+                'ok': False, 'note': None, 'n': None}
+    off = [i for i in items if isinstance(i, dict) and i.get('band') != 'Blocked']
+    kept = [i for i in items if isinstance(i, dict) and i.get('band') == 'Blocked']
+    probs = []
+    if len(items) != dl or len(off) != do or len(kept) != dk or dl != do + dk:
+        probs.append(f'counts disagree with the danger list: listed {dl} offered {do} kept {dk}, list {len(items)} '
+                     f'({len(off)} not Blocked)')
+    note = '; '.join(probs + [f"offered at {i.get('band')}: {i.get('target')}" for i in off[:3]]
+                     + ([f'danger_kept {len(kept)} (listed Blocked, report only): '
+                         + ', '.join(f"{i.get('target')} [{i.get('scanner')}]" for i in kept[:3])] if kept else []))
+    return {'value': f'danger_offered={do} (danger_kept={dk})', 'ok': do == 0 and not probs, 'note': note or None, 'n': do}
+
 
 # K1-K6 per set and app
 for s in sets:
@@ -847,7 +959,8 @@ for s in sets:
         if s == 'dirty':
             row('K2', st, subj, t.get('danger_blocking'), 0, t.get('danger_blocking') == 0)
         else:
-            row('K1', st, subj, t.get('danger_listed'), 0, t.get('danger_listed') == 0)
+            dg = danger_offered(t)
+            row('K1', st, subj, dg['value'], 0, dg['ok'], dg['note'])
         dp, up = t.get('danger_preselected'), t.get('userdata_preselected')
         row('K3', st, subj, f'danger_preselected={dp} userdata_preselected={up}', '0 and 0', dp == 0 and up == 0)
         ps = t.get('precision_safe')
@@ -923,6 +1036,11 @@ if True:  # G1: the replay of the frozen corpus
                     'danger 0, precision_safe 100 %', False)
                 continue
             ps, dl = ts[0].get('precision_safe'), ts[0].get('danger_listed')
+            # review R4d N1: an empty replayed plan proves nothing, as K1-K6 (truth items, nothing offered, or no counts)
+            tn, on = ts[0].get('truth_n'), ts[0].get('offered_n')
+            if not is_int(tn) or not is_int(on) or (tn > 0 and on == 0):
+                row('K4', 'G1', f'replay/{rid}', f'empty plan or no counts: truth_n={tn} offered_n={on}', 'a plan with items', False)
+                continue
             row('K4', 'G1', f'replay/{rid}', f'danger_listed={dl} precision_safe={ps}', 'danger 0, precision_safe 100 %',
                 dl == 0 and (ps is None or ps == 1.0))
         extra = sorted({str(a.get('id')) for a in rs.get('apps', [])} - set(REPLAY_RUNS))
@@ -944,14 +1062,17 @@ def suggestions(scan):
 
 for s in [x for x in sets if x in ('clean', 'dirty')]:
     st = STEP[s]
-    if 'vcredist' in apps:
+    if 'vcredist' in set_apps(s):
         t = purge_score(s, 'vcredist')
         if t is None:
-            row('K8', st, f'{s}/vcredist', miss('vcredist score'), '0 preselected, 0 danger', False)
+            row('K8', st, f'{s}/vcredist', miss('vcredist score'), '0 preselected, 0 danger offered', False)
         else:
-            pre = sum(1 for i in t.get('items', []) if i.get('preselected'))
-            row('K8', st, f'{s}/vcredist', f'preselected={pre} danger_listed={t.get("danger_listed")}', '0 and 0', pre == 0 and t.get('danger_listed') == 0)
-    if 'python' in apps:
+            items = t.get('items')
+            pre = sum(1 for i in items if isinstance(i, dict) and i.get('preselected')) if isinstance(items, list) else None
+            dg = danger_offered(t)
+            row('K8', st, f'{s}/vcredist', f'preselected={pre} {dg["value"]}', '0 preselected, 0 danger offered',
+                pre == 0 and dg['ok'], dg['note'])
+    if 'python' in set_apps(s):
         scan = load(f'{s}-python-scan.json')
         if scan is None:
             row('K8', st, f'{s}/python suggestion', miss(f'{s}-python-scan.json'), 'launcher suggestion, report-only', False)
@@ -959,7 +1080,7 @@ for s in [x for x in sets if x in ('clean', 'dirty')]:
             sg = suggestions(scan)
             ok = bool(sg) and all(str(i.get('action')) == 'ReportOnly' for i in sg)
             row('K8', st, f'{s}/python suggestion', f'{len(sg)} suggestion(s), actions {sorted({str(i.get("action")) for i in sg})}', '>= 1, all ReportOnly', ok)
-    if 'python312-with-313' in apps:
+    if 'python312-with-313' in set_apps(s):
         scan = load(f'{s}-python312-with-313-scan.json')
         if scan is None:
             row('K8', st, f'{s}/python312-with-313 suggestion', miss(f'{s}-python312-with-313-scan.json'), 'none', False)
@@ -1076,26 +1197,48 @@ for run in trap_runs:
 # K14: budgets (review R4b S6: every run exit 0, 3 rounds per engine and step, round 1 shown cold)
 STAMP = re.compile(r'^\[\s*([0-9.]+)s\]')
 PHASE = re.compile(r'^timing:\s+phase (\S+) ([0-9.]+)s')
+# Ruling 2026-11-18 (K14 warm cache): the engine's cache line (PURGE_TIMING), `timing: msi_table_cache disk <path>
+# hits=N misses=M` or `timing: msi_table_cache memory ...`; the process total line `timing: total: ... sys.msi_tables
+# N/rows ...` (no sys.msi_tables in it: none read); the harvest summary `harvest: <name> (<id>); N root(s), R rejected;
+# ...; K co-product candidate(s); ...` (G7 like for like).
+CACHE = re.compile(r'^timing:\s+msi_table_cache\s+(\S+)(.*)$')
+TOTAL = re.compile(r'^timing:\s+total:(.*)$')
+MSI_READS = re.compile(r'(?:^|;)\s*sys\.msi_tables (\d+)')
+HSUM = re.compile(r'^harvest: .*?(\d+) root\(s\).*?(\d+) co-product candidate\(s\)')
 
 
 def parse_log(p):
-    total, phases = None, {}
+    total, phases, cache, reads, harvest = None, {}, [], None, None
     try:
         with open(p, encoding='utf-8', errors='replace') as f:
             for line in f:
+                line = line.rstrip('\r\n')
                 m = STAMP.match(line)
                 if m:
                     total = float(m.group(1))
                 m = PHASE.match(line)
                 if m:
                     phases.setdefault(m.group(1), []).append(float(m.group(2)))
+                m = CACHE.match(line)
+                if m:
+                    h = re.search(r'\bhits=(\d+)', m.group(2))
+                    cache.append({'kind': m.group(1), 'hits': int(h.group(1)) if h else None})
+                m = TOTAL.match(line)
+                if m:
+                    r = MSI_READS.search(m.group(1))
+                    reads = int(r.group(1)) if r else 0
+                m = HSUM.match(line)
+                if m:
+                    harvest = {'roots': int(m.group(1)), 'coproducts': int(m.group(2))}
     except OSError:
         return None
-    return {'total': total, 'phases': phases}
+    return {'total': total, 'phases': phases, 'cache': cache, 'msi_reads': reads, 'harvest': harvest}
 
 
+K14_ROWS = ('budget runs', 'reference walks per scan', 'added scan time', 'added harvest time', 'ownership.components',
+            'ownership.tables', 'warm MSI table cache', 'like for like')
 if bud is None:
-    for what in ('budget runs', 'reference walks per scan', 'added scan time', 'added harvest time', 'ownership.components', 'ownership.tables'):
+    for what in K14_ROWS:
         row('K14', 'G7', what, miss('budgets/budgets.json (rig.ps1 -Mode m1b-budgets)'), '-', False)
 else:
     probs, seen = [], {}
@@ -1147,6 +1290,61 @@ else:
         tb = [v for (e, s_, k, _), x in logs.items() if e == 'm1b' and k == kind for v in x['phases'].get('ownership.tables', [])]
         val = (max(tb) if kind == 'cold' else statistics.median(tb)) if tb else None
         row('K14', 'G7', f'ownership.tables ({kind})', val if tb else miss(f'{kind} ownership.tables lines'), f'<= {lim} s', bool(tb) and val <= lim)
+
+    # Ruling 2026-11-18: a warm round must have read the MSI tables from the disk cache. Every warm M1b log shows
+    # `msi_table_cache disk` with hits >= 1 and no `memory` line, and reads fewer sys.msi_tables than the cold round of
+    # the same step; a missing log, line or count fails.
+    wprobs, wnote = [], []
+    for step in BUDGET_STEPS:
+        cl = logs.get(('m1b', step, 'cold', 1))
+        if cl is None or cl['msi_reads'] is None:
+            wprobs.append(f'm1b {step} cold: no log or no timing total line')
+            continue
+        if cl['msi_reads'] <= 0:
+            wprobs.append(f'm1b {step} cold: read no sys.msi_tables (nothing to be warm against)')
+        for n in BUDGET_ROUNDS[1:]:
+            wl = logs.get(('m1b', step, 'warm', n))
+            if wl is None:
+                wprobs.append(f'm1b {step} round {n}: no log')
+                continue
+            kinds = [c['kind'] for c in wl['cache']]
+            disk = [c for c in wl['cache'] if c['kind'] == 'disk']
+            if not wl['cache']:
+                wprobs.append(f'm1b {step} round {n}: no msi_table_cache line (cache not on disk)')
+            elif 'disk' not in kinds or any(k != 'disk' for k in kinds):
+                wprobs.append(f"m1b {step} round {n}: msi_table_cache {'/'.join(kinds)}, not disk")
+            elif not all(isinstance(c['hits'], int) and c['hits'] >= 1 for c in disk):
+                wprobs.append(f"m1b {step} round {n}: disk cache with hits {[c['hits'] for c in disk]}")
+            if wl['msi_reads'] is None:
+                wprobs.append(f'm1b {step} round {n}: no timing total line')
+            elif wl['msi_reads'] >= cl['msi_reads']:
+                wprobs.append(f"m1b {step} round {n}: read {wl['msi_reads']} sys.msi_tables, the cold round {cl['msi_reads']}")
+            else:
+                wnote.append(f"{step} r{n} {wl['msi_reads']}/{cl['msi_reads']}")
+    row('K14', 'G7', 'warm MSI table cache', f'{len(wprobs)} problem(s)',
+        'every warm m1b log: msi_table_cache disk (hits >= 1), fewer sys.msi_tables than cold', not wprobs,
+        '; '.join(wprobs[:4]) or ('sys.msi_tables warm/cold: ' + ', '.join(wnote)))
+
+    # Ruling 2026-11-18 (G7 like for like): both engines' harvest of the program reports an install root, the same
+    # root count in every round, and no co-product candidate (PuTTY: no root for the M2 head, which then skipped the
+    # anchor pass the M1b engine ran).
+    lprobs, roots = [], {}
+    for e in BUDGET_ENGINES:
+        for n in BUDGET_ROUNDS:
+            hl = logs.get((e, 'harvest', 'cold' if n == 1 else 'warm', n))
+            hv = (hl or {}).get('harvest')
+            if not hv:
+                lprobs.append(f'{e} harvest round {n}: no harvest summary line')
+                continue
+            roots.setdefault(e, set()).add(hv['roots'])
+            if hv['coproducts'] != 0:
+                lprobs.append(f"{e} harvest round {n}: {hv['coproducts']} co-product candidate(s)")
+    allroots = set().union(*roots.values()) if roots else set()
+    if len(allroots) != 1 or set(roots) != set(BUDGET_ENGINES) or min(allroots or {0}) < 1:
+        lprobs.append('root counts ' + ', '.join(f'{e} {sorted(v)}' for e, v in sorted(roots.items())) + ' (need the same count >= 1)')
+    row('K14', 'G7', 'like for like', 'like for like' if not lprobs else 'not like for like',
+        'both engines: same install root count >= 1, 0 co-product candidates', not lprobs,
+        '; '.join(lprobs[:4]) or f"program {bud.get('program')}: {sorted(allroots)[0]} root(s) for both engines")
 
 
 # K16: replay diff (review R4b B1), judged by its rows: every row carries one of the five reasons (DECISIONS
@@ -1219,8 +1417,8 @@ if how != 'gate':
 gate = passed and not why_not
 doc = {'schema': 'purge.rig.m1b-score/2', 'time': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
        'evidence': evid, 'gate_config': config, 'config_vars': config_vars.split(), 'mode': how,
-       'apps': apps, 'cp_apps': cp_apps, 'sets': sets, 'trap_runs': trap_runs,
-       'inputs': {'traps_sha256': traps_now, 'labels': manifest.get('labels'), 'frozen': manifest.get('frozen'),
+       'apps': apps, 'dirty_apps': dirty_apps, 'cp_apps': cp_apps, 'sets': sets, 'trap_runs': trap_runs,
+       'inputs': {'traps_sha256': traps_now, 'deny_sha256': deny_now, 'labels': manifest.get('labels'), 'frozen': manifest.get('frozen'),
                   'rigtool': manifest.get('rigtool'), 'engines': sorted(engines), 'commits': sorted(commits)},
        'criteria': rows, 'failed': len(fails), 'pass': passed, 'gate': gate, 'not_gate_because': why_not}
 os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
@@ -1237,7 +1435,7 @@ EOF
 
 # evaluate <evidence dir> <score json out> [gate|evaluate]: stage 2; "gate" only from the no-argument run.
 evaluate() {
-  pyeval evaluate "$1" "$2" "$APPS" "$CP_APPS" "$SETS" "$TRAP_RUNS" "$CONFIG" "$CONFIG_VARS" "${3:-evaluate}" "$HERE"
+  pyeval evaluate "$1" "$2" "$APPS" "$DIRTY_APPS" "$CP_APPS" "$SETS" "$TRAP_RUNS" "$CONFIG" "$CONFIG_VARS" "${3:-evaluate}" "$HERE"
 }
 
 # plan_actions <plan> <scan sidecar> <out>: the plan with each item's action from its scan sidecar (as m1a.sh step 3).
@@ -1274,11 +1472,13 @@ EOF
 # be replayed is left out (exit 1); K4 G1 then fails, as it needs all five. XTASK (default "cargo xtask") and GIT
 # (default git) name the commands (the selftest's stubs).
 replay() {
-  local src=${PURGE_RUNS_DIR:-$RUNS} stage="$RUNS/m1b-replay" id d s rc=0 commit dirty xt gt
+  local src=${PURGE_RUNS_DIR:-$RUNS} stage="$RUNS/m1b-replay" id d s rc=0 commit dirty xt gt drc
   read -r -a xt <<<"${XTASK:-cargo xtask}"; read -r -a gt <<<"${GIT:-git}"
-  rm -rf "$stage"; mkdir -p "$stage"; rm -f "$REPLAY_SCORE"
-  "${xt[@]}" replay-diff --runs "$src" -o "$REPLAY_DIFF" >&2 \
-    || { echo "m1b replay: replay-diff failed or has unexplained rows (K16 judges $REPLAY_DIFF)" >&2; rc=1; }
+  # review R4d S3: the old diff goes first, so a replay-diff that fails before writing leaves none (K16 FAILs on a
+  # missing diff), and the replay block binds the diff this run wrote and replay-diff's exit code (BIND)
+  rm -rf "$stage"; mkdir -p "$stage"; rm -f "$REPLAY_SCORE" "$REPLAY_DIFF"
+  "${xt[@]}" replay-diff --runs "$src" -o "$REPLAY_DIFF" >&2; drc=$?
+  if [ $drc -ne 0 ]; then echo "m1b replay: replay-diff exit $drc: failed or has unexplained rows (K16 judges $REPLAY_DIFF)" >&2; rc=1; fi
   local dirs=()
   for id in $REPLAY_IDS; do
     d="$src/$id"; s="$stage/$id"
@@ -1302,7 +1502,7 @@ replay() {
   commit=$("${gt[@]}" -C "$HERE" rev-parse HEAD 2>/dev/null) || commit=""
   if dirty=$("${gt[@]}" -C "$HERE/../.." status --porcelain --untracked-files=no -- crates bins tools kb Cargo.toml Cargo.lock \
       rust-toolchain.toml 2>/dev/null); then [ -n "$dirty" ] && dirty=true || dirty=false; else dirty=unknown; fi
-  pyeval replaybind "$REPLAY_SCORE" "$HERE" "$REPLAY_IDS" "$commit" "$dirty" || return 1
+  pyeval replaybind "$REPLAY_SCORE" "$HERE" "$REPLAY_IDS" "$commit" "$dirty" "$REPLAY_DIFF" "$drc" || return 1
   echo "m1b replay: ${#dirs[@]} of 5 run(s) scored -> $REPLAY_SCORE" >&2
   return $rc
 }
@@ -1434,7 +1634,17 @@ assert not d['pass'] and not d['gate']
       "inputs_missing BIND" "inputs_dirty BIND" "inputs_two_sets BIND" "inputs_changed_in_campaign BIND" \
       "inputs_traps_edited_before BIND" "inputs_label_edited_before BIND" \
       "sanity_relabelled SANITY" "sanity_truth_missing SANITY" "sanity_run_only PASS" "sanity_frozen_only PASS" \
-      "nulls_too_few RUN" "null_phase_failed RUN"; do
+      "nulls_too_few RUN" "null_phase_failed RUN" \
+      "k1_blocked_denylisted PASS" "k1_danger_likely K1" "k1_danger_safe K1" "k1_danger_likely_beside_kept K1" \
+      "k1_counts_disagree K1" "k1_counts_missing K1" "k8_vcredist_danger_likely K8" "k8_vcredist_blocked PASS" \
+      "run_target_preinstalled RUN" "run_no_entry_created RUN" "run_lists0_unreadable RUN" "run_target_unknown RUN" \
+      "sanity_ambient_same_name PASS" "sanity_ambient_only_same_name PASS" "sanity_relabelled_by_name SANITY" \
+      "sanity_frozen_unreadable SANITY" \
+      "deny_changed BIND" "inputs_deny_edited_before BIND" "inputs_no_deny BIND" "inputs_frozen_edited_before BIND" \
+      "replay_diff_unbound BIND" "replay_diff_failed BIND" "replay_diff_missing K16" \
+      "replay_score_empty_plan K4" "replay_score_no_counts K4" \
+      "budget_cache_memory K14" "budget_cache_line_missing K14" "budget_cache_no_hits K14" "budget_warm_reads_tables K14" \
+      "budget_not_like_for_like K14" "budget_coproduct K14" "budget_no_harvest_line K14"; do
     set -- $ctl
     rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"
     if ! "$PY" -I "$fx" mutate "$tmp/m" "$1" >"$tmp/m.txt" 2>&1; then no_ "control $1" "mutation failed: $(head -c 300 "$tmp/m.txt")"; continue; fi
@@ -1475,19 +1685,24 @@ assert not d['gate'] and not d['pass']
   printf '#!/usr/bin/env bash\nexec "%s" -I "%s" git "$@"\n' "$PY" "$fx" >"$tmp/bin/git"
   chmod +x "$tmp/bin/"*
   local rv want_rc want_gate
-  for rv in all npp; do
+  # Review R4d S3: the replay block binds the diff the step wrote (sha256) and replay-diff's exit code; a replay-diff
+  # that fails before writing leaves no diff behind (the stale one is deleted first): K16 and BIND fail.
+  for rv in all npp difffail; do
     if [ $rv = all ]; then want_rc=0; want_gate=0; else want_rc=1; want_gate=1; fi
-    "$PY" -I "$fx" replayruns "$tmp/rr" "$([ $rv = all ] || echo $rv)"
+    "$PY" -I "$fx" replayruns "$tmp/rr" "$([ $rv = npp ] && echo npp)"
+    rm -rf "$tmp/rp-$rv"; mkdir -p "$tmp/rp-$rv"; echo '{"stale": true}' >"$tmp/rp-$rv/diff.json"
     (OUT="$tmp/rp-$rv"; HERE="$tmp/fx/truth"; RUNS="$tmp/rr"; unset PURGE_RUNS_DIR; R="$tmp/bin/rigtool"; XTASK="$tmp/bin/xtask"
-     GIT="$tmp/bin/git"; REPLAY_SCORE="$tmp/rp-$rv/score.json"; REPLAY_DIFF="$tmp/rp-$rv/diff.json"; mkdir -p "$OUT"; replay) \
-      >"$tmp/rp.txt" 2>&1; rc=$?
-    rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"; rm -f "$tmp/m/replay-score.json"
+     GIT="$tmp/bin/git"; REPLAY_SCORE="$tmp/rp-$rv/score.json"; REPLAY_DIFF="$tmp/rp-$rv/diff.json"
+     if [ $rv = difffail ]; then export STUB_DIFF_FAIL=1; fi; replay) >"$tmp/rp.txt" 2>&1; rc=$?
+    rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"; rm -f "$tmp/m/replay-score.json" "$tmp/m/replay-diff.json"
     [ -f "$tmp/rp-$rv/score.json" ] && cp "$tmp/rp-$rv/score.json" "$tmp/m/replay-score.json"
+    [ -f "$tmp/rp-$rv/diff.json" ] && cp "$tmp/rp-$rv/diff.json" "$tmp/m/replay-diff.json"
     eval_gate "$tmp/m" "$tmp/m.json" >"$tmp/m.out" 2>&1; local grc=$?
-    if [ $rc -eq $want_rc ] && [ $grc -eq $want_gate ] && "$PY" -I - "$tmp/rp-$rv/score.json" "$tmp/rr" "$tmp/m.json" "$rv" <<'EOF'
-import json, os, sys
+    if [ $rc -eq $want_rc ] && [ $grc -eq $want_gate ] && "$PY" -I - "$tmp/rp-$rv/score.json" "$tmp/rr" "$tmp/m.json" "$rv" "$tmp/rp-$rv/diff.json" <<'EOF'
+import hashlib, json, os, sys
+rv = sys.argv[4]
 s = json.load(open(sys.argv[1], encoding='utf-8'))
-want = ['vscode', 'git', 'firefox', 'npp', '7zip'] if sys.argv[4] == 'all' else ['vscode', 'git', 'firefox', '7zip']
+want = ['vscode', 'git', 'firefox', '7zip'] if rv == 'npp' else ['vscode', 'git', 'firefox', 'npp', '7zip']
 assert sorted(a['id'] for a in s['apps']) == sorted(want), [a['id'] for a in s['apps']]
 rb = s['replay']
 assert rb['schema'] == 'purge.rig.m1b-replay/1' and rb['commit'] == 'c' * 40 and rb['source_dirty'] is False, rb
@@ -1495,13 +1710,32 @@ assert all(not os.listdir(os.path.join(sys.argv[2], a, 'plans')) for a in want),
 g = json.load(open(sys.argv[3], encoding='utf-8'))
 k4 = [r for r in g['criteria'] if r['id'] == 'K4' and r['step'] == 'G1']
 assert len(k4) == 5, k4
-if sys.argv[4] == 'all':
-    assert g['gate'] and all(r['pass'] for r in k4)
+failed = lambda i: [r for r in g['criteria'] if r['id'] == i and not r['pass']]
+if rv == 'difffail':
+    assert not os.path.exists(sys.argv[5]), 'the stale diff survived a failed replay-diff'
+    assert rb['diff_sha256'] is None and rb['diff_exit'] not in (0, None), rb
+    assert failed('K16') and failed('BIND') and not g['gate'], 'a failed replay-diff passed'
 else:
+    assert rb['diff_exit'] == 0 and rb['diff_sha256'] == hashlib.sha256(open(sys.argv[5], 'rb').read()).hexdigest(), rb
+if rv == 'all':
+    assert g['gate'] and all(r['pass'] for r in k4)
+elif rv == 'npp':
     assert [r['subject'] for r in k4 if not r['pass']] == ['replay/npp'], k4
 EOF
     then ok_ "replay_step_writes_score_$rv"; else no_ "replay_step_writes_score_$rv" "step exit $rc, gate exit $grc: $(tail -2 "$tmp/rp.txt")"; fi
   done
+
+  # Ruling 2026-11-18 (RUN): runsum records the target ARP entry against lists-0; the evaluator rejects a run whose
+  # target was already there (the dirty-base node run) or that created no entry.
+  "$PY" -I "$fx" targetruns "$tmp/tr" && pyeval runsum "$tmp/tr/m1bd-node" m1bd-node "$tmp/tr/node.json" \
+    && pyeval runsum "$tmp/tr/m1bd-temurin" m1bd-temurin "$tmp/tr/temurin.json"; rc=$?
+  if [ $rc -eq 0 ] && "$PY" -I - "$tmp/tr/node.json" "$tmp/tr/temurin.json" <<'EOF'
+import json, sys
+n, t = (json.load(open(p, encoding='utf-8'))['target'] for p in sys.argv[1:3])
+assert n['in_lists0'] is True and n['entries_created'] == [], n
+assert t['in_lists0'] is False and t['entries_created'] == [t['main_key']], t
+EOF
+  then ok_ runsum_target_against_lists0; else no_ runsum_target_against_lists0 "exit $rc"; fi
 
   # Churn rule (RIG.md section 12.6): an item in one freeze run only is excluded from the frozen truth and reported,
   # never frozen as a leftover; a label that differs between the runs and a run that is not whole refuse the freeze.
