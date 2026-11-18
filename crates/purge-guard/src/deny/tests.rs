@@ -1512,10 +1512,48 @@ fn shared_components_lookup() {
                 paths: vec![r"relative\x".into()],
                 keys: Vec::new(),
                 packages: Vec::new(),
+                burn_link: None,
             }]
         )
         .is_err()
     );
+}
+
+/// The Python Launcher is the one component Burn bundles install without a provider record: the
+/// CPython bundles, by the Launcher's UpgradeCode (vm/runs/m1b-python and m1b-python313-with-312,
+/// `Installer\UpgradeCodes\CE0A86B13DD4431548E03758B480361F` for both Launcher products).
+#[test]
+fn shared_components_burn_link() {
+    let shared = SharedComponents::compile(&env()).unwrap();
+    let linked: Vec<&str> = shared
+        .components()
+        .iter()
+        .filter(|c| c.burn_link.is_some())
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(linked, ["python-launcher"]);
+    let link = shared.components()[shared
+        .components()
+        .iter()
+        .position(|c| c.id == "python-launcher")
+        .unwrap()]
+    .burn_link
+    .as_ref()
+    .unwrap();
+    assert_eq!(
+        link.upgrade_codes,
+        ["{1B68A0EC-4DD3-5134-840E-73854B0863F1}"]
+    );
+    for (provider, want) in [
+        ("CPython-3.12", true),
+        ("cpython-3.13", true),
+        ("  CPython-3.14 ", true),
+        ("CPython", false),
+        ("MyCPython-3.12", false),
+        ("", false),
+    ] {
+        assert_eq!(link.bundle_matches(provider), want, "{provider:?}");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------

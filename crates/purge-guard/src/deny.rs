@@ -69,7 +69,7 @@ mod tests;
 
 pub use objects::{ObjectGuardFacts, check_object};
 pub use rules::{SharedIid, SharedIids, shared_iids};
-pub use shared::{SharedComponent, SharedComponents, shared_components};
+pub use shared::{BurnLink, SharedComponent, SharedComponents, shared_components};
 
 /// The names of the deny rules added in M1b (C-GUARD), as reported in [`Blocker::DenyListed`]. A scanner
 /// that blocks with one of them from its own facts (`com.system-class` from the baseline, say) uses these

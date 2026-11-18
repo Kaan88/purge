@@ -1340,6 +1340,16 @@ impl OwnershipIndex {
             .map_or(&[], |p| p.dependents.as_slice())
     }
 
+    /// Every Burn/MSI dependency provider key the index found under the machine's and every loaded
+    /// user's Classes (as first found, in key order), whether or not anything depends on it, with each
+    /// of its dependents and the hive the record was read from: `None` for the machine's, else the
+    /// user's SID. Only complete when [`area::BURN`] is.
+    pub fn burn_providers(&self) -> impl Iterator<Item = (&str, &[(String, Option<String>)])> {
+        self.burn
+            .values()
+            .map(|p| (p.name.as_str(), p.records.as_slice()))
+    }
+
     /// The provider keys (as found) that list `dependent` (compared without regard to case) in any
     /// hive. Not an ownership answer: a user can write a record naming any dependent in their own
     /// hive; use [`OwnershipIndex::burn_providers_in`] for that.

@@ -190,6 +190,7 @@ fn burn_fp() -> Fingerprint {
             },
         ],
         dependents_at_harvest: Vec::new(),
+        linked: Vec::new(),
     });
     fp
 }

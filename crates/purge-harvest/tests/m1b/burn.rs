@@ -434,3 +434,165 @@ fn burn_provider_default_value_guid_used() {
         )]
     );
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// A package without a provider record: the Python Launcher of the real CPython bundles
+// ---------------------------------------------------------------------------------------------------------
+
+/// The Python Launcher 3.12.7 (vm/runs/m1b-python).
+const LAUNCHER: &str = "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}";
+/// The Launcher's UpgradeCode (`Installer\UpgradeCodes\CE0A86B13DD4431548E03758B480361F`).
+const LAUNCHER_UPGRADE: &str = "{1B68A0EC-4DD3-5134-840E-73854B0863F1}";
+/// The Python 3.12.7 (64-bit) bundle.
+const PY_BUNDLE: &str = "{e9b7c837-5066-4f10-851a-69179f987b18}";
+const PY_NAME: &str = "Python 3.12.7 (64-bit)";
+
+/// The machine as Python 3.12.7 leaves it (vm/runs/m1b-python, snap 1): a per-user bundle of the user
+/// `SID` with the provider key `provider` and the version `version`, whose only dependency record is
+/// its own (`<provider>\Dependents\{bundle}` in the user's Classes); the Python Launcher installed for
+/// the machine from `last_used` (`SourceList\LastUsedSource`), registered under its UpgradeCode.
+fn python(provider: &str, version: &str, last_used: &str) -> FixtureBuilder {
+    let key = format!(r"{}\{PY_BUNDLE}", user_uninstall());
+    let cache_path =
+        format!(r"C:\Users\tester\AppData\Local\Package Cache\{PY_BUNDLE}\python-3.12.7-amd64.exe");
+    let b = machine()
+        .sz(&key, "DisplayName", PY_NAME)
+        .sz(&key, "DisplayVersion", "3.12.7150.0")
+        .sz(&key, "Publisher", "Python Software Foundation")
+        .sz(&key, "BundleProviderKey", provider)
+        .sz(&key, "BundleVersion", version)
+        .sz(&key, "BundleCachePath", &cache_path)
+        .sz(
+            &key,
+            "BundleUpgradeCode",
+            "{114AEC44-152B-5746-952F-F20CE3CAB54A}",
+        )
+        .sz(
+            &key,
+            "UninstallString",
+            &format!(r#""{cache_path}"  /uninstall"#),
+        )
+        .file(&cache_path, 879_168)
+        .key(&format!(
+            r"{}\{provider}\Dependents\{PY_BUNDLE}",
+            user_deps()
+        ));
+    msi_app(b, LAUNCHER, "Python Launcher", None)
+        .sz(&upgrade_key(), &packed(LAUNCHER), "")
+        .sz(
+            &format!(
+                r"HKLM\SOFTWARE\Classes\Installer\Products\{}\SourceList",
+                packed(LAUNCHER)
+            ),
+            "LastUsedSource",
+            last_used,
+        )
+}
+
+/// The machine's registrations under the Launcher's UpgradeCode.
+fn upgrade_key() -> String {
+    format!(
+        r"HKLM\SOFTWARE\Classes\Installer\UpgradeCodes\{}",
+        packed(LAUNCHER_UPGRADE)
+    )
+}
+
+fn launcher_source(version: &str) -> String {
+    format!(r"n;1;C:\ProgramData\Package Cache\{LAUNCHER}v{version}\")
+}
+
+/// The linked components and the warnings of the Python bundle's harvest.
+fn linked_of(f: &purge_source::fixture::Fixture) -> (Vec<purge_model::BurnLinked>, Vec<String>) {
+    let fp = harvest_of(f, PY_NAME).fingerprint;
+    (fp.burn.expect("burn facts").linked, fp.warnings)
+}
+
+/// The real shape: no package has a provider record, so `packages` is empty; the Launcher is linked
+/// through the kb entry and the folder Burn made for it.
+#[test]
+fn burn_package_without_provider_linked_through_kb() {
+    assert_eq!(packed(LAUNCHER_UPGRADE), "CE0A86B13DD4431548E03758B480361F");
+    let f = python(
+        "CPython-3.12",
+        "3.12.7150.0",
+        &launcher_source("3.12.7150.0"),
+    )
+    .build();
+    let fp = harvest_of(&f, PY_NAME).fingerprint;
+    let burn = fp.burn.as_ref().expect("burn facts");
+    assert!(burn.packages.is_empty(), "{:?}", burn.packages);
+    assert_eq!(
+        burn.linked,
+        [purge_model::BurnLinked {
+            component: "python-launcher".into(),
+            product_code: LAUNCHER.into(),
+            cache_dir: format!(r"C:\ProgramData\Package Cache\{LAUNCHER}v3.12.7150.0"),
+        }]
+    );
+    // A link is not a package: nothing of the Launcher is the app's.
+    assert!(fp.msi.is_empty(), "{:?}", fp.msi);
+    assert!(purge_harvest::harvest::to_json(&fp).contains("\"linked\""));
+
+    // Without a link the member is not written: every other fingerprint stays byte for byte.
+    let f = python("ToolSuite", "3.12.7150.0", &launcher_source("3.12.7150.0")).build();
+    let fp = harvest_of(&f, PY_NAME).fingerprint;
+    assert!(fp.burn.as_ref().unwrap().linked.is_empty());
+    assert!(!purge_harvest::harvest::to_json(&fp).contains("\"linked\""));
+}
+
+/// Nothing is linked when any part of the link is missing.
+#[test]
+fn burn_package_without_provider_not_linked_without_every_record() {
+    let source = launcher_source("3.12.7150.0");
+    // Another version of the Launcher: another bundle installed it (3.13 before 3.12, the 3.12 bundle
+    // then skips its older Launcher).
+    let (l, _) = linked_of(
+        &python(
+            "CPython-3.12",
+            "3.12.7150.0",
+            &launcher_source("3.13.17150.0"),
+        )
+        .build(),
+    );
+    assert!(l.is_empty(), "{l:?}");
+    // A bundle the kb entry does not name.
+    let (l, _) = linked_of(&python("ToolSuite", "3.12.7150.0", &source).build());
+    assert!(l.is_empty(), "{l:?}");
+    // Installed from somewhere else than Burn's folder for it in the machine's Package Cache.
+    for other in [
+        format!(r"n;1;C:\Users\tester\AppData\Local\Package Cache\{LAUNCHER}v3.12.7150.0\"),
+        format!(r"n;1;C:\ProgramData\Package Cache\{LAUNCHER}\"),
+        format!(r"n;1;C:\ProgramData\Package Cache\{LAUNCHER}v3.12.7150.0\x\"),
+        r"n;1;C:\Downloads\".to_owned(),
+        format!(r"u;1;C:\ProgramData\Package Cache\{LAUNCHER}v3.12.7150.0\"),
+    ] {
+        let (l, _) = linked_of(&python("CPython-3.12", "3.12.7150.0", &other).build());
+        assert!(l.is_empty(), "{other}: {l:?}");
+    }
+    // The bundle has no version.
+    let mut f = python("CPython-3.12", "3.12.7150.0", &source).build();
+    f.remove_value(
+        &format!(r"{}\{PY_BUNDLE}", user_uninstall()),
+        "BundleVersion",
+    );
+    let (l, w) = linked_of(&f);
+    assert!(l.is_empty(), "{l:?}");
+    assert!(w.iter().any(|w| w.contains("BundleVersion")), "{w:?}");
+    // The product is not registered under the UpgradeCode.
+    let mut f = python("CPython-3.12", "3.12.7150.0", &source).build();
+    f.remove_key(&upgrade_key());
+    let (l, _) = linked_of(&f);
+    assert!(l.is_empty(), "{l:?}");
+    // The UpgradeCode registrations cannot be read.
+    let mut f = python("CPython-3.12", "3.12.7150.0", &source).build();
+    f.add_denied(&upgrade_key());
+    let (l, w) = linked_of(&f);
+    assert!(l.is_empty(), "{l:?}");
+    assert!(w.iter().any(|w| w.contains("UpgradeCodes")), "{w:?}");
+    // The product is not installed.
+    let mut f = python("CPython-3.12", "3.12.7150.0", &source).build();
+    f.set_msi_products(Some(Vec::new()));
+    f.remove_key(&format!(r"{UNINSTALL}\{LAUNCHER}"));
+    let (l, _) = linked_of(&f);
+    assert!(l.is_empty(), "{l:?}");
+}

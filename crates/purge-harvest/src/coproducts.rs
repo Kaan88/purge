@@ -112,6 +112,10 @@ impl Drop for CoHarvestGuard {
 
 /// Harvests a candidate as a target of its own, from the same sources and before the uninstaller
 /// runs. The harvest only reads and never fails; its own co-product candidates are not followed.
+///
+/// With the engine call's shared indexes ([`HarvestCtx::shared`]) the candidate's harvest uses the
+/// ownership index, the system-object index and the MSI table cache the target's harvest already has,
+/// instead of reading the whole machine again.
 fn harvest_candidate(ctx: &HarvestCtx<'_>, entry: &InventoryEntry) -> Box<Fingerprint> {
     IN_CO_HARVEST.with(|flag| flag.set(true));
     let _guard = CoHarvestGuard;
@@ -125,13 +129,21 @@ fn harvest_candidate(ctx: &HarvestCtx<'_>, entry: &InventoryEntry) -> Box<Finger
         fs: ctx.fs,
         sys: ctx.sys,
     };
-    Box::new(harvest::harvest(
-        entry,
-        &inventory,
-        sources,
-        ctx.baseline,
-        Kb::shipped(),
-    ))
+    let opts = harvest::HarvestOpts {
+        table_cache: ctx.shared.and_then(|s| s.table_cache()),
+        shared: ctx.shared,
+    };
+    Box::new(
+        harvest::harvest_report_with(
+            entry,
+            &inventory,
+            sources,
+            ctx.baseline,
+            Kb::shipped(),
+            &opts,
+        )
+        .fingerprint,
+    )
 }
 
 /// Lower-case letters and digits only.
@@ -531,6 +543,7 @@ mod tests {
             inventory: &inventory,
             target: &inventory[0],
             cutoff: None,
+            shared: None,
         };
 
         let found = candidates(&ctx);

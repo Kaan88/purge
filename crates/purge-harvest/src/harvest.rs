@@ -37,6 +37,7 @@
 //! *candidates* are returned in the [`HarvestReport`]; which of them really disappeared is known only
 //! after the uninstaller ran.
 
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
@@ -263,8 +264,75 @@ fn install_time(entry: &InventoryEntry) -> Option<FileTime> {
 #[derive(Clone, Copy, Default)]
 pub struct HarvestOpts<'a> {
     /// A cache of MSI tables for the ownership index and the app's own packages; `None` reads every
-    /// package from the source.
+    /// package from the source. Not used when [`HarvestOpts::shared`] is given: its cache is.
     pub table_cache: Option<&'a dyn TableCache>,
+    /// The machine-wide indexes of the engine call, when the caller already has them; `None` makes
+    /// the harvest set up its own from its arguments.
+    pub shared: Option<&'a SharedIndexes<'a>>,
+}
+
+/// What one engine call reads of the whole machine at most once, shared by the target's harvest and
+/// the harvests of its co-product candidates ([`crate::coproducts`]): the MSI table cache, the
+/// ownership index and the system-object index. Each index is built when it is first asked for, from
+/// the sources and the inventory given here, exactly as a harvest of its own would build it; a later
+/// harvest gets the same index instead of building another one.
+///
+/// The ownership index is built from the whole inventory given here, `msi_only` included (R2a S8). A
+/// co-product candidate's harvest used to build one from the entries alone.
+pub struct SharedIndexes<'a> {
+    sources: Sources<'a>,
+    inventory: &'a InventoryDoc,
+    table_cache: Option<&'a dyn TableCache>,
+    ownership: OnceCell<OwnershipIndex>,
+    sysobj: OnceCell<sysobj_index::SysObjectIndex>,
+}
+
+impl<'a> SharedIndexes<'a> {
+    /// Nothing built yet; `table_cache` as in [`HarvestOpts::table_cache`].
+    pub fn new(
+        sources: Sources<'a>,
+        inventory: &'a InventoryDoc,
+        table_cache: Option<&'a dyn TableCache>,
+    ) -> Self {
+        Self {
+            sources,
+            inventory,
+            table_cache,
+            ownership: OnceCell::new(),
+            sysobj: OnceCell::new(),
+        }
+    }
+
+    /// The MSI table cache.
+    pub fn table_cache(&self) -> Option<&'a dyn TableCache> {
+        self.table_cache
+    }
+
+    /// The ownership index, built on the first call.
+    pub fn ownership(&self) -> &OwnershipIndex {
+        self.ownership.get_or_init(|| {
+            OwnershipIndex::build(&OwnershipInput {
+                reg: self.sources.reg,
+                fs: self.sources.fs,
+                sys: self.sources.sys,
+                products: &self.inventory.entries,
+                msi_only: &self.inventory.msi_only,
+                cache: self.table_cache,
+                threads: 0,
+            })
+        })
+    }
+
+    /// Whether the ownership index has been built.
+    pub fn ownership_built(&self) -> bool {
+        self.ownership.get().is_some()
+    }
+
+    /// The system-object index, built on the first call.
+    pub fn sysobj(&self) -> &sysobj_index::SysObjectIndex {
+        self.sysobj
+            .get_or_init(|| sysobj_index::build(self.sources.reg, self.sources.sys))
+    }
 }
 
 /// Like [`harvest`], with the facts the fingerprint has no field for.
@@ -358,20 +426,20 @@ pub fn harvest_report_with(
             os.baseline_name()
         ));
     }
-    // The two M1b indexes. The ownership index (component clients, MSI rows, Burn dependents) is read
-    // only for an MSI or Burn entry: nothing else of the harvest asks it.
-    let ownership = reads_msi(entry).then(|| {
-        OwnershipIndex::build(&OwnershipInput {
-            reg,
-            fs,
-            sys,
-            products: &inventory.entries,
-            msi_only: &inventory.msi_only,
-            cache: opts.table_cache,
-            threads: 0,
-        })
-    });
-    let sys_index = sysobj_index::build(reg, sys);
+    // The two M1b indexes, once per engine call: the caller's, or this harvest's own, which the
+    // harvests of the co-product candidates then share. The ownership index (component clients, MSI
+    // rows, Burn dependents) is read only for an MSI or Burn entry: nothing else of the harvest asks it.
+    let own_shared;
+    let shared: &SharedIndexes<'_> = match opts.shared {
+        Some(shared) => shared,
+        None => {
+            own_shared = SharedIndexes::new(sources, inventory, opts.table_cache);
+            &own_shared
+        }
+    };
+    let table_cache = shared.table_cache();
+    let ownership = reads_msi(entry).then(|| shared.ownership());
+    let sys_index = shared.sysobj();
 
     // 2. The Inno Setup uninstall log.
     let binding = UserBinding {
@@ -401,7 +469,7 @@ pub fn harvest_report_with(
             ownership: ix,
             sys,
             fs,
-            cache: opts.table_cache,
+            cache: table_cache,
             current_control_set: guard.current_control_set,
             env: &env,
             guard,
@@ -698,6 +766,7 @@ pub fn harvest_report_with(
         inventory: &inventory.entries,
         target: entry,
         cutoff,
+        shared: Some(shared),
     };
     let (snapshot, subtrees, journal, co_candidates) = if anchor_set.is_empty() {
         warnings.push(
@@ -740,7 +809,7 @@ pub fn harvest_report_with(
         .collect();
     let sys_env = sysobj_index::Env::new(env_vars.iter().map(|(k, v)| (k, v.clone())));
     let objects = sysobj::record(&sysobj::SysInput {
-        index: &sys_index,
+        index: sys_index,
         roots: &fp.roots,
         exes: &fp.exes,
         outside: &fp.outside_root_files,
@@ -764,7 +833,7 @@ pub fn harvest_report_with(
         inno: inno_summary,
         co_candidates,
         refsnap_complete,
-        sysobj_errors: sys_index.errors,
+        sysobj_errors: sys_index.errors.clone(),
         ownership: ownership.map(|ix| ix.stats().clone()),
     }
 }

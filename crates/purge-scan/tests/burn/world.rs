@@ -8,7 +8,7 @@ use purge_index::baseline::Baseline;
 use purge_index::ownership::{OwnershipIndex, OwnershipInput};
 use purge_index::sysobj::SysObjectIndex;
 use purge_model::{
-    AppRef, Band, BurnFacts, BurnPackage, Candidate, Fingerprint, FingerprintSchema,
+    AppRef, Band, BurnFacts, BurnLinked, BurnPackage, Candidate, Fingerprint, FingerprintSchema,
     IdentitySnapshot, OsInfo, ProgramId, ScanMode, Target, TimeWindow, VerifyGone, View,
 };
 use purge_policy::band::{PolicyCtx, TargetScope, decide};
@@ -36,6 +36,15 @@ pub const DEPS: &str = r"HKLM\SOFTWARE\Classes\Installer\Dependencies";
 pub const CACHE: &str = r"C:\ProgramData\Package Cache";
 pub const USER_CACHE: &str = r"C:\Users\tester\AppData\Local\Package Cache";
 pub const UNINSTALL: &str = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+pub const UNINSTALL_32: &str =
+    r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall";
+
+/// The Python 3.12.7 (64-bit) bundle of vm/runs/m1b-python and its provider key.
+pub const PY_BUNDLE: &str = "{e9b7c837-5066-4f10-851a-69179f987b18}";
+pub const PY_PROVIDER: &str = "CPython-3.12";
+/// The Python 3.13.17 (64-bit) bundle of vm/runs/m1b-python313-with-312 and its provider key.
+pub const PY313_BUNDLE: &str = "{9b3415f5-afcc-46ea-9954-a8000df10f86}";
+pub const PY313_PROVIDER: &str = "CPython-3.13";
 
 /// `HKU\<sid>_Classes\Installer\Dependencies`, the guard's spelling of the user's dependencies.
 pub fn user_deps() -> String {
@@ -86,6 +95,7 @@ pub fn burn_facts() -> BurnFacts {
             ),
         ],
         dependents_at_harvest: Vec::new(),
+        linked: Vec::new(),
     }
 }
 
@@ -184,6 +194,51 @@ impl World {
             env,
             guard: GuardEnv::sample(),
             other_apps: OtherApps::new(other_apps()),
+            verify_gone: Some(VerifyGone::new(true, true, true)),
+            ext,
+        }
+    }
+
+    /// The real shape of a removed CPython bundle (vm/runs/m1b-python): Python 3.12.7, a per-user bundle
+    /// of the user `SID` that registered only its own provider key `CPython-3.12` (gone with it) and no
+    /// provider record for any MSI package, so `packages` is empty. The harvest linked the Python
+    /// Launcher through the kb entry `python-launcher` and the Launcher's folder in the machine's Package
+    /// Cache. After the uninstall the user's dependency records are empty and the Launcher (a machine
+    /// product, its Uninstall key in the 32-bit view) is still installed.
+    pub fn python() -> Self {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/burn/python.json");
+        let fixture = Fixture::from_json_file(&path).expect("python.json loads");
+        let env = fixture.env().expect("fixture env");
+        let ext = ScanExt::new(index(&fixture), SysObjectIndex::default());
+        let header = "#purge-baseline 1\tT\tPC\tProfessional\t26340.9882\n";
+        let mut fp = fingerprint();
+        fp.app = AppRef {
+            program_id: ProgramId::user(SID, View::K64, PY_BUNDLE).unwrap(),
+            display_name: "Python 3.12.7 (64-bit)".into(),
+        };
+        fp.burn = Some(BurnFacts {
+            bundle_id: PY_BUNDLE.into(),
+            provider_key: Some(PY_PROVIDER.into()),
+            cache_path: Some(format!(r"{USER_CACHE}\{PY_BUNDLE}")),
+            packages: Vec::new(),
+            dependents_at_harvest: Vec::new(),
+            linked: vec![BurnLinked {
+                component: "python-launcher".into(),
+                product_code: LAUNCHER.into(),
+                cache_dir: format!(r"{CACHE}\{LAUNCHER}v3.12.7150.0"),
+            }],
+        });
+        Self {
+            fixture,
+            fp,
+            baseline: Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            env,
+            guard: GuardEnv::sample(),
+            other_apps: OtherApps::new(vec![OtherApp {
+                name: "Python Launcher".into(),
+                keys: vec![format!(r"{UNINSTALL_32}\{LAUNCHER}")],
+                ..OtherApp::default()
+            }]),
             verify_gone: Some(VerifyGone::new(true, true, true)),
             ext,
         }

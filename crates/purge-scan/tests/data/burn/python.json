@@ -1,0 +1,58 @@
+{
+  "schema": "purge.fixture/1",
+  "system": {
+    "os": { "edition": "Professional", "build": 26340, "ubr": 9882 },
+    "user_sid": "S-1-5-21-1004336348-1177238915-682003330-1001",
+    "env": {
+      "SYSTEMROOT": "C:\\Windows",
+      "WINDIR": "C:\\Windows",
+      "SYSTEMDRIVE": "C:",
+      "PROGRAMFILES": "C:\\Program Files",
+      "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+      "PROGRAMDATA": "C:\\ProgramData",
+      "LOCALAPPDATA": "C:\\Users\\tester\\AppData\\Local"
+    }
+  },
+  "registry": {
+    "current_control_set": 1,
+    "keys": {
+      "HKLM\\SYSTEM\\Select": { "values": { "Current": { "dword": 1 } } },
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001\\Software\\Microsoft": {},
+      "HKU\\S-1-5-21-1004336348-1177238915-682003330-1001_Classes\\Installer\\Dependencies": {}
+    }
+  },
+  "msi": {
+    "products": [
+      {
+        "code": "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+        "context": "Machine",
+        "name": "Python Launcher"
+      }
+    ]
+  },
+  "filesystem": {
+    "volumes": {
+      "C:\\": { "serial": 305419896, "fixed": true, "fs": "NTFS" }
+    },
+    "entries": {
+      "C:\\ProgramData\\Package Cache": {
+        "dir": true,
+        "children": {
+          "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}v3.12.7150.0": {
+            "dir": true,
+            "children": { "launcher.msi": { "size": 552960 } }
+          }
+        }
+      },
+      "C:\\Users\\tester\\AppData\\Local\\Package Cache": {
+        "dir": true,
+        "children": {
+          "{e9b7c837-5066-4f10-851a-69179f987b18}": {
+            "dir": true,
+            "children": { "python-3.12.7-amd64.exe": { "size": 879168 } }
+          }
+        }
+      }
+    }
+  }
+}

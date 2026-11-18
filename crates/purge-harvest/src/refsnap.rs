@@ -57,6 +57,7 @@ use purge_source::system::SystemSource;
 use purge_source::types::{REG_EXPAND_SZ, REG_SZ};
 
 use crate::anchors::ComCutoff;
+use crate::harvest::SharedIndexes;
 
 /// Everything the second half of the harvest reads.
 ///
@@ -87,6 +88,10 @@ pub struct HarvestCtx<'a> {
     /// When the app was installed, for "this key is older than the app" ([`ComCutoff`]); `None`
     /// when nothing is known, and then no key is taken for older.
     pub cutoff: Option<ComCutoff>,
+    /// The machine-wide indexes of the engine call, built from the same sources and inventory, for
+    /// the harvests of the co-product candidates ([`crate::coproducts`]); `None` makes each candidate
+    /// harvest build its own.
+    pub shared: Option<&'a SharedIndexes<'a>>,
 }
 
 impl<'a> HarvestCtx<'a> {

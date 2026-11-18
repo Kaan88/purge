@@ -41,19 +41,22 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use purge_guard::canon::{GuardEnv, OtherAppRoot, canon_path};
 use purge_guard::deny::DenyList;
 use purge_guard::prefix;
 use purge_harvest::coproducts;
-use purge_harvest::harvest::{HarvestOpts, HarvestReport, harvest_report_with};
+use purge_harvest::harvest::{HarvestOpts, HarvestReport, SharedIndexes, harvest_report_with};
 use purge_harvest::refsnap::HarvestCtx;
 use purge_harvest::roots::guard_env;
 use purge_identity::kbdata::Kb;
 use purge_index::baseline::{Baseline, RecordCounts};
 use purge_index::matcher::AnchorSet;
-use purge_index::ownership::{DiskTableCache, MemTableCache, OwnershipLimits, TableCache};
+use purge_index::ownership::{
+    CacheKey, DiskTableCache, MemTableCache, OwnershipLimits, TableCache,
+};
 use purge_inventory::arp::Inventory;
 use purge_inventory::runner::{ProcessHost, RunError, RunOptions, RunReport, RunRequest};
 use purge_inventory::verify_gone::{self, VerifyTarget};
@@ -69,6 +72,7 @@ use purge_scan::framework::{
     product_known_in,
 };
 use purge_source::registry::RegistrySource;
+use purge_source::sysobj::MsiTables;
 use purge_win::env::{EnvMap, expand_with};
 
 pub use purge_harvest::harvest::Sources;
@@ -164,6 +168,64 @@ pub fn table_cache(
     match DiskTableCache::open(dir, sources.fs) {
         Some(disk) => (Box::new(disk), TableCacheKind::Disk),
         None => memory(),
+    }
+}
+
+/// A [`TableCache`] that counts its lookups, for the `PURGE_TIMING` line that says which MSI table
+/// cache an engine call used and how warm it was ([`CountingCache::timing_line`]). It changes nothing
+/// of what the cache holds or answers.
+struct CountingCache<'c> {
+    inner: &'c dyn TableCache,
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
+impl<'c> CountingCache<'c> {
+    fn new(inner: &'c dyn TableCache) -> Self {
+        Self {
+            inner,
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+        }
+    }
+
+    /// `msi_table_cache disk <dir> hits=N misses=M`, or `msi_table_cache memory hits=N misses=M`.
+    fn timing_line(&self, kind: TableCacheKind, settings: &Settings) -> String {
+        let place = match (kind, settings.msi_table_dir.as_deref()) {
+            (TableCacheKind::Disk, Some(dir)) => format!("disk {}", dir.display()),
+            (TableCacheKind::Disk, None) => "disk".to_owned(),
+            (TableCacheKind::Memory, _) => "memory".to_owned(),
+        };
+        format!(
+            "msi_table_cache {place} hits={} misses={}",
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed)
+        )
+    }
+
+    /// Writes [`CountingCache::timing_line`] to stderr when a source meter is installed
+    /// (`PURGE_TIMING`), like the other `timing:` lines of the engine.
+    fn report(&self, kind: TableCacheKind, settings: &Settings) {
+        if purge_source::metered::installed().is_some() {
+            eprintln!("timing: {}", self.timing_line(kind, settings));
+        }
+    }
+}
+
+impl TableCache for CountingCache<'_> {
+    fn get(&self, key: &CacheKey) -> Option<MsiTables> {
+        let found = self.inner.get(key);
+        let counter = if found.is_some() {
+            &self.hits
+        } else {
+            &self.misses
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        found
+    }
+
+    fn put(&self, key: &CacheKey, tables: &MsiTables) {
+        self.inner.put(key, tables);
     }
 }
 
@@ -341,11 +403,14 @@ pub fn harvest(
 
     let baseline = baseline_for(sources, settings, &mut warnings, &mut step);
     step.say("harvest: reading roots, Inno log, anchors and the reference snapshot");
-    let (cache, _) = table_cache(sources, settings);
+    let (cache, cache_kind) = table_cache(sources, settings);
+    let cache = CountingCache::new(cache.as_ref());
     let opts = HarvestOpts {
-        table_cache: Some(cache.as_ref()),
+        table_cache: Some(&cache),
+        shared: None,
     };
     let mut report = harvest_report_with(entry, &inv.doc, sources, baseline.as_ref(), kb, &opts);
+    cache.report(cache_kind, settings);
     if !sources.sys.elevated() {
         let w = not_elevated_warning("harvest");
         report.fingerprint.warnings.push(w.clone());
@@ -468,6 +533,8 @@ pub fn uninstall(
         .as_deref()
         .map(|fp| fp.roots.iter().map(|r| r.path.clone()).collect())
         .unwrap_or_default();
+    // The candidates' harvests share one ownership index and one system-object index.
+    let shared = SharedIndexes::new(sources, &before.doc, None);
     let co_candidates = fp
         .as_deref()
         .map(|fp| {
@@ -483,6 +550,7 @@ pub fn uninstall(
                 inventory: &before.doc.entries,
                 target: entry,
                 cutoff: None,
+                shared: Some(&shared),
             })
         })
         .unwrap_or_default();
@@ -694,11 +762,14 @@ pub fn scan_path(
     let entry = synthetic_entry(&path, &leaf, &facts)?;
     let inv = inventory(sources);
     warnings.extend(inv.warnings.iter().map(|w| format!("inventory: {w}")));
-    let (cache, _) = table_cache(sources, settings);
+    let (cache, cache_kind) = table_cache(sources, settings);
+    let cache = CountingCache::new(cache.as_ref());
     let opts = HarvestOpts {
-        table_cache: Some(cache.as_ref()),
+        table_cache: Some(&cache),
+        shared: None,
     };
     let report = harvest_report_with(&entry, &inv.doc, sources, None, kb, &opts);
+    cache.report(cache_kind, settings);
     if report.fingerprint.roots.is_empty() {
         let why = report
             .rejected_roots
@@ -914,6 +985,7 @@ fn run_scan(
     let app = AppIdentityView::from_fingerprint(fp, &env);
     step.say("scan: reading the references, the MSI ownership and the system objects");
     let (cache, cache_kind) = table_cache(sources, settings);
+    let cache = CountingCache::new(cache.as_ref());
     let ext = ScanExt::build(
         sources.reg,
         sources.fs,
@@ -922,9 +994,10 @@ fn run_scan(
         &app,
         &inv.doc.entries,
         &inv.doc.msi_only,
-        Some(cache.as_ref()),
+        Some(&cache),
         OwnershipLimits::default(),
     );
+    cache.report(cache_kind, settings);
     warnings.extend(ext_warnings(&ext));
     step.done(&format!(
         "scan: {} reference(s), {} MSI product(s), {} service(s); MSI table cache in {}",
@@ -1628,6 +1701,39 @@ mod tests {
         assert_eq!(
             baseline_loaded("Professional-1.2", n, true),
             "baseline Professional-1.2 loaded: 1 keys, 2 values, 3 dirs, 4 files"
+        );
+    }
+
+    /// The `PURGE_TIMING` line of the MSI table cache names the cache and counts its lookups, without
+    /// changing what the cache answers.
+    #[test]
+    fn table_cache_timing_line_counts_hits_and_misses() {
+        let inner = MemTableCache::new();
+        let cache = CountingCache::new(&inner);
+        let key = CacheKey {
+            local_package: r"C:\Windows\Installer\1a2b.msi".into(),
+            size: 10,
+            mtime: 20,
+        };
+        assert!(cache.get(&key).is_none());
+        let tables = MsiTables {
+            custom_action_count: 3,
+            ..MsiTables::default()
+        };
+        cache.put(&key, &tables);
+        assert_eq!(cache.get(&key), Some(tables.clone()));
+        assert_eq!(inner.get(&key), Some(tables));
+        let settings = Settings {
+            msi_table_dir: Some(PathBuf::from(r"C:\ProgramData\Purge\fp\msitables")),
+            ..Settings::default()
+        };
+        assert_eq!(
+            cache.timing_line(TableCacheKind::Memory, &settings),
+            "msi_table_cache memory hits=1 misses=1"
+        );
+        assert_eq!(
+            cache.timing_line(TableCacheKind::Disk, &settings),
+            r"msi_table_cache disk C:\ProgramData\Purge\fp\msitables hits=1 misses=1"
         );
     }
 
