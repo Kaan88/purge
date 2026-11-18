@@ -11,6 +11,26 @@
   runs still in `vm\runs`.
 - Next: migrate the rig to the laptop (`docs/MIGRATION-laptop.md`), then continue campaign 4 or rerun it in full there.
 
+## Migration done (2026-11-19 03:30): the laptop is the rig host
+
+- Laptop `DESKTOP-K1F333G` (ASUS GL702VM, i7-6700HQ 4C/8T, 32 GB, Win11 24H2), LAN 192.168.1.161. The user's Ubuntu
+  partition was removed on their request; `E:` (84 GB, "rig") holds `E:\inbound-vm`, `E:\purge-vm`;
+  `E:\purge-build` is a junction to `C:\purge-build` (C: is the only other disk).
+- Installed: VirtualBox 7.2.20r175154, Git 2.56, Python 3.13.17, VS Build Tools 18 (VC tools), Rust 1.99.1, .NET SDK
+  10.0.404. Copied with matching file counts/bytes: VMs, `vm\cache`, `vm\runs`, campaign 4 replay files,
+  gate evidence, m2-base engine, memory, the password file (same path as on the desktop).
+- Inbound's snapshot disks had to be opened one by one (`showmediuminfo disk`, parents first) before `registervm`.
+- Verified on the laptop: release engine builds, rigtool source hash 391c9dc8 matches, install.ps1 done, rig selftest
+  325/325, `m1b.sh --selftest` 0 failures, smoke `m1b-app -App 7zip` ok on Inbound (382 s) and Clean-Pro (593 s),
+  VMs start headless fine from an SSH session. Smoke outputs in `E:\purge-build\smoke\`. Not run yet: the unelevated
+  `cargo xtask ci`.
+- `rig.ps1` ignores `PURGE_RUNS_DIR` (runs always go to `<repo>\vm\runs`).
+- Open: the laptop needs a reboot (Build Tools), GitHub sign-in, and the Claude Code login. The desktop
+  (192.168.1.115) runs sshd with the laptop's key, for reaching it from the laptop.
+- Next on the laptop: unelevated ci, then the M1b scan gate. Ask the user: continue campaign 4 (G4 dirty-base, G8, then
+  scoring) or rerun in full. The laptop CPU is much slower than the desktop's (28 threads); G7 (K14 time limits, desktop
+  margin 1.22 s of 1.5 s) likely fails there on hardware alone. Proposal: run G7 on the desktop. Then G5/G6.
+
 ## Current state (2026-11-18 17:30): scan gate fix round 3, then full rerun
 
 - Branch `m1b` head = this commit (on c388dd1), pushed to origin on the user's request 2026-11-18.
