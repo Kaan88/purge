@@ -33,10 +33,10 @@ $e = @{ e0 = $null }
 # captured, so the null runs' ambient set and the app runs share the same paused state.
 Phase 'edge-pause' { $S.edge_pause = Suspend-EdgeUpdate } $S
 # Defender signature idle, exactly as in run-app.ps1 (riglib Wait-DefenderIdle, RIG.md section 12.7, ruling
-# 2026-11-18): one signature update triggered and waited for, then Defender's state stable, right before arp0 / lists 0 /
-# snap 0; the versions are recorded at snap 0 and snap 2 (run.json `defender`; truth/m1b.sh: a null run whose versions
-# differ is INVALID). Never blocks the run.
-Phase 'defender-idle' { $S.defender.idle = Wait-DefenderIdle } $S
+# 2026-11-18; gate5 fix): MpCmdRun retried until it exits 0, then Defender's state stable and its signatures current
+# (bounded), right before arp0 / lists 0 / snap 0; the versions are recorded at snap 0 and snap 2 (run.json
+# `defender`; truth/m1b.sh: a null run whose versions differ is INVALID). Never blocks the run.
+Phase 'defender-idle' { $S.defender.idle = Wait-DefenderIdle -OutDir $Dir } $S
 Phase 'arp0' { $e.e0 = @(UninstallEntries) } $S
 Phase 'lists0' { Lists $Run 0 } $S
 Phase 'snap0' { $S.defender.snap0 = Get-DefenderVersions; Snap $Run 0 } $S

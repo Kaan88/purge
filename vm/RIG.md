@@ -1280,7 +1280,8 @@ digests, frozen truths, rigtool, the null runs per set).
 - **K1-K6** fail on an empty plan (truth items but nothing offered) or a score without counts.
 - **K9** needs every case and `com-shared-class#between` planted ok, every expectation target among the planted objects
   (an object that already existed counts and is reported; a note-only or missing one fails), TrapA 7zip and TrapB node.
-- **K14** needs exactly 12 budget runs (2 engines x 2 steps x 3 rounds), each exit 0, round 1 cold and the others warm,
+- **K14** needs exactly 20 budget runs (2 engines x 2 steps x 5 rounds; 12 with 3 rounds before the gate5 ruling),
+  each exit 0, round 1 cold and the others warm,
   and the M1b cold round's cache moved aside or absent (`cold_cache_state`; `kept` fails). Review R5 B3: per cold
   step too (`cold_cache_steps` `harvest` and `scan` each `moved` or `absent`; a record without them, budgets/2, fails):
   the cold harvest fills the cache, so a cold scan after it without a second move reads no tables. Ruling 2026-11-18:
@@ -1329,17 +1330,30 @@ Options:
 - The program (`-Program`) is one MSI app that both engines find an install root for and that has no co-product
   candidate (ruling 2026-11-18; K14 "like for like" checks it). PuTTY is not one: the M2 head found no root for it
   and skipped the anchor pass the M1b engine ran.
-- For each engine it runs `harvest <program>` and then `scan --mode forced` with `PURGE_TIMING=1`, for 3 rounds. Round 1 is cold; rounds 2 and 3 are warm.
+- Before round 1 it waits for a settled host (coordinator ruling 2026-11-18, gate5: G7 measurement hygiene, the limits
+  unchanged; `Wait-RigHostSettled`): no VirtualBox VM process (`VBoxHeadless`, `VirtualBoxVM`) for 180 s, counted from
+  the last one seen or from the start of the wait, then the CPU load averaged over 30 s (kernel32 `GetSystemTimes`, not
+  the localised counter names) under 10 % with still no VM process. It gives up after 15 min and the mode refuses with
+  the reason ("the host did not settle within 900 s (...)"), before anything is moved or run. Campaign 3 started the
+  budgets 18 s after its last VM campaign ended.
+- For each engine it runs `harvest <program>` and then `scan --mode forced` with `PURGE_TIMING=1`, for 5 rounds
+  (gate5 ruling; 3 before). Round 1 is cold; rounds 2-5 are warm. The engines alternate within each round: m1b then m2
+  in odd rounds, m2 then m1b in even rounds (before: all M1b rounds, then all M2 rounds).
 - Before each step of the M1b engine's cold round (the harvest, and again the scan: review R5 B3, the cold harvest
   fills the cache), the MSI table cache `%ProgramData%\Purge\fp\msitables` is moved aside to
-  `msitables.m1b-budgets-<step>-<stamp>`; budgets.json (`purge.rig.m1b-budgets/3`) records `cold_cache_steps` and
-  `cold_cache` per step. Warm rounds keep the cache the cold scan rebuilt. The moved folders are left for the operator
-  to delete.
+  `msitables.m1b-budgets-<step>-<stamp>`; budgets.json (`purge.rig.m1b-budgets/4`; /3 before gate5) records
+  `cold_cache_steps` and `cold_cache` per step. Warm rounds keep the cache the cold scan rebuilt. The moved folders are
+  left for the operator to delete.
+- budgets.json also records (gate5) `rounds`, `order`, `settle` (settled, waited_sec, cpu_percent and its samples, the
+  VM processes seen), `power_plan` (`powercfg /getactivescheme`: GUID and line), `logical_cpus` and, per run, `seq` and
+  `host_cpu_percent` (the host's CPU load during that step, the engine's own included). m1b.sh shows the settle and the
+  power plan in the K14 "budget runs" note; it does not judge them (the rig refuses an unsettled host).
 - The stderr of each step goes to `runs/m1b-budgets/<engine>-<step>-<round>.log`.
 - m1b.sh reads from each log: the `[ N.NNNs]` end stamp (the total time), the `timing: phase` lines (refscan count,
   ownership.components, ownership.tables), the `timing: msi_table_cache` line, the `sys.msi_tables` count of the
   `timing: total:` line and the `harvest:` summary line (root and co-product counts).
-- The warm figure is the median of the warm rounds, compared with the M2 head measured in the same session.
+- The warm figure is the median of the warm rounds (rounds 2-5), compared with the M2 head measured in the same
+  session. ownership.components is judged as before (the largest value over the M1b logs).
 
 Notes on individual criteria:
 - **K5** needs n >= 29 for each of the two Python pairs (not lowered). Before 2026-11-17 python312-with-313 reached 0 of
@@ -1420,16 +1434,30 @@ The user's ruling was a proper fix and a full rerun. The fix has three parts.
    - SANITY: run-only goes to 0 for 7zip, node, vcredist, powershell and temurin, with 0 relabelled.
    - Every frozen-truth item the new rules match was already ambient (108 items).
 2. **Prevention in the guest.** Phase `defender-idle` runs in `run-app.ps1` and `null-run.ps1`, after `edge-pause`,
-   pre-apps and plants, and right before `arp0` / `lists 0` / `snap 0`. It calls `riglib.ps1` `Wait-DefenderIdle`:
-   - It runs `MpCmdRun.exe -SignatureUpdate` once. The rig waits at most 300 s, then kills it. The output is not
-     redirected.
-   - It then polls every 5 s until Defender's state has not changed for 60 s, giving up after 300 s (`bounded`). The
-     state is the versions, the folder names under `Definition Updates` and the names and sizes of `Scans\mpcache-*`.
+   pre-apps and plants, and right before `arp0` / `lists 0` / `snap 0`. It calls `riglib.ps1`
+   `Wait-DefenderIdle -OutDir <run dir>`. Since the gate5 fix (below) it is a loop, bounded at 600 s overall:
+   - It runs `MpCmdRun.exe -SignatureUpdate`, waited for at most 300 s (and never past the overall bound), then killed.
+     The output is not redirected. Every attempt is recorded (`attempts`: start, exit, sec, timed_out, error;
+     `trigger` is the last one).
+   - A non-zero exit (exit 2 in a fraction of a second while Defender's own update runs; or a failure or timeout): it
+     polls every 5 s until Defender's state changes or 240 s pass, then runs MpCmdRun again.
+   - Exit 0: it polls every 5 s until the state has not changed for 60 s. It is done when Defender then reports its
+     signatures current (`DefenderSignaturesOutOfDate` false, or `AntivirusSignatureAge` <= 1 day); otherwise it runs
+     MpCmdRun again. So it ends early only when the last MpCmdRun exited 0, nothing changed for 60 s after it and the
+     signatures are current (`stable` and `current` true); at the bound it ends with `bounded` true.
+   - The state is the versions, the folder names under `Definition Updates` and the names and sizes of `Scans\mpcache-*`.
    - `Get-DefenderVersions` reads `MSFT_MpComputerStatus`, the class `Get-MpComputerStatus` reads, with a 30 s CIM
-     timeout. If that fails it reads the `Signature Updates` registry key instead.
+     timeout (since gate5 also `av_signature_age` and `signatures_out_of_date`). If that fails it reads the
+     `Signature Updates` registry key instead, which does not say whether the signatures are current (not current).
+   - Then it copies Defender's logs into the run directory: MpCmdRun's own log (`%TEMP%\MpCmdRun.log` of the account
+     that ran it, for the rig user `C:\Users\tester\AppData\Local\Temp\MpCmdRun.log`, as the gate5 snaps show;
+     `C:\Windows\Temp\MpCmdRun.log` for SYSTEM) as `defender-MpCmdRun[-windir].log`, and the Defender service's newest
+     `%ProgramData%\Microsoft\Windows Defender\Support\MPLog-*.log` (its update events; read shared, the last 8 MB) as
+     `defender-MPLog.log`; `defender.idle.logs` lists them.
    - The phase never throws and never blocks a run. If the guest has no network, MpCmdRun fails or times out and
-     `run.json` `defender.idle` records it in `trigger.exit`, `timed_out` and `error`, together with `stable`,
-     `bounded`, `updated`, `changes` and `waited_sec`.
+     `run.json` `defender.idle` records it in `attempts`, together with `stable`, `current`, `bounded`, `updated`,
+     `changes` and `waited_sec`. The job timeouts leave room: an app or null run took 4-6 min in gate5 and the wait
+     adds at most about 10 min (app job 5400 s, null job 2400 s).
    - The versions (`av_signature`, `as_signature`, `engine`, `platform`, plus `source` and `error`) are recorded:
      `snap0` is read in the `snap0` phase before the capture, `snap2` in the `snap2` phase after the capture.
 3. **Detection.** `truth/m1b.sh` copies `run.json` `defender` into `runs/<run>.json` in runsum (`defender_record`).
@@ -1444,9 +1472,42 @@ The user's ruling was a proper fix and a full rerun. The fix has three parts.
    The controls fail RUN: `run_defender_updated`, `run_defender_engine_updated`, `run_defender_platform_updated`,
    `run_defender_missing`, `run_defender_snap2_missing`, `run_defender_no_signature`, `trap_defender_updated`,
    `null_defender_updated` and `null_defender_missing`. `run_defender_registry_fallback` still passes, and
-   `runsum_target_against_lists0` checks the copy. rig-selftest checks the phase order in both jobs and runs
-   `Wait-DefenderIdle` against fakes: no network, an update during the wait, never stable, MpCmdRun timed out, and a
-   failure inside. The host's Defender is never called.
+   `runsum_target_against_lists0` checks the copy (since gate5 also `current` and every attempt's exit and seconds).
+   rig-selftest checks the phase order in both jobs and runs `Wait-DefenderIdle` against fakes: current from the start
+   (one exit 0), busy then succeeds (exit 2, the state moves, exit 0), busy with a still state (not done until exit 0),
+   stale signatures with a failing trigger (bounded), exit 0 but stale (bounded), always busy (bounded), never stable,
+   MpCmdRun timed out (its timeout within the bound), and a failure inside; `Copy-DefenderLogs` against a temp folder
+   (an MPLog held open for writing, a long one cut to its tail). The host's Defender is never called.
 
    `m1b.sh freeze` (`run_whole`) does not check the versions. The frozen truths stay as they are, and a freeze
    run's one-run churn is excluded anyway.
+
+**Gate5 follow-up (campaign 3, 2026-11-18; coordinator).** Two findings, two fixes:
+
+1. **Windows churn the app runs now see.** The Defender wait moved snap 0 about 2 min later. The null runs, which
+   build the ambient sets, no longer caught some Windows churn that the app runs then saw, and the default rule labelled
+   it leftover (both temurin runs failed K1-K6 on an empty plan again). `_m1b-noise.json` gets 8 more ambient rules,
+   each added only because every hit in every frozen truth (`truth/frozen/*`, items and freeze-excluded) is already
+   ambient and none matches an app-owned item:
+   - `P:C:\ProgramData\Microsoft\Diagnosis\AggregatorStorage\Triggers\<n>_(data|trigger).dat` (DiagTrack)
+   - `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\VolatileNotifications|<16 hex>` (WNF state names)
+   - `HKLM\SOFTWARE\Microsoft\DirectX|` `LastUpdaterStartTimestamp`, `LastUpdaterCallbackTimestamp`,
+     `DxDbUninstallFodTimestamp` (these three names only)
+   - `HKLM\SOFTWARE\Microsoft\WindowsSelfHost\FIDs` (key and values)
+   - `HKLM\SOFTWARE\Microsoft\WindowsSelfHost\OneSettings|TargetingAttributes(Verified)`
+   - `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform|ServiceSessionId`
+   - `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Executive|UuidSequenceNumber`
+   - `HKLM\SYSTEM\CurrentControlSet\Control\WMI\Security|<guid>`, changed values only (a value an install creates for
+     its own ETW provider stays the app's)
+
+   **Checked by recomputing.** The 18 gate5 app truths were recomputed (rigtool truth and `prestate` with the
+   archived gate5 ambient sets, as collect does). With the old list each equals the archived truth. With the new list
+   only 56 items change, all leftover to ambient and all in these families (Triggers 22, VolatileNotifications 10,
+   DirectX 6, OneSettings 6, FIDs 4, WMI Security 4, ServiceSessionId 2, UuidSequenceNumber 2); no item is added or
+   removed; both temurin truths have 0 leftovers. The new rules match 53 frozen-truth items, all already ambient, so
+   no frozen item changes label. The noise selftest has samples of each rule and app-owned near misses.
+2. **The Defender wait ended early.** `MpCmdRun -SignatureUpdate` exited 2 in 0.1 s whenever Defender's own
+   boot-time update was running; the fingerprint stayed still for 60 s while the download ran, so the wait ended and
+   the update landed after snap 0 (m1bcp-python on Purge-CleanPro, signatures 427 days old: INVALID RUN). The wait is
+   now the loop described in part 2 above: it ends early only after an exit 0, 60 s of stability and current
+   signatures, and keeps Defender's logs with the run.

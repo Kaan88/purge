@@ -1,6 +1,6 @@
 {
   "id": "_m1b-noise",
-  "note": "M1b noise list (RIG.md section 12.6, ruling 2026-11-17). Hand-written from the m1b-freeze captures of 2026-11-17 and (the Defender signature / AppX rules) the m1b-gate4 runs of 2026-11-18 (ruling 2026-11-18: Defender noise, proper fix and full rerun); mk_labels.py does not generate it. vm/truth/m1b.sh passes it as an extra --labels file to every M1b truth (collect and freeze) and hashes it into each run's label digest. Windows-owned areas whose state changes on Windows' own schedule or belongs to a Windows store: every rule is ambient and anchored under a Windows-owned root (checked by the selftest, which also checks that no rule matches a leftover, user_data or kept_owner item of any frozen truth). Churn is never labelled leftover: what this list misses and only one freeze run shows is excluded from the frozen truth by the freeze rule.",
+  "note": "M1b noise list (RIG.md section 12.6, ruling 2026-11-17). Hand-written from the m1b-freeze captures of 2026-11-17 and (the Defender signature / AppX rules) the m1b-gate4 runs of 2026-11-18 (ruling 2026-11-18: Defender noise, proper fix and full rerun) and (the DiagTrack, WNF, DirectX, flighting, SPP, UUID and WMI security rules) the m1b-gate5 runs of 2026-11-18 (coordinator ruling 2026-11-18: snap 0 moved later after the Defender wait); mk_labels.py does not generate it. vm/truth/m1b.sh passes it as an extra --labels file to every M1b truth (collect and freeze) and hashes it into each run's label digest. Windows-owned areas whose state changes on Windows' own schedule or belongs to a Windows store: every rule is ambient and anchored under a Windows-owned root (checked by the selftest, which also checks that no rule matches a leftover, user_data or kept_owner item of any frozen truth). Churn is never labelled leftover: what this list misses and only one freeze run shows is excluded from the frozen truth by the freeze rule.",
   "rules": [
     {
       "label": "ambient",
@@ -121,6 +121,46 @@
       "label": "ambient",
       "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Appx\\\\PackageVolumes\\\\[0-9]+\\\\(User)?MutablePackagesOnline(\\\\[^|]*)?(\\|.*)?$",
       "why": "AppX deployment service volume flags (PackageVolumes\\<n>\\MutablePackagesOnline, UserMutablePackagesOnline), recreated when the service brings the volume's mutable package stores online, e.g. during a Defender platform / signature update; the M0 null runs already showed them (ruling 2026-11-18). Windows' own, never a desktop app's."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\ProgramData\\\\Microsoft\\\\Diagnosis\\\\AggregatorStorage\\\\Triggers\\\\[0-9]+_(data|trigger)\\.dat$",
+      "why": "Connected User Experiences and Telemetry (DiagTrack) aggregator trigger files (<n>_data.dat, <n>_trigger.dat), rewritten on the service's schedule. Gate5 (2026-11-18): with snap 0 ~2 min later (after the Defender wait) the null runs no longer caught them, so app runs labelled them leftover; every frozen truth has them ambient (coordinator ruling 2026-11-18, RIG.md section 12.6)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\VolatileNotifications\\|[0-9A-Fa-f]{16}$",
+      "why": "Windows notification facility (WNF) volatile state names (16 hex digits) the kernel publishes and drops on its own schedule. Gate5: leftover in both temurin runs (an empty plan failed K1-K6); every frozen truth has them ambient (coordinator ruling 2026-11-18)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\DirectX\\|(LastUpdater(Start|Callback)Timestamp|DxDbUninstallFodTimestamp)$",
+      "why": "DirectX database updater run stamps (scheduled task DirectXDatabaseUpdater). These three value names only (DirectX|LastSeen is in the ambient sets already); gate5 runs show them changed in the null-run window or the app run's (coordinator ruling 2026-11-18)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\WindowsSelfHost\\\\FIDs(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Windows feature-flighting ids (WindowsSelfHost\\FIDs, AllFlights and ByFID\\FX:<id>), refreshed by the flighting service on its schedule (coordinator ruling 2026-11-18). No frozen truth has an item here."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\WindowsSelfHost\\\\OneSettings\\|TargetingAttributes(Verified)?$",
+      "why": "Windows OneSettings targeting attributes (TargetingAttributes, TargetingAttributesVerified), refreshed by the flighting service (coordinator ruling 2026-11-18). These two value names only; no frozen truth has an item here."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\SoftwareProtectionPlatform\\|ServiceSessionId$",
+      "why": "Software Protection Platform (sppsvc) session id, new at every service start; every frozen truth has it ambient (coordinator ruling 2026-11-18)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[VC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Session Manager\\\\Executive\\|UuidSequenceNumber$",
+      "why": "Kernel UUID sequence counter (Session Manager\\Executive|UuidSequenceNumber), bumped by Windows (coordinator ruling 2026-11-18). No frozen truth has an item here."
+    },
+    {
+      "label": "ambient",
+      "match": "^C:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\WMI\\\\Security\\|\\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\}?$",
+      "why": "ETW provider / session security descriptors Windows rewrites (Control\\WMI\\Security|<guid>); the rig-dirty null runs already give the same pattern. Changed values only: a value an install creates for its own provider stays the app's (coordinator ruling 2026-11-18). No frozen truth has an item here."
     }
   ],
   "samples": [
@@ -152,6 +192,19 @@
     "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Update\\TargetingInfo\\PersistentDynamicInstalled\\DefenderSignature.amd64|Version",
     "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{0a002690-3839-4e3a-b3b6-96d8df868d99}",
     "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageVolumes\\1\\MutablePackagesOnline",
-    "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageVolumes\\1\\UserMutablePackagesOnline"
+    "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageVolumes\\1\\UserMutablePackagesOnline",
+    "P:C:\\ProgramData\\Microsoft\\Diagnosis\\AggregatorStorage\\Triggers\\3706551710762514350_data.dat",
+    "P:C:\\ProgramData\\Microsoft\\Diagnosis\\AggregatorStorage\\Triggers\\4615479057323752154_trigger.dat",
+    "V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications|41C64E6DA3832055",
+    "C:HKLM\\SOFTWARE\\Microsoft\\DirectX|LastUpdaterStartTimestamp",
+    "C:HKLM\\SOFTWARE\\Microsoft\\DirectX|LastUpdaterCallbackTimestamp",
+    "C:HKLM\\SOFTWARE\\Microsoft\\DirectX|DxDbUninstallFodTimestamp",
+    "C:HKLM\\SOFTWARE\\Microsoft\\WindowsSelfHost\\FIDs|AllFlights",
+    "K:HKLM\\SOFTWARE\\Microsoft\\WindowsSelfHost\\FIDs\\ByFID\\FX:13E51269",
+    "C:HKLM\\SOFTWARE\\Microsoft\\WindowsSelfHost\\OneSettings|TargetingAttributes",
+    "C:HKLM\\SOFTWARE\\Microsoft\\WindowsSelfHost\\OneSettings|TargetingAttributesVerified",
+    "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SoftwareProtectionPlatform|ServiceSessionId",
+    "C:HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Executive|UuidSequenceNumber",
+    "C:HKLM\\SYSTEM\\CurrentControlSet\\Control\\WMI\\Security|1f2e72ec-0b80-402f-b05c-e456727f68b4"
   ]
 }

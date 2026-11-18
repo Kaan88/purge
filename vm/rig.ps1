@@ -1372,14 +1372,14 @@ function Get-PurgeDataRootVerdict {
     "$($line[0])".Substring(8)
 }
 
-# G7 (K14), host only and read-only: purge-engine harvest and forced scan of one program with PURGE_TIMING=1, three
-# rounds per engine (round 1 cold, rounds 2-3 warm), for the M1b engine (-Engine) and the M2-head engine
-# (-BaseEngine, built from 3265797), in the same session. Cold = the M1b engine's MSI table cache
+# G7 (K14), host only and read-only: purge-engine harvest and forced scan of one program with PURGE_TIMING=1, five
+# rounds (round 1 cold, rounds 2-5 warm), for the M1b engine (-Engine) and the M2-head engine (-BaseEngine, built from
+# 3265797), in the same session. Cold = the M1b engine's MSI table cache
 # %ProgramData%\Purge\fp\msitables moved aside to msitables.m1b-budgets-<step>-<stamp> before EACH step of round 1
 # (review R5 B3: the cold harvest fills the cache, so a cold scan run after it without a second move would be warm).
 # Purge's own cache, nothing else is touched; the moved folders are left for the operator to delete. Each step's
 # stderr goes to vm\runs\<prefix>m1b-budgets\<engine>-<step>-<round>.log; budgets.json lists them
-# (purge.rig.m1b-budgets/3, with each run's exit code, the engines' SHA-256, cold_cache_state and, per cold step,
+# (purge.rig.m1b-budgets/4, with each run's exit code, the engines' SHA-256, cold_cache_state and, per cold step,
 # cold_cache_steps and cold_cache) for truth\m1b.sh. Nothing is uninstalled: harvest and scan only read (and write
 # their -o files under the run dir).
 # Ruling 2026-11-18 (K14 warm cache): the engine keeps the MSI table cache on disk only under an admin-only
@@ -1390,8 +1390,92 @@ function Get-PurgeDataRootVerdict {
 # (the same count) and no co-product candidate. PuTTY (no InstallLocation) made the M2 head skip the anchor pass the
 # M1b engine runs. Pick it on the host from both engines' harvest lines ("N root(s) ... 0 co-product candidate(s)");
 # truth\m1b.sh fails K14 "not like for like" otherwise.
+# Coordinator ruling 2026-11-18 (gate5, G7 measurement hygiene; the limits are unchanged): campaign 3 started the
+# budgets 18 s after its last VM campaign ended, all M1b rounds before all M2 rounds. Now (a) before round 1 the host
+# must be settled (Wait-RigHostSettled: no VirtualBox VM process, none for 180 s, CPU load under 10 % over 30 s;
+# bounded at 15 min, then the mode refuses), (b) the engines alternate within each round (m1b first in odd rounds, m2
+# first in even ones), (c) five rounds, 1 cold + 4 warm (truth\m1b.sh judges the warm medians over rounds 2-5).
+# budgets.json records the settle wait (`settle`: CPU load, VM processes seen), the power plan (`power_plan`) and, per
+# step, the host's CPU load during it (`host_cpu_percent`).
 function Test-RigElevated {
     ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# VirtualBox VM processes on the host (headless and GUI VMs): their names, none when no VM runs.
+function Get-RigVmProcesses {
+    @(Get-Process -Name 'VBoxHeadless', 'VirtualBoxVM' -ErrorAction SilentlyContinue | ForEach-Object { $_.ProcessName })
+}
+
+# The host's CPU times (kernel32 GetSystemTimes: idle, kernel incl. idle, user; 100 ns units). Locale-independent,
+# unlike the performance counter names.
+function Get-RigSystemTimes {
+    if (-not ('PurgeRig.SysTimes' -as [type])) {
+        Add-Type -Namespace PurgeRig -Name SysTimes -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
+'@
+    }
+    $i = [long]0; $k = [long]0; $u = [long]0
+    if (-not [PurgeRig.SysTimes]::GetSystemTimes([ref]$i, [ref]$k, [ref]$u)) { throw "GetSystemTimes failed ($([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
+    [pscustomobject]@{ idle = $i; kernel = $k; user = $u }
+}
+
+# CPU load (percent of all logical CPUs) between two Get-RigSystemTimes records.
+function Get-RigCpuPercent($A, $B) {
+    $total = ($B.kernel - $A.kernel) + ($B.user - $A.user)
+    if ($total -le 0) { return $null }
+    [Math]::Round(100.0 * (1.0 - (($B.idle - $A.idle) / [double]$total)), 1)
+}
+
+# The host's average CPU load over $WindowSec seconds.
+function Get-RigCpuLoad([int]$WindowSec = 30) {
+    $a = Get-RigSystemTimes
+    Start-Sleep -Seconds $WindowSec
+    Get-RigCpuPercent $a (Get-RigSystemTimes)
+}
+
+# The active power plan (powercfg /getactivescheme): its GUID and the line as printed. Never throws.
+function Get-RigPowerPlan {
+    try {
+        $line = "$(@(& powercfg.exe /getactivescheme 2>$null) -join ' ')".Trim()
+        $g = [regex]::Match($line, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+        [ordered]@{ guid = $(if ($g.Success) { $g.Value.ToLowerInvariant() } else { $null }); text = $line; error = $null }
+    } catch { [ordered]@{ guid = $null; text = $null; error = $_.Exception.Message } }
+}
+
+# Coordinator ruling 2026-11-18 (gate5, G7 measurement hygiene): waits until the host is settled before the budget
+# rounds: no VirtualBox VM process for $QuietSec (counted from the last one seen, or from the start of the wait), then
+# the CPU load averaged over $CpuWindowSec under $MaxCpuPercent with still no VM process. Bounded by $MaxWaitSec; the
+# record says whether it settled (`settled`) and what it measured. The caller refuses when it did not.
+function Wait-RigHostSettled {
+    param([int]$QuietSec = 180, [double]$MaxCpuPercent = 10, [int]$CpuWindowSec = 30, [int]$MaxWaitSec = 900, [int]$PollSec = 5)
+    $t0 = Get-Date
+    $rec = [ordered]@{ settled = $false; start = $t0.ToString('o'); end = $null; waited_sec = $null; quiet_sec = $QuietSec
+        max_cpu_percent = $MaxCpuPercent; cpu_window_sec = $CpuWindowSec; max_wait_sec = $MaxWaitSec; vm_processes_seen = @()
+        vm_last_seen = $null; cpu_samples = @(); cpu_percent = $null; why_not = $null }
+    $quietFrom = $t0
+    while ($true) {
+        $vm = @(Get-RigVmProcesses)
+        if ($vm.Count) {
+            $quietFrom = Get-Date; $rec.vm_last_seen = $quietFrom.ToString('o')
+            $rec.vm_processes_seen = @(@($rec.vm_processes_seen) + $vm | Sort-Object -Unique)
+            $rec.why_not = "VirtualBox VM process running ($($vm -join ', '))"
+        } elseif (((Get-Date) - $quietFrom).TotalSeconds -ge $QuietSec) {
+            $cpu = Get-RigCpuLoad -WindowSec $CpuWindowSec
+            $rec.cpu_samples = @(@($rec.cpu_samples) + [ordered]@{ at = (Get-Date).ToString('o'); percent = $cpu })
+            $rec.cpu_percent = $cpu
+            $vm = @(Get-RigVmProcesses)
+            if ($vm.Count) { $quietFrom = Get-Date; $rec.why_not = "VirtualBox VM process started ($($vm -join ', '))"; continue }
+            if ($null -ne $cpu -and $cpu -lt $MaxCpuPercent) { $rec.settled = $true; $rec.why_not = $null; break }
+            $rec.why_not = "CPU load $cpu % over $CpuWindowSec s (needs < $MaxCpuPercent %)"
+        } else {
+            $rec.why_not = "no VirtualBox VM process for $([int]((Get-Date) - $quietFrom).TotalSeconds) s of $QuietSec s"
+        }
+        if (((Get-Date) - $t0).TotalSeconds -ge $MaxWaitSec) { break }
+        Start-Sleep -Seconds $PollSec
+    }
+    $rec.end = (Get-Date).ToString('o'); $rec.waited_sec = [Math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+    $rec
 }
 
 # Review R5 B3: moves the MSI table cache aside before one cold M1b step. Returns @{ state; aside }: 'moved' (aside =
@@ -1408,7 +1492,7 @@ function Move-M1bCacheAside {
 
 function Invoke-M1bBudgets {
     param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$BaseEngine, [Parameter(Mandatory)][string]$Program,
-          [string]$RunPrefix = '', [int]$Rounds = 3, [switch]$KeepCache,
+          [string]$RunPrefix = '', [int]$Rounds = 5, [switch]$KeepCache,
           [string]$DataRoot = (Join-Path $env:ProgramData 'Purge'))
     if ($Program -match '[\s"]') { throw "bad program id '$Program'" }
     # Review R5 N1: unelevated, users cannot read the data root's DACL (verdict 'reject') and the engine cannot recreate
@@ -1423,6 +1507,13 @@ function Invoke-M1bBudgets {
     }
     $engines = [ordered]@{ m1b = (Resolve-Path -LiteralPath $Engine).ProviderPath; m2 = (Resolve-Path -LiteralPath $BaseEngine).ProviderPath }
     if ($engines.m1b -eq $engines.m2) { throw '-Engine and -BaseEngine are the same file' }
+    # Coordinator ruling 2026-11-18 (gate5): a settled host before round 1, else refuse (nothing is moved or run)
+    Write-RigLog '  m1b-budgets: waiting for a settled host (no VirtualBox VM for 180 s, CPU < 10 % over 30 s; at most 15 min)'
+    $settle = Wait-RigHostSettled
+    if (-not $settle.settled) {
+        throw "m1b-budgets: the host did not settle within $($settle.max_wait_sec) s ($($settle.why_not)). Stop the VMs and other load (vm\rig.ps1 campaigns, builds), then run again (G7 measurement hygiene, coordinator ruling 2026-11-18)"
+    }
+    Write-RigLog ("  host settled after {0} s: CPU {1} % over {2} s" -f $settle.waited_sec, $settle.cpu_percent, $settle.cpu_window_sec)
     $run = "${RunPrefix}m1b-budgets"
     $null = Move-RunToOld -Run $run
     $dst = Join-Path $script:RunsDir $run
@@ -1430,17 +1521,20 @@ function Invoke-M1bBudgets {
     # Review R4b S6: the engines' SHA-256 (truth\m1b.sh binds the M1b one to the scan runs' engine), the M1b build,
     # and how round 1 was made cold: 'moved' (the cache was moved aside), 'absent' (there was none) or 'kept'
     # (-KeepCache with a cache in place: not cold, K14 fails).
-    $doc = [ordered]@{ schema = 'purge.rig.m1b-budgets/3'; program = $Program; host = $env:COMPUTERNAME; start = (Get-Date).ToString('o'); end = $null
+    $doc = [ordered]@{ schema = 'purge.rig.m1b-budgets/4'; program = $Program; host = $env:COMPUTERNAME; start = (Get-Date).ToString('o'); end = $null
         engines = $engines; engine_sha256 = [ordered]@{ m1b = (Get-M1bBuildInfo -Path $engines.m1b).sha256; m2 = (Get-M1bBuildInfo -Path $engines.m2).sha256 }
-        build = (Get-M1bBuildInfo -Path $engines.m1b); cold_cache = [ordered]@{}; cold_cache_state = $null
-        cold_cache_steps = [ordered]@{}; runs = @() }
+        build = (Get-M1bBuildInfo -Path $engines.m1b); rounds = $Rounds; order = 'alternating: m1b then m2 in odd rounds, m2 then m1b in even rounds'
+        settle = $settle; power_plan = (Get-RigPowerPlan); logical_cpus = [Environment]::ProcessorCount
+        cold_cache = [ordered]@{}; cold_cache_state = $null; cold_cache_steps = [ordered]@{}; runs = @() }
     $old = $env:PURGE_TIMING
     try {
         $env:PURGE_TIMING = '1'
         $cache = Join-Path $dataRoot 'fp\msitables'
-        foreach ($name in $engines.Keys) {
-            for ($i = 1; $i -le $Rounds; $i++) {
-                $kind = $(if ($i -eq 1) { 'cold' } else { 'warm' })
+        $seq = 0
+        for ($i = 1; $i -le $Rounds; $i++) {
+            $kind = $(if ($i -eq 1) { 'cold' } else { 'warm' })
+            $order = $(if ($i % 2) { @('m1b', 'm2') } else { @('m2', 'm1b') })
+            foreach ($name in $order) {
                 $fp = Join-Path $dst "fp-$name-$i.json"; $plan = Join-Path $dst "plan-$name-$i.json"
                 foreach ($step in 'harvest', 'scan') {
                     # Review R5 B3: before each cold M1b step, not once per round: the cold harvest reads (and caches)
@@ -1453,11 +1547,15 @@ function Invoke-M1bBudgets {
                     }
                     $log = Join-Path $dst "$name-$step-$i.log"
                     $a = $(if ($step -eq 'harvest') { @('harvest', $Program, '-o', $fp) } else { @('scan', '--fp', $fp, '--mode', 'forced', '-o', $plan) })
+                    $seq++
+                    $s0 = $null; try { $s0 = Get-RigSystemTimes } catch { }
                     $t = Get-Date
                     $p = Start-Process -FilePath $engines[$name] -ArgumentList $a -NoNewWindow -Wait -PassThru -RedirectStandardError $log -RedirectStandardOutput (Join-Path $dst "$name-$step-$i.out")
                     $sec = ((Get-Date) - $t).TotalSeconds
-                    $doc.runs += [ordered]@{ engine = $name; step = $step; round = $i; kind = $kind; log = (Split-Path -Leaf $log); exit = $p.ExitCode; wall_s = [Math]::Round($sec, 3) }
-                    Write-RigLog ("  {0} {1} round {2} ({3}): exit {4}, {5:N1} s" -f $name, $step, $i, $kind, $p.ExitCode, $sec)
+                    $cpu = $null; try { if ($s0) { $cpu = Get-RigCpuPercent $s0 (Get-RigSystemTimes) } } catch { }
+                    $doc.runs += [ordered]@{ engine = $name; step = $step; round = $i; kind = $kind; seq = $seq; log = (Split-Path -Leaf $log); exit = $p.ExitCode
+                        wall_s = [Math]::Round($sec, 3); host_cpu_percent = $cpu }
+                    Write-RigLog ("  {0} {1} round {2} ({3}): exit {4}, {5:N1} s, host CPU {6} %" -f $name, $step, $i, $kind, $p.ExitCode, $sec, $cpu)
                 }
             }
         }

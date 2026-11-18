@@ -209,7 +209,8 @@ DEF_V = {'av_signature': '1.465.100.0', 'as_signature': '1.465.100.0', 'engine':
 def defender_doc():
     return {'snap0': dict(DEF_V), 'snap2': dict(DEF_V),
             'idle': {'stable': True, 'bounded': False, 'updated': True, 'changes': 1, 'waited_sec': 75.2, 'error': None,
-                     'trigger_exit': 0, 'trigger_timed_out': False, 'trigger_error': None}}
+                     'trigger_exit': 0, 'trigger_timed_out': False, 'trigger_error': None, 'current': True,
+                     'attempts': [{'exit': 0, 'sec': 14.1, 'timed_out': False}]}}
 
 
 def run_doc(run, phases, inputs):
@@ -346,17 +347,23 @@ def write(d, here):
     # budgets (G7)
     runs = []
     os.makedirs(os.path.join(d, 'budgets'), exist_ok=True)
-    for e in ('m1b', 'm2'):
-        for n in (1, 2, 3):
-            kind = 'cold' if n == 1 else 'warm'
+    # coordinator ruling 2026-11-18 (gate5): 5 rounds, the engines alternating within each round (rig.ps1)
+    for n in (1, 2, 3, 4, 5):
+        kind = 'cold' if n == 1 else 'warm'
+        for e in (('m1b', 'm2') if n % 2 else ('m2', 'm1b')):
             for step in ('harvest', 'scan'):
                 log = f'{e}-{step}-{n}.log'
                 with open(os.path.join(d, 'budgets', log), 'w', encoding='utf-8') as f:
                     f.write(budget_log(e, step, kind))
-                runs.append({'engine': e, 'step': step, 'round': n, 'kind': kind, 'log': log, 'exit': 0, 'wall_s': 5.0})
+                runs.append({'engine': e, 'step': step, 'round': n, 'kind': kind, 'seq': len(runs) + 1, 'log': log, 'exit': 0,
+                             'wall_s': 5.0, 'host_cpu_percent': 6.5})
     wj(os.path.join(d, 'budgets', 'budgets.json'),
-       {'schema': 'purge.rig.m1b-budgets/3', 'program': 'fixture-program', 'host': 'FIXTURE', 'engines': {'m1b': 'm1b.exe', 'm2': 'm2.exe'},
-        'engine_sha256': {'m1b': ENGINE, 'm2': 'f' * 64}, 'cold_cache_state': 'moved',
+       {'schema': 'purge.rig.m1b-budgets/4', 'program': 'fixture-program', 'host': 'FIXTURE', 'engines': {'m1b': 'm1b.exe', 'm2': 'm2.exe'},
+        'engine_sha256': {'m1b': ENGINE, 'm2': 'f' * 64}, 'rounds': 5, 'logical_cpus': 8,
+        'settle': {'settled': True, 'waited_sec': 212.4, 'cpu_percent': 2.1, 'cpu_window_sec': 30, 'quiet_sec': 180,
+                   'max_cpu_percent': 10, 'vm_processes_seen': []},
+        'power_plan': {'guid': '381b4222-f694-41f0-9685-ff5bb260df2e', 'text': 'Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)'},
+        'cold_cache_state': 'moved',
         'cold_cache': {'harvest': 'msitables.aside-harvest', 'scan': 'msitables.aside-scan'},
         'cold_cache_steps': {'harvest': 'moved', 'scan': 'moved'}, 'runs': runs})
 
@@ -612,6 +619,8 @@ MUTATIONS = {
     'frozen_missing': lambda d: os.remove(os.path.join(d, 'truth', 'frozen', 'temurin', 'truth.json')),
     'budget_exit': budget_runs(lambda doc: doc['runs'][3].update(exit=1)),
     'budget_two_rounds': budget_runs(lambda doc: doc.update(runs=[r for r in doc['runs'] if not (r['engine'] == 'm1b' and r['round'] == 3)])),
+    # coordinator ruling 2026-11-18 (gate5): a 3-round record (before the fix) is not the 5 rounds K14 needs
+    'budget_three_rounds': budget_runs(lambda doc: doc.update(runs=[r for r in doc['runs'] if r['round'] <= 3])),
     'budget_kept_cache': budget_runs(lambda doc: doc.update(cold_cache_state='kept', cold_cache=None)),
     'budget_kind': budget_runs(lambda doc: next(r for r in doc['runs'] if r['round'] == 2).update(kind='cold')),
     'no_safe_7zip': lambda d: edit(d, 'score-clean.json', lambda doc: (
@@ -696,7 +705,7 @@ MUTATIONS = {
     'budget_cache_line_missing': log_sub('m1b-scan-3.log', r'^timing: msi_table_cache .*\n', ''),
     'budget_cache_no_hits': log_sub('m1b-scan-2.log', r'hits=\d+', 'hits=0'),
     'budget_warm_reads_tables': log_sub('m1b-harvest-3.log', r'fs\.metadata 505 0\.016s', 'fs.metadata 505 0.016s; sys.msi_tables 313/140094 3.180s'),
-    'budget_not_like_for_like': all_of(*[log_sub(f'm2-harvest-{n}.log', r'1 root\(s\)', '0 root(s)') for n in (1, 2, 3)]),
+    'budget_not_like_for_like': all_of(*[log_sub(f'm2-harvest-{n}.log', r'1 root\(s\)', '0 root(s)') for n in (1, 2, 3, 4, 5)]),
     'budget_coproduct': log_sub('m1b-harvest-2.log', r'0 co-product', '1 co-product'),
     'budget_no_harvest_line': log_sub('m2-harvest-1.log', r'^harvest: .*\n', ''),
     # review R5 S1: the scores come from a rigtool built from vm/rigtool as collect found it
@@ -848,9 +857,12 @@ def targetruns(d):
                'entries_created': created, 'phases': [{'name': 'install', 'ok': True}]}
         if run == 'm1bd-temurin':   # the guest's record (riglib Wait-DefenderIdle, Get-DefenderVersions)
             v = dict(DEF_V, nis_signature='1.465.100.0', av_signature_updated='2026-11-18T09:00:00Z', at='2026-11-18T09:01:00Z')
-            rjd['defender'] = {'idle': {'method': 'x', 'stable': True, 'bounded': False, 'updated': True, 'changes': 1,
+            # gate5 fix: MpCmdRun busy (exit 2) once, then exit 0; signatures current at the end
+            att = [{'exe': 'MpCmdRun.exe', 'n': 1, 'exit': 2, 'timed_out': False, 'sec': 0.1, 'error': None},
+                   {'exe': 'MpCmdRun.exe', 'n': 2, 'exit': 0, 'timed_out': False, 'sec': 14.1, 'error': None}]
+            rjd['defender'] = {'idle': {'method': 'x', 'stable': True, 'current': True, 'bounded': False, 'updated': True, 'changes': 1,
                                         'waited_sec': 75.2, 'error': None, 'before': dict(v, av_signature='1.463.242.0'), 'after': v,
-                                        'trigger': {'exe': 'MpCmdRun.exe', 'exit': 0, 'timed_out': False, 'sec': 14.1, 'error': None}},
+                                        'attempts': att, 'trigger': att[-1]},
                                'snap0': v, 'snap2': dict(v, av_signature='1.465.120.0')}
         wj(os.path.join(rd, 'run.json'), rjd)
         # lists-0 names the node entry under another key casing (a key compare is case-insensitive)

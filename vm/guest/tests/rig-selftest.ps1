@@ -163,6 +163,8 @@ Check 'a settings set built with -Priority 4 has Priority=4 (not registered)' ($
         $bd = & {
             function Test-RigElevated { $true }
             function Get-PurgeDataRootVerdict { param([string]$DataRoot, [string]$RepoRoot) 'good' }
+            # gate5 (coordinator ruling 2026-11-18): the settle wait is faked here (tested on its own below)
+            function Wait-RigHostSettled { [ordered]@{ settled = $true; waited_sec = 181.0; cpu_percent = 3.2; cpu_window_sec = 30; max_wait_sec = 900; why_not = $null } }
             Invoke-M1bBudgets -Engine $ea -BaseEngine $eb -Program 'p' -DataRoot $dr
         }
         $asides = @(Get-ChildItem -LiteralPath (Join-Path $dr 'fp') -Directory | Where-Object { $_.Name -like 'msitables.m1b-budgets-*' })
@@ -173,10 +175,60 @@ Check 'a settings set built with -Priority 4 has Priority=4 (not registered)' ($
         Check 'M1b: m1b-budgets moves the cache aside before the cold harvest and again before the cold scan, not in warm rounds' (
             $asides.Count -eq 2 -and $ha.Count -eq 1 -and $harvestInScanAside -and
             @(Get-ChildItem -LiteralPath $ha[0].FullName -Filter 'old.bin').Count -eq 1 -and
-            $bj.schema -eq 'purge.rig.m1b-budgets/3' -and $bj.cold_cache_steps.harvest -eq 'moved' -and $bj.cold_cache_steps.scan -eq 'moved' -and
-            $bj.cold_cache_state -eq 'moved' -and $bj.cold_cache.scan -eq $sa[0].FullName -and @($bj.runs).Count -eq 12 -and
+            $bj.schema -eq 'purge.rig.m1b-budgets/4' -and $bj.cold_cache_steps.harvest -eq 'moved' -and $bj.cold_cache_steps.scan -eq 'moved' -and
+            $bj.cold_cache_state -eq 'moved' -and $bj.cold_cache.scan -eq $sa[0].FullName -and @($bj.runs).Count -eq 20 -and
             -not @($bj.runs | Where-Object { $_.exit -ne 0 }).Count) "asides: $(@($asides.Name) -join ', '); steps: $($bj.cold_cache_steps | ConvertTo-Json -Compress); runs: $(@($bj.runs).Count)"
+        # gate5 (coordinator ruling 2026-11-18): 5 rounds (1 cold, 4 warm), the engines alternating within each round
+        # (m1b first in odd rounds, m2 first in even ones), the settle record, power plan and per-step host load kept
+        $ord = (@($bj.runs | Sort-Object seq | ForEach-Object { "$($_.round)$($_.engine)$($_.step.Substring(0, 1))" }) -join ' ')
+        $want = '1m1bh 1m1bs 1m2h 1m2s 2m2h 2m2s 2m1bh 2m1bs 3m1bh 3m1bs 3m2h 3m2s 4m2h 4m2s 4m1bh 4m1bs 5m1bh 5m1bs 5m2h 5m2s'
+        Check 'M1b: m1b-budgets runs 5 rounds, engines alternating within each round, round 1 cold' ($ord -eq $want -and
+            @($bj.runs | Where-Object { $_.kind -eq 'cold' }).Count -eq 4 -and -not @($bj.runs | Where-Object { $_.kind -eq 'cold' -and $_.round -ne 1 }).Count) $ord
+        Check 'M1b: m1b-budgets records the settled host, the power plan and each step''s host CPU load' ($bj.settle.settled -eq $true -and
+            $bj.settle.cpu_percent -eq 3.2 -and $bj.PSObject.Properties.Name -contains 'power_plan' -and $bj.rounds -eq 5 -and
+            @($bj.runs | Where-Object { $_.PSObject.Properties.Name -contains 'host_cpu_percent' }).Count -eq 20) ($bj | ConvertTo-Json -Depth 3 -Compress)
     } finally { $script:RunsDir = $savedRuns; Remove-Item Env:\PURGE_STUB_CACHE -ErrorAction SilentlyContinue }
+    # gate5 (coordinator ruling 2026-11-18, G7 measurement hygiene): the settled-host wait before round 1. Fakes for the
+    # VM process list and the CPU load; the wait counts the quiet time from the last VM process seen, then needs CPU < 10 %.
+    & {
+        $script:vmCalls = 0
+        function Get-RigVmProcesses { $script:vmCalls++; if ($script:vmCalls -le 2) { @('VBoxHeadless') } else { @() } }
+        function Get-RigCpuLoad([int]$WindowSec = 30) { 4.5 }
+        $t0 = Get-Date
+        $s = Wait-RigHostSettled -QuietSec 2 -CpuWindowSec 1 -MaxWaitSec 20 -PollSec 1
+        $el = ((Get-Date) - $t0).TotalSeconds
+        Check 'M1b budgets settle: a VM process seen, then quiet for QuietSec, CPU under 10 %: settled' ($s.settled -eq $true -and
+            @($s.vm_processes_seen) -contains 'VBoxHeadless' -and $s.vm_last_seen -and $s.cpu_percent -eq 4.5 -and $el -ge 2 -and $el -lt 15) "elapsed=$el $($s | ConvertTo-Json -Depth 3 -Compress)"
+        function Get-RigVmProcesses { @() }
+        function Get-RigCpuLoad([int]$WindowSec = 30) { 37.0 }
+        $s = Wait-RigHostSettled -QuietSec 0 -CpuWindowSec 1 -MaxWaitSec 2 -PollSec 1
+        Check 'M1b budgets settle: CPU load stays high: not settled within the bound, the reason recorded' ($s.settled -eq $false -and
+            "$($s.why_not)" -match 'CPU load 37' -and @($s.cpu_samples).Count -ge 1) ($s | ConvertTo-Json -Depth 3 -Compress)
+        function Get-RigVmProcesses { @('VirtualBoxVM') }
+        $s = Wait-RigHostSettled -QuietSec 1 -CpuWindowSec 1 -MaxWaitSec 2 -PollSec 1
+        Check 'M1b budgets settle: a VM keeps running: not settled, no CPU sample taken' ($s.settled -eq $false -and
+            "$($s.why_not)" -match 'VirtualBoxVM' -and @($s.cpu_samples).Count -eq 0) ($s | ConvertTo-Json -Depth 3 -Compress)
+        $cpu = Get-RigCpuPercent ([pscustomobject]@{ idle = 0; kernel = 0; user = 0 }) ([pscustomobject]@{ idle = 900; kernel = 1000; user = 0 })
+        Check 'M1b budgets settle: CPU percent from GetSystemTimes deltas (kernel includes idle)' ($cpu -eq 10.0) "$cpu"
+        $real = Get-RigSystemTimes
+        Check 'M1b budgets settle: GetSystemTimes readable on this host' ($real.kernel -gt 0 -and $real.idle -ge 0 -and $real.kernel -ge $real.idle) ($real | ConvertTo-Json -Compress)
+    }
+    # an unsettled host: the mode refuses with a clear message before moving the cache or running an engine
+    $savedRuns = $script:RunsDir
+    try {
+        $script:RunsDir = Join-Path $Work 'budget-runs-unsettled'
+        $dr = Join-Path $Work 'budget-data-root-unsettled'; $cache = Join-Path $dr 'fp\msitables'
+        New-Item -ItemType Directory -Force $cache | Out-Null
+        $script:budgetMsg = $null
+        & {
+            function Test-RigElevated { $true }
+            function Get-PurgeDataRootVerdict { param([string]$DataRoot, [string]$RepoRoot) 'good' }
+            function Wait-RigHostSettled { [ordered]@{ settled = $false; waited_sec = 900.2; cpu_percent = 41.0; max_wait_sec = 900; why_not = 'CPU load 41 % over 30 s (needs < 10 %)' } }
+            try { $null = Invoke-M1bBudgets -Engine $ea -BaseEngine $eb -Program 'p' -DataRoot $dr } catch { $script:budgetMsg = $_.Exception.Message }
+        }
+        Check 'M1b: m1b-budgets refuses an unsettled host before anything runs' ("$script:budgetMsg" -match 'did not settle within 900 s \(CPU load 41' -and
+            (Test-Path -LiteralPath $cache) -and -not (Test-Path -LiteralPath (Join-Path $script:RunsDir 'm1b-budgets\budgets.json'))) "$script:budgetMsg"
+    } finally { $script:RunsDir = $savedRuns }
     $absent = Join-Path $Work 'no-purge-data-root'
     $plain = Join-Path $Work 'plain-purge-data-root'; New-Item -ItemType Directory $plain | Out-Null
     $va = Get-PurgeDataRootVerdict -DataRoot $absent; $vp = Get-PurgeDataRootVerdict -DataRoot $plain
@@ -572,7 +624,7 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
 & {
     foreach ($f in 'run-app.ps1', 'null-run.ps1') {
         $t = [IO.File]::ReadAllText((Join-Path $Guest $f))
-        $p = $t.IndexOf("Phase 'edge-pause'"); $d = $t.IndexOf("Phase 'defender-idle' { `$S.defender.idle = Wait-DefenderIdle } `$S"); $a = $t.IndexOf("Phase 'arp0'")
+        $p = $t.IndexOf("Phase 'edge-pause'"); $d = $t.IndexOf("Phase 'defender-idle' { `$S.defender.idle = Wait-DefenderIdle -OutDir `$Dir } `$S"); $a = $t.IndexOf("Phase 'arp0'")
         $l = $t.IndexOf("Phase 'lists0'")
         Check "${f}: defender-idle after edge-pause, right before arp0 / lists0" ($p -gt 0 -and $d -gt $p -and $d -lt $a -and $d -lt $l) "pause=$p defender=$d arp0=$a lists0=$l"
         Check "${f}: Defender versions read before snap 0 and after snap 2" ($t.Contains("Phase 'snap0' { `$S.defender.snap0 = Get-DefenderVersions; Snap `$Run 0 } `$S") -and $t.Contains("Phase 'snap2' { Snap `$Run 2; `$S.defender.snap2 = Get-DefenderVersions } `$S") -and $t.Contains('defender = [ordered]@{ idle = $null; snap0 = $null; snap2 = $null }'))
@@ -580,38 +632,126 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
 }
 
 # ---------------------- riglib: Wait-DefenderIdle is bounded and never throws (no host Defender call: all faked)
+# Gate5 fix (coordinator 2026-11-18): MpCmdRun retried until it exits 0, then stable, then signatures current.
 & {
     . (Join-Path $Guest 'riglib.ps1')
     $ErrorActionPreference = 'Stop'
     function Log([string]$Message) { }
-    $V = { param($sig) [ordered]@{ source = 'fake'; av_signature = $sig; as_signature = $sig; engine = '1.1.1.1'; platform = '4.18.1.1'; error = $null } }
-    # no network: MpCmdRun fails, nothing changes -> stable, not updated, the exit code recorded
-    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; exit = 2; timed_out = $false; sec = 0.1; error = $null } }
-    function Get-DefenderVersions { & $V '1.463.242.0' }
-    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.242.0'); text = 'same' } }
+    function Copy-DefenderLogs([string]$OutDir) { }
+    # a version record: $age days old, out of date when older than 7 days (as Defender says)
+    $V = { param($sig, $age = 0) [ordered]@{ source = 'fake'; av_signature = $sig; as_signature = $sig; engine = '1.1.1.1'; platform = '4.18.1.1'
+            av_signature_age = $age; signatures_out_of_date = ($age -gt 7); error = $null } }
+    $Fake = { param($exit, $sec = 0.1) [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; start = 'x'; exit = $exit; timed_out = $false; sec = $sec; error = $null } }
+    function Get-DefenderVersions { & $V '1.437.1.0' 427 }
+
+    # current from the start: MpCmdRun exits 0 at once, nothing changes, signatures current -> one attempt, done
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { & $Fake 0 }
+    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.242.0' 0); text = 'same' } }
     $t0 = Get-Date
-    $r = Wait-DefenderIdle -StableSec 1 -MaxStableWaitSec 10 -PollSec 0
-    Check 'Wait-DefenderIdle, no network: stable, not updated, MpCmdRun exit recorded, no error' ($r.stable -eq $true -and -not $r.bounded -and $r.updated -eq $false -and $r.trigger.exit -eq 2 -and -not $r.error -and ((Get-Date) - $t0).TotalSeconds -lt 10) ($r | ConvertTo-Json -Depth 4 -Compress)
-    # an update lands during the wait: the versions move once, then hold -> stable, updated, the change counted
-    $script:n = 0
-    function Get-DefenderFingerprint { $script:n++; $s = $(if ($script:n -le 2) { '1.463.242.0' } else { '1.465.10.0' }); [pscustomobject]@{ versions = (& $V $s); text = $s } }
-    $r = Wait-DefenderIdle -StableSec 1 -MaxStableWaitSec 10 -PollSec 0
-    Check 'Wait-DefenderIdle, update during the wait: stable afterwards, updated, the change counted' ($r.stable -eq $true -and $r.updated -eq $true -and $r.changes -ge 1 -and $r.after.av_signature -eq '1.465.10.0') ($r | ConvertTo-Json -Depth 4 -Compress)
-    # never settles: bounded, returns (no hang, no throw), not stable
-    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.242.0'); text = [guid]::NewGuid().ToString() } }
+    $r = Wait-DefenderIdle -StableSec 1 -BusyWaitSec 1 -MaxWaitSec 10 -PollSec 0
+    Check 'Wait-DefenderIdle, current from the start: one attempt (exit 0), stable, current, not bounded' ($r.stable -eq $true -and $r.current -eq $true -and -not $r.bounded -and @($r.attempts).Count -eq 1 -and $r.trigger.exit -eq 0 -and -not $r.error -and ((Get-Date) - $t0).TotalSeconds -lt 5) ($r | ConvertTo-Json -Depth 4 -Compress)
+
+    # busy then succeeds (the gate5 m1bcp-python case): exit 2 in 0.1 s while Defender's own update downloads; the state
+    # moves when it lands; MpCmdRun again exits 0; stable; current -> two attempts, updated
+    $script:calls = 0; $script:polls = 0
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { $script:calls++; if ($script:calls -eq 1) { & $Fake 2 0.1 } else { & $Fake 0 3.5 } }
+    function Get-DefenderFingerprint { $script:polls++; if ($script:polls -le 3) { [pscustomobject]@{ versions = (& $V '1.437.1.0' 427); text = 'old' } } else { [pscustomobject]@{ versions = (& $V '1.463.359.0' 0); text = 'new' } } }
+    $r = Wait-DefenderIdle -StableSec 1 -BusyWaitSec 5 -MaxWaitSec 20 -PollSec 0
+    Check 'Wait-DefenderIdle, busy then succeeds: exit 2 then exit 0 recorded, stable, current, updated' ($r.stable -eq $true -and $r.current -eq $true -and -not $r.bounded -and $r.updated -eq $true -and (@($r.attempts | ForEach-Object { $_.exit }) -join ',') -eq '2,0' -and $r.changes -ge 1 -and $r.after.av_signature -eq '1.463.359.0') ($r | ConvertTo-Json -Depth 4 -Compress)
+
+    # the gate5 failure itself: busy (exit 2) and NOTHING moves for longer than the stable time -> the old wait ended
+    # here; the new one does not end early: it runs MpCmdRun again after the busy wait, until it exits 0
+    $script:calls = 0
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { $script:calls++; if ($script:calls -le 2) { & $Fake 2 0.1 } else { & $Fake 0 2.0 } }
+    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.359.0' 0); text = 'same' } }
+    $r = Wait-DefenderIdle -StableSec 1 -BusyWaitSec 2 -MaxWaitSec 20 -PollSec 0
+    Check 'Wait-DefenderIdle, busy with a still fingerprint: not done until MpCmdRun exits 0 (3 attempts)' ($r.stable -eq $true -and $r.current -eq $true -and (@($r.attempts | ForEach-Object { $_.exit }) -join ',') -eq '2,2,0' -and $r.waited_sec -ge 3.5) ($r | ConvertTo-Json -Depth 4 -Compress)
+
+    # stale signature with a failing trigger: MpCmdRun always fails, the signatures stay 427 days old -> bounded, not
+    # current, several attempts recorded, returns within its bound
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { & $Fake (-2147024894) 0.2 }
+    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.437.1.0' 427); text = 'same' } }
     $t0 = Get-Date
-    $r = Wait-DefenderIdle -StableSec 5 -MaxStableWaitSec 1 -PollSec 0
+    $r = Wait-DefenderIdle -StableSec 1 -BusyWaitSec 1 -MaxWaitSec 3 -PollSec 0
+    $el = ((Get-Date) - $t0).TotalSeconds
+    Check 'Wait-DefenderIdle, stale signatures, failing trigger: bounded, not current, attempts recorded, within the bound' ($r.bounded -eq $true -and $r.stable -eq $false -and $r.current -eq $false -and @($r.attempts).Count -ge 2 -and $r.trigger.exit -eq -2147024894 -and $el -lt 6) "elapsed=$el $($r | ConvertTo-Json -Depth 4 -Compress)"
+    # stale and MpCmdRun exits 0 (nothing newer reached): stable but never current -> MpCmdRun again, bounded
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { & $Fake 0 0.1 }
+    $r = Wait-DefenderIdle -StableSec 1 -BusyWaitSec 1 -MaxWaitSec 3 -PollSec 0
+    Check 'Wait-DefenderIdle, exit 0 but signatures stale: not done, retried, bounded, not current' ($r.bounded -eq $true -and $r.current -eq $false -and $r.stable -eq $false -and @($r.attempts).Count -ge 2) ($r | ConvertTo-Json -Depth 4 -Compress)
+
+    # always busy: exit 2 every time, signatures current -> still bounded (the last MpCmdRun never exited 0)
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { & $Fake 2 0.1 }
+    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.359.0' 0); text = 'same' } }
+    $t0 = Get-Date
+    $r = Wait-DefenderIdle -StableSec 1 -BusyWaitSec 1 -MaxWaitSec 3 -PollSec 0
+    $el = ((Get-Date) - $t0).TotalSeconds
+    Check 'Wait-DefenderIdle, always busy: bounded, not stable, every attempt exit 2, within the bound' ($r.bounded -eq $true -and $r.stable -eq $false -and @($r.attempts).Count -ge 2 -and @($r.attempts | Where-Object { $_.exit -ne 2 }).Count -eq 0 -and $el -lt 6) "elapsed=$el $($r | ConvertTo-Json -Depth 4 -Compress)"
+
+    # never settles after exit 0: bounded, returns (no hang, no throw), not stable
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { & $Fake 0 0.1 }
+    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.359.0' 0); text = [guid]::NewGuid().ToString() } }
+    $t0 = Get-Date
+    $r = Wait-DefenderIdle -StableSec 5 -BusyWaitSec 1 -MaxWaitSec 1 -PollSec 0
     Check 'Wait-DefenderIdle, never settles: bounded, not stable, returns within its bound' ($r.bounded -eq $true -and $r.stable -eq $false -and ((Get-Date) - $t0).TotalSeconds -lt 5) ($r | ConvertTo-Json -Depth 4 -Compress)
-    # MpCmdRun hangs: its own timeout (faked as timed out) is recorded, the wait still ends
-    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; exit = $null; timed_out = $true; sec = $TimeoutSec; error = $null } }
-    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.242.0'); text = 'same' } }
-    $r = Wait-DefenderIdle -UpdateTimeoutSec 7 -StableSec 1 -MaxStableWaitSec 10 -PollSec 0
-    Check 'Wait-DefenderIdle, MpCmdRun timed out: recorded, the wait still ends stable' ($r.trigger.timed_out -eq $true -and $r.trigger.sec -eq 7 -and $r.stable -eq $true) ($r | ConvertTo-Json -Depth 4 -Compress)
+
+    # MpCmdRun hangs: its timeout is capped by what is left of the overall bound; recorded, the wait still ends
+    $script:to = @()
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { $script:to += $TimeoutSec; [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; exit = $null; timed_out = $true; sec = $TimeoutSec; error = $null } }
+    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.359.0' 0); text = 'same' } }
+    $r = Wait-DefenderIdle -UpdateTimeoutSec 300 -StableSec 1 -BusyWaitSec 1 -MaxWaitSec 3 -PollSec 0
+    Check 'Wait-DefenderIdle, MpCmdRun timed out: recorded, its timeout within the overall bound, bounded' ($r.trigger.timed_out -eq $true -and $r.bounded -eq $true -and @($script:to | Where-Object { $_ -gt 3 }).Count -eq 0) "timeouts=$($script:to -join ',') $($r | ConvertTo-Json -Depth 4 -Compress)"
+
     # anything inside throws: the record carries the error, the function does not throw
     function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { throw 'simulated failure' }
     $threw = $false
-    try { $r = Wait-DefenderIdle -StableSec 1 -MaxStableWaitSec 1 -PollSec 0 } catch { $threw = $true }
+    try { $r = Wait-DefenderIdle -StableSec 1 -MaxWaitSec 1 -PollSec 0 } catch { $threw = $true }
     Check 'Wait-DefenderIdle, a failure inside: no throw, error recorded' (-not $threw -and "$($r.error)" -match 'simulated failure') "threw=$threw error=$($r.error)"
+
+    # the default bounds: 600 s overall, 240 s busy wait, 60 s stable (the job timeouts leave room: app 5400 s, null 2400 s)
+    Check 'Wait-DefenderIdle defaults: MaxWaitSec 600, BusyWaitSec 240, StableSec 60, MaxAgeDays 1' ([IO.File]::ReadAllText((Join-Path $Guest 'riglib.ps1')) -match '\[int\]\$StableSec = 60, \[int\]\$BusyWaitSec = 240,\s+\[int\]\$MaxWaitSec = 600, \[int\]\$PollSec = 5, \[int\]\$MaxAgeDays = 1\)')
+}
+& {
+    . (Join-Path $Guest 'riglib.ps1')
+    $ErrorActionPreference = 'Stop'
+    # Test-DefenderSignaturesCurrent: Defender's flag or the age; unknown (registry fallback) is not current
+    $ok = (Test-DefenderSignaturesCurrent ([ordered]@{ signatures_out_of_date = $false; av_signature_age = 427 })) -and
+        (Test-DefenderSignaturesCurrent ([ordered]@{ signatures_out_of_date = $true; av_signature_age = 1 })) -and
+        -not (Test-DefenderSignaturesCurrent ([ordered]@{ signatures_out_of_date = $true; av_signature_age = 2 })) -and
+        -not (Test-DefenderSignaturesCurrent ([ordered]@{ signatures_out_of_date = $null; av_signature_age = $null })) -and
+        -not (Test-DefenderSignaturesCurrent $null)
+    Check 'Test-DefenderSignaturesCurrent: not out of date, or at most 1 day old; unknown is not current' $ok
+    # Copy-DefenderLogs: MpCmdRun.log from %TEMP%, the newest Support\MPLog-*.log read while another handle writes it,
+    # the tail only of a long one; no OutDir: nothing; never throws
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("rigst-deflog-" + [guid]::NewGuid().ToString('N'))
+    $oldTemp = $env:TEMP
+    $hold = $null
+    try {
+        $tdir = Join-Path $tmp 'temp'; $out = Join-Path $tmp 'out'; $sup = Join-Path $tmp 'Defender\Support'
+        foreach ($d in $tdir, $out, $sup) { New-Item -ItemType Directory -Force $d | Out-Null }
+        [IO.File]::WriteAllText((Join-Path $tdir 'MpCmdRun.log'), "MpCmdRun: Command Line: -SignatureUpdate`r`nexit 2`r`n")
+        [IO.File]::WriteAllText((Join-Path $sup 'MPLog-20250101-000000.log'), 'old')
+        (Get-Item (Join-Path $sup 'MPLog-20250101-000000.log')).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddDays(-2)
+        $big = Join-Path $sup 'MPLog-20261118-100000.log'
+        [IO.File]::WriteAllText($big, ('x' * 5000) + 'TAIL')
+        $hold = New-Object IO.FileStream($big, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
+        $env:TEMP = $tdir
+        $RigDefenderData = Join-Path $tmp 'Defender'
+        $threw = $false
+        try { $logs = @(Copy-DefenderLogs -OutDir $out -MaxBytes 1000) } catch { $threw = $true; $logs = @() }
+        $mp = Join-Path $out 'defender-MPLog.log'; $mc = Join-Path $out 'defender-MpCmdRun.log'
+        $mpText = $(if (Test-Path $mp) { [IO.File]::ReadAllText($mp) } else { '' })
+        Check 'Copy-DefenderLogs: MpCmdRun.log and the newest MPLog (open for writing elsewhere) copied, a long one truncated to its tail' (-not $threw -and (Test-Path $mc) -and ([IO.File]::ReadAllText($mc) -match 'SignatureUpdate') -and $mpText.Length -eq 1000 -and $mpText.EndsWith('TAIL') -and @($logs | Where-Object { $_.to -eq 'defender-MPLog.log' -and $_.truncated -eq $true -and -not $_.error }).Count -eq 1) "threw=$threw logs=$($logs | ConvertTo-Json -Depth 3 -Compress)"
+        $none = @(Copy-DefenderLogs -OutDir '')
+        Check 'Copy-DefenderLogs: no OutDir copies nothing' ($none.Count -eq 0)
+        $threw = $false
+        try { $bad = @(Copy-DefenderLogs -OutDir (Join-Path $tmp 'no\such\dir')) } catch { $threw = $true }
+        Check 'Copy-DefenderLogs: an unwritable OutDir: no throw, errors recorded' (-not $threw -and @($bad | Where-Object { $_.error }).Count -ge 1) "threw=$threw"
+    } finally {
+        $env:TEMP = $oldTemp
+        if ($hold) { $hold.Dispose() }
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 & {
     . (Join-Path $Guest 'riglib.ps1')
@@ -719,7 +859,7 @@ function Get-EdgeVersions { [ordered]@{ 'fake-edge' = 'Microsoft Edge 1.0' } }
 function Suspend-EdgeUpdate { Ev 'edge-pause'; [ordered]@{ method = 'fake'; versions_before = (Get-EdgeVersions); versions_after = (Get-EdgeVersions) } }
 # Never trigger a signature update of the host's Defender: the idle wait and the version reads are fakes too.
 function Get-DefenderVersions { [ordered]@{ source = 'fake'; av_signature = '1.463.300.0'; as_signature = '1.463.300.0'; engine = '1.1.25100.9'; platform = '4.18.25100.9'; error = $null } }
-function Wait-DefenderIdle { Ev 'defender-idle'; [ordered]@{ method = 'fake'; stable = $true; bounded = $false; before = (Get-DefenderVersions); after = (Get-DefenderVersions) } }
+function Wait-DefenderIdle([string]$OutDir) { Ev 'defender-idle'; [ordered]@{ method = 'fake'; out_dir = $OutDir; stable = $true; current = $true; bounded = $false; before = (Get-DefenderVersions); after = (Get-DefenderVersions); attempts = @([ordered]@{ exit = 0; sec = 1.0 }) } }
 foreach ($pn in @($Apps | ForEach-Object { $_.plant_pre; $_.plant_post } | Where-Object { $_ } | Select-Object -Unique)) {
     Set-Item -Path "function:script:$pn" -Value ([scriptblock]::Create("param(`$Ctx) Ev ('plant:' + `$Ctx.Phase + ':$pn'); Add-Planted `$Ctx 'file' 'P:C:\fake\$pn.txt' 'fake'"))
 }
@@ -842,7 +982,7 @@ $EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect
     Check 'run-app engine: outputs under the prefixed run name only' ((Files $r.dir) -eq 'engine-run.json,fp.json,inv-1.json,inv-2.json,lists-r0-npp-0.json,lists-r0-npp-1.json,lists-r0-npp-2.json,plan-purge.json,plan-purge.scan.json,run.json,run.log,snap-r0-npp-0.tsv.gz,snap-r0-npp-1.tsv.gz,snap-r0-npp-2.tsv.gz' -and -not (Test-Path (Join-Path $r.outRoot 'npp'))) (Files $r.dir)
     Check 'run-app engine: no extra checks without -Extra' (-not ($r.run.PSObject.Properties.Name -contains 'extra') -and -not ($r.engine -match '--mode external')) ($r.engine -join ' | ')
     Check 'run-app engine: run.json names run r0-npp of app npp' ($r.run.run -eq 'r0-npp' -and $r.run.id -eq 'npp')
-    Check 'run-app engine: Defender idle before the captures, versions recorded at snap 0 and snap 2' ((@($r.events | Where-Object { $_ -match '^(defender-idle|lists:0|snap:0)$' }) -join ' ') -eq 'defender-idle lists:0 snap:0' -and $r.run.defender.idle.stable -eq $true -and $r.run.defender.snap0.av_signature -eq '1.463.300.0' -and $r.run.defender.snap2.av_signature -eq '1.463.300.0') (($r.events -join ' | ') + ' ' + ($r.run.defender | ConvertTo-Json -Depth 4 -Compress))
+    Check 'run-app engine: Defender idle before the captures, versions recorded at snap 0 and snap 2' ((@($r.events | Where-Object { $_ -match '^(defender-idle|lists:0|snap:0)$' }) -join ' ') -eq 'defender-idle lists:0 snap:0' -and $r.run.defender.idle.stable -eq $true -and $r.run.defender.idle.out_dir -eq $r.dir -and $r.run.defender.snap0.av_signature -eq '1.463.300.0' -and $r.run.defender.snap2.av_signature -eq '1.463.300.0') (($r.events -join ' | ') + ' ' + ($r.run.defender | ConvertTo-Json -Depth 4 -Compress))
     Check 'run-app engine: program_id resolved from inv-1.json by key path' ($r.run.engine.program_id -eq 'HKLM|64|Fake-npp') "$($r.run.engine.program_id)"
     Check 'run-app engine: harvest/uninstall/scan command lines' (
         ($r.engine -contains ('engine:harvest "HKLM|64|Fake-npp" -o ' + (Join-Path $r.dir 'fp.json'))) -and

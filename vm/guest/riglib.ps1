@@ -812,20 +812,28 @@ function Suspend-EdgeUpdate {
 # bounded) and then waits until Defender's state is unchanged for $StableSec (bounded too); the versions are recorded at
 # snap 0 and snap 2 (run.json `defender`), and truth/m1b.sh calls a run whose versions differ INVALID. Fail-safe: these
 # functions never throw and never wait unbounded (no network: MpCmdRun fails or times out, the record says so).
+# Gate5 (2026-11-18, coordinator): MpCmdRun -SignatureUpdate returned exit 2 in 0.1 s while Defender's own boot-time
+# update was downloading, the fingerprint stayed still for 60 s during the download, the wait ended and the update
+# landed after snap 0 (m1bcp-python: Clean-Pro, signatures 427 days old). So the wait now retries MpCmdRun until it
+# returns 0, waits for stability after that, and ends only once Defender reports its signatures current.
 
 $RigDefenderData = 'C:\ProgramData\Microsoft\Windows Defender'
 
 # Defender's signature, engine and platform versions: MSFT_MpComputerStatus (what Get-MpComputerStatus reads; CIM call
-# bounded to 30 s), else the Signature Updates registry key. Never throws; `error` says what failed.
+# bounded to 30 s), else the Signature Updates registry key. Never throws; `error` says what failed. Only the CIM class
+# says whether the signatures are current (signatures_out_of_date = DefenderSignaturesOutOfDate, av_signature_age =
+# AntivirusSignatureAge in days); the registry fallback leaves both null (not known to be current).
 function Get-DefenderVersions {
     $v = [ordered]@{ source = $null; av_signature = $null; as_signature = $null; nis_signature = $null; engine = $null; platform = $null
-        av_signature_updated = $null; at = (NowIso); error = $null }
+        av_signature_updated = $null; av_signature_age = $null; signatures_out_of_date = $null; at = (NowIso); error = $null }
     try {
         $c = Get-CimInstance -Namespace 'root/Microsoft/Windows/Defender' -ClassName 'MSFT_MpComputerStatus' -OperationTimeoutSec 30 -ErrorAction Stop
         $v.source = 'MSFT_MpComputerStatus'
         $v.av_signature = "$($c.AntivirusSignatureVersion)"; $v.as_signature = "$($c.AntispywareSignatureVersion)"
         $v.nis_signature = "$($c.NISSignatureVersion)"; $v.engine = "$($c.AMEngineVersion)"; $v.platform = "$($c.AMProductVersion)"
         if ($c.AntivirusSignatureLastUpdated) { $v.av_signature_updated = ([datetime]$c.AntivirusSignatureLastUpdated).ToString('o') }
+        if ($null -ne $c.AntivirusSignatureAge) { $v.av_signature_age = [int64]$c.AntivirusSignatureAge }
+        if ($null -ne $c.DefenderSignaturesOutOfDate) { $v.signatures_out_of_date = [bool]$c.DefenderSignaturesOutOfDate }
     } catch {
         $v.error = "MSFT_MpComputerStatus: $($_.Exception.Message)"
         try {
@@ -861,9 +869,10 @@ function Get-DefenderFingerprint {
 }
 
 # MpCmdRun.exe -SignatureUpdate, waited for at most $TimeoutSec (killed after). No output redirection: a child of
-# MpCmdRun that inherited the pipes could keep a stream read open past the kill. Never throws.
+# MpCmdRun that inherited the pipes could keep a stream read open past the kill. Never throws. Exit 0: the update ran
+# (or nothing was newer); exit 2 in a fraction of a second: another update (Defender's own) is running, or it failed.
 function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) {
-    $r = [ordered]@{ exe = $null; args = '-SignatureUpdate'; exit = $null; timed_out = $false; sec = $null; error = $null }
+    $r = [ordered]@{ exe = $null; args = '-SignatureUpdate'; start = (NowIso); exit = $null; timed_out = $false; sec = $null; error = $null }
     $t0 = Get-Date
     try {
         $cands = @(Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe')
@@ -882,38 +891,125 @@ function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) {
     $r
 }
 
-# Before arp0 / lists 0 / snap 0 of every app and null run: one signature update (bounded by $UpdateTimeoutSec), then
-# polls Get-DefenderFingerprint every $PollSec until it has not changed for $StableSec, or $MaxStableWaitSec passed
-# (`bounded`). Never throws; returns the record for run.json `defender.idle`.
-function Wait-DefenderIdle([int]$UpdateTimeoutSec = 300, [int]$StableSec = 60, [int]$MaxStableWaitSec = 300, [int]$PollSec = 5) {
+# Current signatures (gate5 fix): Defender says they are not out of date, or the antivirus signatures are at most
+# $MaxAgeDays old. Unknown (the registry fallback has neither) is not current.
+function Test-DefenderSignaturesCurrent($Versions, [int]$MaxAgeDays = 1) {
+    if (-not $Versions) { return $false }
+    if ($Versions['signatures_out_of_date'] -eq $false) { return $true }
+    $age = $Versions['av_signature_age']
+    [bool]($null -ne $age -and [int64]$age -le $MaxAgeDays)
+}
+
+# Defender's update logs into the run directory (gate5 fix, evidence for the idle wait): MpCmdRun's own log
+# (MpCmdRun.log in %TEMP% of the account that ran it: the rig user's; C:\Windows\Temp for SYSTEM) as
+# defender-MpCmdRun[-windir].log, and the Defender service's newest Support\MPLog-*.log (its signature update events) as
+# defender-MPLog.log. Read shared (the service keeps MPLog open); only the last $MaxBytes of a longer file. Never throws;
+# writes one record per file (from, to, bytes, truncated, error) to the pipeline.
+function Copy-DefenderLogs([string]$OutDir, [long]$MaxBytes = 8MB) {
+    $out = New-Object System.Collections.ArrayList
+    if (-not $OutDir) { return }
+    $srcs = New-Object System.Collections.ArrayList
+    try {
+        $seen = @{}
+        foreach ($p in @(@($env:TEMP, 'defender-MpCmdRun.log'), @((Join-Path "$env:SystemRoot" 'Temp'), 'defender-MpCmdRun-windir.log'))) {
+            if (-not $p[0]) { continue }
+            $f = Join-Path $p[0] 'MpCmdRun.log'
+            $k = $f.ToLowerInvariant()
+            if ($seen.ContainsKey($k)) { continue }
+            $seen[$k] = 1
+            if (Test-Path -LiteralPath $f -PathType Leaf) { [void]$srcs.Add(@($f, $p[1])) }
+        }
+        $mp = @(Get-ChildItem -LiteralPath (Join-Path $RigDefenderData 'Support') -Filter 'MPLog-*.log' -File -Force -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTimeUtc -Descending) | Select-Object -First 1
+        if ($mp) { [void]$srcs.Add(@($mp.FullName, 'defender-MPLog.log')) }
+    } catch { [void]$out.Add([ordered]@{ from = $null; to = $null; bytes = $null; truncated = $false; error = "listing: $($_.Exception.Message)" }) }
+    foreach ($s in $srcs) {
+        $r = [ordered]@{ from = $s[0]; to = $s[1]; bytes = $null; truncated = $false; error = $null }
+        $in = $null; $w = $null
+        try {
+            $in = New-Object System.IO.FileStream($s[0], [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            if ($in.Length -gt $MaxBytes) { [void]$in.Seek(-$MaxBytes, [IO.SeekOrigin]::End); $r.truncated = $true }
+            $w = New-Object System.IO.FileStream((Join-Path $OutDir $s[1]), [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            $in.CopyTo($w)
+            $r.bytes = $w.Length
+        } catch { $r.error = $_.Exception.Message }
+        finally { if ($w) { $w.Dispose() }; if ($in) { $in.Dispose() } }
+        [void]$out.Add($r)
+    }
+    $out
+}
+
+# Before arp0 / lists 0 / snap 0 of every app and null run (gate5 fix, coordinator 2026-11-18). A loop, bounded by
+# $MaxWaitSec overall (`bounded` when it ends there):
+#   1. MpCmdRun -SignatureUpdate (bounded by $UpdateTimeoutSec and by what is left of $MaxWaitSec); every attempt is
+#      recorded (`attempts`: start, exit, sec, timed_out, error).
+#   2. A non-zero exit (busy: Defender's own update running; or failed / timed out): poll Get-DefenderFingerprint every
+#      $PollSec until it changes or $BusyWaitSec passed, then step 1 again.
+#   3. Exit 0: poll until the fingerprint has not changed for $StableSec. Then done when Defender reports its signatures
+#      current (Test-DefenderSignaturesCurrent); otherwise step 1 again.
+# So it ends early only when the LAST MpCmdRun returned 0, nothing changed for $StableSec after it and the signatures are
+# current (`stable` and `current` true). Then Defender's logs are copied into $OutDir (Copy-DefenderLogs). Never
+# throws; returns the record for run.json `defender.idle` (`trigger` = the last attempt).
+function Wait-DefenderIdle([string]$OutDir = '', [int]$UpdateTimeoutSec = 300, [int]$StableSec = 60, [int]$BusyWaitSec = 240,
+                           [int]$MaxWaitSec = 600, [int]$PollSec = 5, [int]$MaxAgeDays = 1) {
     $t0 = Get-Date
-    $rec = [ordered]@{ method = 'MpCmdRun -SignatureUpdate (bounded), then versions + Definition Updates + Scans\mpcache-* unchanged for stable_sec (bounded)'
-        start = (NowIso); end = $null; before = $null; trigger = $null; changes = 0; stable = $false; stable_sec = $StableSec
-        bounded = $false; max_stable_wait_sec = $MaxStableWaitSec; after = $null; updated = $null; waited_sec = $null; error = $null }
+    $deadline = $t0.AddSeconds($MaxWaitSec)
+    $rec = [ordered]@{ method = 'loop: MpCmdRun -SignatureUpdate; on a non-zero exit wait for a change (busy_wait_sec) and run it again; done when the last run exited 0, versions + Definition Updates + Scans\mpcache-* stayed unchanged for stable_sec after it and the signatures are current; bounded by max_wait_sec'
+        start = (NowIso); end = $null; before = $null; attempts = (New-Object System.Collections.ArrayList); trigger = $null
+        changes = 0; stable = $false; current = $false; stable_sec = $StableSec; busy_wait_sec = $BusyWaitSec; max_age_days = $MaxAgeDays
+        bounded = $false; max_wait_sec = $MaxWaitSec; after = $null; updated = $null; waited_sec = $null; logs = $null; error = $null }
+    $fp = $null
     try {
         $rec.before = Get-DefenderVersions
-        $rec.trigger = Invoke-DefenderSignatureUpdate -TimeoutSec $UpdateTimeoutSec
         $fp = Get-DefenderFingerprint
-        $t1 = Get-Date; $since = $t1
         while ($true) {
-            if (((Get-Date) - $since).TotalSeconds -ge $StableSec) { $rec.stable = $true; break }
-            if (((Get-Date) - $t1).TotalSeconds -ge $MaxStableWaitSec) { $rec.bounded = $true; break }
-            Start-Sleep -Milliseconds ([int]($PollSec * 1000))
-            $n = Get-DefenderFingerprint
-            if ($n.text -ne $fp.text) { $rec.changes++; $since = Get-Date }
-            $fp = $n
+            $left = [int][math]::Floor(($deadline - (Get-Date)).TotalSeconds)
+            if ($left -le 0) { $rec.bounded = $true; break }
+            $a = Invoke-DefenderSignatureUpdate -TimeoutSec ([math]::Max(1, [math]::Min($UpdateTimeoutSec, $left)))
+            $a['n'] = $rec.attempts.Count + 1
+            [void]$rec.attempts.Add($a); $rec.trigger = $a
+            if ($a['exit'] -ne 0) {
+                # busy, failed or timed out: wait until Defender's state moves (its own update landing) or the busy bound
+                $tw = Get-Date
+                while (((Get-Date) - $tw).TotalSeconds -lt $BusyWaitSec -and (Get-Date) -lt $deadline) {
+                    Start-Sleep -Milliseconds ([int]($PollSec * 1000))
+                    $n = Get-DefenderFingerprint
+                    if ($n.text -ne $fp.text) { $rec.changes++; $fp = $n; break }
+                    $fp = $n
+                }
+                continue
+            }
+            # the last MpCmdRun exited 0: nothing may change for $StableSec after it
+            $fp = Get-DefenderFingerprint
+            $since = Get-Date; $stable = $false
+            while ($true) {
+                if (((Get-Date) - $since).TotalSeconds -ge $StableSec) { $stable = $true; break }
+                if ((Get-Date) -ge $deadline) { break }
+                Start-Sleep -Milliseconds ([int]($PollSec * 1000))
+                $n = Get-DefenderFingerprint
+                if ($n.text -ne $fp.text) { $rec.changes++; $since = Get-Date }
+                $fp = $n
+            }
+            if ($stable -and (Test-DefenderSignaturesCurrent $fp.versions $MaxAgeDays)) { $rec.stable = $true; $rec.current = $true; break }
+            # not stable by the deadline (the loop top records `bounded`), or stable but not current: run it again
         }
-        $rec.after = $fp.versions
-        $rec.updated = (@('av_signature', 'as_signature', 'engine', 'platform') | Where-Object { "$($rec.before[$_])" -ne "$($rec.after[$_])" }).Count -gt 0
     } catch { $rec.error = $_.Exception.Message }
+    try {
+        if ($fp) { $rec.after = $fp.versions }
+        if (-not $rec.current) { $rec.current = Test-DefenderSignaturesCurrent $rec.after $MaxAgeDays }
+        if ($rec.before -and $rec.after) {
+            $rec.updated = (@('av_signature', 'as_signature', 'engine', 'platform') | Where-Object { "$($rec.before[$_])" -ne "$($rec.after[$_])" }).Count -gt 0
+        }
+    } catch { if (-not $rec.error) { $rec.error = $_.Exception.Message } }
+    try { $rec.logs = @(Copy-DefenderLogs -OutDir $OutDir) } catch { $rec.logs = @([ordered]@{ error = $_.Exception.Message }) }
     $rec.end = NowIso
     $rec.waited_sec = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
-    $tg = $rec.trigger
-    Log ("defender idle: signatures {0} -> {1} (engine {2} -> {3}); MpCmdRun exit {4}{5}{6} in {7} s; {8} after {9} change(s); waited {10} s{11}" -f
-        $rec.before.av_signature, $rec.after.av_signature, $rec.before.engine, $rec.after.engine, $tg.exit,
-        $(if ($tg.timed_out) { ' TIMED OUT' }), $(if ($tg.error) { ' !! ' + $tg.error }), $tg.sec,
-        $(if ($rec.stable) { "stable $StableSec s" } else { "NOT stable (bound $MaxStableWaitSec s)" }), $rec.changes, $rec.waited_sec,
-        $(if ($rec.error) { ' !! ' + $rec.error }))
+    $att = (@($rec.attempts) | ForEach-Object { 'exit {0}{1}{2} in {3} s' -f $_['exit'], $(if ($_['timed_out']) { ' TIMED OUT' }), $(if ($_['error']) { ' !! ' + $_['error'] }), $_['sec'] }) -join ', '
+    Log ("defender idle: signatures {0} -> {1} (engine {2} -> {3}, age {4} -> {5} d); MpCmdRun {6}; {7} after {8} change(s); waited {9} s{10}" -f
+        $rec.before.av_signature, $rec.after.av_signature, $rec.before.engine, $rec.after.engine, $rec.before.av_signature_age,
+        $rec.after.av_signature_age, $(if ($att) { $att } else { 'not run' }),
+        $(if ($rec.stable -and $rec.current) { "stable $StableSec s, signatures current" } elseif ($rec.bounded) { "NOT settled (bound $MaxWaitSec s, current=$($rec.current))" } else { 'NOT settled' }),
+        $rec.changes, $rec.waited_sec, $(if ($rec.error) { ' !! ' + $rec.error }))
     $rec
 }
 

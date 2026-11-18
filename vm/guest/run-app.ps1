@@ -422,10 +422,12 @@ foreach ($preId in $PreIds) {
 
 if ($PlantPre) { Phase 'plant-pre' { Invoke-Plant 'plant-pre' $PlantPre } $S; Save-Run }
 
-# Defender signature idle (riglib Wait-DefenderIdle, RIG.md section 12.7, ruling 2026-11-18): one signature update
-# triggered and waited for, then Defender's state stable, right before arp0 / lists 0 / snap 0; the versions are recorded
-# at snap 0 and snap 2 (run.json `defender`; truth/m1b.sh: a run whose versions differ is INVALID). Never blocks a run.
-Phase 'defender-idle' { $S.defender.idle = Wait-DefenderIdle } $S
+# Defender signature idle (riglib Wait-DefenderIdle, RIG.md section 12.7, ruling 2026-11-18; gate5 fix): MpCmdRun
+# -SignatureUpdate retried until it exits 0, then Defender's state stable and its signatures current (bounded, every
+# attempt recorded, Defender's logs copied into the run directory), right before arp0 / lists 0 / snap 0; the versions are
+# recorded at snap 0 and snap 2 (run.json `defender`; truth/m1b.sh: a run whose versions differ is INVALID). Never
+# blocks a run.
+Phase 'defender-idle' { $S.defender.idle = Wait-DefenderIdle -OutDir $Dir } $S
 Phase 'arp0' { $e.e0 = @(UninstallEntries); Log "ARP entries before: $($e.e0.Count)" } $S
 Phase 'lists0' { Lists $Run 0 } $S
 Phase 'snap0' { $S.defender.snap0 = Get-DefenderVersions; Snap $Run 0 } $S

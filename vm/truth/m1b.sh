@@ -129,7 +129,8 @@ SANITY_APPS = ['7zip', 'python', 'node', 'vcredist', 'powershell', 'temurin']
 REPLAY_RUNS = ['vscode', 'git', 'firefox', 'npp', '7zip']
 REPLAY_SCHEMA = 'purge.replay-diff/3'
 REPLAY_REASONS = ['new_scanner', 'msi_blocker_added', 'msi_root_added', 'policy_m1b', 'promotion_justified']
-BUDGET_ENGINES, BUDGET_STEPS, BUDGET_ROUNDS = ['m1b', 'm2'], ['harvest', 'scan'], [1, 2, 3]
+# coordinator ruling 2026-11-18 (gate5, G7 measurement hygiene): 5 rounds, 1 cold + 4 warm (limits unchanged)
+BUDGET_ENGINES, BUDGET_STEPS, BUDGET_ROUNDS = ['m1b', 'm2'], ['harvest', 'scan'], [1, 2, 3, 4, 5]
 BANDS = ['Safe', 'Likely', 'Weak', 'Blocked']
 STEP = {'clean': 'G2', 'dirty': 'G3', 'cp': 'G8'}
 # Defender versions compared between snap 0 and snap 2 (ruling 2026-11-18; guest riglib Get-DefenderVersions)
@@ -227,7 +228,14 @@ def defender_record(d):
             'idle': None if idle is None else {'stable': idle.get('stable'), 'bounded': idle.get('bounded'), 'updated': idle.get('updated'),
                                                'changes': idle.get('changes'), 'waited_sec': idle.get('waited_sec'), 'error': idle.get('error'),
                                                'trigger_exit': trig.get('exit'), 'trigger_timed_out': trig.get('timed_out'),
-                                               'trigger_error': trig.get('error')}}
+                                               'trigger_error': trig.get('error'),
+                                               # gate5 fix (RIG.md section 12.7): signatures current at the end, and
+                                               # every MpCmdRun attempt (exit, seconds); None from a run before the fix
+                                               'current': idle.get('current'),
+                                               'attempts': [{'exit': (a or {}).get('exit'), 'sec': (a or {}).get('sec'),
+                                                             'timed_out': (a or {}).get('timed_out')}
+                                                            for a in idle['attempts'] if isinstance(a, dict)]
+                                               if isinstance(idle.get('attempts'), list) else None}}
 
 
 def defender_invalid(rec):
@@ -1460,7 +1468,8 @@ for run in trap_runs:
     row('K9', st, run, f"cases={sm.get('cases')} escapes={sm.get('escapes')} missed_owned={sm.get('missed_owned')} "
         f'failed_cases={failed} unplanted_targets={unplanted} pre_existing_objects={pre_existing}', lim, ok, note or None)
 
-# K14: budgets (review R4b S6: every run exit 0, 3 rounds per engine and step, round 1 shown cold)
+# K14: budgets (review R4b S6: every run exit 0, round 1 shown cold; coordinator ruling 2026-11-18, gate5: 5 rounds per
+# engine and step, the warm medians over rounds 2-5; rig.ps1 settles the host first and alternates the engines)
 STAMP = re.compile(r'^\[\s*([0-9.]+)s\]')
 PHASE = re.compile(r'^timing:\s+phase (\S+) ([0-9.]+)s')
 # Ruling 2026-11-18 (K14 warm cache): the engine's cache line (PURGE_TIMING), `timing: msi_table_cache disk <path>
@@ -1499,6 +1508,17 @@ def parse_log(p):
     except OSError:
         return None
     return {'total': total, 'phases': phases, 'cache': cache, 'msi_reads': reads, 'harvest': harvest}
+
+
+def host_note(doc):
+    """Gate5 (coordinator ruling 2026-11-18): the host state rig.ps1 recorded (budgets/4: settle, power_plan), shown in
+    the K14 note; not judged (rig.ps1 refuses an unsettled host)."""
+    st = doc.get('settle') if isinstance(doc.get('settle'), dict) else None
+    pp = doc.get('power_plan') if isinstance(doc.get('power_plan'), dict) else None
+    if st is None and pp is None:
+        return None
+    return ((f"host settled {st.get('settled')} after {st.get('waited_sec')} s, CPU {st.get('cpu_percent')} %" if st else 'no settle record')
+            + (f"; power plan {pp.get('guid')}" if pp else ''))
 
 
 K14_ROWS = ('budget runs', 'reference walks per scan', 'added scan time', 'added harvest time', 'ownership.components',
@@ -1540,8 +1560,9 @@ else:
             probs.append(f"m1b {step} cold: cache state {ccs.get(step)} (moved aside before this step, or absent, needed)")
     if not bud.get('program'):
         probs.append('no program recorded')
-    row('K14', 'G7', 'budget runs', f'{len(seen)} run(s), {len(probs)} problem(s)', '12 runs (2 engines x 2 steps x 3 rounds), all exit 0, round 1 cold',
-        not probs, '; '.join(probs[:5]) or None)
+    row('K14', 'G7', 'budget runs', f'{len(seen)} run(s), {len(probs)} problem(s)',
+        f'{len(want)} runs (2 engines x 2 steps x {len(BUDGET_ROUNDS)} rounds), all exit 0, round 1 cold',
+        not probs, '; '.join(probs[:5]) or host_note(bud))
 
     def times(eng, step, kind):
         return [x['total'] for (e, s_, k, _), x in logs.items() if e == eng and s_ == step and k == kind]
@@ -1946,7 +1967,7 @@ assert not d['pass'] and not d['gate']
       "unbound_engine BIND" "engine_rebuilt BIND" "build_missing BIND" "build_stale BIND" "source_dirty BIND" \
       "two_commits BIND" "budget_engine_other BIND" "traps_changed BIND" "labels_override BIND" "labels_changed BIND" \
       "frozen_missing FROZEN" \
-      "budget_exit K14" "budget_two_rounds K14" "budget_kept_cache K14" "budget_kind K14" \
+      "budget_exit K14" "budget_two_rounds K14" "budget_three_rounds K14" "budget_kept_cache K14" "budget_kind K14" \
       "no_safe_7zip K4" \
       "replay_score_run_missing K4" "replay_score_7zip_only K4" "replay_score_no_block BIND" \
       "replay_score_other_commit BIND" "replay_score_dirty BIND" "replay_score_frozen_changed BIND" \
@@ -2074,6 +2095,8 @@ assert nd['run_json']['defender'] is None, nd['run_json']
 d = td['run_json']['defender']
 assert d['snap0']['av_signature'] == '1.465.100.0' and d['snap2']['av_signature'] == '1.465.120.0', d
 assert d['snap0']['platform'] == '4.18.25100.9' and d['idle']['stable'] is True and d['idle']['trigger_exit'] == 0, d
+# gate5 fix: every MpCmdRun attempt (exit, seconds) and whether the signatures were current
+assert d['idle']['current'] is True and [(a['exit'], a['sec']) for a in d['idle']['attempts']] == [(2, 0.1), (0, 14.1)], d
 EOF
   then ok_ runsum_target_against_lists0; else no_ runsum_target_against_lists0 "exit $rc"; fi
   # Review R5 S1: collect and replay refuse (exit 2) a rigtool that is not built from vm/rigtool at HEAD: a binary that
@@ -2181,7 +2204,16 @@ for c in ('P:C:\\Windows\\Prefetch\\PWSH.EXE-0A1B2C3D.pf', 'P:C:\\Program Files\
           'K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}',
           'K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\PowerShellCore/Operational',
           'P:C:\\ProgramData\\Fixture\\Windows Defender\\Definition Updates\\{CAE1651D-E3C4-408E-B588-CF4B82A59F45}',
-          'P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\fixture-mpcache-1.bin'):
+          'P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\fixture-mpcache-1.bin',
+          # the gate5 rules (coordinator ruling 2026-11-18): a security descriptor an install creates for its own ETW
+          # provider (a new value), other DirectX / OneSettings / Executive values, other Diagnosis files
+          'V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\WMI\\Security|f90714a8-5509-434a-bf6d-b1624c8a19a2',
+          'V:HKLM\\SOFTWARE\\Microsoft\\DirectX|FixtureAppSetting', 'K:HKLM\\SOFTWARE\\Microsoft\\DirectX\\FixtureApp',
+          'C:HKLM\\SOFTWARE\\Microsoft\\WindowsSelfHost\\OneSettings|FixtureValue',
+          'C:HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Executive|FixtureValue',
+          'K:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications\\Fixture',
+          'P:C:\\ProgramData\\Microsoft\\Diagnosis\\AggregatorStorage\\Triggers\\fixture.dat',
+          'P:C:\\ProgramData\\Microsoft\\Diagnosis\\ETLLogs\\fixture_data.dat'):
     assert not any(x.search(c) for x in rx), f'a noise rule matches an app object: {c}'
 EOF
   then ok_ churn_noise_list_windows_owned_and_never_an_app_item; else no_ churn_noise_list_windows_owned_and_never_an_app_item; fi
