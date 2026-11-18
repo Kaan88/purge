@@ -1375,10 +1375,13 @@ function Get-PurgeDataRootVerdict {
 # G7 (K14), host only and read-only: purge-engine harvest and forced scan of one program with PURGE_TIMING=1, three
 # rounds per engine (round 1 cold, rounds 2-3 warm), for the M1b engine (-Engine) and the M2-head engine
 # (-BaseEngine, built from 3265797), in the same session. Cold = the M1b engine's MSI table cache
-# %ProgramData%\Purge\fp\msitables moved aside to msitables.m1b-budgets-<stamp> before round 1 (Purge's own cache,
-# nothing else is touched; the moved folder is left for the operator to delete). Each step's stderr goes to
-# vm\runs\<prefix>m1b-budgets\<engine>-<step>-<round>.log; budgets.json lists them (purge.rig.m1b-budgets/2, with
-# each run's exit code, the engines' SHA-256 and cold_cache_state) for truth\m1b.sh. Nothing is uninstalled: harvest and scan only read (and write their -o files under the run dir).
+# %ProgramData%\Purge\fp\msitables moved aside to msitables.m1b-budgets-<step>-<stamp> before EACH step of round 1
+# (review R5 B3: the cold harvest fills the cache, so a cold scan run after it without a second move would be warm).
+# Purge's own cache, nothing else is touched; the moved folders are left for the operator to delete. Each step's
+# stderr goes to vm\runs\<prefix>m1b-budgets\<engine>-<step>-<round>.log; budgets.json lists them
+# (purge.rig.m1b-budgets/3, with each run's exit code, the engines' SHA-256, cold_cache_state and, per cold step,
+# cold_cache_steps and cold_cache) for truth\m1b.sh. Nothing is uninstalled: harvest and scan only read (and write
+# their -o files under the run dir).
 # Ruling 2026-11-18 (K14 warm cache): the engine keeps the MSI table cache on disk only under an admin-only
 # %ProgramData%\Purge, else in memory for one process, so "warm" rounds would be cold. The mode refuses to start
 # unless that data root is exactly as install\install.ps1 creates it (Get-PurgeDataRootVerdict 'good': run
@@ -1387,11 +1390,33 @@ function Get-PurgeDataRootVerdict {
 # (the same count) and no co-product candidate. PuTTY (no InstallLocation) made the M2 head skip the anchor pass the
 # M1b engine runs. Pick it on the host from both engines' harvest lines ("N root(s) ... 0 co-product candidate(s)");
 # truth\m1b.sh fails K14 "not like for like" otherwise.
+function Test-RigElevated {
+    ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# Review R5 B3: moves the MSI table cache aside before one cold M1b step. Returns @{ state; aside }: 'moved' (aside =
+# the new name), 'absent' (no cache to move) or 'kept' (-KeepCache: the step is not cold, K14 fails).
+function Move-M1bCacheAside {
+    param([Parameter(Mandatory)][string]$Cache, [Parameter(Mandatory)][string]$Step, [switch]$KeepCache)
+    if (-not (Test-Path -LiteralPath $Cache)) { return @{ state = 'absent'; aside = $null } }
+    if ($KeepCache) { Write-RigLog "  -KeepCache: the cold $Step is not cold (K14 fails)"; return @{ state = 'kept'; aside = $null } }
+    $aside = "$Cache.m1b-budgets-$Step-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+    Move-Item -LiteralPath $Cache -Destination $aside -ErrorAction Stop
+    Write-RigLog "  moved the MSI table cache aside before the cold ${Step}: $aside"
+    @{ state = 'moved'; aside = $aside }
+}
+
 function Invoke-M1bBudgets {
     param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$BaseEngine, [Parameter(Mandatory)][string]$Program,
-          [string]$RunPrefix = '', [int]$Rounds = 3, [switch]$KeepCache)
+          [string]$RunPrefix = '', [int]$Rounds = 3, [switch]$KeepCache,
+          [string]$DataRoot = (Join-Path $env:ProgramData 'Purge'))
     if ($Program -match '[\s"]') { throw "bad program id '$Program'" }
-    $dataRoot = Join-Path $env:ProgramData 'Purge'
+    # Review R5 N1: unelevated, users cannot read the data root's DACL (verdict 'reject') and the engine cannot recreate
+    # fp\msitables after it was moved aside: the mode itself must run elevated.
+    if (-not (Test-RigElevated)) {
+        throw 'm1b-budgets: run elevated (an elevated PowerShell): the admin-only data root can only be checked, and the MSI table cache only rebuilt after it is moved aside, by an administrator (K14)'
+    }
+    $dataRoot = $DataRoot
     $verdict = Get-PurgeDataRootVerdict -DataRoot $dataRoot
     if ($verdict -ne 'good') {
         throw "m1b-budgets: $dataRoot is not the admin-only data root install\install.ps1 creates (verdict: $verdict); without it the MSI table cache is never warm (K14). Run install\install.ps1 elevated, then again"
@@ -1405,28 +1430,27 @@ function Invoke-M1bBudgets {
     # Review R4b S6: the engines' SHA-256 (truth\m1b.sh binds the M1b one to the scan runs' engine), the M1b build,
     # and how round 1 was made cold: 'moved' (the cache was moved aside), 'absent' (there was none) or 'kept'
     # (-KeepCache with a cache in place: not cold, K14 fails).
-    $doc = [ordered]@{ schema = 'purge.rig.m1b-budgets/2'; program = $Program; host = $env:COMPUTERNAME; start = (Get-Date).ToString('o'); end = $null
+    $doc = [ordered]@{ schema = 'purge.rig.m1b-budgets/3'; program = $Program; host = $env:COMPUTERNAME; start = (Get-Date).ToString('o'); end = $null
         engines = $engines; engine_sha256 = [ordered]@{ m1b = (Get-M1bBuildInfo -Path $engines.m1b).sha256; m2 = (Get-M1bBuildInfo -Path $engines.m2).sha256 }
-        build = (Get-M1bBuildInfo -Path $engines.m1b); cold_cache = $null; cold_cache_state = $null; runs = @() }
+        build = (Get-M1bBuildInfo -Path $engines.m1b); cold_cache = [ordered]@{}; cold_cache_state = $null
+        cold_cache_steps = [ordered]@{}; runs = @() }
     $old = $env:PURGE_TIMING
     try {
         $env:PURGE_TIMING = '1'
-        $cache = Join-Path $env:ProgramData 'Purge\fp\msitables'
+        $cache = Join-Path $dataRoot 'fp\msitables'
         foreach ($name in $engines.Keys) {
             for ($i = 1; $i -le $Rounds; $i++) {
                 $kind = $(if ($i -eq 1) { 'cold' } else { 'warm' })
-                if ($kind -eq 'cold' -and $name -eq 'm1b') {
-                    if (-not (Test-Path -LiteralPath $cache)) { $doc.cold_cache_state = 'absent' }
-                    elseif ($KeepCache) { $doc.cold_cache_state = 'kept'; Write-RigLog '  -KeepCache: round 1 is not cold (K14 fails)' }
-                    else {
-                        $aside = "$cache.m1b-budgets-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-                        Move-Item -LiteralPath $cache -Destination $aside -ErrorAction Stop
-                        $doc.cold_cache = $aside; $doc.cold_cache_state = 'moved'
-                        Write-RigLog "  moved the MSI table cache aside: $aside"
-                    }
-                }
                 $fp = Join-Path $dst "fp-$name-$i.json"; $plan = Join-Path $dst "plan-$name-$i.json"
                 foreach ($step in 'harvest', 'scan') {
+                    # Review R5 B3: before each cold M1b step, not once per round: the cold harvest reads (and caches)
+                    # the same packages the cold scan reads. Warm rounds keep the cache the cold scan rebuilt.
+                    if ($kind -eq 'cold' -and $name -eq 'm1b') {
+                        $mv = Move-M1bCacheAside -Cache $cache -Step $step -KeepCache:$KeepCache
+                        $doc.cold_cache_steps[$step] = $mv.state; $doc.cold_cache[$step] = $mv.aside
+                        $st = @($doc.cold_cache_steps.Values)
+                        $doc.cold_cache_state = $(if ($st -contains 'kept') { 'kept' } elseif ($st -contains 'moved') { 'moved' } else { 'absent' })
+                    }
                     $log = Join-Path $dst "$name-$step-$i.log"
                     $a = $(if ($step -eq 'harvest') { @('harvest', $Program, '-o', $fp) } else { @('scan', '--fp', $fp, '--mode', 'forced', '-o', $plan) })
                     $t = Get-Date

@@ -71,6 +71,61 @@ def danger_item(band='Blocked'):
             'outcome': 'danger', 'class': 'unticked' if band != 'Safe' else 'blocking'}
 
 
+def scan_item(target, action, band, blockers=(), suggest=None):
+    """A scan sidecar item (purge.scan/0 shape: target, action, blockers, evidence, decision)."""
+    det = {'what': 'related_product', 'suggest_uninstall': suggest} if suggest else {'token': 'fixture'}
+    return {'target': target, 'action': action, 'scanner': 'SYS-BURNDEPS' if suggest else 'REF-ANY',
+            'blockers': [dict(b) for b in blockers], 'evidence': [{'kind': 'HarvestedToken', 'detail': det}],
+            'decision': {'band': band, 'preselected': band == 'Safe'}}
+
+
+# The engine writes ControlSet001 where the score (and BAM above) says CurrentControlSet: K1 matches them (review R5 S3).
+BAM_SCAN = {'type': 'RegValue', 'path': BAM[2:].split('|', 1)[0].replace('CurrentControlSet', 'ControlSet001'),
+            'name': BAM.split('|', 1)[1]}
+DENY = {'kind': 'DenyListed', 'rule': 'reg.hklm.system'}
+
+
+def bam_scan_item(band='Blocked', blockers=(DENY,)):
+    return scan_item(BAM_SCAN, 'DeleteValue', band, blockers if band == 'Blocked' else ())
+
+
+# The Python Launcher (review R5 B1, B2): orphaned on rig-base and Clean-Pro (3.12.7's, suggested), kept by
+# dirty-base's Python 3.13.1 (its own Launcher, Protected, no suggestion).
+UNINST = 'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\'
+LAUNCHER_KEY = UNINST + '{73831AC2-F0E1-4173-9FDB-D07463D7EB80}'
+LAUNCHER_313_KEY = UNINST + '{7102CAE5-270C-4E81-AC25-27699156D8AE}'
+LAUNCHER_NAME = 'Python Launcher (64-bit)'
+
+
+def suggestion_item(key=LAUNCHER_KEY, action='ReportOnly'):
+    return scan_item({'type': 'RegKey', 'path': key}, action, 'Likely', suggest=LAUNCHER_NAME)
+
+
+def notice(key=LAUNCHER_KEY):
+    return {'target': 'K:' + key, 'band': 'Likely', 'preselected': False, 'scanner': 'SYS-BURNDEPS', 'action': 'ReportOnly',
+            'suggest_uninstall': LAUNCHER_NAME, 'would_be': 'danger', 'truth': ['kept_owner K:' + key]}
+
+
+OTHER = {'kind': 'OtherApps', 'rule': 'Python 3.13.1'}
+
+
+def launcher_kept_items():
+    """dirty-base: the 3.13.1 Launcher's objects the scanners find, all Blocked (kept: another dependent remains)."""
+    return [scan_item({'type': 'Path', 'path': 'C:\\Windows\\py.exe'}, 'Quarantine', 'Blocked', (OTHER,)),
+            scan_item({'type': 'RegKey', 'path': LAUNCHER_313_KEY}, 'DeleteKey', 'Blocked', (OTHER,))]
+
+
+def scan_doc(s, app):
+    items = []
+    if app in KEPT_DANGER:
+        items.append(bam_scan_item())
+    if app == 'python' and s in ('clean', 'cp'):
+        items.append(suggestion_item())
+    if app == 'python' and s == 'dirty':
+        items += launcher_kept_items()
+    return {'schema': 'purge.scan/0', 'app': app, 'items': items}
+
+
 def set_danger(t, items):
     """Puts the danger items into a purge score as rigtool score counts them."""
     t['items'] = [i for i in t['items'] if i.get('outcome') != 'danger'] + items
@@ -98,7 +153,8 @@ def tool(app):
     t = {'tool': 'purge', 'truth_n': 3, 'offered_n': len(items), 'danger_listed': 0, 'danger_offered': 0, 'danger_kept': 0,
          'danger_blocking': 0, 'danger_preselected': 0, 'userdata_preselected': 0, 'danger': [],
          'precision_safe': 1.0 if any(i['band'] == 'Safe' for i in items) else None,
-         'protected_n': pn, 'protected_correct': 1.0 if pn else None, 'protected_wrong': [], 'items': items}
+         'protected_n': pn, 'protected_correct': 1.0 if pn else None, 'protected_wrong': [], 'items': items,
+         'notices': []}
     if app in KEPT_DANGER:
         set_danger(t, [danger_item('Blocked')])
     return t
@@ -203,10 +259,12 @@ TRAP_PHASES = ['setup', 'pre-node', 'install', 'launch', 'm1b-traps-pre', 'lists
 
 def budget_log(engine, step, kind):
     total = {('m1b', 'harvest'): 9.0, ('m2', 'harvest'): 7.5, ('m1b', 'scan'): 8.0, ('m2', 'scan'): 6.5}[(engine, step)]
-    if kind == 'cold':
+    if kind in ('cold', 'cold-warm'):
         total += 3.0
     lines = ['[  0.010s] purge-engine ' + step]
     # ruling 2026-11-18: the M1b engine's MSI table cache on disk (cold: all misses; warm: hits, no table read)
+    # 'cold-warm': a cold scan run right after the cold harvest without moving the cache aside again (the rig before
+    # review R5 B3): every package a cache hit, no table read
     reads = 313 if engine == 'm2' or kind == 'cold' else 0
     if engine == 'm1b':
         if step == 'scan':
@@ -246,13 +304,15 @@ def write(d, here):
     inputs = rig_inputs(os.path.join(d, 'truth'))
     # scores
     for s in ('clean', 'dirty', 'cp'):
-        wj(os.path.join(d, f'score-{s}.json'),
-           {'apps': [{'id': a, 'dir': f'runs/{PREFIX[s]}-{a}', 'tools': [tool(a)]} for a in set_apps(s)]})
+        apps = []
+        for a in set_apps(s):
+            t = tool(a)
+            if a == 'python' and s in ('clean', 'cp'):
+                t['notices'] = [notice()]   # rigtool score: the suggestion is a notice, not an item (review R5 B1)
+            apps.append({'id': a, 'dir': f'runs/{PREFIX[s]}-{a}', 'tools': [t]})
+            wj(os.path.join(d, f'{s}-{a}-scan.json'), scan_doc(s, a))
+        wj(os.path.join(d, f'score-{s}.json'), {'apps': apps})
     wj(os.path.join(d, 'clean-7zip-fp.json'), {'roots': [{'path': 'C:\\Program Files\\7-Zip', 'source': 'MsiComponent'}]})
-    for s in ('clean', 'dirty'):
-        wj(os.path.join(d, f'{s}-python-scan.json'),
-           {'items': [{'action': 'ReportOnly', 'related': {'suggest_uninstall': 'Python Launcher (64-bit)'}}]})
-        wj(os.path.join(d, f'{s}-python312-with-313-scan.json'), {'items': []})
     # replay (G1): the committed diff, then the score whose replay block binds it (review R4d S3)
     shutil.copy(os.path.join(here, 'm1b-replay-diff.json'), os.path.join(d, 'replay-diff.json'))
     wj(os.path.join(d, 'replay-score.json'), {'apps': [
@@ -283,8 +343,10 @@ def write(d, here):
                     f.write(budget_log(e, step, kind))
                 runs.append({'engine': e, 'step': step, 'round': n, 'kind': kind, 'log': log, 'exit': 0, 'wall_s': 5.0})
     wj(os.path.join(d, 'budgets', 'budgets.json'),
-       {'schema': 'purge.rig.m1b-budgets/2', 'program': 'fixture-program', 'host': 'FIXTURE', 'engines': {'m1b': 'm1b.exe', 'm2': 'm2.exe'},
-        'engine_sha256': {'m1b': ENGINE, 'm2': 'f' * 64}, 'cold_cache_state': 'moved', 'cold_cache': 'msitables.aside', 'runs': runs})
+       {'schema': 'purge.rig.m1b-budgets/3', 'program': 'fixture-program', 'host': 'FIXTURE', 'engines': {'m1b': 'm1b.exe', 'm2': 'm2.exe'},
+        'engine_sha256': {'m1b': ENGINE, 'm2': 'f' * 64}, 'cold_cache_state': 'moved',
+        'cold_cache': {'harvest': 'msitables.aside-harvest', 'scan': 'msitables.aside-scan'},
+        'cold_cache_steps': {'harvest': 'moved', 'scan': 'moved'}, 'runs': runs})
 
 
 def labelmap():
@@ -393,7 +455,30 @@ def edit_diff(fn):
 
 
 def score_danger(s, app, *bands):
-    return lambda d: edit(d, f'score-{s}.json', lambda doc: set_danger(app_tool(doc, app), [danger_item(b) for b in bands]))
+    """Danger items in the score, and the engine's own record of them in the scan sidecar (a Blocked one deny-listed)."""
+    def go(d):
+        edit(d, f'score-{s}.json', lambda doc: set_danger(app_tool(doc, app), [danger_item(b) for b in bands]))
+        edit(d, f'{s}-{app}-scan.json', lambda doc: doc.update(items=[i for i in doc['items'] if i['target'] != BAM_SCAN]
+                                                                + [bam_scan_item(b) for b in bands]))
+    return go
+
+
+def scan_edit(s, app, fn):
+    return lambda d: edit(d, f'{s}-{app}-scan.json', lambda doc: doc.update(items=fn(doc['items'])))
+
+
+def bam_blockers(*blockers):
+    def fn(items):
+        for i in items:
+            if i['target'] == BAM_SCAN:
+                i['blockers'] = [dict(b) for b in blockers]
+        return items
+    return fn
+
+
+def kept_cold_scan(d):
+    with open(os.path.join(d, 'budgets', 'm1b-scan-1.log'), 'w', encoding='utf-8') as f:
+        f.write(budget_log('m1b', 'scan', 'cold-warm'))
 
 
 def target(run, **kw):
@@ -522,7 +607,6 @@ MUTATIONS = {
     # trap runs judge TrapA only (coordinator ruling 2026-11-18)
     'trap_main_is_pre': target('m1bd-traps-7zip', main_is_pre=True),
     'trap_main_not_created': target('m1bcp-traps-7zip', main_created=False),
-    'trap_no_pre_record': target('m1b-traps-7zip', main_is_pre=None),
     # ruling 2026-11-18 (3) / review R4d S2: an ambient item sharing the frozen leftover's normalised name
     'sanity_ambient_same_name': run_truth('python', temp_items(('DELEAE3.tmp', 'leftover'), ('6D5C.tmp', 'ambient'))),
     'sanity_ambient_only_same_name': run_truth('python', temp_items(('6D5C.tmp', 'ambient'))),
@@ -547,6 +631,33 @@ MUTATIONS = {
     'budget_not_like_for_like': all_of(*[log_sub(f'm2-harvest-{n}.log', r'1 root\(s\)', '0 root(s)') for n in (1, 2, 3)]),
     'budget_coproduct': log_sub('m1b-harvest-2.log', r'0 co-product', '1 co-product'),
     'budget_no_harvest_line': log_sub('m2-harvest-1.log', r'^harvest: .*\n', ''),
+    # review R5 S1: the scores come from a rigtool built from vm/rigtool as collect found it
+    'rigtool_unbound': lambda d: edit(d, 'manifest.json', lambda doc: doc['rigtool'].update(source_sha256='8' * 64)),
+    'rigtool_no_source': lambda d: edit(d, 'manifest.json', lambda doc: doc['rigtool'].pop('source_sha256')),
+    # review R5 S3: a Blocked danger item is kept only when the scan says DenyListed
+    'k1_blocked_not_denylisted': scan_edit('clean', 'python', bam_blockers({'kind': 'NotGone'})),
+    'k1_blocked_no_scan_item': scan_edit('clean', 'vcredist', lambda items: [i for i in items if i['target'] != BAM_SCAN]),
+    'k1_blocked_no_scan': lambda d: os.remove(os.path.join(d, 'cp-vcredist-scan.json')),
+    'k8_vcredist_blocked_too_large': scan_edit('dirty', 'vcredist', bam_blockers({'kind': 'TooLarge'})),
+    # review R5 B1: the Launcher suggestion is a notice in the score, report-only, on rig-base and Clean-Pro
+    'k8_suggestion_not_a_notice': lambda d: edit(d, 'score-clean.json', lambda doc: app_tool(doc, 'python').update(notices=[])),
+    'k8_notices_missing': lambda d: edit(d, 'score-cp.json', lambda doc: app_tool(doc, 'python').pop('notices')),
+    'k8_suggestion_not_report_only': scan_edit('clean', 'python', lambda items: [
+        dict(i, action='DeleteKey') if i.get('scanner') == 'SYS-BURNDEPS' else i for i in items]),
+    'k8_cp_no_suggestion': all_of(
+        scan_edit('cp', 'python', lambda items: [i for i in items if i.get('scanner') != 'SYS-BURNDEPS']),
+        lambda d: edit(d, 'score-cp.json', lambda doc: app_tool(doc, 'python').update(notices=[]))),
+    # review R5 B2: dirty-base keeps the Launcher (Python 3.13.1): no suggestion, nothing of it offered
+    'k8_dirty_python_suggestion': scan_edit('dirty', 'python', lambda items: items + [suggestion_item(LAUNCHER_313_KEY)]),
+    'k8_dirty_launcher_offered': scan_edit('dirty', 'python', lambda items: items + [
+        scan_item({'type': 'Path', 'path': 'C:\\Windows\\pyw.exe'}, 'Quarantine', 'Likely')]),
+    'k8_dirty_launcher_blocked': scan_edit('dirty', 'python', lambda items: items + [
+        scan_item({'type': 'Path', 'path': 'C:\\Windows\\pyshellext.amd64.dll'}, 'Quarantine', 'Blocked', (OTHER,)),
+        scan_item({'type': 'RegKey', 'path': LAUNCHER_313_KEY}, 'ReportOnly', 'Likely')]),
+    # review R5 B3: the cold scan is cold only when the cache the cold harvest filled is moved aside before it
+    'budget_cold_scan_warm': kept_cold_scan,
+    'budget_cold_scan_not_moved': budget_runs(lambda doc: doc['cold_cache_steps'].update(scan='kept')),
+    'budget_cold_steps_missing': budget_runs(lambda doc: (doc.pop('cold_cache_steps'), doc.update(schema='purge.rig.m1b-budgets/2'))),
 }
 
 
@@ -656,13 +767,37 @@ def targetruns(d):
     # lists-0 rule alone decides); trappre: run.json main names the TrapB entry.
     zip7 = {'key': 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\7-Zip', 'name': '7-Zip 24.08 (x64 edition)',
             'version': '24.08.00.0', 'msi': None}
-    for var, main, l0 in (('trapok', zip7, [node]), ('trapa0', zip7, [node, zip7]), ('trappre', node, [node])):
+    # review R5 S2: trapnopre: run.json has no `pre`; trapemptypre: `pre` is an empty list (the pre-app phase
+    # recorded nothing). Both must be INVALID ("cannot tell whether the target is TrapA").
+    for var, main, l0 in (('trapok', zip7, [node]), ('trapa0', zip7, [node, zip7]), ('trappre', node, [node]),
+                          ('trapnopre', zip7, [node]), ('trapemptypre', zip7, [node])):
         run = 'm1bd-traps-7zip'
         rd = os.path.join(d, var, run)
-        wj(os.path.join(rd, 'run.json'), {'schema': 'purge.rig.run/1', 'run': run, 'finished': 'x', 'main': main,
-                                          'pre': [{'id': 'node', 'exit': 0, 'entry': dict(node)}],
-                                          'entries_created': [zip7], 'phases': [{'name': 'install', 'ok': True}]})
+        rjd = {'schema': 'purge.rig.run/1', 'run': run, 'finished': 'x', 'main': main,
+               'pre': [{'id': 'node', 'exit': 0, 'entry': dict(node)}],
+               'entries_created': [zip7], 'phases': [{'name': 'install', 'ok': True}]}
+        if var == 'trapnopre':
+            rjd.pop('pre')
+        elif var == 'trapemptypre':
+            rjd['pre'] = []
+        wj(os.path.join(rd, 'run.json'), rjd)
         wj(os.path.join(rd, f'lists-{run}-0.json'), {'uninstall': l0})
+
+
+def planactions(d):
+    """A plan and its scan sidecar for plan_actions: the Launcher suggestion (ReportOnly + suggest_uninstall), a
+    deleting item, and a plain ReportOnly item without the fact."""
+    if os.path.exists(d):
+        shutil.rmtree(d)
+    k = lambda p: {'type': 'RegKey', 'path': p}
+    py = 'HKLM\\SOFTWARE\\Python\\PythonCore\\Python312'
+    stale = 'HKLM\\SOFTWARE\\Fixture\\Stale'
+    wj(os.path.join(d, 'plan.json'), {'items': [
+        {'target': k(LAUNCHER_KEY), 'band': 'Likely', 'preselected': False, 'suggest_uninstall': 'stale value'},
+        {'target': k(py), 'band': 'Safe', 'preselected': True},
+        {'target': k(stale.upper()), 'band': 'Weak', 'preselected': False}]})
+    wj(os.path.join(d, 'scan.json'), {'items': [suggestion_item(), scan_item(k(py), 'DeleteKey', 'Safe'),
+                                                scan_item(k(stale), 'ReportOnly', 'Weak')]})
 
 
 def settarget(d, run, runsum):
@@ -710,6 +845,9 @@ def xtask(here, args):
 def rigtool(args):
     """rigtool score --set <dirs> ... --json J: one purge score per dir, needing truth.json, both snaps and plans
     with actions (the step's plan_actions ran)."""
+    if args[0] == 'version':   # review R5 S1: the sources the stub "was built from" (STUB_RIGTOOL_SHA)
+        print(f"rigtool 0.0.0 source-sha256 {os.environ.get('STUB_RIGTOOL_SHA')}" if os.environ.get('STUB_RIGTOOL_SHA') else 'rigtool 0.0.0')
+        return
     if args[0] != 'score':
         raise SystemExit(f'rigtool stub: {args}')
     dirs = args[args.index('--set') + 1:]
@@ -736,7 +874,10 @@ def rigtool(args):
 def git(args):
     if 'rev-parse' in args:
         print(COMMIT)
-    elif 'status' not in args:
+    elif 'status' in args:
+        if os.environ.get('STUB_GIT_DIRTY'):
+            print(' M src/score.rs')
+    else:
         raise SystemExit(f'git stub: {args}')
 
 
@@ -755,6 +896,9 @@ def main(argv):
         return
     if len(argv) == 3 and argv[1] == 'targetruns':
         targetruns(argv[2])
+        return
+    if len(argv) == 3 and argv[1] == 'planactions':
+        planactions(argv[2])
         return
     if len(argv) == 5 and argv[1] == 'settarget':
         settarget(argv[2], argv[3], argv[4])

@@ -32,6 +32,25 @@ pub struct PlanItem {
     /// second pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+    /// The product the item suggests the user uninstall (Purge's SYS-BURNDEPS rule (c): the evidence fact
+    /// `suggest_uninstall`, copied from the scan sidecar by `truth/m1b.sh` with the action). With `ReportOnly`
+    /// it makes the item a notice ([`is_notice`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggest_uninstall: Option<String>,
+}
+
+/// Is the plan item a notice rather than an offer or a listing? (User ruling 2026-11-18, review R5 B1.) A
+/// `ReportOnly` item that carries `suggest_uninstall` tells the user that a related product is still installed
+/// and can be uninstalled through its own uninstaller (the Python Launcher after Python): it removes nothing and
+/// lists nothing for removal. It is not counted in danger (offered, listed or kept), precision, recall or
+/// `protected_correct`; [`score_plan`] reports it in `notices` only (K8 judges it). Narrow and fail-closed: any
+/// other action, no `suggest_uninstall`, a preselected item or a Safe band keeps the item an ordinary one, scored
+/// as before.
+pub fn is_notice(it: &PlanItem) -> bool {
+    it.action.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("ReportOnly"))
+        && it.suggest_uninstall.as_deref().is_some_and(|s| !s.trim().is_empty())
+        && !it.preselected
+        && band_of(&it.band) != Band::Safe
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -401,7 +420,8 @@ pub fn is_protected_band(b: &str) -> bool {
 /// `protected_correct` (C-RIG, gate K5): per protected truth item, every plan item that lists it below Protected.
 /// "Lists" is the relation alone, whatever the item's outcome or action: the plan item equals the truth item,
 /// contains it, or lies inside it (a partial removal). A `gone` or delete-if-empty item is still a listing, and so
-/// is a report-only one: the criterion is about the band the item is shown in.
+/// is a report-only one: the criterion is about the band the item is shown in. A notice ([`is_notice`]) is not a
+/// listing: [`score_plan`] takes notices out before this runs.
 fn protected_listings(t: &TruthIdx, evals: &[Eval], plan: &Plan, s2: &Snap) -> BTreeMap<usize, Vec<ProtectedWrong>> {
     let mut out: BTreeMap<usize, Vec<ProtectedWrong>> = BTreeMap::new();
     for (e, it) in evals.iter().zip(&plan.items) {
@@ -452,6 +472,7 @@ pub struct ToolScore {
     pub tool: String,
     pub mode: String,
     pub plan_file: String,
+    /// Plan items scored: every item but the notices (`notices`).
     pub offered_n: usize,
     pub truth_n: usize,
     pub covered_listed: usize,
@@ -517,6 +538,30 @@ pub struct ToolScore {
     pub danger: Vec<ItemOutcome>,
     pub noop: Vec<ItemOutcome>,
     pub items: Vec<ItemOutcome>,
+    /// Notices ([`is_notice`], ruling 2026-11-18): not in `offered_n`, `items` or any count above. Always present
+    /// (an empty list when the plan has none), so a reader can tell a score without notices from an older score.
+    pub notices: Vec<Notice>,
+}
+
+/// A notice of the plan ([`is_notice`]): reported, never scored.
+#[derive(Serialize, Clone, Debug)]
+pub struct Notice {
+    pub target: String,
+    pub band: String,
+    pub preselected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scanner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    pub suggest_uninstall: String,
+    /// What the item would have scored as an ordinary listing (`danger`, `hit`, ...), and why: for the gate
+    /// report only.
+    pub would_be: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+    /// The truth items it lies on (`<label> <target>`), e.g. the kept Launcher's Uninstall key.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub truth: Vec<String>,
 }
 
 fn ratio(a: usize, b: usize) -> Option<f64> {
@@ -924,12 +969,40 @@ fn eval_item(cx: &Ctx, it: &PlanItem) -> Eval {
 
 pub fn score_plan(cx: &Ctx, app: &str, plan: &Plan, plan_file: &str) -> ToolScore {
     let t = cx.truth;
+    // Notices (ruling 2026-11-18, review R5 B1) leave the plan before anything is counted: the rest scores the
+    // offers and listings alone, and a plan of notices only is an empty plan.
+    let (notice_items, scored): (Vec<&PlanItem>, Vec<&PlanItem>) = plan.items.iter().partition(|it| is_notice(it));
+    let notices: Vec<Notice> = notice_items
+        .into_iter()
+        .map(|it| {
+            let e = eval_item(cx, it);
+            Notice {
+                target: e.o.canon_string(),
+                band: it.band.clone(),
+                preselected: it.preselected,
+                scanner: it.scanner.clone(),
+                action: it.action.clone(),
+                suggest_uninstall: it.suggest_uninstall.clone().unwrap_or_default(),
+                would_be: e.outcome.to_string(),
+                reasons: e.reasons,
+                truth: e
+                    .covers
+                    .iter()
+                    .chain(e.partial.iter())
+                    .map(|&i| format!("{} {}", t.items[i].label, t.items[i].target.canon_string()))
+                    .collect(),
+            }
+        })
+        .collect();
+    let scored_plan = Plan { items: scored.into_iter().cloned().collect(), ..plan.clone() };
+    let plan = &scored_plan;
     let mut sc = ToolScore {
         app: app.to_string(),
         tool: plan.tool.clone(),
         mode: plan.mode.clone(),
         plan_file: plan_file.to_string(),
         offered_n: plan.items.len(),
+        notices,
         ..Default::default()
     };
     for o in OUTCOMES {
@@ -1522,6 +1595,37 @@ pub fn render_md(apps: &[AppScore], macros: &[MacroScore]) -> String {
             }
         }
     }
+    if apps.iter().any(|a| a.tools.iter().any(|t| !t.notices.is_empty())) {
+        let _ = writeln!(m, "\n## Notices (not scored)\n");
+        let _ = writeln!(
+            m,
+            "`ReportOnly` items that suggest uninstalling a related product (`suggest_uninstall`; ruling 2026-11-18): \
+             not an offer and not a listing, so outside every count above. **would be** = how the item would have \
+             scored as an ordinary listing.\n"
+        );
+        for a in apps {
+            for t in &a.tools {
+                for x in &t.notices {
+                    let _ = writeln!(
+                        m,
+                        "- {} / {}: `{}` suggest uninstall \"{}\" ({}{}; would be {}{})",
+                        a.id,
+                        tool_label(t),
+                        md_escape(&x.target),
+                        md_escape(&x.suggest_uninstall),
+                        x.band,
+                        x.scanner.as_deref().map(|s| format!(", {s}")).unwrap_or_default(),
+                        x.would_be,
+                        if x.truth.is_empty() {
+                            String::new()
+                        } else {
+                            format!(": {}", md_escape(&x.truth.join(", ")))
+                        }
+                    );
+                }
+            }
+        }
+    }
     let _ = writeln!(m, "\n## Missed truth items (first 50 per app and tool; full list in the JSON)\n");
     for a in apps {
         for t in &a.tools {
@@ -1931,6 +2035,7 @@ mod tests {
             scanner: Some("S".into()),
             category: None,
             action: None,
+            suggest_uninstall: None,
         }
     }
 
@@ -2881,5 +2986,92 @@ mod tests {
             "pre": [{"start": "2026-11-15T05:17:05+03:00", "entry": {"key": "X\\Firefox ESR"}}]
         });
         assert_eq!(pre_same_app_start(&sib), None);
+    }
+
+    fn suggest(mut i: PlanItem) -> PlanItem {
+        i.suggest_uninstall = Some("Python Launcher (64-bit)".into());
+        i
+    }
+
+    /// Ruling 2026-11-18 (review R5 B1): the Launcher suggestion, a `ReportOnly` item with `suggest_uninstall` on the
+    /// kept Launcher's Uninstall key, is a notice: no danger (offered, listed or kept), no precision, no protected
+    /// listing. Narrow: the same target as a plain `ReportOnly`, with a deleting action at Likely or Safe, or a
+    /// suggestion at Safe or preselected, still scores as before (danger on a kept_owner item, K1 / K5 / K6 fail).
+    #[test]
+    fn suggest_uninstall_report_only_is_a_notice_and_nothing_else() {
+        let (s0, s2, idx) = fixture();
+        let k = |p: &str| Target::RegKey { path: p.into() };
+        let launcher = || item(k("HKLM\\SOFTWARE\\Launcher"), "Likely", false);
+        let leftover = || item(k("HKLM\\SOFTWARE\\Mozilla"), "Safe", true);
+        let run = |plan_items: Vec<PlanItem>| score_one(&s0, &s2, idx.items.clone(), plan_items);
+
+        for band in ["Likely", "Weak", "Blocked"] {
+            let mut n = act(suggest(launcher()), "ReportOnly");
+            n.band = band.into();
+            let s = run(vec![leftover(), n]);
+            assert_eq!(s.offered_n, 1, "{band}: the notice is not an offered item");
+            assert_eq!(s.items.len(), 1, "{band}");
+            assert_eq!((s.danger_listed, s.danger_offered, s.danger_kept, s.danger_blocking), (0, 0, 0, 0), "{band}");
+            assert!(s.danger.is_empty(), "{band}");
+            assert_eq!((s.protected_n, s.protected_correct_n, s.protected_correct), (1, 1, Some(1.0)), "{band}");
+            assert!(s.protected_wrong.is_empty(), "{band}");
+            assert_eq!((s.safe_n, s.safe_not_gone, s.safe_hits, s.precision_safe), (1, 1, 1, Some(1.0)), "{band}");
+            assert_eq!(s.notices.len(), 1, "{band}");
+            let x = &s.notices[0];
+            assert_eq!(x.target, "K:HKLM\\SOFTWARE\\Launcher");
+            assert_eq!(x.suggest_uninstall, "Python Launcher (64-bit)");
+            assert_eq!(x.would_be, "danger", "the notice records what it would have scored");
+            assert_eq!(x.truth, vec!["kept_owner K:HKLM\\SOFTWARE\\Launcher".to_string()]);
+        }
+
+        // Not a notice: each is scored as an ordinary item on the kept_owner key (danger, a protected listing).
+        let plain = act(launcher(), "ReportOnly");
+        let likely_delete = act(suggest(launcher()), "DeleteKey");
+        let mut safe_delete = act(suggest(launcher()), "DeleteKey");
+        safe_delete.band = "Safe".into();
+        let mut safe_report = act(suggest(launcher()), "ReportOnly");
+        safe_report.band = "Safe".into();
+        let mut presel_report = act(suggest(launcher()), "ReportOnly");
+        presel_report.preselected = true;
+        let no_action = suggest(launcher());
+        let mut empty_name = act(launcher(), "ReportOnly");
+        empty_name.suggest_uninstall = Some("  ".into());
+        for (what, it) in [
+            ("plain ReportOnly", plain),
+            ("DeleteKey at Likely", likely_delete),
+            ("DeleteKey at Safe", safe_delete),
+            ("ReportOnly at Safe", safe_report),
+            ("ReportOnly preselected", presel_report),
+            ("no action", no_action),
+            ("empty suggest_uninstall", empty_name),
+        ] {
+            let s = run(vec![leftover(), it]);
+            assert!(s.notices.is_empty(), "{what}");
+            assert_eq!((s.offered_n, s.danger_listed, s.danger_offered), (2, 1, 1), "{what}");
+            assert_eq!(s.protected_wrong.len(), 1, "{what}");
+            assert_eq!(s.protected_correct, Some(0.0), "{what}");
+        }
+        // A plain ReportOnly listed Blocked stays a kept danger item (danger_kept), as before.
+        let mut kept = act(launcher(), "ReportOnly");
+        kept.band = "Blocked".into();
+        let s = run(vec![leftover(), kept]);
+        assert_eq!((s.danger_listed, s.danger_offered, s.danger_kept), (1, 0, 1));
+
+        // A plan of notices only is an empty plan (K1-K6 fail it when the app has truth items).
+        let s = run(vec![act(suggest(launcher()), "ReportOnly")]);
+        assert_eq!((s.offered_n, s.notices.len(), s.danger_listed), (0, 1, 0));
+
+        // The plan JSON field, as truth/m1b.sh writes it; absent stays absent.
+        let it: PlanItem = serde_json::from_value(json!({
+            "target": {"type": "RegKey", "path": "HKLM\\SOFTWARE\\Launcher"}, "band": "Likely", "preselected": false,
+            "action": "ReportOnly", "suggest_uninstall": "Python Launcher (64-bit)"
+        }))
+        .unwrap();
+        assert!(is_notice(&it));
+        let v = serde_json::to_value(item(k("HKLM\\SOFTWARE\\X"), "Likely", false)).unwrap();
+        assert!(v.get("suggest_uninstall").is_none());
+        // The score JSON always carries the list.
+        let s = run(vec![leftover()]);
+        assert_eq!(serde_json::to_value(&s).unwrap()["notices"], json!([]));
     }
 }

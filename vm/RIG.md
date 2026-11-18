@@ -1183,6 +1183,17 @@ sources clean, frozen truth SHA-256). Review R4d S3: the old diff is deleted fir
 of the diff this replay wrote (`diff_sha256`, null when replay-diff wrote none) and replay-diff's exit code
 (`diff_exit`). Exit 1 when a run could not be replayed or the diff has unexplained rows.
 
+Review R5 N3: after `m1b.sh replay`, never restore or re-checkout `truth/m1b-replay-diff.json` (it is tracked) before
+collect: BIND compares the bytes of the diff collect copies with the `diff_sha256` of the replay block, so a restored
+committed diff fails BIND. Replay again instead.
+
+Review R5 S1: collect and replay first check the rigtool they score with (`rigtool_check`): `$RIGTOOL version` must
+report the SHA-256 of the sources it was built from (`vm/rigtool/build.rs`: `Cargo.toml`, `Cargo.lock`, `build.rs` and
+`src/**`, CRLF read as LF) equal to the tree's (`pyeval rigtoolsrc`), and `git status` must show `vm/rigtool` clean
+against HEAD. Otherwise m1b.sh prints why and exits 2 without collecting: rebuild with
+`(cd vm/rigtool && cargo build --release)` (the default target dir, `rigtool/target/release/rigtool`). The manifest
+records both hashes (`rigtool.source_sha256`, `rigtool.tree_sha256`); BIND fails when they are missing or differ.
+
 `bash truth/m1b.sh` (run from `vm/`) has two stages.
 
 **Collect.** It writes everything into `truth/m1b-evidence/`:
@@ -1208,7 +1219,8 @@ digests, frozen truths, rigtool, the null runs per set).
   (FAIL). Null runs install nothing and are excepted. A trap run judges TrapA (7zip, run.json `main`) only: TrapB
   (node) is a pre-app installed before lists-0 on purpose, so its entry in lists-0 is expected (on dirty-base an
   already-installed node serves as the app that stays); the run is invalid when `main` is a `pre` entry, when the pre
-  record is missing, or when TrapA's entry is not among `entries_created`.
+  record is missing, or when TrapA's entry is not among `entries_created`. Review R5 S2: runsum writes `main_is_pre`
+  null (not false) when run.json has no `pre` or an empty one, so "no pre record" is INVALID through the real runsum.
 - **BIND**: each run's build record names its run.json (SHA-256), the engine did not change during the campaign, the
   sources were clean, one engine and one commit over all runs, the budgets' M1b engine is that engine, and the trap file
   and label files are the committed ones with each run's label id equal to its app id. Review R4c S3: every run holds
@@ -1234,12 +1246,32 @@ digests, frozen truths, rigtool, the null runs per set).
   in any band but Blocked. A danger item listed Blocked (deny-listed, report only, e.g. REF-ANY's hit on the bam
   `UserSettings` value naming the Package Cache) is `danger_kept` and is named in the note. `danger_listed`,
   `danger_offered`, `danger_kept` and the `danger` list must be present and agree, else FAIL. K8 runs over each set's
-  own app list.
+  own app list. Review R5 S3: a Blocked danger item is accepted only when its blockers, read from the run's scan
+  sidecar (`<set>-<id>-scan.json`, matched by target: case, hive spellings, `HKU\<sid>` as HKCU, CurrentControlSet as
+  ControlSet001), include `DenyListed`; another blocker (`NotGone`, `TooLarge`, ...), none, or no scan item FAILS, and
+  the note names the blockers.
+- **Notices** (user ruling 2026-11-18, review R5 B1): a plan item whose action is `ReportOnly` and that carries
+  `suggest_uninstall` (SYS-BURNDEPS rule (c), "uninstall the Python Launcher yourself") is a notice, not an offer or a
+  listing. Collect's plan step copies the fact from the scan item's evidence into the plan item (`suggest_uninstall`);
+  rigtool score takes such items out of every count (danger offered, listed and kept, precision, recall,
+  `protected_correct`, `offered_n`, `items`) and lists them under `notices` (target, band, `suggest_uninstall`, what it
+  would have scored, the truth items it lies on), also in the score's markdown. Narrow: any other action, no
+  `suggest_uninstall`, a preselected item or a Safe band keeps the item an ordinary one (on a kept_owner target: danger,
+  K1/K5/K6 fail). Only K8 scores notices.
+- **K8 python** (review R5 B1, B2): rig-base (G2) and Clean-Pro (G8) python, where the Launcher is left orphaned: at
+  least one suggestion in the scan sidecar, all `ReportOnly`, and each a notice in the score (same `suggest_uninstall`
+  names; a score without `notices` fails). dirty-base python (G3): Python 3.11.9 and 3.13.1 stay and the Launcher is
+  3.13.1's, so the correct result is no suggestion (coordinator ruling 2026-11-18, a design fact, not a loosening); a
+  suggestion, or any scan item on the Launcher (its product codes, or `C:\Windows\py.exe`, `pyw.exe`,
+  `pyshellext.amd64.dll`) listed in any band but Blocked with an action other than `ReportOnly`, FAILS. Blocked
+  Launcher items are the design's "stays Protected". python312-with-313 (G2, G3): no suggestion.
 - **K1-K6** fail on an empty plan (truth items but nothing offered) or a score without counts.
 - **K9** needs every case and `com-shared-class#between` planted ok, every expectation target among the planted objects
   (an object that already existed counts and is reported; a note-only or missing one fails), TrapA 7zip and TrapB node.
 - **K14** needs exactly 12 budget runs (2 engines x 2 steps x 3 rounds), each exit 0, round 1 cold and the others warm,
-  and the M1b cold round's cache moved aside or absent (`cold_cache_state`; `kept` fails). Ruling 2026-11-18:
+  and the M1b cold round's cache moved aside or absent (`cold_cache_state`; `kept` fails). Review R5 B3: per cold
+  step too (`cold_cache_steps` `harvest` and `scan` each `moved` or `absent`; a record without them, budgets/2, fails):
+  the cold harvest fills the cache, so a cold scan after it without a second move reads no tables. Ruling 2026-11-18:
   - **warm MSI table cache**: every warm M1b log has `timing: msi_table_cache disk <path> hits=N misses=M` with
     N >= 1 (a `memory` line or no line fails), and its `timing: total:` line reads fewer `sys.msi_tables` than the
     cold round of the same step (a total line without the counter counts 0; a missing total line, or a cold round
@@ -1263,13 +1295,20 @@ Options:
   lists-0 unreadable (RUN), a relabel by normalised name and an unreadable frozen truth (SANITY), a changed or unbound
   deny list or frozen truth, an unbound or failed replay diff (BIND), an empty replayed plan (K4), and a memory or
   missing cache line, a warm round without hits or reading the tables, a root count that differs, a co-product, a
-  missing harvest line (K14)) fails on its named criterion, while the positive controls (a Blocked danger item, an
+  missing harvest line (K14); since R5 a Blocked danger item whose scan blocker is not DenyListed or unknown (K1,
+  K8), a suggestion that is no notice in the score, a score without notices, a suggestion not ReportOnly, no Clean-Pro
+  suggestion, a suggestion or an offered Launcher item on dirty-base (K8), a cold scan that read no tables or whose
+  cache was not moved (K14), a rigtool not bound to its sources (BIND)) fails on its named criterion, while the positive controls (a Blocked danger item, an
   ambient item sharing a frozen leftover's normalised name, ...) still pass; that every non-default setting gives
   exit 3; that `replay` with stub cargo xtask, rigtool and git writes a score the gate passes with (fails K4 G1 when
-  a run is missing; with a failing replay-diff the stale diff is gone and K16 and BIND fail); and that `runsum`
-  records the target against lists-0.
+  a run is missing; with a failing replay-diff the stale diff is gone and K16 and BIND fail); that `runsum`
+  records the target against lists-0 (and, R5 S2, a trap run without a pre record is INVALID through it); that
+  `rigtool_check` refuses a binary with other or no source hash and a dirty `vm/rigtool`, and collect then exits 2
+  (R5 S1); and that `plan_actions` copies `suggest_uninstall` only onto the suggestion (R5 B1).
 
 `m1b-budgets` runs on the host and only reads:
+- It must run elevated (review R5 N1): unelevated it refuses with "run elevated" (users cannot read the data root's DACL,
+  and the engine cannot recreate `fp\msitables` after it is moved aside).
 - It refuses to start unless `%ProgramData%\Purge` is the admin-only data root (`Get-PurgeDataRootVerdict`: install.ps1's
   `Test-Tree` against `Get-PurgeDataLayout` gives `good`; run `install\install.ps1` first). Without it the engine's MSI
   table cache falls back to memory and every round is cold (ruling 2026-11-18).
@@ -1277,7 +1316,11 @@ Options:
   candidate (ruling 2026-11-18; K14 "like for like" checks it). PuTTY is not one: the M2 head found no root for it
   and skipped the anchor pass the M1b engine ran.
 - For each engine it runs `harvest <program>` and then `scan --mode forced` with `PURGE_TIMING=1`, for 3 rounds. Round 1 is cold; rounds 2 and 3 are warm.
-- Before the M1b engine's cold round, the MSI table cache `%ProgramData%\Purge\fp\msitables` is moved aside. The moved folder is left for the operator to delete.
+- Before each step of the M1b engine's cold round (the harvest, and again the scan: review R5 B3, the cold harvest
+  fills the cache), the MSI table cache `%ProgramData%\Purge\fp\msitables` is moved aside to
+  `msitables.m1b-budgets-<step>-<stamp>`; budgets.json (`purge.rig.m1b-budgets/3`) records `cold_cache_steps` and
+  `cold_cache` per step. Warm rounds keep the cache the cold scan rebuilt. The moved folders are left for the operator
+  to delete.
 - The stderr of each step goes to `runs/m1b-budgets/<engine>-<step>-<round>.log`.
 - m1b.sh reads from each log: the `[ N.NNNs]` end stamp (the total time), the `timing: phase` lines (refscan count,
   ownership.components, ownership.tables), the `timing: msi_table_cache` line, the `sys.msi_tables` count of the

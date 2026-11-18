@@ -185,7 +185,10 @@ def target_entry(rj, lists0):
     The target is run.json's `main` (Find-MainEntry of the app the run installs after snap 0: TrapA, 7zip, in a trap
     run), never a `pre` entry: a pre-app (TrapB node; the other Python of a pair) is installed before lists-0 on
     purpose and is in lists-0 in every run, so it is not judged (coordinator ruling 2026-11-18). `pre_keys` lists the
-    pre entries, `main_is_pre` whether main is one of them, `main_created` whether main is among entries_created."""
+    pre entries, `main_is_pre` whether main is one of them, `main_created` whether main is among entries_created.
+    Review R5 S2: with no pre record (run.json has no `pre`, or no entry in it) `main_is_pre` is None ("cannot
+    tell"), never False, so the evaluator's "no pre record" check fires on a trap run whose pre-app phase recorded
+    nothing."""
     if not isinstance(rj, dict):
         return None
     m = rj.get('main') if isinstance(rj.get('main'), dict) else None
@@ -202,7 +205,7 @@ def target_entry(rj, lists0):
         return isinstance(e, dict) and bool((key and str(e.get('key') or '').lower() == key)
                                             or (code and str(e.get('msi') or '').strip('{}').lower() == code))
     if m:
-        out['main_is_pre'] = any(same(e) for e in pre_e)
+        out['main_is_pre'] = any(same(e) for e in pre_e) if pre_e else None
         if isinstance(created, list):
             out['main_created'] = any(same(e) for e in created)
         if isinstance(lists0, dict) and isinstance(lists0.get('uninstall'), list):
@@ -229,10 +232,29 @@ if MODE == 'runsum':
         json.dump(doc, f, indent=2, ensure_ascii=False)
     sys.exit(0)
 
+if MODE == 'rigtoolsrc':
+    # rigtoolsrc <vm/rigtool dir>: the SHA-256 of rigtool's sources as its build.rs records it (review R5 S1):
+    # Cargo.toml, Cargo.lock, build.rs and every file under src/, sorted by relative path ('/'), one line
+    # '<sha256 of the bytes, CRLF read as LF>  <path>' each, hashed.
+    root = A[0]
+    files = [f for f in ('Cargo.toml', 'Cargo.lock', 'build.rs')]
+    for dp, _, fs in os.walk(os.path.join(root, 'src')):
+        files += [os.path.relpath(os.path.join(dp, f), root).replace(os.sep, '/') for f in fs]
+    lines = ''
+    try:
+        for rel in sorted(files):
+            with open(os.path.join(root, rel), 'rb') as f:
+                lines += hashlib.sha256(f.read().replace(b'\r\n', b'\n')).hexdigest() + '  ' + rel + '\n'
+    except OSError as e:
+        print(f'm1b: rigtool sources: {e}', file=sys.stderr)
+        sys.exit(1)
+    print(hashlib.sha256(lines.encode()).hexdigest())
+    sys.exit(0)
+
 if MODE == 'manifest':
     # manifest <out> <runs dir> <sets> <prefix clean> <prefix dirty> <prefix cp> <label map "run=lid ..."> <truth dir>
-    #          <config> <config vars> <rigtool> <null runs "run ...">
-    out, runs_dir, sets, pc, pd, pcp, lmap, truth_dir, config, config_vars, rigtool, nulls = A
+    #          <config> <config vars> <rigtool> <null runs "run ..."> <rigtool source sha256> <rigtool tree sha256>
+    out, runs_dir, sets, pc, pd, pcp, lmap, truth_dir, config, config_vars, rigtool, nulls, rt_src, rt_tree = A
     pre = {'clean': pc, 'dirty': pd, 'cp': pcp}
     labels = {}
     for m in lmap.split():
@@ -243,7 +265,9 @@ if MODE == 'manifest':
            'traps_sha256': sha256_file(os.path.join(truth_dir, 'm1b-traps.json')), 'labels': labels,
            'deny_sha256': sha256_file(os.path.join(truth_dir, 'deny.json')),   # review R4d S1
            'frozen': {a: sha256_file(os.path.join(truth_dir, 'frozen', a, 'truth.json')) for a in FROZEN_APPS},
-           'rigtool': {'path': rigtool, 'sha256': sha256_file(rigtool) or sha256_file(rigtool + '.exe')},
+           'rigtool': {'path': rigtool, 'sha256': sha256_file(rigtool) or sha256_file(rigtool + '.exe'),
+                       # review R5 S1: the sources the binary was built from (`rigtool version`) and vm/rigtool's now
+                       'source_sha256': rt_src or None, 'tree_sha256': rt_tree or None},
            # the null runs each set's ambient set was built from (review R4c, R4b S2 rest): RUN checks them too
            'nulls': {s: [n for n in nulls.split() if n.startswith(pre[s] + '-null')] for s in sets.split()}}
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
@@ -793,6 +817,12 @@ if not traps_now or manifest.get('traps_sha256') != traps_now:
 deny_now = sha256_file(os.path.join(truth_dir, 'deny.json'))
 if not deny_now or manifest.get('deny_sha256') != deny_now:
     bind_problems.append(f"deny list sha256 {manifest.get('deny_sha256')} at collect, {deny_now} committed")
+# review R5 S1: the scores come from a rigtool built from vm/rigtool as collect found it (collect refuses otherwise;
+# this catches evidence collected some other way)
+rtm = manifest.get('rigtool') if isinstance(manifest.get('rigtool'), dict) else {}
+if not rtm.get('source_sha256') or rtm.get('source_sha256') != rtm.get('tree_sha256'):
+    bind_problems.append(f"rigtool built from sources {rtm.get('source_sha256')}, vm/rigtool at collect {rtm.get('tree_sha256')}: "
+                         'rebuild rigtool and collect again')
 for s, id, run in app_runs:
     lab = (manifest.get('labels') or {}).get(run) or {}
     now = label_digest(os.path.join(truth_dir, 'labels'), id)
@@ -939,7 +969,38 @@ if 'clean' in sets:
 # reg.hklm.system; deny.json marks bam as danger), so it is kept, not
 # offered: counted as danger_kept and named in the note. Fail-closed: the counts must be integers and agree with the
 # score's danger list (danger_listed = every danger item, danger_offered = those not Blocked).
-def danger_offered(t):
+# Review R5 S3: the ruling covers a deny-list hit only. Each Blocked danger item's blockers are read from the run's
+# scan sidecar (<set>-<id>-scan.json, the engine's own record); it is accepted only when one of them is DenyListed.
+# Another blocker (NotGone, TooLarge, ... states that can change between scan and execute), no blocker, or no scan item
+# for the target FAILS, and the note names the blockers.
+def norm_target(cs):
+    """A score target (`V:<key>|<name>`, `K:<key>`, `P:<path>`) folded for matching it with a scan item's: case, the
+    hive spellings, HKU\\<sid>[_Classes] as HKCU, HKCR as HKLM\\SOFTWARE\\Classes, CurrentControlSet as ControlSet001."""
+    s = str(cs or '').replace('/', '\\').lower()
+    for a, b in (('hkey_local_machine', 'hklm'), ('hkey_users', 'hku'), ('hkey_current_user', 'hkcu'), ('hkey_classes_root', 'hkcr')):
+        s = re.sub(r'(?<=^.:)' + a + r'(?=\\|$)', b, s)
+    s = re.sub(r'(?<=^.:)hku\\s-1-5-21-[0-9-]+_classes(?=\\|$)', 'hkcu\\\\software\\\\classes', s)
+    s = re.sub(r'(?<=^.:)hku\\s-1-5-21-[0-9-]+(?=\\|$)', 'hkcu', s)
+    s = re.sub(r'(?<=^.:)hkcr(?=\\|$)', 'hklm\\\\software\\\\classes', s)
+    return s.replace('\\currentcontrolset\\', '\\controlset001\\')
+
+
+def scan_blockers(scan):
+    """{normalised target: [blocker, ...]} of a scan sidecar's items, or None when there is no readable scan."""
+    if not isinstance(scan, dict) or not isinstance(scan.get('items'), list):
+        return None
+    out = {}
+    for it in scan['items']:
+        if isinstance(it, dict) and isinstance(it.get('target'), dict) and canon_of(it['target']):
+            out.setdefault(norm_target(canon_of(it['target'])), []).extend(b for b in (it.get('blockers') or []) if isinstance(b, dict))
+    return out
+
+
+def blocker_text(b):
+    return str(b.get('kind')) + (f" {b.get('rule')}" if b.get('rule') else '')
+
+
+def danger_offered(t, scan):
     dl, do, dk, items = t.get('danger_listed'), t.get('danger_offered'), t.get('danger_kept'), t.get('danger')
     if not (is_int(dl) and is_int(do) and is_int(dk)) or not isinstance(items, list):
         return {'value': miss(f'danger_listed / danger_offered / danger_kept / danger in the score ({dl}, {do}, {dk})'),
@@ -950,9 +1011,22 @@ def danger_offered(t):
     if len(items) != dl or len(off) != do or len(kept) != dk or dl != do + dk:
         probs.append(f'counts disagree with the danger list: listed {dl} offered {do} kept {dk}, list {len(items)} '
                      f'({len(off)} not Blocked)')
+    bl = scan_blockers(scan) if kept else {}
+    kept_txt = []
+    for i in kept:
+        if bl is None:
+            probs.append(f"Blocked danger item {i.get('target')}: no scan sidecar to read its blockers from")
+            kept_txt.append(f"{i.get('target')} [{i.get('scanner')}; blockers unknown]")
+            continue
+        b = bl.get(norm_target(i.get('target')))
+        names = ', '.join(blocker_text(x) for x in b or []) or 'none'
+        kept_txt.append(f"{i.get('target')} [{i.get('scanner')}; {names}]")
+        if b is None:
+            probs.append(f"Blocked danger item {i.get('target')}: not in the scan sidecar, its blocker is unknown")
+        elif not any(x.get('kind') == 'DenyListed' for x in b):
+            probs.append(f"Blocked danger item {i.get('target')}: blocked by {names}, not a deny-list hit (ruling 2026-11-18 covers DenyListed only)")
     note = '; '.join(probs + [f"offered at {i.get('band')}: {i.get('target')}" for i in off[:3]]
-                     + ([f'danger_kept {len(kept)} (listed Blocked, report only): '
-                         + ', '.join(f"{i.get('target')} [{i.get('scanner')}]" for i in kept[:3])] if kept else []))
+                     + ([f'danger_kept {len(kept)} (listed Blocked, report only): ' + ', '.join(kept_txt[:3])] if kept else []))
     return {'value': f'danger_offered={do} (danger_kept={dk})', 'ok': do == 0 and not probs, 'note': note or None, 'n': do}
 
 
@@ -981,7 +1055,7 @@ for s in sets:
         if s == 'dirty':
             row('K2', st, subj, t.get('danger_blocking'), 0, t.get('danger_blocking') == 0)
         else:
-            dg = danger_offered(t)
+            dg = danger_offered(t, load(f'{s}-{id}-scan.json'))
             row('K1', st, subj, dg['value'], 0, dg['ok'], dg['note'])
         dp, up = t.get('danger_preselected'), t.get('userdata_preselected')
         row('K3', st, subj, f'danger_preselected={dp} userdata_preselected={up}', '0 and 0', dp == 0 and up == 0)
@@ -1073,36 +1147,98 @@ if True:  # G1: the replay of the frozen corpus
         row('K7', 'G1', 'replay 7zip', f'{len(hit)} listing(s)' if z else miss('a 7zip app in replay-score.json'), 'HKU\\<sid>\\Software\\7-Zip listed', bool(hit))
 
 
-# K8: vcredist nothing preselected, no danger; python alone: the launcher suggestion (report-only); python312-with-313: none
+# K8: vcredist nothing preselected, no danger; python: the Launcher suggestion where the Launcher is left orphaned
+# (rig-base and Clean-Pro: report-only, scored as a notice); dirty-base python (Python 3.11.9 and 3.13.1 stay, the
+# Launcher is 3.13.1's): no suggestion and the Launcher not offered; python312-with-313: none.
+# Review R5 B1 (user ruling 2026-11-18): rigtool score takes a ReportOnly item carrying suggest_uninstall out of every
+# count (danger, precision, protected_correct) and lists it under `notices`; K8 is the only criterion that scores it,
+# so it needs each suggestion of the scan sidecar to be a notice in the score (an old rigtool, or a plan without the
+# copied fact, FAILS here, and K1/K5/K6 fail on the same item).
+# Review R5 B2 (coordinator ruling 2026-11-18, a design fact): on dirty-base the Launcher belongs to the Python 3.13.1
+# that stays, so the correct result is no suggestion; any item on the Launcher listed in any band but Blocked with an
+# action other than ReportOnly FAILS (Blocked is the design's "stays Protected").
+SUGGEST_SETS = ('clean', 'cp')        # the Launcher is orphaned there (python alone)
+# The Python Launcher's product codes (kb/shared-components.json python-launcher, 3.12.7 and 3.13.1; 3.13.17 per R5 N5)
+# and its files: a dirty-base item naming one of them is "on the Launcher".
+LAUNCHER_CODES = ['73831AC2-F0E1-4173-9FDB-D07463D7EB80', '7102CAE5-270C-4E81-AC25-27699156D8AE',
+                  '8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3']
+LAUNCHER_FILES = ['c:\\windows\\py.exe', 'c:\\windows\\pyw.exe', 'c:\\windows\\pyshellext.amd64.dll']
+
+
+def suggest_of(it):
+    """The product a scan item suggests uninstalling (SYS-BURNDEPS rule (c): its evidence fact suggest_uninstall)."""
+    for ev in (it.get('evidence') or []) if isinstance(it, dict) else []:
+        v = (ev.get('detail') or {}).get('suggest_uninstall') if isinstance(ev, dict) and isinstance(ev.get('detail'), dict) else None
+        if isinstance(v, str) and v.strip():
+            return v
+    return None
+
+
 def suggestions(scan):
-    out = []
-    for it in (scan or {}).get('items', []):
-        if 'suggest_uninstall' in json.dumps(it):
-            out.append(it)
-    return out
+    return [it for it in (scan or {}).get('items', []) if suggest_of(it)]
 
 
-for s in [x for x in sets if x in ('clean', 'dirty')]:
+def item_band(it):
+    return ((it.get('decision') or {}).get('band') if isinstance(it.get('decision'), dict) else None) or it.get('band')
+
+
+def on_launcher(it):
+    t = it.get('target') if isinstance(it.get('target'), dict) else {}
+    text = (str(t.get('path') or '') + '|' + str(t.get('name') or '')).lower()
+    if any(c.lower() in text for c in LAUNCHER_CODES):
+        return True
+    p = str(t.get('path') or '').lower() if t.get('type') == 'Path' else ''
+    return any(p == f or p.startswith(f + '\\') for f in LAUNCHER_FILES)
+
+
+for s in [x for x in sets if x in ('clean', 'dirty', 'cp')]:
     st = STEP[s]
-    if 'vcredist' in set_apps(s):
+    if 'vcredist' in set_apps(s) and s != 'cp':
         t = purge_score(s, 'vcredist')
         if t is None:
             row('K8', st, f'{s}/vcredist', miss('vcredist score'), '0 preselected, 0 danger offered', False)
         else:
             items = t.get('items')
             pre = sum(1 for i in items if isinstance(i, dict) and i.get('preselected')) if isinstance(items, list) else None
-            dg = danger_offered(t)
+            dg = danger_offered(t, load(f'{s}-vcredist-scan.json'))
             row('K8', st, f'{s}/vcredist', f'preselected={pre} {dg["value"]}', '0 preselected, 0 danger offered',
                 pre == 0 and dg['ok'], dg['note'])
     if 'python' in set_apps(s):
         scan = load(f'{s}-python-scan.json')
-        if scan is None:
-            row('K8', st, f'{s}/python suggestion', miss(f'{s}-python-scan.json'), 'launcher suggestion, report-only', False)
+        subj = f'{s}/python suggestion'
+        if s in SUGGEST_SETS:
+            lim = '>= 1, all ReportOnly, each a notice in the score'
+            t = purge_score(s, 'python')
+            if scan is None or t is None:
+                row('K8', st, subj, miss(f'{s}-python-scan.json' if scan is None else f'score of {prefix[s]}-python'), lim, False)
+            else:
+                sg = suggestions(scan)
+                nt = t.get('notices')
+                probs = [] if sg else ['no suggestion']
+                probs += [f"{suggest_of(i)} on {canon_of(i.get('target') or {})}: action {i.get('action')}" for i in sg if i.get('action') != 'ReportOnly']
+                if not isinstance(nt, list):
+                    probs.append('the score has no notices list (rigtool built before review R5)')
+                else:
+                    want = sorted(suggest_of(i) for i in sg)
+                    got = sorted(str(n.get('suggest_uninstall')) for n in nt if isinstance(n, dict))
+                    if want != got:
+                        probs.append(f'notices in the score {got}, suggestions in the scan {want} (a suggestion scored as an offer or listing?)')
+                row('K8', st, subj, f'{len(sg)} suggestion(s), actions {sorted({str(i.get("action")) for i in sg})}, '
+                    f'{len(nt) if isinstance(nt, list) else "no"} notice(s)', lim, not probs,
+                    '; '.join(probs[:3] + [f"{n.get('suggest_uninstall')} on {n.get('target')} ({n.get('band')}, would be {n.get('would_be')})"
+                                           for n in (nt if isinstance(nt, list) else [])[:2] if isinstance(n, dict)]) or None)
         else:
-            sg = suggestions(scan)
-            ok = bool(sg) and all(str(i.get('action')) == 'ReportOnly' for i in sg)
-            row('K8', st, f'{s}/python suggestion', f'{len(sg)} suggestion(s), actions {sorted({str(i.get("action")) for i in sg})}', '>= 1, all ReportOnly', ok)
-    if 'python312-with-313' in set_apps(s):
+            lim = '0 suggestions, Launcher not offered (kept by Python 3.13.1)'
+            if scan is None:
+                row('K8', st, subj, miss(f'{s}-python-scan.json'), lim, False)
+            else:
+                sg = suggestions(scan)
+                off = [i for i in scan.get('items', []) if isinstance(i, dict) and on_launcher(i)
+                       and i.get('action') != 'ReportOnly' and item_band(i) != 'Blocked']
+                row('K8', st, subj, f'{len(sg)} suggestion(s), {len(off)} Launcher item(s) offered', lim, not sg and not off,
+                    '; '.join([f'suggests {suggest_of(i)} on {canon_of(i.get("target") or {})}' for i in sg[:2]]
+                              + [f"offered {i.get('action')} at {item_band(i)}: {canon_of(i.get('target') or {})}" for i in off[:3]]) or None)
+    if 'python312-with-313' in set_apps(s) and s != 'cp':
         scan = load(f'{s}-python312-with-313-scan.json')
         if scan is None:
             row('K8', st, f'{s}/python312-with-313 suggestion', miss(f'{s}-python312-with-313-scan.json'), 'none', False)
@@ -1288,6 +1424,12 @@ else:
     cold = bud.get('cold_cache_state') or ('moved' if bud.get('cold_cache') else None)
     if cold not in ('moved', 'absent'):
         probs.append(f'cold round not shown cold (cold_cache_state {cold})')
+    # review R5 B3: the cold harvest fills the disk cache, so the cache is moved aside before EACH cold M1b step
+    # (rig.ps1 cold_cache_steps); a record without a state for a step (budgets/2) or with 'kept' is not cold
+    ccs = bud.get('cold_cache_steps') if isinstance(bud.get('cold_cache_steps'), dict) else {}
+    for step in BUDGET_STEPS:
+        if ccs.get(step) not in ('moved', 'absent'):
+            probs.append(f"m1b {step} cold: cache state {ccs.get(step)} (moved aside before this step, or absent, needed)")
     if not bud.get('program'):
         probs.append('no program recorded')
     row('K14', 'G7', 'budget runs', f'{len(seen)} run(s), {len(probs)} problem(s)', '12 runs (2 engines x 2 steps x 3 rounds), all exit 0, round 1 cold',
@@ -1323,7 +1465,8 @@ else:
             wprobs.append(f'm1b {step} cold: no log or no timing total line')
             continue
         if cl['msi_reads'] <= 0:
-            wprobs.append(f'm1b {step} cold: read no sys.msi_tables (nothing to be warm against)')
+            wprobs.append(f'm1b {step} cold: read no sys.msi_tables (nothing to be warm against: the cold round was '
+                          'warm, e.g. the cache the cold harvest filled was not moved aside before the cold scan)')
         for n in BUDGET_ROUNDS[1:]:
             wl = logs.get(('m1b', step, 'warm', n))
             if wl is None:
@@ -1460,7 +1603,38 @@ evaluate() {
   pyeval evaluate "$1" "$2" "$APPS" "$DIRTY_APPS" "$CP_APPS" "$SETS" "$TRAP_RUNS" "$CONFIG" "$CONFIG_VARS" "${3:-evaluate}" "$HERE"
 }
 
-# plan_actions <plan> <scan sidecar> <out>: the plan with each item's action from its scan sidecar (as m1a.sh step 3).
+# rigtool_check: review R5 S1. collect and replay score with $R only when it was built from vm/rigtool as committed
+# at HEAD: `$R version` reports the SHA-256 of the sources it was built from (build.rs), which must equal the tree's
+# (pyeval rigtoolsrc), and vm/rigtool must not differ from HEAD (git status, $GIT as in replay). Otherwise it prints
+# why and returns 2 (nothing is collected). The two hashes go into the manifest; BIND checks them again.
+RT_SRC=$HERE/../rigtool
+RT_SRC_SHA=""; RT_TREE_SHA=""
+rigtool_check() {
+  local gt st
+  read -r -a gt <<<"${GIT:-git}"
+  RT_TREE_SHA=$(pyeval rigtoolsrc "$RT_SRC") || { echo "m1b: cannot hash the rigtool sources in $RT_SRC" >&2; return 2; }
+  RT_SRC_SHA=$("$R" version 2>/dev/null | sed -n 's/.*source-sha256 \([0-9a-f]\{64\}\).*/\1/p')
+  local fix="rebuild it: (cd vm/rigtool && cargo build --release)"
+  if [ -z "$RT_SRC_SHA" ]; then
+    echo "m1b: $R does not report the sources it was built from (built before review R5, or not rigtool): $fix" >&2; return 2
+  fi
+  if [ "$RT_SRC_SHA" != "$RT_TREE_SHA" ]; then
+    echo "m1b: $R was built from other sources than vm/rigtool now (source-sha256 $RT_SRC_SHA, tree $RT_TREE_SHA): $fix" >&2
+    return 2
+  fi
+  if ! st=$("${gt[@]}" -C "$RT_SRC" status --porcelain -- . 2>/dev/null); then
+    echo "m1b: cannot tell whether vm/rigtool differs from HEAD (git status failed)" >&2; return 2
+  fi
+  if [ -n "$st" ]; then
+    echo "m1b: vm/rigtool differs from HEAD; score only with a rigtool built from committed sources:" >&2
+    echo "$st" | head -5 >&2; return 2
+  fi
+  return 0
+}
+
+# plan_actions <plan> <scan sidecar> <out>: the plan with each item's action from its scan sidecar (as m1a.sh step 3),
+# and its `suggest_uninstall` (the evidence fact of SYS-BURNDEPS rule (c)) when it has one: rigtool score counts a
+# ReportOnly item with it as a notice, not an offer (user ruling 2026-11-18, review R5 B1).
 plan_actions() {
   "$PY" -I - "$1" "$2" "$3" <<'EOF'
 import json, os, sys
@@ -1468,16 +1642,29 @@ plan_f, scan_f, out_f = sys.argv[1:4]
 with open(plan_f, encoding='utf-8-sig') as f:
     plan = json.load(f)
 key = lambda t: json.dumps({k: (str(v).lower() if k != 'type' else v) for k, v in sorted(t.items())})
+
+
+def suggest_of(it):
+    for ev in it.get('evidence') or []:
+        v = (ev.get('detail') or {}).get('suggest_uninstall') if isinstance(ev, dict) and isinstance(ev.get('detail'), dict) else None
+        if isinstance(v, str) and v.strip():
+            return v
+    return None
+
+
 if os.path.isfile(scan_f):
     with open(scan_f, encoding='utf-8-sig') as f:
         scan = json.load(f)
     by = {}
     for it in scan.get('items', []):
-        by.setdefault(key(it['target']), []).append(it.get('action'))
+        by.setdefault(key(it['target']), []).append((it.get('action'), suggest_of(it)))
     for it in plan.get('items', []):
         acts = by.get(key(it['target'])) or []
+        it.pop('suggest_uninstall', None)
         if acts:
-            it['action'] = acts.pop(0)
+            it['action'], sg = acts.pop(0)
+            if sg is not None:
+                it['suggest_uninstall'] = sg
 with open(out_f, 'w', encoding='utf-8') as f:
     json.dump(plan, f, indent=2, ensure_ascii=False)
 EOF
@@ -1498,6 +1685,7 @@ replay() {
   read -r -a xt <<<"${XTASK:-cargo xtask}"; read -r -a gt <<<"${GIT:-git}"
   # review R4d S3: the old diff goes first, so a replay-diff that fails before writing leaves none (K16 FAILs on a
   # missing diff), and the replay block binds the diff this run wrote and replay-diff's exit code (BIND)
+  rigtool_check || return 2
   rm -rf "$stage"; mkdir -p "$stage"; rm -f "$REPLAY_SCORE" "$REPLAY_DIFF"
   "${xt[@]}" replay-diff --runs "$src" -o "$REPLAY_DIFF" >&2; drc=$?
   if [ $drc -ne 0 ]; then echo "m1b replay: replay-diff exit $drc: failed or has unexplained rows (K16 judges $REPLAY_DIFF)" >&2; rc=1; fi
@@ -1531,6 +1719,7 @@ replay() {
 
 # ------------------------------------------------------------------------------------------- stage 1
 collect() {
+  rigtool_check || return 2
   mkdir -p "$EVID" "$EVID/budgets" "$EVID/runs"
   rm -f "$EVID"/score-*.json "$EVID"/traps-*.json "$EVID"/*-fp.json "$EVID"/*-scan.json "$EVID"/replay-*.json "$EVID"/budgets/* \
         "$EVID"/runs/*.json "$EVID"/truth-*.json "$EVID"/manifest.json
@@ -1595,7 +1784,7 @@ collect() {
   [ -f "$REPLAY_DIFF" ] && cp "$REPLAY_DIFF" "$EVID/replay-diff.json"
   [ -f "$REPLAY_SCORE" ] && cp "$REPLAY_SCORE" "$EVID/replay-score.json"
   pyeval manifest "$EVID/manifest.json" "$RUNS" "$SETS" "$(prefix_of clean)" "$(prefix_of dirty)" "$(prefix_of cp)" "${lmap# }" \
-    "$HERE" "$CONFIG" "$CONFIG_VARS" "$R" "${nmap# }"
+    "$HERE" "$CONFIG" "$CONFIG_VARS" "$R" "${nmap# }" "$RT_SRC_SHA" "$RT_TREE_SHA"
 }
 
 # ------------------------------------------------------------------------------------------- selftest
@@ -1612,7 +1801,7 @@ selftest() {
   mkfix() {
     "$PY" -I "$fx" write "$1" "$HERE" >/dev/null || return 1
     pyeval manifest "$1/manifest.json" runs "$DEF_SETS" m1b m1bd m1bcp "$("$PY" -I "$fx" labelmap)" "$1/truth" default "" rigtool \
-      "$("$PY" -I "$fx" nullmap)"
+      "$("$PY" -I "$fx" nullmap)" "$(printf '7%.0s' {1..64})" "$(printf '7%.0s' {1..64})"
   }
   # eval_gate <dir> <out>: evaluate as the gate does, against the dir's own truth/ copy
   eval_gate() { (HERE="$1/truth"; evaluate "$1" "$2" gate); }
@@ -1660,14 +1849,19 @@ assert not d['pass'] and not d['gate']
       "k1_blocked_denylisted PASS" "k1_danger_likely K1" "k1_danger_safe K1" "k1_danger_likely_beside_kept K1" \
       "k1_counts_disagree K1" "k1_counts_missing K1" "k8_vcredist_danger_likely K8" "k8_vcredist_blocked PASS" \
       "run_target_preinstalled RUN" "run_no_entry_created RUN" "run_lists0_unreadable RUN" "run_target_unknown RUN" \
-      "trap_main_is_pre RUN" "trap_main_not_created RUN" "trap_no_pre_record RUN" \
+      "trap_main_is_pre RUN" "trap_main_not_created RUN" \
       "sanity_ambient_same_name PASS" "sanity_ambient_only_same_name PASS" "sanity_relabelled_by_name SANITY" \
       "sanity_frozen_unreadable SANITY" \
       "deny_changed BIND" "inputs_deny_edited_before BIND" "inputs_no_deny BIND" "inputs_frozen_edited_before BIND" \
       "replay_diff_unbound BIND" "replay_diff_failed BIND" "replay_diff_missing K16" \
       "replay_score_empty_plan K4" "replay_score_no_counts K4" \
       "budget_cache_memory K14" "budget_cache_line_missing K14" "budget_cache_no_hits K14" "budget_warm_reads_tables K14" \
-      "budget_not_like_for_like K14" "budget_coproduct K14" "budget_no_harvest_line K14"; do
+      "budget_not_like_for_like K14" "budget_coproduct K14" "budget_no_harvest_line K14" \
+      "rigtool_unbound BIND" "rigtool_no_source BIND" \
+      "k1_blocked_not_denylisted K1" "k1_blocked_no_scan_item K1" "k1_blocked_no_scan K1" "k8_vcredist_blocked_too_large K8" \
+      "k8_suggestion_not_a_notice K8" "k8_notices_missing K8" "k8_suggestion_not_report_only K8" "k8_cp_no_suggestion K8" \
+      "k8_dirty_python_suggestion K8" "k8_dirty_launcher_offered K8" "k8_dirty_launcher_blocked PASS" \
+      "budget_cold_scan_warm K14" "budget_cold_scan_not_moved K14" "budget_cold_steps_missing K14"; do
     set -- $ctl
     rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"
     if ! "$PY" -I "$fx" mutate "$tmp/m" "$1" >"$tmp/m.txt" 2>&1; then no_ "control $1" "mutation failed: $(head -c 300 "$tmp/m.txt")"; continue; fi
@@ -1708,6 +1902,7 @@ assert not d['gate'] and not d['pass']
   printf '#!/usr/bin/env bash\nexec "%s" -I "%s" git "$@"\n' "$PY" "$fx" >"$tmp/bin/git"
   chmod +x "$tmp/bin/"*
   local rv want_rc want_gate
+  STUB_RIGTOOL_SHA=$(pyeval rigtoolsrc "$RT_SRC"); export STUB_RIGTOOL_SHA
   # Review R4d S3: the replay block binds the diff the step wrote (sha256) and replay-diff's exit code; a replay-diff
   # that fails before writing leaves no diff behind (the stale one is deleted first): K16 and BIND fail.
   for rv in all npp difffail; do
@@ -1759,10 +1954,33 @@ assert n['in_lists0'] is True and n['entries_created'] == [], n
 assert t['in_lists0'] is False and t['entries_created'] == [t['main_key']], t
 EOF
   then ok_ runsum_target_against_lists0; else no_ runsum_target_against_lists0 "exit $rc"; fi
+  # Review R5 S1: collect and replay refuse (exit 2) a rigtool that is not built from vm/rigtool at HEAD: a binary that
+  # reports other sources, none (built before R5), or a vm/rigtool that differs from HEAD; one built from it passes.
+  local rk want_k got_k
+  for rk in ok other none dirty; do
+    case $rk in ok) want_k=0 ;; *) want_k=2 ;; esac
+    (R="$tmp/bin/rigtool"; GIT="$tmp/bin/git"
+     case $rk in other) export STUB_RIGTOOL_SHA=$(printf '0%.0s' {1..64}) ;; none) export STUB_RIGTOOL_SHA= ;; dirty) export STUB_GIT_DIRTY=1 ;; esac
+     rigtool_check) >"$tmp/rk.txt" 2>&1; got_k=$?
+    if [ $got_k -eq $want_k ] && { [ $rk = ok ] || grep -q 'rigtool\|vm/rigtool' "$tmp/rk.txt"; }; then ok_ "rigtool_check_$rk"
+    else no_ "rigtool_check_$rk" "exit $got_k: $(head -c 300 "$tmp/rk.txt")"; fi
+  done
+  (R="$tmp/bin/rigtool"; GIT="$tmp/bin/git"; EVID="$tmp/ev-refused"; export STUB_RIGTOOL_SHA=$(printf '0%.0s' {1..64}); collect) >/dev/null 2>&1; rc=$?
+  if [ $rc -eq 2 ] && [ ! -e "$tmp/ev-refused" ]; then ok_ collect_refuses_a_stale_rigtool; else no_ collect_refuses_a_stale_rigtool "exit $rc"; fi
+  # Review R5 B1: plan_actions copies the action and, only where the scan item's evidence has it, suggest_uninstall
+  "$PY" -I "$fx" planactions "$tmp/pa" && plan_actions "$tmp/pa/plan.json" "$tmp/pa/scan.json" "$tmp/pa/out.json"; rc=$?
+  if [ $rc -eq 0 ] && "$PY" -I - "$tmp/pa/out.json" <<'EOF'
+import json, sys
+p = json.load(open(sys.argv[1], encoding='utf-8'))
+got = [(i['target']['path'].rsplit('\\', 1)[-1], i.get('action'), i.get('suggest_uninstall')) for i in p['items']]
+assert got == [('{73831AC2-F0E1-4173-9FDB-D07463D7EB80}', 'ReportOnly', 'Python Launcher (64-bit)'),
+               ('Python312', 'DeleteKey', None), ('STALE', 'ReportOnly', None)], got
+EOF
+  then ok_ plan_actions_copies_the_suggestion; else no_ plan_actions_copies_the_suggestion "exit $rc"; fi
   # Trap runs judge TrapA only (coordinator ruling 2026-11-18): a dirty trap run whose TrapB (pre-app node) is in
   # lists-0 and TrapA is new passes RUN; TrapA already in lists-0, or a main entry that is TrapB's, is INVALID.
   local tv want_t
-  for tv in trapok trapa0 trappre; do
+  for tv in trapok trapa0 trappre trapnopre trapemptypre; do
     if [ $tv = trapok ]; then want_t=0; else want_t=1; fi
     rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"
     if pyeval runsum "$tmp/tr/$tv/m1bd-traps-7zip" m1bd-traps-7zip "$tmp/tr/$tv.json" \
@@ -1959,6 +2177,6 @@ case "${1:-}" in
   replay) replay; exit $? ;;
   --evaluate) [ -n "${2:-}" ] || { echo "m1b: --evaluate needs an evidence dir" >&2; exit 2; }
               evaluate "$2" "$OUT/m1b-score.json" evaluate; exit $? ;;
-  "") collect; evaluate "$EVID" "$OUT/m1b-score.json" gate; exit $? ;;
+  "") collect || exit $?; evaluate "$EVID" "$OUT/m1b-score.json" gate; exit $? ;;
   *) echo "m1b: unknown argument $1 (--selftest, --evaluate DIR, --config, freeze APP, replay, or nothing)" >&2; exit 2 ;;
 esac

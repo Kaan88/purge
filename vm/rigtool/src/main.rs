@@ -25,6 +25,9 @@ mod traps;
 mod truth;
 
 use err::{Context, Result, bail};
+/// The SHA-256 of the sources this binary was built from (build.rs; `truth/m1b.sh` compares it with the tree,
+/// review R5 S1).
+const SOURCE_SHA256: &str = env!("RIGTOOL_SOURCE_SHA256");
 use std::path::PathBuf;
 
 const USAGE: &str = "\
@@ -61,6 +64,7 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
                 (M1b scan traps; --plan: purge.scan/0 or purge.plan/0; --app: the run's app id, a plan of
                  another app is an error. exit 1 = escapes or missed_owned > 0; exit 2 = an input error,
                  including a trap file with zero cases)
+  rigtool version   (also --version: the version and the SHA-256 of the sources it was built from, build.rs)
 ";
 
 struct Args {
@@ -336,6 +340,10 @@ fn run(argv: Vec<String>) -> Result<()> {
                     c.inconsistencies
                 );
             }
+            Ok(())
+        }
+        "version" | "--version" => {
+            println!("rigtool {} source-sha256 {}", env!("CARGO_PKG_VERSION"), SOURCE_SHA256);
             Ok(())
         }
         "-h" | "--help" | "help" => {

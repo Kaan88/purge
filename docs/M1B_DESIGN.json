@@ -3159,7 +3159,7 @@
   {
    "id": "K1",
    "step": "G2, G8",
-   "criterion": "danger_offered = 0 for every app: no danger item listed in any band but Blocked. A danger item listed Blocked (deny-listed, report only, e.g. REF-ANY on the bam UserSettings value) is danger_kept and is named in the report (user ruling 2026-11-18)",
+   "criterion": "danger_offered = 0 for every app: no danger item listed in any band but Blocked. A danger item listed Blocked (deny-listed, report only, e.g. REF-ANY on the bam UserSettings value) is danger_kept and is named in the report (user ruling 2026-11-18); it is accepted only when its blockers in the scan sidecar include DenyListed, any other blocker fails and is named (review R5 S3). A ReportOnly item that carries suggest_uninstall (the related-product suggestion) is a notice, not an offer or a listing: it is not counted in danger, precision or protected_correct (K1-K6) and is scored by K8 only (user ruling 2026-11-18, review R5 B1)",
    "measured": "rigtool score: plan items whose target is labelled danger (belongs to another product, Windows or the user) in frozen truth or in the state diff"
   },
   {
@@ -3201,7 +3201,7 @@
   {
    "id": "K8",
    "step": "G2, G3",
-   "criterion": "vcredist: 0 preselected items and 0 danger items offered (danger_offered, as K1); python (alone): the related-product suggestion for the Launcher is present as report-only; python312-with-313: no suggestion",
+   "criterion": "vcredist: 0 preselected items and 0 danger items offered (danger_offered, as K1); python on rig-base (G2) and Purge-CleanPro (G8), where the Launcher is left orphaned: the related-product suggestion for the Launcher is present as report-only and is a notice in the score (user ruling 2026-11-18, review R5 B1); python on dirty-base (G3), where Python 3.13.1 and its Launcher stay: no suggestion and no Launcher item offered (listed in any band but Blocked with an action other than ReportOnly) (coordinator ruling 2026-11-18, review R5 B2: a design fact, not a loosening); python312-with-313: no suggestion",
    "measured": "plan JSON read by m1b.sh"
   },
   {
@@ -3237,7 +3237,7 @@
   {
    "id": "K14",
    "step": "G7",
-   "criterion": "reference walks per scan = 1; added scan time <= 2.5 s warm and <= 6.5 s cold; added harvest time <= 2.5 s warm and <= 6.5 s cold; ownership.components <= 1.5 s; ownership.tables <= 4.0 s cold and <= 0.3 s warm. The warm cache must be shown: every warm M1b log has `timing: msi_table_cache disk <path> hits=N misses=M` with N >= 1 (memory or no line fails) and reads fewer sys.msi_tables than the cold round; like for like: every harvest log of both engines reports the same install root count (>= 1) and 0 co-product candidates (user ruling 2026-11-18)",
+   "criterion": "reference walks per scan = 1; added scan time <= 2.5 s warm and <= 6.5 s cold; added harvest time <= 2.5 s warm and <= 6.5 s cold; ownership.components <= 1.5 s; ownership.tables <= 4.0 s cold and <= 0.3 s warm. The warm cache must be shown: every warm M1b log has `timing: msi_table_cache disk <path> hits=N misses=M` with N >= 1 (memory or no line fails) and reads fewer sys.msi_tables than the cold round; like for like: every harvest log of both engines reports the same install root count (>= 1) and 0 co-product candidates (user ruling 2026-11-18). The M1b cold round is cold per step: the MSI table cache is moved aside before the cold harvest and again before the cold scan (review R5 B3)",
    "measured": "PURGE_TIMING phase, total, msi_table_cache and harvest summary lines, median of the warm runs, against the M2 head measured in the same session"
   },
   {

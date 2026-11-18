@@ -134,10 +134,49 @@ Check 'a settings set built with -Priority 4 has Priority=4 (not registered)' ($
     # ruling 2026-11-18 (K14): m1b-budgets refuses without the admin-only data root, before anything runs
     $msg = $null
     & {
+        function Test-RigElevated { $true }
         function Get-PurgeDataRootVerdict { param([string]$DataRoot, [string]$RepoRoot) 'absent' }
         try { $null = Invoke-M1bBudgets -Engine 'C:\nonexistent\a.exe' -BaseEngine 'C:\nonexistent\b.exe' -Program 'p' } catch { $script:budgetMsg = $_.Exception.Message }
     }
     Check 'M1b: m1b-budgets refuses without an admin-only %ProgramData%\Purge' ("$script:budgetMsg" -match 'not the admin-only data root.*verdict: absent') "$script:budgetMsg"
+    # review R5 N1: unelevated it says to run elevated (not to run install.ps1), before anything else
+    $script:budgetMsg = $null
+    & {
+        function Test-RigElevated { $false }
+        function Get-PurgeDataRootVerdict { param([string]$DataRoot, [string]$RepoRoot) 'reject' }
+        try { $null = Invoke-M1bBudgets -Engine 'C:\nonexistent\a.exe' -BaseEngine 'C:\nonexistent\b.exe' -Program 'p' } catch { $script:budgetMsg = $_.Exception.Message }
+    }
+    Check 'M1b: m1b-budgets unelevated says "run elevated", not "run install.ps1"' (
+        "$script:budgetMsg" -match 'run elevated' -and "$script:budgetMsg" -notmatch 'install\.ps1') "$script:budgetMsg"
+    # review R5 B3: the MSI table cache is moved aside before EACH cold M1b step (the cold harvest fills it, so the
+    # cold scan would be warm), and never in a warm round. Stub engines (.cmd) write a file per step into the cache.
+    $savedRuns = $script:RunsDir
+    try {
+        $script:RunsDir = Join-Path $Work 'budget-runs'
+        $dr = Join-Path $Work 'budget-data-root'; $cache = Join-Path $dr 'fp\msitables'
+        New-Item -ItemType Directory -Force $cache | Out-Null
+        [IO.File]::WriteAllText((Join-Path $cache 'old.bin'), 'x')
+        $stub = "@echo off`r`nif not exist `"%PURGE_STUB_CACHE%`" mkdir `"%PURGE_STUB_CACHE%`"`r`necho %1> `"%PURGE_STUB_CACHE%\%1-%RANDOM%%RANDOM%.bin`"`r`necho timing: stub %1 1>&2`r`nexit /b 0`r`n"
+        $ea = Join-Path $Work 'stub-m1b.cmd'; $eb = Join-Path $Work 'stub-m2.cmd'
+        [IO.File]::WriteAllText($ea, $stub); [IO.File]::WriteAllText($eb, $stub + "rem m2`r`n")
+        $env:PURGE_STUB_CACHE = $cache
+        $bd = & {
+            function Test-RigElevated { $true }
+            function Get-PurgeDataRootVerdict { param([string]$DataRoot, [string]$RepoRoot) 'good' }
+            Invoke-M1bBudgets -Engine $ea -BaseEngine $eb -Program 'p' -DataRoot $dr
+        }
+        $asides = @(Get-ChildItem -LiteralPath (Join-Path $dr 'fp') -Directory | Where-Object { $_.Name -like 'msitables.m1b-budgets-*' })
+        $ha = @($asides | Where-Object { $_.Name -like '*-harvest-*' }); $sa = @($asides | Where-Object { $_.Name -like '*-scan-*' })
+        $harvestInScanAside = $sa.Count -eq 1 -and @(Get-ChildItem -LiteralPath $sa[0].FullName -Filter 'harvest-*.bin').Count -eq 1 -and
+            -not @(Get-ChildItem -LiteralPath $sa[0].FullName -Filter 'old.bin').Count
+        $bj = Get-Content -Raw -LiteralPath (Join-Path $script:RunsDir 'm1b-budgets\budgets.json') | ConvertFrom-Json
+        Check 'M1b: m1b-budgets moves the cache aside before the cold harvest and again before the cold scan, not in warm rounds' (
+            $asides.Count -eq 2 -and $ha.Count -eq 1 -and $harvestInScanAside -and
+            @(Get-ChildItem -LiteralPath $ha[0].FullName -Filter 'old.bin').Count -eq 1 -and
+            $bj.schema -eq 'purge.rig.m1b-budgets/3' -and $bj.cold_cache_steps.harvest -eq 'moved' -and $bj.cold_cache_steps.scan -eq 'moved' -and
+            $bj.cold_cache_state -eq 'moved' -and $bj.cold_cache.scan -eq $sa[0].FullName -and @($bj.runs).Count -eq 12 -and
+            -not @($bj.runs | Where-Object { $_.exit -ne 0 }).Count) "asides: $(@($asides.Name) -join ', '); steps: $($bj.cold_cache_steps | ConvertTo-Json -Compress); runs: $(@($bj.runs).Count)"
+    } finally { $script:RunsDir = $savedRuns; Remove-Item Env:\PURGE_STUB_CACHE -ErrorAction SilentlyContinue }
     $absent = Join-Path $Work 'no-purge-data-root'
     $plain = Join-Path $Work 'plain-purge-data-root'; New-Item -ItemType Directory $plain | Out-Null
     $va = Get-PurgeDataRootVerdict -DataRoot $absent; $vp = Get-PurgeDataRootVerdict -DataRoot $plain
