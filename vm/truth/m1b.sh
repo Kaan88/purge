@@ -132,6 +132,8 @@ REPLAY_REASONS = ['new_scanner', 'msi_blocker_added', 'msi_root_added', 'policy_
 BUDGET_ENGINES, BUDGET_STEPS, BUDGET_ROUNDS = ['m1b', 'm2'], ['harvest', 'scan'], [1, 2, 3]
 BANDS = ['Safe', 'Likely', 'Weak', 'Blocked']
 STEP = {'clean': 'G2', 'dirty': 'G3', 'cp': 'G8'}
+# Defender versions compared between snap 0 and snap 2 (ruling 2026-11-18; guest riglib Get-DefenderVersions)
+DEFENDER_KEYS = ['av_signature', 'as_signature', 'engine', 'platform']
 
 
 def sha256_file(p):
@@ -213,6 +215,33 @@ def target_entry(rj, lists0):
     return out
 
 
+def defender_record(d):
+    """run.json `defender` (guest riglib Get-DefenderVersions / Wait-DefenderIdle) as the evidence keeps it: the versions
+    at snap 0 and snap 2 and the idle wait's outcome; None when the run recorded none (a run before the fix)."""
+    if not isinstance(d, dict):
+        return None
+    ver = lambda v: {k: v.get(k) for k in DEFENDER_KEYS + ['source', 'error']} if isinstance(v, dict) else None
+    idle = d.get('idle') if isinstance(d.get('idle'), dict) else None
+    trig = (idle or {}).get('trigger') if isinstance((idle or {}).get('trigger'), dict) else {}
+    return {'snap0': ver(d.get('snap0')), 'snap2': ver(d.get('snap2')),
+            'idle': None if idle is None else {'stable': idle.get('stable'), 'bounded': idle.get('bounded'), 'updated': idle.get('updated'),
+                                               'changes': idle.get('changes'), 'waited_sec': idle.get('waited_sec'), 'error': idle.get('error'),
+                                               'trigger_exit': trig.get('exit'), 'trigger_timed_out': trig.get('timed_out'),
+                                               'trigger_error': trig.get('error')}}
+
+
+def defender_invalid(rec):
+    """Ruling 2026-11-18 (Defender noise, RIG.md section 12.7): the reason a run is INVALID for Defender, or None. A
+    signature / engine / platform version that differs between snap 0 and snap 2 means an update landed inside the
+    capture window (its files and keys would be truth noise); a run without both records cannot show it did not."""
+    a, b = ((rec or {}).get('snap0'), (rec or {}).get('snap2')) if isinstance(rec, dict) else (None, None)
+    if not isinstance(a, dict) or not isinstance(b, dict) or not a.get('av_signature') or not b.get('av_signature'):
+        return 'no Defender signature version recorded at snap 0 and snap 2 (run.json defender)'
+    # compared where both ends have the version (the antivirus signature always: checked above)
+    ch = [f'{k} {a.get(k)} -> {b.get(k)}' for k in DEFENDER_KEYS if a.get(k) and b.get(k) and a.get(k) != b.get(k)]
+    return ('Defender update between snap 0 and snap 2: ' + ', '.join(ch)) if ch else None
+
+
 if MODE == 'runsum':
     # runsum <run dir> <run name> <out>: the run's record for the evaluator
     d, run, out = A
@@ -224,7 +253,9 @@ if MODE == 'runsum':
            'run_json': None if rj is None else {
                'run': rj.get('run'), 'started': rj.get('started'), 'finished': rj.get('finished'),
                'phases': [{'name': (p or {}).get('name'), 'ok': (p or {}).get('ok'), 'error': (p or {}).get('error')}
-                          for p in (rj.get('phases') or [])]},
+                          for p in (rj.get('phases') or [])],
+               # ruling 2026-11-18 (Defender noise): the versions at snap 0 and snap 2 and the idle wait's outcome
+               'defender': defender_record(rj.get('defender'))},
            'build': read_json(os.path.join(d, 'm1b-build.json')),
            'plan_items': None if plan is None else len(plan.get('items') or [])}
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
@@ -721,7 +752,8 @@ def trap_step(run):
 
 
 # RUN (review R4b S2): every scored run finished with every phase ok (a failed plant, launch or uninstall phase is
-# not scored as if it had worked).
+# not scored as if it had worked). Ruling 2026-11-18 (Defender noise, RIG.md section 12.7): its Defender signature,
+# engine and platform versions are recorded at snap 0 and snap 2 and equal (defender_invalid), for null runs too.
 run_docs = {}
 for s, id, run in app_runs + [('traps', None, r) for r in trap_runs]:
     st = trap_step(run) if s == 'traps' else STEP[s]
@@ -754,14 +786,18 @@ for s, id, run in app_runs + [('traps', None, r) for r in trap_runs]:
                              else 'cannot tell whether the target is TrapA (no pre record)')
             if tg.get('main_created') is not True:
                 inval.append('TrapA\'s entry is not among the entries this run created')
-    ok = rj.get('run') == run and bool(rj.get('finished')) and bool(ph) and not bad and not inval
+    # Ruling 2026-11-18 (Defender noise): no Defender signature / engine update between snap 0 and snap 2
+    dinv = defender_invalid(rj.get('defender'))
+    ok = rj.get('run') == run and bool(rj.get('finished')) and bool(ph) and not bad and not inval and not dinv
     note = '; '.join((['failed: ' + ', '.join(bad)] if bad else [])
                      + ([] if rj.get('run') == run else [f"run.json names {rj.get('run')}"])
-                     + ([f"INVALID RUN: {', '.join(inval)} ({(tg or {}).get('main_name')} {(tg or {}).get('main_key')})"] if inval else []))
+                     + ([f"INVALID RUN: {', '.join(inval)} ({(tg or {}).get('main_name')} {(tg or {}).get('main_key')})"] if inval else [])
+                     + ([f'INVALID RUN: {dinv}'] if dinv else []))
     row('RUN', st, run, f"finished={bool(rj.get('finished'))} phases ok {len(ph) - len(bad)}/{len(ph)}"
-        + (' INVALID: target not installed by this run' if inval else ''),
-        'finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty)'
-        + ('; trap run: TrapA judged, TrapB (pre) not' if s == 'traps' else ''), ok, note or None)
+        + (' INVALID: target not installed by this run' if inval else '')
+        + ((' INVALID: Defender ' + ('update in the capture window' if 'update' in dinv else 'versions not recorded')) if dinv else ''),
+        'finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions '
+        'recorded and equal at snap 0 and snap 2' + ('; trap run: TrapA judged, TrapB (pre) not' if s == 'traps' else ''), ok, note or None)
 
 # RUN for the null runs each set's ambient set came from (review R4c; the rest of R4b S2): at least 2, each finished
 # with every phase ok. They run no engine, so BIND has nothing to bind.
@@ -771,10 +807,14 @@ for s in sets:
     for n in nl:
         rj = ((load(f'runs/{n}.json') or {}).get('run_json')) or {}
         ph = rj.get('phases') or []
+        dinv = defender_invalid(rj.get('defender'))   # ruling 2026-11-18, as for the app runs
         if rj.get('run') != n or not rj.get('finished') or not ph or any(p.get('ok') is not True for p in ph):
             bad.append(f"{n}: run {rj.get('run')}, finished {bool(rj.get('finished'))}, failed "
                        + ','.join(str(p.get('name')) for p in ph if p.get('ok') is not True))
-    row('RUN', STEP[s], f'{prefix[s]}-null*', f'{len(nl)} null run(s), {len(bad)} not whole', '>= 2, each finished, every phase ok',
+        elif dinv:
+            bad.append(f'{n}: INVALID RUN: {dinv}')
+    row('RUN', STEP[s], f'{prefix[s]}-null*', f'{len(nl)} null run(s), {len(bad)} not whole or invalid',
+        '>= 2, each finished, every phase ok, Defender versions recorded and equal at snap 0 and snap 2',
         len(nl) >= 2 and not bad, '; '.join(bad[:3]) or None)
 
 # BIND (review R4b S2, as m1b-exec.sh): one engine build (SHA-256 before and after the campaign equal, one commit,
@@ -1930,7 +1970,11 @@ assert not d['pass'] and not d['gate']
       "k8_notice_python313_with_312 K8" "k8_notice_7zip K8" "k8_notices_missing_other K8" "k8_notice_not_launcher K8" \
       "k8_notice_launcher_code_other_key K8" "k8_notice_second_not_launcher K8" "k8_notice_launcher_313 PASS" \
       "k1_blocked_deny_other_user K1" "k1_blocked_deny_only_other_user K1" "k1_blocked_hkcu_two_users K1" \
-      "k1_blocked_same_key_two_items K1" "k1_blocked_user_hive_spelling PASS" "k1_blocked_user_hive_exact PASS"; do
+      "k1_blocked_same_key_two_items K1" "k1_blocked_user_hive_spelling PASS" "k1_blocked_user_hive_exact PASS" \
+      "run_defender_updated RUN" "run_defender_engine_updated RUN" "run_defender_platform_updated RUN" \
+      "run_defender_missing RUN" "run_defender_snap2_missing RUN" "run_defender_no_signature RUN" \
+      "trap_defender_updated RUN" "null_defender_updated RUN" "null_defender_missing RUN" \
+      "run_defender_registry_fallback PASS"; do
     set -- $ctl
     rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"
     if ! "$PY" -I "$fx" mutate "$tmp/m" "$1" >"$tmp/m.txt" 2>&1; then no_ "control $1" "mutation failed: $(head -c 300 "$tmp/m.txt")"; continue; fi
@@ -2018,9 +2062,15 @@ EOF
     && pyeval runsum "$tmp/tr/m1bd-temurin" m1bd-temurin "$tmp/tr/temurin.json"; rc=$?
   if [ $rc -eq 0 ] && "$PY" -I - "$tmp/tr/node.json" "$tmp/tr/temurin.json" <<'EOF'
 import json, sys
-n, t = (json.load(open(p, encoding='utf-8'))['target'] for p in sys.argv[1:3])
+nd, td = (json.load(open(p, encoding='utf-8')) for p in sys.argv[1:3])
+n, t = nd['target'], td['target']
 assert n['in_lists0'] is True and n['entries_created'] == [], n
 assert t['in_lists0'] is False and t['entries_created'] == [t['main_key']], t
+# ruling 2026-11-18 (Defender noise): runsum keeps run.json `defender` (versions at both snaps, the idle outcome)
+assert nd['run_json']['defender'] is None, nd['run_json']
+d = td['run_json']['defender']
+assert d['snap0']['av_signature'] == '1.465.100.0' and d['snap2']['av_signature'] == '1.465.120.0', d
+assert d['snap0']['platform'] == '4.18.25100.9' and d['idle']['stable'] is True and d['idle']['trigger_exit'] == 0, d
 EOF
   then ok_ runsum_target_against_lists0; else no_ runsum_target_against_lists0 "exit $rc"; fi
   # Review R5 S1: collect and replay refuse (exit 2) a rigtool that is not built from vm/rigtool at HEAD: a binary that
@@ -2123,7 +2173,12 @@ for p in glob.glob(os.path.join(sys.argv[2], '*', 'truth.json')):
 assert not hit, f'noise rules match real truth items: {hit[:3]}'
 for c in ('P:C:\\Windows\\Prefetch\\PWSH.EXE-0A1B2C3D.pf', 'P:C:\\Program Files\\PowerShell\\7\\pwsh.exe',
           'K:HKLM\\SOFTWARE\\Microsoft\\PowerShellCore', 'P:C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.13.9-hotspot',
-          'K:HKLM\\SOFTWARE\\Eclipse Adoptium', 'P:C:\\Users\\rig\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\9d5f66f86ab736a4.automaticDestinations-ms'):
+          'K:HKLM\\SOFTWARE\\Eclipse Adoptium', 'P:C:\\Users\\rig\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\9d5f66f86ab736a4.automaticDestinations-ms',
+          # the Defender rules (ruling 2026-11-18) take the antimalware engine's publisher only, not an app's
+          'K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}',
+          'K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\PowerShellCore/Operational',
+          'P:C:\\ProgramData\\Fixture\\Windows Defender\\Definition Updates\\{CAE1651D-E3C4-408E-B588-CF4B82A59F45}',
+          'P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\fixture-mpcache-1.bin'):
     assert not any(x.search(c) for x in rx), f'a noise rule matches an app object: {c}'
 EOF
   then ok_ churn_noise_list_windows_owned_and_never_an_app_item; else no_ churn_noise_list_windows_owned_and_never_an_app_item; fi

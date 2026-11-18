@@ -152,6 +152,10 @@ and `<prefix>null<n>` with one (§4a).
    the clean state and offering any of it scores as danger. With `pre_launch` each is then launched as in
    step 3 (`pre[].launch`), with `pre_uninstall` removed with its vendor uninstaller as in step 5
    (`pre[].uninstall`). Then `plant_pre` (§4b).
+0b. **Defender signature idle** (phase `defender-idle`, right before `arp0` / `lists 0` / `snap 0`, app and null
+   runs alike; `riglib.ps1` `Wait-DefenderIdle`; ruling 2026-11-18, section 12.7): one Defender signature update is
+   triggered and waited for, then Defender's state must hold still. The versions are recorded at `snap 0` and
+   `snap 2` (`run.json` `defender`).
 1. `lists 0`, `snap 0` (clean, from `rig-base`).
 2. Install silently. Record `install_start`, `install_end`, exit code and `ran_as`: `elevated` (the agent's token)
    or, for apps with `install_il = 'medium'` (`vscode-user`, a per-user install), `medium`: the installer is
@@ -1370,7 +1374,8 @@ changes on Windows' own schedule or belongs to a Windows store, seen in the free
 SystemAppData activity of inbox Windows components (`MicrosoftWindows.*_cw5n1h2txyewy` only; an app's own channel stays
 the app's), IRIS, Desktop Spotlight, the rules engine, the shell's component-category cache and `TaskbarStateLastRun`,
 the font cache, BitLocker telemetry, the hive defrag counter, Security Center provider state, DiagTrack downloaded
-settings, `Installer\TempPackages`, the Windows Update SLS cache and the .NET servicing `BreadcrumbStore`. Every rule is
+settings, `Installer\TempPackages`, the Windows Update SLS cache and the .NET servicing `BreadcrumbStore`; since
+2026-11-18 also Defender's signature-update footprint and the AppX volume flags (12.7). Every rule is
 `ambient` (never `first`), so it can only take an item out of the leftover set. m1b.sh passes it to every M1b truth
 (collect and freeze) and hashes it into each run's label digest (BIND). A leftover `C:\Windows\Installer\<x>.msi`
 that snap 2's `Installer\TempPackages` names (msiexec deletes it itself) is relabelled ambient by m1b.sh. A
@@ -1378,3 +1383,70 @@ that snap 2's `Installer\TempPackages` names (msiexec deletes it itself) is rela
 (`churn_noise_list_windows_owned_and_never_an_app_item`) checks that every rule lies under a Windows-owned root, matches
 its recorded churn samples, and matches no leftover, user_data or kept_owner item of any frozen truth (M0 and M1b), nor
 a PowerShell or Temurin object. The selftest's `churn_*` controls check the freeze rule on synthetic runs.
+
+### 12.7 Defender signature updates (ruling 2026-11-18)
+
+**What happened.** The snapshots ship Defender definitions 1.463.242.0, and every boot pulls newer ones. In the gate4
+campaign (2026-11-18) a Defender signature / engine update landed about 20 s after snap 0 in 4 of the 8 rig-base app
+runs (7zip, node, powershell, temurin). The default rule labelled its 18-23 items leftover. These were:
+- `ProgramData\Microsoft\Windows Defender\Definition Updates\{guid}`
+- `Scans\mpcache-<hash>.bin` with its `.NN` parts and `.manifest`
+- `Scans\RtSigs\Data\<sha1>`
+- `HKLM\SOFTWARE\Microsoft\MpSigStub|LastStartTime`
+- `...\TargetingInfo\PersistentDynamicInstalled\DefenderSignature.amd64|Version`
+- the event publisher `{0a002690-3839-4e3a-b3b6-96d8df868d99}` (Microsoft-Antimalware-Engine)
+- `Appx\PackageVolumes\<n>\MutablePackagesOnline` and `UserMutablePackagesOnline`
+
+The update did the same in dirty-base 7zip and powershell. Temurin's correct empty plan then failed K1 and K3-K6.
+
+The user's ruling was a proper fix and a full rerun. The fix has three parts.
+
+1. **Ambient rules.** `_m1b-noise.json` gets 7 rules, all `ambient` and anchored under a Defender or AppX root:
+   - `Definition Updates(\...)?`
+   - `Scans\mpcache-<hex>.bin` with an optional `.NN` or `.manifest`
+   - `Scans\RtSigs(\...)?`
+   - `HKLM\SOFTWARE\Microsoft\MpSigStub`
+   - `TargetingInfo\PersistentDynamicInstalled\DefenderSignature.<arch>`
+   - `WINEVT\Publishers\{0a002690-...}`, that GUID only (PowerShell's own publisher stays a leftover)
+   - `Appx\PackageVolumes\<n>\(User)MutablePackagesOnline`
+
+   The M0 null runs already showed the RtSigs and PackageVolumes items as ambient.
+
+   **Checked by recomputing.** Every gate4 app truth was recomputed (18 runs: rigtool truth and `prestate` with the
+   archived ambient sets, exactly as collect does). With the old list each truth equals the archived one. With the new
+   list:
+   - The only label changes are 137 Defender/AppX items, all from leftover to ambient. No item was added or removed.
+   - temurin's truth has 0 leftovers.
+   - SANITY: run-only goes to 0 for 7zip, node, vcredist, powershell and temurin, with 0 relabelled.
+   - Every frozen-truth item the new rules match was already ambient (108 items).
+2. **Prevention in the guest.** Phase `defender-idle` runs in `run-app.ps1` and `null-run.ps1`, after `edge-pause`,
+   pre-apps and plants, and right before `arp0` / `lists 0` / `snap 0`. It calls `riglib.ps1` `Wait-DefenderIdle`:
+   - It runs `MpCmdRun.exe -SignatureUpdate` once. The rig waits at most 300 s, then kills it. The output is not
+     redirected.
+   - It then polls every 5 s until Defender's state has not changed for 60 s, giving up after 300 s (`bounded`). The
+     state is the versions, the folder names under `Definition Updates` and the names and sizes of `Scans\mpcache-*`.
+   - `Get-DefenderVersions` reads `MSFT_MpComputerStatus`, the class `Get-MpComputerStatus` reads, with a 30 s CIM
+     timeout. If that fails it reads the `Signature Updates` registry key instead.
+   - The phase never throws and never blocks a run. If the guest has no network, MpCmdRun fails or times out and
+     `run.json` `defender.idle` records it in `trigger.exit`, `timed_out` and `error`, together with `stable`,
+     `bounded`, `updated`, `changes` and `waited_sec`.
+   - The versions (`av_signature`, `as_signature`, `engine`, `platform`, plus `source` and `error`) are recorded:
+     `snap0` is read in the `snap0` phase before the capture, `snap2` in the `snap2` phase after the capture.
+3. **Detection.** `truth/m1b.sh` copies `run.json` `defender` into `runs/<run>.json` in runsum (`defender_record`).
+   RUN (`defender_invalid`) calls a run **INVALID** in two cases:
+   - It has no antivirus signature version at snap 0 and snap 2. Every run from before this fix is in this case.
+   - Its signature, engine or platform version differs between the two snaps. A version is compared only when both
+     ends have it, so a registry fallback at one end is not an update.
+
+   The rule applies to app, trap and null runs alike. The note says `INVALID RUN: Defender update between snap 0 and
+   snap 2: ...` or `no Defender signature version recorded ...`.
+
+   The controls fail RUN: `run_defender_updated`, `run_defender_engine_updated`, `run_defender_platform_updated`,
+   `run_defender_missing`, `run_defender_snap2_missing`, `run_defender_no_signature`, `trap_defender_updated`,
+   `null_defender_updated` and `null_defender_missing`. `run_defender_registry_fallback` still passes, and
+   `runsum_target_against_lists0` checks the copy. rig-selftest checks the phase order in both jobs and runs
+   `Wait-DefenderIdle` against fakes: no network, an update during the wait, never stable, MpCmdRun timed out, and a
+   failure inside. The host's Defender is never called.
+
+   `m1b.sh freeze` (`run_whole`) does not check the versions. The frozen truths stay as they are, and a freeze
+   run's one-run churn is excluded anyway.

@@ -802,6 +802,121 @@ function Suspend-EdgeUpdate {
     $r
 }
 
+# ------------------------------------------------------------------- Defender signature idle (RIG.md 12.7)
+#
+# The rig snapshots ship Defender definitions 1.463.242.0, and every boot pulls newer ones. In the M1b gate4 campaign
+# (2026-11-18) a signature / engine update landed ~20 s after snap 0 in 4 of 8 rig-base app runs: its 18-23 files and
+# keys (Definition Updates\{guid}, Scans\mpcache-*, MpSigStub, DefenderSignature.amd64|Version, the antimalware engine's
+# event publisher, AppX PackageVolumes flags) became truth noise. Ruling 2026-11-18: proper fix and full rerun. So every
+# app and null run, before arp0 / lists 0 / snap 0, triggers one signature update itself (MpCmdRun -SignatureUpdate,
+# bounded) and then waits until Defender's state is unchanged for $StableSec (bounded too); the versions are recorded at
+# snap 0 and snap 2 (run.json `defender`), and truth/m1b.sh calls a run whose versions differ INVALID. Fail-safe: these
+# functions never throw and never wait unbounded (no network: MpCmdRun fails or times out, the record says so).
+
+$RigDefenderData = 'C:\ProgramData\Microsoft\Windows Defender'
+
+# Defender's signature, engine and platform versions: MSFT_MpComputerStatus (what Get-MpComputerStatus reads; CIM call
+# bounded to 30 s), else the Signature Updates registry key. Never throws; `error` says what failed.
+function Get-DefenderVersions {
+    $v = [ordered]@{ source = $null; av_signature = $null; as_signature = $null; nis_signature = $null; engine = $null; platform = $null
+        av_signature_updated = $null; at = (NowIso); error = $null }
+    try {
+        $c = Get-CimInstance -Namespace 'root/Microsoft/Windows/Defender' -ClassName 'MSFT_MpComputerStatus' -OperationTimeoutSec 30 -ErrorAction Stop
+        $v.source = 'MSFT_MpComputerStatus'
+        $v.av_signature = "$($c.AntivirusSignatureVersion)"; $v.as_signature = "$($c.AntispywareSignatureVersion)"
+        $v.nis_signature = "$($c.NISSignatureVersion)"; $v.engine = "$($c.AMEngineVersion)"; $v.platform = "$($c.AMProductVersion)"
+        if ($c.AntivirusSignatureLastUpdated) { $v.av_signature_updated = ([datetime]$c.AntivirusSignatureLastUpdated).ToString('o') }
+    } catch {
+        $v.error = "MSFT_MpComputerStatus: $($_.Exception.Message)"
+        try {
+            $k = Open-RegKey 'HKLM\SOFTWARE\Microsoft\Windows Defender\Signature Updates'
+            if ($k) {
+                try {
+                    $v.source = 'registry'
+                    $v.av_signature = "$($k.GetValue('AVSignatureVersion'))"; $v.as_signature = "$($k.GetValue('ASSignatureVersion'))"
+                    $v.nis_signature = "$($k.GetValue('NISSignatureVersion'))"; $v.engine = "$($k.GetValue('EngineVersion'))"
+                } finally { $k.Dispose() }
+            }
+            $loc = "$(Get-RegRaw 'HKLM\SOFTWARE\Microsoft\Windows Defender' 'InstallLocation')"
+            if ($loc -match '\\Platform\\([0-9][0-9.\-]*)\\?$') { $v.platform = $Matches[1] }
+        } catch { $v.error += "; registry: $($_.Exception.Message)" }
+    }
+    foreach ($n in 'av_signature', 'as_signature', 'nis_signature', 'engine', 'platform') { if (-not "$($v[$n])".Trim()) { $v[$n] = $null } }
+    $v
+}
+
+# What a signature / engine update changes: the versions, the Definition Updates folders (names) and the engine scan
+# cache (Scans\mpcache-*: names and sizes). Never throws (a listing error is part of the text).
+function Get-DefenderFingerprint {
+    $v = Get-DefenderVersions
+    $parts = New-Object System.Collections.ArrayList
+    [void]$parts.Add("v $($v.av_signature) $($v.as_signature) $($v.engine) $($v.platform)")
+    try {
+        foreach ($d in @(Get-ChildItem -LiteralPath (Join-Path $RigDefenderData 'Definition Updates') -Force -ErrorAction Stop)) { [void]$parts.Add("d $($d.Name)") }
+    } catch { [void]$parts.Add("d! $($_.Exception.Message)") }
+    try {
+        foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $RigDefenderData 'Scans') -Filter 'mpcache-*' -File -Force -ErrorAction Stop)) { [void]$parts.Add("m $($f.Name) $($f.Length)") }
+    } catch { [void]$parts.Add("m! $($_.Exception.Message)") }
+    [pscustomobject]@{ versions = $v; text = (@($parts) | Sort-Object) -join "`n" }
+}
+
+# MpCmdRun.exe -SignatureUpdate, waited for at most $TimeoutSec (killed after). No output redirection: a child of
+# MpCmdRun that inherited the pipes could keep a stream read open past the kill. Never throws.
+function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) {
+    $r = [ordered]@{ exe = $null; args = '-SignatureUpdate'; exit = $null; timed_out = $false; sec = $null; error = $null }
+    $t0 = Get-Date
+    try {
+        $cands = @(Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe')
+        $cands += @(Get-ChildItem -LiteralPath (Join-Path $RigDefenderData 'Platform') -Directory -ErrorAction SilentlyContinue |
+            Sort-Object { try { [version]($_.Name -replace '-.*$', '') } catch { [version]'0.0' } } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'MpCmdRun.exe' })
+        $r.exe = @($cands | Where-Object { Test-Path -LiteralPath $_ }) | Select-Object -First 1
+        if (-not $r.exe) { throw 'MpCmdRun.exe not found' }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $r.exe; $psi.Arguments = $r.args; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        if ($p.WaitForExit($TimeoutSec * 1000)) { $r.exit = $p.ExitCode }
+        else { $r.timed_out = $true; try { $p.Kill() } catch { } }
+    } catch { $r.error = $_.Exception.Message }
+    $r.sec = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+    $r
+}
+
+# Before arp0 / lists 0 / snap 0 of every app and null run: one signature update (bounded by $UpdateTimeoutSec), then
+# polls Get-DefenderFingerprint every $PollSec until it has not changed for $StableSec, or $MaxStableWaitSec passed
+# (`bounded`). Never throws; returns the record for run.json `defender.idle`.
+function Wait-DefenderIdle([int]$UpdateTimeoutSec = 300, [int]$StableSec = 60, [int]$MaxStableWaitSec = 300, [int]$PollSec = 5) {
+    $t0 = Get-Date
+    $rec = [ordered]@{ method = 'MpCmdRun -SignatureUpdate (bounded), then versions + Definition Updates + Scans\mpcache-* unchanged for stable_sec (bounded)'
+        start = (NowIso); end = $null; before = $null; trigger = $null; changes = 0; stable = $false; stable_sec = $StableSec
+        bounded = $false; max_stable_wait_sec = $MaxStableWaitSec; after = $null; updated = $null; waited_sec = $null; error = $null }
+    try {
+        $rec.before = Get-DefenderVersions
+        $rec.trigger = Invoke-DefenderSignatureUpdate -TimeoutSec $UpdateTimeoutSec
+        $fp = Get-DefenderFingerprint
+        $t1 = Get-Date; $since = $t1
+        while ($true) {
+            if (((Get-Date) - $since).TotalSeconds -ge $StableSec) { $rec.stable = $true; break }
+            if (((Get-Date) - $t1).TotalSeconds -ge $MaxStableWaitSec) { $rec.bounded = $true; break }
+            Start-Sleep -Milliseconds ([int]($PollSec * 1000))
+            $n = Get-DefenderFingerprint
+            if ($n.text -ne $fp.text) { $rec.changes++; $since = Get-Date }
+            $fp = $n
+        }
+        $rec.after = $fp.versions
+        $rec.updated = (@('av_signature', 'as_signature', 'engine', 'platform') | Where-Object { "$($rec.before[$_])" -ne "$($rec.after[$_])" }).Count -gt 0
+    } catch { $rec.error = $_.Exception.Message }
+    $rec.end = NowIso
+    $rec.waited_sec = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+    $tg = $rec.trigger
+    Log ("defender idle: signatures {0} -> {1} (engine {2} -> {3}); MpCmdRun exit {4}{5}{6} in {7} s; {8} after {9} change(s); waited {10} s{11}" -f
+        $rec.before.av_signature, $rec.after.av_signature, $rec.before.engine, $rec.after.engine, $tg.exit,
+        $(if ($tg.timed_out) { ' TIMED OUT' }), $(if ($tg.error) { ' !! ' + $tg.error }), $tg.sec,
+        $(if ($rec.stable) { "stable $StableSec s" } else { "NOT stable (bound $MaxStableWaitSec s)" }), $rec.changes, $rec.waited_sec,
+        $(if ($rec.error) { ' !! ' + $rec.error }))
+    $rec
+}
+
 # ---------------------------------------------------------------------------------------------- lists
 
 function Get-AppxRecords {

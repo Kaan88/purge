@@ -21,6 +21,7 @@ $S = [ordered]@{
     schema = 'purge.rig.run/1'; id = $null; run = $Run; kind = 'null'; computer = $env:COMPUTERNAME; sid = $RigUserSid; user_sid = $RigUserSid
     started = (NowIso); finished = $null; waits = $Waits
     install = $null; launch = [ordered]@{ done = $false }; uninstall = $null
+    defender = [ordered]@{ idle = $null; snap0 = $null; snap2 = $null }
     entries_created = @(); entries_left = @()
     phases = New-Object System.Collections.ArrayList
 }
@@ -31,9 +32,14 @@ $e = @{ e0 = $null }
 # Edge/WebView2 updater pause, exactly as in run-app.ps1 (riglib Suspend-EdgeUpdate, RIG.md §4): before anything is
 # captured, so the null runs' ambient set and the app runs share the same paused state.
 Phase 'edge-pause' { $S.edge_pause = Suspend-EdgeUpdate } $S
+# Defender signature idle, exactly as in run-app.ps1 (riglib Wait-DefenderIdle, RIG.md section 12.7, ruling
+# 2026-11-18): one signature update triggered and waited for, then Defender's state stable, right before arp0 / lists 0 /
+# snap 0; the versions are recorded at snap 0 and snap 2 (run.json `defender`; truth/m1b.sh: a null run whose versions
+# differ is INVALID). Never blocks the run.
+Phase 'defender-idle' { $S.defender.idle = Wait-DefenderIdle } $S
 Phase 'arp0' { $e.e0 = @(UninstallEntries) } $S
 Phase 'lists0' { Lists $Run 0 } $S
-Phase 'snap0' { Snap $Run 0 } $S
+Phase 'snap0' { $S.defender.snap0 = Get-DefenderVersions; Snap $Run 0 } $S
 Save-Run
 Phase 'wait-install' { Log "idle $($Waits.install) s"; Start-Sleep -Seconds $Waits.install } $S
 Phase 'wait-launch' { Log "idle $($Waits.launch) s"; Start-Sleep -Seconds $Waits.launch } $S
@@ -42,7 +48,7 @@ Phase 'snap1' { Snap $Run 1 } $S
 Save-Run
 Phase 'wait-uninstall' { Log "idle $($Waits.uninstall) s"; Start-Sleep -Seconds $Waits.uninstall } $S
 Phase 'lists2' { Lists $Run 2 } $S
-Phase 'snap2' { Snap $Run 2 } $S
+Phase 'snap2' { Snap $Run 2; $S.defender.snap2 = Get-DefenderVersions } $S
 Phase 'edge-check' {
     if (-not $S.edge_pause) { throw 'no edge_pause record' }
     $S.edge_pause.versions_end = Get-EdgeVersions

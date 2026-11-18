@@ -568,6 +568,62 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
     Check 'riglib: Suspend-EdgeUpdate disables both services and the MicrosoftEdgeUpdate* tasks' ($rl -match "RigEdgeServices = @\('edgeupdate', 'edgeupdatem'\)" -and $rl -match 'Set-Service -Name \$n -StartupType Disabled' -and $rl -match 'Disable-ScheduledTask')
 }
 
+# ------------------------------------- Defender signature idle (RIG.md 12.7, ruling 2026-11-18): order in both jobs
+& {
+    foreach ($f in 'run-app.ps1', 'null-run.ps1') {
+        $t = [IO.File]::ReadAllText((Join-Path $Guest $f))
+        $p = $t.IndexOf("Phase 'edge-pause'"); $d = $t.IndexOf("Phase 'defender-idle' { `$S.defender.idle = Wait-DefenderIdle } `$S"); $a = $t.IndexOf("Phase 'arp0'")
+        $l = $t.IndexOf("Phase 'lists0'")
+        Check "${f}: defender-idle after edge-pause, right before arp0 / lists0" ($p -gt 0 -and $d -gt $p -and $d -lt $a -and $d -lt $l) "pause=$p defender=$d arp0=$a lists0=$l"
+        Check "${f}: Defender versions read before snap 0 and after snap 2" ($t.Contains("Phase 'snap0' { `$S.defender.snap0 = Get-DefenderVersions; Snap `$Run 0 } `$S") -and $t.Contains("Phase 'snap2' { Snap `$Run 2; `$S.defender.snap2 = Get-DefenderVersions } `$S") -and $t.Contains('defender = [ordered]@{ idle = $null; snap0 = $null; snap2 = $null }'))
+    }
+}
+
+# ---------------------- riglib: Wait-DefenderIdle is bounded and never throws (no host Defender call: all faked)
+& {
+    . (Join-Path $Guest 'riglib.ps1')
+    $ErrorActionPreference = 'Stop'
+    function Log([string]$Message) { }
+    $V = { param($sig) [ordered]@{ source = 'fake'; av_signature = $sig; as_signature = $sig; engine = '1.1.1.1'; platform = '4.18.1.1'; error = $null } }
+    # no network: MpCmdRun fails, nothing changes -> stable, not updated, the exit code recorded
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; exit = 2; timed_out = $false; sec = 0.1; error = $null } }
+    function Get-DefenderVersions { & $V '1.463.242.0' }
+    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.242.0'); text = 'same' } }
+    $t0 = Get-Date
+    $r = Wait-DefenderIdle -StableSec 1 -MaxStableWaitSec 10 -PollSec 0
+    Check 'Wait-DefenderIdle, no network: stable, not updated, MpCmdRun exit recorded, no error' ($r.stable -eq $true -and -not $r.bounded -and $r.updated -eq $false -and $r.trigger.exit -eq 2 -and -not $r.error -and ((Get-Date) - $t0).TotalSeconds -lt 10) ($r | ConvertTo-Json -Depth 4 -Compress)
+    # an update lands during the wait: the versions move once, then hold -> stable, updated, the change counted
+    $script:n = 0
+    function Get-DefenderFingerprint { $script:n++; $s = $(if ($script:n -le 2) { '1.463.242.0' } else { '1.465.10.0' }); [pscustomobject]@{ versions = (& $V $s); text = $s } }
+    $r = Wait-DefenderIdle -StableSec 1 -MaxStableWaitSec 10 -PollSec 0
+    Check 'Wait-DefenderIdle, update during the wait: stable afterwards, updated, the change counted' ($r.stable -eq $true -and $r.updated -eq $true -and $r.changes -ge 1 -and $r.after.av_signature -eq '1.465.10.0') ($r | ConvertTo-Json -Depth 4 -Compress)
+    # never settles: bounded, returns (no hang, no throw), not stable
+    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.242.0'); text = [guid]::NewGuid().ToString() } }
+    $t0 = Get-Date
+    $r = Wait-DefenderIdle -StableSec 5 -MaxStableWaitSec 1 -PollSec 0
+    Check 'Wait-DefenderIdle, never settles: bounded, not stable, returns within its bound' ($r.bounded -eq $true -and $r.stable -eq $false -and ((Get-Date) - $t0).TotalSeconds -lt 5) ($r | ConvertTo-Json -Depth 4 -Compress)
+    # MpCmdRun hangs: its own timeout (faked as timed out) is recorded, the wait still ends
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; exit = $null; timed_out = $true; sec = $TimeoutSec; error = $null } }
+    function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.242.0'); text = 'same' } }
+    $r = Wait-DefenderIdle -UpdateTimeoutSec 7 -StableSec 1 -MaxStableWaitSec 10 -PollSec 0
+    Check 'Wait-DefenderIdle, MpCmdRun timed out: recorded, the wait still ends stable' ($r.trigger.timed_out -eq $true -and $r.trigger.sec -eq 7 -and $r.stable -eq $true) ($r | ConvertTo-Json -Depth 4 -Compress)
+    # anything inside throws: the record carries the error, the function does not throw
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { throw 'simulated failure' }
+    $threw = $false
+    try { $r = Wait-DefenderIdle -StableSec 1 -MaxStableWaitSec 1 -PollSec 0 } catch { $threw = $true }
+    Check 'Wait-DefenderIdle, a failure inside: no throw, error recorded' (-not $threw -and "$($r.error)" -match 'simulated failure') "threw=$threw error=$($r.error)"
+}
+& {
+    . (Join-Path $Guest 'riglib.ps1')
+    $ErrorActionPreference = 'Stop'
+    # Defender absent or its CIM class unreachable, and the registry fallback failing too: no throw, both errors recorded
+    function Get-CimInstance { throw 'Invalid namespace' }
+    function Open-RegKey([string]$Canon) { throw 'access denied' }
+    $threw = $false
+    try { $v = Get-DefenderVersions } catch { $threw = $true }
+    Check 'Get-DefenderVersions, no Defender: no throw, no version, both errors recorded' (-not $threw -and $null -eq $v.av_signature -and "$($v.error)" -match 'Invalid namespace' -and "$($v.error)" -match 'access denied') "threw=$threw error=$($v.error)"
+}
+
 # ------------------------------------------------------------------------- riglib: engine helpers
 & {
     . (Join-Path $Guest 'riglib.ps1')
@@ -661,6 +717,9 @@ $script:FakeNames = @{ npp = 'Notepad++ (64-bit x64)'; firefox = 'Mozilla Firefo
 # (apps.ps1 plant_pre / plant_post) are fakes that only record an event (and one planted item each).
 function Get-EdgeVersions { [ordered]@{ 'fake-edge' = 'Microsoft Edge 1.0' } }
 function Suspend-EdgeUpdate { Ev 'edge-pause'; [ordered]@{ method = 'fake'; versions_before = (Get-EdgeVersions); versions_after = (Get-EdgeVersions) } }
+# Never trigger a signature update of the host's Defender: the idle wait and the version reads are fakes too.
+function Get-DefenderVersions { [ordered]@{ source = 'fake'; av_signature = '1.463.300.0'; as_signature = '1.463.300.0'; engine = '1.1.25100.9'; platform = '4.18.25100.9'; error = $null } }
+function Wait-DefenderIdle { Ev 'defender-idle'; [ordered]@{ method = 'fake'; stable = $true; bounded = $false; before = (Get-DefenderVersions); after = (Get-DefenderVersions) } }
 foreach ($pn in @($Apps | ForEach-Object { $_.plant_pre; $_.plant_post } | Where-Object { $_ } | Select-Object -Unique)) {
     Set-Item -Path "function:script:$pn" -Value ([scriptblock]::Create("param(`$Ctx) Ev ('plant:' + `$Ctx.Phase + ':$pn'); Add-Planted `$Ctx 'file' 'P:C:\fake\$pn.txt' 'fake'"))
 }
@@ -753,9 +812,9 @@ function Files($Dir) { @(Get-ChildItem -LiteralPath $Dir -File | ForEach-Object 
 # The capture / install / engine events only, in order.
 function Steps($R) { @($R.events | Where-Object { $_ -match '^(lists|snap|start|medium|engine):' } | ForEach-Object { ($_ -split ' ')[0] }) -join ' ' }
 
-$M0Phases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1 snap1 uninstall lists2 snap2 edge-check entries'
+$M0Phases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect launch lists1 snap1 uninstall lists2 snap2 edge-check entries'
 # Engine inventory right after the lists of the same point (RIG.md §4a capture order).
-$EnginePhases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1 engine-inventory-1 snap1 engine-harvest uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan'
+$EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect launch lists1 engine-inventory-1 snap1 engine-harvest uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan'
 
 & {
     $ErrorActionPreference = 'Stop'
@@ -783,6 +842,7 @@ $EnginePhases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1
     Check 'run-app engine: outputs under the prefixed run name only' ((Files $r.dir) -eq 'engine-run.json,fp.json,inv-1.json,inv-2.json,lists-r0-npp-0.json,lists-r0-npp-1.json,lists-r0-npp-2.json,plan-purge.json,plan-purge.scan.json,run.json,run.log,snap-r0-npp-0.tsv.gz,snap-r0-npp-1.tsv.gz,snap-r0-npp-2.tsv.gz' -and -not (Test-Path (Join-Path $r.outRoot 'npp'))) (Files $r.dir)
     Check 'run-app engine: no extra checks without -Extra' (-not ($r.run.PSObject.Properties.Name -contains 'extra') -and -not ($r.engine -match '--mode external')) ($r.engine -join ' | ')
     Check 'run-app engine: run.json names run r0-npp of app npp' ($r.run.run -eq 'r0-npp' -and $r.run.id -eq 'npp')
+    Check 'run-app engine: Defender idle before the captures, versions recorded at snap 0 and snap 2' ((@($r.events | Where-Object { $_ -match '^(defender-idle|lists:0|snap:0)$' }) -join ' ') -eq 'defender-idle lists:0 snap:0' -and $r.run.defender.idle.stable -eq $true -and $r.run.defender.snap0.av_signature -eq '1.463.300.0' -and $r.run.defender.snap2.av_signature -eq '1.463.300.0') (($r.events -join ' | ') + ' ' + ($r.run.defender | ConvertTo-Json -Depth 4 -Compress))
     Check 'run-app engine: program_id resolved from inv-1.json by key path' ($r.run.engine.program_id -eq 'HKLM|64|Fake-npp') "$($r.run.engine.program_id)"
     Check 'run-app engine: harvest/uninstall/scan command lines' (
         ($r.engine -contains ('engine:harvest "HKLM|64|Fake-npp" -o ' + (Join-Path $r.dir 'fp.json'))) -and
@@ -818,7 +878,7 @@ $EnginePhases = 'edge-pause setup arp0 lists0 snap0 install detect launch lists1
 
     # x0 (RIG.md §4b): plants before snap 0 and after the launch, live scan and repeat scan.
     $r = Invoke-FakeRunApp 'x0-npp-userfiles' 'npp-userfiles' 'x0t-npp-userfiles' -EngineMode -Extra
-    $x0Phases = 'edge-pause setup plant-pre arp0 lists0 snap0 install detect launch plant-post lists1 engine-inventory-1 snap1 engine-harvest engine-scan-live uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan engine-scan-repeat'
+    $x0Phases = 'edge-pause setup plant-pre defender-idle arp0 lists0 snap0 install detect launch plant-post lists1 engine-inventory-1 snap1 engine-harvest engine-scan-live uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan engine-scan-repeat'
     Check 'run-app x0 npp-userfiles: exit 0, plant and extra-check phases in order' ($r.code -eq 0 -and ($r.phases -join ' ') -eq $x0Phases) "exit $($r.code); $($r.phases -join ' ')`n$($r.out)"
     $ev = @($r.events | Where-Object { $_ -match '^(lists:|snap:|plant:|medium:)' }) -join ' '
     Check 'run-app x0 npp-userfiles: plant-pre before lists 0, plant-post after the launch and before lists 1' ($ev -eq 'plant:plant-pre:Plant-NppPortable lists:0 snap:0 medium:PurgeRigLaunch:app.exe plant:plant-post:Plant-NppUserFiles lists:1 snap:1 lists:2 snap:2') $ev

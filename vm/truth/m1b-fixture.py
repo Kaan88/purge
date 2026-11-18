@@ -200,6 +200,18 @@ def planted_doc(traps):
             'updated': '2026-11-17T10:30:00+01:00', 'cases': cases}
 
 
+# The Defender record runsum keeps of run.json `defender` (ruling 2026-11-18, RIG.md section 12.7): versions at snap 0
+# and snap 2 equal, the idle wait stable.
+DEF_V = {'av_signature': '1.465.100.0', 'as_signature': '1.465.100.0', 'engine': '1.1.25100.9', 'platform': '4.18.25100.9',
+         'source': 'MSFT_MpComputerStatus', 'error': None}
+
+
+def defender_doc():
+    return {'snap0': dict(DEF_V), 'snap2': dict(DEF_V),
+            'idle': {'stable': True, 'bounded': False, 'updated': True, 'changes': 1, 'waited_sec': 75.2, 'error': None,
+                     'trigger_exit': 0, 'trigger_timed_out': False, 'trigger_error': None}}
+
+
 def run_doc(run, phases, inputs):
     sha = hashlib.sha256(('run.json of ' + run).encode()).hexdigest()
     key = f'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Fixture-{run}'
@@ -209,7 +221,7 @@ def run_doc(run, phases, inputs):
                                                    'entries_created': [key], 'in_lists0': False, 'main_created': True,
                                                    'main_is_pre': False, 'pre_keys': [NODE_KEY] if 'traps' in run else []},
             'run_json': {'run': run, 'started': '2026-11-17T09:00:00+01:00', 'finished': '2026-11-17T09:40:00+01:00',
-                         'phases': [{'name': p, 'ok': True, 'error': None} for p in phases]},
+                         'phases': [{'name': p, 'ok': True, 'error': None} for p in phases], 'defender': defender_doc()},
             'build': None if inputs is None else {
                 'schema': 'purge.rig.m1b-build/1', 'run': run, 'run_json_sha256': sha, 'engine': 'purge-engine.exe',
                 'engine_sha256': ENGINE, 'engine_sha256_after': ENGINE, 'commit': COMMIT, 'source_dirty': False,
@@ -251,9 +263,9 @@ def frozen_truth(a):
     return {'schema': 'fixture', 'id': a, 'items': items}
 
 
-APP_PHASES = ['setup', 'install', 'launch', 'lists1', 'engine-inventory-1', 'snap1', 'msi-tables-1', 'engine-harvest',
+APP_PHASES = ['setup', 'defender-idle', 'install', 'launch', 'lists1', 'engine-inventory-1', 'snap1', 'msi-tables-1', 'engine-harvest',
               'uninstall', 'lists2', 'engine-inventory-2', 'snap2', 'msi-tables-2', 'edge-check', 'entries', 'engine-scan']
-TRAP_PHASES = ['setup', 'pre-node', 'install', 'launch', 'm1b-traps-pre', 'lists1', 'snap1', 'msi-tables-1', 'engine-harvest',
+TRAP_PHASES = ['setup', 'pre-node', 'defender-idle', 'install', 'launch', 'm1b-traps-pre', 'lists1', 'snap1', 'msi-tables-1', 'engine-harvest',
                'm1b-traps-between', 'uninstall', 'm1b-traps-post', 'lists2', 'snap2', 'msi-tables-2', 'engine-scan']
 
 
@@ -330,7 +342,7 @@ def write(d, here):
     for run in TRAP_RUNS:
         wj(os.path.join(d, 'runs', f'{run}.json'), run_doc(run, TRAP_PHASES, inputs))
     for run in NULL_RUNS:
-        wj(os.path.join(d, 'runs', f'{run}.json'), run_doc(run, ['setup', 'snap0', 'wait', 'snap1', 'snap2'], None))
+        wj(os.path.join(d, 'runs', f'{run}.json'), run_doc(run, ['setup', 'defender-idle', 'snap0', 'wait', 'snap1', 'snap2'], None))
     # budgets (G7)
     runs = []
     os.makedirs(os.path.join(d, 'budgets'), exist_ok=True)
@@ -515,6 +527,17 @@ def target(run, **kw):
     return lambda d: edit(d, f'runs/{run}.json', lambda doc: doc['target'].update(**kw))
 
 
+def defender(run, end, **kw):
+    """Changes run.json `defender` <end> (snap0, snap2) of a run record; with no keyword, drops that end's record."""
+    def fn(doc):
+        dd = doc['run_json']['defender']
+        if kw:
+            dd[end].update(**kw)
+        else:
+            dd[end] = None
+    return lambda d: edit(d, f'runs/{run}.json', fn)
+
+
 def run_truth(app, fn):
     return lambda d: edit(d, f'truth-clean-{app}.json', lambda doc: doc.update(items=fn(doc['items'])))
 
@@ -573,7 +596,7 @@ MUTATIONS = {
     'empty_plan': lambda d: edit(d, 'score-clean.json', lambda doc: app_tool(doc, 'node').update(items=[], offered_n=0, precision_safe=None)),
     'empty_plan_dirty': lambda d: edit(d, 'score-dirty.json', lambda doc: app_tool(doc, 'temurin').update(items=[], offered_n=0, precision_safe=None)),
     'score_without_counts': lambda d: edit(d, 'score-cp.json', lambda doc: app_tool(doc, 'python').pop('truth_n')),
-    'run_phase_failed': lambda d: edit(d, 'runs/m1b-traps-7zip.json', lambda doc: doc['run_json']['phases'][4].update(ok=False, error='a case failed')),
+    'run_phase_failed': lambda d: edit(d, 'runs/m1b-traps-7zip.json', lambda doc: next(p for p in doc['run_json']['phases'] if p['name'] == 'm1b-traps-pre').update(ok=False, error='a case failed')),
     'run_unfinished': lambda d: edit(d, 'runs/m1bcp-python.json', lambda doc: doc['run_json'].update(finished=None)),
     'run_json_missing': lambda d: os.remove(os.path.join(d, 'runs', 'm1bd-temurin.json')),
     'unbound_engine': build('m1bcp-7zip', lambda b: b.update(engine_sha256='a' * 64, engine_sha256_after='a' * 64)),
@@ -618,7 +641,7 @@ MUTATIONS = {
     'sanity_frozen_only': lambda d: edit(d, 'truth-clean-7zip.json', lambda doc: doc['items'].pop(0)),
     # the null runs (R4b S2 rest)
     'nulls_too_few': lambda d: edit(d, 'manifest.json', lambda doc: doc['nulls'].update(dirty=['m1bd-null1'])),
-    'null_phase_failed': lambda d: edit(d, 'runs/m1bcp-null2.json', lambda doc: doc['run_json']['phases'][2].update(ok=False)),
+    'null_phase_failed': lambda d: edit(d, 'runs/m1bcp-null2.json', lambda doc: next(p for p in doc['run_json']['phases'] if p['name'] == 'snap0').update(ok=False)),
     # ruling 2026-11-18 (1): K1 / K8 count danger offered; a Blocked (deny-listed, report-only) danger item is kept
     'k1_blocked_denylisted': score_danger('clean', '7zip', 'Blocked'),
     'k1_danger_likely': score_danger('clean', 'python', 'Likely'),
@@ -634,6 +657,19 @@ MUTATIONS = {
     'run_no_entry_created': target('m1b-node', entries_created=[]),
     'run_lists0_unreadable': target('m1bcp-vcredist', in_lists0=None),
     'run_target_unknown': lambda d: edit(d, 'runs/m1bd-traps-7zip.json', lambda doc: doc.update(target=None)),
+    # ruling 2026-11-18 (Defender noise, RIG.md section 12.7): a Defender update between snap 0 and snap 2, or no
+    # recorded versions, makes an app, trap or null run INVALID
+    'run_defender_updated': defender('m1b-temurin', 'snap2', av_signature='1.465.120.0', as_signature='1.465.120.0'),
+    'run_defender_engine_updated': defender('m1bd-7zip', 'snap2', engine='1.1.25110.1'),
+    'run_defender_platform_updated': defender('m1bcp-vcredist', 'snap2', platform='4.18.25110.1'),
+    'run_defender_missing': lambda d: edit(d, 'runs/m1bcp-python.json', lambda doc: doc['run_json'].pop('defender')),
+    'run_defender_snap2_missing': defender('m1b-node', 'snap2'),
+    'run_defender_no_signature': defender('m1bd-python', 'snap0', av_signature=None, source=None, error='Invalid namespace'),
+    'trap_defender_updated': defender('m1bd-traps-7zip', 'snap2', av_signature='1.465.120.0'),
+    'null_defender_updated': defender('m1b-null2', 'snap2', av_signature='1.465.120.0'),
+    'null_defender_missing': lambda d: edit(d, 'runs/m1bd-null1.json', lambda doc: doc['run_json'].update(defender=None)),
+    # positive: the registry fallback at one end (no platform version there), the same signatures: not an update
+    'run_defender_registry_fallback': defender('m1b-python', 'snap2', platform=None, source='registry', error='MSFT_MpComputerStatus: timeout'),
     # trap runs judge TrapA only (coordinator ruling 2026-11-18)
     'trap_main_is_pre': target('m1bd-traps-7zip', main_is_pre=True),
     'trap_main_not_created': target('m1bcp-traps-7zip', main_created=False),
@@ -806,8 +842,15 @@ def targetruns(d):
            'name': 'Eclipse Temurin JDK with Hotspot 21.0.13+9 (x64)', 'version': '21.0.13.9', 'msi': '{0A1B2C3D-1111-2222-3333-444455556666}'}
     for run, main, created in (('m1bd-node', node, []), ('m1bd-temurin', tem, [tem])):
         rd = os.path.join(d, run)
-        wj(os.path.join(rd, 'run.json'), {'schema': 'purge.rig.run/1', 'run': run, 'finished': 'x', 'main': main,
-                                          'entries_created': created, 'phases': [{'name': 'install', 'ok': True}]})
+        rjd = {'schema': 'purge.rig.run/1', 'run': run, 'finished': 'x', 'main': main,
+               'entries_created': created, 'phases': [{'name': 'install', 'ok': True}]}
+        if run == 'm1bd-temurin':   # the guest's record (riglib Wait-DefenderIdle, Get-DefenderVersions)
+            v = dict(DEF_V, nis_signature='1.465.100.0', av_signature_updated='2026-11-18T09:00:00Z', at='2026-11-18T09:01:00Z')
+            rjd['defender'] = {'idle': {'method': 'x', 'stable': True, 'bounded': False, 'updated': True, 'changes': 1,
+                                        'waited_sec': 75.2, 'error': None, 'before': dict(v, av_signature='1.463.242.0'), 'after': v,
+                                        'trigger': {'exe': 'MpCmdRun.exe', 'exit': 0, 'timed_out': False, 'sec': 14.1, 'error': None}},
+                               'snap0': v, 'snap2': dict(v, av_signature='1.465.120.0')}
+        wj(os.path.join(rd, 'run.json'), rjd)
         # lists-0 names the node entry under another key casing (a key compare is case-insensitive)
         wj(os.path.join(rd, f'lists-{run}-0.json'), {'uninstall': [dict(node, key=node['key'].upper())]})
     # dirty trap runs (coordinator ruling 2026-11-18): TrapB node is a pre-app, in lists-0 by design; TrapA 7zip is

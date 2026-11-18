@@ -1,6 +1,6 @@
 {
   "id": "_m1b-noise",
-  "note": "M1b noise list (RIG.md section 12.6, ruling 2026-11-17). Hand-written from the m1b-freeze captures of 2026-11-17; mk_labels.py does not generate it. vm/truth/m1b.sh passes it as an extra --labels file to every M1b truth (collect and freeze) and hashes it into each run's label digest. Windows-owned areas whose state changes on Windows' own schedule or belongs to a Windows store: every rule is ambient and anchored under a Windows-owned root (checked by the selftest, which also checks that no rule matches a leftover, user_data or kept_owner item of any frozen truth). Churn is never labelled leftover: what this list misses and only one freeze run shows is excluded from the frozen truth by the freeze rule.",
+  "note": "M1b noise list (RIG.md section 12.6, ruling 2026-11-17). Hand-written from the m1b-freeze captures of 2026-11-17 and (the Defender signature / AppX rules) the m1b-gate4 runs of 2026-11-18 (ruling 2026-11-18: Defender noise, proper fix and full rerun); mk_labels.py does not generate it. vm/truth/m1b.sh passes it as an extra --labels file to every M1b truth (collect and freeze) and hashes it into each run's label digest. Windows-owned areas whose state changes on Windows' own schedule or belongs to a Windows store: every rule is ambient and anchored under a Windows-owned root (checked by the selftest, which also checks that no rule matches a leftover, user_data or kept_owner item of any frozen truth). Churn is never labelled leftover: what this list misses and only one freeze run shows is excluded from the frozen truth by the freeze rule.",
   "rules": [
     {
       "label": "ambient",
@@ -86,6 +86,41 @@
       "label": "ambient",
       "match": "^P:C:\\\\ProgramData\\\\Microsoft\\\\NetFramework\\\\BreadcrumbStore(\\\\.*)?$",
       "why": ".NET servicing breadcrumb store (one empty file per runtime package a .NET app loaded, read by Microsoft Update to service .NET); a Windows-owned store under ProgramData\\Microsoft (deny fs.programdata.microsoft), never a cleaner target."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows Defender\\\\Definition Updates(\\\\.*)?$",
+      "why": "Microsoft Defender signature store: each signature / engine update unpacks into a new Definition Updates\\{guid} folder (gate4 2026-11-18: an update ~20 s after snap 0 in 4 of 8 rig-base runs; ruling 2026-11-18, RIG.md section 12.7). Defender-owned, never an app's."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows Defender\\\\Scans\\\\mpcache-[0-9A-F]+\\.bin(\\.[0-9A-F]{2}|\\.manifest)?$",
+      "why": "Microsoft Defender engine scan cache (mpcache-<hash>.bin, its .NN parts and .manifest), rebuilt by a signature / engine update (ruling 2026-11-18)."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows Defender\\\\Scans\\\\RtSigs(\\\\.*)?$",
+      "why": "Microsoft Defender real-time (dynamic) signature store: RtSigs\\Data\\<sha1> blobs Defender fetches and expires on its own schedule (the M0 null runs already showed them; ruling 2026-11-18)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\MpSigStub(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Microsoft Defender signature-update stub (MpSigStub.exe) run state, e.g. LastStartTime, written at every signature update (ruling 2026-11-18)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Update\\\\TargetingInfo\\\\PersistentDynamicInstalled\\\\DefenderSignature\\.[a-z0-9]+(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Windows Update targeting record of the installed Defender signature package (DefenderSignature.<arch>|Version), bumped by every signature update (ruling 2026-11-18)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\WINEVT\\\\Publishers\\\\\\{0a002690-3839-4e3a-b3b6-96d8df868d99\\}(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Event-log publisher Microsoft-Antimalware-Engine (this exact GUID only), re-registered by a Defender engine update (ruling 2026-11-18). Other publishers stay their app's (PowerShell's {f90714a8-...} is a leftover)."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Appx\\\\PackageVolumes\\\\[0-9]+\\\\(User)?MutablePackagesOnline(\\\\[^|]*)?(\\|.*)?$",
+      "why": "AppX deployment service volume flags (PackageVolumes\\<n>\\MutablePackagesOnline, UserMutablePackagesOnline), recreated when the service brings the volume's mutable package stores online, e.g. during a Defender platform / signature update; the M0 null runs already showed them (ruling 2026-11-18). Windows' own, never a desktop app's."
     }
   ],
   "samples": [
@@ -106,6 +141,17 @@
     "V:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore|SRInitDone",
     "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\MuiCache\\1a",
     "K:HKU\\.DEFAULT\\Software\\Classes\\Local Settings\\MuiCache\\1a",
-    "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.IrisService\\V1\\LU|PCT"
+    "C:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.IrisService\\V1\\LU|PCT",
+    "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Definition Updates\\{CAE1651D-E3C4-408E-B588-CF4B82A59F45}",
+    "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\mpcache-E7D191F47AB763E9FF8F2F496D7D0FBB5F1D8765.bin",
+    "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\mpcache-E7D191F47AB763E9FF8F2F496D7D0FBB5F1D8765.bin.6C",
+    "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\mpcache-DFDFB240B0FC5DC659D731BDFA167FEC0780413D.bin.manifest",
+    "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\6b65befd5bcf19841e6dcdfecc7f90fe54643393",
+    "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs",
+    "C:HKLM\\SOFTWARE\\Microsoft\\MpSigStub|LastStartTime",
+    "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Update\\TargetingInfo\\PersistentDynamicInstalled\\DefenderSignature.amd64|Version",
+    "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{0a002690-3839-4e3a-b3b6-96d8df868d99}",
+    "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageVolumes\\1\\MutablePackagesOnline",
+    "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Appx\\PackageVolumes\\1\\UserMutablePackagesOnline"
   ]
 }

@@ -8,7 +8,7 @@
 #   harvest) and plan-purge-b.json (a second identical post scan); results in run.json `extra`
 # Every phase is wrapped: a failure is recorded in run.json and the remaining captures still run.
 # Phase order (RIG.md §4, §4a, §4b): edge-pause, setup, pre-apps (+ pre-launch, pre-uninstall), plant-pre,
-# arp0/lists0/snap0, install (upgrade_from first), detect, launch, post-apps, plant-post, lists1,
+# defender-idle, arp0/lists0/snap0, install (upgrade_from first), detect, launch, post-apps, plant-post, lists1,
 # [engine-inventory-1], snap1, [engine-harvest, engine-scan-live], uninstall, lists2, [engine-inventory-2], snap2,
 # edge-check, entries, [engine-scan, engine-scan-repeat].
 # M1b options (__M1B__, RIG.md section 12) add msi-tables-1 / msi-tables-2 right after snap1 / snap2 and, with traps,
@@ -63,6 +63,7 @@ $S = [ordered]@{
     uninstall = [ordered]@{ cmd = $null; t0 = $null; t1 = $null; exit = $null; timed_out = $false; entry_gone = $null; killed = @() }
     entries_created = @(); entries_left = @()
     edge_pause = $null
+    defender = [ordered]@{ idle = $null; snap0 = $null; snap2 = $null }
     planted = New-Object System.Collections.ArrayList
     phases = New-Object System.Collections.ArrayList
 }
@@ -421,9 +422,13 @@ foreach ($preId in $PreIds) {
 
 if ($PlantPre) { Phase 'plant-pre' { Invoke-Plant 'plant-pre' $PlantPre } $S; Save-Run }
 
+# Defender signature idle (riglib Wait-DefenderIdle, RIG.md section 12.7, ruling 2026-11-18): one signature update
+# triggered and waited for, then Defender's state stable, right before arp0 / lists 0 / snap 0; the versions are recorded
+# at snap 0 and snap 2 (run.json `defender`; truth/m1b.sh: a run whose versions differ is INVALID). Never blocks a run.
+Phase 'defender-idle' { $S.defender.idle = Wait-DefenderIdle } $S
 Phase 'arp0' { $e.e0 = @(UninstallEntries); Log "ARP entries before: $($e.e0.Count)" } $S
 Phase 'lists0' { Lists $Run 0 } $S
-Phase 'snap0' { Snap $Run 0 } $S
+Phase 'snap0' { $S.defender.snap0 = Get-DefenderVersions; Snap $Run 0 } $S
 Save-Run
 
 # ----------------------------------------------------------------------------------------------- install
@@ -622,7 +627,7 @@ if ($Engine) {
         $null = Invoke-EngineStep -Step 'inventory-2' -Arguments 'inventory --json' -Calls $S.engine.calls -TimeoutSec $EngineMaxSec -StdoutFile $Inv2
     } $S
 }
-Phase 'snap2' { Snap $Run 2 } $S
+Phase 'snap2' { Snap $Run 2; $S.defender.snap2 = Get-DefenderVersions } $S
 if ($M1b -and $M1b.msi_tables) { Phase 'msi-tables-2' { Save-M1bMsiTables 2 } $S }
 # Proof that the Edge pause held (truth/m1a.sh compares versions_before / versions_end).
 Phase 'edge-check' {
