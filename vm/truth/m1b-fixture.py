@@ -150,7 +150,8 @@ def run_doc(run, phases, inputs):
     return {'schema': 'purge.rig.m1b-run/1', 'run': run, 'run_json_sha256': sha,
             # the target ARP entry (ruling 2026-11-18): new in this run; null runs have none
             'target': None if inputs is None else {'main_key': key, 'main_name': 'Fixture ' + run, 'main_msi': None,
-                                                   'entries_created': [key], 'in_lists0': False},
+                                                   'entries_created': [key], 'in_lists0': False, 'main_created': True,
+                                                   'main_is_pre': False, 'pre_keys': [NODE_KEY] if 'traps' in run else []},
             'run_json': {'run': run, 'started': '2026-11-17T09:00:00+01:00', 'finished': '2026-11-17T09:40:00+01:00',
                          'phases': [{'name': p, 'ok': True, 'error': None} for p in phases]},
             'build': None if inputs is None else {
@@ -518,6 +519,10 @@ MUTATIONS = {
     'run_no_entry_created': target('m1b-node', entries_created=[]),
     'run_lists0_unreadable': target('m1bcp-vcredist', in_lists0=None),
     'run_target_unknown': lambda d: edit(d, 'runs/m1bd-traps-7zip.json', lambda doc: doc.update(target=None)),
+    # trap runs judge TrapA only (coordinator ruling 2026-11-18)
+    'trap_main_is_pre': target('m1bd-traps-7zip', main_is_pre=True),
+    'trap_main_not_created': target('m1bcp-traps-7zip', main_created=False),
+    'trap_no_pre_record': target('m1b-traps-7zip', main_is_pre=None),
     # ruling 2026-11-18 (3) / review R4d S2: an ambient item sharing the frozen leftover's normalised name
     'sanity_ambient_same_name': run_truth('python', temp_items(('DELEAE3.tmp', 'leftover'), ('6D5C.tmp', 'ambient'))),
     'sanity_ambient_only_same_name': run_truth('python', temp_items(('6D5C.tmp', 'ambient'))),
@@ -628,6 +633,9 @@ def prestate(d, here):
     shutil.copy(os.path.join(here, 'labels', 'python312-with-313.json'), os.path.join(d, 'labels.json'))
 
 
+NODE_KEY = 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}'
+
+
 def targetruns(d):
     """Two run dirs for `pyeval runsum` (ruling 2026-11-18, RUN): m1bd-node as the failed campaign had it (dirty-base's
     Node.js 20.18.0 already in lists-0, nothing created) and m1bd-temurin (a new entry)."""
@@ -643,6 +651,24 @@ def targetruns(d):
                                           'entries_created': created, 'phases': [{'name': 'install', 'ok': True}]})
         # lists-0 names the node entry under another key casing (a key compare is case-insensitive)
         wj(os.path.join(rd, f'lists-{run}-0.json'), {'uninstall': [dict(node, key=node['key'].upper())]})
+    # dirty trap runs (coordinator ruling 2026-11-18): TrapB node is a pre-app, in lists-0 by design; TrapA 7zip is
+    # the target. trapok: TrapA new; trapa0: TrapA's entry already in lists-0 too (entries_created kept, so the
+    # lists-0 rule alone decides); trappre: run.json main names the TrapB entry.
+    zip7 = {'key': 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\7-Zip', 'name': '7-Zip 24.08 (x64 edition)',
+            'version': '24.08.00.0', 'msi': None}
+    for var, main, l0 in (('trapok', zip7, [node]), ('trapa0', zip7, [node, zip7]), ('trappre', node, [node])):
+        run = 'm1bd-traps-7zip'
+        rd = os.path.join(d, var, run)
+        wj(os.path.join(rd, 'run.json'), {'schema': 'purge.rig.run/1', 'run': run, 'finished': 'x', 'main': main,
+                                          'pre': [{'id': 'node', 'exit': 0, 'entry': dict(node)}],
+                                          'entries_created': [zip7], 'phases': [{'name': 'install', 'ok': True}]})
+        wj(os.path.join(rd, f'lists-{run}-0.json'), {'uninstall': l0})
+
+
+def settarget(d, run, runsum):
+    """Puts the target `pyeval runsum` recorded into a fixture evidence run record."""
+    t = rj(runsum)['target']
+    edit(d, f'runs/{run}.json', lambda doc: doc.update(target=t))
 
 
 # ------------------------------------------------------------------------------------------- replay step stubs
@@ -729,6 +755,9 @@ def main(argv):
         return
     if len(argv) == 3 and argv[1] == 'targetruns':
         targetruns(argv[2])
+        return
+    if len(argv) == 5 and argv[1] == 'settarget':
+        settarget(argv[2], argv[3], argv[4])
         return
     if len(argv) == 4 and argv[1] == 'write':
         write(argv[2], argv[3])

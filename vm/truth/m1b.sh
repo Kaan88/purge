@@ -181,19 +181,32 @@ def read_json(p):
 def target_entry(rj, lists0):
     """The run's target ARP entry against lists-0 (ruling 2026-11-18, RUN): the main entry run-app found, whether it
     was already in lists-0 (same key, or same MSI product code), and how many entries the install created. A target
-    already there means the install was a no-op (G3 node: dirty-base had Node.js 20.18.0)."""
+    already there means the install was a no-op (G3 node: dirty-base had Node.js 20.18.0).
+    The target is run.json's `main` (Find-MainEntry of the app the run installs after snap 0: TrapA, 7zip, in a trap
+    run), never a `pre` entry: a pre-app (TrapB node; the other Python of a pair) is installed before lists-0 on
+    purpose and is in lists-0 in every run, so it is not judged (coordinator ruling 2026-11-18). `pre_keys` lists the
+    pre entries, `main_is_pre` whether main is one of them, `main_created` whether main is among entries_created."""
     if not isinstance(rj, dict):
         return None
     m = rj.get('main') if isinstance(rj.get('main'), dict) else None
     created = rj.get('entries_created')
+    pre = rj.get('pre') if isinstance(rj.get('pre'), list) else []
+    pre_e = [p.get('entry') for p in pre if isinstance(p, dict) and isinstance(p.get('entry'), dict)]
     out = {'main_key': (m or {}).get('key'), 'main_name': (m or {}).get('name'), 'main_msi': (m or {}).get('msi'),
            'entries_created': [str((e or {}).get('key')) for e in created] if isinstance(created, list) else None,
+           'pre_keys': [str(e.get('key')) for e in pre_e], 'main_is_pre': None, 'main_created': None,
            'in_lists0': None}
-    if m and isinstance(lists0, dict) and isinstance(lists0.get('uninstall'), list):
+
+    def same(e):
         key, code = str(m.get('key') or '').lower(), str(m.get('msi') or '').strip('{}').lower()
-        out['in_lists0'] = any(isinstance(e, dict) and ((key and str(e.get('key') or '').lower() == key)
-                                                        or (code and str(e.get('msi') or '').strip('{}').lower() == code))
-                               for e in lists0['uninstall'])
+        return isinstance(e, dict) and bool((key and str(e.get('key') or '').lower() == key)
+                                            or (code and str(e.get('msi') or '').strip('{}').lower() == code))
+    if m:
+        out['main_is_pre'] = any(same(e) for e in pre_e)
+        if isinstance(created, list):
+            out['main_created'] = any(same(e) for e in created)
+        if isinstance(lists0, dict) and isinstance(lists0.get('uninstall'), list):
+            out['in_lists0'] = any(same(e) for e in lists0['uninstall'])
     return out
 
 
@@ -709,13 +722,22 @@ for s, id, run in app_runs + [('traps', None, r) for r in trap_runs]:
                          else 'lists-0 unreadable: cannot tell whether the target was installed by this run')
         if not isinstance(tg.get('entries_created'), list) or not tg.get('entries_created'):
             inval.append('the install created no ARP entry (entries_created empty)')
+        if s == 'traps':
+            # trap runs judge TrapA (main) only; TrapB is a pre-app in lists-0 by design. main must be TrapA's new
+            # entry: not a pre entry, and created by this run.
+            if tg.get('main_is_pre') is not False:
+                inval.append('target is a pre-app (TrapB) entry, not TrapA' if tg.get('main_is_pre')
+                             else 'cannot tell whether the target is TrapA (no pre record)')
+            if tg.get('main_created') is not True:
+                inval.append('TrapA\'s entry is not among the entries this run created')
     ok = rj.get('run') == run and bool(rj.get('finished')) and bool(ph) and not bad and not inval
     note = '; '.join((['failed: ' + ', '.join(bad)] if bad else [])
                      + ([] if rj.get('run') == run else [f"run.json names {rj.get('run')}"])
                      + ([f"INVALID RUN: {', '.join(inval)} ({(tg or {}).get('main_name')} {(tg or {}).get('main_key')})"] if inval else []))
     row('RUN', st, run, f"finished={bool(rj.get('finished'))} phases ok {len(ph) - len(bad)}/{len(ph)}"
         + (' INVALID: target not installed by this run' if inval else ''),
-        'finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty)', ok, note or None)
+        'finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty)'
+        + ('; trap run: TrapA judged, TrapB (pre) not' if s == 'traps' else ''), ok, note or None)
 
 # RUN for the null runs each set's ambient set came from (review R4c; the rest of R4b S2): at least 2, each finished
 # with every phase ok. They run no engine, so BIND has nothing to bind.
@@ -1638,6 +1660,7 @@ assert not d['pass'] and not d['gate']
       "k1_blocked_denylisted PASS" "k1_danger_likely K1" "k1_danger_safe K1" "k1_danger_likely_beside_kept K1" \
       "k1_counts_disagree K1" "k1_counts_missing K1" "k8_vcredist_danger_likely K8" "k8_vcredist_blocked PASS" \
       "run_target_preinstalled RUN" "run_no_entry_created RUN" "run_lists0_unreadable RUN" "run_target_unknown RUN" \
+      "trap_main_is_pre RUN" "trap_main_not_created RUN" "trap_no_pre_record RUN" \
       "sanity_ambient_same_name PASS" "sanity_ambient_only_same_name PASS" "sanity_relabelled_by_name SANITY" \
       "sanity_frozen_unreadable SANITY" \
       "deny_changed BIND" "inputs_deny_edited_before BIND" "inputs_no_deny BIND" "inputs_frozen_edited_before BIND" \
@@ -1736,6 +1759,29 @@ assert n['in_lists0'] is True and n['entries_created'] == [], n
 assert t['in_lists0'] is False and t['entries_created'] == [t['main_key']], t
 EOF
   then ok_ runsum_target_against_lists0; else no_ runsum_target_against_lists0 "exit $rc"; fi
+  # Trap runs judge TrapA only (coordinator ruling 2026-11-18): a dirty trap run whose TrapB (pre-app node) is in
+  # lists-0 and TrapA is new passes RUN; TrapA already in lists-0, or a main entry that is TrapB's, is INVALID.
+  local tv want_t
+  for tv in trapok trapa0 trappre; do
+    if [ $tv = trapok ]; then want_t=0; else want_t=1; fi
+    rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"
+    if pyeval runsum "$tmp/tr/$tv/m1bd-traps-7zip" m1bd-traps-7zip "$tmp/tr/$tv.json" \
+       && "$PY" -I "$fx" settarget "$tmp/m" m1bd-traps-7zip "$tmp/tr/$tv.json"; then
+      eval_gate "$tmp/m" "$tmp/m.json" >"$tmp/m.out" 2>&1; rc=$?
+    else rc=99; fi
+    if [ $rc -eq $want_t ] && "$PY" -I - "$tmp/m.json" "$tv" <<'EOF'
+import json, sys
+g = json.load(open(sys.argv[1], encoding='utf-8'))
+r = [x for x in g['criteria'] if x['id'] == 'RUN' and x['subject'] == 'm1bd-traps-7zip']
+assert len(r) == 1, r
+if sys.argv[2] == 'trapok':
+    assert r[0]['pass'] and g['gate'], r
+else:
+    assert not r[0]['pass'] and 'INVALID RUN' in (r[0].get('note') or ''), r
+    assert [x['subject'] for x in g['criteria'] if not x['pass']] == ['m1bd-traps-7zip'], 'another line failed'
+EOF
+    then ok_ "trap_run_judges_trapa_$tv"; else no_ "trap_run_judges_trapa_$tv" "exit $rc: $(grep FAIL "$tmp/m.out" | head -2)"; fi
+  done
 
   # Churn rule (RIG.md section 12.6): an item in one freeze run only is excluded from the frozen truth and reported,
   # never frozen as a leftover; a label that differs between the runs and a run that is not whole refuse the freeze.

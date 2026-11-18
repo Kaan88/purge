@@ -1205,7 +1205,10 @@ digests, frozen truths, rigtool, the null runs per set).
   finished with every phase ok (R4b S2 rest). Ruling 2026-11-18: each app and trap run must have installed its
   target: collect records run.json's `main` entry and `entries_created` against `lists-<run>-0.json` (same key, or
   same MSI product code); a target already in lists-0, no entry created, or either unreadable is "INVALID RUN"
-  (FAIL). Null runs install nothing and are excepted.
+  (FAIL). Null runs install nothing and are excepted. A trap run judges TrapA (7zip, run.json `main`) only: TrapB
+  (node) is a pre-app installed before lists-0 on purpose, so its entry in lists-0 is expected (on dirty-base an
+  already-installed node serves as the app that stays); the run is invalid when `main` is a `pre` entry, when the pre
+  record is missing, or when TrapA's entry is not among `entries_created`.
 - **BIND**: each run's build record names its run.json (SHA-256), the engine did not change during the campaign, the
   sources were clean, one engine and one commit over all runs, the budgets' M1b engine is that engine, and the trap file
   and label files are the committed ones with each run's label id equal to its app id. Review R4c S3: every run holds
