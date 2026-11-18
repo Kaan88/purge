@@ -1249,7 +1249,10 @@ digests, frozen truths, rigtool, the null runs per set).
   own app list. Review R5 S3: a Blocked danger item is accepted only when its blockers, read from the run's scan
   sidecar (`<set>-<id>-scan.json`, matched by target: case, hive spellings, `HKU\<sid>` as HKCU, CurrentControlSet as
   ControlSet001), include `DenyListed`; another blocker (`NotGone`, `TooLarge`, ...), none, or no scan item FAILS, and
-  the note names the blockers.
+  the note names the blockers. Review R5b N1: blockers are never merged. The scan items of the exact key (the SID of
+  `HKU\<sid>` kept) are taken first; only when there is none, the `HKU\<sid>` -> HKCU fold, and then only items whose
+  SID agrees with the target's (HKCU or the same SID); matched items in two different users' hives FAIL. Every matched
+  scan item must carry `DenyListed`, so a deny-listed item in one hive never covers another blocked otherwise.
 - **Notices** (user ruling 2026-11-18, review R5 B1): a plan item whose action is `ReportOnly` and that carries
   `suggest_uninstall` (SYS-BURNDEPS rule (c), "uninstall the Python Launcher yourself") is a notice, not an offer or a
   listing. Collect's plan step copies the fact from the scan item's evidence into the plan item (`suggest_uninstall`);
@@ -1265,6 +1268,11 @@ digests, frozen truths, rigtool, the null runs per set).
   suggestion, or any scan item on the Launcher (its product codes, or `C:\Windows\py.exe`, `pyw.exe`,
   `pyshellext.amd64.dll`) listed in any band but Blocked with an action other than `ReportOnly`, FAILS. Blocked
   Launcher items are the design's "stays Protected". python312-with-313 (G2, G3): no suggestion.
+  Review R5b S1: rigtool takes notices out of K1-K6 for every app, so K8 scores all of them. On rig-base and
+  Clean-Pro each python notice must sit on the Launcher's own Uninstall key (`K:` HKLM or HKCU, optional
+  `WOW6432Node`, `...\CurrentVersion\Uninstall\{<code>}` with one of the Launcher product codes the dirty check uses);
+  any other notice FAILS. One more K8 row per set, "notices elsewhere": every other app of the set must have
+  `notices == []` (a missing list FAILS).
 - **K1-K6** fail on an empty plan (truth items but nothing offered) or a score without counts.
 - **K9** needs every case and `com-shared-class#between` planted ok, every expectation target among the planted objects
   (an object that already existed counts and is reported; a note-only or missing one fails), TrapA 7zip and TrapB node.
@@ -1298,7 +1306,9 @@ Options:
   missing harvest line (K14); since R5 a Blocked danger item whose scan blocker is not DenyListed or unknown (K1,
   K8), a suggestion that is no notice in the score, a score without notices, a suggestion not ReportOnly, no Clean-Pro
   suggestion, a suggestion or an offered Launcher item on dirty-base (K8), a cold scan that read no tables or whose
-  cache was not moved (K14), a rigtool not bound to its sources (BIND)) fails on its named criterion, while the positive controls (a Blocked danger item, an
+  cache was not moved (K14), a rigtool not bound to its sources (BIND); since R5b a notice on another app or on a key
+  that is not the Launcher's Uninstall key, a missing notices list on another app (K8), a deny-listed scan item in
+  another user's hive or beside a non-deny-listed one on the same key (K1)) fails on its named criterion, while the positive controls (a Blocked danger item, an
   ambient item sharing a frozen leftover's normalised name, ...) still pass; that every non-default setting gives
   exit 3; that `replay` with stub cargo xtask, rigtool and git writes a score the gate passes with (fails K4 G1 when
   a run is missing; with a failing replay-diff the stale diff is gone and K16 and BIND fail); that `runsum`

@@ -973,27 +973,59 @@ if 'clean' in sets:
 # scan sidecar (<set>-<id>-scan.json, the engine's own record); it is accepted only when one of them is DenyListed.
 # Another blocker (NotGone, TooLarge, ... states that can change between scan and execute), no blocker, or no scan item
 # for the target FAILS, and the note names the blockers.
-def norm_target(cs):
+# Review R5b N1: blockers are never merged across scan items or across users' hives. A score target is matched with the
+# scan items of the exact same key first (the SID of HKU\<sid> kept); only when there is none, with the HKU\<sid> -> HKCU
+# fold, and then only items whose SID agrees with the target's (HKCU or the same SID); items of two different SIDs are
+# ambiguous and FAIL. EVERY matched scan item must carry DenyListed, so a deny-listed item in one hive can never cover
+# an item blocked otherwise (TooLarge, ...) in another.
+def norm_target(cs, keep_sid=False):
     """A score target (`V:<key>|<name>`, `K:<key>`, `P:<path>`) folded for matching it with a scan item's: case, the
-    hive spellings, HKU\\<sid>[_Classes] as HKCU, HKCR as HKLM\\SOFTWARE\\Classes, CurrentControlSet as ControlSet001."""
+    hive spellings, HKU\\<sid>[_Classes] as HKCU (not with keep_sid), HKCR as HKLM\\SOFTWARE\\Classes,
+    CurrentControlSet as ControlSet001."""
     s = str(cs or '').replace('/', '\\').lower()
     for a, b in (('hkey_local_machine', 'hklm'), ('hkey_users', 'hku'), ('hkey_current_user', 'hkcu'), ('hkey_classes_root', 'hkcr')):
         s = re.sub(r'(?<=^.:)' + a + r'(?=\\|$)', b, s)
-    s = re.sub(r'(?<=^.:)hku\\s-1-5-21-[0-9-]+_classes(?=\\|$)', 'hkcu\\\\software\\\\classes', s)
-    s = re.sub(r'(?<=^.:)hku\\s-1-5-21-[0-9-]+(?=\\|$)', 'hkcu', s)
+    if not keep_sid:
+        s = re.sub(r'(?<=^.:)hku\\s-1-5-21-[0-9-]+_classes(?=\\|$)', 'hkcu\\\\software\\\\classes', s)
+        s = re.sub(r'(?<=^.:)hku\\s-1-5-21-[0-9-]+(?=\\|$)', 'hkcu', s)
     s = re.sub(r'(?<=^.:)hkcr(?=\\|$)', 'hklm\\\\software\\\\classes', s)
     return s.replace('\\currentcontrolset\\', '\\controlset001\\')
 
 
+def target_sid(cs):
+    """The SID of a target in HKU\\<sid>[_Classes], lower case, or None (HKCU, HKLM, a path)."""
+    m = re.match(r'^.:hku\\(s-1-5-21-[0-9-]+?)(?:_classes)?(?=\\|$)', norm_target(cs, keep_sid=True))
+    return m.group(1) if m else None
+
+
 def scan_blockers(scan):
-    """{normalised target: [blocker, ...]} of a scan sidecar's items, or None when there is no readable scan."""
+    """[(folded target, SID, exact target, [blocker, ...]), ...] one entry per scan item (never merged), or None when
+    there is no readable scan."""
     if not isinstance(scan, dict) or not isinstance(scan.get('items'), list):
         return None
-    out = {}
+    out = []
     for it in scan['items']:
         if isinstance(it, dict) and isinstance(it.get('target'), dict) and canon_of(it['target']):
-            out.setdefault(norm_target(canon_of(it['target'])), []).extend(b for b in (it.get('blockers') or []) if isinstance(b, dict))
+            cs = canon_of(it['target'])
+            out.append((norm_target(cs), target_sid(cs), norm_target(cs, keep_sid=True),
+                        [b for b in (it.get('blockers') or []) if isinstance(b, dict)]))
     return out
+
+
+def blockers_for(bl, target):
+    """The blocker lists of the scan items for a score target, one list per item, and a problem or None: exact key
+    first (SID kept); else the HKCU fold among items whose SID agrees with the target's; two SIDs is a problem."""
+    ex = norm_target(target, keep_sid=True)
+    hit = [b for _, _, e, b in bl if e == ex]
+    if hit:
+        return hit, None
+    f0, s0 = norm_target(target), target_sid(target)
+    cand = [(sid, b) for f, sid, _, b in bl if f == f0 and (s0 is None or sid is None or sid == s0)]
+    sids = sorted({sid for sid, _ in cand if sid})
+    if len(sids) > 1:
+        return [b for _, b in cand], (f"scan items in {len(sids)} users' hives ({', '.join(x.upper() for x in sids)}), "
+                                      'blockers not merged across users')
+    return [b for _, b in cand], None
 
 
 def blocker_text(b):
@@ -1011,20 +1043,23 @@ def danger_offered(t, scan):
     if len(items) != dl or len(off) != do or len(kept) != dk or dl != do + dk:
         probs.append(f'counts disagree with the danger list: listed {dl} offered {do} kept {dk}, list {len(items)} '
                      f'({len(off)} not Blocked)')
-    bl = scan_blockers(scan) if kept else {}
+    bl = scan_blockers(scan) if kept else []
     kept_txt = []
     for i in kept:
         if bl is None:
             probs.append(f"Blocked danger item {i.get('target')}: no scan sidecar to read its blockers from")
             kept_txt.append(f"{i.get('target')} [{i.get('scanner')}; blockers unknown]")
             continue
-        b = bl.get(norm_target(i.get('target')))
-        names = ', '.join(blocker_text(x) for x in b or []) or 'none'
+        per, amb = blockers_for(bl, i.get('target'))
+        names = ' | '.join(', '.join(blocker_text(x) for x in b) or 'none' for b in per) or 'none'
         kept_txt.append(f"{i.get('target')} [{i.get('scanner')}; {names}]")
-        if b is None:
+        if amb:
+            probs.append(f"Blocked danger item {i.get('target')}: {amb} ({names})")
+        elif not per:
             probs.append(f"Blocked danger item {i.get('target')}: not in the scan sidecar, its blocker is unknown")
-        elif not any(x.get('kind') == 'DenyListed' for x in b):
-            probs.append(f"Blocked danger item {i.get('target')}: blocked by {names}, not a deny-list hit (ruling 2026-11-18 covers DenyListed only)")
+        elif not all(any(x.get('kind') == 'DenyListed' for x in b) for b in per):
+            probs.append(f"Blocked danger item {i.get('target')}: blocked by {names}, not a deny-list hit on every scan "
+                         'item (ruling 2026-11-18 covers DenyListed only)')
     note = '; '.join(probs + [f"offered at {i.get('band')}: {i.get('target')}" for i in off[:3]]
                      + ([f'danger_kept {len(kept)} (listed Blocked, report only): ' + ', '.join(kept_txt[:3])] if kept else []))
     return {'value': f'danger_offered={do} (danger_kept={dk})', 'ok': do == 0 and not probs, 'note': note or None, 'n': do}
@@ -1191,6 +1226,18 @@ def on_launcher(it):
     return any(p == f or p.startswith(f + '\\') for f in LAUNCHER_FILES)
 
 
+# Review R5b S1: rigtool takes every notice out of K1-K6 for every app, so K8 scores all of them. clean/cp python: each
+# notice must sit on the Launcher's own Uninstall key (`K:` HKLM or HKCU [WOW6432Node] ...\Uninstall\{<code>}, the code
+# one of LAUNCHER_CODES); any other notice FAILS. Every other app of the set: `notices` must be an empty list (a
+# missing list FAILS), one row per set.
+LAUNCHER_UNINSTALL_RE = re.compile(r'k:(?:hklm|hkcu)\\software\\(?:wow6432node\\)?microsoft\\windows\\currentversion\\uninstall\\\{('
+                                   + '|'.join(c.lower() for c in LAUNCHER_CODES) + r')\}')
+
+
+def on_launcher_uninstall(target):
+    return isinstance(target, str) and LAUNCHER_UNINSTALL_RE.fullmatch(norm_target(target)) is not None
+
+
 for s in [x for x in sets if x in ('clean', 'dirty', 'cp')]:
     st = STEP[s]
     if 'vcredist' in set_apps(s) and s != 'cp':
@@ -1207,7 +1254,7 @@ for s in [x for x in sets if x in ('clean', 'dirty', 'cp')]:
         scan = load(f'{s}-python-scan.json')
         subj = f'{s}/python suggestion'
         if s in SUGGEST_SETS:
-            lim = '>= 1, all ReportOnly, each a notice in the score'
+            lim = ">= 1, all ReportOnly, each a notice in the score on the Launcher's Uninstall key"
             t = purge_score(s, 'python')
             if scan is None or t is None:
                 row('K8', st, subj, miss(f'{s}-python-scan.json' if scan is None else f'score of {prefix[s]}-python'), lim, False)
@@ -1223,6 +1270,8 @@ for s in [x for x in sets if x in ('clean', 'dirty', 'cp')]:
                     got = sorted(str(n.get('suggest_uninstall')) for n in nt if isinstance(n, dict))
                     if want != got:
                         probs.append(f'notices in the score {got}, suggestions in the scan {want} (a suggestion scored as an offer or listing?)')
+                    probs += [f"notice not on the Launcher's Uninstall key: {n.get('target') if isinstance(n, dict) else n}"
+                              for n in nt if not (isinstance(n, dict) and on_launcher_uninstall(n.get('target')))]
                 row('K8', st, subj, f'{len(sg)} suggestion(s), actions {sorted({str(i.get("action")) for i in sg})}, '
                     f'{len(nt) if isinstance(nt, list) else "no"} notice(s)', lim, not probs,
                     '; '.join(probs[:3] + [f"{n.get('suggest_uninstall')} on {n.get('target')} ({n.get('band')}, would be {n.get('would_be')})"
@@ -1245,6 +1294,22 @@ for s in [x for x in sets if x in ('clean', 'dirty', 'cp')]:
         else:
             sg = suggestions(scan)
             row('K8', st, f'{s}/python312-with-313 suggestion', len(sg), 0, not sg)
+    # Review R5b S1: every other app's score carries an empty notices list (a missing list FAILS).
+    others = [id for id in set_apps(s) if not (id == 'python' and s in SUGGEST_SETS)]
+    bad, ns = [], 0
+    for id in others:
+        t = purge_score(s, id)
+        nt = None if t is None else t.get('notices')
+        if t is None:
+            bad.append(f'{id}: {miss("score")}')
+        elif not isinstance(nt, list):
+            bad.append(f'{id}: no notices list')
+        elif nt:
+            ns += len(nt)
+            bad += [f"{id}: {n.get('suggest_uninstall') if isinstance(n, dict) else n} on "
+                    f"{n.get('target') if isinstance(n, dict) else '?'}" for n in nt[:2]]
+    row('K8', st, f'{s}/notices elsewhere', f'{ns} notice(s) in {len(others)} app(s)', "notices == [] for every app but "
+        "clean/cp python", not bad, '; '.join(bad[:4]) or None)
 
 
 # K9: traps. rigtool's verdicts count only when every case was planted (review R4b S1): the guest's planted record
@@ -1861,7 +1926,11 @@ assert not d['pass'] and not d['gate']
       "k1_blocked_not_denylisted K1" "k1_blocked_no_scan_item K1" "k1_blocked_no_scan K1" "k8_vcredist_blocked_too_large K8" \
       "k8_suggestion_not_a_notice K8" "k8_notices_missing K8" "k8_suggestion_not_report_only K8" "k8_cp_no_suggestion K8" \
       "k8_dirty_python_suggestion K8" "k8_dirty_launcher_offered K8" "k8_dirty_launcher_blocked PASS" \
-      "budget_cold_scan_warm K14" "budget_cold_scan_not_moved K14" "budget_cold_steps_missing K14"; do
+      "budget_cold_scan_warm K14" "budget_cold_scan_not_moved K14" "budget_cold_steps_missing K14" \
+      "k8_notice_python313_with_312 K8" "k8_notice_7zip K8" "k8_notices_missing_other K8" "k8_notice_not_launcher K8" \
+      "k8_notice_launcher_code_other_key K8" "k8_notice_second_not_launcher K8" "k8_notice_launcher_313 PASS" \
+      "k1_blocked_deny_other_user K1" "k1_blocked_deny_only_other_user K1" "k1_blocked_hkcu_two_users K1" \
+      "k1_blocked_same_key_two_items K1" "k1_blocked_user_hive_spelling PASS" "k1_blocked_user_hive_exact PASS"; do
     set -- $ctl
     rm -rf "$tmp/m"; cp -r "$tmp/fx" "$tmp/m"
     if ! "$PY" -I "$fx" mutate "$tmp/m" "$1" >"$tmp/m.txt" 2>&1; then no_ "control $1" "mutation failed: $(head -c 300 "$tmp/m.txt")"; continue; fi

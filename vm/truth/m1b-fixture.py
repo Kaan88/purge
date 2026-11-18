@@ -476,6 +476,36 @@ def bam_blockers(*blockers):
     return fn
 
 
+# Review R5b N1: a Blocked danger value in a user hive, the score target spelled with score_hive, and its scan items
+# (hive, blockers), one per entry; blockers are never merged across scan items or users' hives.
+SID2 = 'S-1-5-21-1000000000-2000000000-3000000000-1002'
+USER_DANGER_KEY = 'Software\\FixtureShared'
+TOO_LARGE = {'kind': 'TooLarge'}
+
+
+def user_danger(score_hive, *scan_items):
+    def go(d):
+        tgt = f'V:{score_hive}\\{USER_DANGER_KEY}|v'
+        edit(d, 'score-clean.json', lambda doc: set_danger(app_tool(doc, '7zip'), [dict(danger_item('Blocked'), target=tgt)]))
+        edit(d, 'clean-7zip-scan.json', lambda doc: doc['items'].extend(
+            scan_item({'type': 'RegValue', 'path': f'{h}\\{USER_DANGER_KEY}', 'name': 'v'}, 'DeleteValue', 'Blocked', bl)
+            for h, bl in scan_items))
+    return go
+
+
+# Review R5b S1: notices on the Launcher's Uninstall key only (clean/cp python), none anywhere else.
+NOT_LAUNCHER_KEY = UNINST + '{11111111-2222-3333-4444-555555555555}'
+
+
+def python_suggestions(s, *keys):
+    """The python run of set s suggests uninstalling the Launcher on each key: the scan items and the score's notices."""
+    def go(d):
+        scan_edit(s, 'python', lambda items: [i for i in items if i.get('scanner') != 'SYS-BURNDEPS']
+                  + [suggestion_item(k) for k in keys])(d)
+        edit(d, f'score-{s}.json', lambda doc: app_tool(doc, 'python').update(notices=[notice(k) for k in keys]))
+    return go
+
+
 def kept_cold_scan(d):
     with open(os.path.join(d, 'budgets', 'm1b-scan-1.log'), 'w', encoding='utf-8') as f:
         f.write(budget_log('m1b', 'scan', 'cold-warm'))
@@ -658,6 +688,24 @@ MUTATIONS = {
     'budget_cold_scan_warm': kept_cold_scan,
     'budget_cold_scan_not_moved': budget_runs(lambda doc: doc['cold_cache_steps'].update(scan='kept')),
     'budget_cold_steps_missing': budget_runs(lambda doc: (doc.pop('cold_cache_steps'), doc.update(schema='purge.rig.m1b-budgets/2'))),
+    # review R5b S1: a notice anywhere but on clean/cp python's Launcher Uninstall key
+    'k8_notice_python313_with_312': lambda d: edit(d, 'score-clean.json', lambda doc: app_tool(doc, 'python313-with-312').update(
+        notices=[notice(LAUNCHER_313_KEY)])),
+    'k8_notice_7zip': lambda d: edit(d, 'score-cp.json', lambda doc: app_tool(doc, '7zip').update(notices=[notice()])),
+    'k8_notices_missing_other': lambda d: edit(d, 'score-dirty.json', lambda doc: app_tool(doc, 'vcredist').pop('notices')),
+    'k8_notice_not_launcher': python_suggestions('clean', NOT_LAUNCHER_KEY),
+    'k8_notice_launcher_code_other_key': python_suggestions(
+        'cp', 'HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}'),
+    'k8_notice_second_not_launcher': python_suggestions('clean', LAUNCHER_KEY, NOT_LAUNCHER_KEY),
+    'k8_notice_launcher_313': python_suggestions(
+        'cp', 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{7102CAE5-270C-4E81-AC25-27699156D8AE}'),
+    # review R5b N1: a deny-listed scan item never covers another item, in the same or another user's hive
+    'k1_blocked_deny_other_user': user_danger(f'HKU\\{SID}', (f'HKU\\{SID2}', (DENY,)), (f'HKU\\{SID}', (TOO_LARGE,))),
+    'k1_blocked_deny_only_other_user': user_danger(f'HKU\\{SID}', (f'HKU\\{SID2}', (DENY,))),
+    'k1_blocked_hkcu_two_users': user_danger('HKCU', (f'HKU\\{SID}', (DENY,)), (f'HKU\\{SID2}', (TOO_LARGE,))),
+    'k1_blocked_same_key_two_items': user_danger(f'HKU\\{SID}', (f'HKU\\{SID}', (DENY,)), (f'HKU\\{SID}', (TOO_LARGE,))),
+    'k1_blocked_user_hive_spelling': user_danger(f'HKU\\{SID}', ('HKCU', (DENY,))),
+    'k1_blocked_user_hive_exact': user_danger(f'HKU\\{SID}', (f'HKU\\{SID}', (DENY,)), (f'HKU\\{SID2}', (TOO_LARGE,))),
 }
 
 
