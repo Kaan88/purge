@@ -1,7 +1,8 @@
 # Purge rig, M1b: typed-object executor runs (docs\M1B_DESIGN.json M1B-RIG-EXEC, gate G5; vm\RIG.md section 12).
 # Template: the host (vm\rig-m1b-exec.ps1 through rig.ps1 New-M2JobText) replaces __RUN__, __MODE__
 # (m1b-x-fidelity | m1b-x-traps | m1b-x-undo-traps), __STAGE__ (start) and __OPTS__ (base64 JSON: cases_b64 = the
-# file vm\truth\m1b-exec-cases.json, base64; settle_max, settle_min_uptime) and submits it as an agent job
+# file vm\truth\m1b-exec-cases.json, base64; settle_max, settle_min_uptime; ambient = the pushed ambient set's file
+# and SHA-256; null, null_wait = a null run, RIG.md section 12.8) and submits it as an agent job
 # (elevated). Windows PowerShell 5.1. `. m1b-exec.ps1 -Library` only defines the functions (m1b-crash.ps1, the host
 # self-test).
 #
@@ -563,6 +564,14 @@ $S = $R.S
 $Calls = $S.engine.calls
 $PhaseCount0 = $S.phases.Count
 $Cases = $null
+# Null run (opts null = true; RIG.md §12.8, host mode m1b-x-null): m1b-x-fidelity / m1b-x-traps exactly as a real run
+# up to snap A / deep A, then an idle wait of null_wait seconds where exec would run, snap B and deep B, and nothing
+# after (no exec, so no restore point and no firewall delete). diff(snap A, snap B) is pure Windows churn of the exec
+# window, the input of `rigtool ambient --m2 --added` (vm\truth\m1b-exec-ambient.json).
+$NullRun = [bool](Get-M2Opt $Opts 'null' $false)
+$NullWaitSec = [int](Get-M2Opt $Opts 'null_wait' 10)
+if ($NullRun -and @('m1b-x-fidelity', 'm1b-x-traps') -cnotcontains $Mode) { Log "m1b-exec.ps1: a null run is for m1b-x-fidelity / m1b-x-traps only"; Save-M2Run $R -Finished; exit 2 }
+$S.null_run = [ordered]@{ null = $NullRun; wait_sec = $(if ($NullRun) { $NullWaitSec } else { $null }) }
 
 function Q([string]$s) { ConvertTo-EngineArg $s }
 function F([string]$n) { Join-Path $D $n }
@@ -615,6 +624,23 @@ function Step-Pauses {
     Phase 'install' { Step-Install } $S
 }
 
+# A null run's exec window (opts null): the idle wait instead of exec, snap B, deep B, the store; nothing after.
+function Invoke-ExNullWindow([string]$DeepScope) {
+    Phase 'null-wait' { Log "null run: idle $NullWaitSec s instead of exec"; Start-Sleep -Seconds $NullWaitSec } $S
+    Phase 'snap-b' { $null = Invoke-M2Snap (F "snap-$Run-b.tsv.gz") } $S
+    Phase 'deep-b' { $null = Invoke-M2Deep @($DeepScope) (F 'deep-b.json') } $S
+    Phase 'store' { Set-M2Result $R 'store' (Save-M2Store $D 'final') } $S
+}
+
+# The ambient set this run's execdiffs use (C:\cr\bin\m2-ambient.json, pushed by the host): what the host declared
+# (opts.ambient: file, sha256) and the SHA-256 of the guest copy ($null: none, execdiff runs without one).
+function Get-ExAmbientRecord {
+    $decl = $(if ($Opts -and $Opts.PSObject.Properties['ambient']) { $Opts.ambient } else { $null })
+    $sha = $null
+    if (Test-Path -LiteralPath $RigM2Ambient -PathType Leaf) { $sha = Get-ExBytesSha ([IO.File]::ReadAllBytes($RigM2Ambient)) }
+    [ordered]@{ declared = $decl; guest = $RigM2Ambient; guest_sha256 = $sha }
+}
+
 function Step-Settle([string]$Tag) {
     Phase "settle-$Tag" { Add-Result 'settle' $Tag (Wait-M2BootSettle -MaxSec ([int](Get-M2Opt $Opts 'settle_max' 300)) -MinUptimeSec ([int](Get-M2Opt $Opts 'settle_min_uptime' 180))) } $S
 }
@@ -663,6 +689,7 @@ function Invoke-FidelityMode {
     Step-Settle 'main'
     Phase 'snap-a' { $null = Invoke-M2Snap (F "snap-$Run-a.tsv.gz") } $S
     Phase 'deep-a' { $null = Invoke-M2Deep @((F 'deepscope-main.json')) (F 'deep-a.json') } $S
+    if ($NullRun) { Invoke-ExNullWindow (F 'deepscope-main.json'); return }
     $script:X = $null
     Phase 'exec-main' {
         $script:X = Invoke-ExExec $sc $script:Sel 'main'
@@ -784,6 +811,7 @@ function Invoke-TrapsMode {
     } $S
     Phase 'snap-a' { $null = Invoke-M2Snap (F "snap-$Run-a.tsv.gz") } $S
     Phase 'deep-a' { $null = Invoke-M2Deep @((F 'deepscope-traps.json')) (F 'deep-a.json') } $S
+    if ($NullRun) { Set-M2Result $R 'act_traps' @($script:Traps); Invoke-ExNullWindow (F 'deepscope-traps.json'); return }
     $script:X = $null
     Phase 'exec-traps' {
         $script:X = Invoke-ExExec $sc $script:Sel 'traps'
@@ -926,6 +954,7 @@ try {
         $script:Cases = Read-ExCases $Opts
         Write-JsonFile $script:Cases (F 'm1b-exec-cases.json') 20
         Set-M2Result $R 'cases' ([ordered]@{ schema = "$($script:Cases.schema)"; sha256 = (Get-ExCasesSha $Opts); variants = @($script:Cases.fidelity.variants).Count; act_traps = @($script:Cases.act_traps.cases).Count; undo_traps = @($script:Cases.undo_traps.cases).Count })
+        Set-M2Result $R 'ambient' (Get-ExAmbientRecord)
     } $S
     $Cases = $script:Cases
     if ($Cases) {

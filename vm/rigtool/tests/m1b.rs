@@ -163,6 +163,11 @@ fn counts(outcomes: &[&Value]) -> Value {
 
 /// A journal (header, the ops' records, `extra` records, commit) and the matching `purge.exec/1` report.
 fn journal_and_report(ops: &[(u32, &str, &str, Value)], extra: &[Value]) -> (String, String) {
+    journal_and_report_rp(ops, extra, "NotRequested")
+}
+
+/// Same, with the report's restore point outcome `rp` (purge-model `RestorePointOutcome` kind).
+fn journal_and_report_rp(ops: &[(u32, &str, &str, Value)], extra: &[Value], rp: &str) -> (String, String) {
     let mut s = format!("{}\n", header(ops.len()));
     for (op, kind, a, o) in ops {
         for r in obj_op(*op, kind, a, o.clone(), None) {
@@ -184,7 +189,7 @@ fn journal_and_report(ops: &[(u32, &str, &str, Value)], extra: &[Value]) -> (Str
         .collect();
     let rep = json!({"schema": "purge.exec/1", "session": SESSION, "app": "fixture", "plan_hash": HA,
         "selection_hash": HB, "state": "Committed", "started": 1, "finished": 2, "items": items, "counts": c,
-        "backup_bytes": 0, "pending_reboot": false, "restore_point": {"kind": "NotRequested"}, "warnings": []});
+        "backup_bytes": 0, "pending_reboot": false, "restore_point": {"kind": rp}, "warnings": []});
     (s, rep.to_string())
 }
 
@@ -616,12 +621,30 @@ fn execdiff(
     after: &[String],
     ops: &[(u32, &str, &str, Value)],
 ) -> (i32, String, Value) {
-    let (j, r) = journal_and_report(ops, &[]);
+    execdiff_rp(dir, tag, before, after, ops, "NotRequested", None)
+}
+
+/// Same, with the report's restore point outcome and optionally an ambient file.
+fn execdiff_rp(
+    dir: &Dir,
+    tag: &str,
+    before: &[String],
+    after: &[String],
+    ops: &[(u32, &str, &str, Value)],
+    restore_point: &str,
+    ambient: Option<&Path>,
+) -> (i32, String, Value) {
+    let (j, r) = journal_and_report_rp(ops, &[], restore_point);
     let (a, b) = (dir.file(&format!("{tag}-a.tsv"), &snap(before)), dir.file(&format!("{tag}-b.tsv"), &snap(after)));
     let (jp, rp) = (dir.file(&format!("{tag}-j.jsonl"), &j), dir.file(&format!("{tag}-r.json"), &r));
     let out = dir.path(&format!("{tag}-execdiff.json"));
-    let (code, err) =
-        rigtool(&[&"execdiff", &"--before", &a, &"--after", &b, &"--journal", &jp, &"--report", &rp, &"-o", &out]);
+    let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> =
+        vec![&"execdiff", &"--before", &a, &"--after", &b, &"--journal", &jp, &"--report", &rp, &"-o", &out];
+    if let Some(p) = &ambient {
+        args.push(&"--ambient");
+        args.push(p);
+    }
+    let (code, err) = rigtool(&args);
     (code, err, if out.exists() { read(&out) } else { Value::Null })
 }
 
@@ -774,6 +797,154 @@ fn execdiff_task_file_excused_only_after_a_reregistration() {
     let reparse = format!("F\t{}\t3010\t20\t99\ta0000003\n", esc(&file));
     let (_, _, rep) = execdiff(&dir, "reparse", &before, &after(NEW_ID, reparse), &ops);
     assert_eq!(rep["counts"]["collateral"], 1, "{rep:#}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// execdiff: the engine's restore point and firewall delete side effects (RIG.md §12.8)
+// ---------------------------------------------------------------------------------------------
+
+const VOLSNAP: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{533c5b84-ec70-11d2-9505-00c04f79deaf}";
+const BASEC: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\DeviceContainers\\{00000000-0000-0000-FFFF-FFFFFFFFFFFF}\\BaseContainers\\{00000000-0000-0000-FFFF-FFFFFFFFFFFF}";
+const SRPROV: &str = "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\SystemRestoreProv @ root/default";
+const FWPROV: &str = "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\wfascim @ ROOT/StandardCimv2";
+const SPP: &str = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SPP";
+const SRKEY: &str = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore";
+const DSM: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DsmSvc\\State";
+const EPOCH: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Epoch";
+const SVI: &str = "C:\\System Volume Information";
+const WFPDIAG: &str = "C:\\ProgramData\\Microsoft\\Windows\\wfp\\wfpdiag.etl";
+
+fn kx(key: &str, lwt: u64) -> String {
+    format!("K\t{}\t{lwt}\t\t\n", esc(key))
+}
+
+fn dx(path: &str, mtime: u64) -> String {
+    format!("D\t{}\t10\t{mtime}\t0\n", esc(path))
+}
+
+/// exec_before() plus the objects a restore point (`rp`) and a firewall rule delete (`fw`) touch; with `rp` / `fw`
+/// the records the M1b executor runs of 2026-11-19 showed are added or changed, and the deleted rule is gone.
+fn side_world(rp: bool, fw: bool) -> Vec<String> {
+    let mut l = if fw { removed(&exec_before(), &[&format!("{FW}|{RULE}")]) } else { exec_before() };
+    let n = |on: bool| if on { 2 } else { 1 };
+    l.push(kx(VOLSNAP, n(rp)));
+    l.push(kx(&format!("{VOLSNAP}\\0000"), 1));
+    l.push(v(&format!("{VOLSNAP}\\0000"), "DriverDesc", 1, 40, 0x10, "Generic volume shadow copy"));
+    if rp {
+        l.push(kx(&format!("{VOLSNAP}\\0001"), 2));
+        l.push(v(&format!("{VOLSNAP}\\0001"), "DriverDesc", 1, 40, 0x10, "Generic volume shadow copy"));
+        l.push(v(&format!("{VOLSNAP}\\0001"), "InfPath", 1, 20, 0x11, "volsnap.inf"));
+    }
+    l.push(kx(BASEC, n(rp)));
+    l.push(v(BASEC, "STORAGE\\Volume\\{x}", 7, 2, 0x12, ""));
+    if rp {
+        l.push(v(BASEC, "STORAGE\\VolumeSnapshot\\HarddiskVolumeSnapshot2", 7, 2, 0x13, ""));
+    }
+    l.push(kx(SRPROV, n(rp)));
+    l.push(v(SRPROV, "134392365941964792", 11, 8, 0x14, ""));
+    if rp {
+        l.push(v(SRPROV, "134395554330118898", 11, 8, 0x15, ""));
+    }
+    for k in [SPP, SRKEY] {
+        l.push(kx(k, n(rp)));
+        l.push(v(k, "LastIndex", 4, 4, if rp { 3 } else { 1 }, if rp { "3" } else { "1" }));
+    }
+    l.push(kx(DSM, n(rp)));
+    l.push(v(DSM, "SessionNumber", 4, 4, n(rp), ""));
+    // Times after the before snapshot (2026-11-17), so the stale-dir-time rule does not apply.
+    l.push(dx(SVI, if rp { 134_395_554_395_268_593 } else { 134_395_553_010_531_795 }));
+    l.push(kx(FWPROV, n(fw)));
+    l.push(kx(EPOCH, n(fw)));
+    l.push(v(EPOCH, "Epoch", 4, 4, n(fw), if fw { "63" } else { "62" }));
+    l.push(f(WFPDIAG, if fw { 200 } else { 100 }, n(fw)));
+    l
+}
+
+fn rows_of(rep: &Value, k: &str) -> String {
+    rep[k].to_string()
+}
+
+#[test]
+fn execdiff_restore_point_records_only_when_created() {
+    let dir = Dir::new("execdiff-rp");
+    let before = side_world(false, false);
+    let fw_done = [(1, "DeleteFirewallRule", RULE, json!({"kind": "Done"}))];
+    // Created, a Done firewall delete: every side effect authorised.
+    let (code, err, rep) = execdiff_rp(&dir, "created", &before, &side_world(true, true), &fw_done, "Created", None);
+    assert_eq!(
+        (rep["counts"]["collateral"].as_u64(), rep["counts"]["unexplained"].as_u64()),
+        (Some(0), Some(0)),
+        "{err}\n{rep:#}"
+    );
+    assert_eq!(code, 0, "{err}\n{rep:#}");
+    assert!(rep["counts"]["authorised"]["engine-rp"].as_u64().unwrap() >= 9, "{rep:#}");
+    assert!(rep["counts"]["authorised"]["engine-fw"].as_u64().unwrap() >= 2, "{rep:#}");
+    // Negative control: the same records with the restore point not created are not hidden.
+    for rp in ["NotRequested", "Failed"] {
+        let (code, err, rep) = execdiff_rp(&dir, rp, &before, &side_world(true, true), &fw_done, rp, None);
+        assert_eq!(code, 1, "{rp}: {err}");
+        // +K 0001 and its two values, the container value, the provider value.
+        assert_eq!(rep["counts"]["unexplained"], 5, "{rp}: {rep:#}");
+        let (c, u) = (rows_of(&rep, "collateral"), rows_of(&rep, "unexplained"));
+        for s in ["HarddiskVolumeSnapshot2", "0001", "134395554330118898"] {
+            assert!(u.contains(s), "{rp}: {s} not unexplained: {u}");
+        }
+        for s in ["SPP", "SystemRestore", "SessionNumber", "System Volume Information"] {
+            assert!(c.contains(s), "{rp}: {s} not collateral: {c}");
+        }
+        assert!(!c.contains("Epoch") && !c.contains("wfpdiag"), "{rp}: {c}");
+    }
+    // Created, but a record removed: a removal is never the restore point's.
+    let mut gone = removed(&side_world(true, true), &[&format!("{SPP}|LastIndex"), &format!("{VOLSNAP}\\0000")]);
+    gone.retain(|l| !l.contains("HarddiskVolumeSnapshot2"));
+    let mut b4 = before.clone();
+    b4.push(v(BASEC, "STORAGE\\VolumeSnapshot\\HarddiskVolumeSnapshot1", 7, 2, 0x13, ""));
+    let (code, _, rep) = execdiff_rp(&dir, "removed", &b4, &gone, &fw_done, "Created", None);
+    assert_eq!(code, 1);
+    let c = rows_of(&rep, "collateral");
+    for s in ["LastIndex", "0000", "HarddiskVolumeSnapshot1"] {
+        assert!(c.contains(s), "{s} not collateral: {c}");
+    }
+}
+
+#[test]
+fn execdiff_firewall_delete_records_only_with_a_done_firewall_delete() {
+    let dir = Dir::new("execdiff-fw");
+    let before = side_world(false, false);
+    // The side effects of a firewall delete without one: the rule skipped, or no firewall op at all.
+    let mut fw_noise = side_world(false, false);
+    fw_noise.retain(|l| !l.contains("wfascim") && !l.contains("SharedAccess\\\\Epoch") && !l.contains("wfpdiag"));
+    let fw_on = side_world(false, true);
+    fw_noise.extend(
+        fw_on
+            .iter()
+            .filter(|l| l.contains("wfascim") || l.contains("SharedAccess\\\\Epoch") || l.contains("wfpdiag"))
+            .cloned(),
+    );
+    let skipped = [(1, "DeleteFirewallRule", RULE, json!({"kind": "Skipped", "reason": {"kind": "ChangedSinceScan"}}))];
+    let svc_only = [(1, "DeleteService", "PurgeTrapSvc", json!({"kind": "Done"}))];
+    let svc_gone = |l: &Vec<String>| removed(l, &[&format!("{SVC}\\PurgeTrapSvc")]);
+    for (tag, ops, after) in
+        [("skipped", &skipped[..], fw_noise.clone()), ("no-fw-op", &svc_only[..], svc_gone(&fw_noise))]
+    {
+        let (code, err, rep) = execdiff_rp(&dir, tag, &before, &after, ops, "Created", None);
+        assert_eq!(code, 1, "{tag}: {err}");
+        let c = rows_of(&rep, "collateral");
+        for s in ["wfascim", "Epoch", "wfpdiag"] {
+            assert!(c.contains(s), "{tag}: {s} not collateral: {c}");
+        }
+        assert!(rep["counts"]["authorised"].get("engine-fw").is_none(), "{tag}: {rep:#}");
+    }
+    // A Done firewall delete: authorised; but not a removal of the same records.
+    let fw_done = [(1, "DeleteFirewallRule", RULE, json!({"kind": "Done"}))];
+    let (code, err, rep) = execdiff_rp(&dir, "done", &before, &fw_on, &fw_done, "NotRequested", None);
+    assert_eq!(code, 0, "{err}\n{rep:#}");
+    assert_eq!(rep["counts"]["unexplained"], 0, "{rep:#}");
+    let gone = removed(&fw_on, &[&format!("{EPOCH}|Epoch"), WFPDIAG]);
+    let (code, _, rep) = execdiff_rp(&dir, "done-removed", &before, &gone, &fw_done, "NotRequested", None);
+    assert_eq!(code, 1);
+    let c = rows_of(&rep, "collateral");
+    assert!(c.contains("Epoch") && c.contains("wfpdiag"), "{c}");
 }
 
 // ---------------------------------------------------------------------------------------------

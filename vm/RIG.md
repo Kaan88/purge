@@ -1006,7 +1006,8 @@ empty elements, `...WindowsApps;` became `...WindowsApps;<segment>`, and the eng
 ## 12. M1b scan runs (`rig.ps1 -Mode m1b-*`, `truth/m1b.sh`, docs/M1B_DESIGN.json M1B-RIG-HOST)
 
 This section covers the scan side of the M1b gate: G1 (replay), G2 (rig-base), G3 (dirty-base), G4 (traps), G7 (budgets)
-and G8 (Purge-CleanPro). The executor side (G5, G6, K10-K13) is `vm/rig-m1b-exec.ps1` (M1B-RIG-EXEC).
+and G8 (Purge-CleanPro). The executor side (G5, G6, K10-K13) is `vm/rig-m1b-exec.ps1` (M1B-RIG-EXEC); its ambient set and
+the engine side-effect rules of execdiff are in 12.8.
 
 ### 12.1 Modes
 
@@ -1512,3 +1513,65 @@ The user's ruling was a proper fix and a full rerun. The fix has three parts.
    the update landed after snap 0 (m1bcp-python on Purge-CleanPro, signatures 427 days old: INVALID RUN). The wait is
    now the loop described in part 2 above: it ends early only after an exit 0, 60 s of stability and current
    signatures, and keeps Defender's logs with the run.
+
+### 12.8 Executor runs: ambient set and engine side effects (`rig-m1b-exec.ps1`, gate fixes of 2026-11-19)
+
+The executor modes (G5, G6, K10-K13) are documented in the header of `vm/rig-m1b-exec.ps1`; the score is
+`truth/m1b-exec.sh`. The first executor gate campaign (2026-11-19) showed three rig gaps, fixed here.
+
+**K13 task rounds (task Id NUL).** `m1b-crash.ps1` read `TaskCache\Tree\<path>|Id` raw; the REG_SZ came back with
+its NUL terminator, which went into a `rigtool snap --root` and cut the command line there ("rigtool: missing -o"),
+so no task round ran. The Id now goes through `ConvertTo-XTaskId` (trailing NULs trimmed, then it must match the
+rig's GUID pattern, else the round throws), and riglib `ConvertTo-EngineArg`, which quotes every engine and rigtool
+argument, throws on any NUL. `Get-RegRaw` is unchanged (its other callers compare raw data). Self-tests: rig-selftest
+`ConvertTo-XTaskId: ...`, `ConvertTo-EngineArg: a NUL throws`, `Invoke-M2Snap: a root with a NUL throws`.
+
+**K10: the engine's own side effects** (`rigtool execdiff`, authorised as `engine-rp` / `engine-fw`, additions and
+changes only, never a removal; rigtool unit tests `engine_rp_created_*`, `engine_fw_delete_*` and the m1b.rs
+integration tests `execdiff_restore_point_records_only_when_created`,
+`execdiff_firewall_delete_records_only_with_a_done_firewall_delete`, each with the negative control):
+
+- **restore point**, only when the exec report's `restore_point.kind` is `Created` (the M2 runs had `NotRequested`;
+  the existing `Services\VSS\Diag` rule stays unconditional): a new volume snapshot device instance
+  `Control\Class\{533c5b84-ec70-11d2-9505-00c04f79deaf}\<4 digits>` (key and values added); the value
+  `STORAGE\VolumeSnapshot\HarddiskVolumeSnapshot<n>` added to `Control\DeviceContainers\{00000000-0000-0000-FFFF-
+  FFFFFFFFFFFF}\BaseContainers\{same}`; `Wbem\Tracing\Providers\SystemRestoreProv @ root/default` (key added or its
+  LastWriteTime / value count changed, a value named by a number added); `Windows NT\CurrentVersion\SPP|LastIndex` and
+  `...\SystemRestore|LastIndex` changed; `Services\DsmSvc\State|SessionNumber` changed; `<drive>:\System Volume
+  Information` with only its mtime changed. The keys around them are covered by the parent rule.
+- **firewall rule delete**, only when the journal has a `DeleteFirewallRule` op with effective outcome `Done`:
+  `Wbem\Tracing\Providers\wfascim @ ROOT/StandardCimv2` (as above), `Services\SharedAccess\Epoch|Epoch` changed,
+  `C:\ProgramData\Microsoft\Windows\wfp\wfpdiag.etl` changed.
+- **rig**: prefetch files of the rig's PurgeExec* programs, `C:\Windows\Prefetch\PURGEEXEC*.EXE-<8 hex>.pf` (the
+  act-time trap service PurgeExecTrapSvcRun.exe that the rig starts), are rig records (`items::RigRules`).
+
+**K10: the M1b exec ambient set.** The rest of the 2026-11-19 records (CIMWin32 / TERMINALSERVICE WMI tracing keys,
+Defender / USOShared / Security Health logs, `rdyboost\Parameters`, `rblayout.xin`, `ntuser.dat.LOG2` /
+`UsrClass.dat.LOG2`, `StartupProfileData-NonInteractive`, CBS `TiRunning`, `hivelist|...\COMPONENTS`) is Windows
+churn of the exec window. It comes from null runs of the executor flows, not from hand rules:
+
+    $env:VMPWFILE = '<guest password file>'
+    .\vm\rig-m1b-exec.ps1 -Mode m1b-x-null -Count 6 -Engine E:\purge-build\rig-exec\release\purge-engine.exe
+    #   12 runs: xn<k>-m1b-x-fidelity and xn<k>-m1b-x-traps, k = 1..6, each from a fresh restore of m2-base;
+    #   then host rigtool `ambient --m2 --added --null <the 12 run dirs> -o vm\truth\m1b-exec-ambient.json`
+    .\vm\rig-m1b-exec.ps1 -Mode m1b-x-ambient -Count 6      # host only: rebuild the file from those runs
+    .\vm\rig-m1b-exec.ps1 -Mode m1b-x-fidelity -Engine ...   # the gate modes then push it (below)
+
+- A null run is the guest flow of `m1b-x-fidelity` / `m1b-x-traps` with opts `null` (and `null_wait`,
+  `-NullWaitSec`, default 10 s, about the gate runs' exec time): the same pauses, install, plants, harvest, scan,
+  selection, settle wait, (traps) the act-time changes, snap A and deep A, then the idle wait where exec would run,
+  snap B, deep B, the store, and nothing after (no exec, so no restore point, no firewall delete; run.json
+  `null_run`). No ambient set is pushed to a null run.
+- `rigtool ambient --m2 --added` is the M2 set builder (§11.8: exact record keys, token patterns, one record each,
+  never a subtree, a `~` entry never matches a `-` record) that also keeps added (`+`) records: K10 fails on
+  unexplained additions, M2's gate does not. An added entry matches an added record only.
+- **One file per VM** (`Get-XAmbientFile`): Inbound `truth\m1b-exec-ambient.json`, Purge-CleanPro
+  `truth\m1b-exec-ambient-cleanpro.json`; `-AmbientFile` names another. `-RunPrefix` changes the null runs' prefix
+  (default `xn`), `-Count` the rounds. A failed null run writes no file. Regenerate it when m2-base is rebuilt.
+- **Gate modes:** `m1b-x-fidelity` and `m1b-x-traps` refuse to start without the file; `m1b-x-undo-traps` and
+  `m1b-x-crash` push it when it exists, else the VM's M2 set. rig.ps1 `Push-M2Ambient` copies it to the guest as
+  `C:\cr\bin\m2-ambient.json` (rig-m1b-exec.ps1 replaces `Get-M2AmbientFile` for its own runs), where riglib
+  `Invoke-M2Execdiff` passes it as `--ambient`. The host records the pushed file and its SHA-256 in opts.ambient, the
+  guest records both and the guest copy's SHA-256 in run.json `results.ambient`.
+- Self-test (`-Mode m1b-x-selftest`): `null_run_names`, `ambient_file_per_vm`, `ambient_build_keeps_added_records`,
+  `guest_null_window_replaces_exec`; rigtool `m2_run_records_keep_added_records_only_when_asked`.

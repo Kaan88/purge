@@ -155,6 +155,12 @@ impl RigRules {
                 ci(r"^P:[A-Z]:\\Windows\\Prefetch\\PURGE-ENGINE\.EXE-[0-9A-F]+\.pf$"),
                 "rig:purge-engine prefetch".to_string(),
             ),
+            // M1b executor runs (RIG.md section 12.8): the rig's own fabricated programs are all named PurgeExec*
+            // (guest\m1b-exec.ps1; e.g. the act-time trap service PurgeExecTrapSvcRun.exe that the rig starts).
+            (
+                ci(r"^P:[A-Z]:\\Windows\\Prefetch\\PURGEEXEC[A-Z0-9_]*\.EXE-[0-9A-F]{8}\.pf$"),
+                "rig:PurgeExec* prefetch".to_string(),
+            ),
         ];
         let guids = rig_task_guids(snaps);
         if !guids.is_empty() {
@@ -290,6 +296,18 @@ mod tests {
         assert!(r.check("P:C:\\Windows\\Prefetch\\PURGE-ENGINE-HELPER.EXE-1A2B3C4D.pf").is_none());
         assert!(r.check("P:C:\\Windows\\Prefetch\\UNINS000.EXE-1A2B3C4D.pf").is_none());
         assert!(r.check("P:C:\\Windows\\Prefetch\\PURGE-ENGINE.EXE-1A2B3C4D.pf\\x").is_none());
+        // M1b executor runs: the rig's PurgeExec* programs (the trap service it starts), nothing else.
+        assert_eq!(
+            r.check("P:C:\\WINDOWS\\Prefetch\\PURGEEXECTRAPSVCRUN.EXE-F46E565D.pf"),
+            Some("rig:PurgeExec* prefetch")
+        );
+        assert!(r.check("P:C:\\Windows\\Prefetch\\PurgeExecCr001.exe-0123abcd.pf").is_some());
+        assert!(r.check("P:C:\\Windows\\Prefetch\\PURGEEXEC.EXE-F46E565D.pf").is_some());
+        assert!(r.check("P:C:\\Windows\\Prefetch\\APP.EXE-F46E565D.pf").is_none());
+        assert!(r.check("P:C:\\Windows\\Prefetch\\XPURGEEXECTRAPSVCRUN.EXE-F46E565D.pf").is_none());
+        assert!(r.check("P:C:\\Windows\\Prefetch\\PURGEEXECTRAPSVCRUN.EXE-F46E565D.pf\\x").is_none());
+        assert!(r.check("P:C:\\Windows\\Prefetch\\PURGEEXEC.DLL-F46E565D.pf").is_none());
+        assert!(r.check("P:C:\\Users\\x\\Prefetch\\PURGEEXECTRAPSVCRUN.EXE-F46E565D.pf").is_none());
         // The medium-integrity install task of vscode-user.
         assert!(r.check("P:C:\\Windows\\System32\\Tasks\\PurgeRigInstall").is_some());
         assert!(r.check(&format!("K:{TASKCACHE}\\Tree\\PurgeRigInstall")).is_some());

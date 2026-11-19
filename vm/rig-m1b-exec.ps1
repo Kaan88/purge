@@ -4,6 +4,7 @@
 
     $env:VMPWFILE = 'C:\path\to\pw.txt'
     .\vm\rig-m1b-exec.ps1 -Mode m1b-x-selftest                       # host only, no VM
+    .\vm\rig-m1b-exec.ps1 -Mode m1b-x-null -Count 6 -Engine ...      # ambient set first (once per m2-base, RIG.md 12.8)
     .\vm\rig-m1b-exec.ps1 -Mode m1b-x-fidelity -Engine E:\purge-build\rig-exec\release\purge-engine.exe
     .\vm\rig-m1b-exec.ps1 -Mode m1b-x-traps -Engine ...
     .\vm\rig-m1b-exec.ps1 -Mode m1b-x-undo-traps -Engine ...
@@ -28,6 +29,16 @@
     m1b-x-elevated    the M1b elevated tests (cases `elevated`): host `cargo test --release --no-run`, the binaries
                       and a mirror of their package dirs copied to the guest, run by the elevated agent with
                       --include-ignored; writes vm\runs\<prefix>m1b-x-elevated\elevated-tests.json.
+    m1b-x-null        the M1b exec ambient set (RIG.md section 12.8): -Count rounds (default 6), each a null run of
+                      m1b-x-fidelity and of m1b-x-traps (runs <prefix><k>-<mode>, default prefix xn: xn1-m1b-x-fidelity;
+                      the same phases and timing up to deep A, -NullWaitSec idle seconds (default 10) instead of exec,
+                      snap B, deep B, nothing after: no restore point, no firewall delete), then host rigtool
+                      `ambient --m2 --added --null <run dirs>` -> -AmbientFile (default the VM's: Inbound
+                      truth\m1b-exec-ambient.json, Purge-CleanPro truth\m1b-exec-ambient-cleanpro.json). A failed null
+                      run writes no file. m1b-x-fidelity and m1b-x-traps refuse to run without it; m1b-x-undo-traps and
+                      m1b-x-crash push it when it exists (else the VM's M2 set). Each run records the pushed file and
+                      its SHA-256 (opts.ambient; guest run.json results.ambient).
+    m1b-x-ambient     host only: the same ambient file again from existing null runs (-Count, -RunPrefix as above).
     m1b-x-selftest    no VM: exec_sh_fails_on_missing_input, exec_cases_json_lists_every_fault_point_per_kind,
                       crash_script_reports_unreached_point_as_failure (and positive controls), the power-off journal
                       proof, and the bad-run controls (review R4 S7): truth\m1b-exec.sh on a synthetic good run set
@@ -42,8 +53,14 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('m1b-x-fidelity', 'm1b-x-traps', 'm1b-x-undo-traps', 'm1b-x-crash', 'm1b-x-elevated', 'm1b-x-selftest')]
+    [ValidateSet('m1b-x-fidelity', 'm1b-x-traps', 'm1b-x-undo-traps', 'm1b-x-crash', 'm1b-x-elevated', 'm1b-x-selftest', 'm1b-x-null', 'm1b-x-ambient')]
     [string] $Mode,
+    # m1b-x-null / m1b-x-ambient: null rounds (each one m1b-x-fidelity and one m1b-x-traps null run), the idle seconds
+    # in place of exec, and the ambient file written (default: the VM's, Get-XAmbientFile). VM modes: the ambient set
+    # pushed for execdiff (default the VM's M1b exec set, which must exist).
+    [int] $Count = 6,
+    [int] $NullWaitSec = 10,
+    [string] $AmbientFile = '',
     [string] $Engine = '',
     [string] $RunPrefix = '',
     [string] $Snapshot = 'm2-base',
@@ -62,7 +79,8 @@ $ErrorActionPreference = 'Stop'
 $X = [ordered]@{ mode = $Mode; engine = $Engine; prefix = $RunPrefix; snapshot = $Snapshot; vm = $VmName; hard = [bool]$HardPowerOff
     kinds = @($Kinds | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     points = @($Points | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    batch = $BatchSize; settle_max = $SettleMax; settle_min_uptime = $SettleMinUptime; target = $CargoTargetDir }
+    batch = $BatchSize; settle_max = $SettleMax; settle_min_uptime = $SettleMinUptime; target = $CargoTargetDir
+    count = $Count; null_wait = $NullWaitSec; ambient = $AmbientFile }
 $XRigDir = $PSScriptRoot
 $XRepo = Split-Path -Parent $PSScriptRoot
 $XCasesFile = Join-Path $XRigDir 'truth\m1b-exec-cases.json'
@@ -115,6 +133,34 @@ function Get-XBuildInfo([string]$Path = '') {
         if ($LASTEXITCODE -eq 0) { $dirty = [bool]($d | Where-Object { "$_".Trim() }) }
     } finally { $ErrorActionPreference = $old }
     [ordered]@{ path = $Path; sha256 = $sha; commit = $commit; source_dirty = $dirty }
+}
+
+# The M1b executor ambient set of a VM (RIG.md section 12.8), built from its own null runs (m1b-x-null): Inbound
+# truth\m1b-exec-ambient.json, Clean-Pro truth\m1b-exec-ambient-cleanpro.json. Another VM has none.
+function Get-XAmbientFile([string]$Vm) {
+    $leaf = switch -CaseSensitive ($Vm) { 'Inbound-Win11-Test' { 'm1b-exec-ambient.json' } 'Purge-CleanPro' { 'm1b-exec-ambient-cleanpro.json' } default { $null } }
+    if (-not $leaf) { throw "no M1b exec ambient set for VM '$Vm'" }
+    Join-Path $XRigDir "truth\$leaf"
+}
+
+# The guest modes a null round runs (each its exec window with an idle wait instead of exec).
+$XNullModes = @('m1b-x-fidelity', 'm1b-x-traps')
+
+# The run name of null round $K of guest mode $M: <prefix><k>-<mode> (default prefix xn: xn1-m1b-x-fidelity), as M2's
+# Invoke-M2NullCampaign names its runs; never a gate run's name.
+function Get-XNullRunName([int]$K, [string]$M, [string]$Prefix = '') {
+    if ($K -lt 1) { throw "bad null round $K" }
+    if ($XNullModes -cnotcontains $M) { throw "a null run is for $($XNullModes -join ' / ') only (got '$M')" }
+    if (-not $Prefix) { $Prefix = 'xn' }
+    $r = "$Prefix$K-$M"
+    if ($r -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$r'" }
+    $r
+}
+
+# The arguments of the host rigtool call that builds the M1b exec ambient set from null run dirs.
+function Get-XAmbientArgs([string[]]$Dirs, [string]$Out) {
+    if (-not @($Dirs).Count) { throw 'no null run dirs' }
+    @('ambient', '--m2', '--added', '--null') + @($Dirs) + @('-o', $Out)
 }
 
 function Get-XSha256File([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
@@ -297,6 +343,35 @@ function Invoke-XSelftest {
         }
     } catch { & $add 'exec_sh_bad_run_controls' $false $_.Exception.Message }
 
+    # The null mode and the M1b exec ambient set (RIG.md section 12.8).
+    try {
+        $n1 = Get-XNullRunName 1 'm1b-x-fidelity'
+        $n2 = Get-XNullRunName 12 'm1b-x-traps' 'cpxn'
+        $bad = 0
+        foreach ($b in @(@(0, 'm1b-x-fidelity', ''), @(1, 'm1b-x-undo-traps', ''), @(1, 'm1b-x-crash', ''), @(1, 'm1b-x-traps', 'Bad Prefix'))) {
+            try { $null = Get-XNullRunName $b[0] $b[1] $b[2]; $bad++ } catch { }
+        }
+        & $add 'null_run_names' ($n1 -ceq 'xn1-m1b-x-fidelity' -and $n2 -ceq 'cpxn12-m1b-x-traps' -and $bad -eq 0 -and ($XNullModes -join ',') -ceq 'm1b-x-fidelity,m1b-x-traps') "$n1, $n2; $bad bad name(s) accepted"
+        $ai = Get-XAmbientFile 'Inbound-Win11-Test'; $ac = Get-XAmbientFile 'Purge-CleanPro'
+        $threw = $false; try { $null = Get-XAmbientFile 'Some-Other-VM' } catch { $threw = $true }
+        & $add 'ambient_file_per_vm' ($ai -like '*\truth\m1b-exec-ambient.json' -and $ac -like '*\truth\m1b-exec-ambient-cleanpro.json' -and $threw) "$ai | $ac"
+        $aa = @(Get-XAmbientArgs @('runs\xn1-m1b-x-fidelity', 'runs\xn1-m1b-x-traps') 'out.json')
+        & $add 'ambient_build_keeps_added_records' (($aa -join ' ') -ceq 'ambient --m2 --added --null runs\xn1-m1b-x-fidelity runs\xn1-m1b-x-traps -o out.json') ($aa -join ' ')
+        # The guest flows: the null window replaces exec right after deep A, in both null modes; nothing in the null
+        # branch runs the engine.
+        $g = [IO.File]::ReadAllText((Join-Path $XRigDir 'guest\m1b-exec.ps1'))
+        $okFlow = $true; $why = @()
+        foreach ($f in @(@('Invoke-FidelityMode', 'deepscope-main.json', 'exec-main'), @('Invoke-TrapsMode', 'deepscope-traps.json', 'exec-traps'))) {
+            $body = [regex]::Match($g, "(?s)function $($f[0]) \{(.*?)\r?\n\}\r?\n").Groups[1].Value
+            $iDeep = $body.IndexOf("Phase 'deep-a'"); $iNull = $body.IndexOf('if ($NullRun) {'); $iExec = $body.IndexOf("Phase '$($f[2])'")
+            $nullLine = $(if ($iNull -ge 0) { $body.Substring($iNull, $body.IndexOf("`n", $iNull) - $iNull) } else { '' })
+            if (-not ($iDeep -ge 0 -and $iNull -gt $iDeep -and $iExec -gt $iNull -and $nullLine -match 'Invoke-ExNullWindow' -and $nullLine -match 'return' -and $nullLine -notmatch 'Invoke-ExExec|Invoke-M2Engine')) { $okFlow = $false; $why += "$($f[0]): deep-a $iDeep, null $iNull, exec $iExec" }
+        }
+        $win = [regex]::Match($g, '(?s)function Invoke-ExNullWindow\(.*?\r?\n\}\r?\n').Value
+        $okWin = ($win -match "Phase 'null-wait'" -and $win -match 'Start-Sleep -Seconds \$NullWaitSec' -and $win -match "Phase 'snap-b'" -and $win -match 'snap-\$Run-b\.tsv\.gz' -and $win -notmatch 'Invoke-M2Engine|Invoke-ExExec|Invoke-M2Execdiff')
+        & $add 'guest_null_window_replaces_exec' ($okFlow -and $okWin) (($why + $(if (-not $okWin) { 'Invoke-ExNullWindow' })) -join '; ')
+    } catch { & $add 'null_mode' $false $_.Exception.Message }
+
     # Guest pure helpers: plan rows and outcomes.
     try {
         $plan = [pscustomobject]@{ items = @([pscustomobject]@{ band = 'Safe'; preselected = $true }, [pscustomobject]@{ band = 'Weak'; preselected = $false }) }
@@ -349,13 +424,36 @@ function Get-XRunName([string]$M) {
     $r
 }
 
-function Invoke-XGuestMode {
-    $run = Get-XRunName $X.mode
+# The ambient set a run pushes for execdiff (RIG.md section 12.8): -AmbientFile, else the VM's M1b exec set
+# (Get-XAmbientFile, built by m1b-x-null). m1b-x-fidelity and m1b-x-traps (K10) require it; the other modes push it
+# when it exists, else the VM's M2 set as before (their execdiffs are scoped). rig.ps1 Push-M2Ambient copies the file
+# to the guest as C:\cr\bin\m2-ambient.json, where riglib Invoke-M2Execdiff passes it as --ambient; a null run
+# pushes none. The Get-M2AmbientFile below replaces rig.ps1's (the M2 set) for this script only.
+$XAmbient = $(if ($X.ambient) { $X.ambient } else { Get-XAmbientFile $X.vm })
+$XM2Ambient = $(try { Get-M2AmbientFile } catch { $null })
+$script:XPushAmbient = $null
+function Get-M2AmbientFile([string]$Name = $script:VmName) { $script:XPushAmbient }
+$XAmbientModes = @('m1b-x-fidelity', 'm1b-x-traps')
+
+# One guest-mode run from a fresh restore. -GuestMode / -Run default to the script's mode; -Null: a null run of
+# m1b-x-fidelity / m1b-x-traps (opts null, null_wait; no ambient set pushed).
+function Invoke-XGuestMode([string]$GuestMode = $X.mode, [string]$Run = '', [switch]$Null) {
+    $run = $(if ($Run) { $Run } else { Get-XRunName $GuestMode })
     $eng = Get-M2Engine -Engine $X.engine
     $casesB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($XCasesFile))
-    $opts = [ordered]@{ mode = $X.mode; snapshot = $X.snapshot; cases_b64 = $casesB64; engine_build = (Get-XBuildInfo $eng) }
+    $opts = [ordered]@{ mode = $GuestMode; snapshot = $X.snapshot; cases_b64 = $casesB64; engine_build = (Get-XBuildInfo $eng) }
+    if ($Null) {
+        if ($XNullModes -cnotcontains $GuestMode) { throw "a null run is for $($XNullModes -join ' / ') only" }
+        $opts.null = $true; $opts.null_wait = $X.null_wait
+        $script:XPushAmbient = $null
+    } else {
+        $have = Test-Path -LiteralPath $XAmbient -PathType Leaf
+        if (-not $have -and $XAmbientModes -ccontains $GuestMode) { throw "no M1b exec ambient set $XAmbient (run -Mode m1b-x-null first, RIG.md section 12.8, or pass -AmbientFile)" }
+        $script:XPushAmbient = $(if ($have) { $XAmbient } else { $XM2Ambient })
+        if ($script:XPushAmbient -and (Test-Path -LiteralPath $script:XPushAmbient -PathType Leaf)) { $opts.ambient = [ordered]@{ file = $script:XPushAmbient; sha256 = (Get-XSha256File $script:XPushAmbient) } }
+    }
     $tpl = 'm1b-exec.ps1'; $to = 7200
-    if ($X.mode -eq 'm1b-x-crash') {
+    if ($GuestMode -eq 'm1b-x-crash') {
         $tpl = 'm1b-crash.ps1'; $to = 14400
         $opts.batch = $X.batch; $opts.hard_poweroff = $X.hard
         if ($X.kinds.Count) { $opts.kinds = $X.kinds }
@@ -367,11 +465,11 @@ function Invoke-XGuestMode {
     New-Item -ItemType Directory -Force $script:RunsDir | Out-Null
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $script:RigLogFile = Join-Path $script:RunsDir "m1b-$run-$stamp.log"
-    Write-RigLog "M1b $($X.mode) as run $run from $($X.snapshot) on $script:VmName; engine $eng$(if ($X.hard) { '; hard power-off' })$(if ($X.kinds.Count) { '; kinds ' + ($X.kinds -join ',') })$(if ($X.points.Count) { '; points ' + ($X.points -join ',') })"
+    Write-RigLog "M1b $GuestMode as run $run from $($X.snapshot) on $script:VmName; engine $eng$(if ($Null) { "; null run, idle $($X.null_wait) s" } else { "; ambient $($script:XPushAmbient)" })$(if ($X.hard) { '; hard power-off' })$(if ($X.kinds.Count) { '; kinds ' + ($X.kinds -join ',') })$(if ($X.points.Count) { '; points ' + ($X.points -join ',') })"
     $rec = $null
     try {
         $null = Get-PwFile
-        $rec = Invoke-SnapshotJob -Run $run -Mode $X.mode -Opts $opts -Template $tpl -Snapshot $X.snapshot -Engine $eng -HardPowerOff:$X.hard -TimeoutSec $to
+        $rec = Invoke-SnapshotJob -Run $run -Mode $GuestMode -Opts $opts -Template $tpl -Snapshot $X.snapshot -Engine $eng -HardPowerOff:$X.hard -TimeoutSec $to
         [IO.File]::WriteAllText((Join-Path $script:RunsDir "m1b-$run-$stamp.json"), (ConvertTo-Json -InputObject $rec -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
     } finally {
         Stop-XVm $X.snapshot
@@ -379,6 +477,52 @@ function Invoke-XGuestMode {
         $script:RigLogFile = $null
     }
     $rec
+}
+
+# The host rigtool (ambient builds): $env:RIG_RIGTOOL, else vm\rigtool\target\release\rigtool.exe.
+function Get-XHostRigTool {
+    $t = $(if ($env:RIG_RIGTOOL) { $env:RIG_RIGTOOL } else { Join-Path $XRigDir 'rigtool\target\release\rigtool.exe' })
+    if (-not (Test-Path -LiteralPath $t -PathType Leaf)) { throw "rigtool not built: $t" }
+    $t
+}
+
+# m1b-x-ambient (host only): the M1b exec ambient set from the null runs <prefix><k>-<mode>, k = 1..-Count, of both
+# null modes (every one must hold its snapshot pair) -> $XAmbient. Returns the dirs used.
+function Invoke-XBuildAmbient {
+    $dirs = @()
+    foreach ($k in 1..$X.count) {
+        foreach ($m in $XNullModes) {
+            $r = Get-XNullRunName $k $m $X.prefix
+            $d = Join-Path $script:RunsDir $r
+            if (-not (Test-Path -LiteralPath (Join-Path $d "snap-$r-a.tsv.gz")) -or -not (Test-Path -LiteralPath (Join-Path $d "snap-$r-b.tsv.gz"))) { throw "null run $r has no snapshot pair in $d" }
+            $dirs += $d
+        }
+    }
+    $a = Get-XAmbientArgs $dirs $XAmbient
+    $tool = Get-XHostRigTool
+    Write-Host "$tool $($a -join ' ')"
+    & $tool @a
+    if ($LASTEXITCODE -ne 0) { throw "rigtool ambient --m2 --added exited $LASTEXITCODE" }
+    Write-Host "M1b exec ambient set ($($dirs.Count) null runs) -> $XAmbient"
+    $dirs
+}
+
+# m1b-x-null: -Count null rounds, each a null run of m1b-x-fidelity and of m1b-x-traps from a fresh restore, then the
+# ambient set (Invoke-XBuildAmbient). Any failed null run: no ambient file is written (exit 1).
+function Invoke-XNullCampaign {
+    if ($X.count -lt 1) { throw '-Count must be at least 1' }
+    if ($X.hard) { throw '-HardPowerOff is for m1b-x-crash only' }
+    $null = Get-XHostRigTool
+    $bad = @()
+    foreach ($k in 1..$X.count) {
+        foreach ($m in $XNullModes) {
+            $run = Get-XNullRunName $k $m $X.prefix
+            $r = Invoke-XGuestMode -GuestMode $m -Run $run -Null
+            if (-not $r -or -not $r.ok) { $bad += $run; Write-Host "!! null run $run failed: $(if ($r) { $r.error })" }
+        }
+    }
+    if ($bad.Count) { throw "null run(s) failed: $($bad -join ', '); no ambient set written" }
+    $null = Invoke-XBuildAmbient
 }
 
 # The M1b elevated tests (cases `elevated`). Binaries read files through env!("CARGO_MANIFEST_DIR") (e.g. the
@@ -488,7 +632,15 @@ function Invoke-XElevated {
     [pscustomobject]$doc
 }
 
+if ($X.mode -eq 'm1b-x-ambient') {
+    try { $null = Invoke-XBuildAmbient } catch { Write-Host "m1b-x-ambient: $($_.Exception.Message)"; exit 1 }
+    exit 0
+}
 Assert-RigVm
+if ($X.mode -eq 'm1b-x-null') {
+    try { Invoke-XNullCampaign } catch { Write-Host "m1b-x-null: $($_.Exception.Message)"; exit 1 }
+    exit 0
+}
 if ($X.mode -eq 'm1b-x-elevated') {
     $d = Invoke-XElevated
     if (-not $d.pass) { exit 1 }

@@ -419,13 +419,14 @@ impl RecordMatcher {
     }
 }
 
-/// The removed and changed records of one null run's exec window (rig records dropped). Added records are left out:
-/// execdiff never fails on them (they are `unexplained`).
-pub fn m2_run_records(a: &Snap, b: &Snap) -> Vec<String> {
+/// The removed and changed records of one null run's exec window (rig records dropped). Added records are left out
+/// unless `added`: M2's execdiff never fails on them (they are `unexplained`); the M1b executor gate (K10) does, so
+/// its set (`--added`, RIG.md section 12.8) holds them too.
+pub fn m2_run_records(a: &Snap, b: &Snap, added: bool) -> Vec<String> {
     let rig = RigRules::new(&[a, b]);
     let mut out: Vec<String> = diff::diff(a, b)
         .iter()
-        .filter(|c| c.op != '+')
+        .filter(|c| added || c.op != '+')
         .filter(|c| {
             let k = change_key(c);
             record_as_target(&k).is_some_and(|t| rig.check(&t).is_none())
@@ -437,9 +438,10 @@ pub fn m2_run_records(a: &Snap, b: &Snap) -> Vec<String> {
     out
 }
 
-/// `rigtool ambient --m2 --null DIR...`: each DIR a null run of an M2 mode (exec-run.ps1 with opts null), holding
-/// `snap-<DIR name>-a.tsv.gz` and `-b.tsv.gz`.
-pub fn cmd_ambient_m2(dirs: &[PathBuf], out: &Path) -> Result<()> {
+/// `rigtool ambient --m2 [--added] --null DIR...`: each DIR a null run of an M2 mode (exec-run.ps1 with opts null)
+/// or of an M1b executor mode (m1b-exec.ps1 with opts null, RIG.md section 12.8), holding `snap-<DIR name>-a.tsv.gz`
+/// and `-b.tsv.gz`. `added`: added (+) records too (the M1b executor set).
+pub fn cmd_ambient_m2(dirs: &[PathBuf], out: &Path, added: bool) -> Result<()> {
     let mut items = Vec::new();
     for d in dirs {
         let id = d.file_name().and_then(|n| n.to_str()).unwrap_or("null").to_string();
@@ -453,7 +455,7 @@ pub fn cmd_ambient_m2(dirs: &[PathBuf], out: &Path) -> Result<()> {
         }
         let a = Snap::load(&fa, LoadOpts::default())?;
         let b = Snap::load(&fb, LoadOpts::default())?;
-        let recs = m2_run_records(&a, &b);
+        let recs = m2_run_records(&a, &b, added);
         items.push((id, d.display().to_string(), vec![fa.display().to_string(), fb.display().to_string()], recs));
     }
     let targets: Vec<String> =
@@ -476,13 +478,18 @@ pub fn cmd_ambient_m2(dirs: &[PathBuf], out: &Path) -> Result<()> {
     }
     records.sort_by(|a, b| canon::ci_cmp(a, b));
     let patterns: BTreeSet<String> = runs.iter().flat_map(|r| r.patterns.iter().cloned()).collect();
+    let note = if added {
+        "added (+), removed (-) and changed (~) records of diff(snap A, snap B) in null runs of the M1b executor \
+         modes (exec replaced by an idle wait); a record is ambient only when it matches a key exactly or a \
+         token-generalised pattern, never by a parent (vm/RIG.md section 12.8)"
+    } else {
+        "removed (-) and changed (~) records of diff(snap A, snap B) in null runs of the M2 modes (exec replaced \
+         by an idle wait); a record is ambient only when it matches a key exactly or a token-generalised \
+         pattern, never by a parent (vm/RIG.md section 11.8)"
+    };
     let j = M2AmbientJson {
         schema: M2_SCHEMA.into(),
-        note:
-            "removed (-) and changed (~) records of diff(snap A, snap B) in null runs of the M2 modes (exec replaced \
-               by an idle wait); a record is ambient only when it matches a key exactly or a token-generalised \
-               pattern, never by a parent (vm/RIG.md section 11.8)"
-                .into(),
+        note: note.into(),
         runs,
         records,
         patterns: patterns.into_iter().collect(),
@@ -740,6 +747,38 @@ mod tests {
         assert!(m.matches(&ch('-', 'V', k, Some("134392558165883938"))).is_some());
         assert!(m.matches(&ch('-', 'K', k, None)).is_none());
         assert!(m.matches(&ch('-', 'V', k, Some("Other"))).is_none());
+    }
+
+    #[test]
+    fn m2_run_records_keep_added_records_only_when_asked() {
+        use crate::snap::{write_f, write_k, write_v};
+        let a = crate::testutil::snap_text(|t| {
+            write_k(t, "HKLM\\SOFTWARE\\Churn", 1, Some(1), Some(0));
+            write_v(t, "HKLM\\SOFTWARE\\Churn", "n", 4, 4, 1, "1");
+            write_f(t, "C:\\ProgramData\\Microsoft\\churn.log", 10, 0x20, 1, 0);
+        });
+        let b = crate::testutil::snap_text(|t| {
+            write_k(t, "HKLM\\SOFTWARE\\Churn", 1, Some(2), Some(0));
+            write_v(t, "HKLM\\SOFTWARE\\Churn", "n", 4, 4, 2, "2");
+            write_v(t, "HKLM\\SOFTWARE\\Churn", "134395554330118898", 11, 8, 3, "");
+            write_f(t, "C:\\ProgramData\\Microsoft\\churn.log", 10, 0x20, 1, 0);
+            write_f(t, "C:\\ProgramData\\Microsoft\\new.etl", 10, 0x20, 1, 0);
+            // A rig file is never ambient.
+            write_f(t, "C:\\Windows\\Prefetch\\RIGTOOL.EXE-1A2B3C4D.pf", 10, 0x20, 1, 0);
+        });
+        let m2 = m2_run_records(&a, &b, false);
+        assert!(m2.iter().all(|k| !k.starts_with('+')), "{m2:?}");
+        assert!(m2.iter().any(|k| k == "~V:HKLM\\SOFTWARE\\Churn|n"), "{m2:?}");
+        let x = m2_run_records(&a, &b, true);
+        assert!(x.iter().any(|k| k == "+F:C:\\ProgramData\\Microsoft\\new.etl"), "{x:?}");
+        assert!(x.iter().any(|k| k == "+V:HKLM\\SOFTWARE\\Churn|134395554330118898"), "{x:?}");
+        assert!(x.iter().all(|k| !k.contains("RIGTOOL")), "{x:?}");
+        // An added record matches as added only: never the same object's removal or change.
+        let m = RecordMatcher::new(&x, &[]).unwrap();
+        assert!(m.matches(&ch('+', 'F', "C:\\ProgramData\\Microsoft\\new.etl", None)).is_some());
+        assert!(m.matches(&ch('-', 'F', "C:\\ProgramData\\Microsoft\\new.etl", None)).is_none());
+        assert!(m.matches(&ch('~', 'F', "C:\\ProgramData\\Microsoft\\new.etl", None)).is_none());
+        assert!(m.matches(&ch('+', 'F', "C:\\ProgramData\\Microsoft\\new.etl\\x", None)).is_none());
     }
 
     #[test]

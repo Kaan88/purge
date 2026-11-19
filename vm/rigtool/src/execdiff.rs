@@ -24,7 +24,13 @@
 //!   left `PendingReboot` or reconciled; (engine-rm) the engine's own Restart Manager session state, keys and
 //!   values at or under `HKU\<sid>\Software\Microsoft\RestartManager` (the lock query's documented side effect,
 //!   RIG.md §11.8); (engine-rp) the VSS diagnostics the engine's restore point writes, keys and values at or
-//!   under `HKLM\SYSTEM\<control set>\Services\VSS\Diag`, changed or added, never removed; (ambient) the ambient set: with an M2 set (`purge.rig.m2ambient/1`) only the exact op and
+//!   under `HKLM\SYSTEM\<control set>\Services\VSS\Diag`, changed or added, never removed, and, only when the
+//!   report's restore point is `Created`, the other records creating one writes, additions and changes only (the
+//!   volume snapshot device instance and container value, the SystemRestoreProv WMI tracing key, `SPP` and
+//!   `SystemRestore|LastIndex`, `DsmSvc\State|SessionNumber`, the `System Volume Information` mtime; see
+//!   `is_engine_rp_created`); (engine-fw) only when the journal has a `Done` `DeleteFirewallRule`: the wfascim WMI
+//!   tracing key, `SharedAccess\Epoch|Epoch` and `wfpdiag.etl`, additions and changes only (`is_engine_fw_delete`);
+//!   (ambient) the ambient set: with an M2 set (`purge.rig.m2ambient/1`) only the exact op and
 //!   record seen in the null runs, or its token pattern, never a subtree; (parent) a directory whose only change is
 //!   its LastWriteTime, or a key whose only changes are LastWriteTime / value count / subkey count, when an
 //!   authorised record was added or removed directly inside it.
@@ -773,6 +779,138 @@ fn is_engine_rp(c: &Change) -> bool {
         && s[5].eq_ignore_ascii_case("Diag")
 }
 
+/// `HKLM\SYSTEM\<CurrentControlSet|ControlSetNNN>\<rest...>`: the segments after the control set, or None.
+fn system_cs_rest(path: &str) -> Option<Vec<&str>> {
+    let s: Vec<&str> = path.split('\\').collect();
+    let ok = s.len() >= 3
+        && (s[0].eq_ignore_ascii_case("HKLM") || s[0].eq_ignore_ascii_case("HKEY_LOCAL_MACHINE"))
+        && s[1].eq_ignore_ascii_case("SYSTEM")
+        && (s[2].eq_ignore_ascii_case("CurrentControlSet")
+            || (s[2].len() == 13
+                && s[2].is_char_boundary(10)
+                && s[2][..10].eq_ignore_ascii_case("ControlSet")
+                && s[2][10..].bytes().all(|b| b.is_ascii_digit())));
+    ok.then(|| s[3..].to_vec())
+}
+
+/// Does `rest` (path segments) equal `want`, case-insensitively?
+fn segs_eq(rest: &[&str], want: &[&str]) -> bool {
+    rest.len() == want.len() && rest.iter().zip(want).all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
+
+fn all_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The Volume Snapshot device class (volsnap's device instances, `HarddiskVolumeSnapshot<n>`).
+const VOLSNAP_CLASS: &str = "{533c5b84-ec70-11d2-9505-00c04f79deaf}";
+/// The "no container" device container, which holds the volume snapshot devices.
+const NULL_CONTAINER: &str = "{00000000-0000-0000-FFFF-FFFFFFFFFFFF}";
+const HARDDISK_VOLUME_SNAPSHOT: &str = "STORAGE\\VolumeSnapshot\\HarddiskVolumeSnapshot";
+const WMI_TRACING: &str = "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers";
+/// The System Restore WMI provider (the engine creates its restore point through it).
+const SR_PROVIDER: &str = "SystemRestoreProv @ root/default";
+/// The Windows Firewall WMI provider (the engine deletes a firewall rule through it).
+const FW_PROVIDER: &str = "wfascim @ ROOT/StandardCimv2";
+const NT_CURRENT: &str = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+const WFPDIAG: &str = "C:\\ProgramData\\Microsoft\\Windows\\wfp\\wfpdiag.etl";
+
+/// A WMI provider's tracing key `Wbem\Tracing\Providers\<provider>` (exactly): added, or changed in its
+/// LastWriteTime / value count only; or a value added to it whose name is a number (the provider's load time, a
+/// FILETIME). Nothing else, and never a removal.
+fn is_wmi_tracing(c: &Change, provider: &str) -> bool {
+    if !canon::ci_eq(&c.path, &format!("{WMI_TRACING}\\{provider}")) {
+        return false;
+    }
+    match (c.op, c.rec) {
+        ('+', 'K') => true,
+        ('~', 'K') => only_changes(c, &["lwt ", "n_values "]),
+        ('+', 'V') => c.name.as_deref().is_some_and(all_digits),
+        _ => false,
+    }
+}
+
+/// What creating a restore point writes besides `VSS\Diag` (the M1b executor runs of 2026-11-19, absent from the
+/// M2 runs whose restore point was `NotRequested`). Applied only when the exec report's restore point is `Created`
+/// (`check`); additions and changes only, a removal (`-`) is never covered:
+/// - a new volume snapshot device instance: the key `Control\Class\{533c5b84-...}\<4 digits>` and its values, added;
+/// - its container entry: the value `STORAGE\VolumeSnapshot\HarddiskVolumeSnapshot<n>` added to
+///   `Control\DeviceContainers\{00000000-0000-0000-FFFF-FFFFFFFFFFFF}\BaseContainers\{same}`;
+/// - the System Restore WMI provider's tracing key (`is_wmi_tracing`, `SystemRestoreProv @ root/default`);
+/// - `Windows NT\CurrentVersion\SPP|LastIndex` and `Windows NT\CurrentVersion\SystemRestore|LastIndex`, changed;
+/// - `Services\DsmSvc\State|SessionNumber`, changed (Device Setup Manager reacting to the new device);
+/// - `<drive>:\System Volume Information` (the directory itself), its mtime only changed.
+///
+/// The keys around them (LastWriteTime, value / subkey count) are left to the parent rule.
+fn is_engine_rp_created(c: &Change) -> bool {
+    if c.op == '-' {
+        return false;
+    }
+    if let Some(r) = system_cs_rest(&c.path) {
+        if c.op == '+'
+            && matches!(c.rec, 'K' | 'V')
+            && r.len() == 4
+            && segs_eq(&r[..3], &["Control", "Class", VOLSNAP_CLASS])
+            && r[3].len() == 4
+            && all_digits(r[3])
+        {
+            return true;
+        }
+        if c.op == '+'
+            && c.rec == 'V'
+            && segs_eq(&r, &["Control", "DeviceContainers", NULL_CONTAINER, "BaseContainers", NULL_CONTAINER])
+        {
+            let p = HARDDISK_VOLUME_SNAPSHOT;
+            return c.name.as_deref().is_some_and(|n| {
+                n.len() > p.len()
+                    && n.is_char_boundary(p.len())
+                    && n[..p.len()].eq_ignore_ascii_case(p)
+                    && all_digits(&n[p.len()..])
+            });
+        }
+        return c.op == '~'
+            && c.rec == 'V'
+            && segs_eq(&r, &["Services", "DsmSvc", "State"])
+            && c.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("SessionNumber"));
+    }
+    if is_wmi_tracing(c, SR_PROVIDER) {
+        return true;
+    }
+    if c.op == '~' && c.rec == 'V' {
+        return c.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("LastIndex"))
+            && (canon::ci_eq(&c.path, &format!("{NT_CURRENT}\\SPP"))
+                || canon::ci_eq(&c.path, &format!("{NT_CURRENT}\\SystemRestore")));
+    }
+    if c.op == '~' && c.rec == 'D' && only_changes(c, &["mtime "]) {
+        let b = c.path.as_bytes();
+        return b.len() == 28
+            && b[0].is_ascii_alphabetic()
+            && c.path[1..].eq_ignore_ascii_case(":\\System Volume Information");
+    }
+    false
+}
+
+/// What deleting a firewall rule writes (the M1b executor runs of 2026-11-19). Applied only when the journal has a
+/// `DeleteFirewallRule` op whose effective outcome is `Done` (`check`); additions and changes only:
+/// - the firewall WMI provider's tracing key (`is_wmi_tracing`, `wfascim @ ROOT/StandardCimv2`);
+/// - `Services\SharedAccess\Epoch|Epoch`, changed (the firewall policy store's change counter);
+/// - `C:\ProgramData\Microsoft\Windows\wfp\wfpdiag.etl`, changed (the WFP diagnostics trace).
+fn is_engine_fw_delete(c: &Change) -> bool {
+    if c.op == '-' {
+        return false;
+    }
+    if let Some(r) = system_cs_rest(&c.path) {
+        return c.op == '~'
+            && c.rec == 'V'
+            && segs_eq(&r, &["Services", "SharedAccess", "Epoch"])
+            && c.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("Epoch"));
+    }
+    if is_wmi_tracing(c, FW_PROVIDER) {
+        return true;
+    }
+    c.op == '~' && c.rec == 'F' && canon::ci_eq(&c.path, WFPDIAG)
+}
+
 fn row_of(c: &Change) -> DiffRow {
     DiffRow {
         change: format!("{}{}", c.op, c.rec),
@@ -1321,6 +1459,12 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
         warnings.push(format!("before snapshot time {:?} unreadable: no stale-dir-time rule", cx.a.header.time));
     }
 
+    // The engine's side effects that depend on what this run did (RIG.md §12.8): the restore point the report
+    // says it created; a firewall rule the journal says it deleted.
+    let rp_created = rep.restore_point.kind == "Created";
+    let fw_deleted =
+        ops.iter().any(|o| o.kind.as_deref() == Some("DeleteFirewallRule") && o.j.outcome.as_deref() == Some("Done"));
+
     // Classify diff records.
     let d = diff::diff(cx.a, cx.b);
     let mut counts = Counts { diff_records: d.len() as u64, ..Default::default() };
@@ -1347,8 +1491,10 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
             Some("pending-rename")
         } else if is_engine_rm(c) {
             Some("engine-rm")
-        } else if is_engine_rp(c) {
+        } else if is_engine_rp(c) || (rp_created && is_engine_rp_created(c)) {
             Some("engine-rp")
+        } else if fw_deleted && is_engine_fw_delete(c) {
+            Some("engine-fw")
         } else if cx.ambient.and_then(|m| m.matches_change(c, &t)).is_some() {
             Some("ambient")
         } else if stale_dir_time(c, before_ft) {
@@ -1973,6 +2119,112 @@ mod tests {
         assert!(!is_engine_rp(&chg('~', 'K', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\VSS")));
         assert!(!is_engine_rp(&chg('~', 'K', "HKLM\\SYSTEM\\ControlSetX01\\Services\\VSS\\Diag")));
         assert!(!is_engine_rp(&chg('~', 'F', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\VSS\\Diag")));
+    }
+
+    fn chgv(op: char, path: &str, name: &str) -> Change {
+        Change { op, rec: 'V', path: path.into(), name: Some(name.into()), changes: Vec::new() }
+    }
+
+    fn chgx(op: char, rec: char, path: &str, changes: &[&str]) -> Change {
+        Change { op, rec, path: path.into(), name: None, changes: changes.iter().map(|s| s.to_string()).collect() }
+    }
+
+    const CLASS: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{533c5b84-ec70-11d2-9505-00c04f79deaf}";
+    const BASEC: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\DeviceContainers\\{00000000-0000-0000-FFFF-FFFFFFFFFFFF}\\BaseContainers\\{00000000-0000-0000-FFFF-FFFFFFFFFFFF}";
+    const SRPROV: &str = "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\SystemRestoreProv @ root/default";
+    const FWPROV: &str = "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\wfascim @ ROOT/StandardCimv2";
+
+    #[test]
+    fn engine_rp_created_records_are_additions_and_changes_only() {
+        let yes = [
+            chg('+', 'K', &format!("{CLASS}\\0001")),
+            chgv('+', &format!("{CLASS}\\0001"), "DriverDesc"),
+            chg('+', 'K', "HKLM\\SYSTEM\\ControlSet001\\Control\\Class\\{533C5B84-EC70-11D2-9505-00C04F79DEAF}\\0012"),
+            chgv('+', BASEC, "STORAGE\\VolumeSnapshot\\HarddiskVolumeSnapshot2"),
+            chgv('+', SRPROV, "134395554330118898"),
+            chgx('~', 'K', SRPROV, &["lwt 1->2", "n_values 1->2"]),
+            chgv('~', "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SPP", "LastIndex"),
+            chgv('~', "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore", "LastIndex"),
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DsmSvc\\State", "SessionNumber"),
+            chgx('~', 'D', "C:\\System Volume Information", &["mtime 1->2"]),
+        ];
+        for c in &yes {
+            assert!(is_engine_rp_created(c), "{c:?}");
+        }
+        let no = [
+            // Removals never.
+            chg('-', 'K', &format!("{CLASS}\\0001")),
+            chgv('-', &format!("{CLASS}\\0001"), "DriverDesc"),
+            chgv('-', BASEC, "STORAGE\\VolumeSnapshot\\HarddiskVolumeSnapshot2"),
+            chgv('-', "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SPP", "LastIndex"),
+            chg('-', 'K', SRPROV),
+            // Changes of an existing device instance, another class, a deeper key, a non-numeric instance.
+            chgv('~', &format!("{CLASS}\\0001"), "DriverDesc"),
+            chg(
+                '+',
+                'K',
+                "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e967-e325-11ce-bfc1-08002be10318}\\0001",
+            ),
+            chg('+', 'K', &format!("{CLASS}\\0001\\Properties")),
+            chg('+', 'K', &format!("{CLASS}\\Configuration")),
+            // Another container value, another container.
+            chgv('+', BASEC, "STORAGE\\Volume\\{x}"),
+            chgv('+', BASEC, "STORAGE\\VolumeSnapshot\\HarddiskVolumeSnapshot"),
+            chgv(
+                '+',
+                &BASEC.replace("FFFF-FFFFFFFFFFFF}\\BaseContainers", "FFFF-FFFFFFFFFFFE}\\BaseContainers"),
+                "STORAGE\\VolumeSnapshot\\HarddiskVolumeSnapshot2",
+            ),
+            // Another tracing provider, a named value, a key change beyond lwt / count.
+            chgv('+', FWPROV, "134395554415537810"),
+            chgv('+', SRPROV, "Level"),
+            chgx('~', 'K', SRPROV, &["lwt 1->2", "n_subkeys 0->1"]),
+            // Other SPP / DsmSvc values, a ControlSet look-alike.
+            chgv('~', "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SPP", "LastIndexX"),
+            chgv('~', "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore", "RPSessionInterval"),
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DsmSvc\\Parameters", "SessionNumber"),
+            chgv('~', "HKLM\\SYSTEM\\ControlSetX01\\Services\\DsmSvc\\State", "SessionNumber"),
+            // System Volume Information: anything but the directory's mtime.
+            chgx('~', 'D', "C:\\System Volume Information", &["mtime 1->2", "attrs 22->20"]),
+            chgx('~', 'F', "C:\\System Volume Information\\tracking.log", &["mtime 1->2"]),
+            chgx('~', 'D', "C:\\x\\System Volume Information", &["mtime 1->2"]),
+        ];
+        for c in &no {
+            assert!(!is_engine_rp_created(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn engine_fw_delete_records_are_additions_and_changes_only() {
+        let yes = [
+            chgx('~', 'K', FWPROV, &["lwt 1->2"]),
+            chg('+', 'K', FWPROV),
+            chgv('+', FWPROV, "134395554415537810"),
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Epoch", "Epoch"),
+            chgx('~', 'F', "C:\\ProgramData\\Microsoft\\Windows\\wfp\\wfpdiag.etl", &["size 1->2", "mtime 1->2"]),
+        ];
+        for c in &yes {
+            assert!(is_engine_fw_delete(c), "{c:?}");
+        }
+        let no = [
+            chg('-', 'K', FWPROV),
+            chgv('-', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Epoch", "Epoch"),
+            chg('-', 'F', "C:\\ProgramData\\Microsoft\\Windows\\wfp\\wfpdiag.etl"),
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters", "Epoch"),
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Epoch", "Other"),
+            chgv(
+                '-',
+                "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules",
+                "X",
+            ),
+            chgx('~', 'K', "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\CIMWin32 @ root/CIMV2", &["lwt 1->2"]),
+            chgx('~', 'K', SRPROV, &["lwt 1->2"]),
+            chgx('~', 'F', "C:\\ProgramData\\Microsoft\\Windows\\wfp\\wfpdiag2.etl", &["mtime 1->2"]),
+            chg('+', 'F', "C:\\ProgramData\\Microsoft\\Windows\\wfp\\wfpdiag.etl"),
+        ];
+        for c in &no {
+            assert!(!is_engine_fw_delete(c), "{c:?}");
+        }
     }
 
     struct Case {

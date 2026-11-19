@@ -39,6 +39,7 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
                 [--ambient ambient.json] [--labels labels.json...] [--deny deny.json] [--sid SID] -o truth.json
   rigtool ambient --null DIR... -o ambient.json
   rigtool ambient --m2 --null DIR... -o m2-ambient.json   (M2: removed/changed records of null runs)
+  rigtool ambient --m2 --added --null DIR... -o m1b-exec-ambient.json   (M1b exec: added records too)
   rigtool score --set APPDIR... [--deny deny.json] [--sid SID] [--classes] --json out.json --md out.md
   rigtool score --plan plan.json [--plan ...] --truth truth.json --s0 F --s2 F [--lists0 F]
                 [--deny deny.json] [--sid SID] [--classes] --json out.json --md out.md
@@ -205,13 +206,16 @@ fn run(argv: Vec<String>) -> Result<()> {
             })
         }
         "ambient" => {
-            let a = Args::parse(rest, &["--m2"], &["--null"], &["-o"])?;
+            let a = Args::parse(rest, &["--m2", "--added"], &["--null"], &["-o"])?;
             let dirs: Vec<PathBuf> = a.all("--null").into_iter().map(PathBuf::from).collect();
             if dirs.is_empty() {
                 bail!("ambient needs --null DIR...");
             }
+            if a.has("--added") && !a.has("--m2") {
+                bail!("ambient --added is for --m2 sets only");
+            }
             if a.has("--m2") {
-                ambient::cmd_ambient_m2(&dirs, &a.req("-o")?)
+                ambient::cmd_ambient_m2(&dirs, &a.req("-o")?, a.has("--added"))
             } else {
                 ambient::cmd_ambient(&dirs, &a.req("-o")?)
             }
