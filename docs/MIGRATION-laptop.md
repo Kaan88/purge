@@ -71,6 +71,12 @@ Git branches on origin (`Kaan88/purge`): `main`, `m1a`, `m2`, `m1b` (work branch
    391c9dc8...), run `install\install.ps1` elevated (creates `%ProgramData%\Purge`; G7 needs it).
 4. Unelevated `cargo xtask ci` (scheduled task with `/rl LIMITED /it`, see HANDOFF-m1b.md) and the rig self-tests
    (`bash vm/truth/m1b.sh --selftest`, `vm/guest/tests/rig-selftest.ps1`).
+   Host prerequisite: the `act_fs` and `purge-win` `fs_write` tests need TEMP to look like a normal profile Temp
+   folder: Full Control for SYSTEM, Administrators and the user (`WRITE_OWNER` is needed), and an auto-inherited
+   DACL (`D:AI`). The laptop's profile ACLs carry no `AI` flag, so its ci runs with `TEMP=TMP=C:\purge-build\tmp`, made
+   by `icacls <dir> /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *<user SID>:(OI)(CI)F` and
+   `/setowner *<user SID>` (icacls writes the DACL with `AI`; new children inherit it). Wrapper:
+   `C:\purge-build\ci-unelev.cmd`, task `PurgeCiUnelev`.
 5. One smoke run per VM (`rig.ps1 -Mode m1b-app -App 7zip`, and `-VmName Purge-CleanPro`).
 6. Then the M1b scan gate: either continue campaign 4 (G4 dirty-base traps, G8, G7, `m1b.sh`) on the same commit and
    engine build, or, cleaner, a fresh full campaign. Ask the user. With 32 GB the two VMs could run in parallel after a
