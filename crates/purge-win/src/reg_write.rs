@@ -1056,6 +1056,24 @@ impl WKey {
         Ok(CreatedKey(key))
     }
 
+    /// Opens the direct subkey `name` (one component) in this key's view again for the security write
+    /// of [`CreatedKey::set_security`], with `REG_OPTION_OPEN_LINK`: for a key an earlier attempt of the
+    /// same undo created and did not finish (the process ended between the creation and the security
+    /// write). The caller establishes that the key is its own; nothing here can tell.
+    ///
+    /// The handle is opened for reading and `WRITE_DAC`, and with `owner` also for `WRITE_OWNER` (an
+    /// owner or group write needs it). Unlike at creation, the kernel checks these rights against the
+    /// key's security descriptor in force: `WRITE_DAC` is the owner's by default, `WRITE_OWNER` only
+    /// when the DACL grants it, and `ERROR_ACCESS_DENIED` otherwise. No privilege is enabled for the
+    /// open. Refuses when this key is a link; a subkey that is a link is opened as the link and
+    /// refused by [`CreatedKey::set_security`].
+    pub fn reopen_created_subkey(&self, name: &str, owner: bool) -> Result<CreatedKey, Win32Error> {
+        let name_w = component_w(name)?;
+        self.refuse_link()?;
+        let access = KEY_READ | WRITE_DAC | if owner { WRITE_OWNER } else { 0 };
+        open_one(self.hkey, &name_w, access, self.view).map(CreatedKey)
+    }
+
     /// Writes the key's pending changes to disk (`RegFlushKey`).
     pub fn flush_key(&self) -> Result<(), Win32Error> {
         // SAFETY: `hkey` is a live key handle; the call takes no pointers.
@@ -1120,7 +1138,8 @@ fn open_path(
     Ok(current.expect("at least one component"))
 }
 
-/// A key this process created a moment ago with [`WKey::create_subkey`].
+/// A key this process created a moment ago with [`WKey::create_subkey`], or one an interrupted undo
+/// created and its next attempt opened again with [`WKey::reopen_created_subkey`].
 ///
 /// It dereferences to [`WKey`] and adds the one security write Purge performs: putting a recorded
 /// owner, group and DACL back on a key it re-creates during undo. No other key can reach
@@ -1148,9 +1167,13 @@ impl CreatedKey {
     /// (an elevated administrator holds the privilege). Without the privilege it fails with
     /// `ERROR_INVALID_OWNER` (1307) and nothing is changed.
     ///
-    /// Put all parts into one call (or give them to [`WKey::create_subkey`]): the kernel checks an
-    /// owner or group change against the DACL in force, so after a restrictive DACL has been set a
-    /// separate owner call fails with `ERROR_ACCESS_DENIED`.
+    /// The kernel checks the write against the rights of this handle, not against the DACL in force:
+    /// the handle of [`WKey::create_subkey`] holds `WRITE_DAC` and `WRITE_OWNER` whatever descriptor
+    /// the key was created with or was given since, so the parts can be set together or one after
+    /// another, in any order (review R8 S6; test
+    /// `the_creating_handle_sets_security_whatever_the_dacl_in_force`). A handle of
+    /// [`WKey::reopen_created_subkey`] opened without `WRITE_OWNER` fails an owner or group write with
+    /// `ERROR_ACCESS_DENIED`. Put all parts into one call where possible: one call is one change.
     pub fn set_security(&self, sddl: &str) -> Result<(), Win32Error> {
         let sd = ParsedSd::parse(sddl)?;
         sd.request_auto_inherited()?;
@@ -1929,6 +1952,50 @@ mod tests {
         }
     }
 
+    /// Review R8 S6: a security write through the creating handle is checked against that handle's
+    /// rights (`WRITE_DAC`, `WRITE_OWNER`, granted at creation), not against the DACL in force. With a
+    /// DACL that gives this token read access only, the whole descriptor, the group alone and the
+    /// owner alone are all set. A handle opened afterwards is checked against the DACL.
+    #[test]
+    fn the_creating_handle_sets_security_whatever_the_dacl_in_force() {
+        let root = TestRoot::new();
+        let sid = current_user_sid().unwrap();
+        let open_sddl = format!("D:P(A;CI;KA;;;{sid})");
+        let dacl = format!("D:PAI(A;CI;KR;;;BA)(A;CI;KR;;;{sid})(A;CI;KA;;;SY)");
+        let key = root.key.create_subkey("k", "", Some(&dacl), false).unwrap();
+        let _restore = RestoreDacl(&key, open_sddl.clone());
+        // Creation drops the auto-inherited flag; the DACL in force grants no write access.
+        let created = key.security_sddl().unwrap();
+        assert!(
+            created.ends_with(&dacl.replacen("D:PAI", "D:P", 1)),
+            "{created}"
+        );
+        let whole = format!("O:{sid}G:{sid}{dacl}");
+        key.set_security(&whole).unwrap();
+        assert_eq!(key.security_sddl().unwrap(), whole);
+        key.set_security("G:SY").unwrap();
+        key.set_security(&format!("O:{sid}")).unwrap();
+        key.set_security(&dacl).unwrap();
+        assert_eq!(key.security_sddl().unwrap(), format!("O:{sid}G:SY{dacl}"));
+
+        // A second handle: `WRITE_OWNER` is not granted by this DACL, `WRITE_DAC` is the owner's.
+        assert_eq!(
+            root.key.reopen_created_subkey("k", true).unwrap_err(),
+            ACCESS_DENIED
+        );
+        let again = root.key.reopen_created_subkey("k", false).unwrap();
+        assert_eq!(again.set_security("G:BA").unwrap_err(), ACCESS_DENIED);
+        assert_eq!(again.set_security(&whole).unwrap_err(), ACCESS_DENIED);
+        again.set_security(&dacl).unwrap();
+        assert_eq!(again.security_sddl().unwrap(), format!("O:{sid}G:SY{dacl}"));
+        assert!(
+            root.key
+                .reopen_created_subkey("absent", false)
+                .unwrap_err()
+                .is_not_found()
+        );
+    }
+
     #[test]
     fn security_round_trip_and_restricted_dacl() {
         let root = TestRoot::new();
@@ -1990,8 +2057,7 @@ mod tests {
             .unwrap();
         let _restore_full = RestoreDacl(&full, open_sddl.clone());
         assert_eq!(full.security_sddl().unwrap(), got);
-        // Back to the unprotected default: the DACL first (the kernel checks an owner or group
-        // change against the DACL in force), then the whole descriptor.
+        // Back to the unprotected default: the DACL, then the whole descriptor.
         copy.set_security(&inherited[inherited.find("D:").unwrap()..])
             .unwrap();
         copy.set_security(&inherited).unwrap();

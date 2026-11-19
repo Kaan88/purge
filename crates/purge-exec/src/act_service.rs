@@ -85,6 +85,14 @@
 //! `own_attempt` (no attempt, or one that ended before its create did anything) it is `ObjectExists`: a
 //! service another install created is never adopted.
 //!
+//! The write-back converges over attempts (review R8 S5, M1, M2): [`write_back_ops`] names every key
+//! and value the backup holds and the live key lacks or holds otherwise, and also every key below the
+//! service's own that exists with another security descriptor than the recorded one (a key an earlier
+//! attempt created before the process ended, or one the SCM made during create or config2). The backend
+//! applies every write it can and then reports all failures together; an owner that cannot be assigned
+//! (no `SeRestorePrivilege`, or no `WRITE_OWNER` on a key opened again) is not a failure, since the exact
+//! check sets the owner aside, but it is named in the detail of the outcome.
+//!
 //! Nothing here starts, stops or controls a service: the backend has no such entry, and the restored
 //! service keeps the start type its backup records.
 //!
@@ -303,6 +311,15 @@ pub enum WriteBack {
         /// Whether the key is volatile.
         volatile: bool,
     },
+    /// Put the recorded descriptor on the key `path`, which exists with another one: a key an earlier
+    /// attempt of this undo created without finishing its security write, or one the SCM created.
+    SetSecurity {
+        /// Key names below the service key; never empty (the service's own key keeps the descriptor
+        /// the SCM gives it).
+        path: Vec<String>,
+        /// Owner, group and DACL as recorded.
+        sddl: String,
+    },
     /// Set value `name` of key `path` to exactly this type and data.
     SetValue {
         /// Key names below the service key.
@@ -334,8 +351,10 @@ pub trait ServiceBackend {
     fn apply_config2(&self, name: &str, item: &Config2Item) -> Result<(), ObjErr>;
     /// Sets the DACL of the service object `name` from `sddl` (owner and group are not set).
     fn apply_security(&self, name: &str, sddl: &str) -> Result<(), ObjErr>;
-    /// Applies `writes`, in order, below the key of `name`.
-    fn write_back(&self, name: &str, writes: &[WriteBack]) -> Result<(), ObjErr>;
+    /// Applies `writes`, in order, below the key of `name`: every write that can be applied is, also
+    /// after one failed, and the error then names every failure. `Ok` holds the notes for the report:
+    /// one line per key whose recorded owner could not be assigned.
+    fn write_back(&self, name: &str, writes: &[WriteBack]) -> Result<Vec<String>, ObjErr>;
     /// Flushes the `SYSTEM` hive.
     fn flush_system(&self) -> Result<(), ObjErr>;
 }
@@ -1568,6 +1587,20 @@ fn sddl_without_owner(sddl: &str) -> &str {
     }
 }
 
+/// The DACL part of an SDDL string as read from a key (owner, group, DACL; no SACL): from `D:` to the
+/// end, empty when there is none. An owner or group SID string holds no `:`, so the first `D:` is the
+/// DACL's.
+fn sddl_dacl(sddl: &str) -> &str {
+    sddl.find("D:").map_or("", |at| &sddl[at..])
+}
+
+/// The owner SID string of an SDDL string; empty when it has no owner part.
+fn sddl_owner(sddl: &str) -> &str {
+    sddl.strip_suffix(sddl_without_owner(sddl))
+        .and_then(|owner| owner.strip_prefix("O:"))
+        .unwrap_or("")
+}
+
 /// The values of key `index` by folded name.
 fn values_by_name(tree: &RegTree, index: usize) -> HashMap<Vec<u16>, (u32, &[u8])> {
     tree.keys[index]
@@ -1693,8 +1726,10 @@ fn live_within_backup(backup: &RegTree, live: &RegTree) -> bool {
 }
 
 /// The writes that make `live` hold every key and value of `backup`: each backup key that is missing
-/// (created with its class, descriptor and volatility, parent first) and each backup value that is
-/// missing or has another type or data. Nothing is ever deleted.
+/// (created with its class, descriptor and volatility, parent first), each backup key below the root
+/// that exists with another descriptor than the recorded one (owner included; review R8 S5: a retry
+/// after an interrupted write-back must converge), and each backup value that is missing or has
+/// another type or data. Nothing is ever deleted, and no key outside the backup is named.
 pub fn write_back_ops(backup: &RegTree, live: &RegTree) -> Vec<WriteBack> {
     let backup_paths = folded_paths(backup);
     let live_index: HashMap<Vec<u16>, usize> = folded_paths(live)
@@ -1707,7 +1742,15 @@ pub fn write_back_ops(backup: &RegTree, live: &RegTree) -> Vec<WriteBack> {
         let node = &backup.keys[i];
         let names = name_path(backup, i);
         let live_values = match live_index.get(path) {
-            Some(&j) => values_by_name(live, j),
+            Some(&j) => {
+                if i != 0 && live.keys[j].sddl != node.sddl {
+                    writes.push(WriteBack::SetSecurity {
+                        path: names.clone(),
+                        sddl: node.sddl.clone(),
+                    });
+                }
+                values_by_name(live, j)
+            }
             None => {
                 writes.push(WriteBack::CreateKey {
                     path: names.clone(),
@@ -2406,19 +2449,30 @@ pub fn run_undo(
         Err(r) => return r,
     };
     let writes = write_back_ops(&tree, &live);
-    if !writes.is_empty()
-        && let Err(e) = backend.write_back(&name, &writes)
-    {
-        return api("write back the backed-up values", &e);
+    let mut owner_notes = Vec::new();
+    if !writes.is_empty() {
+        match backend.write_back(&name, &writes) {
+            Ok(notes) => owner_notes = notes,
+            Err(e) => return api("write back the backed-up values", &e),
+        }
     }
+    // What the write-back could not do without failing (an owner it could not assign) goes into the
+    // detail of whatever this attempt ends with (review R8 M2).
+    let noted = |text: String| {
+        let parts: Vec<&str> = std::iter::once(text.as_str())
+            .chain(owner_notes.iter().map(String::as_str))
+            .filter(|part| !part.is_empty())
+            .collect();
+        parts.join("; ")
+    };
     if let Err(e) = backend.flush_system() {
         return SvcUndoResult::failed(
             FailCode::VerifyFailed,
             e.os_error,
-            format!(
+            noted(format!(
                 "service {name}: the SYSTEM hive could not be flushed: {}",
                 e.detail
-            ),
+            )),
         );
     }
     hit(fault::UNDO_ACT_AFTER);
@@ -2427,13 +2481,13 @@ pub fn run_undo(
         Err(r) => return r,
     };
     match tree_difference(&tree, &after) {
-        None => SvcUndoResult::done(UndoOutcome::Restored, note),
+        None => SvcUndoResult::done(UndoOutcome::Restored, noted(note)),
         Some(difference) => SvcUndoResult::conflict(
             UndoConflict::ValueDiffers,
-            format!(
+            noted(format!(
                 "service {name} was created again, but its key is not the backup: {difference}; it \
                  was not started"
-            ),
+            )),
         ),
     }
 }
@@ -2711,7 +2765,7 @@ impl ServiceBackend for LiveServices {
         scm::set_security(name, sddl).map_err(|e| ObjErr::scm("SetServiceObjectSecurity", e))
     }
 
-    fn write_back(&self, name: &str, writes: &[WriteBack]) -> Result<(), ObjErr> {
+    fn write_back(&self, name: &str, writes: &[WriteBack]) -> Result<Vec<String>, ObjErr> {
         let Some(root) = Self::open(name, KeyAccess::SET_VALUE | KeyAccess::CREATE_SUB_KEY)? else {
             return Err(ObjErr::new(
                 ObjErrKind::NotFound,
@@ -2731,106 +2785,255 @@ impl ServiceBackend for LiveServices {
 }
 
 /// Applies `writes` below `root`, the key of a service the SCM re-created a moment ago: every missing
-/// key is created with its recorded class, volatility and descriptor, every value set as recorded.
-fn write_back_below(root: &WKey, writes: &[WriteBack]) -> Result<(), ObjErr> {
-    let below = |path: &[String], access: KeyAccess| -> Result<Option<WKey>, ObjErr> {
-        if path.is_empty() {
-            return Ok(None);
-        }
-        if path.iter().any(|p| p.is_empty() || p.contains('\\')) {
-            return Err(ObjErr::other("a key name of the backup is not usable"));
-        }
-        root.open_subkey(&path.join("\\"), access)
-            .map(Some)
-            .map_err(|e| ObjErr::os(&format!(r"open {}", path.join("\\")), e))
-    };
+/// key is created with its recorded class, volatility and descriptor, every existing key named gets its
+/// recorded descriptor, every value is set as recorded.
+///
+/// A write that fails does not end the write-back (review R8 M1): every later write is still applied,
+/// except those at or below a key that could not be created, and the error returned at the end names
+/// every failure (its Win32 code is the first failure's). `Ok` holds one note per key whose recorded
+/// owner could not be assigned (review R8 M2).
+fn write_back_below(root: &WKey, writes: &[WriteBack]) -> Result<Vec<String>, ObjErr> {
+    let mut notes: Vec<String> = Vec::new();
+    let mut failures: Vec<ObjErr> = Vec::new();
+    // Keys that could not be created: nothing can be written at or below them.
+    let mut not_created: Vec<&[String]> = Vec::new();
+    let mut left_out = 0usize;
     for write in writes {
-        match write {
+        let path: &[String] = match write {
+            WriteBack::CreateKey { path, .. }
+            | WriteBack::SetSecurity { path, .. }
+            | WriteBack::SetValue { path, .. } => path,
+        };
+        if not_created.iter().any(|gone| path.starts_with(gone)) {
+            left_out += 1;
+            continue;
+        }
+        let shown = path.join("\\");
+        let done = match write {
             WriteBack::CreateKey {
                 path,
                 class,
                 sddl,
                 volatile,
-            } => {
-                let Some((leaf, parent_path)) = path.split_last() else {
-                    return Err(ObjErr::other("a key to create has no name"));
-                };
-                let parent = below(parent_path, KeyAccess::CREATE_SUB_KEY)?;
-                let parent = parent.as_ref().unwrap_or(root);
-                let shown = path.join("\\");
-                let what = format!(r"create {shown}");
-                let created = match parent.create_subkey(leaf, class, Some(sddl), *volatile) {
-                    Ok(created) => created,
-                    Err(e) if e == INVALID_OWNER => {
-                        // Creation enables no privilege, so a recorded owner the token may not
-                        // assign by itself (SYSTEM) is refused there; `restore_key_security` sets it
-                        // on the new key.
-                        let rest = sddl_without_owner(sddl);
-                        parent
-                            .create_subkey(
-                                leaf,
-                                class,
-                                (!rest.is_empty()).then_some(rest),
-                                *volatile,
-                            )
-                            .map_err(|e| ObjErr::os(&what, e))?
-                    }
-                    Err(e) => return Err(ObjErr::os(&what, e)),
-                };
-                restore_key_security(&created, sddl, &shown)?;
-            }
+            } => match create_recorded(root, path, class, sddl, *volatile) {
+                // The key exists from here on: a descriptor that cannot be set is reported, and the
+                // key's values and subkeys are still written.
+                Ok(created) => restore_key_security(&created, sddl, &shown),
+                Err(e) => {
+                    not_created.push(path);
+                    Err(e)
+                }
+            },
+            WriteBack::SetSecurity { path, sddl } => set_recorded_security(root, path, sddl),
             WriteBack::SetValue {
                 path,
                 name: value,
                 value_type,
                 data,
-            } => {
-                let key = below(path, KeyAccess::SET_VALUE)?;
+            } => open_below(root, path, KeyAccess::SET_VALUE).and_then(|key| {
                 key.as_ref()
                     .unwrap_or(root)
                     .set_value_raw(value, *value_type, data)
-                    .map_err(|e| ObjErr::os(&format!("set value {value}"), e))?;
-            }
+                    .map(|()| None)
+                    .map_err(|e| ObjErr::os(&format!("set value {shown}|{value}"), e))
+            }),
+        };
+        match done {
+            Ok(note) => notes.extend(note),
+            Err(e) => failures.push(e),
         }
     }
-    Ok(())
+    let Some(first) = failures.first() else {
+        return Ok(notes);
+    };
+    let mut detail = failures
+        .iter()
+        .map(|f| f.detail.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    if failures.len() > 1 {
+        detail = format!("{} writes failed: {detail}", failures.len());
+    }
+    if left_out > 0 {
+        detail.push_str(&format!(
+            "; {left_out} writes at or below a key that was not created were left out"
+        ));
+    }
+    for note in &notes {
+        detail.push_str("; ");
+        detail.push_str(note);
+    }
+    Err(ObjErr::new(first.kind, first.os_error, detail))
 }
 
-/// Puts the recorded descriptor on a key just created, exactly: creation stores a DACL without its
-/// auto-inherited flag (`D:AI(...)` comes out as `D:(...)`) and refuses an owner the token may not
-/// assign without `SeRestorePrivilege`. When the descriptor read back is not the recorded one, the
-/// whole recorded descriptor is set once through the created key's own handle
-/// ([`CreatedKey::set_security`]); an owner that still cannot be assigned is left as created and the
-/// rest (group and DACL) is set, which is what [`tree_difference`] compares. A descriptor that cannot
-/// be read or set is an error, and so is one that differs afterwards, the owner aside.
-fn restore_key_security(key: &CreatedKey, recorded: &str, shown: &str) -> Result<(), ObjErr> {
+/// Test seam (`test-support`): [`LiveServices`]' registry write-back below any key, so the elevated
+/// rig test can run it on a scratch key instead of a real service's.
+#[cfg(any(test, feature = "test-support"))]
+pub fn write_back_below_key(root: &WKey, writes: &[WriteBack]) -> Result<Vec<String>, ObjErr> {
+    write_back_below(root, writes)
+}
+
+/// The key `path` below `root` opened with `access`; `None` for the empty path (`root` itself).
+fn open_below(root: &WKey, path: &[String], access: KeyAccess) -> Result<Option<WKey>, ObjErr> {
+    if path.is_empty() {
+        return Ok(None);
+    }
+    if path.iter().any(|p| p.is_empty() || p.contains('\\')) {
+        return Err(ObjErr::other("a key name of the backup is not usable"));
+    }
+    root.open_subkey(&path.join("\\"), access)
+        .map(Some)
+        .map_err(|e| ObjErr::os(&format!(r"open {}", path.join("\\")), e))
+}
+
+/// Creates the missing key `path` below `root` (its parent exists) with its recorded class and
+/// volatility and, as far as creation takes it, its recorded descriptor: the DACL is in force from the
+/// first moment, without its auto-inherited flag, and an owner the token may not assign by itself
+/// (SYSTEM; creation enables no privilege) is left out. [`restore_key_security`] puts the rest on the
+/// key through the handle returned.
+fn create_recorded(
+    root: &WKey,
+    path: &[String],
+    class: &str,
+    sddl: &str,
+    volatile: bool,
+) -> Result<CreatedKey, ObjErr> {
+    let Some((leaf, parent_path)) = path.split_last() else {
+        return Err(ObjErr::other("a key to create has no name"));
+    };
+    let parent = open_below(root, parent_path, KeyAccess::CREATE_SUB_KEY)?;
+    let parent = parent.as_ref().unwrap_or(root);
+    let what = format!(r"create {}", path.join("\\"));
+    match parent.create_subkey(leaf, class, Some(sddl), volatile) {
+        Ok(created) => Ok(created),
+        Err(e) if e == INVALID_OWNER => {
+            let rest = sddl_without_owner(sddl);
+            parent
+                .create_subkey(leaf, class, (!rest.is_empty()).then_some(rest), volatile)
+                .map_err(|e| ObjErr::os(&what, e))
+        }
+        Err(e) => Err(ObjErr::os(&what, e)),
+    }
+}
+
+/// Puts the recorded descriptor on the existing key `path` below `root` (review R8 S5): a key an
+/// earlier attempt of this undo created before the process ended, with the descriptor creation gave
+/// it, or one the SCM created with its own.
+///
+/// The key is opened again for the security write, with `WRITE_OWNER` where the DACL in force grants
+/// it and with `WRITE_DAC` alone (the owner's by default) where not; [`restore_key_security`] then
+/// writes what that handle can. A key that cannot be opened for either is an error only when its
+/// group or DACL is not the recorded one.
+fn set_recorded_security(
+    root: &WKey,
+    path: &[String],
+    recorded: &str,
+) -> Result<Option<String>, ObjErr> {
+    let Some((leaf, parent_path)) = path.split_last() else {
+        return Err(ObjErr::other(
+            "the service's own key keeps the descriptor the SCM gave it",
+        ));
+    };
+    let shown = path.join("\\");
+    let parent = open_below(root, parent_path, KeyAccess::READ)?;
+    let parent = parent.as_ref().unwrap_or(root);
+    if leaf.is_empty() || leaf.contains('\\') {
+        return Err(ObjErr::other("a key name of the backup is not usable"));
+    }
+    let what = format!("open {shown} to set its security descriptor");
+    let denied = match parent.reopen_created_subkey(leaf, true) {
+        Ok(key) => return restore_key_security(&key, recorded, &shown),
+        Err(e) if e == Win32Error::ACCESS_DENIED => e,
+        Err(e) => return Err(ObjErr::os(&what, e)),
+    };
+    match parent.reopen_created_subkey(leaf, false) {
+        Ok(key) => restore_key_security(&key, recorded, &shown),
+        Err(e) if e == Win32Error::ACCESS_DENIED => {
+            let live = parent
+                .open_subkey(leaf, KeyAccess::READ)
+                .and_then(|key| key.security_sddl())
+                .map_err(|e| ObjErr::os(&format!("read the security descriptor of {shown}"), e))?;
+            security_result(&live, recorded, &shown, Some(denied), &what)
+        }
+        Err(e) => Err(ObjErr::os(&what, e)),
+    }
+}
+
+/// Puts the recorded descriptor on a key just created, or opened again by a later attempt, exactly:
+/// creation stores a DACL without its auto-inherited flag (`D:AI(...)` comes out as `D:(...)`) and
+/// refuses an owner the token may not assign without `SeRestorePrivilege`.
+///
+/// When the descriptor read back is not the recorded one, the whole recorded descriptor is set in one
+/// write ([`CreatedKey::set_security`]). The write is checked against the rights of the handle, not
+/// against the DACL in force (review R8 S6): the creating handle holds `WRITE_DAC` and `WRITE_OWNER`
+/// also when the recorded DACL, already on the key, grants the token neither. Where the whole
+/// descriptor is refused, because the owner cannot be assigned (1307) or because a handle opened again
+/// has no `WRITE_OWNER` (5), the parts that can be written are: group and DACL, then the DACL alone. A
+/// refused write changes nothing.
+///
+/// The key is read again afterwards. Equal to the recorded descriptor: `None`. Equal the owner aside,
+/// which is what [`tree_difference`] compares: a note naming the owner left (review R8 M2). Anything
+/// else, or a descriptor that cannot be read: an error.
+fn restore_key_security(
+    key: &CreatedKey,
+    recorded: &str,
+    shown: &str,
+) -> Result<Option<String>, ObjErr> {
     let read = || {
         key.security_sddl()
             .map_err(|e| ObjErr::os(&format!("read the security descriptor of {shown}"), e))
     };
     if read()? == recorded {
-        return Ok(());
+        return Ok(None);
+    }
+    let mut refused: Option<Win32Error> = None;
+    let mut tried: Vec<&str> = Vec::new();
+    for part in [recorded, sddl_without_owner(recorded), sddl_dacl(recorded)] {
+        if part.is_empty() || tried.contains(&part) {
+            continue;
+        }
+        tried.push(part);
+        match key.set_security(part) {
+            Ok(()) => break,
+            Err(e) => {
+                let narrower = e == INVALID_OWNER || e == Win32Error::ACCESS_DENIED;
+                refused.get_or_insert(e);
+                if !narrower {
+                    break;
+                }
+            }
+        }
     }
     let what = format!("set the security descriptor of {shown}");
-    match key.set_security(recorded) {
-        Ok(()) => {}
-        Err(e) if e == INVALID_OWNER => {
-            // A failed write changes nothing. Without the owner part nothing needs a privilege.
-            let rest = sddl_without_owner(recorded);
-            if rest.is_empty() || rest == recorded {
-                return Err(ObjErr::os(&what, e));
-            }
-            key.set_security(rest).map_err(|e| ObjErr::os(&what, e))?;
-        }
-        Err(e) => return Err(ObjErr::os(&what, e)),
+    security_result(&read()?, recorded, shown, refused, &what)
+}
+
+/// What a security write left: nothing to say when `live` is the recorded descriptor, a note when only
+/// the owner differs, else an error (`refused`, the first write refused, when there is one).
+fn security_result(
+    live: &str,
+    recorded: &str,
+    shown: &str,
+    refused: Option<Win32Error>,
+    what: &str,
+) -> Result<Option<String>, ObjErr> {
+    if live == recorded {
+        return Ok(None);
     }
-    let live = read()?;
-    if sddl_without_owner(&live) != sddl_without_owner(recorded) {
-        return Err(ObjErr::other(format!(
-            "the security descriptor of {shown} is {live} after it was set, not {recorded}"
+    if sddl_without_owner(live) == sddl_without_owner(recorded) {
+        let why = refused.map_or_else(String::new, |e| format!(" ({e})"));
+        return Ok(Some(format!(
+            "key {shown} keeps the owner {}: the recorded owner {} could not be assigned{why}",
+            sddl_owner(live),
+            sddl_owner(recorded),
         )));
     }
-    Ok(())
+    Err(match refused {
+        Some(e) => ObjErr::os(&format!("{what} (it is {live}, not {recorded})"), e),
+        None => ObjErr::other(format!(
+            "the security descriptor of {shown} is {live} after it was set, not {recorded}"
+        )),
+    })
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -3015,6 +3218,8 @@ pub mod fake {
         pub mark_on_delete: bool,
         /// Value names the write-back silently skips (a write the registry did not take).
         pub skip_writes: Vec<String>,
+        /// The notes a successful write-back returns (owners it could not assign): none by default.
+        pub write_notes: Vec<String>,
         /// What the fake SCM writes on a `create` besides the main values: none by default.
         pub create_extra: Vec<(String, u32, Vec<u8>)>,
     }
@@ -3274,9 +3479,9 @@ pub mod fake {
             Ok(())
         }
 
-        fn write_back(&self, name: &str, writes: &[WriteBack]) -> Result<(), ObjErr> {
+        fn write_back(&self, name: &str, writes: &[WriteBack]) -> Result<Vec<String>, ObjErr> {
             self.begin("write_back", format!("write_back {name} {}", writes.len()))?;
-            {
+            let notes = {
                 let mut world = self.world.borrow_mut();
                 let skip = world.skip_writes.clone();
                 let Some(service) = world.services.get_mut(&key_of(name)) else {
@@ -3306,6 +3511,11 @@ pub mod fake {
                             key.volatile = *volatile;
                             service.tree.keys.push(key);
                         }
+                        WriteBack::SetSecurity { path, sddl } => {
+                            let index = find_key(&service.tree, path)
+                                .ok_or_else(|| ObjErr::other("key missing"))?;
+                            service.tree.keys[index].sddl = sddl.clone();
+                        }
                         WriteBack::SetValue {
                             path,
                             name: value_name,
@@ -3327,9 +3537,10 @@ pub mod fake {
                         }
                     }
                 }
-            }
+                world.write_notes.clone()
+            };
             self.done("write_back", ());
-            Ok(())
+            Ok(notes)
         }
 
         fn flush_system(&self) -> Result<(), ObjErr> {
@@ -3380,186 +3591,56 @@ mod tests {
         assert_eq!(sddl_without_owner("D:(A;;KA;;;SY)"), "D:(A;;KA;;;SY)");
     }
 
-    /// A scratch key below the current user's `Software`, standing in for `Services\<name>`: removed
-    /// with everything in it on drop.
-    struct ScratchKey {
-        software: WKey,
-        name: String,
-        key: WKey,
-    }
-
-    impl ScratchKey {
-        fn new(tag: &str) -> ScratchKey {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let name = format!("PurgeTest-svc-{tag}-{:x}-{nanos:x}", std::process::id());
-            let software = WKey::open(
-                RegRoot::Hku,
-                &format!(r"{}\Software", purge_win::sid::current_user_sid().unwrap()),
-                RegView::K64,
-                KeyAccess::CREATE_SUB_KEY,
-            )
-            .unwrap();
-            let key = software
-                .create_subkey(&name, "", None, false)
-                .unwrap()
-                .into_key();
-            ScratchKey {
-                software,
-                name,
-                key,
-            }
-        }
-
-        fn tree(&self) -> RegTree {
-            regbackup::capture_tree(&self.key, r"HKU\scratch", regbackup::DEFAULT_KEY_LIMIT)
-                .unwrap()
-                .tree()
-                .unwrap()
-                .clone()
-        }
-
-        /// Whether the test process may assign SYSTEM as an owner (`SeRestorePrivilege`, which an
-        /// elevated administrator's token holds): tried on a probe key, removed again.
-        fn may_assign_system_owner(&self) -> bool {
-            let probe = self
-                .key
-                .create_subkey("privilege-probe", "", None, false)
-                .unwrap();
-            let held = probe.set_security("O:SY").is_ok();
-            drop(probe);
-            remove_tree(&self.key, "privilege-probe");
-            held
-        }
-
-        fn sddl_of(&self, rel: &str) -> String {
-            self.key
-                .open_subkey(rel, KeyAccess::READ)
-                .unwrap()
-                .security_sddl()
-                .unwrap()
-        }
-    }
-
-    fn remove_tree(parent: &WKey, name: &str) {
-        let Ok(key) = parent.open_subkey(name, KeyAccess::READ) else {
-            return;
-        };
-        for sub in key.subkey_names().unwrap_or_default() {
-            remove_tree(&key, &sub);
-        }
-        drop(key);
-        let _ = parent.delete_subkey(name);
-    }
-
-    impl Drop for ScratchKey {
-        fn drop(&mut self) {
-            remove_tree(&self.software, &self.name);
-        }
-    }
-
-    /// M1b executor gate (K11 svc-full, K13): the write-back re-created `Parameters` from a descriptor
-    /// with an auto-inherited DACL (`D:AI(...)`), creation stored it as `D:(...)`, and undo's own exact
-    /// check then refused the tree it had just written. Backed up, deleted and written back, a subkey
-    /// (and a key below it) holds the recorded descriptor exactly, `AI` included.
     #[test]
-    fn write_back_restores_an_auto_inherited_dacl_exactly() {
-        let scratch = ScratchKey::new("ai");
-        let sid = purge_win::sid::current_user_sid().unwrap();
-        let recorded = format!(
-            "O:{sid}G:{sid}D:AI(A;CIID;KA;;;{sid})(A;CIID;KA;;;SY)(A;CIID;KA;;;BA)(A;CIID;KR;;;BU)"
-        );
-        let deep = format!("O:{sid}G:{sid}D:PAI(A;CI;KA;;;{sid})(A;CI;KR;;;BU)");
-        {
-            let params = scratch
-                .key
-                .create_subkey("Parameters", "Cls", None, false)
-                .unwrap();
-            params.set_security(&recorded).unwrap();
-            params
-                .set_value_raw("ServiceDll", REG_SZ, &[b'x', 0, 0, 0])
-                .unwrap();
-            let inner = params.create_subkey("Deep", "", None, false).unwrap();
-            inner.set_security(&deep).unwrap();
-        }
-        let backup = scratch.tree();
-        assert!(
-            backup.keys.iter().any(|k| k.sddl == recorded),
-            "{backup:#?}"
-        );
-        assert!(backup.keys.iter().any(|k| k.sddl == deep), "{backup:#?}");
-
-        remove_tree(&scratch.key, "Parameters");
-        let emptied = scratch.tree();
-        assert_eq!(emptied.keys.len(), 1);
-        let writes = write_back_ops(&backup, &emptied);
-        assert_eq!(
-            writes
-                .iter()
-                .filter(|w| matches!(w, WriteBack::CreateKey { .. }))
-                .count(),
-            2
-        );
-        write_back_below(&scratch.key, &writes).unwrap();
-
-        assert_eq!(scratch.sddl_of("Parameters"), recorded);
-        assert_eq!(scratch.sddl_of(r"Parameters\Deep"), deep);
-        let live = scratch.tree();
-        assert_eq!(tree_difference(&backup, &live), None);
+    fn sddl_parts() {
+        let sddl = "O:BAG:DAD:AI(A;CI;KA;;;SY)";
+        assert_eq!(sddl_dacl(sddl), "D:AI(A;CI;KA;;;SY)");
+        assert_eq!(sddl_owner(sddl), "BA");
+        assert_eq!(sddl_dacl("O:S-1-5-18G:S-1-5-18"), "");
+        assert_eq!(sddl_owner("G:SYD:(A;;KA;;;SY)"), "");
+        assert_eq!(sddl_dacl("D:(A;;KA;;;SY)"), "D:(A;;KA;;;SY)");
     }
 
-    /// The other arm: a recorded SYSTEM owner is refused at creation (1307), the key is created without
-    /// the owner part, and the recorded descriptor is still put on it. Unelevated the owner stays the
-    /// creator's (the exact check sets the owner aside) while group and DACL, `AI` included, are the
-    /// recorded ones; elevated (`SeRestorePrivilege`) the whole descriptor is.
-    #[test]
-    fn write_back_restores_the_dacl_of_a_key_whose_owner_cannot_be_assigned_at_creation() {
-        let scratch = ScratchKey::new("owner");
-        let sid = purge_win::sid::current_user_sid().unwrap();
-        let recorded = format!(
-            "O:SYG:SYD:AI(A;CIID;KA;;;{sid})(A;CIID;KA;;;SY)(A;CIID;KA;;;BA)(A;CIID;KR;;;BU)"
-        );
-        let writes = [WriteBack::CreateKey {
-            path: vec!["Parameters".to_owned()],
-            class: String::new(),
-            sddl: recorded.clone(),
+    fn key(parent: Option<u32>, name: &str, sddl: &str) -> purge_model::exec::regbackup::KeyNode {
+        purge_model::exec::regbackup::KeyNode {
+            parent,
+            name_b64: name.into(),
+            class_b64: None,
+            sddl: sddl.to_owned(),
+            last_write_time: FileTime(0),
+            link: false,
             volatile: false,
-        }];
-        write_back_below(&scratch.key, &writes).unwrap();
-        let live = scratch.sddl_of("Parameters");
-        assert_eq!(sddl_without_owner(&live), sddl_without_owner(&recorded));
-        if scratch.may_assign_system_owner() {
-            assert_eq!(live, recorded);
+            values: Vec::new(),
         }
     }
 
-    /// As above with the real thing: a key owned by SYSTEM is backed up, deleted and written back with
-    /// owner, group and auto-inherited DACL exactly as recorded. Needs an elevated administrator
-    /// (`SeRestorePrivilege`); run by hand: `cargo test -p purge-exec --lib -- --ignored
-    /// elevated_write_back_restores_a_system_owned_auto_inherited_key`.
+    /// Review R8 S5: a backup key that exists with another descriptor gets a `SetSecurity`, also when
+    /// only the owner differs; the service's own key and a key with the recorded descriptor get none.
     #[test]
-    #[ignore = "needs an elevated administrator (SeRestorePrivilege)"]
-    fn elevated_write_back_restores_a_system_owned_auto_inherited_key() {
-        let scratch = ScratchKey::new("system");
-        assert!(scratch.may_assign_system_owner(), "run elevated");
-        let recorded = "O:SYG:SYD:AI(A;CIID;KA;;;SY)(A;CIID;KA;;;BA)(A;CIID;KR;;;BU)";
-        scratch
-            .key
-            .create_subkey("Parameters", "", None, false)
-            .unwrap()
-            .set_security(recorded)
-            .unwrap();
-        let backup = scratch.tree();
-        assert!(
-            backup.keys.iter().any(|k| k.sddl == recorded),
-            "{backup:#?}"
+    fn write_back_ops_name_an_existing_key_with_another_descriptor() {
+        let recorded = "O:SYG:SYD:AI(A;CIID;KA;;;SY)";
+        let tree = |root: &str, params: &str, deep: &str| RegTree {
+            keys: vec![
+                key(None, "Svc", root),
+                key(Some(0), "Parameters", params),
+                key(Some(1), "Deep", deep),
+            ],
+        };
+        let backup = tree("O:SYG:SYD:(A;;KA;;;SY)", recorded, recorded);
+        let same = tree("O:BAG:BAD:(A;;KA;;;BA)", recorded, recorded);
+        assert_eq!(write_back_ops(&backup, &same), Vec::new());
+        let live = tree(
+            recorded,
+            "O:SYG:SYD:(A;CIID;KA;;;SY)",
+            "O:BAG:SYD:AI(A;CIID;KA;;;SY)",
         );
-        remove_tree(&scratch.key, "Parameters");
-        let writes = write_back_ops(&backup, &scratch.tree());
-        write_back_below(&scratch.key, &writes).unwrap();
-        assert_eq!(scratch.sddl_of("Parameters"), recorded);
-        assert_eq!(tree_difference(&backup, &scratch.tree()), None);
+        let set = |path: &[&str]| WriteBack::SetSecurity {
+            path: path.iter().map(|p| (*p).to_owned()).collect(),
+            sddl: recorded.to_owned(),
+        };
+        assert_eq!(
+            write_back_ops(&backup, &live),
+            vec![set(&["Parameters"]), set(&["Parameters", "Deep"])]
+        );
     }
 }

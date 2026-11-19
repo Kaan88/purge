@@ -3,7 +3,9 @@
 //! Every test runs over the in-memory backend `act_service::fake::FakeServices` and a relaxed store with
 //! a real journal: nothing here creates, changes or deletes a service on this machine. The only live
 //! test reads a built-in service and is read-only; the live create/delete round trip is VM-rig only
-//! (ignored).
+//! (ignored). The registry write-back of the live backend is run on a scratch key below the current
+//! user's `Software` (`write_back_*`; the `elevated_write_back_*` ones need an elevated administrator
+//! and are part of the gate's elevated set E1).
 
 #![cfg(feature = "test-support")]
 
@@ -11,12 +13,13 @@ mod common;
 
 use std::path::Path;
 
-use common::{Scratch, safe};
-use purge_exec::act_service::fake::{FakeService, FakeServices, dword, sz};
+use common::{Scratch, TestKey, safe};
+use purge_exec::act_service::fake::{FakeService, FakeServices, KEY_SDDL, dword, sz};
 use purge_exec::act_service::{
     LiveServices, ObjErr, ObjErrKind, ServiceBackend, SvcPrepareArgs, SvcPrepared, SvcRemoval,
-    SvcUndoArgs, SvcUndoPrepared, SvcUndoResult, SvcValidated, act, complete, prepare,
+    SvcUndoArgs, SvcUndoPrepared, SvcUndoResult, SvcValidated, WriteBack, act, complete, prepare,
     prepare_undo, probe, run_undo, take_fault_trace, tree_difference, validate,
+    write_back_below_key, write_back_ops,
 };
 use purge_exec::fault;
 use purge_exec::gate::Stamp;
@@ -33,6 +36,7 @@ use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::regbackup::RegTree;
 use purge_model::{Action, Blocker, Candidate, ObjectKind, Reversibility, ScanMode, Target};
 use purge_win::reg::{REG_DWORD, REG_EXPAND_SZ, REG_SZ};
+use purge_win::reg_write::{KeyAccess, WKey};
 
 // ---------------------------------------------------------------------------------------------------
 // Fixtures
@@ -1352,6 +1356,119 @@ fn undo_crash_at_svcrestore_mid_then_resume() {
     w.journal.undo_done(token, UndoOutcome::Restored).unwrap();
 }
 
+/// Review R8 S5: the process ends inside the write-back, after `Parameters` was created and before its
+/// recorded descriptor was set. The next attempt (the undo intent is on record) finds the key, puts the
+/// recorded descriptor on it and ends `Restored`; before, no write touched an existing key's descriptor
+/// and every further attempt ended `ValueDiffers`, then `ObjectExists`.
+#[test]
+fn undo_crash_between_key_create_and_security_then_resume() {
+    let mut w = world("svc-u-wbcrash", vendor_service());
+    let (outcome, intent) = w.run();
+    let roots = vec![ROOT.to_owned()];
+    let args = w.undo_args(&intent, Some(&outcome), false, &roots);
+    let SvcUndoPrepared::Ready(job) = prepare_undo(&w.fake, &w.session, &GuardEnv::sample(), &args)
+    else {
+        panic!("decided");
+    };
+    let token = w.journal.undo_intent(OP).unwrap();
+    // The "crash": the write-back stops, and what it had done by then is one key, created with the
+    // descriptor creation gives it. The token is lost.
+    w.fake.world().fail_next.insert(
+        "write_back",
+        ObjErr::new(ObjErrKind::Other, Some(1117), "power lost"),
+    );
+    let _ = run_undo(&w.fake, job, &token);
+    drop(token);
+    let created = "O:BAG:SYD:(A;CI;KA;;;BA)";
+    assert_ne!(created, KEY_SDDL);
+    {
+        let mut world = w.fake.world();
+        let service = world.services.values_mut().next().unwrap();
+        let params = service.add_key(0, "Parameters", Vec::new());
+        service.tree.keys[params].sddl = created.to_owned();
+    }
+    w.reopen_journal();
+    let half = w.fake.service(NAME).unwrap();
+    assert!(tree_difference(&vendor_service().tree, &half.tree).is_some());
+
+    let token = w.journal.resume_undo(OP).expect("an open undo intent");
+    let args = w.undo_args(&intent, Some(&outcome), true, &roots);
+    let SvcUndoPrepared::Ready(job) = prepare_undo(&w.fake, &w.session, &GuardEnv::sample(), &args)
+    else {
+        panic!("decided");
+    };
+    assert!(!job.creates());
+    let before = w.fake.log().len();
+    let r = run_undo(&w.fake, job, &token);
+    assert_eq!(done_outcome(&r), &UndoOutcome::Restored, "{r:?}");
+    assert_eq!(creates(&w.fake.log()[before..]), 0);
+    let live = w.fake.service(NAME).unwrap().tree;
+    assert_same_tree(&live, &vendor_service().tree);
+    assert!(live.keys.iter().all(|k| k.sddl == KEY_SDDL), "{live:#?}");
+    w.journal.undo_done(token, UndoOutcome::Restored).unwrap();
+
+    // Once more: nothing is left to do.
+    let args = w.undo_args(&intent, Some(&outcome), false, &roots);
+    let SvcUndoPrepared::Decided(r) = prepare_undo(&w.fake, &w.session, &GuardEnv::sample(), &args)
+    else {
+        panic!("ready");
+    };
+    assert_eq!(done_outcome(&r), &UndoOutcome::AlreadyRestored);
+}
+
+/// The same after an attempt that ended with an error instead of a crash: `Failed{VerifyFailed}` is on
+/// record, the whole undo runs again and converges.
+#[test]
+fn undo_failed_in_the_write_back_then_again_restores_the_descriptor() {
+    let mut w = world("svc-u-wbfail", vendor_service());
+    let (outcome, intent) = w.run();
+    w.fake.world().fail_next.insert(
+        "write_back",
+        ObjErr::new(
+            ObjErrKind::AccessDenied,
+            Some(5),
+            "set the security descriptor of Parameters: access denied",
+        ),
+    );
+    let r = w.undo(&intent, &outcome);
+    let UndoOutcome::Failed { code, os_error, .. } = done_outcome(&r) else {
+        panic!("{r:?}");
+    };
+    assert_eq!((code, os_error), (&FailCode::VerifyFailed, &Some(5)));
+    {
+        let mut world = w.fake.world();
+        let service = world.services.values_mut().next().unwrap();
+        let params = service.add_key(0, "Parameters", Vec::new());
+        service.tree.keys[params].sddl = "O:BAG:SYD:(A;CI;KA;;;BA)".to_owned();
+    }
+    let roots = vec![ROOT.to_owned()];
+    let args = w.undo_args(&intent, Some(&outcome), true, &roots);
+    let SvcUndoPrepared::Ready(job) = prepare_undo(&w.fake, &w.session, &GuardEnv::sample(), &args)
+    else {
+        panic!("decided");
+    };
+    let token = w.journal.undo_intent(OP).unwrap();
+    let r = run_undo(&w.fake, job, &token);
+    assert_eq!(done_outcome(&r), &UndoOutcome::Restored, "{r:?}");
+    assert_same_tree(&w.fake.service(NAME).unwrap().tree, &vendor_service().tree);
+}
+
+/// Review R8 M2: an owner the write-back could not assign does not fail the undo (the exact check sets
+/// the owner aside), and the `Restored` outcome says so in its detail.
+#[test]
+fn undo_names_an_owner_that_could_not_be_assigned() {
+    let mut w = world("svc-u-owner", vendor_service());
+    let (outcome, intent) = w.run();
+    let note = "key Parameters keeps the owner BA: the recorded owner SY could not be assigned";
+    w.fake.world().write_notes = vec![note.to_owned()];
+    let r = w.undo(&intent, &outcome);
+    let SvcUndoResult::Done { outcome, detail } = &r else {
+        panic!("{r:?}");
+    };
+    assert_eq!(outcome, &UndoOutcome::Restored);
+    assert_eq!(detail, note);
+}
+
 /// The backend has no start entry, and the module's source names no API that starts or controls a
 /// service.
 #[test]
@@ -1600,6 +1717,396 @@ fn live_read_of_a_builtin_service_is_consistent() {
             .is_none()
     );
     let _ = &deny;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The registry write-back of the live backend, on a scratch key standing in for `Services\<name>`
+// ---------------------------------------------------------------------------------------------------
+
+/// The scratch key opened as [`LiveServices`] opens a service's key for the write-back.
+fn wb_root(t: &TestKey) -> WKey {
+    t.open("", KeyAccess::SET_VALUE | KeyAccess::CREATE_SUB_KEY)
+}
+
+fn wb_apply(t: &TestKey, writes: &[WriteBack]) -> Result<Vec<String>, ObjErr> {
+    write_back_below_key(&wb_root(t), writes)
+}
+
+fn wb_tree(t: &TestKey) -> RegTree {
+    purge_exec::regbackup::capture_tree(
+        &t.open("", KeyAccess::READ),
+        r"HKU\scratch",
+        purge_exec::regbackup::DEFAULT_KEY_LIMIT,
+    )
+    .unwrap()
+    .tree()
+    .unwrap()
+    .clone()
+}
+
+fn wb_sddl(t: &TestKey, sub: &str) -> String {
+    t.open(sub, KeyAccess::READ).security_sddl().unwrap()
+}
+
+fn wb_remove(parent: &WKey, name: &str) {
+    let key = parent.open_subkey(name, KeyAccess::READ).unwrap();
+    for sub in key.subkey_names().unwrap() {
+        wb_remove(&key, &sub);
+    }
+    drop(key);
+    parent.delete_subkey(name).unwrap();
+}
+
+/// Whether the test process may assign SYSTEM as an owner (`SeRestorePrivilege`, which an elevated
+/// administrator's token holds): tried on a probe key, removed again.
+fn may_assign_system_owner(t: &TestKey) -> bool {
+    let root = wb_root(t);
+    let probe = root
+        .create_subkey("privilege-probe", "", None, false)
+        .unwrap();
+    let held = probe.set_security("O:SY").is_ok();
+    drop(probe);
+    wb_remove(&root, "privilege-probe");
+    held
+}
+
+/// Group and DACL of an SDDL string with an owner part.
+fn owner_aside(sddl: &str) -> &str {
+    &sddl[sddl.find("G:").unwrap()..]
+}
+
+fn create_key(path: &[&str], sddl: &str) -> WriteBack {
+    WriteBack::CreateKey {
+        path: path.iter().map(|p| (*p).to_owned()).collect(),
+        class: String::new(),
+        sddl: sddl.to_owned(),
+        volatile: false,
+    }
+}
+
+fn set_security(path: &[&str], sddl: &str) -> WriteBack {
+    WriteBack::SetSecurity {
+        path: path.iter().map(|p| (*p).to_owned()).collect(),
+        sddl: sddl.to_owned(),
+    }
+}
+
+fn set_value(path: &[&str], name: &str) -> WriteBack {
+    WriteBack::SetValue {
+        path: path.iter().map(|p| (*p).to_owned()).collect(),
+        name: name.to_owned(),
+        value_type: REG_SZ,
+        data: sz("x"),
+    }
+}
+
+/// A protected, auto-inherited DACL as a key stores it, with access mask `mask` for the current user
+/// and for administrators and full control for SYSTEM: set on a model key, read back, removed.
+fn stored_dacl(t: &TestKey, mask: &str) -> String {
+    let root = wb_root(t);
+    let sid = &t.sid;
+    let model = root.create_subkey("dacl-model", "", None, false).unwrap();
+    model
+        .set_security(&format!(
+            "D:PAI(A;CI;{mask};;;BA)(A;CI;{mask};;;{sid})(A;CI;KA;;;SY)"
+        ))
+        .unwrap();
+    let stored = model.security_sddl().unwrap();
+    drop(model);
+    wb_remove(&root, "dacl-model");
+    let dacl = stored[stored.find("D:").unwrap()..].to_owned();
+    assert!(dacl.starts_with("D:PAI("), "{dacl}");
+    dacl
+}
+
+/// Read, `DELETE` and `WRITE_DAC` (so the test can remove the key again), no `WRITE_OWNER`.
+const NO_WRITE_OWNER: &str = "0x70019";
+/// Everything a key has but `WRITE_OWNER`.
+const ALL_BUT_WRITE_OWNER: &str = "0x7003f";
+
+/// A `Parameters` key (class, value, auto-inherited DACL) with a `Deep` key below it (protected DACL),
+/// backed up and removed again: the backup, and the two recorded descriptors.
+fn parameters_backup(t: &TestKey) -> (RegTree, String, String) {
+    let sid = &t.sid;
+    let recorded = format!(
+        "O:{sid}G:{sid}D:AI(A;CIID;KA;;;{sid})(A;CIID;KA;;;SY)(A;CIID;KA;;;BA)(A;CIID;KR;;;BU)"
+    );
+    let deep = format!("O:{sid}G:{sid}D:PAI(A;CI;KA;;;{sid})(A;CI;KR;;;BU)");
+    let root = wb_root(t);
+    {
+        let params = root
+            .create_subkey("Parameters", "Cls", None, false)
+            .unwrap();
+        params.set_security(&recorded).unwrap();
+        params
+            .set_value_raw("ServiceDll", REG_SZ, &sz("x"))
+            .unwrap();
+        let inner = params.create_subkey("Deep", "", None, false).unwrap();
+        inner.set_security(&deep).unwrap();
+    }
+    let backup = wb_tree(t);
+    assert!(
+        backup.keys.iter().any(|k| k.sddl == recorded),
+        "{backup:#?}"
+    );
+    assert!(backup.keys.iter().any(|k| k.sddl == deep), "{backup:#?}");
+    wb_remove(&root, "Parameters");
+    assert_eq!(wb_tree(t).keys.len(), 1);
+    (backup, recorded, deep)
+}
+
+/// M1b executor gate (K11 svc-full, K13): the write-back re-created `Parameters` from a descriptor
+/// with an auto-inherited DACL (`D:AI(...)`), creation stored it as `D:(...)`, and undo's own exact
+/// check then refused the tree it had just written. Backed up, deleted and written back, a subkey
+/// (and a key below it) holds the recorded descriptor exactly, `AI` included.
+#[test]
+fn write_back_restores_an_auto_inherited_dacl_exactly() {
+    let t = TestKey::new();
+    let (backup, recorded, deep) = parameters_backup(&t);
+    let writes = write_back_ops(&backup, &wb_tree(&t));
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|w| matches!(w, WriteBack::CreateKey { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(wb_apply(&t, &writes).unwrap(), Vec::<String>::new());
+
+    assert_eq!(wb_sddl(&t, "Parameters"), recorded);
+    assert_eq!(wb_sddl(&t, r"Parameters\Deep"), deep);
+    assert_eq!(tree_difference(&backup, &wb_tree(&t)), None);
+    assert_eq!(write_back_ops(&backup, &wb_tree(&t)), Vec::new());
+}
+
+/// The other arm: a recorded SYSTEM owner is refused at creation (1307), the key is created without
+/// the owner part, and the recorded descriptor is still put on it. Elevated (`SeRestorePrivilege`) the
+/// whole descriptor is the recorded one and nothing is noted. Unelevated the owner stays the creator's
+/// (the exact check sets the owner aside) while group and DACL, `AI` included, are the recorded ones,
+/// and the owner left is named in a note (review R8 M2).
+#[test]
+fn write_back_restores_the_dacl_of_a_key_whose_owner_cannot_be_assigned_at_creation() {
+    let t = TestKey::new();
+    let sid = &t.sid;
+    let recorded =
+        format!("O:SYG:SYD:AI(A;CIID;KA;;;{sid})(A;CIID;KA;;;SY)(A;CIID;KA;;;BA)(A;CIID;KR;;;BU)");
+    let notes = wb_apply(&t, &[create_key(&["Parameters"], &recorded)]).unwrap();
+    let live = wb_sddl(&t, "Parameters");
+    assert_eq!(owner_aside(&live), owner_aside(&recorded));
+    if may_assign_system_owner(&t) {
+        assert_eq!(live, recorded);
+        assert_eq!(notes, Vec::<String>::new());
+    } else {
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].starts_with("key Parameters keeps the owner ")
+                && notes[0].contains("the recorded owner SY could not be assigned"),
+            "{notes:?}"
+        );
+    }
+}
+
+/// Review R8 S6: the recorded DACL gives the token no `WRITE_OWNER` (and it is on the key from its
+/// creation), and the recorded descriptor is still set whole afterwards, because the security write is
+/// checked against the creating handle's rights. Both creation arms: an owner the token may assign
+/// (created with the whole descriptor, then set for the flags creation dropped), and SYSTEM (created
+/// without the owner; set whole when elevated, group and DACL with a note when not).
+#[test]
+fn write_back_restores_a_descriptor_whose_dacl_grants_no_write_owner() {
+    let t = TestKey::new();
+    let sid = &t.sid;
+    let dacl = stored_dacl(&t, NO_WRITE_OWNER);
+
+    let own = format!("O:{sid}G:{sid}{dacl}");
+    assert_eq!(
+        wb_apply(&t, &[create_key(&["Own"], &own)]).unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(wb_sddl(&t, "Own"), own);
+
+    let system = format!("O:SYG:SY{dacl}");
+    let notes = wb_apply(&t, &[create_key(&["System"], &system)]).unwrap();
+    let live = wb_sddl(&t, "System");
+    assert_eq!(owner_aside(&live), owner_aside(&system));
+    if may_assign_system_owner(&t) {
+        assert_eq!(live, system);
+        assert_eq!(notes, Vec::<String>::new());
+    } else {
+        assert_eq!(notes.len(), 1, "{notes:?}");
+    }
+}
+
+/// Review R8 S5 on a real key: an attempt created `Parameters` as recorded and ended before the
+/// security write (creation drops the auto-inherited flag). The next attempt names the key with a
+/// `SetSecurity`, puts the recorded descriptor on it, creates what is still missing, and the tree is
+/// the backup; a third attempt has nothing to write.
+#[test]
+fn write_back_converges_after_an_attempt_that_ended_between_create_and_set() {
+    let t = TestKey::new();
+    let (backup, recorded, deep) = parameters_backup(&t);
+    drop(
+        wb_root(&t)
+            .create_subkey("Parameters", "Cls", Some(&recorded), false)
+            .unwrap(),
+    );
+    let half = wb_tree(&t);
+    assert_ne!(wb_sddl(&t, "Parameters"), recorded);
+    assert_eq!(
+        tree_difference(&backup, &half).as_deref(),
+        Some(r"key Parameters\ has another security descriptor")
+    );
+    let writes = write_back_ops(&backup, &half);
+    assert_eq!(writes[0], set_security(&["Parameters"], &recorded));
+    assert_eq!(writes.len(), 3, "{writes:?}");
+    assert_eq!(wb_apply(&t, &writes).unwrap(), Vec::<String>::new());
+    assert_eq!(wb_sddl(&t, "Parameters"), recorded);
+    assert_eq!(wb_sddl(&t, r"Parameters\Deep"), deep);
+    assert_eq!(tree_difference(&backup, &wb_tree(&t)), None);
+    assert_eq!(write_back_ops(&backup, &wb_tree(&t)), Vec::new());
+}
+
+/// The same for the hardest leftover: the recorded owner is SYSTEM, the key was created without it,
+/// and its DACL (in force since creation) grants no `WRITE_OWNER`, so the key can be opened again for
+/// `WRITE_DAC` only. The DACL is set alone, group and DACL are then the recorded ones (what the exact
+/// check compares), and the owner left is named in a note; nothing fails.
+#[test]
+fn write_back_converges_on_a_leftover_key_it_cannot_open_for_write_owner() {
+    let t = TestKey::new();
+    let dacl = stored_dacl(&t, NO_WRITE_OWNER);
+    let recorded = format!("O:SYG:SY{dacl}");
+    drop(
+        wb_root(&t)
+            .create_subkey("System", "", Some(owner_aside(&recorded)), false)
+            .unwrap(),
+    );
+    let created = wb_sddl(&t, "System");
+    assert_ne!(owner_aside(&created), owner_aside(&recorded));
+
+    let notes = wb_apply(&t, &[set_security(&["System"], &recorded)]).unwrap();
+    let live = wb_sddl(&t, "System");
+    assert_eq!(owner_aside(&live), owner_aside(&recorded));
+    assert_ne!(live, recorded);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains("the recorded owner SY could not be assigned"),
+        "{notes:?}"
+    );
+    // Every further attempt says the same and changes nothing.
+    assert_eq!(
+        wb_apply(&t, &[set_security(&["System"], &recorded)]).unwrap(),
+        notes
+    );
+    assert_eq!(wb_sddl(&t, "System"), live);
+}
+
+/// Review R8 M1: a descriptor that cannot be set and a key that cannot be created do not end the
+/// write-back. The values of the first key and everything after both are still written, the writes at
+/// and below the key that was not created are left out, and the error names all of it.
+#[test]
+fn write_back_writes_everything_it_can_and_reports_every_failure() {
+    let t = TestKey::new();
+    let sid = &t.sid;
+    let dacl = stored_dacl(&t, ALL_BUT_WRITE_OWNER);
+    // `Locked` exists with another group than recorded, and no handle to it gets `WRITE_OWNER`.
+    {
+        let locked = wb_root(&t)
+            .create_subkey("Locked", "", None, false)
+            .unwrap();
+        locked
+            .set_security(&format!("O:{sid}G:{sid}{dacl}"))
+            .unwrap();
+    }
+    let recorded = format!("O:{sid}G:SY{dacl}");
+    let plain = format!("O:{sid}G:{sid}D:P(A;CI;KA;;;{sid})(A;CI;KA;;;BA)");
+    let writes = [
+        set_security(&["Locked"], &recorded),
+        set_value(&["Locked"], "v"),
+        create_key(&["Bad"], "not a descriptor"),
+        set_value(&["Bad"], "x"),
+        create_key(&["Bad", "Sub"], &plain),
+        create_key(&["After"], &plain),
+        set_value(&["After"], "y"),
+    ];
+    let e = wb_apply(&t, &writes).unwrap_err();
+    assert_eq!((e.kind, e.os_error), (ObjErrKind::AccessDenied, Some(5)));
+    assert!(
+        e.detail
+            .starts_with("2 writes failed: set the security descriptor of Locked (it is ")
+            && e.detail.contains("; create Bad: ")
+            && e.detail
+                .ends_with("; 2 writes at or below a key that was not created were left out"),
+        "{}",
+        e.detail
+    );
+    assert_eq!(wb_sddl(&t, "Locked"), format!("O:{sid}G:{sid}{dacl}"));
+    assert_eq!(t.get("Locked", "v"), Some((REG_SZ, sz("x"))));
+    assert!(!t.exists("Bad"));
+    assert_eq!(wb_sddl(&t, "After"), plain);
+    assert_eq!(t.get("After", "y"), Some((REG_SZ, sz("x"))));
+}
+
+/// The real thing, for the gate's elevated set (E1): a key owned by SYSTEM is backed up, deleted and
+/// written back with owner, group and auto-inherited DACL exactly as recorded, and nothing is noted.
+/// Needs an elevated administrator (`SeRestorePrivilege`): `cargo test -p purge-exec --features
+/// test-support --test act_service -- --include-ignored elevated_write_back`.
+#[test]
+#[ignore = "needs an elevated administrator (SeRestorePrivilege)"]
+fn elevated_write_back_restores_a_system_owned_auto_inherited_key() {
+    let t = TestKey::new();
+    assert!(may_assign_system_owner(&t), "run elevated");
+    let recorded = "O:SYG:SYD:AI(A;CIID;KA;;;SY)(A;CIID;KA;;;BA)(A;CIID;KR;;;BU)";
+    let root = wb_root(&t);
+    root.create_subkey("Parameters", "", None, false)
+        .unwrap()
+        .set_security(recorded)
+        .unwrap();
+    let backup = wb_tree(&t);
+    assert!(
+        backup.keys.iter().any(|k| k.sddl == recorded),
+        "{backup:#?}"
+    );
+    wb_remove(&root, "Parameters");
+    let writes = write_back_ops(&backup, &wb_tree(&t));
+    assert_eq!(wb_apply(&t, &writes).unwrap(), Vec::<String>::new());
+    assert_eq!(wb_sddl(&t, "Parameters"), recorded);
+    assert_eq!(tree_difference(&backup, &wb_tree(&t)), None);
+}
+
+/// Review R8 S5 and S6 with a SYSTEM owner, elevated: the leftover of an attempt that ended between
+/// the creation (without the owner, which creation refuses) and the security write is opened again and
+/// gets the whole recorded descriptor, owner included; and a SYSTEM-owned key whose recorded DACL gives
+/// administrators no `WRITE_OWNER` is created and set exactly.
+#[test]
+#[ignore = "needs an elevated administrator (SeRestorePrivilege)"]
+fn elevated_write_back_converges_on_a_system_owned_key_after_an_interrupted_attempt() {
+    let t = TestKey::new();
+    assert!(may_assign_system_owner(&t), "run elevated");
+    let recorded = "O:SYG:SYD:AI(A;CIID;KA;;;SY)(A;CIID;KA;;;BA)(A;CIID;KR;;;BU)";
+    let root = wb_root(&t);
+    root.create_subkey("Parameters", "", None, false)
+        .unwrap()
+        .set_security(recorded)
+        .unwrap();
+    let backup = wb_tree(&t);
+    wb_remove(&root, "Parameters");
+    drop(
+        root.create_subkey("Parameters", "", Some(owner_aside(recorded)), false)
+            .unwrap(),
+    );
+    let half = wb_tree(&t);
+    assert!(tree_difference(&backup, &half).is_some());
+    let writes = write_back_ops(&backup, &half);
+    assert_eq!(writes, vec![set_security(&["Parameters"], recorded)]);
+    assert_eq!(wb_apply(&t, &writes).unwrap(), Vec::<String>::new());
+    assert_eq!(wb_sddl(&t, "Parameters"), recorded);
+    assert_eq!(tree_difference(&backup, &wb_tree(&t)), None);
+
+    let system = format!("O:SYG:SY{}", stored_dacl(&t, NO_WRITE_OWNER));
+    assert_eq!(
+        wb_apply(&t, &[create_key(&["System"], &system)]).unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(wb_sddl(&t, "System"), system);
 }
 
 /// The real delete and re-create of a throwaway service. Elevated, changes the SCM: VM rig only.

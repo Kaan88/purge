@@ -313,7 +313,7 @@ impl ServiceBackend for Objects {
     fn apply_security(&self, name: &str, sddl: &str) -> Result<(), SvcErr> {
         self.call("svc.security", || self.services.apply_security(name, sddl))
     }
-    fn write_back(&self, name: &str, writes: &[WriteBack]) -> Result<(), SvcErr> {
+    fn write_back(&self, name: &str, writes: &[WriteBack]) -> Result<Vec<String>, SvcErr> {
         self.call("svc.write_back", || self.services.write_back(name, writes))
     }
     fn flush_system(&self) -> Result<(), SvcErr> {
