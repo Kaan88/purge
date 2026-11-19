@@ -2,17 +2,21 @@
 
     python -I vm/truth/m1b-exec-fixture.py --cases vm/truth/m1b-exec-cases.json --out <dir> [--mutate <name>]
 
-Writes <dir>/cases.json (the cases file, edited by a cases-* mutation) and <dir>/runs/m1b-x-*/ as the guest and
+Writes <dir>/cases.json (the cases file, edited by a cases-* mutation), <dir>/ambient.json (an M1b exec ambient set
+of NULL_RUNS null runs per null mode, edited by an ambient-* file mutation) and <dir>/runs/m1b-x-*/ as the guest and
 host would for a run in which every criterion holds, built from that cases file (not from the scorer's constants),
 then applies one named mutation that makes the run set bad. The self-test scores each set with
-M1B_RUNS=<dir>/runs M1B_CASES=<dir>/cases.json and requires: no mutation -> PASS; every mutation -> FAIL on the
-criterion it names (MUTATIONS). An unknown mutation name is an error (exit 2), never a passing set.
+M1B_RUNS=<dir>/runs M1B_CASES=<dir>/cases.json M1B_AMBIENT=<dir>/ambient.json and requires: no mutation -> PASS;
+every mutation -> FAIL on the criterion it names (MUTATIONS). An unknown mutation name is an error (exit 2), never a
+passing set.
 """
 import argparse, copy, hashlib, json, os, sys
 
 KINDS = ["service", "task", "firewall"]
 ENGINE = "ab" * 32
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
+NULL_RUNS = 6                                                             # per null mode (m1b-exec.sh MIN_NULL_RUNS_PER_MODE)
+GUEST_AMBIENT = "C:\\cr\\bin\\m2-ambient.json"
 
 # name -> (criterion the score must fail, what the mutation does)
 MUTATIONS = {
@@ -41,7 +45,19 @@ MUTATIONS = {
     "engine-installed-differs": ("BIND", "the installed engine is not the staged one (R4 S6)"),
     "commit-differs": ("BIND", "the elevated run names another commit (R4 S6)"),
     "source-dirty": ("BIND", "the fidelity run's sources were dirty (R4 S6)"),
+    "ambient-missing-in-run": ("BIND", "the crash run records no ambient set (R8 S3)"),
+    "ambient-other-hash": ("BIND", "the traps run declared and used another ambient set (R8 S3)"),
+    "ambient-guest-differs": ("BIND", "the undo-traps run's guest copy differs from the declared set (R8 S3)"),
+    "ambient-declared-missing": ("BIND", "the fidelity run's host declared no ambient set (R8 S3)"),
+    "ambient-few-null-runs": ("BIND", "the committed set holds 5 null runs of m1b-x-traps (R8 S3)"),
+    "ambient-gate-run-id": ("BIND", "the committed set was built from a gate run m1b-x-fidelity (R8 S2, S3)"),
+    "ambient-fixture-name": ("BIND", "the committed set names a PurgeExec* service (R8 S2, S3)"),
+    "ambient-schema": ("BIND", "the committed set has another schema (R8 S3)"),
 }
+
+# Mutations of the ambient file itself (applied before it is hashed: the runs then name the mutated file's hash, so
+# only the file check can catch them).
+AMBIENT_FILE_MUTATIONS = {"ambient-few-null-runs", "ambient-gate-run-id", "ambient-fixture-name", "ambient-schema"}
 
 
 def write(path, doc):
@@ -58,10 +74,36 @@ def phases():
     return [{"name": "p", "ok": True}]
 
 
-def run_doc(mode, cases_sha, results, engine=ENGINE, installed=None, commit=COMMIT, dirty=False):
+def ambient_doc():
+    runs = []
+    for k in range(1, NULL_RUNS + 1):
+        for m in ("m1b-x-fidelity", "m1b-x-traps"):
+            rid = "xn%d-%s" % (k, m)
+            runs.append({"id": rid, "dir": "runs\\" + rid, "pair": ["snap-%s-a.tsv.gz" % rid, "snap-%s-b.tsv.gz" % rid],
+                         "records": ["~K:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\CIMWin32 @ root/CIMV2"],
+                         "patterns": []})
+    return {"schema": "purge.rig.m2ambient/1", "note": "fixture", "runs": runs,
+            "records": ["~K:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\CIMWin32 @ root/CIMV2"],
+            "patterns": ["(?i)^~V:HKLM\\\\SOFTWARE\\\\X\\|[0-9]+$"]}
+
+
+def mutate_ambient(a, m):
+    if m == "ambient-few-null-runs":
+        a["runs"] = [r for r in a["runs"] if r["id"] != "xn%d-m1b-x-traps" % NULL_RUNS]
+    elif m == "ambient-gate-run-id":
+        a["runs"][0]["id"] = "m1b-x-fidelity"
+    elif m == "ambient-fixture-name":
+        a["records"].append("~K:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeExecSvcA")
+    elif m == "ambient-schema":
+        a["schema"] = "purge.rig.ambient/1"
+
+
+def run_doc(mode, cases_sha, results, engine=ENGINE, installed=None, commit=COMMIT, dirty=False, amb_sha=None):
     r = {"cases": {"sha256": cases_sha},
          "engine_build": {"declared": {"sha256": engine, "commit": commit, "source_dirty": dirty},
-                          "staged_sha256": engine, "installed_sha256": installed or engine}}
+                          "staged_sha256": engine, "installed_sha256": installed or engine},
+         "ambient": {"declared": {"file": "vm\\truth\\m1b-exec-ambient.json", "sha256": amb_sha}, "guest": GUEST_AMBIENT,
+                     "guest_sha256": amb_sha}}
     r.update(results)
     return {"schema": "purge.rig.m2/1", "run": mode, "mode": mode, "finished": "2026-11-17T00:00:00Z", "phases": phases(), "results": r}
 
@@ -93,7 +135,7 @@ def crash_row(n, kind, point, phase, after, rkind="abort"):
     return r
 
 
-def build(cases, cases_sha, mutate):
+def build(cases, cases_sha, mutate, amb_sha):
     sets = {}
     ex = lambda ok=True, c=0, u=0: {"ok": ok, "counts": {"collateral": c, "guard_escapes": 0, "unexplained": u, "missing_effects": 0, "changed_not_done": 0},
                                     "inputs": {"ambient": "C:\\cr\\m2-ambient.json"}}
@@ -110,7 +152,7 @@ def build(cases, cases_sha, mutate):
             g = {"id": v["id"], "kind": v["kind"], "recorded": True, "planted": p, "offered": {"id": "c%d" % i, "band": "Blocked"},
                  "selected": False, "exec": {}, "after_exec": p, "undo": {}, "after_undo": p}
         variants.append(g)
-    fid = run_doc("m1b-x-fidelity", cases_sha, {"variants": variants, "execs": {"main": {"exit": 0}}, "undo": {"main": {"exit": 0}}})
+    fid = run_doc("m1b-x-fidelity", cases_sha, {"variants": variants, "execs": {"main": {"exit": 0}}, "undo": {"main": {"exit": 0}}}, amb_sha=amb_sha)
     sets["m1b-x-fidelity/run.json"] = fid
     sets["m1b-x-fidelity/execdiff-main.json"] = ex()
     sets["m1b-x-fidelity/fidelity-main.json"] = {"ok": True, "ops": ops, "rows": [], "normalisations": []}
@@ -127,7 +169,7 @@ def build(cases, cases_sha, mutate):
                 g["scm_after_change"] = {"state": "Running", "pid": 4242}
                 g["scm_after_exec"] = {"state": "Running", "pid": 4242}
         traps.append(g)
-    sets["m1b-x-traps/run.json"] = run_doc("m1b-x-traps", cases_sha, {"act_traps": traps, "execs": {"traps": {"exit": 10}}})
+    sets["m1b-x-traps/run.json"] = run_doc("m1b-x-traps", cases_sha, {"act_traps": traps, "execs": {"traps": {"exit": 10}}}, amb_sha=amb_sha)
     sets["m1b-x-traps/execdiff-traps.json"] = ex()
     # m1b-x-undo-traps
     uts = []
@@ -140,7 +182,7 @@ def build(cases, cases_sha, mutate):
         else:
             g.update({"after_undo": st(False), "definition_present_after_undo": False})
         uts.append(g)
-    sets["m1b-x-undo-traps/run.json"] = run_doc("m1b-x-undo-traps", cases_sha, {"undo_traps": uts, "undo": {"main": {"exit": 11}}})
+    sets["m1b-x-undo-traps/run.json"] = run_doc("m1b-x-undo-traps", cases_sha, {"undo_traps": uts, "undo": {"main": {"exit": 11}}}, amb_sha=amb_sha)
     # m1b-x-crash
     rows, n = [], 0
     for k in KINDS:
@@ -157,7 +199,7 @@ def build(cases, cases_sha, mutate):
             n += 1
             rows.append(crash_row(n, k, p["point"], p["phase"], "resume", "poweroff"))
     declared = [fp["point"] for fp in cases["crash"]["fault_points"]]
-    sets["m1b-x-crash/run.json"] = run_doc("m1b-x-crash", cases_sha, {"fault_points": {"declared": declared}})
+    sets["m1b-x-crash/run.json"] = run_doc("m1b-x-crash", cases_sha, {"fault_points": {"declared": declared}}, amb_sha=amb_sha)
     sets["m1b-x-crash/crash-matrix.json"] = {"schema": "purge.rig.m1b-crashmatrix/1", "points": declared, "kinds": [], "filter_points": [], "rows": rows}
     # m1b-x-elevated
     targets = []
@@ -253,6 +295,15 @@ def mutate_sets(s, m):
         s["m1b-x-elevated/elevated-tests.json"]["build"]["commit"] = "f" * 40
     elif m == "source-dirty":
         s["m1b-x-fidelity/run.json"]["results"]["engine_build"]["declared"]["source_dirty"] = True
+    elif m == "ambient-missing-in-run":
+        del s["m1b-x-crash/run.json"]["results"]["ambient"]
+    elif m == "ambient-other-hash":
+        a = s["m1b-x-traps/run.json"]["results"]["ambient"]
+        a["declared"]["sha256"] = a["guest_sha256"] = "12" * 32
+    elif m == "ambient-guest-differs":
+        s["m1b-x-undo-traps/run.json"]["results"]["ambient"]["guest_sha256"] = "34" * 32
+    elif m == "ambient-declared-missing":
+        s["m1b-x-fidelity/run.json"]["results"]["ambient"]["declared"] = None
     elif m == "cases-elevated-min":
         for t in s["m1b-x-elevated/elevated-tests.json"]["targets"]:
             if t["test"] == "scm":
@@ -281,7 +332,13 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "cases.json"), "wb") as f:
         f.write(text)
-    sets = build(cases, hashlib.sha256(text).hexdigest(), a.mutate)
+    amb = ambient_doc()
+    if a.mutate in AMBIENT_FILE_MUTATIONS:
+        mutate_ambient(amb, a.mutate)
+    amb_text = (json.dumps(amb, indent=1) + "\n").encode("utf-8")
+    with open(os.path.join(a.out, "ambient.json"), "wb") as f:
+        f.write(amb_text)
+    sets = build(cases, hashlib.sha256(text).hexdigest(), a.mutate, hashlib.sha256(amb_text).hexdigest())
     if a.mutate:
         mutate_sets(sets, a.mutate)
     for rel, doc in sets.items():

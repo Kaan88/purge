@@ -233,8 +233,9 @@ function New-XRow([int]$N, [string]$ObjectKind, [string]$Point, [string]$Phase, 
         error = $null; notes = @(); pass = $false }
 }
 
-# The rig's GUID pattern (riglib $RigGuidRx; repeated here because the -Library self-test does not load riglib).
-$XGuidRx = '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$'
+# The rig's GUID pattern (riglib $RigGuidRx; repeated here because the -Library self-test does not load riglib). \A and
+# \z, not ^ and $: '$' also matches before a trailing newline, which would pass on into a command line (review R8 M4).
+$XGuidRx = '\A\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}\z'
 
 # A task's Id value from TaskCache\Tree\<path> (raw REG_SZ) as a braced GUID. The value can carry its NUL
 # terminator (2026-11-19: '{...}<NUL>' went into a snap --root and truncated the rigtool command line, so no task
@@ -455,6 +456,7 @@ function Start-XPaused($Rec, [string]$Point, [string]$Phase) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = Get-M2EngineExe
     $psi.Arguments = $(if ($Phase -eq 'undo') { New-M2UndoArgs $Rec.session '' '' (F "undo-paused-$($Rec.tag).json") } else { New-ExExecArgs $Rec.scan.plan $Rec.confirm $Rec.select $Rec.scan.fp (F "report-$($Rec.tag).json") })
+    Assert-NoNul $psi.Arguments 'engine command line'                     # as Invoke-Engine (review R8 M4)
     $psi.UseShellExecute = $true
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     Log "engine (detached): [PURGE_FAULT_PAUSE=$Point`:600000] `"$($psi.FileName)`" $($psi.Arguments)"
@@ -576,6 +578,8 @@ try {
         Phase 'fault-points' {
             Write-JsonFile $script:Cases (F 'm1b-exec-cases.json') 20
             Set-M2Result $R 'cases' ([ordered]@{ schema = "$($script:Cases.schema)"; sha256 = (Get-ExCasesSha $Opts) })
+            # The ambient set the rounds' execdiffs use, as m1b-exec.ps1 records it (m1b-exec.sh BIND, review R8 S3).
+            Set-M2Result $R 'ambient' (Get-ExAmbientRecord)
             $null = Invoke-M2Engine -Step 'fault-points' -Arguments (New-M2JournalArgs 'fault-points') -Calls $Calls -StdoutFile (F 'fault-points.out')
             $declared = @(ConvertFrom-M2FaultPoints ([IO.File]::ReadAllText((F 'fault-points.out'))))
             if (-not $declared.Count) { throw 'journal fault-points listed no point' }

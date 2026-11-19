@@ -155,11 +155,13 @@ impl RigRules {
                 ci(r"^P:[A-Z]:\\Windows\\Prefetch\\PURGE-ENGINE\.EXE-[0-9A-F]+\.pf$"),
                 "rig:purge-engine prefetch".to_string(),
             ),
-            // M1b executor runs (RIG.md section 12.8): the rig's own fabricated programs are all named PurgeExec*
-            // (guest\m1b-exec.ps1; e.g. the act-time trap service PurgeExecTrapSvcRun.exe that the rig starts).
+            // M1b executor runs (RIG.md section 12.8): the one program the rig itself starts, the act-time trap
+            // service PurgeExecTrapSvcRun.exe (guest\m1b-exec.ps1, traps change `start`). Never the other PurgeExec*
+            // service binaries (PurgeExecSvcA/B, PurgeExecTrapDep, PurgeExecImpostor, ...): the engine must never start
+            // them, and their new prefetch file is the record that shows it did (review R8 S4).
             (
-                ci(r"^P:[A-Z]:\\Windows\\Prefetch\\PURGEEXEC[A-Z0-9_]*\.EXE-[0-9A-F]{8}\.pf$"),
-                "rig:PurgeExec* prefetch".to_string(),
+                ci(r"^P:[A-Z]:\\Windows\\Prefetch\\PURGEEXECTRAPSVCRUN\.EXE-[0-9A-F]{8}\.pf$"),
+                "rig:PurgeExecTrapSvcRun prefetch".to_string(),
             ),
         ];
         let guids = rig_task_guids(snaps);
@@ -296,13 +298,25 @@ mod tests {
         assert!(r.check("P:C:\\Windows\\Prefetch\\PURGE-ENGINE-HELPER.EXE-1A2B3C4D.pf").is_none());
         assert!(r.check("P:C:\\Windows\\Prefetch\\UNINS000.EXE-1A2B3C4D.pf").is_none());
         assert!(r.check("P:C:\\Windows\\Prefetch\\PURGE-ENGINE.EXE-1A2B3C4D.pf\\x").is_none());
-        // M1b executor runs: the rig's PurgeExec* programs (the trap service it starts), nothing else.
+        // M1b executor runs: the trap service the rig starts, nothing else (review R8 S4).
         assert_eq!(
             r.check("P:C:\\WINDOWS\\Prefetch\\PURGEEXECTRAPSVCRUN.EXE-F46E565D.pf"),
-            Some("rig:PurgeExec* prefetch")
+            Some("rig:PurgeExecTrapSvcRun prefetch")
         );
-        assert!(r.check("P:C:\\Windows\\Prefetch\\PurgeExecCr001.exe-0123abcd.pf").is_some());
-        assert!(r.check("P:C:\\Windows\\Prefetch\\PURGEEXEC.EXE-F46E565D.pf").is_some());
+        assert!(r.check("P:C:\\Windows\\Prefetch\\PurgeExecTrapSvcRun.exe-0123abcd.pf").is_some());
+        // The planted service binaries the engine must never start: their prefetch file stays a record.
+        for p in [
+            "PURGEEXECSVCA.EXE",
+            "PURGEEXECSVCB.EXE",
+            "PURGEEXECTRAPDEP.EXE",
+            "PURGEEXECIMPOSTOR.EXE",
+            "PurgeExecCr001.exe",
+            "PURGEEXEC.EXE",
+            "PURGEEXECTRAPSVCRUNX.EXE",
+        ] {
+            assert!(r.check(&format!("P:C:\\Windows\\Prefetch\\{p}-F46E565D.pf")).is_none(), "{p}");
+        }
+        assert!(r.check("P:C:\\Windows\\Prefetch\\PURGEEXECTRAPSVCRUN.EXE-F46E565.pf").is_none());
         assert!(r.check("P:C:\\Windows\\Prefetch\\APP.EXE-F46E565D.pf").is_none());
         assert!(r.check("P:C:\\Windows\\Prefetch\\XPURGEEXECTRAPSVCRUN.EXE-F46E565D.pf").is_none());
         assert!(r.check("P:C:\\Windows\\Prefetch\\PURGEEXECTRAPSVCRUN.EXE-F46E565D.pf\\x").is_none());

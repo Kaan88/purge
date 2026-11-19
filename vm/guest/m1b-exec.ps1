@@ -541,6 +541,34 @@ function New-ExExecArgs([string]$Plan, [string]$Confirm, [string]$Select, [strin
     (New-M2ExecArgs $Plan $Confirm $Select) + ' --fp ' + (ConvertTo-EngineArg $Fp) + $(if ($Out) { ' -o ' + (ConvertTo-EngineArg $Out) } else { '' })
 }
 
+# The exec window of m1b-x-fidelity / m1b-x-traps (after snap A and deep A), ONE flow for the gate run and its null
+# run (RIG.md section 12.8, review R8 B1): the gate run runs $Exec (phase $ExecPhase, the engine), a null run the idle
+# wait of $NullWaitSec in its place; everything else runs in both, in the same order: $AfterExec (the rig's own reads
+# between exec and snap B; traps: the trap objects' state and the SCM through CIM Win32_Service, which writes WMI
+# tracing keys), then snap B and deep B. So diff(snap A, snap B) of a null run holds what the gate window holds minus
+# the engine. A gate run whose exec wrote no report ($script:X.report) takes no snap B. Returns $true when snap B and
+# deep B ran. Defined above the -Library return so the host self-test can run it with stubs (both branches traced).
+function Invoke-ExWindow([string]$ExecPhase, [scriptblock]$Exec, [scriptblock]$AfterExec, [string]$DeepScope) {
+    if ($NullRun) { Phase 'null-wait' { Log "null run: idle $NullWaitSec s instead of exec"; Start-Sleep -Seconds $NullWaitSec } $S }
+    else { Phase $ExecPhase $Exec $S }
+    if ($AfterExec) { Phase 'after-exec' $AfterExec $S }
+    if (-not $NullRun -and -not ($script:X -and $script:X.report)) { return $false }
+    Phase 'snap-b' { $null = Invoke-M2Snap (F "snap-$Run-b.tsv.gz") } $S
+    Phase 'deep-b' { $null = Invoke-M2Deep @($DeepScope) (F 'deep-b.json') } $S
+    $true
+}
+
+# The ambient set this run's execdiffs use (C:\cr\bin\m2-ambient.json, pushed by the host): what the host declared
+# (opts.ambient: file, sha256) and the SHA-256 of the guest copy ($null: none, execdiff runs without one). m1b-exec.sh
+# BIND requires declared = guest = the committed set's SHA-256 in every VM run (review R8 S3); m1b-crash.ps1 records
+# it too (above the -Library return for that).
+function Get-ExAmbientRecord {
+    $decl = $(if ($Opts -and $Opts.PSObject.Properties['ambient']) { $Opts.ambient } else { $null })
+    $sha = $null
+    if (Test-Path -LiteralPath $RigM2Ambient -PathType Leaf) { $sha = Get-ExBytesSha ([IO.File]::ReadAllBytes($RigM2Ambient)) }
+    [ordered]@{ declared = $decl; guest = $RigM2Ambient; guest_sha256 = $sha }
+}
+
 if ($Library) { return }
 
 # ============================================================================================ main
@@ -565,9 +593,10 @@ $Calls = $S.engine.calls
 $PhaseCount0 = $S.phases.Count
 $Cases = $null
 # Null run (opts null = true; RIG.md §12.8, host mode m1b-x-null): m1b-x-fidelity / m1b-x-traps exactly as a real run
-# up to snap A / deep A, then an idle wait of null_wait seconds where exec would run, snap B and deep B, and nothing
-# after (no exec, so no restore point and no firewall delete). diff(snap A, snap B) is pure Windows churn of the exec
-# window, the input of `rigtool ambient --m2 --added` (vm\truth\m1b-exec-ambient.json).
+# up to snap A / deep A, then the same window (Invoke-ExWindow) with an idle wait of null_wait seconds where exec
+# would run (the rig's own reads of the window, traps after-exec, still run), snap B and deep B, and nothing after (no
+# exec, so no restore point and no firewall delete). diff(snap A, snap B) is the Windows and rig churn of the exec
+# window without the engine, the input of `rigtool ambient --m2 --added` (vm\truth\m1b-exec-ambient.json).
 $NullRun = [bool](Get-M2Opt $Opts 'null' $false)
 $NullWaitSec = [int](Get-M2Opt $Opts 'null_wait' 10)
 if ($NullRun -and @('m1b-x-fidelity', 'm1b-x-traps') -cnotcontains $Mode) { Log "m1b-exec.ps1: a null run is for m1b-x-fidelity / m1b-x-traps only"; Save-M2Run $R -Finished; exit 2 }
@@ -624,23 +653,6 @@ function Step-Pauses {
     Phase 'install' { Step-Install } $S
 }
 
-# A null run's exec window (opts null): the idle wait instead of exec, snap B, deep B, the store; nothing after.
-function Invoke-ExNullWindow([string]$DeepScope) {
-    Phase 'null-wait' { Log "null run: idle $NullWaitSec s instead of exec"; Start-Sleep -Seconds $NullWaitSec } $S
-    Phase 'snap-b' { $null = Invoke-M2Snap (F "snap-$Run-b.tsv.gz") } $S
-    Phase 'deep-b' { $null = Invoke-M2Deep @($DeepScope) (F 'deep-b.json') } $S
-    Phase 'store' { Set-M2Result $R 'store' (Save-M2Store $D 'final') } $S
-}
-
-# The ambient set this run's execdiffs use (C:\cr\bin\m2-ambient.json, pushed by the host): what the host declared
-# (opts.ambient: file, sha256) and the SHA-256 of the guest copy ($null: none, execdiff runs without one).
-function Get-ExAmbientRecord {
-    $decl = $(if ($Opts -and $Opts.PSObject.Properties['ambient']) { $Opts.ambient } else { $null })
-    $sha = $null
-    if (Test-Path -LiteralPath $RigM2Ambient -PathType Leaf) { $sha = Get-ExBytesSha ([IO.File]::ReadAllBytes($RigM2Ambient)) }
-    [ordered]@{ declared = $decl; guest = $RigM2Ambient; guest_sha256 = $sha }
-}
-
 function Step-Settle([string]$Tag) {
     Phase "settle-$Tag" { Add-Result 'settle' $Tag (Wait-M2BootSettle -MaxSec ([int](Get-M2Opt $Opts 'settle_max' 300)) -MinUptimeSec ([int](Get-M2Opt $Opts 'settle_min_uptime' 180))) } $S
 }
@@ -689,16 +701,15 @@ function Invoke-FidelityMode {
     Step-Settle 'main'
     Phase 'snap-a' { $null = Invoke-M2Snap (F "snap-$Run-a.tsv.gz") } $S
     Phase 'deep-a' { $null = Invoke-M2Deep @((F 'deepscope-main.json')) (F 'deep-a.json') } $S
-    if ($NullRun) { Invoke-ExNullWindow (F 'deepscope-main.json'); return }
+    # The window (Invoke-ExWindow, shared with the null run): exec, snap B, deep B. The rig's reads of this mode
+    # (after-exec) come after snap B, outside the window.
     $script:X = $null
-    Phase 'exec-main' {
+    $snapped = Invoke-ExWindow 'exec-main' {
         $script:X = Invoke-ExExec $sc $script:Sel 'main'
         if (-not $script:X.report) { throw "exec main wrote no report (exit $($script:X.exit))" }
         Add-Result 'execs' 'main' ([ordered]@{ exit = $script:X.exit; session = $script:X.session; counts = $script:X.doc.counts })
-    } $S
-    if (-not $script:X -or -not $script:X.report) { Phase 'store' { Set-M2Result $R 'store' (Save-M2Store $D 'final') } $S; return }
-    Phase 'snap-b' { $null = Invoke-M2Snap (F "snap-$Run-b.tsv.gz") } $S
-    Phase 'deep-b' { $null = Invoke-M2Deep @((F 'deepscope-main.json')) (F 'deep-b.json') } $S
+    } $null (F 'deepscope-main.json')
+    if ($NullRun -or -not $snapped) { Phase 'store' { Set-M2Result $R 'store' (Save-M2Store $D 'final') } $S; return }
     Phase 'execdiff-main' {
         $v = Invoke-M2Execdiff -Before (F "snap-$Run-a.tsv.gz") -After (F "snap-$Run-b.tsv.gz") -Journal $script:X.journal -Report $script:X.report -DeepBefore (F 'deep-a.json') -DeepAfter (F 'deep-b.json') -Out (F 'execdiff-main.json')
         Add-Result 'execdiff' 'main' $v.ok
@@ -811,14 +822,15 @@ function Invoke-TrapsMode {
     } $S
     Phase 'snap-a' { $null = Invoke-M2Snap (F "snap-$Run-a.tsv.gz") } $S
     Phase 'deep-a' { $null = Invoke-M2Deep @((F 'deepscope-traps.json')) (F 'deep-a.json') } $S
-    if ($NullRun) { Set-M2Result $R 'act_traps' @($script:Traps); Invoke-ExNullWindow (F 'deepscope-traps.json'); return }
+    # The window (Invoke-ExWindow, shared with the null run): exec, after-exec, snap B, deep B. after-exec reads the
+    # trap objects and the running service through CIM inside the window (WMI tracing keys, review R8 B1), so a null
+    # run runs the same reads in the same place; with no exec its pass fields are false (a null run is never scored).
     $script:X = $null
-    Phase 'exec-traps' {
+    $snapped = Invoke-ExWindow 'exec-traps' {
         $script:X = Invoke-ExExec $sc $script:Sel 'traps'
         Add-Result 'execs' 'traps' ([ordered]@{ exit = $script:X.exit; session = $script:X.session; counts = $(if ($script:X.doc) { $script:X.doc.counts }) })
         if (-not $script:X.report) { throw "exec traps wrote no report (exit $($script:X.exit))" }
-    } $S
-    Phase 'after-exec' {
+    } {
         foreach ($t in $script:Traps) {
             $t.exec = $(if ($t.offered -and $script:X -and $script:X.doc) { Get-ExOutcome $script:X.doc $t.offered.id } else { $null })
             $t.after_exec = Get-ExStateRecord $t.kind $t.name
@@ -836,10 +848,8 @@ function Invoke-TrapsMode {
             }
         }
         Set-M2Result $R 'act_traps' @($script:Traps)
-    } $S
-    if ($script:X -and $script:X.report) {
-        Phase 'snap-b' { $null = Invoke-M2Snap (F "snap-$Run-b.tsv.gz") } $S
-        Phase 'deep-b' { $null = Invoke-M2Deep @((F 'deepscope-traps.json')) (F 'deep-b.json') } $S
+    } (F 'deepscope-traps.json')
+    if ($snapped -and -not $NullRun) {
         Phase 'execdiff-traps' {
             $v = Invoke-M2Execdiff -Before (F "snap-$Run-a.tsv.gz") -After (F "snap-$Run-b.tsv.gz") -Journal $script:X.journal -Report $script:X.report -DeepBefore (F 'deep-a.json') -DeepAfter (F 'deep-b.json') -Out (F 'execdiff-traps.json')
             Add-Result 'execdiff' 'traps' $v.ok

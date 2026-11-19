@@ -23,6 +23,13 @@
 # the SHA-256 of the cases bytes it got and the engine build it ran (review R4 S6): all runs must name the same cases
 # file (the one scored here) and the same engine (sha256, installed copy equal, one repo commit, clean sources).
 #
+# The ambient set decides K10 as much as the cases file does (review R8 S3): the scorer hashes the committed set
+# ($M1B_AMBIENT, default truth/m1b-exec-ambient.json; Purge-CleanPro: truth/m1b-exec-ambient-cleanpro.json) itself
+# and requires, in all four VM runs, results.ambient.declared.sha256 == results.ambient.guest_sha256 == that hash. It
+# also checks the file: schema purge.rig.m2ambient/1, at least MIN_NULL_RUNS_PER_MODE null runs of each null mode
+# (a constant here, not read from anywhere), every run id of the null-run shape <prefix><k>-<mode>, and no fixture
+# name (PurgeExec*, C:\ProgramData\Purge) in any record or pattern.
+#
 # Exit codes: 0 every criterion passes; 1 a criterion fails; 2 an input is missing (the score is still written,
 # FAIL, with the missing inputs listed under `missing`).
 #
@@ -31,6 +38,7 @@
 #   M1B_PREFIX  run-name prefix (default empty)
 #   M1B_OUT     directory for m1b-exec-score.json (default truth)
 #   M1B_CASES   the cases file (default truth/m1b-exec-cases.json)
+#   M1B_AMBIENT the committed M1b exec ambient set (default truth/m1b-exec-ambient.json)
 #   PYTHON      Python 3 interpreter (default python)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -39,14 +47,15 @@ M1B_RUNS="${M1B_RUNS:-runs}"
 M1B_PREFIX="${M1B_PREFIX:-}"
 M1B_OUT="${M1B_OUT:-truth}"
 M1B_CASES="${M1B_CASES:-truth/m1b-exec-cases.json}"
+M1B_AMBIENT="${M1B_AMBIENT:-truth/m1b-exec-ambient.json}"
 mkdir -p "$M1B_OUT"
 
 PY="${PYTHON:-python}"
 
-"$PY" -I - "$M1B_RUNS" "$M1B_PREFIX" "$M1B_OUT" "$M1B_CASES" <<'EOF'
-import datetime, hashlib, json, os, sys
+"$PY" -I - "$M1B_RUNS" "$M1B_PREFIX" "$M1B_OUT" "$M1B_CASES" "$M1B_AMBIENT" <<'EOF'
+import datetime, hashlib, json, os, re, sys
 
-runs_dir, prefix, out_dir, cases_path = sys.argv[1:5]
+runs_dir, prefix, out_dir, cases_path, ambient_path = sys.argv[1:6]
 KINDS = ["service", "task", "firewall"]
 missing = []
 
@@ -89,6 +98,12 @@ NOT_REACHABLE = {"regdelete.mid", "regrestore.mid", "expiry.mid", "bootmove.regi
 GATE_ROUNDS = [(k, p, ph, a) for (p, ph, ks, afters) in GATE_POINTS for k in ks for a in afters]
 POWEROFF_PER_KIND = 5                                                     # K13: 15 of 15
 POWEROFF_FIRST = "objdelete.after"
+# BIND, the ambient set (review R8 S3): the null runs it must be built from, per null mode, and what it must not name.
+AMBIENT_SCHEMA = "purge.rig.m2ambient/1"
+NULL_MODES = ["m1b-x-fidelity", "m1b-x-traps"]
+MIN_NULL_RUNS_PER_MODE = 6                                                # vm/RIG.md 12.8: -Count 6
+NULL_RUN_RX = re.compile(r"^[a-z0-9][a-z0-9_.-]*[0-9]-(m1b-x-fidelity|m1b-x-traps)$")
+FIXTURE_RX = re.compile(r"(?i)purgeexec|programdata\\+purge")               # as rig-m1b-exec.ps1 $XFixtureRx
 ELEVATED = [                                                              # E1
     {"crate": "purge-win", "test": "scm", "run": "all", "min": 12, "require_prefix": "elevated::", "prefix_min": 6},
     {"crate": "purge-win", "test": "firewall", "run": "all", "min": 12, "require_prefix": "rig::", "prefix_min": 10},
@@ -139,6 +154,15 @@ except (OSError, ValueError):
     cases_sha, cases = None, {}
     missing.append("cases " + cases_path)
 
+try:
+    with open(ambient_path, "rb") as f:
+        amb_bytes = f.read()
+    amb_sha = hashlib.sha256(amb_bytes).hexdigest()
+    amb = json.loads(amb_bytes.decode("utf-8-sig"))
+except (OSError, ValueError):
+    amb_sha, amb = None, None
+    missing.append("ambient " + ambient_path)
+
 fid_run = need(rpath("m1b-x-fidelity", "run.json"), prefix + "m1b-x-fidelity/run.json")
 fid_ed = need(rpath("m1b-x-fidelity", "execdiff-main.json"), prefix + "m1b-x-fidelity/execdiff-main.json")
 fid_fd = need(rpath("m1b-x-fidelity", "fidelity-main.json"), prefix + "m1b-x-fidelity/fidelity-main.json")
@@ -149,22 +173,52 @@ cr_run = need(rpath("m1b-x-crash", "run.json"), prefix + "m1b-x-crash/run.json")
 cr_mx = need(rpath("m1b-x-crash", "crash-matrix.json"), prefix + "m1b-x-crash/crash-matrix.json")
 el = need(rpath("m1b-x-elevated", "elevated-tests.json"), prefix + "m1b-x-elevated/elevated-tests.json")
 
-# ---------------------------------------------------------------------------------------------- binding (R4 S4, S6)
-# One cases file and one engine build for every run.
+# ---------------------------------------------------------------------------------------------- binding (R4 S4, S6, R8 S3)
+# One cases file, one ambient set (the committed one scored here) and one engine build for every run.
+amb_problems = []
+amb_info = {"file": ambient_path, "sha256": amb_sha, "schema": (amb or {}).get("schema") if isinstance(amb, dict) else None,
+            "runs_per_mode": {}, "bad_run_ids": [], "fixture_names": [], "min_runs_per_mode": MIN_NULL_RUNS_PER_MODE}
+if amb is not None:
+    if not isinstance(amb, dict) or amb.get("schema") != AMBIENT_SCHEMA:
+        amb_problems.append("ambient %s: schema %s, want %s" % (ambient_path, amb_info["schema"], AMBIENT_SCHEMA))
+    a = amb if isinstance(amb, dict) else {}
+    runs = [r for r in (a.get("runs") or []) if isinstance(r, dict)]
+    ids = [str(r.get("id")) for r in runs]
+    for m in NULL_MODES:
+        amb_info["runs_per_mode"][m] = len({i for i in ids if NULL_RUN_RX.match(i) and i.endswith("-" + m)})
+        if amb_info["runs_per_mode"][m] < MIN_NULL_RUNS_PER_MODE:
+            amb_problems.append("ambient: %d null run(s) of %s, want at least %d" % (amb_info["runs_per_mode"][m], m, MIN_NULL_RUNS_PER_MODE))
+    amb_info["bad_run_ids"] = [i for i in ids if not NULL_RUN_RX.match(i)] + sorted({i for i in ids if ids.count(i) > 1})
+    if amb_info["bad_run_ids"]:
+        amb_problems.append("ambient: run ids not of the null-run shape or repeated: %s" % ", ".join(amb_info["bad_run_ids"][:10]))
+    if not isinstance(a.get("records"), list) or not isinstance(a.get("patterns"), list):
+        amb_problems.append("ambient: records / patterns are not lists")
+    entries = list(a.get("records") or []) + list(a.get("patterns") or [])
+    for r in runs:
+        entries += list(r.get("records") or []) + list(r.get("patterns") or [])
+    amb_info["fixture_names"] = sorted({str(e) for e in entries if FIXTURE_RX.search(str(e))})
+    if amb_info["fixture_names"]:
+        amb_problems.append("ambient: %d entr(ies) name a fixture: %s" % (len(amb_info["fixture_names"]), " | ".join(amb_info["fixture_names"][:5])))
 vm_runs = {"m1b-x-fidelity": fid_run, "m1b-x-traps": trp_run, "m1b-x-undo-traps": ut_run, "m1b-x-crash": cr_run}
-bind_rows, bind_problems = [], []
+bind_rows, bind_problems = [], list(amb_problems)
 for mode, run in vm_runs.items():
     res = results(run)
     eb = res.get("engine_build") or {}
     decl = eb.get("declared") or {}
+    ar = res.get("ambient") if isinstance(res.get("ambient"), dict) else {}
     row = {"run": prefix + mode, "cases_sha256": (res.get("cases") or {}).get("sha256"),
            "engine_sha256": decl.get("sha256"), "staged_sha256": eb.get("staged_sha256"),
-           "installed_sha256": eb.get("installed_sha256"), "commit": decl.get("commit"), "source_dirty": decl.get("source_dirty")}
+           "installed_sha256": eb.get("installed_sha256"), "commit": decl.get("commit"), "source_dirty": decl.get("source_dirty"),
+           "ambient_declared_sha256": (ar.get("declared") or {}).get("sha256") if isinstance(ar.get("declared"), dict) else None,
+           "ambient_guest_sha256": ar.get("guest_sha256")}
     bind_rows.append(row)
     if run is None:
         continue
     if not row["cases_sha256"] or row["cases_sha256"] != cases_sha:
         bind_problems.append("%s: cases sha256 %s, scored file %s" % (row["run"], row["cases_sha256"], cases_sha))
+    # The run's execdiffs used the committed ambient set: the host declared it and the guest copy is it (R8 S3).
+    if not (amb_sha and row["ambient_declared_sha256"] == amb_sha and row["ambient_guest_sha256"] == amb_sha):
+        bind_problems.append("%s: ambient declared %s, guest %s, committed %s" % (row["run"], row["ambient_declared_sha256"], row["ambient_guest_sha256"], amb_sha))
     if not row["engine_sha256"] or not (row["engine_sha256"] == row["staged_sha256"] == row["installed_sha256"]):
         bind_problems.append("%s: engine declared %s, staged %s, installed %s" % (row["run"], row["engine_sha256"], row["staged_sha256"], row["installed_sha256"]))
     if not row["commit"] or row["source_dirty"] is not False:
@@ -184,9 +238,9 @@ if len(engines) > 1:
     bind_problems.append("runs ran %d different engines: %s" % (len(engines), ", ".join(engines)))
 if len(commits) > 1:
     bind_problems.append("runs name %d different commits: %s" % (len(commits), ", ".join(commits)))
-binding = {"cases_sha256": cases_sha, "runs": bind_rows + [el_row], "engines": engines, "commits": commits,
+binding = {"cases_sha256": cases_sha, "ambient": amb_info, "runs": bind_rows + [el_row], "engines": engines, "commits": commits,
            "problems": bind_problems}
-binding["pass"] = bool(cases_sha and not bind_problems and len(engines) == 1 and len(commits) == 1)
+binding["pass"] = bool(cases_sha and amb_sha and not bind_problems and len(engines) == 1 and len(commits) == 1)
 
 # ---------------------------------------------------------------------------------------------- K10 collateral
 def ed_row(name, ed):
@@ -453,7 +507,7 @@ crit = {"BIND": binding, "K10": k10, "K11": k11, "K12": k12, "K13": k13, "E1": e
 failing_crit = [k for k, v in crit.items() if not v.get("pass")]
 report = {
     "schema": "purge.rig.m1b-exec-score/2", "written": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-    "runs_dir": runs_dir, "prefix": prefix, "cases": cases_path, "missing": missing,
+    "runs_dir": runs_dir, "prefix": prefix, "cases": cases_path, "ambient": ambient_path, "missing": missing,
     "gates": {"G5": {"criteria": ["BIND", "K10", "K11", "K12"], "pass": not missing and all(crit[k]["pass"] for k in ("BIND", "K10", "K11", "K12"))},
               "G6": {"criteria": ["BIND", "K13", "E1"], "pass": not missing and all(crit[k]["pass"] for k in ("BIND", "K13", "E1"))}},
     "criteria": crit, "failing": failing_crit,

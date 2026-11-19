@@ -75,9 +75,19 @@ function Phase([string]$Name, [scriptblock]$Body, $Record) {
 
 # ----------------------------------------------------------------------------------- native processes
 
+# Throws when $Value holds a NUL. A command line is a C string: everything after a NUL is lost (a REG_SZ read with
+# its terminator truncated `rigtool snap` after a --root, 2026-11-19). Called where every native, engine and rigtool
+# command line is started (Start-Native, Invoke-Native, Invoke-Engine; review R8 M4) and by ConvertTo-EngineArg for
+# each quoted argument, so a NUL in an unquoted part (--sid, --group) is refused too. The message shows it as <NUL>.
+function Assert-NoNul([string]$Value, [string]$What = 'command line') {
+    $i = $Value.IndexOf([char]0)
+    if ($i -ge 0) { throw ("{0} holds a NUL at {1}: '{2}'" -f $What, $i, $Value.Replace([string][char]0, '<NUL>')) }
+}
+
 # Starts a program with a verbatim argument string (Windows PowerShell 5.1 does not quote embedded
 # quotes for native programs, so arguments are never passed as an array).
 function Start-Native([string]$Exe, [string]$Arguments = '', [string]$WorkDir = '') {
+    Assert-NoNul $Exe 'program path'; Assert-NoNul $Arguments 'command line'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Exe
     $psi.Arguments = $Arguments
@@ -88,6 +98,7 @@ function Start-Native([string]$Exe, [string]$Arguments = '', [string]$WorkDir = 
 
 # Runs a console program to completion with stdout/stderr captured (read asynchronously, no deadlock).
 function Invoke-Native([string]$Exe, [string]$Arguments = '', [int]$TimeoutSec = 3600) {
+    Assert-NoNul $Exe 'program path'; Assert-NoNul $Arguments 'command line'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Exe
     $psi.Arguments = $Arguments
@@ -258,7 +269,7 @@ function Get-LoadedUserSids {
     try { @($u.GetSubKeyNames() | Where-Object { $_ -match '^S-1-5-21-[\d-]+$' }) } finally { $u.Dispose() }
 }
 
-$RigGuidRx = '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$'
+$RigGuidRx = '\A\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}\z'
 
 # MSI product code of an ARP entry: the key name when it is a GUID and the entry is a Windows Installer
 # one (WindowsInstaller=1 or an msiexec UninstallString naming it), else a GUID named by msiexec /I|/X in
@@ -1290,7 +1301,7 @@ $RigEngine = 'C:\cr\bin\purge-engine.exe'
 # line is a C string: everything after it is lost, e.g. a REG_SZ read with its terminator truncated `rigtool snap`
 # after a --root, 2026-11-19), so it throws.
 function ConvertTo-EngineArg([string]$Value) {
-    if ($Value.IndexOf([char]0) -ge 0) { throw ("engine/rigtool argument holds a NUL at {0}: '{1}'" -f $Value.IndexOf([char]0), ($Value -replace "`0", ' ')) }
+    Assert-NoNul $Value 'engine/rigtool argument'
     if ($Value -ne '' -and $Value -notmatch '[\s"|&<>^%]') { return $Value }
     $v = [regex]::Replace($Value, '(\\*)"', { param($m) ($m.Groups[1].Value * 2) + '\"' })
     $v = [regex]::Replace($v, '(\\+)$', { param($m) $m.Groups[1].Value * 2 })
@@ -1325,6 +1336,7 @@ function Invoke-Engine {
     param([string]$Arguments = '', [int]$TimeoutSec = 1800, [string]$StdoutFile = '', [string]$Exe = $RigEngine, [int]$DrainSec = 30,
           # Extra environment variables for the engine process only (M2: PURGE_FAULT_AT / PURGE_FAULT_PAUSE).
           [hashtable]$Environment = @{})
+    Assert-NoNul $Exe 'engine path'; Assert-NoNul $Arguments 'engine command line'
     if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) { throw "missing $Exe (push it with Push-Tools -Engine on the host)" }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Exe

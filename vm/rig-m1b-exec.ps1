@@ -31,14 +31,18 @@
                       --include-ignored; writes vm\runs\<prefix>m1b-x-elevated\elevated-tests.json.
     m1b-x-null        the M1b exec ambient set (RIG.md section 12.8): -Count rounds (default 6), each a null run of
                       m1b-x-fidelity and of m1b-x-traps (runs <prefix><k>-<mode>, default prefix xn: xn1-m1b-x-fidelity;
-                      the same phases and timing up to deep A, -NullWaitSec idle seconds (default 10) instead of exec,
-                      snap B, deep B, nothing after: no restore point, no firewall delete), then host rigtool
-                      `ambient --m2 --added --null <run dirs>` -> -AmbientFile (default the VM's: Inbound
+                      the same phases and timing up to deep A, then the gate's own window (guest Invoke-ExWindow) with
+                      -NullWaitSec idle seconds (default 10) instead of exec: the rig's reads of the window (traps
+                      after-exec), snap B, deep B, nothing after: no restore point, no firewall delete), then host
+                      rigtool `ambient --m2 --added --null <run dirs>` -> -AmbientFile (default the VM's: Inbound
                       truth\m1b-exec-ambient.json, Purge-CleanPro truth\m1b-exec-ambient-cleanpro.json). A failed null
-                      run writes no file. m1b-x-fidelity and m1b-x-traps refuse to run without it; m1b-x-undo-traps and
-                      m1b-x-crash push it when it exists (else the VM's M2 set). Each run records the pushed file and
-                      its SHA-256 (opts.ambient; guest run.json results.ambient).
+                      run writes no file. Every gate VM mode (fidelity, traps, undo-traps, crash) refuses to run
+                      without it (no M2 fallback). Each run records the pushed file and its SHA-256 (opts.ambient;
+                      guest run.json results.ambient); truth\m1b-exec.sh BIND requires the committed file's hash.
     m1b-x-ambient     host only: the same ambient file again from existing null runs (-Count, -RunPrefix as above).
+                      Each run.json must mark a finished null run of its mode, all phases ok; a set naming a fixture
+                      (PurgeExec*, C:\ProgramData\Purge) is refused; a refusal writes no file. A gate run's name never
+                      has the null shape <prefix><k>-<mode> (-RunPrefix must not end in a digit and '-').
     m1b-x-selftest    no VM: exec_sh_fails_on_missing_input, exec_cases_json_lists_every_fault_point_per_kind,
                       crash_script_reports_unreached_point_as_failure (and positive controls), the power-off journal
                       proof, and the bad-run controls (review R4 S7): truth\m1b-exec.sh on a synthetic good run set
@@ -161,6 +165,54 @@ function Get-XNullRunName([int]$K, [string]$M, [string]$Prefix = '') {
 function Get-XAmbientArgs([string[]]$Dirs, [string]$Out) {
     if (-not @($Dirs).Count) { throw 'no null run dirs' }
     @('ambient', '--m2', '--added', '--null') + @($Dirs) + @('-o', $Out)
+}
+
+# True when $Name has the shape of a null run name (Get-XNullRunName: <prefix><k>-<null mode>, any prefix). A gate
+# run's name never has it (Get-XRunName, review R8 S2).
+function Test-XNullRunShape([string]$Name) {
+    $Name -cmatch ('[0-9]-(' + (($XNullModes | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\z')
+}
+
+# The run name of a gate run of mode $M: <prefix><mode>.
+function Get-XRunName([string]$M, [string]$Prefix = $X.prefix) {
+    $r = "$Prefix$M"
+    if ($r -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$r'" }
+    # A gate run never takes a name a null run can have (review R8 S2): m1b-x-ambient would build from its window.
+    if (Test-XNullRunShape $r) { throw "run name '$r' has the shape of a null run (<prefix><k>-<mode>); pick a -RunPrefix that does not end in a digit and '-'" }
+    $r
+}
+# Why the run.json $Doc of run dir $Run is not a finished null run of guest mode $M; none: it is (review R8 S2). A
+# gate run, a run of another mode, an unfinished run, one with a failed phase or one that ran exec is refused.
+function Test-XNullRunDoc($Doc, [string]$Run, [string]$M) {
+    if (-not $Doc) { return @('no readable run.json') }
+    $why = @()
+    if ("$($Doc.schema)" -cne 'purge.rig.m2/1') { $why += "schema '$($Doc.schema)'" }
+    if ("$($Doc.run)" -cne $Run) { $why += "run.json names run '$($Doc.run)'" }
+    if ("$($Doc.mode)" -cne $M) { $why += "mode '$($Doc.mode)', want '$M'" }
+    if (-not ($Doc.PSObject.Properties['null_run'] -and $Doc.null_run -and $Doc.null_run.null -eq $true)) { $why += 'not a null run (null_run.null is not true)' }
+    if (-not "$($Doc.finished)") { $why += 'not finished' }
+    $ph = @(@($Doc.phases) | Where-Object { $_ })
+    if (-not $ph.Count) { $why += 'no phases' }
+    $failed = @($ph | Where-Object { $_.ok -ne $true } | ForEach-Object { "$($_.name)" })
+    if ($failed.Count) { $why += "failed phase(s): $($failed -join ', ')" }
+    $names = @($ph | ForEach-Object { "$($_.name)" })
+    $exec = @($names | Where-Object { $_ -cmatch '^(exec|undo|execdiff)-' })
+    if ($exec.Count) { $why += "ran $($exec -join ', ')" }
+    foreach ($need in @('snap-a', 'null-wait', 'snap-b')) { if ($names -cnotcontains $need) { $why += "no phase $need" } }
+    $why
+}
+
+# Fixture names an ambient set must never hold (review R8 S2): the rig's PurgeExec* objects (the app PurgeExecApp, its
+# ARP key, services, tasks, rules, programs) and the engine's store C:\ProgramData\Purge. An entry on one of them
+# would excuse the engine's change to that very object. Matched case-insensitively; '\\+' also covers the escaped
+# backslashes of a pattern. truth\m1b-exec.sh checks the committed file with the same expression.
+$XFixtureRx = '(?i)purgeexec|programdata\\+purge'
+
+# Every record and pattern of an ambient set (purge.rig.m2ambient/1, parsed) that names a fixture: union and per run.
+function Get-XAmbientFixtureHits($Set) {
+    $all = @(@($Set.records) + @($Set.patterns))
+    foreach ($r in @($Set.runs)) { if ($r) { $all += @($r.records) + @($r.patterns) } }
+    @($all | Where-Object { $null -ne $_ -and "$_" -match $XFixtureRx } | ForEach-Object { "$_" } | Select-Object -Unique)
 }
 
 function Get-XSha256File([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
@@ -311,7 +363,8 @@ function Invoke-XSelftest {
         $muts = @($list | ForEach-Object { "$_" } | Where-Object { $_ -match "`t" } | ForEach-Object { $p = $_ -split "`t"; [pscustomobject]@{ name = $p[0]; crit = $p[1]; what = $p[2] } })
         # The mutations the review asked for must be among them (a fixture that lost one would weaken the test).
         $required = @('collateral', 'unexplained', 'trap-deleted', 'impostor-overwritten', 'unreached-point', 'poweroff-14', 'poweroff-not-mid-run',
-            'svc-running-restarted', 'twin-base-not-done', 'cases-min-full', 'cases-drop-trap', 'cases-drop-point', 'engine-differs', 'cases-sha')
+            'svc-running-restarted', 'twin-base-not-done', 'cases-min-full', 'cases-drop-trap', 'cases-drop-point', 'engine-differs', 'cases-sha',
+            'ambient-missing-in-run', 'ambient-other-hash', 'ambient-guest-differs', 'ambient-few-null-runs', 'ambient-fixture-name', 'ambient-gate-run-id')
         $lost = @($required | Where-Object { @($muts | ForEach-Object { $_.name }) -notcontains $_ })
         & $add 'bad_run_controls_listed' (-not $lost.Count -and $muts.Count -ge $required.Count) "$($muts.Count) mutation(s); missing [$($lost -join ',')]"
         $score = {
@@ -322,9 +375,9 @@ function Invoke-XSelftest {
                 $a = @('-I', $fx, '--cases', $XCasesFile, '--out', $d); if ($Mutation) { $a += @('--mutate', $Mutation) }
                 $null = & $py @a 2>&1
                 if ($LASTEXITCODE -ne 0) { throw "fixture $Mutation exited $LASTEXITCODE" }
-                $old = @{ R = $env:M1B_RUNS; O = $env:M1B_OUT; C = $env:M1B_CASES }
-                $env:M1B_RUNS = (Join-Path $d 'runs') -replace '\\', '/'; $env:M1B_OUT = $d -replace '\\', '/'; $env:M1B_CASES = (Join-Path $d 'cases.json') -replace '\\', '/'
-                try { $null = & $bash ($XExecSh -replace '\\', '/') 2>&1; $code = $LASTEXITCODE } finally { $env:M1B_RUNS = $old.R; $env:M1B_OUT = $old.O; $env:M1B_CASES = $old.C }
+                $old = @{ R = $env:M1B_RUNS; O = $env:M1B_OUT; C = $env:M1B_CASES; A = $env:M1B_AMBIENT }
+                $env:M1B_RUNS = (Join-Path $d 'runs') -replace '\\', '/'; $env:M1B_OUT = $d -replace '\\', '/'; $env:M1B_CASES = (Join-Path $d 'cases.json') -replace '\\', '/'; $env:M1B_AMBIENT = (Join-Path $d 'ambient.json') -replace '\\', '/'
+                try { $null = & $bash ($XExecSh -replace '\\', '/') 2>&1; $code = $LASTEXITCODE } finally { $env:M1B_RUNS = $old.R; $env:M1B_OUT = $old.O; $env:M1B_CASES = $old.C; $env:M1B_AMBIENT = $old.A }
                 $ErrorActionPreference = 'Stop'
                 $sf = Join-Path $d 'm1b-exec-score.json'
                 [pscustomobject]@{ code = $code; score = $(if (Test-Path -LiteralPath $sf) { [IO.File]::ReadAllText($sf) | ConvertFrom-Json } else { $null }) }
@@ -355,21 +408,108 @@ function Invoke-XSelftest {
         $ai = Get-XAmbientFile 'Inbound-Win11-Test'; $ac = Get-XAmbientFile 'Purge-CleanPro'
         $threw = $false; try { $null = Get-XAmbientFile 'Some-Other-VM' } catch { $threw = $true }
         & $add 'ambient_file_per_vm' ($ai -like '*\truth\m1b-exec-ambient.json' -and $ac -like '*\truth\m1b-exec-ambient-cleanpro.json' -and $threw) "$ai | $ac"
+        # Gate run names never have the null shape; null names always do (review R8 S2).
+        $gateBad = 0
+        foreach ($p in @('xn1-', 'r2-', 'a9-')) { foreach ($gm in $XNullModes) { try { $null = Get-XRunName $gm $p; $gateBad++ } catch { } } }
+        $gateOk = 0
+        foreach ($p in @('', 'r2b-', 'cp-', 'xn-')) { foreach ($gm in @($XNullModes) + @('m1b-x-undo-traps', 'm1b-x-crash')) { try { $null = Get-XRunName $gm $p; $gateOk++ } catch { } } }
+        $shape = (Test-XNullRunShape $n1) -and (Test-XNullRunShape $n2) -and -not (Test-XNullRunShape 'm1b-x-fidelity') -and -not (Test-XNullRunShape 'xn1-m1b-x-undo-traps')
+        & $add 'gate_run_names_never_null_shaped' ($gateBad -eq 0 -and $gateOk -eq 16 -and $shape) "$gateBad null-shaped gate name(s) accepted; $gateOk of 16 good ones; shape $shape"
+        # Invoke-XBuildAmbient takes only finished null runs of the expected mode (review R8 S2).
+        $mkDoc = {
+            param([string]$Run, [string]$M, [bool]$IsNull = $true)
+            $ph = @('install', 'snap-a', 'deep-a') + $(if ($IsNull) { @('null-wait') } else { @("exec-$(if ($M -eq 'm1b-x-traps') { 'traps' } else { 'main' })") }) + @('snap-b', 'deep-b', 'store')
+            ([ordered]@{ schema = 'purge.rig.m2/1'; run = $Run; mode = $M; finished = '2026-11-19T00:00:00Z'; null_run = [ordered]@{ null = $IsNull; wait_sec = 10 }
+                phases = @($ph | ForEach-Object { [ordered]@{ name = $_; ok = $true } }); results = [ordered]@{} } | ConvertTo-Json -Depth 6 | ConvertFrom-Json)
+        }
+        $good = & $mkDoc 'xn1-m1b-x-traps' 'm1b-x-traps'
+        $okGood = -not @(Test-XNullRunDoc $good 'xn1-m1b-x-traps' 'm1b-x-traps').Count
+        $refused = [ordered]@{}
+        $refused['gate run'] = & $mkDoc 'xn1-m1b-x-traps' 'm1b-x-traps' $false
+        $refused['other mode'] = & $mkDoc 'xn1-m1b-x-traps' 'm1b-x-fidelity'
+        $d = & $mkDoc 'xn1-m1b-x-traps' 'm1b-x-traps'; $d.finished = $null; $refused['unfinished'] = $d
+        $d = & $mkDoc 'xn1-m1b-x-traps' 'm1b-x-traps'; $d.phases[4].ok = $false; $refused['failed phase'] = $d
+        $d = & $mkDoc 'xn1-m1b-x-traps' 'm1b-x-traps'; $d.null_run.null = $false; $refused['null false'] = $d
+        $d = & $mkDoc 'xn1-m1b-x-traps' 'm1b-x-traps'; $d.PSObject.Properties.Remove('null_run'); $refused['no null_run'] = $d
+        $d = & $mkDoc 'xn2-m1b-x-traps' 'm1b-x-traps'; $refused['other run'] = $d
+        $refused['no run.json'] = $null
+        $let = @($refused.Keys | Where-Object { -not @(Test-XNullRunDoc $refused[$_] 'xn1-m1b-x-traps' 'm1b-x-traps').Count })
+        & $add 'ambient_build_takes_only_null_runs' ($okGood -and -not $let.Count) "good accepted $okGood; let through [$($let -join ', ')]"
+        # ...and no set that names a fixture (review R8 S2).
+        $clean = [pscustomobject]@{ schema = 'purge.rig.m2ambient/1'; records = @('~K:HKLM\SYSTEM\x'); patterns = @('(?i)^~K:HKLM\\SYSTEM\\[0-9]+$'); runs = @([pscustomobject]@{ id = 'xn1-m1b-x-traps'; records = @('~K:HKLM\SYSTEM\x'); patterns = @() }) }
+        $hitsClean = @(Get-XAmbientFixtureHits $clean)
+        $fx = @(
+            [pscustomobject]@{ records = @('~K:HKLM\SYSTEM\CurrentControlSet\Services\PurgeExecSvcA'); patterns = @(); runs = @() },
+            [pscustomobject]@{ records = @(); patterns = @('(?i)^~F:C:\\ProgramData\\Purge\\sessions\\[0-9a-f]{32}$'); runs = @() },
+            [pscustomobject]@{ records = @(); patterns = @(); runs = @([pscustomobject]@{ records = @('+F:C:\Windows\Prefetch\PURGEEXECTRAPSVCRUN.EXE-F46E565D.pf'); patterns = @() }) },
+            [pscustomobject]@{ records = @('~V:HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PurgeExecApp|DisplayName'); patterns = @(); runs = @() })
+        $missed = @(for ($i = 0; $i -lt $fx.Count; $i++) { if (-not @(Get-XAmbientFixtureHits $fx[$i]).Count) { $i } })
+        & $add 'ambient_build_refuses_fixture_names' (-not $hitsClean.Count -and -not $missed.Count) "clean hits $($hitsClean.Count); missed fixture set(s) [$($missed -join ',')]"
         $aa = @(Get-XAmbientArgs @('runs\xn1-m1b-x-fidelity', 'runs\xn1-m1b-x-traps') 'out.json')
         & $add 'ambient_build_keeps_added_records' (($aa -join ' ') -ceq 'ambient --m2 --added --null runs\xn1-m1b-x-fidelity runs\xn1-m1b-x-traps -o out.json') ($aa -join ' ')
-        # The guest flows: the null window replaces exec right after deep A, in both null modes; nothing in the null
-        # branch runs the engine.
+        # The guest flows (review R8 B1): in both null modes the window after deep A is ONE call of Invoke-ExWindow,
+        # shared by the gate and the null run. Between deep A and that call nothing runs; no snap B, no after-exec
+        # read and no $NullRun branch sits outside it before snap B; the traps mode's after-exec reads go into it.
         $g = [IO.File]::ReadAllText((Join-Path $XRigDir 'guest\m1b-exec.ps1'))
         $okFlow = $true; $why = @()
-        foreach ($f in @(@('Invoke-FidelityMode', 'deepscope-main.json', 'exec-main'), @('Invoke-TrapsMode', 'deepscope-traps.json', 'exec-traps'))) {
+        foreach ($f in @(@('Invoke-FidelityMode', 'deepscope-main.json', 'exec-main', $false), @('Invoke-TrapsMode', 'deepscope-traps.json', 'exec-traps', $true))) {
             $body = [regex]::Match($g, "(?s)function $($f[0]) \{(.*?)\r?\n\}\r?\n").Groups[1].Value
-            $iDeep = $body.IndexOf("Phase 'deep-a'"); $iNull = $body.IndexOf('if ($NullRun) {'); $iExec = $body.IndexOf("Phase '$($f[2])'")
-            $nullLine = $(if ($iNull -ge 0) { $body.Substring($iNull, $body.IndexOf("`n", $iNull) - $iNull) } else { '' })
-            if (-not ($iDeep -ge 0 -and $iNull -gt $iDeep -and $iExec -gt $iNull -and $nullLine -match 'Invoke-ExNullWindow' -and $nullLine -match 'return' -and $nullLine -notmatch 'Invoke-ExExec|Invoke-M2Engine')) { $okFlow = $false; $why += "$($f[0]): deep-a $iDeep, null $iNull, exec $iExec" }
+            $iDeep = $body.IndexOf("Phase 'deep-a'"); $iWin = $body.IndexOf("Invoke-ExWindow '$($f[2])' {")
+            $iDeepEnd = $(if ($iDeep -ge 0) { $body.IndexOf("`n", $iDeep) } else { -1 })
+            $between = $(if ($iDeepEnd -ge 0 -and $iWin -gt $iDeepEnd) { $body.Substring($iDeepEnd, $iWin - $iDeepEnd) } else { $null })
+            $iNullUse = $body.IndexOf('$NullRun')
+            $winCalls = [regex]::Matches($body, "Invoke-ExWindow '").Count
+            $tail = $(if ($iWin -ge 0) { $body.Substring($iWin) } else { '' })
+            $iAfter = $tail.IndexOf("Phase 'after-exec'")
+            $iScm = $tail.IndexOf('Get-ExScmState')
+            $iDeepScope = $tail.IndexOf("(F '$($f[1])')")
+            # Between deep A and the window only comments and `$script:X = $null` / `$snapped =` may stand.
+            $betweenCode = $(if ($null -ne $between) { (@($between -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') }) -join "`n") } else { $null })
+            $ok = ($null -ne $betweenCode -and $betweenCode -cmatch '\A(\$script:X = \$null\s*)?(\$snapped =\s*)?\z' -and $winCalls -eq 1 -and $iNullUse -gt $iWin `
+                    -and $body -notmatch "Phase 'snap-b'|Phase 'deep-b'|Phase 'null-wait'|Invoke-ExNullWindow" -and $iDeepScope -gt 0)
+            # traps: the after-exec reads (state records, CIM) are the window's $AfterExec block, before its scope arg;
+            # fidelity: its after-exec phase comes after the window (after snap B).
+            if ($f[3]) { $ok = $ok -and $iAfter -lt 0 -and $iScm -gt 0 -and $iScm -lt $iDeepScope -and $tail.Substring(0, $iDeepScope) -match '\} \z' }
+            else { $ok = $ok -and $iAfter -gt $iDeepScope -and $tail.Substring(0, $iDeepScope) -match '\} \$null \z' }
+            if (-not $ok) { $okFlow = $false; $why += "$($f[0]): deep-a $iDeep, window $iWin ($winCalls call(s)), first NullRun $iNullUse, after-exec $iAfter, scm $iScm, scope $iDeepScope, between [$betweenCode]" }
         }
-        $win = [regex]::Match($g, '(?s)function Invoke-ExNullWindow\(.*?\r?\n\}\r?\n').Value
+        $win = [regex]::Match($g, '(?s)function Invoke-ExWindow\(.*?\r?\n\}\r?\n').Value
         $okWin = ($win -match "Phase 'null-wait'" -and $win -match 'Start-Sleep -Seconds \$NullWaitSec' -and $win -match "Phase 'snap-b'" -and $win -match 'snap-\$Run-b\.tsv\.gz' -and $win -notmatch 'Invoke-M2Engine|Invoke-ExExec|Invoke-M2Execdiff')
-        & $add 'guest_null_window_replaces_exec' ($okFlow -and $okWin) (($why + $(if (-not $okWin) { 'Invoke-ExNullWindow' })) -join '; ')
+        # Run it: both branches traced with stubs; apart from the exec phase (the engine / the idle wait) the two runs
+        # do the same things in the same order, after-exec reads included.
+        $saveX = $script:X
+        try {
+            $trace = & {
+                $tr = New-Object System.Collections.ArrayList
+                function Phase([string]$Name, [scriptblock]$Body, $Record) { [void]$tr.Add("phase:$Name"); $null = & $Body }
+                function Start-Sleep { [void]$tr.Add('sleep') }
+                function Log { }
+                function F([string]$n) { "out\$n" }
+                function Invoke-M2Snap { [void]$tr.Add("snap:$($args[0])") }
+                function Invoke-M2Deep { [void]$tr.Add("deep:$($args[0] -join ',')>$($args[1])") }
+                $S = $null; $Run = 'r'; $NullWaitSec = 10
+                $exec = { [void]$tr.Add('ENGINE'); $script:X = [pscustomobject]@{ report = 'rep.json' } }
+                $after = { [void]$tr.Add('read:state'); [void]$tr.Add('read:scm') }
+                $out = [ordered]@{}
+                foreach ($nr in @($false, $true)) {
+                    $tr.Clear(); $script:X = $null; $NullRun = $nr
+                    $ret = Invoke-ExWindow 'exec-traps' $exec $after 'scope.json'
+                    $out["$nr"] = [pscustomobject]@{ trace = @($tr); ret = $ret }
+                }
+                # a gate exec without a report: after-exec still runs, no snap B
+                $tr.Clear(); $script:X = $null; $NullRun = $false
+                $ret = Invoke-ExWindow 'exec-traps' { [void]$tr.Add('ENGINE') } $after 'scope.json'
+                $out['noreport'] = [pscustomobject]@{ trace = @($tr); ret = $ret }
+                $out
+            }
+        } finally { $script:X = $saveX }
+        $gate = @($trace['False'].trace); $null1 = @($trace['True'].trace)
+        $strip = { param($t) @($t | Where-Object { $_ -notin @('phase:exec-traps', 'ENGINE', 'phase:null-wait', 'sleep') }) -join ' > ' }
+        $want = 'phase:after-exec > read:state > read:scm > phase:snap-b > snap:out\snap-r-b.tsv.gz > phase:deep-b > deep:scope.json>out\deep-b.json'
+        $okRun = ((& $strip $gate) -ceq $want -and (& $strip $null1) -ceq $want -and ($gate[0..1] -join ',') -ceq 'phase:exec-traps,ENGINE' `
+                -and ($null1[0..1] -join ',') -ceq 'phase:null-wait,sleep' -and $null1 -notcontains 'ENGINE' -and $trace['False'].ret -eq $true -and $trace['True'].ret -eq $true `
+                -and (@($trace['noreport'].trace) -join ' > ') -ceq 'phase:exec-traps > ENGINE > phase:after-exec > read:state > read:scm' -and $trace['noreport'].ret -eq $false)
+        & $add 'guest_null_window_replaces_exec' ($okFlow -and $okWin -and $okRun) (($why + $(if (-not $okWin) { 'Invoke-ExWindow text' }) + $(if (-not $okRun) { "gate [$($gate -join ' > ')] null [$($null1 -join ' > ')] noreport [$(@($trace['noreport'].trace) -join ' > ')]" })) -join '; ')
     } catch { & $add 'null_mode' $false $_.Exception.Message }
 
     # Guest pure helpers: plan rows and outcomes.
@@ -418,22 +558,19 @@ function Stop-XVm([string]$Snap) {
     } catch { Write-RigLog "!! leaving the VM at $Snap failed: $($_.Exception.Message)" }
 }
 
-function Get-XRunName([string]$M) {
-    $r = "$($X.prefix)$M"
-    if ($r -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$r'" }
-    $r
-}
 
 # The ambient set a run pushes for execdiff (RIG.md section 12.8): -AmbientFile, else the VM's M1b exec set
-# (Get-XAmbientFile, built by m1b-x-null). m1b-x-fidelity and m1b-x-traps (K10) require it; the other modes push it
-# when it exists, else the VM's M2 set as before (their execdiffs are scoped). rig.ps1 Push-M2Ambient copies the file
-# to the guest as C:\cr\bin\m2-ambient.json, where riglib Invoke-M2Execdiff passes it as --ambient; a null run
-# pushes none. The Get-M2AmbientFile below replaces rig.ps1's (the M2 set) for this script only.
-$XAmbient = $(if ($X.ambient) { $X.ambient } else { Get-XAmbientFile $X.vm })
-$XM2Ambient = $(try { Get-M2AmbientFile } catch { $null })
+# (Get-XAmbientFile, built by m1b-x-null). Every gate VM mode requires it (m1b-x-fidelity, m1b-x-traps,
+# m1b-x-undo-traps, m1b-x-crash; no fallback to the M2 set, review R8 S3: truth\m1b-exec.sh BIND requires the
+# committed file's SHA-256 in all four). Resolved only where it is used (Resolve-XAmbient: the gate modes and
+# m1b-x-ambient; review R8 M5), so m1b-x-elevated and the self-test need none. rig.ps1 Push-M2Ambient copies it to the
+# guest as C:\cr\bin\m2-ambient.json, where riglib Invoke-M2Execdiff passes it as --ambient; a null run pushes none
+# (-None). The Get-M2AmbientFile below replaces rig.ps1's (the M2 set) for this script only; Push-M2Ambient reads it
+# only without -None, and a non-null run always sets it to an existing file first.
+function Resolve-XAmbient { if ($X.ambient) { $X.ambient } else { Get-XAmbientFile $X.vm } }
 $script:XPushAmbient = $null
 function Get-M2AmbientFile([string]$Name = $script:VmName) { $script:XPushAmbient }
-$XAmbientModes = @('m1b-x-fidelity', 'm1b-x-traps')
+$XAmbientModes = @('m1b-x-fidelity', 'm1b-x-traps', 'm1b-x-undo-traps', 'm1b-x-crash')
 
 # One guest-mode run from a fresh restore. -GuestMode / -Run default to the script's mode; -Null: a null run of
 # m1b-x-fidelity / m1b-x-traps (opts null, null_wait; no ambient set pushed).
@@ -447,10 +584,11 @@ function Invoke-XGuestMode([string]$GuestMode = $X.mode, [string]$Run = '', [swi
         $opts.null = $true; $opts.null_wait = $X.null_wait
         $script:XPushAmbient = $null
     } else {
-        $have = Test-Path -LiteralPath $XAmbient -PathType Leaf
-        if (-not $have -and $XAmbientModes -ccontains $GuestMode) { throw "no M1b exec ambient set $XAmbient (run -Mode m1b-x-null first, RIG.md section 12.8, or pass -AmbientFile)" }
-        $script:XPushAmbient = $(if ($have) { $XAmbient } else { $XM2Ambient })
-        if ($script:XPushAmbient -and (Test-Path -LiteralPath $script:XPushAmbient -PathType Leaf)) { $opts.ambient = [ordered]@{ file = $script:XPushAmbient; sha256 = (Get-XSha256File $script:XPushAmbient) } }
+        if ($XAmbientModes -cnotcontains $GuestMode) { throw "no ambient set is defined for guest mode '$GuestMode'" }
+        $amb = Resolve-XAmbient
+        if (-not (Test-Path -LiteralPath $amb -PathType Leaf)) { throw "no M1b exec ambient set $amb (run -Mode m1b-x-null first, RIG.md section 12.8, or pass -AmbientFile)" }
+        $script:XPushAmbient = $amb
+        $opts.ambient = [ordered]@{ file = $amb; sha256 = (Get-XSha256File $amb) }
     }
     $tpl = 'm1b-exec.ps1'; $to = 7200
     if ($GuestMode -eq 'm1b-x-crash') {
@@ -487,23 +625,42 @@ function Get-XHostRigTool {
 }
 
 # m1b-x-ambient (host only): the M1b exec ambient set from the null runs <prefix><k>-<mode>, k = 1..-Count, of both
-# null modes (every one must hold its snapshot pair) -> $XAmbient. Returns the dirs used.
+# null modes -> the VM's file (Resolve-XAmbient). Each run dir must hold its snapshot pair and a run.json that marks a
+# finished null run of that mode with every phase ok (Test-XNullRunDoc, review R8 S2); the set is built into a
+# temporary file and must name no fixture (Get-XAmbientFixtureHits). Any refusal throws and writes no file (an older
+# file stays as it was). Returns the dirs used.
 function Invoke-XBuildAmbient {
+    $out = Resolve-XAmbient
     $dirs = @()
+    $bad = @()
     foreach ($k in 1..$X.count) {
         foreach ($m in $XNullModes) {
             $r = Get-XNullRunName $k $m $X.prefix
             $d = Join-Path $script:RunsDir $r
-            if (-not (Test-Path -LiteralPath (Join-Path $d "snap-$r-a.tsv.gz")) -or -not (Test-Path -LiteralPath (Join-Path $d "snap-$r-b.tsv.gz"))) { throw "null run $r has no snapshot pair in $d" }
+            if (-not (Test-Path -LiteralPath (Join-Path $d "snap-$r-a.tsv.gz")) -or -not (Test-Path -LiteralPath (Join-Path $d "snap-$r-b.tsv.gz"))) { $bad += "$r`: no snapshot pair in $d"; continue }
+            $rj = Join-Path $d 'run.json'
+            $doc = $null
+            try { $doc = [IO.File]::ReadAllText($rj).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { $doc = $null }
+            $why = @(Test-XNullRunDoc $doc $r $m)
+            if ($why.Count) { $bad += "$r`: $($why -join '; ')"; continue }
             $dirs += $d
         }
     }
-    $a = Get-XAmbientArgs $dirs $XAmbient
-    $tool = Get-XHostRigTool
-    Write-Host "$tool $($a -join ' ')"
-    & $tool @a
-    if ($LASTEXITCODE -ne 0) { throw "rigtool ambient --m2 --added exited $LASTEXITCODE" }
-    Write-Host "M1b exec ambient set ($($dirs.Count) null runs) -> $XAmbient"
+    if ($bad.Count) { throw "not null runs, no ambient set written:`n  $($bad -join "`n  ")" }
+    $tmp = "$out.tmp-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    try {
+        $a = Get-XAmbientArgs $dirs $tmp
+        $tool = Get-XHostRigTool
+        Write-Host "$tool $($a -join ' ')"
+        & $tool @a
+        if ($LASTEXITCODE -ne 0) { throw "rigtool ambient --m2 --added exited $LASTEXITCODE; no ambient set written" }
+        $set = [IO.File]::ReadAllText($tmp).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        if ("$($set.schema)" -cne 'purge.rig.m2ambient/1') { throw "the built set has schema '$($set.schema)'; no ambient set written" }
+        $hits = @(Get-XAmbientFixtureHits $set)
+        if ($hits.Count) { throw "the built set names fixture objects ($($hits.Count)), no ambient set written; rerun the null rounds: $(@($hits | Select-Object -First 10) -join ' | ')" }
+        Move-Item -LiteralPath $tmp -Destination $out -Force
+    } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    Write-Host "M1b exec ambient set ($($dirs.Count) null runs) -> $out"
     $dirs
 }
 
@@ -513,6 +670,7 @@ function Invoke-XNullCampaign {
     if ($X.count -lt 1) { throw '-Count must be at least 1' }
     if ($X.hard) { throw '-HardPowerOff is for m1b-x-crash only' }
     $null = Get-XHostRigTool
+    $null = Resolve-XAmbient                                              # the output file must be known before the rounds
     $bad = @()
     foreach ($k in 1..$X.count) {
         foreach ($m in $XNullModes) {

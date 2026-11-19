@@ -1525,6 +1525,11 @@ so no task round ran. The Id now goes through `ConvertTo-XTaskId` (trailing NULs
 rig's GUID pattern, else the round throws), and riglib `ConvertTo-EngineArg`, which quotes every engine and rigtool
 argument, throws on any NUL. `Get-RegRaw` is unchanged (its other callers compare raw data). Self-tests: rig-selftest
 `ConvertTo-XTaskId: ...`, `ConvertTo-EngineArg: a NUL throws`, `Invoke-M2Snap: a root with a NUL throws`.
+Review R8 M4: the guard (riglib `Assert-NoNul`) also sits where every command line is started, `Start-Native`,
+`Invoke-Native`, `Invoke-Engine` and m1b-crash `Start-XPaused` (unquoted parts such as `--sid` / `--group` never pass
+`ConvertTo-EngineArg`), and the GUID patterns (`$XGuidRx`, riglib `$RigGuidRx`) are anchored with `\A` / `\z`
+(`$` matched before a trailing newline). Self-tests: `Invoke-Native` / `Start-Native` / `Invoke-Engine: a NUL ...
+throws`, `ConvertTo-XTaskId: '<guid>\n' throws`.
 
 **K10: the engine's own side effects** (`rigtool execdiff`, authorised as `engine-rp` / `engine-fw`, additions and
 changes only, never a removal; rigtool unit tests `engine_rp_created_*`, `engine_fw_delete_*` and the m1b.rs
@@ -1542,13 +1547,21 @@ integration tests `execdiff_restore_point_records_only_when_created`,
 - **firewall rule delete**, only when the journal has a `DeleteFirewallRule` op with effective outcome `Done`:
   `Wbem\Tracing\Providers\wfascim @ ROOT/StandardCimv2` (as above), `Services\SharedAccess\Epoch|Epoch` changed,
   `C:\ProgramData\Microsoft\Windows\wfp\wfpdiag.etl` changed.
-- **rig**: prefetch files of the rig's PurgeExec* programs, `C:\Windows\Prefetch\PURGEEXEC*.EXE-<8 hex>.pf` (the
-  act-time trap service PurgeExecTrapSvcRun.exe that the rig starts), are rig records (`items::RigRules`).
+- **rig**: the prefetch file of the one program the rig itself starts, the act-time trap service
+  PurgeExecTrapSvcRun.exe, `C:\Windows\Prefetch\PURGEEXECTRAPSVCRUN.EXE-<8 hex>.pf`, is a rig record
+  (`items::RigRules`). Only that program (review R8 S4): the other PurgeExec* service binaries (PurgeExecSvcA/B,
+  PurgeExecTrapDep, PurgeExecImpostor, the crash rounds' programs) must never be started by the engine, and their new
+  prefetch file is the record that shows it did (unit test `rig_exclusions_engine_runs`, negative cases).
+- **Restore point / firewall outcome other than `Created` / `Done`** (review R8 M3, left as is): a restore point that
+  ends `Throttled` or `Failed`, or a firewall delete that ends `Failed`, may still load the WMI provider and write its
+  tracing key; those records are then not authorised and fail K10. That is fail-closed and costs a rerun. If it
+  happens, the ruling is to let the tracing-key part alone apply for any outcome but `NotRequested` / `Disabled`.
 
 **K10: the M1b exec ambient set.** The rest of the 2026-11-19 records (CIMWin32 / TERMINALSERVICE WMI tracing keys,
 Defender / USOShared / Security Health logs, `rdyboost\Parameters`, `rblayout.xin`, `ntuser.dat.LOG2` /
 `UsrClass.dat.LOG2`, `StartupProfileData-NonInteractive`, CBS `TiRunning`, `hivelist|...\COMPONENTS`) is Windows
-churn of the exec window. It comes from null runs of the executor flows, not from hand rules:
+churn of the exec window (CIMWin32 / TERMINALSERVICE in the traps run are the rig's own after-exec CIM reads, review
+R8 B1, below). It comes from null runs of the executor flows, not from hand rules:
 
     $env:VMPWFILE = '<guest password file>'
     .\vm\rig-m1b-exec.ps1 -Mode m1b-x-null -Count 6 -Engine E:\purge-build\rig-exec\release\purge-engine.exe
@@ -1559,19 +1572,51 @@ churn of the exec window. It comes from null runs of the executor flows, not fro
 
 - A null run is the guest flow of `m1b-x-fidelity` / `m1b-x-traps` with opts `null` (and `null_wait`,
   `-NullWaitSec`, default 10 s, about the gate runs' exec time): the same pauses, install, plants, harvest, scan,
-  selection, settle wait, (traps) the act-time changes, snap A and deep A, then the idle wait where exec would run,
-  snap B, deep B, the store, and nothing after (no exec, so no restore point, no firewall delete; run.json
-  `null_run`). No ambient set is pushed to a null run.
+  selection, settle wait, (traps) the act-time changes, snap A and deep A, then the same window, the store, and
+  nothing after (no exec, so no restore point, no firewall delete; run.json `null_run`). No ambient set is pushed to a
+  null run.
+- **One window for both** (review R8 B1): guest `Invoke-ExWindow` is the exec window of the gate run and of its null
+  run. The gate runs the exec phase (the engine), a null run the idle wait (`null-wait`) in its place; everything else
+  runs in both, in the same order: the mode's after-exec reads, snap B, deep B. In `m1b-x-traps` after-exec reads
+  every trap object and the running trap service through CIM `Win32_Service` (`Get-ExScmState`), which writes the
+  `Wbem\Tracing\Providers\CIMWin32` / `Win32_WIN32_TERMINALSERVICE_Prov` keys inside the window; the first traps
+  null runs only slept, so those records could not be ambient. Now a traps null run makes the same reads (its pass
+  fields are false: no exec; a null run is never scored). In `m1b-x-fidelity` after-exec comes after snap B, outside
+  the window. A gate exec without a report takes no snap B (after-exec still runs). The self-test checks the text
+  (one `Invoke-ExWindow` call right after deep A in each mode, nothing between, no snap B / null branch outside it,
+  the traps reads inside it) and runs both branches with stubs: apart from the exec phase the traces are equal.
 - `rigtool ambient --m2 --added` is the M2 set builder (§11.8: exact record keys, token patterns, one record each,
   never a subtree, a `~` entry never matches a `-` record) that also keeps added (`+`) records: K10 fails on
   unexplained additions, M2's gate does not. An added entry matches an added record only.
 - **One file per VM** (`Get-XAmbientFile`): Inbound `truth\m1b-exec-ambient.json`, Purge-CleanPro
   `truth\m1b-exec-ambient-cleanpro.json`; `-AmbientFile` names another. `-RunPrefix` changes the null runs' prefix
   (default `xn`), `-Count` the rounds. A failed null run writes no file. Regenerate it when m2-base is rebuilt.
-- **Gate modes:** `m1b-x-fidelity` and `m1b-x-traps` refuse to start without the file; `m1b-x-undo-traps` and
-  `m1b-x-crash` push it when it exists, else the VM's M2 set. rig.ps1 `Push-M2Ambient` copies it to the guest as
+- **Only null runs build it** (review R8 S2): `Invoke-XBuildAmbient` reads each run dir's run.json and refuses unless
+  it is schema `purge.rig.m2/1`, names that run and the expected null mode, has `null_run.null = true`, is finished,
+  has every phase ok, has `snap-a`, `null-wait`, `snap-b` and no `exec-*` / `undo-*` / `execdiff-*` phase
+  (`Test-XNullRunDoc`). The set is built into a temporary file; a set with a record or pattern naming a fixture
+  (`PurgeExec*`: the app, its ARP key, services, tasks, rules, programs; `C:\ProgramData\Purge`) is refused
+  (`Get-XAmbientFixtureHits`). Any refusal writes no file and leaves an older one as it was. A gate run never takes a
+  name of the null shape `<prefix><k>-<null mode>` (`Get-XRunName`: a `-RunPrefix` ending in a digit and `-` is
+  refused for the gate modes).
+- **Gate modes:** `m1b-x-fidelity`, `m1b-x-traps`, `m1b-x-undo-traps` and `m1b-x-crash` all refuse to start without
+  the file (no fallback to the M2 set, review R8 S3). The file is resolved only for these modes and `m1b-x-ambient`
+  (`Resolve-XAmbient`, review R8 M5): `m1b-x-elevated` and the self-test need none, and no `$null` path reaches
+  `Push-M2Ambient` (a null run pushes with `-None`). rig.ps1 `Push-M2Ambient` copies it to the guest as
   `C:\cr\bin\m2-ambient.json` (rig-m1b-exec.ps1 replaces `Get-M2AmbientFile` for its own runs), where riglib
   `Invoke-M2Execdiff` passes it as `--ambient`. The host records the pushed file and its SHA-256 in opts.ambient, the
   guest records both and the guest copy's SHA-256 in run.json `results.ambient`.
-- Self-test (`-Mode m1b-x-selftest`): `null_run_names`, `ambient_file_per_vm`, `ambient_build_keeps_added_records`,
-  `guest_null_window_replaces_exec`; rigtool `m2_run_records_keep_added_records_only_when_asked`.
+- **BIND checks the set** (review R8 S3): commit `vm/truth/m1b-exec-ambient.json` (Clean-Pro: `-cleanpro`) after the
+  null campaign and read it like a truth file. `truth/m1b-exec.sh` hashes the committed file itself (`M1B_AMBIENT`,
+  default `truth/m1b-exec-ambient.json`; a missing file is a missing input) and requires, in all four VM runs
+  (fidelity, traps, undo-traps, crash), `results.ambient.declared.sha256 == results.ambient.guest_sha256 ==` that
+  hash. `m1b-crash.ps1` records `results.ambient` at its start stage as `m1b-exec.ps1` does (`Get-ExAmbientRecord`
+  is above the `-Library` return now). The scorer also checks the file: schema `purge.rig.m2ambient/1`, at least
+  `MIN_NULL_RUNS_PER_MODE` (6, a constant in the script) distinct null runs per null mode, every run id of the shape
+  `<prefix><k>-m1b-x-fidelity|traps`, and no fixture name in any record or pattern (same expression as the host).
+- Self-test (`-Mode m1b-x-selftest`): `null_run_names`, `gate_run_names_never_null_shaped`, `ambient_file_per_vm`,
+  `ambient_build_takes_only_null_runs`, `ambient_build_refuses_fixture_names`, `ambient_build_keeps_added_records`,
+  `guest_null_window_replaces_exec`; the bad-run controls `ambient-missing-in-run`, `ambient-other-hash`,
+  `ambient-guest-differs`, `ambient-declared-missing`, `ambient-few-null-runs`, `ambient-gate-run-id`,
+  `ambient-fixture-name`, `ambient-schema` (each must fail BIND); rigtool
+  `m2_run_records_keep_added_records_only_when_asked`.

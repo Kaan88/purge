@@ -773,7 +773,8 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
     $t = ConvertTo-XTaskId ($g + [char]0)
     Check 'ConvertTo-XTaskId: the REG_SZ terminator NUL is trimmed' ($t -ceq $g -and $t.IndexOf([char]0) -lt 0) "$($t.Length) chars"
     Check 'ConvertTo-XTaskId: several trailing NULs are trimmed' ((ConvertTo-XTaskId ($g + [char]0 + [char]0)) -ceq $g)
-    foreach ($bad in @($null, '', 'not-a-guid', ('{1B4D5E2F-0A3C' + [char]0 + '-4E6B-9D8F-7C1A2B3C4D5E}'), ($g + ' '), [string[]]@($g))) {
+    # A trailing newline must not pass ('$' matches before one; the pattern uses \z, review R8 M4).
+    foreach ($bad in @($null, '', 'not-a-guid', ('{1B4D5E2F-0A3C' + [char]0 + '-4E6B-9D8F-7C1A2B3C4D5E}'), ($g + ' '), [string[]]@($g), ($g + "`n"), ($g + "`r`n"), ("`n" + $g))) {
         $threw = $false; try { $null = ConvertTo-XTaskId $bad } catch { $threw = $true }
         Check "ConvertTo-XTaskId: '$("$bad" -replace "`0", '\0')' throws" $threw
     }
@@ -797,6 +798,15 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
     }
     $threw = $false; try { $null = Invoke-M2Snap (Join-Path $Work 'nul.tsv.gz') @('HKLM\SOFTWARE\x', "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\$nulGuid") } catch { $threw = ("$($_.Exception.Message)" -match 'NUL') }
     Check 'Invoke-M2Snap: a root with a NUL throws before rigtool runs' $threw
+    # Where the command line is started, too (review R8 M4): unquoted parts (--sid, --group) never pass ConvertTo-EngineArg.
+    $threw = $false; try { $null = Invoke-Native "$env:SystemRoot\System32\cmd.exe" ('/c exit 0 ' + [char]0 + ' x') } catch { $threw = ("$($_.Exception.Message)" -match 'NUL') }
+    Check 'Invoke-Native: a NUL in the command line throws' $threw
+    $threw = $false; try { $null = Start-Native "$env:SystemRoot\System32\cmd.exe" ('/c exit 0' + [char]0) } catch { $threw = ("$($_.Exception.Message)" -match 'NUL') }
+    Check 'Start-Native: a NUL in the command line throws' $threw
+    $threw = $false; try { $null = Invoke-Engine -Exe "$env:SystemRoot\System32\cmd.exe" -Arguments ('--sid S-1-5-18' + [char]0) } catch { $threw = ("$($_.Exception.Message)" -match 'NUL') }
+    Check 'Invoke-Engine: a NUL in the command line throws before the engine starts' $threw
+    $r0 = Invoke-Native "$env:SystemRoot\System32\cmd.exe" '/c exit 0'
+    Check 'Invoke-Native: a clean command line still runs' ($r0.exit -eq 0) "exit $($r0.exit)"
     $iso = ConvertFrom-EngineFileTime 134000000000000000
     Check 'ConvertFrom-EngineFileTime round-trips' ([DateTimeOffset]::Parse($iso, [Globalization.CultureInfo]::InvariantCulture).ToFileTime() -eq 134000000000000000) $iso
     Check 'ConvertFrom-EngineFileTime: null stays null' ($null -eq (ConvertFrom-EngineFileTime $null))
