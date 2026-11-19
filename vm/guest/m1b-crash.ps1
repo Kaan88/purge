@@ -233,6 +233,39 @@ function New-XRow([int]$N, [string]$ObjectKind, [string]$Point, [string]$Phase, 
         error = $null; notes = @(); pass = $false }
 }
 
+# The rig's GUID pattern (riglib $RigGuidRx; repeated here because the -Library self-test does not load riglib).
+$XGuidRx = '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$'
+
+# A task's Id value from TaskCache\Tree\<path> (raw REG_SZ) as a braced GUID. The value can carry its NUL
+# terminator (2026-11-19: '{...}<NUL>' went into a snap --root and truncated the rigtool command line, so no task
+# round ran), so trailing NULs are trimmed; anything that is not then a GUID throws.
+function ConvertTo-XTaskId($Raw) {
+    if ($null -eq $Raw) { throw 'the task has no Id value in TaskCache\Tree' }
+    if ($Raw -isnot [string]) { throw "the task's Id value is a $($Raw.GetType().Name), not a string" }
+    $id = $Raw.TrimEnd([char]0)
+    if ($id -notmatch $XGuidRx) { throw ("the task's Id value '{0}' is not a GUID" -f ($Raw -replace "`0", '\0')) }
+    $id
+}
+
+# Scoped snapshot roots of a round's object, the store and the Session Manager key (-BootStable: its Environment
+# subkey only; the round compares PendingFileRenameOperations itself). Pure; above the -Library return for the
+# self-test ($RigPurgeData / $RigPfroKey come from riglib).
+function Get-XRoots([string]$Kind, [string]$Name, [string]$TaskId, [switch]$BootStable) {
+    $r = @()
+    switch ($Kind) {
+        'service' { $r += "$ExSvcKey\$Name" }
+        'task' {
+            $r += (Join-Path $ExTasksDir $ExTaskRoot.TrimStart('\'))
+            $r += "$ExTaskCache\Tree$ExTaskRoot"
+            if ($TaskId) { $r += "$ExTaskCache\Tasks\$TaskId"; $r += "$ExTaskCache\Plain\$TaskId" }
+        }
+        'firewall' { $r += $ExFwKey }
+    }
+    $r += $RigPurgeData
+    $r += $(if ($BootStable) { "$RigPfroKey\Environment" } else { $RigPfroKey })
+    @($r)
+}
+
 if ($Library) { return }
 
 # ============================================================================================ main
@@ -281,24 +314,6 @@ function Add-MatrixRow($Row) {
     Write-JsonFile ([ordered]@{ schema = 'purge.rig.m1b-crashmatrix/1'; run = $Run; points = $script:St.points; kinds = $Kinds; filter_points = $Points; rows = @($rows) }) $MatrixFile 10
 }
 
-# Scoped snapshot roots of a round's object, the store and the Session Manager key (-BootStable: its Environment
-# subkey only; the round compares PendingFileRenameOperations itself).
-function Get-XRoots([string]$Kind, [string]$Name, [string]$TaskId, [switch]$BootStable) {
-    $r = @()
-    switch ($Kind) {
-        'service' { $r += "$ExSvcKey\$Name" }
-        'task' {
-            $r += (Join-Path $ExTasksDir $ExTaskRoot.TrimStart('\'))
-            $r += "$ExTaskCache\Tree$ExTaskRoot"
-            if ($TaskId) { $r += "$ExTaskCache\Tasks\$TaskId"; $r += "$ExTaskCache\Plain\$TaskId" }
-        }
-        'firewall' { $r += $ExFwKey }
-    }
-    $r += $RigPurgeData
-    $r += $(if ($BootStable) { "$RigPfroKey\Environment" } else { $RigPfroKey })
-    @($r)
-}
-
 # A fresh round: clean slate, app + one object planted, harvest, uninstall stand-in, scan; the object's item must be
 # offered Safe; deep A and scoped snap A. Returns the round record.
 function New-XRound($Cases, [string]$Kind, [int]$N, [string]$Tag, [switch]$BootStable) {
@@ -312,7 +327,7 @@ function New-XRound($Cases, [string]$Kind, [int]$N, [string]$Tag, [switch]$BootS
     if (-not $row) { throw "the plan has no item for $Kind $name" }
     if ($row.band -ne 'Safe') { throw "$Kind $name is offered $($row.band), not Safe" }
     $taskId = $null
-    if ($Kind -eq 'task') { $taskId = Get-RegRaw "$ExTaskCache\Tree$name" 'Id' }
+    if ($Kind -eq 'task') { $taskId = ConvertTo-XTaskId (Get-RegRaw "$ExTaskCache\Tree$name" 'Id') }
     $ids = @($row.id)
     $sp = Split-ExObjects @([pscustomobject]@{ kind = $Kind; name = $name })
     $scope = F "deepscope-$Tag.json"

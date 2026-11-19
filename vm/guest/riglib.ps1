@@ -1286,8 +1286,11 @@ function Snap([string]$Run, [string]$Phase) {
 $RigEngine = 'C:\cr\bin\purge-engine.exe'
 
 # Pure: one argument quoted for a verbatim argument string (CommandLineToArgvW rules). Program ids hold
-# '|' and ARP key names hold spaces, so anything but a plain word is quoted.
+# '|' and ARP key names hold spaces, so anything but a plain word is quoted. A NUL cannot be passed (the command
+# line is a C string: everything after it is lost, e.g. a REG_SZ read with its terminator truncated `rigtool snap`
+# after a --root, 2026-11-19), so it throws.
 function ConvertTo-EngineArg([string]$Value) {
+    if ($Value.IndexOf([char]0) -ge 0) { throw ("engine/rigtool argument holds a NUL at {0}: '{1}'" -f $Value.IndexOf([char]0), ($Value -replace "`0", ' ')) }
     if ($Value -ne '' -and $Value -notmatch '[\s"|&<>^%]') { return $Value }
     $v = [regex]::Replace($Value, '(\\*)"', { param($m) ($m.Groups[1].Value * 2) + '\"' })
     $v = [regex]::Replace($v, '(\\+)$', { param($m) $m.Groups[1].Value * 2 })

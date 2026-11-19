@@ -764,6 +764,23 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
     Check 'Get-DefenderVersions, no Defender: no throw, no version, both errors recorded' (-not $threw -and $null -eq $v.av_signature -and "$($v.error)" -match 'Invalid namespace' -and "$($v.error)" -match 'access denied') "threw=$threw error=$($v.error)"
 }
 
+# ----------------------------------------------------- m1b-crash: a task's Id value (K13 task rounds, 2026-11-19)
+& {
+    . (Join-Path $Guest 'm1b-crash.ps1') -Library
+    $ErrorActionPreference = 'Stop'
+    $g = '{1B4D5E2F-0A3C-4E6B-9D8F-7C1A2B3C4D5E}'
+    Check 'ConvertTo-XTaskId: a GUID passes unchanged' ((ConvertTo-XTaskId $g) -ceq $g)
+    $t = ConvertTo-XTaskId ($g + [char]0)
+    Check 'ConvertTo-XTaskId: the REG_SZ terminator NUL is trimmed' ($t -ceq $g -and $t.IndexOf([char]0) -lt 0) "$($t.Length) chars"
+    Check 'ConvertTo-XTaskId: several trailing NULs are trimmed' ((ConvertTo-XTaskId ($g + [char]0 + [char]0)) -ceq $g)
+    foreach ($bad in @($null, '', 'not-a-guid', ('{1B4D5E2F-0A3C' + [char]0 + '-4E6B-9D8F-7C1A2B3C4D5E}'), ($g + ' '), [string[]]@($g))) {
+        $threw = $false; try { $null = ConvertTo-XTaskId $bad } catch { $threw = $true }
+        Check "ConvertTo-XTaskId: '$("$bad" -replace "`0", '\0')' throws" $threw
+    }
+    $roots = @(Get-XRoots 'task' '\PurgeExecApp\Crash 001' (ConvertTo-XTaskId ($g + [char]0)))
+    Check 'Get-XRoots task: the Tasks and Plain roots name the trimmed GUID' ((@($roots | Where-Object { $_ -like "*\TaskCache\Tasks\$g" -or $_ -like "*\TaskCache\Plain\$g" }).Count -eq 2) -and -not @($roots | Where-Object { "$_".IndexOf([char]0) -ge 0 }).Count) ($roots -join ' | ')
+}
+
 # ------------------------------------------------------------------------- riglib: engine helpers
 & {
     . (Join-Path $Guest 'riglib.ps1')
@@ -772,6 +789,14 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
     Check 'ConvertTo-EngineArg: program id quoted' ((ConvertTo-EngineArg 'HKLM|64|Git_is1') -eq '"HKLM|64|Git_is1"')
     Check 'ConvertTo-EngineArg: trailing backslash doubled' ((ConvertTo-EngineArg 'C:\a b\') -eq '"C:\a b\\"') (ConvertTo-EngineArg 'C:\a b\')
     Check 'ConvertTo-EngineArg: embedded quote escaped' ((ConvertTo-EngineArg 'x"y') -eq '"x\"y"') (ConvertTo-EngineArg 'x"y')
+    # A NUL would cut the command line there (2026-11-19: a task Id's terminator truncated `rigtool snap`).
+    $nulGuid = '{1B4D5E2F-0A3C-4E6B-9D8F-7C1A2B3C4D5E}' + [char]0
+    foreach ($v in @($nulGuid, ('a' + [char]0 + 'b'), [string][char]0)) {
+        $threw = $false; try { $null = ConvertTo-EngineArg $v } catch { $threw = ("$($_.Exception.Message)" -match 'NUL') }
+        Check "ConvertTo-EngineArg: a NUL throws ($($v.Length) chars)" $threw
+    }
+    $threw = $false; try { $null = Invoke-M2Snap (Join-Path $Work 'nul.tsv.gz') @('HKLM\SOFTWARE\x', "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\$nulGuid") } catch { $threw = ("$($_.Exception.Message)" -match 'NUL') }
+    Check 'Invoke-M2Snap: a root with a NUL throws before rigtool runs' $threw
     $iso = ConvertFrom-EngineFileTime 134000000000000000
     Check 'ConvertFrom-EngineFileTime round-trips' ([DateTimeOffset]::Parse($iso, [Globalization.CultureInfo]::InvariantCulture).ToFileTime() -eq 134000000000000000) $iso
     Check 'ConvertFrom-EngineFileTime: null stays null' ($null -eq (ConvertFrom-EngineFileTime $null))
