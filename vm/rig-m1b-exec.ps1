@@ -437,12 +437,12 @@ $XAmbientModes = @('m1b-x-fidelity', 'm1b-x-traps')
 
 # One guest-mode run from a fresh restore. -GuestMode / -Run default to the script's mode; -Null: a null run of
 # m1b-x-fidelity / m1b-x-traps (opts null, null_wait; no ambient set pushed).
-function Invoke-XGuestMode([string]$GuestMode = $X.mode, [string]$Run = '', [switch]$Null) {
+function Invoke-XGuestMode([string]$GuestMode = $X.mode, [string]$Run = '', [switch]$NullRun) {
     $run = $(if ($Run) { $Run } else { Get-XRunName $GuestMode })
     $eng = Get-M2Engine -Engine $X.engine
     $casesB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($XCasesFile))
     $opts = [ordered]@{ mode = $GuestMode; snapshot = $X.snapshot; cases_b64 = $casesB64; engine_build = (Get-XBuildInfo $eng) }
-    if ($Null) {
+    if ($NullRun) {
         if ($XNullModes -cnotcontains $GuestMode) { throw "a null run is for $($XNullModes -join ' / ') only" }
         $opts.null = $true; $opts.null_wait = $X.null_wait
         $script:XPushAmbient = $null
@@ -465,7 +465,7 @@ function Invoke-XGuestMode([string]$GuestMode = $X.mode, [string]$Run = '', [swi
     New-Item -ItemType Directory -Force $script:RunsDir | Out-Null
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $script:RigLogFile = Join-Path $script:RunsDir "m1b-$run-$stamp.log"
-    Write-RigLog "M1b $GuestMode as run $run from $($X.snapshot) on $script:VmName; engine $eng$(if ($Null) { "; null run, idle $($X.null_wait) s" } else { "; ambient $($script:XPushAmbient)" })$(if ($X.hard) { '; hard power-off' })$(if ($X.kinds.Count) { '; kinds ' + ($X.kinds -join ',') })$(if ($X.points.Count) { '; points ' + ($X.points -join ',') })"
+    Write-RigLog "M1b $GuestMode as run $run from $($X.snapshot) on $script:VmName; engine $eng$(if ($NullRun) { "; null run, idle $($X.null_wait) s" } else { "; ambient $($script:XPushAmbient)" })$(if ($X.hard) { '; hard power-off' })$(if ($X.kinds.Count) { '; kinds ' + ($X.kinds -join ',') })$(if ($X.points.Count) { '; points ' + ($X.points -join ',') })"
     $rec = $null
     try {
         $null = Get-PwFile
@@ -517,7 +517,7 @@ function Invoke-XNullCampaign {
     foreach ($k in 1..$X.count) {
         foreach ($m in $XNullModes) {
             $run = Get-XNullRunName $k $m $X.prefix
-            $r = Invoke-XGuestMode -GuestMode $m -Run $run -Null
+            $r = Invoke-XGuestMode -GuestMode $m -Run $run -NullRun
             if (-not $r -or -not $r.ok) { $bad += $run; Write-Host "!! null run $run failed: $(if ($r) { $r.error })" }
         }
     }
