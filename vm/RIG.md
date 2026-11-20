@@ -1543,7 +1543,11 @@ integration tests `execdiff_restore_point_records_only_when_created`,
   FFFFFFFFFFFF}\BaseContainers\{same}`; `Wbem\Tracing\Providers\SystemRestoreProv @ root/default` (key added or its
   LastWriteTime / value count changed, a value named by a number added); `Windows NT\CurrentVersion\SPP|LastIndex` and
   `...\SystemRestore|LastIndex` changed; `Services\DsmSvc\State|SessionNumber` changed; `<drive>:\System Volume
-  Information` with only its mtime changed. The keys around them are covered by the parent rule.
+  Information` with only its mtime changed; a loaded user hive's transaction log (`<drive>:\Users\<profile>\ntuser.dat.LOG1|LOG2`,
+  `<drive>:\Users\<profile>\AppData\Local\Microsoft\Windows\UsrClass.dat.LOG1|LOG2`) with only its size / mtime changed
+  (the VSS registry writer flushes the loaded hives; user ruling 2026-11-20 after the R8 S1 host replay, where these were
+  the only records left: 3 in fidelity, 2 in traps, none in the 12 null runs). The keys around them are covered by the
+  parent rule.
 - **firewall rule delete**, only when the journal has a `DeleteFirewallRule` op with effective outcome `Done`:
   `Wbem\Tracing\Providers\wfascim @ ROOT/StandardCimv2` (as above), `Services\SharedAccess\Epoch|Epoch` changed,
   `C:\ProgramData\Microsoft\Windows\wfp\wfpdiag.etl` changed.

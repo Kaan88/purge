@@ -839,7 +839,8 @@ fn is_wmi_tracing(c: &Change, provider: &str) -> bool {
 /// - the System Restore WMI provider's tracing key (`is_wmi_tracing`, `SystemRestoreProv @ root/default`);
 /// - `Windows NT\CurrentVersion\SPP|LastIndex` and `Windows NT\CurrentVersion\SystemRestore|LastIndex`, changed;
 /// - `Services\DsmSvc\State|SessionNumber`, changed (Device Setup Manager reacting to the new device);
-/// - `<drive>:\System Volume Information` (the directory itself), its mtime only changed.
+/// - `<drive>:\System Volume Information` (the directory itself), its mtime only changed;
+/// - a loaded user hive's transaction log (`is_user_hive_log`), its size / mtime only changed (never removed).
 ///
 /// The keys around them (LastWriteTime, value / subkey count) are left to the parent rule.
 fn is_engine_rp_created(c: &Change) -> bool {
@@ -887,7 +888,30 @@ fn is_engine_rp_created(c: &Change) -> bool {
             && b[0].is_ascii_alphabetic()
             && c.path[1..].eq_ignore_ascii_case(":\\System Volume Information");
     }
-    false
+    c.op == '~' && c.rec == 'F' && only_changes(c, &["size ", "mtime "]) && is_user_hive_log(&c.path)
+}
+
+/// A loaded user hive's transaction log: `<drive>:\Users\<profile>\ntuser.dat.LOG1|LOG2` or
+/// `<drive>:\Users\<profile>\AppData\Local\Microsoft\Windows\UsrClass.dat.LOG1|LOG2` (one profile segment). The
+/// restore point's VSS registry writer flushes the loaded hives, which rotates and truncates these logs (user ruling
+/// 2026-11-20 after the R8 S1 replay: they changed in both failed runs and in none of the 12 null runs).
+fn is_user_hive_log(path: &str) -> bool {
+    let s: Vec<&str> = path.split('\\').collect();
+    let drive = |d: &str| d.len() == 2 && d.as_bytes()[0].is_ascii_alphabetic() && d.as_bytes()[1] == b':';
+    let log = |f: &str, base: &str| {
+        f.len() == base.len() + 5
+            && f.is_char_boundary(base.len())
+            && f[..base.len()].eq_ignore_ascii_case(base)
+            && (f[base.len()..].eq_ignore_ascii_case(".LOG1") || f[base.len()..].eq_ignore_ascii_case(".LOG2"))
+    };
+    if s.len() < 4 || !drive(s[0]) || !s[1].eq_ignore_ascii_case("Users") || s[2].is_empty() {
+        return false;
+    }
+    match s.len() {
+        4 => log(s[3], "ntuser.dat"),
+        8 => segs_eq(&s[3..7], &["AppData", "Local", "Microsoft", "Windows"]) && log(s[7], "UsrClass.dat"),
+        _ => false,
+    }
 }
 
 /// What deleting a firewall rule writes (the M1b executor runs of 2026-11-19). Applied only when the journal has a
@@ -2147,11 +2171,30 @@ mod tests {
             chgv('~', "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore", "LastIndex"),
             chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DsmSvc\\State", "SessionNumber"),
             chgx('~', 'D', "C:\\System Volume Information", &["mtime 1->2"]),
+            chgx('~', 'F', "C:\\Users\\tester\\ntuser.dat.LOG2", &["size 442368->8192"]),
+            chgx('~', 'F', "C:\\Users\\tester\\NTUSER.DAT.LOG1", &["size 0->1", "mtime 1->2"]),
+            chgx(
+                '~',
+                'F',
+                "C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\UsrClass.dat.LOG1",
+                &["size 0->147456"],
+            ),
         ];
         for c in &yes {
             assert!(is_engine_rp_created(c), "{c:?}");
         }
         let no = [
+            // Hive logs: removed, added, a content-hash or attribute change, the hive itself, another log name,
+            // another folder, a nested profile path.
+            chgx('-', 'F', "C:\\Users\\tester\\ntuser.dat.LOG2", &[]),
+            chg('+', 'F', "C:\\Users\\tester\\ntuser.dat.LOG2"),
+            chgx('~', 'F', "C:\\Users\\tester\\ntuser.dat.LOG2", &["size 1->2", "sha256 a->b"]),
+            chgx('~', 'F', "C:\\Users\\tester\\ntuser.dat.LOG2", &["attrs 32->0"]),
+            chgx('~', 'F', "C:\\Users\\tester\\ntuser.dat", &["size 1->2"]),
+            chgx('~', 'F', "C:\\Users\\tester\\ntuser.dat.LOG3", &["size 1->2"]),
+            chgx('~', 'F', "C:\\Users\\tester\\Documents\\ntuser.dat.LOG1", &["size 1->2"]),
+            chgx('~', 'F', "C:\\Users\\tester\\AppData\\Local\\UsrClass.dat.LOG1", &["size 1->2"]),
+            chgx('~', 'F', "C:\\ProgramData\\ntuser.dat.LOG1", &["size 1->2"]),
             // Removals never.
             chg('-', 'K', &format!("{CLASS}\\0001")),
             chgv('-', &format!("{CLASS}\\0001"), "DriverDesc"),

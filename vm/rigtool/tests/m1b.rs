@@ -857,6 +857,8 @@ fn side_world(rp: bool, fw: bool) -> Vec<String> {
     l.push(kx(EPOCH, n(fw)));
     l.push(v(EPOCH, "Epoch", 4, 4, n(fw), if fw { "63" } else { "62" }));
     l.push(f(WFPDIAG, if fw { 200 } else { 100 }, n(fw)));
+    // The VSS registry writer flushes the loaded user hive: its transaction log is truncated.
+    l.push(f(r"C:\Users\tester\ntuser.dat.LOG2", if rp { 8192 } else { 442_368 }, n(rp)));
     l
 }
 
@@ -889,7 +891,7 @@ fn execdiff_restore_point_records_only_when_created() {
         for s in ["HarddiskVolumeSnapshot2", "0001", "134395554330118898"] {
             assert!(u.contains(s), "{rp}: {s} not unexplained: {u}");
         }
-        for s in ["SPP", "SystemRestore", "SessionNumber", "System Volume Information"] {
+        for s in ["SPP", "SystemRestore", "SessionNumber", "System Volume Information", "ntuser.dat.LOG2"] {
             assert!(c.contains(s), "{rp}: {s} not collateral: {c}");
         }
         assert!(!c.contains("Epoch") && !c.contains("wfpdiag"), "{rp}: {c}");

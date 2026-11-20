@@ -108,7 +108,7 @@ ELEVATED = [                                                              # E1
     {"crate": "purge-win", "test": "scm", "run": "all", "min": 12, "require_prefix": "elevated::", "prefix_min": 6},
     {"crate": "purge-win", "test": "firewall", "run": "all", "min": 12, "require_prefix": "rig::", "prefix_min": 10},
     {"crate": "purge-win", "test": "taskschd", "run": "all", "min": 11},
-    {"crate": "purge-exec", "test": "act_service", "require_names": ["rig_live_delete_and_recreate_round_trip"]},
+    {"crate": "purge-exec", "test": "act_service", "require_names": ["rig_live_delete_and_recreate_round_trip", "elevated_write_back_restores_a_system_owned_auto_inherited_key", "elevated_write_back_converges_on_a_system_owned_key_after_an_interrupted_attempt"]},
     {"crate": "purge-exec", "test": "act_task", "require_names": ["rig_live_delete_and_undo"]},
     {"crate": "purge-exec", "test": "act_firewall", "require_names": ["rig_live_delete_and_recreate_round_trip"]},
 ]
