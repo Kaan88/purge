@@ -1,0 +1,121 @@
+{
+  "schema": "purge.scan/0",
+  "app": "powershell",
+  "tool": "purge",
+  "mode": "post",
+  "policy_version": "m1b.1",
+  "plan_hash": "4559d5a21f3d22fdc3bdd5da1b1934cfb4054e0b73021ef905561d80b0d3b33f",
+  "items": [
+    {
+      "id": "c-2aad69ffe4b6da54",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}",
+        "name": "MessageFileName"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+        "display_name": "PowerShell 7-x64"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}|MessageFileName",
+          "detail": {
+            "anchor": "C:\\Program Files\\PowerShell\\7\\PowerShell.Core.Instrumentation.dll",
+            "place": "shared"
+          }
+        },
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "B",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\powershell\\7\\powershell.core.instrumentation.dll",
+          "detail": {
+            "path": "c:\\program files\\powershell\\7\\powershell.core.instrumentation.dll",
+            "place": "shared",
+            "root": "C:\\Program Files\\PowerShell\\7"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 14,
+        "explanation": "Pointed to C:\\Program Files\\PowerShell\\7\\PowerShell.Core.Instrumentation.dll before uninstall · Points to c:\\program files\\powershell\\7\\powershell.core.instrumentation.dll in PowerShell 7-x64's install folder · In a place other software and you also write to; nothing shows that PowerShell 7-x64 put it there"
+      }
+    },
+    {
+      "id": "c-bbf291cd7f6c383f",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}",
+        "name": "ResourceFileName"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|{2E334F2C-291A-46DA-9D05-1697F697E04D}",
+        "display_name": "PowerShell 7-x64"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}|ResourceFileName",
+          "detail": {
+            "anchor": "C:\\Program Files\\PowerShell\\7\\PowerShell.Core.Instrumentation.dll",
+            "place": "shared"
+          }
+        },
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "B",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\powershell\\7\\powershell.core.instrumentation.dll",
+          "detail": {
+            "path": "c:\\program files\\powershell\\7\\powershell.core.instrumentation.dll",
+            "place": "shared",
+            "root": "C:\\Program Files\\PowerShell\\7"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 14,
+        "explanation": "Pointed to C:\\Program Files\\PowerShell\\7\\PowerShell.Core.Instrumentation.dll before uninstall · Points to c:\\program files\\powershell\\7\\powershell.core.instrumentation.dll in PowerShell 7-x64's install folder · In a place other software and you also write to; nothing shows that PowerShell 7-x64 put it there"
+      }
+    }
+  ],
+  "absorbed": []
+}

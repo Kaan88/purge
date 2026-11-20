@@ -1,0 +1,1676 @@
+{
+  "schema": "purge.fp/0",
+  "app": {
+    "program_id": "HKLM|64|{23170F69-40C1-2702-2408-000001000000}",
+    "display_name": "7-Zip 24.08 (x64 edition)"
+  },
+  "identity": {
+    "names": [
+      "7-Zip 24.08 (x64 edition)"
+    ],
+    "vendors": [
+      "Igor Pavlov",
+      "7-zip"
+    ],
+    "tokens": [
+      "7",
+      "zip"
+    ],
+    "mega_vendor": false
+  },
+  "roots": [
+    {
+      "path": "C:\\Program Files\\7-Zip",
+      "kind": "InstallRoot",
+      "source": "MsiComponent",
+      "trust": "AdminOnly",
+      "volume_serial": 1379905015,
+      "parent_existed": true
+    }
+  ],
+  "exes": [
+    {
+      "path": "C:\\Program Files\\7-Zip\\7-zip.dll",
+      "main": false
+    },
+    {
+      "path": "C:\\Program Files\\7-Zip\\7-zip32.dll",
+      "main": false
+    },
+    {
+      "path": "C:\\Program Files\\7-Zip\\7z.dll",
+      "main": false
+    },
+    {
+      "path": "C:\\Program Files\\7-Zip\\7z.exe",
+      "main": false
+    },
+    {
+      "path": "C:\\Program Files\\7-Zip\\7zFM.exe",
+      "main": false
+    },
+    {
+      "path": "C:\\Program Files\\7-Zip\\7zG.exe",
+      "main": false
+    }
+  ],
+  "outside_root_files": [],
+  "anchors": {
+    "progids": [],
+    "clsids": [
+      "{23170F69-40C1-278A-1000-000100020000}"
+    ],
+    "appids": [],
+    "typelibs": [],
+    "aumids": [],
+    "package_families": [],
+    "package_full_names": [],
+    "run_entries": []
+  },
+  "tokens": [
+    {
+      "token": "23170F69-40C1-2702-2408-000001000000",
+      "source": "arp:key"
+    }
+  ],
+  "inno": [],
+  "ref_snapshot": [
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\7-Zip",
+        "name": "Path"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Root",
+        "text": "C:\\Program Files\\7-Zip"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 0,
+      "data_hash": "9d667a8f69fc017d"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\7-Zip",
+        "name": "Path64"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Root",
+        "text": "C:\\Program Files\\7-Zip"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 0,
+      "data_hash": "9d667a8f69fc017d"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\7-Zip\\7-zip.dll"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 0,
+      "data_hash": "e3fcfdc1a522ead2"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\DragDropHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Drive\\shellex\\DragDropHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Folder\\ShellEx\\ContextMenuHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\7-Zip\\7-zip32.dll"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 0,
+      "data_hash": "fc4dc86f7ec02e97"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\7-Zip\\7zFM.exe"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 0,
+      "data_hash": "9015ac8676ff5f10"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe",
+        "name": "Path"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Root",
+        "text": "C:\\Program Files\\7-Zip"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 0,
+      "data_hash": "9d667a8f69fc017d"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders",
+        "name": "C:\\Program Files\\7-Zip\\"
+      },
+      "carrier": "ValueName",
+      "anchor": {
+        "kind": "Root",
+        "text": "C:\\Program Files\\7-Zip"
+      },
+      "parent_values": 907,
+      "parent_subkeys": 0,
+      "data_hash": "96a296d224f285c6"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders",
+        "name": "C:\\Program Files\\7-Zip\\Lang\\"
+      },
+      "carrier": "ValueName",
+      "anchor": {
+        "kind": "Root",
+        "text": "C:\\Program Files\\7-Zip"
+      },
+      "parent_values": 907,
+      "parent_subkeys": 0,
+      "data_hash": "96a296d224f285c6"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
+        "name": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "carrier": "ValueName",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 20,
+      "parent_subkeys": 0,
+      "data_hash": "64c3d0ccabc68562"
+    },
+    {
+      "target": {
+        "type": "RegMultiSzSegment",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH\\ARP",
+        "name": "0",
+        "segment": "{23170F69-40C1-2702-2408-000001000000}",
+        "index": 1
+      },
+      "carrier": "Segment",
+      "anchor": {
+        "kind": "Token",
+        "text": "23170F69-40C1-2702-2408-000001000000"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "93927e20372c201d"
+    },
+    {
+      "target": {
+        "type": "RegMultiSzSegment",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH\\ARP",
+        "name": "0",
+        "segment": "MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}",
+        "index": 2
+      },
+      "carrier": "Segment",
+      "anchor": {
+        "kind": "Token",
+        "text": "23170F69-40C1-2702-2408-000001000000"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "93927e20372c201d"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}",
+        "name": "ModifyPath"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "23170F69-40C1-2702-2408-000001000000"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "b21667f712df364e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}",
+        "name": "UninstallString"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "23170F69-40C1-2702-2408-000001000000"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "b21667f712df364e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\*\\shellex\\ContextMenuHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\7-Zip\\7-zip32.dll"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 0,
+      "data_hash": "fc4dc86f7ec02e97"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Directory\\shellex\\ContextMenuHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Directory\\shellex\\DragDropHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Drive\\shellex\\DragDropHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Folder\\ShellEx\\ContextMenuHandlers\\7-Zip",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Clsid",
+        "text": "{23170F69-40C1-278A-1000-000100020000}"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "f1016acb5bb64d5e"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\WOW6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\7-Zip\\7-zip32.dll"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 0,
+      "data_hash": "fc4dc86f7ec02e97"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip",
+        "name": "Path"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Root",
+        "text": "C:\\Program Files\\7-Zip"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 1,
+      "data_hash": "9d667a8f69fc017d"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip",
+        "name": "Path64"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Root",
+        "text": "C:\\Program Files\\7-Zip"
+      },
+      "parent_values": 2,
+      "parent_subkeys": 1,
+      "data_hash": "9d667a8f69fc017d"
+    },
+    {
+      "target": {
+        "type": "RegMultiSzSegment",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "0",
+        "segment": "C:\\Program Files\\7-Zip\\7zFM.exe",
+        "index": 1
+      },
+      "carrier": "Segment",
+      "anchor": {
+        "kind": "Exe",
+        "text": "C:\\Program Files\\7-Zip\\7zFM.exe"
+      },
+      "parent_values": 1,
+      "parent_subkeys": 0,
+      "data_hash": "d3afe8a46cc7ff32"
+    }
+  ],
+  "subtrees": [
+    {
+      "key": "HKLM\\SOFTWARE\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "Path",
+          "hash": "1:9d667a8f69fc017d"
+        },
+        {
+          "subkey": "",
+          "name": "Path64",
+          "hash": "1:9d667a8f69fc017d"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246175547,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246088345,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246088345,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\CLSID",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246124405,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}",
+      "values": [
+        {
+          "subkey": "InprocServer32",
+          "name": "",
+          "hash": "1:e3fcfdc1a522ead2"
+        },
+        {
+          "subkey": "InprocServer32",
+          "name": "ThreadingModel",
+          "hash": "1:37b9977bec31aaca"
+        }
+      ],
+      "subkeys": [
+        "InprocServer32"
+      ],
+      "lwt": 134395359246124405,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:e3fcfdc1a522ead2"
+        },
+        {
+          "subkey": "",
+          "name": "ThreadingModel",
+          "hash": "1:37b9977bec31aaca"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246142542,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246088345,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246088345,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\DragDropHandlers",
+      "values": [
+        {
+          "subkey": "7-Zip",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [
+        "7-Zip"
+      ],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\DragDropHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Drive\\shellex",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246124405,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Drive\\shellex\\DragDropHandlers",
+      "values": [
+        {
+          "subkey": "7-Zip",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [
+        "7-Zip"
+      ],
+      "lwt": 134395359246124405,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Drive\\shellex\\DragDropHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246124405,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Folder\\ShellEx\\ContextMenuHandlers",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\Folder\\ShellEx\\ContextMenuHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\WOW6432Node\\CLSID",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246054486,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}",
+      "values": [
+        {
+          "subkey": "InprocServer32",
+          "name": "",
+          "hash": "1:fc4dc86f7ec02e97"
+        },
+        {
+          "subkey": "InprocServer32",
+          "name": "ThreadingModel",
+          "hash": "1:37b9977bec31aaca"
+        }
+      ],
+      "subkeys": [
+        "InprocServer32"
+      ],
+      "lwt": 134395359246075751,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:fc4dc86f7ec02e97"
+        },
+        {
+          "subkey": "",
+          "name": "ThreadingModel",
+          "hash": "1:37b9977bec31aaca"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246075751,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion",
+      "values": [
+        {
+          "subkey": "",
+          "name": "CommonFilesDir",
+          "hash": "1:4d9f3d94c23d7d25"
+        },
+        {
+          "subkey": "",
+          "name": "CommonFilesDir (x86)",
+          "hash": "1:48b4f7c237c23203"
+        },
+        {
+          "subkey": "",
+          "name": "CommonW6432Dir",
+          "hash": "1:4d9f3d94c23d7d25"
+        },
+        {
+          "subkey": "",
+          "name": "DevicePath",
+          "hash": "2:9552352d0f76d040"
+        },
+        {
+          "subkey": "",
+          "name": "MediaPathUnexpanded",
+          "hash": "2:ea39aa8da3ebd245"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramFilesDir",
+          "hash": "1:5c64b95adc8ce922"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramFilesDir (x86)",
+          "hash": "1:370c7c4862db64a8"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramFilesPath",
+          "hash": "2:02677332d1b64eea"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramW6432Dir",
+          "hash": "1:5c64b95adc8ce922"
+        },
+        {
+          "subkey": "",
+          "name": "SM_ConfigureProgramsName",
+          "hash": "1:485783de4c7de0d4"
+        },
+        {
+          "subkey": "",
+          "name": "SM_GamesName",
+          "hash": "1:1a89cdfc4b574fce"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134388886356168410,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:9015ac8676ff5f10"
+        },
+        {
+          "subkey": "",
+          "name": "Path",
+          "hash": "1:9d667a8f69fc017d"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246193569,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH",
+      "values": [
+        {
+          "subkey": "ARP",
+          "name": "0",
+          "hash": "7:93927e20372c201d"
+        }
+      ],
+      "subkeys": [
+        "ARP"
+      ],
+      "lwt": 134388886356168410,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH\\ARP",
+      "values": [
+        {
+          "subkey": "",
+          "name": "0",
+          "hash": "7:93927e20372c201d"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359267971759,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246288593,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{23170F69-40C1-2702-2408-000001000000}",
+      "values": [
+        {
+          "subkey": "",
+          "name": "AuthorizedCDFPrefix",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "Comments",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "Contact",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayName",
+          "hash": "1:bcee70573f94c3ff"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayVersion",
+          "hash": "1:dd866e0298a2cdaf"
+        },
+        {
+          "subkey": "",
+          "name": "EstimatedSize",
+          "hash": "4:c9a37daf63719cf4"
+        },
+        {
+          "subkey": "",
+          "name": "HelpLink",
+          "hash": "2:21392e8f564dab0b"
+        },
+        {
+          "subkey": "",
+          "name": "HelpTelephone",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "InstallDate",
+          "hash": "1:094b7b7db047e9ea"
+        },
+        {
+          "subkey": "",
+          "name": "InstallLocation",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "InstallSource",
+          "hash": "1:b4f981e8f4c85784"
+        },
+        {
+          "subkey": "",
+          "name": "Language",
+          "hash": "4:641c2b20cfae89ad"
+        },
+        {
+          "subkey": "",
+          "name": "ModifyPath",
+          "hash": "2:b21667f712df364e"
+        },
+        {
+          "subkey": "",
+          "name": "Publisher",
+          "hash": "1:4acf76b8f90c0e20"
+        },
+        {
+          "subkey": "",
+          "name": "Readme",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "Size",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "",
+          "name": "UninstallString",
+          "hash": "2:b21667f712df364e"
+        },
+        {
+          "subkey": "",
+          "name": "URLInfoAbout",
+          "hash": "1:5ee3c9f65e862c55"
+        },
+        {
+          "subkey": "",
+          "name": "URLUpdateInfo",
+          "hash": "1:fd05dd735af7ac21"
+        },
+        {
+          "subkey": "",
+          "name": "Version",
+          "hash": "4:fb2e098e60a26c26"
+        },
+        {
+          "subkey": "",
+          "name": "VersionMajor",
+          "hash": "4:17fa9c7f5e9039a2"
+        },
+        {
+          "subkey": "",
+          "name": "VersionMinor",
+          "hash": "4:dc765660b06ee03d"
+        },
+        {
+          "subkey": "",
+          "name": "WindowsInstaller",
+          "hash": "4:67abdd721024f0ff"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246329180,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\*\\shellex\\ContextMenuHandlers",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246088345,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\*\\shellex\\ContextMenuHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246088345,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246054486,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}",
+      "values": [
+        {
+          "subkey": "InprocServer32",
+          "name": "",
+          "hash": "1:fc4dc86f7ec02e97"
+        },
+        {
+          "subkey": "InprocServer32",
+          "name": "ThreadingModel",
+          "hash": "1:37b9977bec31aaca"
+        }
+      ],
+      "subkeys": [
+        "InprocServer32"
+      ],
+      "lwt": 134395359246075751,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:fc4dc86f7ec02e97"
+        },
+        {
+          "subkey": "",
+          "name": "ThreadingModel",
+          "hash": "1:37b9977bec31aaca"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246075751,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Directory\\shellex",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Directory\\shellex\\ContextMenuHandlers",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246088345,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Directory\\shellex\\ContextMenuHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246088345,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Directory\\shellex\\DragDropHandlers",
+      "values": [
+        {
+          "subkey": "7-Zip",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [
+        "7-Zip"
+      ],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Directory\\shellex\\DragDropHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Drive\\shellex",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246124405,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Drive\\shellex\\DragDropHandlers",
+      "values": [
+        {
+          "subkey": "7-Zip",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [
+        "7-Zip"
+      ],
+      "lwt": 134395359246124405,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Drive\\shellex\\DragDropHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246124405,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Folder\\ShellEx\\ContextMenuHandlers",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Folder\\ShellEx\\ContextMenuHandlers\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:f1016acb5bb64d5e"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246107306,
+      "ti_owned": false,
+      "fully_attributed": true
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\WOW6432Node\\CLSID",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395359246054486,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\WOW6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}",
+      "values": [
+        {
+          "subkey": "InprocServer32",
+          "name": "",
+          "hash": "1:fc4dc86f7ec02e97"
+        },
+        {
+          "subkey": "InprocServer32",
+          "name": "ThreadingModel",
+          "hash": "1:37b9977bec31aaca"
+        }
+      ],
+      "subkeys": [
+        "InprocServer32"
+      ],
+      "lwt": 134395359246075751,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\WOW6432Node\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:fc4dc86f7ec02e97"
+        },
+        {
+          "subkey": "",
+          "name": "ThreadingModel",
+          "hash": "1:37b9977bec31aaca"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359246075751,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip",
+      "values": [
+        {
+          "subkey": "",
+          "name": "Path",
+          "hash": "1:9d667a8f69fc017d"
+        },
+        {
+          "subkey": "",
+          "name": "Path64",
+          "hash": "1:9d667a8f69fc017d"
+        },
+        {
+          "subkey": "FM",
+          "name": "FlatViewArc0",
+          "hash": "4:df3f619804a92fdb"
+        },
+        {
+          "subkey": "FM",
+          "name": "FlatViewArc1",
+          "hash": "4:df3f619804a92fdb"
+        },
+        {
+          "subkey": "FM",
+          "name": "FolderHistory",
+          "hash": "3:96a296d224f285c6"
+        },
+        {
+          "subkey": "FM",
+          "name": "FolderShortcuts",
+          "hash": "3:e3b0c44298fc1c14"
+        },
+        {
+          "subkey": "FM",
+          "name": "ListMode",
+          "hash": "4:355ebec2cf873012"
+        },
+        {
+          "subkey": "FM",
+          "name": "PanelPath0",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "FM",
+          "name": "PanelPath1",
+          "hash": "1:96a296d224f285c6"
+        },
+        {
+          "subkey": "FM",
+          "name": "Panels",
+          "hash": "3:f8d6ef5673b4e747"
+        },
+        {
+          "subkey": "FM",
+          "name": "Position",
+          "hash": "3:dc7dc593a4172cc4"
+        },
+        {
+          "subkey": "FM\\Columns",
+          "name": "RootFolder",
+          "hash": "3:89ad0878c99268b2"
+        }
+      ],
+      "subkeys": [
+        "FM",
+        "FM\\Columns"
+      ],
+      "lwt": 134395359749222861,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+      "values": [
+        {
+          "subkey": "",
+          "name": "0",
+          "hash": "7:d3afe8a46cc7ff32"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395359270604602,
+      "ti_owned": false,
+      "fully_attributed": false
+    }
+  ],
+  "ext_journal": [],
+  "co_removed": [],
+  "os": {
+    "edition": "EnterpriseSEval",
+    "build": 26100,
+    "ubr": 1742
+  },
+  "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "window": {
+    "install_time": 134394624000000000,
+    "t_start": 134395360823144088,
+    "t_end": 134395360853264063
+  },
+  "verify_gone": {
+    "arp_gone": true,
+    "msi_unknown_all_ctx": true,
+    "main_exes_gone": true,
+    "passed": true
+  },
+  "warnings": [
+    "refsnap: the reference scan is incomplete (31 keys unreadable, first: HKLM\\SOFTWARE\\Microsoft\\EAPSIMMethods\\18\\FastReauthContext (access denied))",
+    "subtree: 16 subtrees were recorded in part (size caps or baseline keys)"
+  ],
+  "msi": [
+    {
+      "product_code": "{23170F69-40C1-2702-2408-000001000000}",
+      "packed_code": "96F071321C0420724280000010000000",
+      "upgrade_code": "{23170F69-40C1-2702-0000-000004000000}",
+      "context": "Machine",
+      "user_sid": null,
+      "local_package": "C:\\WINDOWS\\Installer\\32270.msi",
+      "package_readable": true,
+      "components": [
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000001}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\7zFM.exe"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000002}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\7-zip.dll"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000003}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\7z.exe"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000005}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\7zG.exe"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000006}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\7z.sfx"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000007}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\7zCon.sfx"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000008}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\7-zip.chm"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000009}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\descript.ion"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000010}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\7z.dll"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000012}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\Lang\\en.ttt"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000013}",
+          "key_path": {
+            "kind": "file",
+            "path": "C:\\Program Files\\7-Zip\\7-zip32.dll"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000080}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKU\\*\\Software\\7-Zip",
+            "name": "Path"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000081}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\7-Zip",
+            "name": "Path"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000082}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\7-Zip",
+            "name": null
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000083}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers\\7-Zip",
+            "name": null
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000084}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\DragDropHandlers\\7-Zip",
+            "name": null
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000085}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Classes\\Drive\\shellex\\DragDropHandlers\\7-Zip",
+            "name": null
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000086}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
+            "name": "{23170F69-40C1-278A-1000-000100020000}"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000087}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe",
+            "name": null
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{23170F69-40C1-2702-2408-000003000088}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Classes\\Folder\\shellex\\ContextMenuHandlers\\7-Zip",
+            "name": null
+          },
+          "other_clients": [],
+          "shared_dll": false
+        }
+      ],
+      "registry_rows": [
+        {
+          "key": "HKU\\*\\Software\\7-Zip",
+          "name": "Path",
+          "whole_key": false,
+          "component": "InstallRegCU",
+          "row": "MyInstallRegCU"
+        },
+        {
+          "key": "HKU\\*\\Software\\7-Zip",
+          "name": "Path64",
+          "whole_key": false,
+          "component": "InstallRegCU",
+          "row": "MyInstallRegCU2"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\7-Zip",
+          "name": "Path",
+          "whole_key": false,
+          "component": "InstallRegLM",
+          "row": "MyInstallRegLM"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\7-Zip",
+          "name": "Path64",
+          "whole_key": false,
+          "component": "InstallRegLM",
+          "row": "MyInstallRegLM2"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\7-Zip",
+          "name": null,
+          "whole_key": false,
+          "component": "InstallRegWild",
+          "row": "MyInstallRegWild"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers\\7-Zip",
+          "name": null,
+          "whole_key": false,
+          "component": "InstallRegDirectory",
+          "row": "MyInstallRegDirectory"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Classes\\Folder\\shellex\\ContextMenuHandlers\\7-Zip",
+          "name": null,
+          "whole_key": false,
+          "component": "InstallRegFolder",
+          "row": "MyInstallRegFolder"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Classes\\Directory\\shellex\\DragDropHandlers\\7-Zip",
+          "name": null,
+          "whole_key": false,
+          "component": "InstallRegDirDD",
+          "row": "MyInstallRegDirDD"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Classes\\Drive\\shellex\\DragDropHandlers\\7-Zip",
+          "name": null,
+          "whole_key": false,
+          "component": "InstallRegDriveDD",
+          "row": "MyInstallRegDriveDD"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
+          "name": "{23170F69-40C1-278A-1000-000100020000}",
+          "whole_key": false,
+          "component": "InstallRegApproved",
+          "row": "MyInstallRegApproved"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe",
+          "name": null,
+          "whole_key": false,
+          "component": "InstallRegAppPath",
+          "row": "MyInstallRegAppPath"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\7zFM.exe",
+          "name": "Path",
+          "whole_key": false,
+          "component": "InstallRegAppPath",
+          "row": "MyInstallRegAppPath2"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+          "name": null,
+          "whole_key": false,
+          "component": "ShellExt32",
+          "row": "shellReg0_32"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+          "name": "ThreadingModel",
+          "whole_key": false,
+          "component": "ShellExt32",
+          "row": "shellReg1_32"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+          "name": null,
+          "whole_key": false,
+          "component": "ShellExt",
+          "row": "shellReg0"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Classes\\CLSID\\{23170F69-40C1-278A-1000-000100020000}\\InprocServer32",
+          "name": "ThreadingModel",
+          "whole_key": false,
+          "component": "ShellExt",
+          "row": "shellReg1"
+        }
+      ],
+      "services": [],
+      "source_dirs": [],
+      "custom_actions": 0,
+      "unresolved_rows": 0
+    }
+  ]
+}

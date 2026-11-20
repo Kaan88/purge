@@ -1,0 +1,669 @@
+{
+  "schema": "purge.rig.m1b-exec-score/2",
+  "written": "2026-11-20T22:34:26.641282+00:00",
+  "runs_dir": "runs",
+  "prefix": "",
+  "cases": "truth/m1b-exec-cases.json",
+  "ambient": "truth/m1b-exec-ambient.json",
+  "missing": [],
+  "gates": {
+    "G5": {
+      "criteria": [
+        "BIND",
+        "K10",
+        "K11",
+        "K12"
+      ],
+      "pass": true
+    },
+    "G6": {
+      "criteria": [
+        "BIND",
+        "K13",
+        "E1"
+      ],
+      "pass": true
+    }
+  },
+  "criteria": {
+    "BIND": {
+      "cases_sha256": "672e6991571dbfc46e75e95a551b5d4d59f8a4f7677689e2a6f2975f82f65ca6",
+      "ambient": {
+        "file": "truth/m1b-exec-ambient.json",
+        "sha256": "49214ff7e616d0beb4feaf9007617f95cd9206da1c28767c2f8be9e8188d7153",
+        "schema": "purge.rig.m2ambient/1",
+        "runs_per_mode": {
+          "m1b-x-fidelity": 6,
+          "m1b-x-traps": 6
+        },
+        "bad_run_ids": [],
+        "fixture_names": [],
+        "min_runs_per_mode": 6
+      },
+      "runs": [
+        {
+          "run": "m1b-x-fidelity",
+          "cases_sha256": "672e6991571dbfc46e75e95a551b5d4d59f8a4f7677689e2a6f2975f82f65ca6",
+          "engine_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "staged_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "installed_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "commit": "3f95da796a34334b0c14e87ed6caed22dfb305da",
+          "source_dirty": false,
+          "ambient_declared_sha256": "49214ff7e616d0beb4feaf9007617f95cd9206da1c28767c2f8be9e8188d7153",
+          "ambient_guest_sha256": "49214ff7e616d0beb4feaf9007617f95cd9206da1c28767c2f8be9e8188d7153"
+        },
+        {
+          "run": "m1b-x-traps",
+          "cases_sha256": "672e6991571dbfc46e75e95a551b5d4d59f8a4f7677689e2a6f2975f82f65ca6",
+          "engine_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "staged_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "installed_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "commit": "3f95da796a34334b0c14e87ed6caed22dfb305da",
+          "source_dirty": false,
+          "ambient_declared_sha256": "49214ff7e616d0beb4feaf9007617f95cd9206da1c28767c2f8be9e8188d7153",
+          "ambient_guest_sha256": "49214ff7e616d0beb4feaf9007617f95cd9206da1c28767c2f8be9e8188d7153"
+        },
+        {
+          "run": "m1b-x-undo-traps",
+          "cases_sha256": "672e6991571dbfc46e75e95a551b5d4d59f8a4f7677689e2a6f2975f82f65ca6",
+          "engine_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "staged_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "installed_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "commit": "3f95da796a34334b0c14e87ed6caed22dfb305da",
+          "source_dirty": false,
+          "ambient_declared_sha256": "49214ff7e616d0beb4feaf9007617f95cd9206da1c28767c2f8be9e8188d7153",
+          "ambient_guest_sha256": "49214ff7e616d0beb4feaf9007617f95cd9206da1c28767c2f8be9e8188d7153"
+        },
+        {
+          "run": "m1b-x-crash",
+          "cases_sha256": "672e6991571dbfc46e75e95a551b5d4d59f8a4f7677689e2a6f2975f82f65ca6",
+          "engine_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "staged_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "installed_sha256": "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a",
+          "commit": "3f95da796a34334b0c14e87ed6caed22dfb305da",
+          "source_dirty": false,
+          "ambient_declared_sha256": "49214ff7e616d0beb4feaf9007617f95cd9206da1c28767c2f8be9e8188d7153",
+          "ambient_guest_sha256": "49214ff7e616d0beb4feaf9007617f95cd9206da1c28767c2f8be9e8188d7153"
+        },
+        {
+          "run": "m1b-x-elevated",
+          "cases_sha256": "672e6991571dbfc46e75e95a551b5d4d59f8a4f7677689e2a6f2975f82f65ca6",
+          "commit": "3f95da796a34334b0c14e87ed6caed22dfb305da",
+          "source_dirty": false
+        }
+      ],
+      "engines": [
+        "52a8ee2929f8866b136c9dd6952fa1b893dabb3e6ecfb4f5c9d7195605f3ec4a"
+      ],
+      "commits": [
+        "3f95da796a34334b0c14e87ed6caed22dfb305da"
+      ],
+      "problems": [],
+      "pass": true
+    },
+    "K10": {
+      "execdiffs": [
+        {
+          "file": "m1b-x-fidelity/execdiff-main.json",
+          "present": true,
+          "ok": true,
+          "collateral": 0,
+          "guard_escapes": 0,
+          "unexplained": 0,
+          "missing_effects": 0,
+          "changed_not_done": 0,
+          "ambient": "C:\\cr\\bin\\m2-ambient.json"
+        },
+        {
+          "file": "m1b-x-traps/execdiff-traps.json",
+          "present": true,
+          "ok": true,
+          "collateral": 0,
+          "guard_escapes": 0,
+          "unexplained": 0,
+          "missing_effects": 0,
+          "changed_not_done": 0,
+          "ambient": "C:\\cr\\bin\\m2-ambient.json"
+        }
+      ],
+      "crash_execdiffs": 44,
+      "crash_execdiffs_failing": [],
+      "collateral": 0,
+      "unexplained": 0,
+      "pass": true
+    },
+    "K11": {
+      "variants": [
+        {
+          "id": "svc-full",
+          "kind": "service",
+          "expect": "full",
+          "recorded": true,
+          "band": "Safe",
+          "selected": true,
+          "exec": "Done",
+          "reason": null,
+          "undo": "Finished",
+          "undo_kind": "Restored",
+          "fidelity_objects": 18,
+          "fidelity_differing": 0,
+          "gone_after_exec": true,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": false,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "id": "svc-localservice",
+          "kind": "service",
+          "expect": "full",
+          "recorded": true,
+          "band": "Safe",
+          "selected": true,
+          "exec": "Done",
+          "reason": null,
+          "undo": "Finished",
+          "undo_kind": "Restored",
+          "fidelity_objects": 10,
+          "fidelity_differing": 0,
+          "gone_after_exec": true,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": false,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "id": "task-simple",
+          "kind": "task",
+          "expect": "full",
+          "recorded": true,
+          "band": "Safe",
+          "selected": true,
+          "exec": "Done",
+          "reason": null,
+          "undo": "Finished",
+          "undo_kind": "Restored",
+          "fidelity_objects": 4,
+          "fidelity_differing": 0,
+          "gone_after_exec": true,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": false,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "id": "task-hidden-two",
+          "kind": "task",
+          "expect": "full",
+          "recorded": true,
+          "band": "Safe",
+          "selected": true,
+          "exec": "Done",
+          "reason": null,
+          "undo": "Finished",
+          "undo_kind": "Restored",
+          "fidelity_objects": 4,
+          "fidelity_differing": 0,
+          "gone_after_exec": true,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": false,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "id": "task-com",
+          "kind": "task",
+          "expect": "full",
+          "recorded": true,
+          "band": "Safe",
+          "selected": true,
+          "exec": "Done",
+          "reason": null,
+          "undo": "Finished",
+          "undo_kind": "Restored",
+          "fidelity_objects": 4,
+          "fidelity_differing": 0,
+          "gone_after_exec": true,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": false,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "id": "task-sddl",
+          "kind": "task",
+          "expect": "full",
+          "recorded": true,
+          "band": "Safe",
+          "selected": true,
+          "exec": "Done",
+          "reason": null,
+          "undo": "Finished",
+          "undo_kind": "Restored",
+          "fidelity_objects": 4,
+          "fidelity_differing": 0,
+          "gone_after_exec": true,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": false,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "id": "fw-program",
+          "kind": "firewall",
+          "expect": "full",
+          "recorded": true,
+          "band": "Safe",
+          "selected": true,
+          "exec": "Done",
+          "reason": null,
+          "undo": "Finished",
+          "undo_kind": "Restored",
+          "fidelity_objects": 2,
+          "fidelity_differing": 0,
+          "gone_after_exec": true,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": false,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "id": "fw-addresses",
+          "kind": "firewall",
+          "expect": "full",
+          "recorded": true,
+          "band": "Safe",
+          "selected": true,
+          "exec": "Done",
+          "reason": null,
+          "undo": "Finished",
+          "undo_kind": "Restored",
+          "fidelity_objects": 2,
+          "fidelity_differing": 0,
+          "gone_after_exec": true,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": false,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "id": "fw-profile",
+          "kind": "firewall",
+          "expect": "full",
+          "recorded": true,
+          "band": "Safe",
+          "selected": true,
+          "exec": "Done",
+          "reason": null,
+          "undo": "Finished",
+          "undo_kind": "Restored",
+          "fidelity_objects": 2,
+          "fidelity_differing": 0,
+          "gone_after_exec": true,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": false,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "id": "fw-service",
+          "kind": "firewall",
+          "expect": "refused",
+          "recorded": true,
+          "band": "Blocked",
+          "selected": false,
+          "exec": null,
+          "reason": null,
+          "undo": null,
+          "undo_kind": null,
+          "fidelity_objects": null,
+          "fidelity_differing": null,
+          "gone_after_exec": false,
+          "state_equal_after_undo": true,
+          "unchanged_after_exec": true,
+          "problems": [],
+          "pass": true
+        }
+      ],
+      "full_passing": {
+        "service": 2,
+        "task": 4,
+        "firewall": 3
+      },
+      "min_full": {
+        "service": 2,
+        "task": 4,
+        "firewall": 3
+      },
+      "min_full_in_cases": {
+        "service": 2,
+        "task": 4,
+        "firewall": 3
+      },
+      "fidelity_ok": true,
+      "fidelity_rows": [
+        {
+          "action": "DeleteService",
+          "ops": 2,
+          "objects": 28,
+          "differing": 0,
+          "percent": 100.0,
+          "pass": true
+        },
+        {
+          "action": "DeleteTask",
+          "ops": 4,
+          "objects": 16,
+          "differing": 0,
+          "percent": 100.0,
+          "pass": true
+        },
+        {
+          "action": "DeleteFirewallRule",
+          "ops": 3,
+          "objects": 6,
+          "differing": 0,
+          "percent": 100.0,
+          "pass": true
+        }
+      ],
+      "normalisations": 6,
+      "exec_exit": 0,
+      "undo_exit": 0,
+      "run_phases_ok": true,
+      "pass": true
+    },
+    "K12": {
+      "act": [
+        {
+          "id": "svc-running",
+          "expect": "skipped",
+          "change": "start",
+          "changed": true,
+          "exec": "Skipped",
+          "reason": "GateBlocked",
+          "blocker": "InUse",
+          "problems": [],
+          "deleted": false,
+          "unchanged": true,
+          "scm_before": {
+            "state": "Running",
+            "pid": 8476,
+            "start_mode": "Manual"
+          },
+          "scm_after": {
+            "state": "Running",
+            "pid": 8476,
+            "start_mode": "Manual"
+          },
+          "pass": true
+        },
+        {
+          "id": "svc-repoint",
+          "expect": "skipped",
+          "change": "imagepath",
+          "changed": true,
+          "exec": "Skipped",
+          "reason": "ChangedSinceScan",
+          "blocker": null,
+          "problems": [],
+          "deleted": false,
+          "unchanged": true,
+          "pass": true
+        },
+        {
+          "id": "svc-dependent",
+          "expect": "skipped",
+          "change": "add-dependent",
+          "changed": true,
+          "exec": "Skipped",
+          "reason": "GateBlocked",
+          "blocker": "HasDependents",
+          "problems": [],
+          "deleted": false,
+          "unchanged": true,
+          "pass": true
+        },
+        {
+          "id": "task-edit",
+          "expect": "skipped",
+          "change": "action",
+          "changed": true,
+          "exec": "Skipped",
+          "reason": "ChangedSinceScan",
+          "blocker": null,
+          "problems": [],
+          "deleted": false,
+          "unchanged": true,
+          "pass": true
+        },
+        {
+          "id": "fw-edit",
+          "expect": "skipped",
+          "change": "app",
+          "changed": true,
+          "exec": "Skipped",
+          "reason": "ChangedSinceScan",
+          "blocker": null,
+          "problems": [],
+          "deleted": false,
+          "unchanged": true,
+          "pass": true
+        },
+        {
+          "id": "fw-same-name",
+          "expect": "twin-untouched",
+          "change": "twin",
+          "changed": true,
+          "exec": "Done",
+          "reason": null,
+          "blocker": null,
+          "problems": [],
+          "twin_equal": true,
+          "base_gone": true,
+          "pass": true
+        }
+      ],
+      "act_skipped": 5,
+      "act_skipped_want": 5,
+      "act_twin_untouched": 1,
+      "act_twin_want": 1,
+      "act_summary": "5 of 5 skipped + 1 of 1 twin untouched",
+      "act_deleted": 0,
+      "exec_exit": 10,
+      "exec_exit_want": [
+        10
+      ],
+      "undo": [
+        {
+          "id": "svc-impostor",
+          "trap": "impostor-service",
+          "variant": "svc-full",
+          "set": true,
+          "undo": "Conflict",
+          "conflict": "ObjectExists",
+          "expect": "ObjectExists",
+          "problems": [],
+          "overwritten": false,
+          "pass": true
+        },
+        {
+          "id": "task-impostor",
+          "trap": "impostor-task",
+          "variant": "task-simple",
+          "set": true,
+          "undo": "Conflict",
+          "conflict": "ObjectExists",
+          "expect": "ObjectExists",
+          "problems": [],
+          "overwritten": false,
+          "pass": true
+        },
+        {
+          "id": "def-tamper",
+          "trap": "tamper-definition",
+          "variant": "fw-program",
+          "set": true,
+          "undo": "Conflict",
+          "conflict": "BackupTampered",
+          "expect": "BackupTampered",
+          "problems": [],
+          "overwritten": false,
+          "pass": true
+        },
+        {
+          "id": "def-missing",
+          "trap": "delete-definition",
+          "variant": "svc-localservice",
+          "set": true,
+          "undo": "Conflict",
+          "conflict": "BackupMissing",
+          "expect": "BackupMissing",
+          "problems": [],
+          "overwritten": false,
+          "pass": true
+        }
+      ],
+      "undo_conflicts": 4,
+      "undo_total": 4,
+      "undo_overwritten": 0,
+      "undo_exit": 11,
+      "undo_exit_want": [
+        11
+      ],
+      "runs_phases_ok": true,
+      "pass": true
+    },
+    "K13": {
+      "planned": 74,
+      "rows": 74,
+      "unreached": [],
+      "failing": [],
+      "poweroff": {
+        "service": {
+          "rounds": 5,
+          "consistent": 5,
+          "cut_mid_run": 5,
+          "points": [
+            "objdelete.after/exec",
+            "intent.flushed/exec",
+            "commit.before/exec",
+            "done.before/exec",
+            "undo.act.after/undo"
+          ],
+          "distinct": true,
+          "first": true
+        },
+        "task": {
+          "rounds": 5,
+          "consistent": 5,
+          "cut_mid_run": 5,
+          "points": [
+            "objdelete.after/exec",
+            "act.after/exec",
+            "done.before/exec",
+            "undo.intent/undo",
+            "undo.act.after/undo"
+          ],
+          "distinct": true,
+          "first": true
+        },
+        "firewall": {
+          "rounds": 5,
+          "consistent": 5,
+          "cut_mid_run": 5,
+          "points": [
+            "objdelete.after/exec",
+            "undo.act.after/undo",
+            "done.before/exec",
+            "commit.before/exec",
+            "act.after/exec"
+          ],
+          "distinct": true,
+          "first": true
+        }
+      },
+      "poweroff_want_per_kind": 5,
+      "poweroff_consistent": 15,
+      "poweroff_total_want": 15,
+      "declared_points": [
+        "journal.header",
+        "backup.written",
+        "backup.verified",
+        "intent.flushed",
+        "act.before",
+        "act.after",
+        "done.before",
+        "group.end",
+        "commit.before",
+        "regdelete.mid",
+        "regrestore.mid",
+        "undo.intent",
+        "undo.act.after",
+        "index.write",
+        "expiry.mid",
+        "bootmove.registered",
+        "objdelete.after",
+        "svcrestore.mid",
+        "fwrestore.mid"
+      ],
+      "declared_not_in_gate": [],
+      "gate_not_declared": [],
+      "declared_not_in_cases": [],
+      "subset_run": false,
+      "run_phases_ok": true,
+      "pass": true
+    },
+    "E1": {
+      "targets": [
+        {
+          "crate": "purge-win",
+          "test": "scm",
+          "passed": 12,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "crate": "purge-win",
+          "test": "firewall",
+          "passed": 12,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "crate": "purge-win",
+          "test": "taskschd",
+          "passed": 11,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "crate": "purge-exec",
+          "test": "act_service",
+          "passed": 3,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "crate": "purge-exec",
+          "test": "act_task",
+          "passed": 1,
+          "problems": [],
+          "pass": true
+        },
+        {
+          "crate": "purge-exec",
+          "test": "act_firewall",
+          "passed": 1,
+          "problems": [],
+          "pass": true
+        }
+      ],
+      "admin": true,
+      "pass": true
+    }
+  },
+  "failing": [],
+  "pass": true,
+  "verdict": "PASS"
+}

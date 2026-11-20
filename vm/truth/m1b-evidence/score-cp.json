@@ -1,0 +1,2854 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "purge",
+      "apps": 3,
+      "truth_n": 404,
+      "recall_listed": 0.034574656466921656,
+      "recall_visible": 0.034574656466921656,
+      "recall_safe": 0.012820512820512822,
+      "recall_listed_nd": 0.034574656466921656,
+      "recall_visible_nd": 0.034574656466921656,
+      "recall_safe_nd": 0.012820512820512822,
+      "precision_safe": 1.0,
+      "partial_n": 0,
+      "danger_listed": 0,
+      "danger_offered": 0,
+      "danger_kept": 0,
+      "danger_blocking": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 1,
+      "noop_would_be_danger": 1,
+      "classes": {
+        "danger_blocking": 0,
+        "userdata_blocking": 0,
+        "danger_unticked": 0,
+        "userdata_unticked": 0,
+        "preexisting_value_ref": 0,
+        "old_empty_ext_key": 0,
+        "replaced_value": 0,
+        "userdata_safe": 0
+      },
+      "per_kind_recall": {
+        "Path": 0.0,
+        "RegKey": 0.1111111111111111,
+        "RegValue": 0.2222222222222222,
+        "RegValueChanged": 0.0
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 0,
+        "gone": 0,
+        "hit": 3,
+        "noop_if_nonempty": 1,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "7zip",
+      "dir": "runs/m1bcp-7zip",
+      "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+      "truth_counts": {
+        "ambient": 1020,
+        "leftover": 26,
+        "rig": 2
+      },
+      "ambient_by_run": {
+        "m1bcp-null1": 263,
+        "m1bcp-null2": 194,
+        "m1bcp-null3": 979
+      },
+      "tools": [
+        {
+          "app": "7zip",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1bcp-7zip\\plans\\purge.json",
+          "offered_n": 1,
+          "truth_n": 26,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 1,
+          "recall_listed": 0.038461538461538464,
+          "recall_visible": 0.038461538461538464,
+          "recall_safe": 0.038461538461538464,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 1,
+          "recall_listed_nd": 0.038461538461538464,
+          "recall_visible_nd": 0.038461538461538464,
+          "recall_safe_nd": 0.038461538461538464,
+          "partial_n": 0,
+          "safe_n": 1,
+          "safe_not_gone": 1,
+          "safe_hits": 1,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_offered": 0,
+          "danger_kept": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "protected_n": 0,
+          "protected_correct_n": 0,
+          "protected_correct": null,
+          "protected_correct_pct": null,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 1,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 13,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 3,
+              "covered": 1,
+              "recall": 0.3333333333333333
+            },
+            "RegValue": {
+              "n": 1,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValueChanged": {
+              "n": 9,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "REG-SOFTWARE": {
+              "hit": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\DiagnosticLogCSP\\Collectors\\DiagnosticLogCSP_Collector_DeviceProvisioning_2026_11_19_4_1_57.etl",
+              "label": "leftover",
+              "partial": false,
+              "size": 327680
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\Common\\StandaloneUpdater-2026-11-19.0100.6876.1.odl",
+              "label": "leftover",
+              "partial": false,
+              "size": 51147
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\4a67ac2c-9508-4977-9660-f152e552475d.e19bf7f2-1246-443d-81ed-99c2a6d03329.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3088
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\87fbc65f-e01b-4b09-9598-316d326e14cb.5bdd4067-3763-476a-a81c-2378c4e7ff48.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3092
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\9a9a7927-8aee-4820-97eb-2acc84a216a1.686046bb-c681-46ed-b031-c134a364af57.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3110
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\acabe54d-ee69-4bb7-996e-77c14ce275a4.cdb99dab-5435-43e5-b75f-43b887dcdeba.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3108
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\b15a2291-2a04-4010-bd4b-ba4d41c2cb88.f1c07d6f-b732-4cb3-a375-9ff7be20f725.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3108
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\c6cbdc77-5e50-4c77-87b0-c43ef2bc684a.df0d5cdd-30dc-4bdf-9b4e-36bc6ffab879.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3112
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wct917E.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 106074
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\5bb830f67194431a.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\7ZFM.EXE-44040917.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 10784
+            },
+            {
+              "target": "P:C:\\WINDOWS\\System32\\Tasks\\SoftLanding\\S-1-5-21-1871224937-2691627691-3762806239-1000\\SoftLandingDeferralTask-{d1ab88d6-0df0-48e9-b996-32a1ea685d5e}",
+              "label": "leftover",
+              "partial": false,
+              "size": 3606
+            },
+            {
+              "target": "P:C:\\WINDOWS\\System32\\Tasks\\SoftLanding\\S-1-5-21-1871224937-2691627691-3762806239-1000\\SoftLandingTriggerTask-128000000001615609-render-{9f30e0c8-898e-479c-92af-610eae7f9ba1}",
+              "label": "leftover",
+              "partial": false,
+              "size": 3768
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Provisioning\\Sessions\\c7UulgPePEqxtiiA.0",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Start\\TileProperties\\W~{6D809377-6AF0-444B-8957-A3773F02200E}\\7-Zip",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Wbem\\WDM\\DREDGE|C:\\WINDOWS\\system32\\drivers\\battc.sys[BATTCWMI]",
+              "label": "leftover",
+              "partial": false,
+              "size": 162
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib|Last Counter",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib|Last Help",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\009|Counter",
+              "label": "leftover",
+              "partial": false,
+              "size": 363704
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\009|Help",
+              "label": "leftover",
+              "partial": false,
+              "size": 1208060
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\CurrentLanguage|Counter",
+              "label": "leftover",
+              "partial": false,
+              "size": 363704
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\CurrentLanguage|Help",
+              "label": "leftover",
+              "partial": false,
+              "size": 1208060
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\WmiApRpl\\Performance|Last Counter",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\WmiApRpl\\Performance|Last Help",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\WmiApRpl\\Performance|Object List",
+              "label": "leftover",
+              "partial": false,
+              "size": 132
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\7-Zip",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ],
+          "notices": []
+        }
+      ]
+    },
+    {
+      "id": "python",
+      "dir": "runs/m1bcp-python",
+      "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+      "truth_counts": {
+        "ambient": 605,
+        "kept_owner": 29,
+        "leftover": 361,
+        "rig": 2,
+        "user_data": 1
+      },
+      "ambient_by_run": {
+        "m1bcp-null1": 374,
+        "m1bcp-null2": 283,
+        "m1bcp-null3": 526
+      },
+      "tools": [
+        {
+          "app": "python",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1bcp-python\\plans\\purge.json",
+          "offered_n": 2,
+          "truth_n": 362,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 0,
+          "recall_listed": 0.0027624309392265192,
+          "recall_visible": 0.0027624309392265192,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.0027624309392265192,
+          "recall_visible_nd": 0.0027624309392265192,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_offered": 0,
+          "danger_kept": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 1,
+          "noop_would_be_danger": 1,
+          "protected_n": 29,
+          "protected_correct_n": 29,
+          "protected_correct": 1.0,
+          "protected_correct_pct": 100.0,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 1,
+            "noop_if_nonempty": 1,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 38,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 4,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValue": {
+              "n": 6,
+              "covered": 1,
+              "recall": 0.16666666666666666
+            },
+            "RegValueChanged": {
+              "n": 314,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "REF-ANY": {
+              "hit": 1
+            },
+            "REG-SOFTWARE": {
+              "noop_if_nonempty": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows Defender\\Support\\MpWppUpdateLogging-20261119-041211.bin",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.idlerc",
+              "label": "user_data",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\CLR_v4.0",
+              "label": "leftover",
+              "partial": false,
+              "size": 335
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\CLR_v4.0_32",
+              "label": "leftover",
+              "partial": false,
+              "size": 333
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\OneDrive\\logs\\Common\\StandaloneUpdater-2026-11-19.0109.8176.1.odl",
+              "label": "leftover",
+              "partial": false,
+              "size": 51147
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\39052a09-3e0a-4740-a656-72b32814bb27.9d4e4042-79c3-4d01-bb27-3334b4aa8524.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3106
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\4cd29db2-9930-40bd-9306-a11e958802a1.34dd6a1a-fcfe-48c9-bc9f-f9d0cc2fccdb.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3108
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\a06042a8-8933-4c95-ac8b-db175f50b40a.a2677123-3a7a-45f3-af99-398c6b62e554.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3106
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\acdd4539-58bd-4f52-98df-68aa9fc2022a.79bbdb8f-23d0-4d27-a4aa-20dd014ba31c.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3106
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\DEL2D6D.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 879168
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 71380
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919_000_core_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 87508
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919_001_exe_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 115022
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919_002_dev_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 503594
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919_003_lib_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1434316
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919_004_doc_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1222756
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919_005_tcltk_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 3005564
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919_006_launcher_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 109026
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919_007_pip_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 114512
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119040919_008_path_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 88652
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119041228.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 55743
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119041228_000_path_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 81466
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119041228_001_pip_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 106564
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119041228_002_tcltk_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 2353968
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119041228_003_doc_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 983936
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119041228_004_lib_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1199896
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119041228_005_dev_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 419194
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119041228_006_exe_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 108528
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261119041228_007_core_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 79644
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\wct6C6D.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 106074
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\97992354503a502a.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\cfa2f398f6b586de.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHON.EXE-02663B5A.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 9914
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHON.EXE-71250B2C.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 31456
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHON.EXE-E3BB012A.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 50433
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHONW.EXE-3E88984D.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 22570
+            },
+            {
+              "target": "P:C:\\WINDOWS\\System32\\Tasks\\SoftLanding\\S-1-5-21-1871224937-2691627691-3762806239-1000\\SoftLandingDeferralTask-{18519b84-4c95-4f08-a7d9-5a15594fd67f}",
+              "label": "leftover",
+              "partial": false,
+              "size": 3606
+            },
+            {
+              "target": "P:C:\\WINDOWS\\System32\\Tasks\\SoftLanding\\S-1-5-21-1871224937-2691627691-3762806239-1000\\SoftLandingTriggerTask-128000000001615609-render-{bded0785-bb9c-405a-a4ae-6b5248069c7a}",
+              "label": "leftover",
+              "partial": false,
+              "size": 3768
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\SoftLanding\\S-1-5-21-1871224937-2691627691-3762806239-1000\\SoftLandingDeferralTask-{18519b84-4c95-4f08-a7d9-5a15594fd67f}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\SoftLanding\\S-1-5-21-1871224937-2691627691-3762806239-1000\\SoftLandingTriggerTask-128000000001615609-render-{bded0785-bb9c-405a-a4ae-6b5248069c7a}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\ServiceInstances\\4d1964b7-8ba2-432e-97be-de020987fdce",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\State|LastSuccess",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\State|LastSuccess",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Windows\\Temp\\{3180B798-1BA6-4D4C-91AE-F0C471E8EA56}\\.be\\python-3.12.7-amd64.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 108
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|3",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|4",
+              "label": "leftover",
+              "partial": false,
+              "size": 306
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots|WorkPending",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\AuditPolicyGPManagedStubs.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\AuditPolicyGPManagedStubs.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 698
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\AuditPolicyGPManagedStubs.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\EventViewer, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\EventViewer, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1954
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\EventViewer, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.Framework, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.Framework, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1646
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.Framework, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.RuleWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.RuleWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3634
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.RuleWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.CertificateServices.PKIClient.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.CertificateServices.PKIClient.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2530
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.CertificateServices.PKIClient.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ConfigCI.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ConfigCI.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2124
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ConfigCI.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Dtc.PowerShell, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Dtc.PowerShell, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1832
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Dtc.PowerShell, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.InternationalSettings.Commands, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.InternationalSettings.Commands, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2084
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.InternationalSettings.Commands, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1242
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop.wsa, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop.wsa, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2922
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop.wsa, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.KeyDistributionService.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.KeyDistributionService.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1700
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.KeyDistributionService.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2092
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure.CimCmdlets, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure.CimCmdlets, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2578
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure.CimCmdlets, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure.Native, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure.Native, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1490
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure.Native, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ManagementConsole, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ManagementConsole, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2180
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ManagementConsole, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3796
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Cmdletization.OData, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Cmdletization.OData, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2284
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Cmdletization.OData, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Diagnostics, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Diagnostics, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2092
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Diagnostics, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Management, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Management, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 4110
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Management, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Utility, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Utility, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3062
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Utility, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.ConsoleHost, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.ConsoleHost, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2056
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.ConsoleHost, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Core.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Core.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2144
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Core.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Diagnostics.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Diagnostics.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2188
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Diagnostics.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Editor, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Editor, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3746
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Editor, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.GPowerShell, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.GPowerShell, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 4910
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.GPowerShell, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.GraphicalHost, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.GraphicalHost, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3612
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.GraphicalHost, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.ISECommon, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.ISECommon, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1460
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.ISECommon, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2790
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.ScheduledJob, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.ScheduledJob, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2502
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.ScheduledJob, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Security, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Security, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1648
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Security, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Security.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Security.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1932
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Security.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Utility.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Utility.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2164
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Utility.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Workflow.ServiceCore, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Workflow.ServiceCore, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 4396
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Workflow.ServiceCore, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.SecureBoot.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.SecureBoot.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1462
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.SecureBoot.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2980
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyEngineApi.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyEngineApi.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 858
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyEngineApi.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyManager, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyManager, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1970
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyManager, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyModel, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyModel, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2236
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyModel, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.XmlHelper, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.XmlHelper, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 978
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.XmlHelper, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.Wizards.AutomaticRuleGenerationWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.Wizards.AutomaticRuleGenerationWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2588
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.Wizards.AutomaticRuleGenerationWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Tpm.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Tpm.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1438
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Tpm.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.GetDiagInput, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.GetDiagInput, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1772
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.GetDiagInput, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagReport, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagReport, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1792
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagReport, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagRootcause, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagRootcause, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1800
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagRootcause, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagProgress, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagProgress, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1792
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagProgress, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagTelemetry, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagTelemetry, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1796
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagTelemetry, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDCommon, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDCommon, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 708
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDCommon, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDEngine, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDEngine, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 710
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDEngine, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDHost, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDHost, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3050
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDHost, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.TroubleshootingPack, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.TroubleshootingPack, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1376
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.TroubleshootingPack, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.DSC.CoreConfProviders, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.DSC.CoreConfProviders, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 4242
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.DSC.CoreConfProviders, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WindowsAuthenticationProtocols.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WindowsAuthenticationProtocols.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1736
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WindowsAuthenticationProtocols.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=amd64\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WindowsSearch.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WindowsSearch.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 906
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WindowsSearch.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Management, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Management, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2436
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Management, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2334
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Runtime, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Runtime, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1218
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Runtime, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCEx, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCEx, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1710
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCEx, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCFxCommon, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCFxCommon, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1558
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCFxCommon, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SecurityAuditPoliciesSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SecurityAuditPoliciesSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2060
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SecurityAuditPoliciesSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SrpUxSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SrpUxSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3402
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SrpUxSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\System.Management.Automation, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\System.Management.Automation, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3458
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\System.Management.Automation, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\TaskScheduler, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\TaskScheduler, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1962
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\TaskScheduler, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows Security Health|LastHeartbeat",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\PolicyApplicationState|PolicyState",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots|WorkPending",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\AuditPolicyGPManagedStubs.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=x86|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\AuditPolicyGPManagedStubs.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=x86\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 694
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\AuditPolicyGPManagedStubs.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=x86\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\EventViewer, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\EventViewer, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1954
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\EventViewer, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.Framework, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.Framework, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1646
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.Framework, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.RuleWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.RuleWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3634
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ApplicationId.RuleWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Dtc.PowerShell, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Dtc.PowerShell, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1832
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Dtc.PowerShell, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1242
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop.wsa, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop.wsa, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2922
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\microsoft.isam.esent.interop.wsa, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2092
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Management.Infrastructure, Version=1.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ManagementConsole, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ManagementConsole, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2180
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.ManagementConsole, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3796
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Diagnostics, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Diagnostics, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2092
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Commands.Diagnostics, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Core.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Core.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2144
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Core.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Diagnostics.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Diagnostics.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2188
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Diagnostics.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2790
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Security.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Security.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1932
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Security.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Utility.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Utility.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2164
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Utility.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Workflow.ServiceCore, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Workflow.ServiceCore, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 4396
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.PowerShell.Workflow.ServiceCore, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2980
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.Cmdlets, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyEngineApi.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=x86|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyEngineApi.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=x86\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 854
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyEngineApi.Interop, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=x86\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyManager, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyManager, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1970
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyManager, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyModel, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyModel, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2236
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.PolicyModel, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.XmlHelper, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.XmlHelper, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 978
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.PolicyManagement.XmlHelper, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.Wizards.AutomaticRuleGenerationWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.Wizards.AutomaticRuleGenerationWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2588
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Security.ApplicationId.Wizards.AutomaticRuleGenerationWizard, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.GetDiagInput, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.GetDiagInput, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1772
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.GetDiagInput, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagReport, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagReport, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1792
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagReport, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagRootcause, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagRootcause, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1800
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.UpdateDiagRootcause, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagProgress, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagProgress, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1792
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagProgress, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagTelemetry, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagTelemetry, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1796
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.Commands.WriteDiagTelemetry, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDCommon, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDCommon, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 708
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDCommon, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDHost, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDHost, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3050
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.SDHost, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.TroubleshootingPack, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.TroubleshootingPack, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1376
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.Windows.Diagnosis.TroubleshootingPack, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WindowsSearch.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WindowsSearch.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 906
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WindowsSearch.Commands, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2334
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Management.Activities, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Runtime, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Runtime, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1218
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\Microsoft.WSMan.Runtime, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCEx, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCEx, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1710
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCEx, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCFxCommon, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCFxCommon, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1558
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\MMCFxCommon, Version=3.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SecurityAuditPoliciesSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SecurityAuditPoliciesSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 2060
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SecurityAuditPoliciesSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SrpUxSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SrpUxSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 3402
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\SrpUxSnapIn, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\TaskScheduler, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\TaskScheduler, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|ImageList",
+              "label": "leftover",
+              "partial": false,
+              "size": 1962
+            },
+            {
+              "target": "C:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v2.0.50727\\NGenService\\Roots\\TaskScheduler, Version=10.0.0.0, Culture=Neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=msil\\0|Status",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\NcbService\\NCBKapiNlmCache\\2|Timestamp",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\NcbService\\NCBKapiNlmCache\\2|Value",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\GamingConfiguration|LastSuccessfulWeeklyTelemetryDateTime",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\PolicyApplicationState|PolicyState",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings|QuietHoursTelemetryLastRun",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\SmartOptOut|LastWeeklyTelemetryTimestamp",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\NotificationData|0D83063EA3B8FCF5",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [],
+          "noop": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (0 existed in snap0), e.g. K:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|AssociateFiles",
+                "as a plain delete: covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Python"
+              ]
+            }
+          ],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (0 existed in snap0), e.g. K:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|AssociateFiles",
+                "as a plain delete: covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Python"
+              ]
+            }
+          ],
+          "notices": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "SYS-BURNDEPS",
+              "action": "ReportOnly",
+              "suggest_uninstall": "Python Launcher",
+              "would_be": "danger",
+              "reasons": [
+                "covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}"
+              ],
+              "truth": [
+                "kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vcredist",
+      "dir": "runs/m1bcp-vcredist",
+      "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+      "truth_counts": {
+        "ambient": 726,
+        "leftover": 16,
+        "rig": 2
+      },
+      "ambient_by_run": {
+        "m1bcp-null1": 137,
+        "m1bcp-null2": 136,
+        "m1bcp-null3": 688
+      },
+      "tools": [
+        {
+          "app": "vcredist",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1bcp-vcredist\\plans\\purge.json",
+          "offered_n": 1,
+          "truth_n": 16,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 0,
+          "recall_listed": 0.0625,
+          "recall_visible": 0.0625,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.0625,
+          "recall_visible_nd": 0.0625,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_offered": 0,
+          "danger_kept": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "protected_n": 0,
+          "protected_correct_n": 0,
+          "protected_correct": null,
+          "protected_correct_pct": null,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 1,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 13,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 1,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValue": {
+              "n": 2,
+              "covered": 1,
+              "recall": 0.5
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "REF-ANY": {
+              "hit": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\DiagnosticLogCSP\\Collectors\\DiagnosticLogCSP_Collector_DeviceProvisioning_2026_11_19_5_0_29.etl",
+              "label": "leftover",
+              "partial": false,
+              "size": 327680
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\WebCache\\V0100003.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 524288
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\513ec7a9-acaf-45a7-a1f6-751f6b61b920.ee8e1497-600d-4f8e-a80d-7bff21cf71be.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3092
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\634f77a5-62ba-4f12-9e59-502a418c573e.3770a1bc-a03c-49cb-9e08-b9a7dba26bee.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3104
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\648a7179-3aeb-433f-bbea-2c73c725d2a5.717aa4a1-11bd-4165-9930-6c6b1a123979.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3092
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Packages\\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\\AC\\BackgroundTransferApi\\974a18a1-5bcf-4851-a746-702c0c4ae1bf.af598ad3-4b08-4e5a-a4a4-4725accfd020.down_meta",
+              "label": "leftover",
+              "partial": false,
+              "size": 3102
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261119045955.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 17061
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261119045955_000_vcRuntimeMinimum_x64.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 130054
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261119045955_001_vcRuntimeAdditional_x64.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 134246
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261119050058.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 14193
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261119050058_000_vcRuntimeAdditional_x64.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 118764
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261119050058_001_vcRuntimeMinimum_x64.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 118402
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\DELCFDA.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 686152
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Provisioning\\Sessions\\5YXmDSol/kargCdQ.0",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Windows\\Temp\\{FDB24738-3CE3-4256-813A-917E462B82CD}\\.be\\VC_redist.x64.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 108
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ],
+          "notices": []
+        }
+      ]
+    }
+  ]
+}

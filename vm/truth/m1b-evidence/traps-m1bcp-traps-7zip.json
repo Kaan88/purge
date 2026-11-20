@@ -1,0 +1,830 @@
+{
+  "schema": "purge.rig.m1b-traps-score/1",
+  "plan": "runs/m1bcp-traps-7zip/plan-purge.scan.json",
+  "plan_schema": "purge.scan/0",
+  "traps": "truth/m1b-traps.json",
+  "app": "7zip",
+  "sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+  "ok": true,
+  "summary": {
+    "cases": 26,
+    "expectations": 44,
+    "passed": 44,
+    "escapes": 0,
+    "missed_owned": 0
+  },
+  "cases": [
+    {
+      "id": "svc-owned",
+      "phase": "pre",
+      "plant": "Plant-OwnedService",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "SVC:PurgeTrapSvcA",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcA|ImagePath",
+              "relation": "inside",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "DeleteValue",
+              "blockers": [
+                "DenyListed"
+              ]
+            },
+            {
+              "target": "SVC:PurgeTrapSvcA",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "svc-owned-running",
+      "phase": "pre",
+      "plant": "Plant-OwnedRunningService",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "SVC:PurgeTrapSvcRun",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcRun|ImagePath",
+              "relation": "inside",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "DeleteValue",
+              "blockers": [
+                "DenyListed"
+              ]
+            },
+            {
+              "target": "SVC:PurgeTrapSvcRun",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "svc-shared",
+      "phase": "pre",
+      "plant": "Plant-SharedService",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "SVC:PurgeTrapSvcShared-7-Zip",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "svc-dependent",
+      "phase": "pre",
+      "plant": "Plant-DependentService",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "SVC:PurgeTrapSvcA2",
+          "verdict": "protected",
+          "blocker": "HasDependents",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcA2|ImagePath",
+              "relation": "inside",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "DeleteValue",
+              "blockers": [
+                "DenyListed"
+              ]
+            },
+            {
+              "target": "SVC:PurgeTrapSvcA2",
+              "relation": "equal",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": [
+                "HasDependents"
+              ]
+            }
+          ]
+        },
+        {
+          "target": "SVC:PurgeTrapSvcDep",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "svc-svchost",
+      "phase": "pre",
+      "plant": "Plant-SvchostService",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "SVC:PurgeTrapSvcHost",
+          "verdict": "protected",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcHost\\Parameters|ServiceDll",
+              "relation": "inside",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "DeleteValue",
+              "blockers": [
+                "DenyListed"
+              ]
+            }
+          ]
+        },
+        {
+          "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Svchost|PurgeTrapGroup",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "task-owned",
+      "phase": "pre",
+      "plant": "Plant-OwnedTask",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "T:\\PurgeTrap\\7-Zip Update",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "T:\\PurgeTrap\\7-Zip Update",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "task-similar-name",
+      "phase": "pre",
+      "plant": "Plant-SimilarTask",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "T:\\PurgeTrap\\7-Zip Updater",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "task-interpreter",
+      "phase": "pre",
+      "plant": "Plant-InterpreterTask",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "T:\\PurgeTrap\\7-Zip Script",
+          "verdict": "not_preselected",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "fw-owned",
+      "phase": "pre",
+      "plant": "Plant-OwnedFirewall",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "FW:PurgeTrapFwA",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "FW:PurgeTrapFwA",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": []
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules|PurgeTrapFwA",
+              "relation": "equal",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "DeleteValue",
+              "blockers": [
+                "DenyListed"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fw-same-display-name",
+      "phase": "pre",
+      "plant": "Plant-SameNameFirewall",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "FW:PurgeTrapFwB",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "fw-no-app",
+      "phase": "pre",
+      "plant": "Plant-PortFirewall",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "FW:PurgeTrapFwPort",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "com-owned",
+      "phase": "pre",
+      "plant": "Plant-ComClass",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}\\InprocServer32|",
+              "relation": "inside",
+              "band": "Safe",
+              "preselected": true,
+              "action": "DeleteValue",
+              "blockers": []
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shellex-approved",
+      "phase": "pre",
+      "plant": "Plant-ShellexApproved",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "K:HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\PurgeTrapA",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\PurgeTrapA|",
+              "relation": "inside",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteValue",
+              "blockers": []
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\PurgeTrapA",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": []
+            }
+          ]
+        },
+        {
+          "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved|{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved|{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteValue",
+              "blockers": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "com-shared-class",
+      "phase": "pre",
+      "plant": "Plant-SharedComClass",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{AA0252AF-8AAD-4AAB-9CF2-50CFE0FD31DF}",
+          "verdict": "protected",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\Classes\\CLSID\\{AA0252AF-8AAD-4AAB-9CF2-50CFE0FD31DF}",
+              "relation": "equal",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": [
+                "ReferencedByOtherApp"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shareddlls-count",
+      "phase": "pre",
+      "plant": "Plant-SharedDlls",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs|C:\\Program Files\\7-Zip\\PurgeTrapShared2.dll",
+          "verdict": "protected",
+          "blocker": "SharedRefcount",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs|C:\\Program Files\\7-Zip\\PurgeTrapShared2.dll",
+              "relation": "equal",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "DeleteValue",
+              "blockers": [
+                "SharedRefcount"
+              ]
+            }
+          ]
+        },
+        {
+          "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs|C:\\Windows\\System32\\comctl32.dll",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "eventlog-shared-source",
+      "phase": "pre",
+      "plant": "Plant-EventLogSource",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "K:HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA|EventMessageFile",
+              "relation": "inside",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteValue",
+              "blockers": []
+            },
+            {
+              "target": "K:HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": []
+            }
+          ]
+        },
+        {
+          "target": "K:HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA2",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "tracing",
+      "phase": "pre",
+      "plant": "Plant-Tracing",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "K:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32",
+          "verdict": "not_preselected",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": []
+            }
+          ]
+        },
+        {
+          "target": "K:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS",
+          "verdict": "not_preselected",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS",
+              "relation": "equal",
+              "band": "Likely",
+              "preselected": false,
+              "action": "DeleteKey",
+              "blockers": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "privacy-twins",
+      "phase": "pre",
+      "plant": "Plant-MuiCacheAndFriends",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\7-Zip\\7zFM.exe.FriendlyAppName",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\7-Zip\\7zFM.exe.FriendlyAppName",
+              "relation": "equal",
+              "band": "Safe",
+              "preselected": true,
+              "action": "DeleteValue",
+              "blockers": []
+            }
+          ]
+        },
+        {
+          "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Program Files\\7-Zip\\7zFM.exe",
+          "verdict": "listed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Program Files\\7-Zip\\7zFM.exe",
+              "relation": "equal",
+              "band": "Safe",
+              "preselected": true,
+              "action": "DeleteValue",
+              "blockers": []
+            }
+          ]
+        },
+        {
+          "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\nodejs\\node.exe.FriendlyAppName",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        },
+        {
+          "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\nodejs\\node.exe.ApplicationCompany",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        },
+        {
+          "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Program Files\\nodejs\\node.exe",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        },
+        {
+          "target": "V:HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers|C:\\Program Files\\nodejs\\node.exe",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "wer-twins",
+      "phase": "pre",
+      "plant": "Plant-WerReports",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "P:C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_7zFM.exe_6feb8ebc183bf561d06a69f0f9cc73a8619d2a05_6feb8ebc_619d2a05",
+          "verdict": "protected",
+          "blocker": "DenyListed",
+          "result": "pass",
+          "listed": true,
+          "why": [],
+          "listings": [
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_7zFM.exe_6feb8ebc183bf561d06a69f0f9cc73a8619d2a05_6feb8ebc_619d2a05",
+              "relation": "equal",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "Quarantine",
+              "blockers": [
+                "DenyListed"
+              ]
+            }
+          ]
+        },
+        {
+          "target": "P:C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_node.exe_ed89c85063a9c1e6cf7892e1cd663d998ea984d1_ed89c850_8ea984d1",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "msi-remnants",
+      "phase": "post",
+      "plant": "Plant-MsiRemnants",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000",
+          "verdict": "not_preselected",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "msi-remnants-foreign",
+      "phase": "post",
+      "plant": "Plant-MsiRemnantsForeign",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        },
+        {
+          "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\941D6F575B3956C4DBBA534183F3D607",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        },
+        {
+          "target": "K:HKLM\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\0DF209647E2CF814AAB4A347574125FD",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "msi-shared-component",
+      "phase": "post",
+      "plant": "Plant-SharedComponent",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\D81447BBA715AD443B803350640BA01C|0DD75A3FB8D547A40A5576A0B7AA1467",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        },
+        {
+          "target": "P:C:\\Program Files\\7-Zip\\PurgeTrapComponent.dat",
+          "verdict": "protected",
+          "blocker": "OwnedByInstalledMsi",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": [
+            {
+              "target": "P:C:\\Program Files\\7-Zip",
+              "relation": "covers",
+              "band": "Blocked",
+              "preselected": false,
+              "action": "Quarantine",
+              "blockers": [
+                "InUse",
+                "NotGone",
+                "UnmatchedChildren",
+                "UserData",
+                "OwnedByInstalledMsi",
+                "OwnedByInstalledMsi",
+                "SharedRefcount"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "com-isimpledom",
+      "phase": "post",
+      "plant": "Plant-IsimpleDom",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "K:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+          "verdict": "protected",
+          "blocker": "SharedIid",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        },
+        {
+          "target": "K:HKLM\\SOFTWARE\\Classes\\Wow6432Node\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}",
+          "verdict": "protected",
+          "blocker": "SharedIid",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "burn-shared-package",
+      "phase": "post",
+      "plant": "Plant-BurnShared",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "K:HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\PurgeTrapPkg",
+          "verdict": "protected",
+          "blocker": "BurnDependentsRemain",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        },
+        {
+          "target": "K:HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\PurgeTrapPkg\\Dependents\\{8F55F023-DF9B-4357-8AE7-2C820D0150CA}",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        },
+        {
+          "target": "P:C:\\ProgramData\\Package Cache\\PurgeTrapPkg",
+          "verdict": "protected",
+          "blocker": "BurnDependentsRemain",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "pkgcache-foreign",
+      "phase": "post",
+      "plant": "Plant-PkgCacheForeign",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "P:C:\\ProgramData\\Package Cache\\{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}v20.18.0",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    },
+    {
+      "id": "instfolders",
+      "phase": "post",
+      "plant": "Plant-InstFolders",
+      "pass": true,
+      "expectations": [
+        {
+          "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\Program Files\\nodejs\\",
+          "verdict": "absent",
+          "result": "pass",
+          "listed": false,
+          "why": [],
+          "listings": []
+        }
+      ]
+    }
+  ]
+}

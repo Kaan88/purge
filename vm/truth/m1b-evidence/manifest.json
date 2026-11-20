@@ -1,0 +1,114 @@
+{
+  "schema": "purge.rig.m1b-evidence/2",
+  "note": "collected by vm/truth/m1b.sh from runs",
+  "prefixes": {
+    "clean": "m1b",
+    "dirty": "m1bd",
+    "cp": "m1bcp"
+  },
+  "gate_config": "default",
+  "config_vars": [],
+  "traps_sha256": "44424038e02d0d9fa658381b92632a507cfe372ca1f900b2b71bd03fe2048134",
+  "labels": {
+    "m1b-7zip": {
+      "label_id": "7zip",
+      "sha256": "4a2ae68ea3d01dd4878e73fcfdf7835578ca1a0990fee0fc35c02cef5e85af9f"
+    },
+    "m1b-python": {
+      "label_id": "python",
+      "sha256": "76b9a3bd2dd57af3d999ae15004e5ee2fca1a89e0e256d5cfbcf4927f099bb33"
+    },
+    "m1b-python312-with-313": {
+      "label_id": "python312-with-313",
+      "sha256": "4186b88dbd571ba6c5eac85abbd95e82aadd7e31893a455ffffcd4e5257d072d"
+    },
+    "m1b-python313-with-312": {
+      "label_id": "python313-with-312",
+      "sha256": "30f181a5c531d77ed6abb17abd8db80f5a249b165ad4dbdb4619322ada602ce2"
+    },
+    "m1b-node": {
+      "label_id": "node",
+      "sha256": "a96e79e466e8a035dbd9407cb10f26b389689fee7639376b7728e55f1f17e74b"
+    },
+    "m1b-vcredist": {
+      "label_id": "vcredist",
+      "sha256": "5efe30b8c4c5e873d5f6cd0929f194c8e837dd5573c3c25fc43f514ddd8ce920"
+    },
+    "m1b-powershell": {
+      "label_id": "powershell",
+      "sha256": "3b69affbc2696c3a9e9a21f714db6e77d6a223629e65a90bfd8f06f8e0091990"
+    },
+    "m1b-temurin": {
+      "label_id": "temurin",
+      "sha256": "55bfb0cfba040db74181be9131718f951cf2c9df7b060197eb4c44245e9655db"
+    },
+    "m1bd-7zip": {
+      "label_id": "7zip",
+      "sha256": "4a2ae68ea3d01dd4878e73fcfdf7835578ca1a0990fee0fc35c02cef5e85af9f"
+    },
+    "m1bd-python": {
+      "label_id": "python",
+      "sha256": "76b9a3bd2dd57af3d999ae15004e5ee2fca1a89e0e256d5cfbcf4927f099bb33"
+    },
+    "m1bd-python312-with-313": {
+      "label_id": "python312-with-313",
+      "sha256": "4186b88dbd571ba6c5eac85abbd95e82aadd7e31893a455ffffcd4e5257d072d"
+    },
+    "m1bd-python313-with-312": {
+      "label_id": "python313-with-312",
+      "sha256": "30f181a5c531d77ed6abb17abd8db80f5a249b165ad4dbdb4619322ada602ce2"
+    },
+    "m1bd-vcredist": {
+      "label_id": "vcredist",
+      "sha256": "5efe30b8c4c5e873d5f6cd0929f194c8e837dd5573c3c25fc43f514ddd8ce920"
+    },
+    "m1bd-powershell": {
+      "label_id": "powershell",
+      "sha256": "3b69affbc2696c3a9e9a21f714db6e77d6a223629e65a90bfd8f06f8e0091990"
+    },
+    "m1bd-temurin": {
+      "label_id": "temurin",
+      "sha256": "55bfb0cfba040db74181be9131718f951cf2c9df7b060197eb4c44245e9655db"
+    },
+    "m1bcp-7zip": {
+      "label_id": "7zip",
+      "sha256": "4a2ae68ea3d01dd4878e73fcfdf7835578ca1a0990fee0fc35c02cef5e85af9f"
+    },
+    "m1bcp-python": {
+      "label_id": "python",
+      "sha256": "76b9a3bd2dd57af3d999ae15004e5ee2fca1a89e0e256d5cfbcf4927f099bb33"
+    },
+    "m1bcp-vcredist": {
+      "label_id": "vcredist",
+      "sha256": "5efe30b8c4c5e873d5f6cd0929f194c8e837dd5573c3c25fc43f514ddd8ce920"
+    }
+  },
+  "deny_sha256": "d2520fa39c2fa48a5dd5b69ed9d9ddce48900943607df3f32e4ca64a964fd75e",
+  "frozen": {
+    "powershell": "ead6c13ddbac5ca4d3d02107cd23e0dc0d2254c6a62eb1b05923ec1c4ad57db9",
+    "temurin": "a1334b12822e5e0b77ba45c21ef3f76865832a86a51aa8aa15d6bbc44376710c"
+  },
+  "rigtool": {
+    "path": "rigtool/target/release/rigtool",
+    "sha256": "86fc9ea52305285605a3859ebbbb5e75192f4b4626e019dcbfabdbfe679a0ebc",
+    "source_sha256": "391c9dc81cfabc28e5f0c54c08877010b9fd019c32133da68f4debe164447c91",
+    "tree_sha256": "391c9dc81cfabc28e5f0c54c08877010b9fd019c32133da68f4debe164447c91"
+  },
+  "nulls": {
+    "clean": [
+      "m1b-null1",
+      "m1b-null2",
+      "m1b-null3"
+    ],
+    "dirty": [
+      "m1bd-null1",
+      "m1bd-null2",
+      "m1bd-null3"
+    ],
+    "cp": [
+      "m1bcp-null1",
+      "m1bcp-null2",
+      "m1bcp-null3"
+    ]
+  }
+}

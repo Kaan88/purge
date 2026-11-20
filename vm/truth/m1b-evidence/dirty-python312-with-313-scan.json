@@ -1,0 +1,406 @@
+{
+  "schema": "purge.scan/0",
+  "app": "python312-with-313",
+  "tool": "purge",
+  "mode": "post",
+  "policy_version": "m1b.1",
+  "plan_hash": "ee6f05c975e757578b9b0db39ce755594774ca6b16f5c02c23ddf060236192e1",
+  "items": [
+    {
+      "id": "c-b4ec02995777b480",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        "name": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "UserWritable",
+          "source": "token:arp:key",
+          "detail": {
+            "token": "e9b7c837-5066-4f10-851a-69179f987b18"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 7,
+        "explanation": "Carries Python 3.12.7 (64-bit)'s identifier e9b7c837-5066-4f10-851a-69179f987b18"
+      }
+    },
+    {
+      "id": "c-57126b7ddf46ff2d",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\ControlSet001\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "System",
+      "evidence": [
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "UserWritable",
+          "source": "token:arp:key",
+          "detail": {
+            "token": "e9b7c837-5066-4f10-851a-69179f987b18"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "DenyListed",
+          "rule": "reg.hklm.system"
+        }
+      ],
+      "harm": "Critical",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 7,
+        "explanation": "Kept: protected location (rule reg.hklm.system)"
+      }
+    },
+    {
+      "id": "c-20b57da7de3ddcca",
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Python"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Key",
+          "trust": "UserWritable",
+          "source": "identity:python",
+          "detail": {
+            "children": "[\"PyLauncher\\\\\"]",
+            "empty_after_plan": "pending",
+            "vendor": "python"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Key",
+          "trust": "UserWritable",
+          "source": "window",
+          "detail": {}
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}",
+          "row": "Registry:regA4B762942F6E84146266C5EDF4F71394"
+        }
+      ],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 3,
+        "explanation": "Kept: owned by installed product {8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3} (Registry:regA4B762942F6E84146266C5EDF4F71394)"
+      }
+    },
+    {
+      "id": "c-c0bcc8d26abee0fe",
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Python"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Key",
+          "trust": "UserWritable",
+          "source": "identity:python",
+          "detail": {
+            "children": "[\"PythonCore\\\\\"]",
+            "empty_after_plan": "pending",
+            "vendor": "python"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}",
+          "row": "Registry:regA4B762942F6E84146266C5EDF4F71394"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{7E8C62E5-B67D-4D2E-B056-88613B37793E}",
+          "row": "Registry:regBA44F5BFF73982A6B4612322AA7DE7A7"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{C038789C-DCB5-42D3-8C51-3BC9DDB26B90}",
+          "row": "Registry:regBA44F5BFF73982A6B4612322AA7DE7A7"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{425B36E9-4EA6-47B4-88C3-E798BA903188}",
+          "row": "Registry:regCB7A582659A9116C78CC099A55552A92"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{57AC2A86-EC99-4E9C-9FF9-15DAA88D1FAE}",
+          "row": "Registry:reg77D28402A0186ED8B2B0155EF0F6CA8B"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{CD925D17-C20C-441B-AAE2-4FA5B78C978F}",
+          "row": "Registry:reg2BADA8F32B13B2156E9C7F3921D93B43"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{9AFDC691-40E5-4B15-835F-9A524AC4672C}",
+          "row": "Registry:regC4919FB11E2829994B8E64AE77080D28"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{E8717434-E3C0-4B3C-8132-FD1BC65A0AC9}",
+          "row": "Registry:regCB7A582659A9116C78CC099A55552A92"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{558C4CF1-82E8-4C42-BC91-5F1E96E9C99C}",
+          "row": "Registry:reg77D28402A0186ED8B2B0155EF0F6CA8B"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{86F77C4A-0ABA-48D9-9149-78CBF394E7F8}",
+          "row": "Registry:reg2BADA8F32B13B2156E9C7F3921D93B43"
+        },
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{DAC30545-E0EF-4714-BE89-50A8BB6A26BA}",
+          "row": "Registry:regC4919FB11E2829994B8E64AE77080D28"
+        }
+      ],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 2,
+        "explanation": "Kept: owned by installed product {8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3} (Registry:regA4B762942F6E84146266C5EDF4F71394) · Kept: owned by installed product {7E8C62E5-B67D-4D2E-B056-88613B37793E} (Registry:regBA44F5BFF73982A6B4612322AA7DE7A7) · Kept: owned by installed product {C038789C-DCB5-42D3-8C51-3BC9DDB26B90} (Registry:regBA44F5BFF73982A6B4612322AA7DE7A7) · Kept: owned by installed product {425B36E9-4EA6-47B4-88C3-E798BA903188} (Registry:regCB7A582659A9116C78CC099A55552A92) · Kept: owned by installed product {57AC2A86-EC99-4E9C-9FF9-15DAA88D1FAE} (Registry:reg77D28402A0186ED8B2B0155EF0F6CA8B) · Kept: owned by installed product {CD925D17-C20C-441B-AAE2-4FA5B78C978F} (Registry:reg2BADA8F32B13B2156E9C7F3921D93B43) · Kept: owned by installed product {9AFDC691-40E5-4B15-835F-9A524AC4672C} (Registry:regC4919FB11E2829994B8E64AE77080D28) · Kept: owned by installed product {E8717434-E3C0-4B3C-8132-FD1BC65A0AC9} (Registry:regCB7A582659A9116C78CC099A55552A92) · Kept: owned by installed product {558C4CF1-82E8-4C42-BC91-5F1E96E9C99C} (Registry:reg77D28402A0186ED8B2B0155EF0F6CA8B) · Kept: owned by installed product {86F77C4A-0ABA-48D9-9149-78CBF394E7F8} (Registry:reg2BADA8F32B13B2156E9C7F3921D93B43) · Kept: owned by installed product {DAC30545-E0EF-4714-BE89-50A8BB6A26BA} (Registry:regC4919FB11E2829994B8E64AE77080D28)"
+      }
+    },
+    {
+      "id": "c-ec2da69897528182",
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.11"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppFiles",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Path",
+          "trust": "UserWritable",
+          "source": "identity:python",
+          "detail": {
+            "children": "[\"IDLE (Python 3.11 64-bit).lnk\",\"Python 3.11 (64-bit).lnk\",\"Python 3.11 Manuals (64-bit).lnk\",\"Python 3.11 Module Docs (64-bit).lnk\"]",
+            "empty_after_plan": "pending",
+            "vendor": "python"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "DenyListed",
+          "rule": "fs.programdata.microsoft"
+        }
+      ],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 4,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 2,
+        "explanation": "Kept: protected location (rule fs.programdata.microsoft)"
+      },
+      "item_fp": {
+        "file_id": "729c0100000002000000000000000000",
+        "volume_serial": 743726979420761591
+      }
+    },
+    {
+      "id": "c-ec2da59897527fcf",
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppFiles",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Path",
+          "trust": "UserWritable",
+          "source": "identity:python",
+          "detail": {
+            "children": "[\"IDLE (Python 3.12 64-bit).lnk\",\"Python 3.12 (64-bit).lnk\",\"Python 3.12 Manuals (64-bit).lnk\",\"Python 3.12 Module Docs (64-bit).lnk\"]",
+            "empty_after_plan": "pending",
+            "vendor": "python"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "DenyListed",
+          "rule": "fs.programdata.microsoft"
+        }
+      ],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 4,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 2,
+        "explanation": "Kept: protected location (rule fs.programdata.microsoft)"
+      },
+      "item_fp": {
+        "file_id": "40dd0100000002000000000000000000",
+        "volume_serial": 743726979420761591
+      }
+    },
+    {
+      "id": "c-ec2da49897527e1c",
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppFiles",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Path",
+          "trust": "UserWritable",
+          "source": "identity:python",
+          "detail": {
+            "children": "[\"IDLE (Python 3.13 64-bit).lnk\",\"Python 3.13 (64-bit).lnk\",\"Python 3.13 Manuals (64-bit).lnk\",\"Python 3.13 Module Docs (64-bit).lnk\"]",
+            "empty_after_plan": "pending",
+            "vendor": "python"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "DenyListed",
+          "rule": "fs.programdata.microsoft"
+        }
+      ],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 4,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 2,
+        "explanation": "Kept: protected location (rule fs.programdata.microsoft)"
+      },
+      "item_fp": {
+        "file_id": "ec830100000003000000000000000000",
+        "volume_serial": 743726979420761591
+      }
+    }
+  ],
+  "absorbed": []
+}

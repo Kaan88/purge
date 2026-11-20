@@ -1,0 +1,478 @@
+{
+  "schema": "purge.fp/0",
+  "app": {
+    "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+    "display_name": "Python 3.12.7 (64-bit)"
+  },
+  "identity": {
+    "names": [
+      "Python 3.12.7 (64-bit)"
+    ],
+    "vendors": [
+      "Python Software Foundation",
+      "python"
+    ],
+    "tokens": [],
+    "mega_vendor": false
+  },
+  "roots": [],
+  "exes": [],
+  "outside_root_files": [],
+  "uninstallers": [
+    "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe"
+  ],
+  "anchors": {
+    "progids": [],
+    "clsids": [],
+    "appids": [],
+    "typelibs": [],
+    "aumids": [],
+    "package_families": [],
+    "package_full_names": [],
+    "run_entries": []
+  },
+  "tokens": [
+    {
+      "token": "e9b7c837-5066-4f10-851a-69179f987b18",
+      "source": "arp:key"
+    },
+    {
+      "token": "114AEC44-152B-5746-952F-F20CE3CAB54A",
+      "source": "msi:upgrade-code"
+    }
+  ],
+  "inno": [],
+  "ref_snapshot": [
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "name": "BundleCachePath"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "e9b7c837-5066-4f10-851a-69179f987b18"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "4d7b24942074ac60"
+    },
+    {
+      "target": {
+        "type": "RegMultiSzSegment",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "name": "BundleUpgradeCode",
+        "segment": "{114AEC44-152B-5746-952F-F20CE3CAB54A}",
+        "index": 0
+      },
+      "carrier": "Segment",
+      "anchor": {
+        "kind": "Token",
+        "text": "114AEC44-152B-5746-952F-F20CE3CAB54A"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "be910dcbea224877"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "name": "DisplayIcon"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "e9b7c837-5066-4f10-851a-69179f987b18"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "096f3fd559a882d6"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "name": "ModifyPath"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "e9b7c837-5066-4f10-851a-69179f987b18"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "9fdd0c2091cc9f50"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "name": "QuietUninstallString"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "e9b7c837-5066-4f10-851a-69179f987b18"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "a4a6c6bca80866f9"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "name": "UninstallString"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "e9b7c837-5066-4f10-851a-69179f987b18"
+      },
+      "parent_values": 23,
+      "parent_subkeys": 0,
+      "data_hash": "767f7fd051642340"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Installer\\Dependencies\\CPython-3.12",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "e9b7c837-5066-4f10-851a-69179f987b18"
+      },
+      "parent_values": 3,
+      "parent_subkeys": 1,
+      "data_hash": "ae85cd847705778c"
+    }
+  ],
+  "subtrees": [
+    {
+      "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395364429374089,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+      "values": [
+        {
+          "subkey": "",
+          "name": "BundleAddonCode",
+          "hash": "7:e3b0c44298fc1c14"
+        },
+        {
+          "subkey": "",
+          "name": "BundleCachePath",
+          "hash": "1:4d7b24942074ac60"
+        },
+        {
+          "subkey": "",
+          "name": "BundleDetectCode",
+          "hash": "7:e3b0c44298fc1c14"
+        },
+        {
+          "subkey": "",
+          "name": "BundlePatchCode",
+          "hash": "7:e3b0c44298fc1c14"
+        },
+        {
+          "subkey": "",
+          "name": "BundleProviderKey",
+          "hash": "1:31e6cd93ba1f8a08"
+        },
+        {
+          "subkey": "",
+          "name": "BundleTag",
+          "hash": "1:e3b0c44298fc1c14"
+        },
+        {
+          "subkey": "",
+          "name": "BundleUpgradeCode",
+          "hash": "7:be910dcbea224877"
+        },
+        {
+          "subkey": "",
+          "name": "BundleVersion",
+          "hash": "1:531d37235d11e23e"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayIcon",
+          "hash": "1:096f3fd559a882d6"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayName",
+          "hash": "1:2744da1fe8fbd492"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayVersion",
+          "hash": "1:531d37235d11e23e"
+        },
+        {
+          "subkey": "",
+          "name": "EngineVersion",
+          "hash": "1:e965927859e1f0b8"
+        },
+        {
+          "subkey": "",
+          "name": "EstimatedSize",
+          "hash": "4:eca4c5f010d59322"
+        },
+        {
+          "subkey": "",
+          "name": "Installed",
+          "hash": "4:67abdd721024f0ff"
+        },
+        {
+          "subkey": "",
+          "name": "ModifyPath",
+          "hash": "1:9fdd0c2091cc9f50"
+        },
+        {
+          "subkey": "",
+          "name": "NoElevateOnModify",
+          "hash": "4:67abdd721024f0ff"
+        },
+        {
+          "subkey": "",
+          "name": "Publisher",
+          "hash": "1:8775ac833bd1aac5"
+        },
+        {
+          "subkey": "",
+          "name": "QuietUninstallString",
+          "hash": "1:a4a6c6bca80866f9"
+        },
+        {
+          "subkey": "",
+          "name": "Resume",
+          "hash": "4:9d9f290527a6be62"
+        },
+        {
+          "subkey": "",
+          "name": "UninstallString",
+          "hash": "1:767f7fd051642340"
+        },
+        {
+          "subkey": "",
+          "name": "URLInfoAbout",
+          "hash": "1:3d70ec62cde3b573"
+        },
+        {
+          "subkey": "",
+          "name": "VersionMajor",
+          "hash": "4:9d9f290527a6be62"
+        },
+        {
+          "subkey": "",
+          "name": "VersionMinor",
+          "hash": "4:42f4aeb81c1ef81f"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395364759047949,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Installer",
+      "values": [
+        {
+          "subkey": "Dependencies\\CPython-3.11",
+          "name": "",
+          "hash": "1:b8777e0210f9792a"
+        },
+        {
+          "subkey": "Dependencies\\CPython-3.11",
+          "name": "DisplayName",
+          "hash": "1:2802ecf2f4e57224"
+        },
+        {
+          "subkey": "Dependencies\\CPython-3.11",
+          "name": "Version",
+          "hash": "1:1486546dd4b67e66"
+        },
+        {
+          "subkey": "Dependencies\\CPython-3.12",
+          "name": "",
+          "hash": "1:ae85cd847705778c"
+        },
+        {
+          "subkey": "Dependencies\\CPython-3.12",
+          "name": "DisplayName",
+          "hash": "1:2744da1fe8fbd492"
+        },
+        {
+          "subkey": "Dependencies\\CPython-3.12",
+          "name": "Version",
+          "hash": "1:531d37235d11e23e"
+        },
+        {
+          "subkey": "Dependencies\\CPython-3.13",
+          "name": "",
+          "hash": "1:9a2eed81a7e02a32"
+        },
+        {
+          "subkey": "Dependencies\\CPython-3.13",
+          "name": "DisplayName",
+          "hash": "1:53aaea6c92e420ff"
+        },
+        {
+          "subkey": "Dependencies\\CPython-3.13",
+          "name": "Version",
+          "hash": "1:9b91b8c5ca439151"
+        }
+      ],
+      "subkeys": [
+        "Dependencies",
+        "Dependencies\\CPython-3.11",
+        "Dependencies\\CPython-3.11\\Dependents",
+        "Dependencies\\CPython-3.11\\Dependents\\{1da2e09b-199c-4def-9a99-93a8c1b8ddf2}",
+        "Dependencies\\CPython-3.12",
+        "Dependencies\\CPython-3.12\\Dependents",
+        "Dependencies\\CPython-3.12\\Dependents\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "Dependencies\\CPython-3.13",
+        "Dependencies\\CPython-3.13\\Dependents",
+        "Dependencies\\CPython-3.13\\Dependents\\{1abbd55d-059a-4d1e-bdf1-35bb74697f5a}"
+      ],
+      "lwt": 134388887088680908,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Installer\\Dependencies",
+      "values": [
+        {
+          "subkey": "CPython-3.11",
+          "name": "",
+          "hash": "1:b8777e0210f9792a"
+        },
+        {
+          "subkey": "CPython-3.11",
+          "name": "DisplayName",
+          "hash": "1:2802ecf2f4e57224"
+        },
+        {
+          "subkey": "CPython-3.11",
+          "name": "Version",
+          "hash": "1:1486546dd4b67e66"
+        },
+        {
+          "subkey": "CPython-3.12",
+          "name": "",
+          "hash": "1:ae85cd847705778c"
+        },
+        {
+          "subkey": "CPython-3.12",
+          "name": "DisplayName",
+          "hash": "1:2744da1fe8fbd492"
+        },
+        {
+          "subkey": "CPython-3.12",
+          "name": "Version",
+          "hash": "1:531d37235d11e23e"
+        },
+        {
+          "subkey": "CPython-3.13",
+          "name": "",
+          "hash": "1:9a2eed81a7e02a32"
+        },
+        {
+          "subkey": "CPython-3.13",
+          "name": "DisplayName",
+          "hash": "1:53aaea6c92e420ff"
+        },
+        {
+          "subkey": "CPython-3.13",
+          "name": "Version",
+          "hash": "1:9b91b8c5ca439151"
+        }
+      ],
+      "subkeys": [
+        "CPython-3.11",
+        "CPython-3.11\\Dependents",
+        "CPython-3.11\\Dependents\\{1da2e09b-199c-4def-9a99-93a8c1b8ddf2}",
+        "CPython-3.12",
+        "CPython-3.12\\Dependents",
+        "CPython-3.12\\Dependents\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "CPython-3.13",
+        "CPython-3.13\\Dependents",
+        "CPython-3.13\\Dependents\\{1abbd55d-059a-4d1e-bdf1-35bb74697f5a}"
+      ],
+      "lwt": 134395364429391601,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Installer\\Dependencies\\CPython-3.12",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:ae85cd847705778c"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayName",
+          "hash": "1:2744da1fe8fbd492"
+        },
+        {
+          "subkey": "",
+          "name": "Version",
+          "hash": "1:531d37235d11e23e"
+        }
+      ],
+      "subkeys": [
+        "Dependents",
+        "Dependents\\{e9b7c837-5066-4f10-851a-69179f987b18}"
+      ],
+      "lwt": 134395364429391601,
+      "ti_owned": false,
+      "fully_attributed": false
+    }
+  ],
+  "ext_journal": [],
+  "co_removed": [],
+  "os": {
+    "edition": "EnterpriseSEval",
+    "build": 26100,
+    "ubr": 1742
+  },
+  "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "window": {
+    "install_time": 134395364759047949,
+    "t_start": 134395366479186615,
+    "t_end": 134395367111098453
+  },
+  "verify_gone": {
+    "arp_gone": true,
+    "msi_unknown_all_ctx": true,
+    "main_exes_gone": true,
+    "passed": true
+  },
+  "warnings": [
+    "roots: root \"C:\\\\Users\\\\tester\\\\AppData\\\\Local\\\\Package Cache\\\\{e9b7c837-5066-4f10-851a-69179f987b18}\" from DisplayIcon rejected: refused by the guard (root.package-cache)",
+    "roots: root \"C:\\\\Users\\\\tester\\\\AppData\\\\Local\\\\Package Cache\\\\{e9b7c837-5066-4f10-851a-69179f987b18}\" from UninstallerDir rejected: refused by the guard (root.package-cache)",
+    "roots: the app has no validated root; nothing can be attributed by path",
+    "anchors: the app has no install root and no exe; no registry anchor can be attributed",
+    "refsnap: the reference scan is incomplete (31 keys unreadable, first: HKLM\\SOFTWARE\\Microsoft\\EAPSIMMethods\\18\\FastReauthContext (access denied))",
+    "subtree: 1 subtrees were recorded in part (size caps or baseline keys)"
+  ],
+  "burn": {
+    "bundle_id": "{e9b7c837-5066-4f10-851a-69179f987b18}",
+    "provider_key": "CPython-3.12",
+    "cache_path": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+    "packages": [],
+    "dependents_at_harvest": []
+  }
+}

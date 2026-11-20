@@ -1,5 +1,15 @@
 # M1b handoff
 
+## M1b gate PASSED (2026-11-21)
+
+- Report `docs/M1B_GATE.md`. Scan gate 153/153 at 7e885aa (engine 23529600, evidence
+  `E:\purge-build\gate-evidence\m1b-gate6\final`). Executor gate G5/G6 PASS at 3f95da7 (rig-exec engine 52a8ee29,
+  evidence `E:\purge-build\gate-evidence\m1b-gate7`: step logs, `m1b-exec-score.json`, `runs\`, `null-runs\`).
+- Do not re-score the scan campaign at a later commit: rig inputs changed after 7e885aa, BIND fails by construction.
+- Follow-ups: scm elevated tests tolerate a transient `Marked`; scorer check that the E1 names match the cases file;
+  R8b M1 owner limit in M3 with the broker. Build the gate engine with `-p purge-engine` (the scan gate engine was a workspace build, M1B_GATE.md section 5).
+- Next: local baseline (`docs/BASELINE_LOCAL_DESIGN.md`), then M3 (UI and broker).
+
 ## Paused for the laptop migration (2026-11-19 00:30)
 
 - Gate5 fix done and pushed (834819c + 8e1a1d2); Fable check R7 clean (no blocker). Smoke run on Clean-Pro python:

@@ -1,0 +1,151 @@
+{
+  "schema": "purge.rig.m1b-run/1",
+  "run": "m1b-null1",
+  "target": {
+    "main_key": null,
+    "main_name": null,
+    "main_msi": null,
+    "entries_created": [],
+    "pre_keys": [],
+    "main_is_pre": null,
+    "main_created": null,
+    "in_lists0": null
+  },
+  "run_json_sha256": "7cce994338d3d0a45c4ebb23bae0a5df5d5b41cef57156bb89dad991550dd0ca",
+  "run_json": {
+    "run": "m1b-null1",
+    "started": "2026-11-18T19:01:35.5062378-08:00",
+    "finished": "2026-11-18T19:06:27.0990567-08:00",
+    "phases": [
+      {
+        "name": "edge-pause",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "defender-idle",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "arp0",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists0",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap0",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "wait-install",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "wait-launch",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists1",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap1",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "wait-uninstall",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists2",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap2",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "edge-check",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "entries",
+        "ok": true,
+        "error": null
+      }
+    ],
+    "defender": {
+      "snap0": {
+        "av_signature": "1.463.364.0",
+        "as_signature": "1.463.364.0",
+        "engine": "1.1.26100.4",
+        "platform": "4.18.26100.4",
+        "source": "MSFT_MpComputerStatus",
+        "error": null
+      },
+      "snap2": {
+        "av_signature": "1.463.364.0",
+        "as_signature": "1.463.364.0",
+        "engine": "1.1.26100.4",
+        "platform": "4.18.26100.4",
+        "source": "MSFT_MpComputerStatus",
+        "error": null
+      },
+      "idle": {
+        "stable": true,
+        "bounded": false,
+        "updated": true,
+        "changes": 5,
+        "waited_sec": 115.9,
+        "error": null,
+        "trigger_exit": 0,
+        "trigger_timed_out": false,
+        "trigger_error": null,
+        "current": true,
+        "attempts": [
+          {
+            "exit": 2,
+            "sec": 0.3,
+            "timed_out": false
+          },
+          {
+            "exit": 2,
+            "sec": 0.1,
+            "timed_out": false
+          },
+          {
+            "exit": 2,
+            "sec": 0.2,
+            "timed_out": false
+          },
+          {
+            "exit": 2,
+            "sec": 0.1,
+            "timed_out": false
+          },
+          {
+            "exit": 0,
+            "sec": 3.2,
+            "timed_out": false
+          }
+        ]
+      }
+    }
+  },
+  "build": null,
+  "plan_items": null
+}

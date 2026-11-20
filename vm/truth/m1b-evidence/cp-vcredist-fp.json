@@ -1,0 +1,1467 @@
+{
+  "schema": "purge.fp/0",
+  "app": {
+    "program_id": "HKLM|32|{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+    "display_name": "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211"
+  },
+  "identity": {
+    "names": [
+      "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211"
+    ],
+    "vendors": [
+      "Microsoft Corporation",
+      "microsoft"
+    ],
+    "tokens": [],
+    "mega_vendor": true
+  },
+  "roots": [],
+  "exes": [],
+  "outside_root_files": [],
+  "uninstallers": [
+    "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe"
+  ],
+  "anchors": {
+    "progids": [],
+    "clsids": [],
+    "appids": [],
+    "typelibs": [],
+    "aumids": [],
+    "package_families": [],
+    "package_full_names": [],
+    "run_entries": []
+  },
+  "tokens": [
+    {
+      "token": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515",
+      "source": "arp:key"
+    },
+    {
+      "token": "C146EF48-4D31-3C3D-A2C5-1E91AF8A0A9B",
+      "source": "msi:upgrade-code"
+    }
+  ],
+  "inno": [],
+  "ref_snapshot": [
+    {
+      "target": {
+        "type": "RegMultiSzSegment",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH\\ARP",
+        "name": "0",
+        "segment": "{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "index": 1
+      },
+      "carrier": "Segment",
+      "anchor": {
+        "kind": "Token",
+        "text": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+      },
+      "parent_values": 3,
+      "parent_subkeys": 0,
+      "data_hash": "5c8fab9faf9bb5ae"
+    },
+    {
+      "target": {
+        "type": "RegMultiSzSegment",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH\\ARP",
+        "name": "0",
+        "segment": "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\"  /uninstall",
+        "index": 2
+      },
+      "carrier": "Segment",
+      "anchor": {
+        "kind": "Token",
+        "text": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+      },
+      "parent_values": 3,
+      "parent_subkeys": 0,
+      "data_hash": "5c8fab9faf9bb5ae"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\VC,redist.x64,amd64,14.44,bundle",
+        "name": ""
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+      },
+      "parent_values": 3,
+      "parent_subkeys": 1,
+      "data_hash": "e7b1d7387fbfe874"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "name": "BundleCachePath"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+      },
+      "parent_values": 22,
+      "parent_subkeys": 0,
+      "data_hash": "e0b0b845bd03689c"
+    },
+    {
+      "target": {
+        "type": "RegMultiSzSegment",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "name": "BundleUpgradeCode",
+        "segment": "{C146EF48-4D31-3C3D-A2C5-1E91AF8A0A9B}",
+        "index": 0
+      },
+      "carrier": "Segment",
+      "anchor": {
+        "kind": "Token",
+        "text": "C146EF48-4D31-3C3D-A2C5-1E91AF8A0A9B"
+      },
+      "parent_values": 22,
+      "parent_subkeys": 0,
+      "data_hash": "9fc378a3e9726334"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "name": "DisplayIcon"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+      },
+      "parent_values": 22,
+      "parent_subkeys": 0,
+      "data_hash": "07a7c4e364dd2b90"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "name": "ModifyPath"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+      },
+      "parent_values": 22,
+      "parent_subkeys": 0,
+      "data_hash": "83c14238d8441ec2"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "name": "QuietUninstallString"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+      },
+      "parent_values": 22,
+      "parent_subkeys": 0,
+      "data_hash": "d5aacc6690293367"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "name": "UninstallString"
+      },
+      "carrier": "Data",
+      "anchor": {
+        "kind": "Token",
+        "text": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+      },
+      "parent_values": 22,
+      "parent_subkeys": 0,
+      "data_hash": "767d4c926248b82f"
+    }
+  ],
+  "subtrees": [
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion",
+      "values": [
+        {
+          "subkey": "",
+          "name": "CommonFilesDir",
+          "hash": "1:4d9f3d94c23d7d25"
+        },
+        {
+          "subkey": "",
+          "name": "CommonFilesDir (x86)",
+          "hash": "1:48b4f7c237c23203"
+        },
+        {
+          "subkey": "",
+          "name": "CommonW6432Dir",
+          "hash": "1:4d9f3d94c23d7d25"
+        },
+        {
+          "subkey": "",
+          "name": "DevicePath",
+          "hash": "2:9552352d0f76d040"
+        },
+        {
+          "subkey": "",
+          "name": "MediaPathUnexpanded",
+          "hash": "2:ea39aa8da3ebd245"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramFilesDir",
+          "hash": "1:5c64b95adc8ce922"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramFilesDir (x86)",
+          "hash": "1:370c7c4862db64a8"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramFilesPath",
+          "hash": "2:02677332d1b64eea"
+        },
+        {
+          "subkey": "",
+          "name": "ProgramW6432Dir",
+          "hash": "1:5c64b95adc8ce922"
+        },
+        {
+          "subkey": "",
+          "name": "SM_ConfigureProgramsName",
+          "hash": "1:485783de4c7de0d4"
+        },
+        {
+          "subkey": "",
+          "name": "SM_GamesName",
+          "hash": "1:1a89cdfc4b574fce"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395271991444897,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH",
+      "values": [
+        {
+          "subkey": "ARP",
+          "name": "0",
+          "hash": "7:5c8fab9faf9bb5ae"
+        },
+        {
+          "subkey": "ARP",
+          "name": "1",
+          "hash": "7:433993db19d3be38"
+        },
+        {
+          "subkey": "ARP",
+          "name": "2",
+          "hash": "7:15ed8c0f6b7caae1"
+        }
+      ],
+      "subkeys": [
+        "ARP"
+      ],
+      "lwt": 134395271991444897,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH\\ARP",
+      "values": [
+        {
+          "subkey": "",
+          "name": "0",
+          "hash": "7:5c8fab9faf9bb5ae"
+        },
+        {
+          "subkey": "",
+          "name": "1",
+          "hash": "7:433993db19d3be38"
+        },
+        {
+          "subkey": "",
+          "name": "2",
+          "hash": "7:15ed8c0f6b7caae1"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395272005823321,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395271995930411,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies",
+      "values": [
+        {
+          "subkey": "Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14",
+          "name": "",
+          "hash": "1:4a7de2586b2112b4"
+        },
+        {
+          "subkey": "Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14",
+          "name": "DisplayName",
+          "hash": "1:0725d844ca58803e"
+        },
+        {
+          "subkey": "Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14",
+          "name": "Version",
+          "hash": "1:dc3cf51ab0008e48"
+        },
+        {
+          "subkey": "Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14",
+          "name": "",
+          "hash": "1:d0c62a6cccb99e37"
+        },
+        {
+          "subkey": "Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14",
+          "name": "DisplayName",
+          "hash": "1:a241a84b31097b21"
+        },
+        {
+          "subkey": "Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14",
+          "name": "Version",
+          "hash": "1:dc3cf51ab0008e48"
+        },
+        {
+          "subkey": "VC,redist.x64,amd64,14.44,bundle",
+          "name": "",
+          "hash": "1:e7b1d7387fbfe874"
+        },
+        {
+          "subkey": "VC,redist.x64,amd64,14.44,bundle",
+          "name": "DisplayName",
+          "hash": "1:b58bee3a9d62b493"
+        },
+        {
+          "subkey": "VC,redist.x64,amd64,14.44,bundle",
+          "name": "Version",
+          "hash": "1:5abf12f5eec712d6"
+        }
+      ],
+      "subkeys": [
+        "Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14",
+        "Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14\\Dependents",
+        "Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14\\Dependents\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14",
+        "Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14\\Dependents",
+        "Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14\\Dependents\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "VC,redist.x64,amd64,14.44,bundle",
+        "VC,redist.x64,amd64,14.44,bundle\\Dependents",
+        "VC,redist.x64,amd64,14.44,bundle\\Dependents\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}"
+      ],
+      "lwt": 134395272003586320,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\VC,redist.x64,amd64,14.44,bundle",
+      "values": [
+        {
+          "subkey": "",
+          "name": "",
+          "hash": "1:e7b1d7387fbfe874"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayName",
+          "hash": "1:b58bee3a9d62b493"
+        },
+        {
+          "subkey": "",
+          "name": "Version",
+          "hash": "1:5abf12f5eec712d6"
+        }
+      ],
+      "subkeys": [
+        "Dependents",
+        "Dependents\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}"
+      ],
+      "lwt": 134395271981431955,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+      "values": [],
+      "subkeys": [],
+      "lwt": 134395271981374369,
+      "ti_owned": false,
+      "fully_attributed": false
+    },
+    {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+      "values": [
+        {
+          "subkey": "",
+          "name": "BundleAddonCode",
+          "hash": "7:e3b0c44298fc1c14"
+        },
+        {
+          "subkey": "",
+          "name": "BundleCachePath",
+          "hash": "1:e0b0b845bd03689c"
+        },
+        {
+          "subkey": "",
+          "name": "BundleDetectCode",
+          "hash": "7:e3b0c44298fc1c14"
+        },
+        {
+          "subkey": "",
+          "name": "BundlePatchCode",
+          "hash": "7:e3b0c44298fc1c14"
+        },
+        {
+          "subkey": "",
+          "name": "BundleProviderKey",
+          "hash": "1:bf5a37639c056081"
+        },
+        {
+          "subkey": "",
+          "name": "BundleTag",
+          "hash": "1:e3b0c44298fc1c14"
+        },
+        {
+          "subkey": "",
+          "name": "BundleUpgradeCode",
+          "hash": "7:9fc378a3e9726334"
+        },
+        {
+          "subkey": "",
+          "name": "BundleVersion",
+          "hash": "1:5abf12f5eec712d6"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayIcon",
+          "hash": "1:07a7c4e364dd2b90"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayName",
+          "hash": "1:b58bee3a9d62b493"
+        },
+        {
+          "subkey": "",
+          "name": "DisplayVersion",
+          "hash": "1:5abf12f5eec712d6"
+        },
+        {
+          "subkey": "",
+          "name": "EngineVersion",
+          "hash": "1:37f93635c84f7a01"
+        },
+        {
+          "subkey": "",
+          "name": "EstimatedSize",
+          "hash": "4:6d6178c29b462522"
+        },
+        {
+          "subkey": "",
+          "name": "Installed",
+          "hash": "4:67abdd721024f0ff"
+        },
+        {
+          "subkey": "",
+          "name": "ModifyPath",
+          "hash": "1:83c14238d8441ec2"
+        },
+        {
+          "subkey": "",
+          "name": "NoElevateOnModify",
+          "hash": "4:67abdd721024f0ff"
+        },
+        {
+          "subkey": "",
+          "name": "Publisher",
+          "hash": "1:39ce4714492aeb39"
+        },
+        {
+          "subkey": "",
+          "name": "QuietUninstallString",
+          "hash": "1:d5aacc6690293367"
+        },
+        {
+          "subkey": "",
+          "name": "Resume",
+          "hash": "4:9d9f290527a6be62"
+        },
+        {
+          "subkey": "",
+          "name": "UninstallString",
+          "hash": "1:767d4c926248b82f"
+        },
+        {
+          "subkey": "",
+          "name": "VersionMajor",
+          "hash": "4:01b4f6bd5d6a06a7"
+        },
+        {
+          "subkey": "",
+          "name": "VersionMinor",
+          "hash": "4:32434dc5b0f72c9b"
+        }
+      ],
+      "subkeys": [],
+      "lwt": 134395272005390044,
+      "ti_owned": false,
+      "fully_attributed": false
+    }
+  ],
+  "ext_journal": [],
+  "co_removed": [],
+  "os": {
+    "edition": "Professional",
+    "build": 26340,
+    "ubr": 9882
+  },
+  "user_sid": "S-1-5-21-1871224937-2691627691-3762806239-1000",
+  "window": {
+    "install_time": 134395272005390044,
+    "t_start": 134395272582463550,
+    "t_end": 134395272633394873
+  },
+  "verify_gone": {
+    "arp_gone": true,
+    "msi_unknown_all_ctx": true,
+    "main_exes_gone": true,
+    "passed": true
+  },
+  "warnings": [
+    "roots: root \"C:\\\\ProgramData\\\\Package Cache\\\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\" from DisplayIcon rejected: refused by the guard (root.package-cache)",
+    "roots: root \"C:\\\\ProgramData\\\\Package Cache\\\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\" from UninstallerDir rejected: refused by the guard (root.package-cache)",
+    "roots: the app has no validated root; nothing can be attributed by path",
+    "anchors: the app has no install root and no exe; no registry anchor can be attributed",
+    "refsnap: the reference scan is incomplete (32 keys unreadable, first: HKLM\\SOFTWARE\\Microsoft\\EAPSIMMethods\\18\\FastReauthContext (access denied))",
+    "subtree: 3 subtrees were recorded in part (size caps or baseline keys)"
+  ],
+  "msi": [
+    {
+      "product_code": "{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}",
+      "packed_code": "9CC2BA68DB8034640B9F8FD200D627FF",
+      "upgrade_code": "{9B0BAA88-E15F-3A1F-ACC0-B206E9DDF71C}",
+      "context": "Machine",
+      "user_sid": null,
+      "local_package": "C:\\WINDOWS\\Installer\\4dad3.msi",
+      "package_readable": true,
+      "components": [
+        {
+          "component_id": "{04D1E303-8E0F-36D1-BC1F-E27EE209198A}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+            "name": "SP"
+          },
+          "other_clients": [
+            "101D0B34220A4F84D940AB04C4BED135"
+          ],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{21B0261D-5191-3D58-9C29-B9232B27D616}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{225DB27C-EE31-3DF8-B4BB-AC5506C5673A}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+            "name": "Install"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{32252141-0BE5-3AFE-9849-D281CD954D43}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{3639FCCA-5969-316D-AC18-E0C6B2B532E9}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+            "name": "Version"
+          },
+          "other_clients": [
+            "101D0B34220A4F84D940AB04C4BED135"
+          ],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{3A88BA88-2780-3262-A7A9-7A11D3ED9A88}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{51C499DB-BD7A-31E9-AAFA-5D0813741B43}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{610423BB-1113-392F-8B0A-340000E19044}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14",
+            "name": "Version"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{674A4EC5-F732-3C6D-A0FB-289D61963665}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{686933F1-9A99-3CD8-A071-2BE11CEA5E99}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{7F148EE8-E61F-3462-B6D4-E1411A8EC5C9}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{8924DA15-E863-388D-A06B-E7A3931AD77B}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{8D300AD7-942A-3EDF-AA03-3D442AF99208}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{99A922E3-648F-3C37-8AE6-78232F317B1E}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{ABC89929-9E1E-30F1-A5A6-C685BDDDB7E3}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+            "name": "Install"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{AD221A2C-956B-3F16-8F64-FC938CBFD1C9}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{C6C22F1F-CEB2-31D6-A2E9-8F124A82428F}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{CA9C8888-CEE6-38D6-A64D-33DA28675281}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{D2959D22-4DB7-32AF-A1B0-8405C4221749}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+            "name": "Version"
+          },
+          "other_clients": [
+            "101D0B34220A4F84D940AB04C4BED135"
+          ],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{EA0D3A76-AE46-3F46-B94D-309D5097A125}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+            "name": "SP"
+          },
+          "other_clients": [
+            "101D0B34220A4F84D940AB04C4BED135"
+          ],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{F692B585-1C66-3BD5-AC31-442E4221ED80}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        }
+      ],
+      "registry_rows": [
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Version",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg8E22332645C4486C314943DF5FE0CC27"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Version",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "reg908592DD131E7C4983ECE11CC7FC9BD6"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+          "name": "SP",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductFamily_amd64",
+          "row": "reg3372D3995D5FF1B23BEFB5810CCC14E1"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "Install",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "regCC2E2361B7BD5918C5D992618BDDAC57"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+          "name": "SP",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductFamily_amd64_x86",
+          "row": "reg0E6F0BDD487CE6575DDBC915CBB7C9D9"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "Install",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "reg5CFC9C875F7C7295F8A107E185B62940"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14",
+          "name": "Version",
+          "whole_key": false,
+          "component": "VC_RuntimeAdditionalVSU_Provider",
+          "row": "reg086FBA3CCC7BADD528727684C0148621"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Installed",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg53F6322BB82E39C10B8B09671402BCB9"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Major",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg0BD885172FDD3F2360BA97AD7C5EDA9C"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Minor",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg9079944B509AC52ED7E4C365DCAC40E4"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Bld",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg6CD8F4CAC824321F9376E5A42FF78528"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Rbld",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg4C8C800EACC461242862DB302BECA5BD"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Installed",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "regBF9D38C5DF54DE1066E00116CF6CB59D"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Major",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "regF133E78A668EF156AFB700727896344E"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Minor",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "reg780C60B396F24715F58510A458363ED5"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Bld",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "reg1FB46D02903309793538F7118D97D250"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Rbld",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "reg5A2BD5D24B63D27F878F32707194C39D"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+          "name": "SPIndex",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductFamily_amd64",
+          "row": "reg89BF06DC838C21E6E04E72357ABEE837"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "InstallerType",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "reg5B2C908B3AC9457FFEE4E1ECD39B274A"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "SP",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "reg278A47E59BF6D5C44A63B53D4A941D13"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "SPIndex",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "regEFA11F6345AF9CA4D57FF6704AC52593"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "SPName",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "regCB1F4C018DA4C70E5FD71245390B875D"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "Version",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "reg6E7415E2620C088B14BF095BC5155956"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "UpdateVersion",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "regEF0A7649F87D4F93FE150A9564764C01"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\Updates\\Microsoft Visual C++ 2022 X64 Additional Runtime - 14.44.35211",
+          "name": null,
+          "whole_key": true,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "Servicing_Key_ProductEdition_RegKey_7"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+          "name": "SPIndex",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductFamily_amd64_x86",
+          "row": "regA1C4A64F0F95CB4566109088C94B3504"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "InstallerType",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "reg52151294D41054739A1EF4AE7FCEF495"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "SP",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "regDBB7F4A70284BA9FCCDF7F47828B3593"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "SPIndex",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "regA1674A2EB7E08608A2825A16530D89D4"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "SPName",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "reg6DF4E7C52C018AF0C0558CE78329E8DC"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "Version",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "reg0A7ECFABDC41BEDF38AA31C24D54D43C"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeAdditional",
+          "name": "UpdateVersion",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "reg4686D944B0F077245952D93896D439EE"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Updates\\Microsoft Visual C++ 2022 X64 Additional Runtime - 14.44.35211",
+          "name": null,
+          "whole_key": true,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "Servicing_Key_ProductEdition_RegKey_17"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14",
+          "name": null,
+          "whole_key": false,
+          "component": "VC_RuntimeAdditionalVSU_Provider",
+          "row": "regCF8AAB7A42751D40CFD0BCC9E49F65E0"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14",
+          "name": "DisplayName",
+          "whole_key": false,
+          "component": "VC_RuntimeAdditionalVSU_Provider",
+          "row": "reg2865E86F4BF45AD80935D279C884D826"
+        }
+      ],
+      "services": [],
+      "source_dirs": [],
+      "custom_actions": 3,
+      "unresolved_rows": 0
+    },
+    {
+      "product_code": "{43B0D101-A022-48F4-9D04-BA404CEB1D53}",
+      "packed_code": "101D0B34220A4F84D940AB04C4BED135",
+      "upgrade_code": "{36F68A90-239C-34DF-B58C-64B30153CE35}",
+      "context": "Machine",
+      "user_sid": null,
+      "local_package": "C:\\WINDOWS\\Installer\\4dacf.msi",
+      "package_readable": true,
+      "components": [
+        {
+          "component_id": "{04D1E303-8E0F-36D1-BC1F-E27EE209198A}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+            "name": "SP"
+          },
+          "other_clients": [
+            "9CC2BA68DB8034640B9F8FD200D627FF"
+          ],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{22824972-0C4A-31B4-AEEF-9FC7596F1305}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{2427B123-F132-4F0B-A958-50F7CDFCAA56}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{31FF3687-EC05-3A6B-A8CE-ADD81BF1506E}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14",
+            "name": "Version"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{35B5C1D2-EB5B-3569-83EB-78E34F5C3254}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{3639FCCA-5969-316D-AC18-E0C6B2B532E9}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+            "name": "Version"
+          },
+          "other_clients": [
+            "9CC2BA68DB8034640B9F8FD200D627FF"
+          ],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{38F26AF8-73D2-34A5-9BB3-83CE1900A2AE}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+            "name": "Install"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{4AF15CBB-F5C1-4468-A694-C5A03A2238D5}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{61413AE1-024F-4854-B8D8-1D2EF801EC21}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{6713558D-DE1F-373C-A12D-BAE9004657F9}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{7050289E-BECF-32C7-89DC-08C4480E482B}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{AD0439C6-DC3D-3A2C-AF38-B22083D8639F}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{B33258FD-750C-3B42-8BE4-535B48E97DB4}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{D227D7DF-D9F8-33AF-B935-4BF2F47F2EA4}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{D2959D22-4DB7-32AF-A1B0-8405C4221749}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+            "name": "Version"
+          },
+          "other_clients": [
+            "9CC2BA68DB8034640B9F8FD200D627FF"
+          ],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{EA0D3A76-AE46-3F46-B94D-309D5097A125}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+            "name": "SP"
+          },
+          "other_clients": [
+            "9CC2BA68DB8034640B9F8FD200D627FF"
+          ],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{F53F2531-272C-39F4-9C5B-312B318B91E5}",
+          "key_path": {
+            "kind": "registry",
+            "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+            "name": "Install"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{F5E98D96-3C7F-37D7-821F-E4BB03D4384B}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        },
+        {
+          "component_id": "{F8DFE2DF-F4E5-4845-9828-2849C685A91B}",
+          "key_path": {
+            "kind": "none"
+          },
+          "other_clients": [],
+          "shared_dll": false
+        }
+      ],
+      "registry_rows": [
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Version",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg8E22332645C4486C314943DF5FE0CC27"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Version",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "reg908592DD131E7C4983ECE11CC7FC9BD6"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+          "name": "SP",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductFamily_amd64",
+          "row": "reg3372D3995D5FF1B23BEFB5810CCC14E1"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "Install",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "regA3A84F07D7E3553136D5D76D3E93093F"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+          "name": "SP",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductFamily_amd64_x86",
+          "row": "reg0E6F0BDD487CE6575DDBC915CBB7C9D9"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "Install",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "regBB78CC9513B45DD391F206221BA8B031"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14",
+          "name": "Version",
+          "whole_key": false,
+          "component": "VC_RuntimeMinimumVSU_Provider",
+          "row": "regF27B236D111F11D98F40C8092058E7CD"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Installed",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg53F6322BB82E39C10B8B09671402BCB9"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Major",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg0BD885172FDD3F2360BA97AD7C5EDA9C"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Minor",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg9079944B509AC52ED7E4C365DCAC40E4"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Bld",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg6CD8F4CAC824321F9376E5A42FF78528"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Rbld",
+          "whole_key": false,
+          "component": "C_x64_Runtime_Detection",
+          "row": "reg4C8C800EACC461242862DB302BECA5BD"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Installed",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "regBF9D38C5DF54DE1066E00116CF6CB59D"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Major",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "regF133E78A668EF156AFB700727896344E"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Minor",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "reg780C60B396F24715F58510A458363ED5"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Bld",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "reg1FB46D02903309793538F7118D97D250"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64",
+          "name": "Rbld",
+          "whole_key": false,
+          "component": "C_x64_64bit_Runtime_Detection",
+          "row": "reg5A2BD5D24B63D27F878F32707194C39D"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+          "name": "SPIndex",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductFamily_amd64",
+          "row": "reg89BF06DC838C21E6E04E72357ABEE837"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "InstallerType",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "reg31F50BC5C3DC700926704BDED4B76108"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "SP",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "regD5BD40A3992F24540BC413EA9E1F7061"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "SPIndex",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "regAF54BBFEA4CF082A941AC75CF77AEBD0"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "SPName",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "reg536B6FD3F838232DFA682C610F46FF6A"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "Version",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "reg8136CDBB41432B4C0EDBB60E1510E2DB"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "UpdateVersion",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "reg106EF120661580708B9240AA31983923"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\Microsoft\\Updates\\Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.44.35211",
+          "name": null,
+          "whole_key": true,
+          "component": "Servicing_Key_ProductEdition_amd64",
+          "row": "Servicing_Key_ProductEdition_RegKey_7"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0",
+          "name": "SPIndex",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductFamily_amd64_x86",
+          "row": "regA1C4A64F0F95CB4566109088C94B3504"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "InstallerType",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "regB63E7100016A040BF252EF14C7858E87"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "SP",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "regF0274AA2C825095ABA04A7C54DF91051"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "SPIndex",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "reg96834D2A6F0963C7F990EFB514C1BFEE"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "SPName",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "regE939BF351E707C0ED7B618DED362C032"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "Version",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "reg61D19B63F8EF02887B2A6F3375DD00D1"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+          "name": "UpdateVersion",
+          "whole_key": false,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "reg8F813EA0E17C0E68D63608679783BB81"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Updates\\Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.44.35211",
+          "name": null,
+          "whole_key": true,
+          "component": "Servicing_Key_ProductEdition_amd64_x86",
+          "row": "Servicing_Key_ProductEdition_RegKey_17"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14",
+          "name": null,
+          "whole_key": false,
+          "component": "VC_RuntimeMinimumVSU_Provider",
+          "row": "reg488E732F70979D21FA92C977CD04B8C5"
+        },
+        {
+          "key": "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Installer\\Dependencies\\Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14",
+          "name": "DisplayName",
+          "whole_key": false,
+          "component": "VC_RuntimeMinimumVSU_Provider",
+          "row": "regD3CD9A0B686BEE97E58734720007D3A6"
+        }
+      ],
+      "services": [],
+      "source_dirs": [],
+      "custom_actions": 3,
+      "unresolved_rows": 0
+    }
+  ],
+  "burn": {
+    "bundle_id": "{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+    "provider_key": "VC,redist.x64,amd64,14.44,bundle",
+    "cache_path": "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+    "packages": [
+      {
+        "provider_key": "Microsoft.VS.VC_RuntimeAdditionalVSU_amd64,v14",
+        "product_code": "{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}",
+        "cache_dir": null,
+        "other_dependents": []
+      },
+      {
+        "provider_key": "Microsoft.VS.VC_RuntimeMinimumVSU_amd64,v14",
+        "product_code": "{43B0D101-A022-48F4-9D04-BA404CEB1D53}",
+        "cache_dir": null,
+        "other_dependents": []
+      }
+    ],
+    "dependents_at_harvest": []
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "schema": "purge.scan/0",
+  "app": "temurin",
+  "tool": "purge",
+  "mode": "post",
+  "policy_version": "m1b.1",
+  "plan_hash": "5269b8c7e4fd02c243ae4d6d76ea4c1bb6221a93bcc45d5c75251d9e6b043e69",
+  "items": [],
+  "absorbed": []
+}

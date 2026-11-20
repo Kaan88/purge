@@ -1,0 +1,72 @@
+{
+  "schema": "purge.scan/0",
+  "app": "7zip",
+  "tool": "purge",
+  "mode": "post",
+  "policy_version": "m1b.1",
+  "plan_hash": "3bec37ea1ca294998402d43c47f85e599bc550b1b1abd45eb13b3cbfffd40e5e",
+  "items": [
+    {
+      "id": "c-5581ff88ca267092",
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip"
+      },
+      "action": "DeleteKey",
+      "owner": {
+        "program_id": "HKLM|64|{23170F69-40C1-2702-2408-000001000000}",
+        "display_name": "7-Zip 24.08 (x64 edition)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "AppNamedKeyWithRootRef",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "software-key:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip",
+          "detail": {
+            "path": "C:\\Program Files\\7-Zip",
+            "root": "C:\\Program Files\\7-Zip"
+          }
+        },
+        {
+          "kind": "ExactFullName",
+          "tier": "B",
+          "weight": 4,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "identity:7-Zip 24.08 (x64 edition)",
+          "detail": {
+            "name": "7-Zip 24.08 (x64 edition)"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Key",
+          "trust": "AdminOnly",
+          "source": "window",
+          "detail": {}
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 12,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 12,
+        "explanation": "Named after 7-Zip 24.08 (x64 edition) and refers to its install folder · Named exactly like 7-Zip 24.08 (x64 edition) · Created or changed while 7-Zip 24.08 (x64 edition) was being installed or removed"
+      }
+    }
+  ],
+  "absorbed": []
+}

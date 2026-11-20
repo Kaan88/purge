@@ -1,0 +1,202 @@
+{
+  "schema": "purge.scan/0",
+  "app": "python",
+  "tool": "purge",
+  "mode": "post",
+  "policy_version": "m1b.1",
+  "plan_hash": "241a94d0e054c154a4d2b0e3f2fe186b0058eaf66a8a6eca484ae29fcae8eafa",
+  "items": [
+    {
+      "id": "c-b4ec02995777b480",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        "name": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "UserWritable",
+          "source": "token:arp:key",
+          "detail": {
+            "token": "e9b7c837-5066-4f10-851a-69179f987b18"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 7,
+        "explanation": "Carries Python 3.12.7 (64-bit)'s identifier e9b7c837-5066-4f10-851a-69179f987b18"
+      }
+    },
+    {
+      "id": "c-57126b7ddf46ff2d",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\ControlSet001\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "System",
+      "evidence": [
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "UserWritable",
+          "source": "token:arp:key",
+          "detail": {
+            "token": "e9b7c837-5066-4f10-851a-69179f987b18"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "DenyListed",
+          "rule": "reg.hklm.system"
+        }
+      ],
+      "harm": "Critical",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 7,
+        "explanation": "Kept: protected location (rule reg.hklm.system)"
+      }
+    },
+    {
+      "id": "c-8a499d739af4e90e",
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}"
+      },
+      "action": "ReportOnly",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "SYS-BURNDEPS",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": {
+            "InstallerManifest": "Burn"
+          },
+          "tier": "A",
+          "weight": 8,
+          "scope": "Key",
+          "trust": "UserWritable",
+          "source": "burn:{e9b7c837-5066-4f10-851a-69179f987b18}:related_product",
+          "detail": {
+            "bundle": "{e9b7c837-5066-4f10-851a-69179f987b18}",
+            "cache_dir": "C:\\ProgramData\\Package Cache\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}v3.12.7150.0",
+            "component": "python-launcher",
+            "product": "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+            "suggest_uninstall": "Python Launcher",
+            "what": "related_product"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 8,
+        "explanation": "Named in Python 3.12.7 (64-bit)'s installer record · A record the user can change does not prove a machine-wide item"
+      }
+    },
+    {
+      "id": "c-20b57da7de3ddcca",
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Python"
+      },
+      "action": "RemoveDirIfEmpty",
+      "owner": {
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "display_name": "Python 3.12.7 (64-bit)"
+      },
+      "origin": "Scanner",
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "VendorContainer",
+          "tier": "C",
+          "weight": 2,
+          "scope": "Key",
+          "trust": "UserWritable",
+          "source": "identity:python",
+          "detail": {
+            "children": "[\"PyLauncher\\\\\"]",
+            "empty_after_plan": "pending",
+            "vendor": "python"
+          }
+        },
+        {
+          "kind": "TimeWindow",
+          "tier": "C",
+          "weight": 1,
+          "scope": "Key",
+          "trust": "UserWritable",
+          "source": "window",
+          "detail": {}
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "OwnedByInstalledMsi",
+          "product": "{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+          "row": "Registry:regA4B762942F6E84146266C5EDF4F71394"
+        }
+      ],
+      "harm": "None",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": 1,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 3,
+        "explanation": "Kept: owned by installed product {73831AC2-F0E1-4173-9FDB-D07463D7EB80} (Registry:regA4B762942F6E84146266C5EDF4F71394)"
+      }
+    }
+  ],
+  "absorbed": []
+}

@@ -1,0 +1,1525 @@
+{
+  "schema": "purge.rig.m1b-score/2",
+  "time": "2026-11-19T11:17:51+03:00",
+  "evidence": "truth/m1b-evidence",
+  "gate_config": "default",
+  "config_vars": [],
+  "mode": "gate",
+  "apps": [
+    "7zip",
+    "python",
+    "python312-with-313",
+    "python313-with-312",
+    "node",
+    "vcredist",
+    "powershell",
+    "temurin"
+  ],
+  "dirty_apps": [
+    "7zip",
+    "python",
+    "python312-with-313",
+    "python313-with-312",
+    "vcredist",
+    "powershell",
+    "temurin"
+  ],
+  "cp_apps": [
+    "7zip",
+    "python",
+    "vcredist"
+  ],
+  "sets": [
+    "clean",
+    "dirty",
+    "cp"
+  ],
+  "trap_runs": [
+    "m1b-traps-7zip",
+    "m1bd-traps-7zip",
+    "m1bcp-traps-7zip"
+  ],
+  "inputs": {
+    "traps_sha256": "44424038e02d0d9fa658381b92632a507cfe372ca1f900b2b71bd03fe2048134",
+    "deny_sha256": "d2520fa39c2fa48a5dd5b69ed9d9ddce48900943607df3f32e4ca64a964fd75e",
+    "labels": {
+      "m1b-7zip": {
+        "label_id": "7zip",
+        "sha256": "4a2ae68ea3d01dd4878e73fcfdf7835578ca1a0990fee0fc35c02cef5e85af9f"
+      },
+      "m1b-python": {
+        "label_id": "python",
+        "sha256": "76b9a3bd2dd57af3d999ae15004e5ee2fca1a89e0e256d5cfbcf4927f099bb33"
+      },
+      "m1b-python312-with-313": {
+        "label_id": "python312-with-313",
+        "sha256": "4186b88dbd571ba6c5eac85abbd95e82aadd7e31893a455ffffcd4e5257d072d"
+      },
+      "m1b-python313-with-312": {
+        "label_id": "python313-with-312",
+        "sha256": "30f181a5c531d77ed6abb17abd8db80f5a249b165ad4dbdb4619322ada602ce2"
+      },
+      "m1b-node": {
+        "label_id": "node",
+        "sha256": "a96e79e466e8a035dbd9407cb10f26b389689fee7639376b7728e55f1f17e74b"
+      },
+      "m1b-vcredist": {
+        "label_id": "vcredist",
+        "sha256": "5efe30b8c4c5e873d5f6cd0929f194c8e837dd5573c3c25fc43f514ddd8ce920"
+      },
+      "m1b-powershell": {
+        "label_id": "powershell",
+        "sha256": "3b69affbc2696c3a9e9a21f714db6e77d6a223629e65a90bfd8f06f8e0091990"
+      },
+      "m1b-temurin": {
+        "label_id": "temurin",
+        "sha256": "55bfb0cfba040db74181be9131718f951cf2c9df7b060197eb4c44245e9655db"
+      },
+      "m1bd-7zip": {
+        "label_id": "7zip",
+        "sha256": "4a2ae68ea3d01dd4878e73fcfdf7835578ca1a0990fee0fc35c02cef5e85af9f"
+      },
+      "m1bd-python": {
+        "label_id": "python",
+        "sha256": "76b9a3bd2dd57af3d999ae15004e5ee2fca1a89e0e256d5cfbcf4927f099bb33"
+      },
+      "m1bd-python312-with-313": {
+        "label_id": "python312-with-313",
+        "sha256": "4186b88dbd571ba6c5eac85abbd95e82aadd7e31893a455ffffcd4e5257d072d"
+      },
+      "m1bd-python313-with-312": {
+        "label_id": "python313-with-312",
+        "sha256": "30f181a5c531d77ed6abb17abd8db80f5a249b165ad4dbdb4619322ada602ce2"
+      },
+      "m1bd-vcredist": {
+        "label_id": "vcredist",
+        "sha256": "5efe30b8c4c5e873d5f6cd0929f194c8e837dd5573c3c25fc43f514ddd8ce920"
+      },
+      "m1bd-powershell": {
+        "label_id": "powershell",
+        "sha256": "3b69affbc2696c3a9e9a21f714db6e77d6a223629e65a90bfd8f06f8e0091990"
+      },
+      "m1bd-temurin": {
+        "label_id": "temurin",
+        "sha256": "55bfb0cfba040db74181be9131718f951cf2c9df7b060197eb4c44245e9655db"
+      },
+      "m1bcp-7zip": {
+        "label_id": "7zip",
+        "sha256": "4a2ae68ea3d01dd4878e73fcfdf7835578ca1a0990fee0fc35c02cef5e85af9f"
+      },
+      "m1bcp-python": {
+        "label_id": "python",
+        "sha256": "76b9a3bd2dd57af3d999ae15004e5ee2fca1a89e0e256d5cfbcf4927f099bb33"
+      },
+      "m1bcp-vcredist": {
+        "label_id": "vcredist",
+        "sha256": "5efe30b8c4c5e873d5f6cd0929f194c8e837dd5573c3c25fc43f514ddd8ce920"
+      }
+    },
+    "frozen": {
+      "powershell": "ead6c13ddbac5ca4d3d02107cd23e0dc0d2254c6a62eb1b05923ec1c4ad57db9",
+      "temurin": "a1334b12822e5e0b77ba45c21ef3f76865832a86a51aa8aa15d6bbc44376710c"
+    },
+    "rigtool": {
+      "path": "rigtool/target/release/rigtool",
+      "sha256": "86fc9ea52305285605a3859ebbbb5e75192f4b4626e019dcbfabdbfe679a0ebc",
+      "source_sha256": "391c9dc81cfabc28e5f0c54c08877010b9fd019c32133da68f4debe164447c91",
+      "tree_sha256": "391c9dc81cfabc28e5f0c54c08877010b9fd019c32133da68f4debe164447c91"
+    },
+    "engines": [
+      "23529600a56adc8565a7a054be527c5aa5ed6d335c66a42fed64baed06419725"
+    ],
+    "commits": [
+      "7e885aa00e654d1b71236bfd548600ddfbce99b4"
+    ]
+  },
+  "criteria": [
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "m1b-7zip",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "m1b-python",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "m1b-python312-with-313",
+      "value": "finished=True phases ok 23/23",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "m1b-python313-with-312",
+      "value": "finished=True phases ok 23/23",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "m1b-node",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "m1b-vcredist",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "m1b-powershell",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "m1b-temurin",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G3",
+      "subject": "m1bd-7zip",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G3",
+      "subject": "m1bd-python",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G3",
+      "subject": "m1bd-python312-with-313",
+      "value": "finished=True phases ok 23/23",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G3",
+      "subject": "m1bd-python313-with-312",
+      "value": "finished=True phases ok 23/23",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G3",
+      "subject": "m1bd-vcredist",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G3",
+      "subject": "m1bd-powershell",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G3",
+      "subject": "m1bd-temurin",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G8",
+      "subject": "m1bcp-7zip",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G8",
+      "subject": "m1bcp-python",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G8",
+      "subject": "m1bcp-vcredist",
+      "value": "finished=True phases ok 22/22",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G4",
+      "subject": "m1b-traps-7zip",
+      "value": "finished=True phases ok 26/26",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2; trap run: TrapA judged, TrapB (pre) not",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G4",
+      "subject": "m1bd-traps-7zip",
+      "value": "finished=True phases ok 26/26",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2; trap run: TrapA judged, TrapB (pre) not",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G8",
+      "subject": "m1bcp-traps-7zip",
+      "value": "finished=True phases ok 26/26",
+      "limit": "finished, every phase ok, target ARP entry new (not in lists-0, entries_created not empty), Defender versions recorded and equal at snap 0 and snap 2; trap run: TrapA judged, TrapB (pre) not",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "m1b-null*",
+      "value": "3 null run(s), 0 not whole or invalid",
+      "limit": ">= 2, each finished, every phase ok, Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G3",
+      "subject": "m1bd-null*",
+      "value": "3 null run(s), 0 not whole or invalid",
+      "limit": ">= 2, each finished, every phase ok, Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "RUN",
+      "step": "G8",
+      "subject": "m1bcp-null*",
+      "value": "3 null run(s), 0 not whole or invalid",
+      "limit": ">= 2, each finished, every phase ok, Defender versions recorded and equal at snap 0 and snap 2",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "BIND",
+      "step": "G2-G4, G7, G8",
+      "subject": "one build, committed traps and labels",
+      "value": "engines=1 commits=1 problems=0",
+      "limit": "one engine, one commit, clean, 0 problems",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "FROZEN",
+      "step": "G2, G3",
+      "subject": "powershell",
+      "value": "frozen",
+      "limit": "truth/frozen/<app>/truth.json from m1b-freeze",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "FROZEN",
+      "step": "G2, G3",
+      "subject": "temurin",
+      "value": "frozen",
+      "limit": "truth/frozen/<app>/truth.json from m1b-freeze",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "SANITY",
+      "step": "G2",
+      "subject": "clean/7zip",
+      "value": "leftover+user_data frozen 3 run 3, relabelled 0, frozen only 0, run only 0",
+      "limit": "no frozen leftover/user_data item labelled otherwise",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "SANITY",
+      "step": "G2",
+      "subject": "clean/python",
+      "value": "leftover+user_data frozen 30 run 33, relabelled 0, frozen only 0, run only 0",
+      "limit": "no frozen leftover/user_data item labelled otherwise",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "SANITY",
+      "step": "G2",
+      "subject": "clean/node",
+      "value": "leftover+user_data frozen 4 run 4, relabelled 0, frozen only 0, run only 0",
+      "limit": "no frozen leftover/user_data item labelled otherwise",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "SANITY",
+      "step": "G2",
+      "subject": "clean/vcredist",
+      "value": "leftover+user_data frozen 9 run 8, relabelled 0, frozen only 0, run only 0",
+      "limit": "no frozen leftover/user_data item labelled otherwise",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "SANITY",
+      "step": "G2",
+      "subject": "clean/powershell",
+      "value": "leftover+user_data frozen 9 run 9, relabelled 0, frozen only 0, run only 0",
+      "limit": "no frozen leftover/user_data item labelled otherwise",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "SANITY",
+      "step": "G2",
+      "subject": "clean/temurin",
+      "value": "leftover+user_data frozen 0 run 0, relabelled 0, frozen only 0, run only 0",
+      "limit": "no frozen leftover/user_data item labelled otherwise",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G2",
+      "subject": "clean/7zip",
+      "value": "danger_offered=0 (danger_kept=0)",
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G2",
+      "subject": "clean/7zip",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G2",
+      "subject": "clean/7zip",
+      "value": 1.0,
+      "limit": 1.0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K5",
+      "step": "G2",
+      "subject": "clean/7zip",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G2",
+      "subject": "clean/7zip",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G2",
+      "subject": "clean/python",
+      "value": "danger_offered=0 (danger_kept=1)",
+      "limit": 0,
+      "pass": true,
+      "note": "danger_kept 1 (listed Blocked, report only): V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe [REF-ANY; DenyListed reg.hklm.system]"
+    },
+    {
+      "id": "K3",
+      "step": "G2",
+      "subject": "clean/python",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G2",
+      "subject": "clean/python",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G2",
+      "subject": "clean/python",
+      "value": "protected_correct=1.0 n=29 wrong=0",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G2",
+      "subject": "clean/python",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G2",
+      "subject": "clean/python312-with-313",
+      "value": "danger_offered=0 (danger_kept=1)",
+      "limit": 0,
+      "pass": true,
+      "note": "danger_kept 1 (listed Blocked, report only): V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe [REF-ANY; DenyListed reg.hklm.system]"
+    },
+    {
+      "id": "K3",
+      "step": "G2",
+      "subject": "clean/python312-with-313",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G2",
+      "subject": "clean/python312-with-313",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G2",
+      "subject": "clean/python312-with-313",
+      "value": "protected_correct=1.0 n=42 wrong=0",
+      "limit": "100 %, n >= 29",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G2",
+      "subject": "clean/python312-with-313",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G2",
+      "subject": "clean/python313-with-312",
+      "value": "danger_offered=0 (danger_kept=1)",
+      "limit": 0,
+      "pass": true,
+      "note": "danger_kept 1 (listed Blocked, report only): V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{9b3415f5-afcc-46ea-9954-a8000df10f86}\\python-3.13.17-amd64.exe [REF-ANY; DenyListed reg.hklm.system]"
+    },
+    {
+      "id": "K3",
+      "step": "G2",
+      "subject": "clean/python313-with-312",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G2",
+      "subject": "clean/python313-with-312",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G2",
+      "subject": "clean/python313-with-312",
+      "value": "protected_correct=1.0 n=44 wrong=0",
+      "limit": "100 %, n >= 29",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G2",
+      "subject": "clean/python313-with-312",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G2",
+      "subject": "clean/node",
+      "value": "danger_offered=0 (danger_kept=0)",
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G2",
+      "subject": "clean/node",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G2",
+      "subject": "clean/node",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G2",
+      "subject": "clean/node",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G2",
+      "subject": "clean/node",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G2",
+      "subject": "clean/vcredist",
+      "value": "danger_offered=0 (danger_kept=1)",
+      "limit": 0,
+      "pass": true,
+      "note": "danger_kept 1 (listed Blocked, report only): V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe [REF-ANY; DenyListed reg.hklm.system]"
+    },
+    {
+      "id": "K3",
+      "step": "G2",
+      "subject": "clean/vcredist",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G2",
+      "subject": "clean/vcredist",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G2",
+      "subject": "clean/vcredist",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G2",
+      "subject": "clean/vcredist",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G2",
+      "subject": "clean/powershell",
+      "value": "danger_offered=0 (danger_kept=0)",
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G2",
+      "subject": "clean/powershell",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G2",
+      "subject": "clean/powershell",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G2",
+      "subject": "clean/powershell",
+      "value": "protected_correct=1.0 n=2 wrong=0",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G2",
+      "subject": "clean/powershell",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G2",
+      "subject": "clean/temurin",
+      "value": "danger_offered=0 (danger_kept=0)",
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G2",
+      "subject": "clean/temurin",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G2",
+      "subject": "clean/temurin",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G2",
+      "subject": "clean/temurin",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G2",
+      "subject": "clean/temurin",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K2",
+      "step": "G3",
+      "subject": "dirty/7zip",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G3",
+      "subject": "dirty/7zip",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G3",
+      "subject": "dirty/7zip",
+      "value": 1.0,
+      "limit": 1.0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K5",
+      "step": "G3",
+      "subject": "dirty/7zip",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G3",
+      "subject": "dirty/7zip",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K2",
+      "step": "G3",
+      "subject": "dirty/python",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G3",
+      "subject": "dirty/python",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G3",
+      "subject": "dirty/python",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G3",
+      "subject": "dirty/python",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G3",
+      "subject": "dirty/python",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K2",
+      "step": "G3",
+      "subject": "dirty/python312-with-313",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G3",
+      "subject": "dirty/python312-with-313",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G3",
+      "subject": "dirty/python312-with-313",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G3",
+      "subject": "dirty/python312-with-313",
+      "value": "protected_correct=1.0 n=42 wrong=0",
+      "limit": "100 %, n >= 29",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G3",
+      "subject": "dirty/python312-with-313",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K2",
+      "step": "G3",
+      "subject": "dirty/python313-with-312",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G3",
+      "subject": "dirty/python313-with-312",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G3",
+      "subject": "dirty/python313-with-312",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G3",
+      "subject": "dirty/python313-with-312",
+      "value": "protected_correct=1.0 n=44 wrong=0",
+      "limit": "100 %, n >= 29",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G3",
+      "subject": "dirty/python313-with-312",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K2",
+      "step": "G3",
+      "subject": "dirty/vcredist",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G3",
+      "subject": "dirty/vcredist",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G3",
+      "subject": "dirty/vcredist",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G3",
+      "subject": "dirty/vcredist",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G3",
+      "subject": "dirty/vcredist",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K2",
+      "step": "G3",
+      "subject": "dirty/powershell",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G3",
+      "subject": "dirty/powershell",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G3",
+      "subject": "dirty/powershell",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G3",
+      "subject": "dirty/powershell",
+      "value": "protected_correct=1.0 n=2 wrong=0",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G3",
+      "subject": "dirty/powershell",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K2",
+      "step": "G3",
+      "subject": "dirty/temurin",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G3",
+      "subject": "dirty/temurin",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G3",
+      "subject": "dirty/temurin",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G3",
+      "subject": "dirty/temurin",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K6",
+      "step": "G3",
+      "subject": "dirty/temurin",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G8",
+      "subject": "cp/7zip",
+      "value": "danger_offered=0 (danger_kept=0)",
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G8",
+      "subject": "cp/7zip",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G8",
+      "subject": "cp/7zip",
+      "value": 1.0,
+      "limit": 1.0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K5",
+      "step": "G8",
+      "subject": "cp/7zip",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G8",
+      "subject": "cp/python",
+      "value": "danger_offered=0 (danger_kept=0)",
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G8",
+      "subject": "cp/python",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G8",
+      "subject": "cp/python",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G8",
+      "subject": "cp/python",
+      "value": "protected_correct=1.0 n=29 wrong=0",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G8",
+      "subject": "cp/vcredist",
+      "value": "danger_offered=0 (danger_kept=0)",
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G8",
+      "subject": "cp/vcredist",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G8",
+      "subject": "cp/vcredist",
+      "value": null,
+      "limit": 1.0,
+      "pass": true,
+      "note": "no Safe item: null, not counted as a pass"
+    },
+    {
+      "id": "K5",
+      "step": "G8",
+      "subject": "cp/vcredist",
+      "value": "n/a (no kept_owner/protected truth item)",
+      "limit": "100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K7",
+      "step": "G2",
+      "subject": "clean/7zip fingerprint",
+      "value": "root found",
+      "limit": "root C:\\Program Files\\7-Zip from MsiComponent",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K7",
+      "step": "G2",
+      "subject": "clean/7zip plan",
+      "value": "1 listing(s) of HKU\\<sid>\\Software\\7-Zip",
+      "limit": ">= 1",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G1",
+      "subject": "replay/vscode",
+      "value": "danger_listed=0 precision_safe=1.0",
+      "limit": "danger 0, precision_safe 100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G1",
+      "subject": "replay/git",
+      "value": "danger_listed=0 precision_safe=1.0",
+      "limit": "danger 0, precision_safe 100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G1",
+      "subject": "replay/firefox",
+      "value": "danger_listed=0 precision_safe=1.0",
+      "limit": "danger 0, precision_safe 100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G1",
+      "subject": "replay/npp",
+      "value": "danger_listed=0 precision_safe=None",
+      "limit": "danger 0, precision_safe 100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K4",
+      "step": "G1",
+      "subject": "replay/7zip",
+      "value": "danger_listed=0 precision_safe=1.0",
+      "limit": "danger 0, precision_safe 100 %",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K7",
+      "step": "G1",
+      "subject": "replay 7zip",
+      "value": "1 listing(s)",
+      "limit": "HKU\\<sid>\\Software\\7-Zip listed",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K8",
+      "step": "G2",
+      "subject": "clean/vcredist",
+      "value": "preselected=0 danger_offered=0 (danger_kept=1)",
+      "limit": "0 preselected, 0 danger offered",
+      "pass": true,
+      "note": "danger_kept 1 (listed Blocked, report only): V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe [REF-ANY; DenyListed reg.hklm.system]"
+    },
+    {
+      "id": "K8",
+      "step": "G2",
+      "subject": "clean/python suggestion",
+      "value": "1 suggestion(s), actions ['ReportOnly'], 1 notice(s)",
+      "limit": ">= 1, all ReportOnly, each a notice in the score on the Launcher's Uninstall key",
+      "pass": true,
+      "note": "Python Launcher on K:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80} (Likely, would be danger)"
+    },
+    {
+      "id": "K8",
+      "step": "G2",
+      "subject": "clean/python312-with-313 suggestion",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K8",
+      "step": "G2",
+      "subject": "clean/notices elsewhere",
+      "value": "0 notice(s) in 7 app(s)",
+      "limit": "notices == [] for every app but clean/cp python",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K8",
+      "step": "G3",
+      "subject": "dirty/vcredist",
+      "value": "preselected=0 danger_offered=0 (danger_kept=1)",
+      "limit": "0 preselected, 0 danger offered",
+      "pass": true,
+      "note": "danger_kept 1 (listed Blocked, report only): V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe [REF-ANY; DenyListed reg.hklm.system]"
+    },
+    {
+      "id": "K8",
+      "step": "G3",
+      "subject": "dirty/python suggestion",
+      "value": "0 suggestion(s), 0 Launcher item(s) offered",
+      "limit": "0 suggestions, Launcher not offered (kept by Python 3.13.1)",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K8",
+      "step": "G3",
+      "subject": "dirty/python312-with-313 suggestion",
+      "value": 0,
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K8",
+      "step": "G3",
+      "subject": "dirty/notices elsewhere",
+      "value": "0 notice(s) in 7 app(s)",
+      "limit": "notices == [] for every app but clean/cp python",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K8",
+      "step": "G8",
+      "subject": "cp/python suggestion",
+      "value": "1 suggestion(s), actions ['ReportOnly'], 1 notice(s)",
+      "limit": ">= 1, all ReportOnly, each a notice in the score on the Launcher's Uninstall key",
+      "pass": true,
+      "note": "Python Launcher on K:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80} (Likely, would be danger)"
+    },
+    {
+      "id": "K8",
+      "step": "G8",
+      "subject": "cp/notices elsewhere",
+      "value": "0 notice(s) in 2 app(s)",
+      "limit": "notices == [] for every app but clean/cp python",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K9",
+      "step": "G4",
+      "subject": "m1b-traps-7zip",
+      "value": "cases=26 escapes=0 missed_owned=0 failed_cases=0 unplanted_targets=0 pre_existing_objects=1",
+      "limit": "escapes 0, missed_owned 0, 26 cases, every case planted",
+      "pass": true,
+      "note": "owned bands: svc-owned=Likely, task-owned=Likely, fw-owned=Blocked/Likely, com-owned=Likely"
+    },
+    {
+      "id": "K9",
+      "step": "G4",
+      "subject": "m1bd-traps-7zip",
+      "value": "cases=26 escapes=0 missed_owned=0 failed_cases=0 unplanted_targets=0 pre_existing_objects=2",
+      "limit": "escapes 0, missed_owned 0, 26 cases, every case planted",
+      "pass": true,
+      "note": "owned bands: svc-owned=Likely, task-owned=Likely, fw-owned=Blocked/Likely, com-owned=Likely"
+    },
+    {
+      "id": "K9",
+      "step": "G8",
+      "subject": "m1bcp-traps-7zip",
+      "value": "cases=26 escapes=0 missed_owned=0 failed_cases=0 unplanted_targets=0 pre_existing_objects=1",
+      "limit": "escapes 0, missed_owned 0, 26 cases, every case planted",
+      "pass": true,
+      "note": "owned bands: svc-owned=Likely, task-owned=Likely, fw-owned=Blocked/Likely, com-owned=Likely"
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "budget runs",
+      "value": "20 run(s), 0 problem(s)",
+      "limit": "20 runs (2 engines x 2 steps x 5 rounds), all exit 0, round 1 cold",
+      "pass": true,
+      "note": "host settled True after 210.6 s, CPU 1.5 %; power plan 381b4222-f694-41f0-9685-ff5bb260df2e"
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "reference walks per scan",
+      "value": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "limit": "1 each",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "added scan time (warm)",
+      "value": 1.083,
+      "limit": "<= 2.5 s",
+      "pass": true,
+      "note": "m1b 9.646 s vs m2 8.563 s (median)"
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "added scan time (cold)",
+      "value": 1.57,
+      "limit": "<= 6.5 s",
+      "pass": true,
+      "note": "m1b 9.986 s vs m2 8.416 s (median)"
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "added harvest time (warm)",
+      "value": 1.008,
+      "limit": "<= 2.5 s",
+      "pass": true,
+      "note": "m1b 11.314 s vs m2 10.306 s (median)"
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "added harvest time (cold)",
+      "value": 1.193,
+      "limit": "<= 6.5 s",
+      "pass": true,
+      "note": "m1b 11.330 s vs m2 10.137 s (median)"
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "ownership.components",
+      "value": 0.245,
+      "limit": "<= 1.5 s",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "ownership.tables (cold)",
+      "value": 0.254,
+      "limit": "<= 4.0 s",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "ownership.tables (warm)",
+      "value": 0.1385,
+      "limit": "<= 0.3 s",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "warm MSI table cache",
+      "value": "0 problem(s)",
+      "limit": "every warm m1b log: msi_table_cache disk (hits >= 1), fewer sys.msi_tables than cold",
+      "pass": true,
+      "note": "sys.msi_tables warm/cold: harvest r2 0/107, harvest r3 0/107, harvest r4 0/107, harvest r5 0/107, scan r2 0/107, scan r3 0/107, scan r4 0/107, scan r5 0/107"
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "like for like",
+      "value": "like for like",
+      "limit": "both engines: same install root count >= 1, 0 co-product candidates",
+      "pass": true,
+      "note": "program HKLM|32|{AB5C933E-5C7D-4D30-B314-9C83A49B94BE}: 1 root(s) for both engines"
+    },
+    {
+      "id": "K16",
+      "step": "G1",
+      "subject": "replay diff",
+      "value": "rows=3 unexplained=0 promotions=0 problems=0",
+      "limit": "every row an allowed reason, unexplained 0, every promotion justified",
+      "pass": true,
+      "note": null
+    }
+  ],
+  "failed": 0,
+  "pass": true,
+  "gate": true,
+  "not_gate_because": []
+}

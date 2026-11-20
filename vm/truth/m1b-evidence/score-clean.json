@@ -1,0 +1,2271 @@
+{
+  "schema": "purge.rig.score/1",
+  "macro": [
+    {
+      "tool": "purge",
+      "apps": 7,
+      "truth_n": 152,
+      "recall_listed": 0.1809873949579832,
+      "recall_visible": 0.1809873949579832,
+      "recall_safe": 0.047619047619047616,
+      "recall_listed_nd": 0.1809873949579832,
+      "recall_visible_nd": 0.1809873949579832,
+      "recall_safe_nd": 0.047619047619047616,
+      "precision_safe": 1.0,
+      "partial_n": 1,
+      "danger_listed": 4,
+      "danger_offered": 0,
+      "danger_kept": 4,
+      "danger_blocking": 0,
+      "danger_preselected": 0,
+      "userdata_preselected": 0,
+      "noop_if_nonempty": 9,
+      "noop_would_be_danger": 7,
+      "classes": {
+        "danger_blocking": 0,
+        "userdata_blocking": 0,
+        "danger_unticked": 4,
+        "userdata_unticked": 0,
+        "preexisting_value_ref": 0,
+        "old_empty_ext_key": 0,
+        "replaced_value": 0,
+        "userdata_safe": 0
+      },
+      "per_kind_recall": {
+        "Path": 0.0,
+        "RegKey": 0.25,
+        "RegValue": 0.3138888888888889,
+        "RegValueChanged": 0.0
+      },
+      "outcomes": {
+        "ambient": 0,
+        "danger": 4,
+        "gone": 0,
+        "hit": 10,
+        "noop_if_nonempty": 9,
+        "other": 0
+      }
+    }
+  ],
+  "apps": [
+    {
+      "id": "7zip",
+      "dir": "runs/m1b-7zip",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 51,
+        "kept_owner": 0,
+        "leftover": 3,
+        "rig": 0,
+        "user_data": 0
+      },
+      "ambient_by_run": {
+        "m1b-null1": 31,
+        "m1b-null2": 30,
+        "m1b-null3": 31
+      },
+      "tools": [
+        {
+          "app": "7zip",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1b-7zip\\plans\\purge.json",
+          "offered_n": 1,
+          "truth_n": 3,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 1,
+          "recall_listed": 0.3333333333333333,
+          "recall_visible": 0.3333333333333333,
+          "recall_safe": 0.3333333333333333,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 1,
+          "recall_listed_nd": 0.3333333333333333,
+          "recall_visible_nd": 0.3333333333333333,
+          "recall_safe_nd": 0.3333333333333333,
+          "partial_n": 0,
+          "safe_n": 1,
+          "safe_not_gone": 1,
+          "safe_hits": 1,
+          "precision_safe": 1.0,
+          "danger_listed": 0,
+          "danger_offered": 0,
+          "danger_kept": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "protected_n": 0,
+          "protected_correct_n": 0,
+          "protected_correct": null,
+          "protected_correct_pct": null,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 1,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 2,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 1,
+              "covered": 1,
+              "recall": 1.0
+            },
+            "RegValue": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "REG-SOFTWARE": {
+              "hit": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\5bb830f67194431a.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\7ZFM.EXE-44040917.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 9632
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip",
+              "band": "Safe",
+              "preselected": true,
+              "scanner": "REG-SOFTWARE",
+              "action": "DeleteKey",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ],
+          "notices": []
+        }
+      ]
+    },
+    {
+      "id": "python",
+      "dir": "runs/m1b-python",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 133,
+        "kept_owner": 29,
+        "leftover": 33,
+        "user_data": 1
+      },
+      "ambient_by_run": {
+        "m1b-null1": 89,
+        "m1b-null2": 90,
+        "m1b-null3": 49
+      },
+      "tools": [
+        {
+          "app": "python",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1b-python\\plans\\purge.json",
+          "offered_n": 3,
+          "truth_n": 34,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 0,
+          "recall_listed": 0.029411764705882353,
+          "recall_visible": 0.029411764705882353,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.029411764705882353,
+          "recall_visible_nd": 0.029411764705882353,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 1,
+          "danger_offered": 0,
+          "danger_kept": 1,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 1,
+          "noop_would_be_danger": 1,
+          "protected_n": 29,
+          "protected_correct_n": 29,
+          "protected_correct": 1.0,
+          "protected_correct_pct": 100.0,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 1,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 1,
+            "gone": 0,
+            "hit": 1,
+            "noop_if_nonempty": 1,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 25,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            },
+            "RegValue": {
+              "n": 5,
+              "covered": 1,
+              "recall": 0.2
+            },
+            "RegValueChanged": {
+              "n": 4,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "REF-ANY": {
+              "danger": 1,
+              "hit": 1
+            },
+            "REG-SOFTWARE": {
+              "noop_if_nonempty": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\.idlerc",
+              "label": "user_data",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\DELF2D3.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 879168
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 71380
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642_000_core_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 87664
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642_001_exe_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 115194
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642_002_dev_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 503762
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642_003_lib_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1434490
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642_004_doc_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1222940
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642_005_tcltk_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 3005748
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642_006_launcher_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 109206
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642_007_pip_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 114680
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191642_008_path_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 88832
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191903.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 55743
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191903_000_path_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 81646
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191903_001_pip_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 106734
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191903_002_tcltk_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 2397426
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191903_003_doc_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 984120
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191903_004_lib_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1200072
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191903_005_dev_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 419362
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191903_006_exe_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 108700
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118191903_007_core_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 83168
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\97992354503a502a.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\cfa2f398f6b586de.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHON.EXE-E3BB012A.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 35040
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHONW.EXE-3E88984D.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 22988
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Windows\\Temp\\{D625889B-919B-4230-A59F-7DE717FCB4CC}\\.be\\python-3.12.7-amd64.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 108
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|Zvpebfbsg.NhgbTrarengrq.{401RRN19-N821-9P37-NS46-1S4QSR85QQO9}",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|1",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|2",
+              "label": "leftover",
+              "partial": false,
+              "size": 306
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits|SecureTimeEstimated",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits|SecureTimeHigh",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits|SecureTimeLow",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits\\RunTime|SecureTimeTickCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "deny: Report-only: Background Activity Moderator state belongs to the bam driver."
+              ]
+            }
+          ],
+          "noop": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (0 existed in snap0), e.g. K:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|AssociateFiles",
+                "as a plain delete: covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Python"
+              ]
+            }
+          ],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "deny: Report-only: Background Activity Moderator state belongs to the bam driver."
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (0 existed in snap0), e.g. K:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|AssociateFiles",
+                "as a plain delete: covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Python"
+              ]
+            }
+          ],
+          "notices": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "SYS-BURNDEPS",
+              "action": "ReportOnly",
+              "suggest_uninstall": "Python Launcher",
+              "would_be": "danger",
+              "reasons": [
+                "covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}"
+              ],
+              "truth": [
+                "kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{73831AC2-F0E1-4173-9FDB-D07463D7EB80}"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "python312-with-313",
+      "dir": "runs/m1b-python312-with-313",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 76,
+        "kept_owner": 42,
+        "leftover": 44,
+        "user_data": 1
+      },
+      "ambient_by_run": {
+        "m1b-null1": 39,
+        "m1b-null2": 37,
+        "m1b-null3": 35
+      },
+      "tools": [
+        {
+          "app": "python312-with-313",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1b-python312-with-313\\plans\\purge.json",
+          "offered_n": 6,
+          "truth_n": 45,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 0,
+          "recall_listed": 0.022222222222222223,
+          "recall_visible": 0.022222222222222223,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.022222222222222223,
+          "recall_visible_nd": 0.022222222222222223,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 1,
+          "danger_offered": 0,
+          "danger_kept": 1,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 4,
+          "noop_would_be_danger": 3,
+          "protected_n": 42,
+          "protected_correct_n": 42,
+          "protected_correct": 1.0,
+          "protected_correct_pct": 100.0,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 1,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 1,
+            "gone": 0,
+            "hit": 1,
+            "noop_if_nonempty": 4,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 25,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 5,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValue": {
+              "n": 10,
+              "covered": 1,
+              "recall": 0.1
+            },
+            "RegValueChanged": {
+              "n": 5,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "FS-VENDORPARENT": {
+              "noop_if_nonempty": 2
+            },
+            "REF-ANY": {
+              "danger": 1,
+              "hit": 1
+            },
+            "REG-SOFTWARE": {
+              "noop_if_nonempty": 2
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Program Files\\Python312",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12",
+              "label": "leftover",
+              "partial": false,
+              "size": 6452
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.idlerc",
+              "label": "user_data",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\DEL9D7B.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 879168
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 69981
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_000_core_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 87664
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_001_exe_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 115194
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_002_dev_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 503762
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_003_lib_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1434492
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_004_doc_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1222940
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_005_tcltk_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 3005748
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_006_pip_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 114680
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_007_path_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 88706
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 56410
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_000_path_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 78540
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_001_pip_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 106318
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_002_tcltk_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 2391962
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_003_doc_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 979798
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_004_lib_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1199318
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_005_dev_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 418722
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_006_exe_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 105710
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_007_core_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 83272
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Installer\\{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}",
+              "label": "leftover",
+              "partial": false,
+              "size": 57746
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHON.EXE-E3BB012A.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 34883
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHONW.EXE-3E88984D.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 23019
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\Help",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\Idle",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\IdleShortcuts",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\InstalledFeatures",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\PythonPath",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\Program Files\\Python312\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 2
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\Program Files\\Python312\\Doc\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 2
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\WINDOWS\\Installer\\{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 2
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Windows\\Temp\\{1FF34E85-B299-4A72-B356-56DA8E37B56A}\\.be\\python-3.12.7-amd64.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 108
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|Zvpebfbsg.NhgbTrarengrq.{401RRN19-N821-9P37-NS46-1S4QSR85QQO9}",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|3",
+              "label": "leftover",
+              "partial": false,
+              "size": 260
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|4",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|5",
+              "label": "leftover",
+              "partial": false,
+              "size": 306
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment|Path",
+              "label": "leftover",
+              "partial": false,
+              "size": 534
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits|SecureTimeEstimated",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits|SecureTimeHigh",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits|SecureTimeLow",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits\\RunTime|SecureTimeTickCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "deny: Report-only: Background Activity Moderator state belongs to the bam driver."
+              ]
+            }
+          ],
+          "noop": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (4 existed in snap0), e.g. K:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|AssociateFiles",
+                "as a plain delete: existed in snap0: K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+                "as a plain delete: covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Python"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 50 entries left inside (30 existed in snap0), e.g. K:HKLM\\SOFTWARE\\Python\\PythonCore, K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12, K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\Help",
+                "as a plain delete: existed in snap0: K:HKLM\\SOFTWARE\\Python"
+              ]
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (0 existed in snap0), e.g. P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\IDLE (Python 3.12 64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\Python 3.12 (64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\Python 3.12 Manuals (64-bit).lnk"
+              ]
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (4 existed in snap0), e.g. P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\IDLE (Python 3.13 64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\Python 3.13 (64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\Python 3.13 Manuals (64-bit).lnk",
+                "as a plain delete: existed in snap0: P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13"
+              ]
+            }
+          ],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "deny: Report-only: Background Activity Moderator state belongs to the bam driver."
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (4 existed in snap0), e.g. K:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|AssociateFiles",
+                "as a plain delete: existed in snap0: K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+                "as a plain delete: covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Python"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 50 entries left inside (30 existed in snap0), e.g. K:HKLM\\SOFTWARE\\Python\\PythonCore, K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12, K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\Help",
+                "as a plain delete: existed in snap0: K:HKLM\\SOFTWARE\\Python"
+              ]
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (0 existed in snap0), e.g. P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\IDLE (Python 3.12 64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\Python 3.12 (64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\Python 3.12 Manuals (64-bit).lnk"
+              ]
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (4 existed in snap0), e.g. P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\IDLE (Python 3.13 64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\Python 3.13 (64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\Python 3.13 Manuals (64-bit).lnk",
+                "as a plain delete: existed in snap0: P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13"
+              ]
+            }
+          ],
+          "notices": []
+        }
+      ]
+    },
+    {
+      "id": "python313-with-312",
+      "dir": "runs/m1b-python313-with-312",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 81,
+        "kept_owner": 44,
+        "leftover": 47,
+        "user_data": 1
+      },
+      "ambient_by_run": {
+        "m1b-null1": 37,
+        "m1b-null2": 36,
+        "m1b-null3": 34
+      },
+      "tools": [
+        {
+          "app": "python313-with-312",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1b-python313-with-312\\plans\\purge.json",
+          "offered_n": 6,
+          "truth_n": 48,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 0,
+          "recall_listed": 0.020833333333333332,
+          "recall_visible": 0.020833333333333332,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.020833333333333332,
+          "recall_visible_nd": 0.020833333333333332,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 1,
+          "danger_offered": 0,
+          "danger_kept": 1,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 4,
+          "noop_would_be_danger": 3,
+          "protected_n": 44,
+          "protected_correct_n": 44,
+          "protected_correct": 1.0,
+          "protected_correct_pct": 100.0,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 1,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 1,
+            "gone": 0,
+            "hit": 1,
+            "noop_if_nonempty": 4,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 25,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 5,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValue": {
+              "n": 12,
+              "covered": 1,
+              "recall": 0.08333333333333333
+            },
+            "RegValueChanged": {
+              "n": 6,
+              "covered": 0,
+              "recall": 0.0
+            }
+          },
+          "per_scanner": {
+            "FS-VENDORPARENT": {
+              "noop_if_nonempty": 2
+            },
+            "REF-ANY": {
+              "danger": 1,
+              "hit": 1
+            },
+            "REG-SOFTWARE": {
+              "noop_if_nonempty": 2
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Program Files\\Python313",
+              "label": "leftover",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13",
+              "label": "leftover",
+              "partial": false,
+              "size": 6452
+            },
+            {
+              "target": "P:C:\\Users\\tester\\.idlerc",
+              "label": "user_data",
+              "partial": false,
+              "size": 0
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\DEL8000.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 902816
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 76737
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352_000_core_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 87714
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352_001_exe_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 115258
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352_002_dev_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 605162
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352_003_lib_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1319130
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352_004_doc_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1299120
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352_005_tcltk_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 2535894
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352_006_launcher_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 207670
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352_007_pip_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 114742
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193352_008_path_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 88886
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193629.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 59120
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193629_000_path_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 77840
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193629_001_pip_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 105406
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193629_002_tcltk_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 2033930
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193629_003_doc_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1038230
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193629_004_lib_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 1109252
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193629_005_dev_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 498422
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193629_006_exe_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 105444
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.13.17 (64-bit)_20261118193629_007_core_AllUsers.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 83218
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHON.EXE-992E9CF7.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 34026
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PYTHONW.EXE-95C4C392.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 22702
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.13\\Help",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.13\\Idle",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.13\\IdleShortcuts",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.13\\InstalledFeatures",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.13\\PythonPath",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\Program Files\\Python313\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 2
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\Program Files\\Python313\\Doc\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\Program Files\\Python313\\Lib\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 2
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\WINDOWS\\Installer\\{558C4CF1-82E8-4C42-BC91-5F1E96E9C99C}\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 2
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\WINDOWS\\Installer\\{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}\\",
+              "label": "leftover",
+              "partial": false,
+              "size": 2
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Windows\\Temp\\{B11D202B-9676-4EDF-BC1F-BCA0258BC4B6}\\.be\\python-3.13.17-amd64.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 108
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|Zvpebfbsg.NhgbTrarengrq.{05SS6476-SOS9-40N2-24Q2-168978RS936Q}",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|3",
+              "label": "leftover",
+              "partial": false,
+              "size": 260
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|4",
+              "label": "leftover",
+              "partial": false,
+              "size": 370
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|5",
+              "label": "leftover",
+              "partial": false,
+              "size": 306
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment|Path",
+              "label": "leftover",
+              "partial": false,
+              "size": 534
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits|SecureTimeEstimated",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits|SecureTimeHigh",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits|SecureTimeLow",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits\\RunTime|SecureTimeConfidence",
+              "label": "leftover",
+              "partial": false,
+              "size": 4
+            },
+            {
+              "target": "C:HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits\\RunTime|SecureTimeTickCount",
+              "label": "leftover",
+              "partial": false,
+              "size": 8
+            }
+          ],
+          "danger": [
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{9b3415f5-afcc-46ea-9954-a8000df10f86}\\python-3.13.17-amd64.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "deny: Report-only: Background Activity Moderator state belongs to the bam driver."
+              ]
+            }
+          ],
+          "noop": [
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (4 existed in snap0), e.g. K:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|AssociateFiles",
+                "as a plain delete: existed in snap0: K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+                "as a plain delete: covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Python"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 50 entries left inside (30 existed in snap0), e.g. K:HKLM\\SOFTWARE\\Python\\PythonCore, K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12, V:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12|DisplayName",
+                "as a plain delete: existed in snap0: K:HKLM\\SOFTWARE\\Python"
+              ]
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (4 existed in snap0), e.g. P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\IDLE (Python 3.12 64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\Python 3.12 (64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\Python 3.12 Manuals (64-bit).lnk",
+                "as a plain delete: existed in snap0: P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12"
+              ]
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (0 existed in snap0), e.g. P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\IDLE (Python 3.13 64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\Python 3.13 (64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\Python 3.13 Manuals (64-bit).lnk"
+              ]
+            }
+          ],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Users\\tester\\AppData\\Local\\Package Cache\\{9b3415f5-afcc-46ea-9954-a8000df10f86}\\python-3.13.17-amd64.exe",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{9b3415f5-afcc-46ea-9954-a8000df10f86}\\python-3.13.17-amd64.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "deny: Report-only: Background Activity Moderator state belongs to the bam driver."
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (4 existed in snap0), e.g. K:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|, V:HKLM\\SOFTWARE\\WOW6432Node\\Python\\PyLauncher|AssociateFiles",
+                "as a plain delete: existed in snap0: K:HKLM\\SOFTWARE\\WOW6432Node\\Python",
+                "as a plain delete: covers kept_owner K:HKLM\\SOFTWARE\\WOW6432Node\\Python"
+              ]
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Python",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REG-SOFTWARE",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 50 entries left inside (30 existed in snap0), e.g. K:HKLM\\SOFTWARE\\Python\\PythonCore, K:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12, V:HKLM\\SOFTWARE\\Python\\PythonCore\\3.12|DisplayName",
+                "as a plain delete: existed in snap0: K:HKLM\\SOFTWARE\\Python"
+              ]
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "would_be_danger": true,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (4 existed in snap0), e.g. P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\IDLE (Python 3.12 64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\Python 3.12 (64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\Python 3.12 Manuals (64-bit).lnk",
+                "as a plain delete: existed in snap0: P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12"
+              ]
+            },
+            {
+              "target": "P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "FS-VENDORPARENT",
+              "action": "RemoveDirIfEmpty",
+              "outcome": "noop_if_nonempty",
+              "covers": 0,
+              "partial": 0,
+              "reasons": [
+                "not empty after the plan's other removals: 4 entries left inside (0 existed in snap0), e.g. P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\IDLE (Python 3.13 64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\Python 3.13 (64-bit).lnk, P:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.13\\Python 3.13 Manuals (64-bit).lnk"
+              ]
+            }
+          ],
+          "notices": []
+        }
+      ]
+    },
+    {
+      "id": "node",
+      "dir": "runs/m1b-node",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 74,
+        "leftover": 4
+      },
+      "ambient_by_run": {
+        "m1b-null1": 36,
+        "m1b-null2": 34,
+        "m1b-null3": 35
+      },
+      "tools": [
+        {
+          "app": "node",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1b-node\\plans\\purge.json",
+          "offered_n": 3,
+          "truth_n": 4,
+          "covered_listed": 3,
+          "covered_visible": 3,
+          "covered_safe": 0,
+          "recall_listed": 0.75,
+          "recall_visible": 0.75,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 3,
+          "covered_visible_nd": 3,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.75,
+          "recall_visible_nd": 0.75,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_offered": 0,
+          "danger_kept": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "protected_n": 0,
+          "protected_correct_n": 0,
+          "protected_correct": null,
+          "protected_correct_pct": null,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 3,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 1,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            },
+            "RegValue": {
+              "n": 3,
+              "covered": 3,
+              "recall": 1.0
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "REF-ANY": {
+              "hit": 3
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\b37f432ffcc36ce3.automaticDestinations-ms",
+              "label": "leftover",
+              "partial": false,
+              "size": 2560
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|1",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|2",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|3",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            }
+          ],
+          "notices": []
+        }
+      ]
+    },
+    {
+      "id": "vcredist",
+      "dir": "runs/m1b-vcredist",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 117,
+        "leftover": 9
+      },
+      "ambient_by_run": {
+        "m1b-null1": 85,
+        "m1b-null2": 85,
+        "m1b-null3": 45
+      },
+      "tools": [
+        {
+          "app": "vcredist",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1b-vcredist\\plans\\purge.json",
+          "offered_n": 2,
+          "truth_n": 9,
+          "covered_listed": 1,
+          "covered_visible": 1,
+          "covered_safe": 0,
+          "recall_listed": 0.1111111111111111,
+          "recall_visible": 0.1111111111111111,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 1,
+          "covered_visible_nd": 1,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.1111111111111111,
+          "recall_visible_nd": 0.1111111111111111,
+          "recall_safe_nd": 0.0,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 1,
+          "danger_offered": 0,
+          "danger_kept": 1,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "protected_n": 0,
+          "protected_correct_n": 0,
+          "protected_correct": null,
+          "protected_correct_pct": null,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 1,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 1,
+            "gone": 0,
+            "hit": 1,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 7,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            },
+            "RegValue": {
+              "n": 2,
+              "covered": 1,
+              "recall": 0.5
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "REF-ANY": {
+              "danger": 1,
+              "hit": 1
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195335.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 17061
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195335_000_vcRuntimeMinimum_x64.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 130226
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195335_001_vcRuntimeAdditional_x64.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 134418
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195426.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 14193
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195426_000_vcRuntimeAdditional_x64.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 119640
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195426_001_vcRuntimeMinimum_x64.log",
+              "label": "leftover",
+              "partial": false,
+              "size": 118798
+            },
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Temp\\DELB48C.tmp",
+              "label": "leftover",
+              "partial": false,
+              "size": 686152
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Windows\\Temp\\{D7CA27E1-6F69-4444-8789-E4274FB4ED44}\\.be\\VC_redist.x64.exe",
+              "label": "leftover",
+              "partial": false,
+              "size": 108
+            }
+          ],
+          "danger": [
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "deny: Report-only: Background Activity Moderator state belongs to the bam driver."
+              ]
+            }
+          ],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 1,
+              "partial": 0
+            },
+            {
+              "target": "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000|\\Device\\HarddiskVolume4\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe",
+              "band": "Blocked",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "danger",
+              "covers": 1,
+              "partial": 0,
+              "class": "unticked",
+              "reasons": [
+                "deny: Report-only: Background Activity Moderator state belongs to the bam driver."
+              ]
+            }
+          ],
+          "notices": []
+        }
+      ]
+    },
+    {
+      "id": "powershell",
+      "dir": "runs/m1b-powershell",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 150,
+        "kept_owner": 2,
+        "leftover": 9
+      },
+      "ambient_by_run": {
+        "m1b-null1": 38,
+        "m1b-null2": 35,
+        "m1b-null3": 37
+      },
+      "tools": [
+        {
+          "app": "powershell",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1b-powershell\\plans\\purge.json",
+          "offered_n": 2,
+          "truth_n": 9,
+          "covered_listed": 0,
+          "covered_visible": 0,
+          "covered_safe": 0,
+          "recall_listed": 0.0,
+          "recall_visible": 0.0,
+          "recall_safe": 0.0,
+          "covered_listed_nd": 0,
+          "covered_visible_nd": 0,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": 0.0,
+          "recall_visible_nd": 0.0,
+          "recall_safe_nd": 0.0,
+          "partial_n": 1,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_offered": 0,
+          "danger_kept": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "protected_n": 2,
+          "protected_correct_n": 2,
+          "protected_correct": 1.0,
+          "protected_correct_pct": 100.0,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 2,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 2,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegKey": {
+              "n": 6,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValue": {
+              "n": 1,
+              "covered": 0,
+              "recall": 0.0
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {
+            "REF-ANY": {
+              "hit": 2
+            }
+          },
+          "missed": [
+            {
+              "target": "P:C:\\Users\\tester\\AppData\\Local\\Microsoft\\PowerShell",
+              "label": "leftover",
+              "partial": false,
+              "size": 138150
+            },
+            {
+              "target": "P:C:\\WINDOWS\\Prefetch\\PWSH.EXE-28EDFA52.pf",
+              "label": "leftover",
+              "partial": false,
+              "size": 48486
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\PowerShellCore",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\PowerShellCore/Analytic",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\PowerShellCore/Debug",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\PowerShellCore/Operational",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}",
+              "label": "leftover",
+              "partial": true
+            },
+            {
+              "target": "K:HKLM\\SYSTEM\\CurrentControlSet\\Control\\WMI\\Autologger\\EventLog-Application\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}",
+              "label": "leftover",
+              "partial": false
+            },
+            {
+              "target": "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count|Zvpebfbsg.NhgbTrarengrq.{N49227RN-5NS0-Q494-N3S1-0918N278RQ71}",
+              "label": "leftover",
+              "partial": false,
+              "size": 72
+            }
+          ],
+          "danger": [],
+          "noop": [],
+          "items": [
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}|MessageFileName",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            },
+            {
+              "target": "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\{f90714a8-5509-434a-bf6d-b1624c8a19a2}|ResourceFileName",
+              "band": "Likely",
+              "preselected": false,
+              "scanner": "REF-ANY",
+              "action": "DeleteValue",
+              "outcome": "hit",
+              "covers": 0,
+              "partial": 1
+            }
+          ],
+          "notices": []
+        }
+      ]
+    },
+    {
+      "id": "temurin",
+      "dir": "runs/m1b-temurin",
+      "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+      "truth_counts": {
+        "ambient": 41
+      },
+      "ambient_by_run": {
+        "m1b-null1": 26,
+        "m1b-null2": 26,
+        "m1b-null3": 24
+      },
+      "tools": [
+        {
+          "app": "temurin",
+          "tool": "purge",
+          "mode": "post",
+          "plan_file": "runs/m1b-temurin\\plans\\purge.json",
+          "offered_n": 0,
+          "truth_n": 0,
+          "covered_listed": 0,
+          "covered_visible": 0,
+          "covered_safe": 0,
+          "recall_listed": null,
+          "recall_visible": null,
+          "recall_safe": null,
+          "covered_listed_nd": 0,
+          "covered_visible_nd": 0,
+          "covered_safe_nd": 0,
+          "recall_listed_nd": null,
+          "recall_visible_nd": null,
+          "recall_safe_nd": null,
+          "partial_n": 0,
+          "safe_n": 0,
+          "safe_not_gone": 0,
+          "safe_hits": 0,
+          "precision_safe": null,
+          "danger_listed": 0,
+          "danger_offered": 0,
+          "danger_kept": 0,
+          "danger_blocking": 0,
+          "danger_preselected": 0,
+          "userdata_preselected": 0,
+          "noop_if_nonempty": 0,
+          "noop_would_be_danger": 0,
+          "protected_n": 0,
+          "protected_correct_n": 0,
+          "protected_correct": null,
+          "protected_correct_pct": null,
+          "protected_wrong": [],
+          "classes": {
+            "danger_blocking": 0,
+            "userdata_blocking": 0,
+            "danger_unticked": 0,
+            "userdata_unticked": 0,
+            "preexisting_value_ref": 0,
+            "old_empty_ext_key": 0,
+            "replaced_value": 0,
+            "userdata_safe": 0
+          },
+          "outcomes": {
+            "ambient": 0,
+            "danger": 0,
+            "gone": 0,
+            "hit": 0,
+            "noop_if_nonempty": 0,
+            "other": 0
+          },
+          "per_kind": {
+            "Path": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            },
+            "RegKey": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            },
+            "RegValue": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            },
+            "RegValueChanged": {
+              "n": 0,
+              "covered": 0,
+              "recall": null
+            }
+          },
+          "per_scanner": {},
+          "missed": [],
+          "danger": [],
+          "noop": [],
+          "items": [],
+          "notices": []
+        }
+      ]
+    }
+  ]
+}

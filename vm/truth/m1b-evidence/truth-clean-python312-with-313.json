@@ -1,0 +1,2758 @@
+{
+  "schema": "purge.rig.truth/1",
+  "id": "python312-with-313",
+  "run": {
+    "schema": "purge.rig.run/1",
+    "id": "python312-with-313",
+    "run": "m1b-python312-with-313",
+    "kind": "app",
+    "tech": "WiX Burn bundle",
+    "url": null,
+    "installer": "C:\\cr\\inst\\python.exe",
+    "installer_sha256": "1206721601A62C925D4E4A0DCFC371E88F2DDBE8C0C07962EBB2BE9B5BDE4570",
+    "installer_sig": "Valid CN=Python Software Foundation",
+    "computer": "INBOUND-WIN11-T",
+    "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os": "EnterpriseSEval 26100.1742",
+    "started": "2026-11-18T19:21:54.9466604-08:00",
+    "finished": "2026-11-18T19:29:45.7973750-08:00",
+    "main": {
+      "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+      "name": "Python 3.12.7 (64-bit)",
+      "version": "3.12.7150.0",
+      "publisher": "Python Software Foundation",
+      "sys": false,
+      "parent": null,
+      "uninstall": "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\"  /uninstall",
+      "quiet": "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\" /uninstall /quiet",
+      "loc": null,
+      "icon": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe,0",
+      "msi": null,
+      "size": 118762,
+      "install_date": null,
+      "bundle": true
+    },
+    "install": {
+      "cmd": "\"C:\\cr\\inst\\python.exe\" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+      "start": "2026-11-18T19:24:52.8888589-08:00",
+      "end": "2026-11-18T19:25:27.8846495-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "killed": [],
+      "ran_as": "elevated"
+    },
+    "launch": {
+      "done": true,
+      "exe": "C:\\Program Files\\Python312\\pythonw.exe",
+      "args": "-m idlelib",
+      "start": "2026-11-18T19:25:49.0904300-08:00",
+      "end": "2026-11-18T19:26:20.9853058-08:00",
+      "found": true,
+      "closed": [
+        "pythonw.exe[7088]"
+      ],
+      "killed": [],
+      "reason": null
+    },
+    "uninstall": {
+      "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" uninstall \"HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}\" --quiet --fp C:\\cr\\out\\m1b-python312-with-313\\fp.json -o C:\\cr\\out\\m1b-python312-with-313\\engine-run.json",
+      "t0": "2026-11-18T19:27:30.3010774-08:00",
+      "t1": "2026-11-18T19:28:28.4562360-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "entry_gone": true,
+      "killed": [],
+      "via": "purge-engine",
+      "rig_t0": "2026-11-18T19:27:30.1408579-08:00",
+      "engine_exit": 0,
+      "times": "engine",
+      "outcome": "Success",
+      "verify_gone": {
+        "arp_gone": true,
+        "msi_unknown_all_ctx": true,
+        "main_exes_gone": true,
+        "passed": true
+      },
+      "rig_t1": "2026-11-18T19:28:30.7958221-08:00"
+    },
+    "entries_created": [
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{1BB43BDF-D9E8-487A-B743-CA10AAE7B25F}",
+        "name": "Python 3.12.7 Core Interpreter (64-bit)",
+        "version": "3.12.7150.0",
+        "publisher": "Python Software Foundation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{1BB43BDF-D9E8-487A-B743-CA10AAE7B25F}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{1BB43BDF-D9E8-487A-B743-CA10AAE7B25F}",
+        "size": 6808,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{314BCBA9-14E3-41D1-B9DD-32ADF7EA8C5D}",
+        "name": "Python 3.12.7 Documentation (64-bit)",
+        "version": "3.12.7150.0",
+        "publisher": "Python Software Foundation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{314BCBA9-14E3-41D1-B9DD-32ADF7EA8C5D}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{314BCBA9-14E3-41D1-B9DD-32ADF7EA8C5D}",
+        "size": 53236,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{680AB42D-FAF3-46E2-A16D-BDD38E4506BB}",
+        "name": "Python 3.12.7 pip Bootstrap (64-bit)",
+        "version": "3.12.7150.0",
+        "publisher": "Python Software Foundation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{680AB42D-FAF3-46E2-A16D-BDD38E4506BB}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{680AB42D-FAF3-46E2-A16D-BDD38E4506BB}",
+        "size": 268,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{8C1ACF90-E1B6-46A1-B4F0-DD6217005B25}",
+        "name": "Python 3.12.7 Executables (64-bit)",
+        "version": "3.12.7150.0",
+        "publisher": "Python Software Foundation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{8C1ACF90-E1B6-46A1-B4F0-DD6217005B25}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{8C1ACF90-E1B6-46A1-B4F0-DD6217005B25}",
+        "size": 2352,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}",
+        "name": "Python 3.12.7 Tcl/Tk Support (64-bit)",
+        "version": "3.12.7150.0",
+        "publisher": "Python Software Foundation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}",
+        "size": 15764,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{A26ABCC2-F6AA-4B7D-A767-16BE012DB52E}",
+        "name": "Python 3.12.7 Add to Path (64-bit)",
+        "version": "3.12.7150.0",
+        "publisher": "Python Software Foundation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{A26ABCC2-F6AA-4B7D-A767-16BE012DB52E}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{A26ABCC2-F6AA-4B7D-A767-16BE012DB52E}",
+        "size": 48,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{EA6E73B7-512D-4853-BBA5-331DAE48A6B1}",
+        "name": "Python 3.12.7 Development Libraries (64-bit)",
+        "version": "3.12.7150.0",
+        "publisher": "Python Software Foundation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{EA6E73B7-512D-4853-BBA5-331DAE48A6B1}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{EA6E73B7-512D-4853-BBA5-331DAE48A6B1}",
+        "size": 2196,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE}",
+        "name": "Python 3.12.7 Standard Library (64-bit)",
+        "version": "3.12.7150.0",
+        "publisher": "Python Software Foundation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE}",
+        "size": 24432,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "name": "Python 3.12.7 (64-bit)",
+        "version": "3.12.7150.0",
+        "publisher": "Python Software Foundation",
+        "sys": false,
+        "parent": null,
+        "uninstall": "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\"  /uninstall",
+        "quiet": "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\" /uninstall /quiet",
+        "loc": null,
+        "icon": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe,0",
+        "msi": null,
+        "size": 118762,
+        "install_date": null,
+        "bundle": true
+      }
+    ],
+    "entries_left": [],
+    "edge_pause": {
+      "method": "services stopped+disabled, MicrosoftEdgeUpdate* tasks disabled, running updater waited for/killed",
+      "start": "2026-11-18T19:21:55.1619563-08:00",
+      "end": "2026-11-18T19:22:03.4942639-08:00",
+      "services": [
+        {
+          "name": "edgeupdate",
+          "present": true,
+          "start_before": "Auto",
+          "state_before": "Stopped",
+          "start_after": "Disabled",
+          "state_after": "Stopped"
+        },
+        {
+          "name": "edgeupdatem",
+          "present": true,
+          "start_before": "Manual",
+          "state_before": "Stopped",
+          "start_after": "Disabled",
+          "state_after": "Stopped"
+        }
+      ],
+      "tasks": [
+        {
+          "path": "\\MicrosoftEdgeUpdateTaskMachineCore{CE164313-0EFA-47AA-BFE3-542DFBDC1B11}",
+          "state_before": "Ready",
+          "state_after": "Disabled"
+        },
+        {
+          "path": "\\MicrosoftEdgeUpdateTaskMachineUA{1AF5BD52-7897-43AA-9607-3B16D52A4B11}",
+          "state_before": "Ready",
+          "state_after": "Disabled"
+        }
+      ],
+      "updater_seen": [],
+      "waited_sec": 0,
+      "killed": [],
+      "errors": [],
+      "versions_before": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "versions_after": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "versions_end": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "held": true
+    },
+    "defender": {
+      "idle": {
+        "method": "loop: MpCmdRun -SignatureUpdate; on a non-zero exit wait for a change (busy_wait_sec) and run it again; done when the last run exited 0, versions + Definition Updates + Scans\\mpcache-* stayed unchanged for stable_sec after it and the signatures are current; bounded by max_wait_sec",
+        "start": "2026-11-18T19:23:19.0288633-08:00",
+        "end": "2026-11-18T19:24:25.8080047-08:00",
+        "before": {
+          "source": "MSFT_MpComputerStatus",
+          "av_signature": "1.463.364.0",
+          "as_signature": "1.463.364.0",
+          "nis_signature": "1.463.364.0",
+          "engine": "1.1.26100.4",
+          "platform": "4.18.26100.4",
+          "av_signature_updated": "2026-11-18T09:47:36.0000000-08:00",
+          "av_signature_age": 0,
+          "signatures_out_of_date": false,
+          "at": "2026-11-18T19:23:19.0417499-08:00",
+          "error": null
+        },
+        "attempts": [
+          {
+            "exe": "C:\\Program Files\\Windows Defender\\MpCmdRun.exe",
+            "args": "-SignatureUpdate",
+            "start": "2026-11-18T19:23:19.2669331-08:00",
+            "exit": 0,
+            "timed_out": false,
+            "sec": 5.5,
+            "error": null,
+            "n": 1
+          }
+        ],
+        "trigger": {
+          "exe": "C:\\Program Files\\Windows Defender\\MpCmdRun.exe",
+          "args": "-SignatureUpdate",
+          "start": "2026-11-18T19:23:19.2669331-08:00",
+          "exit": 0,
+          "timed_out": false,
+          "sec": 5.5,
+          "error": null,
+          "n": 1
+        },
+        "changes": 0,
+        "stable": true,
+        "current": true,
+        "stable_sec": 60,
+        "busy_wait_sec": 240,
+        "max_age_days": 1,
+        "bounded": false,
+        "max_wait_sec": 600,
+        "after": {
+          "source": "MSFT_MpComputerStatus",
+          "av_signature": "1.463.364.0",
+          "as_signature": "1.463.364.0",
+          "nis_signature": "1.463.364.0",
+          "engine": "1.1.26100.4",
+          "platform": "4.18.26100.4",
+          "av_signature_updated": "2026-11-18T09:47:36.0000000-08:00",
+          "av_signature_age": 0,
+          "signatures_out_of_date": false,
+          "at": "2026-11-18T19:24:25.6234137-08:00",
+          "error": null
+        },
+        "updated": false,
+        "waited_sec": 66.8,
+        "logs": [
+          {
+            "from": "C:\\Users\\tester\\AppData\\Local\\Temp\\MpCmdRun.log",
+            "to": "defender-MpCmdRun.log",
+            "bytes": 1682,
+            "truncated": false,
+            "error": null
+          },
+          {
+            "from": "C:\\ProgramData\\Microsoft\\Windows Defender\\Support\\MPLog-20261108-140753.log",
+            "to": "defender-MPLog.log",
+            "bytes": 1449762,
+            "truncated": false,
+            "error": null
+          }
+        ],
+        "error": null
+      },
+      "snap0": {
+        "source": "MSFT_MpComputerStatus",
+        "av_signature": "1.463.364.0",
+        "as_signature": "1.463.364.0",
+        "nis_signature": "1.463.364.0",
+        "engine": "1.1.26100.4",
+        "platform": "4.18.26100.4",
+        "av_signature_updated": "2026-11-18T09:47:36.0000000-08:00",
+        "av_signature_age": 0,
+        "signatures_out_of_date": false,
+        "at": "2026-11-18T19:24:44.1691038-08:00",
+        "error": null
+      },
+      "snap2": {
+        "source": "MSFT_MpComputerStatus",
+        "av_signature": "1.463.364.0",
+        "as_signature": "1.463.364.0",
+        "nis_signature": "1.463.364.0",
+        "engine": "1.1.26100.4",
+        "platform": "4.18.26100.4",
+        "av_signature_updated": "2026-11-18T09:47:36.0000000-08:00",
+        "av_signature_age": 0,
+        "signatures_out_of_date": false,
+        "at": "2026-11-18T19:29:10.6607515-08:00",
+        "error": null
+      }
+    },
+    "planted": [],
+    "phases": [
+      {
+        "name": "edge-pause",
+        "start": "2026-11-18T19:21:55.1128809-08:00",
+        "end": "2026-11-18T19:22:03.5467217-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "setup",
+        "start": "2026-11-18T19:22:03.5607686-08:00",
+        "end": "2026-11-18T19:22:04.7170317-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "pre-python313",
+        "start": "2026-11-18T19:22:04.8008984-08:00",
+        "end": "2026-11-18T19:23:18.9872458-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "defender-idle",
+        "start": "2026-11-18T19:23:18.9984051-08:00",
+        "end": "2026-11-18T19:24:25.8377997-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "arp0",
+        "start": "2026-11-18T19:24:25.8394962-08:00",
+        "end": "2026-11-18T19:24:25.9478488-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists0",
+        "start": "2026-11-18T19:24:25.9510992-08:00",
+        "end": "2026-11-18T19:24:44.1515926-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap0",
+        "start": "2026-11-18T19:24:44.1549449-08:00",
+        "end": "2026-11-18T19:24:52.6671284-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "install",
+        "start": "2026-11-18T19:24:52.7890295-08:00",
+        "end": "2026-11-18T19:25:47.8986652-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "detect",
+        "start": "2026-11-18T19:25:47.9056044-08:00",
+        "end": "2026-11-18T19:25:48.0923332-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "launch",
+        "start": "2026-11-18T19:25:48.0958752-08:00",
+        "end": "2026-11-18T19:26:30.9974271-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists1",
+        "start": "2026-11-18T19:26:31.0075400-08:00",
+        "end": "2026-11-18T19:26:35.1350207-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "engine-inventory-1",
+        "start": "2026-11-18T19:26:35.1385710-08:00",
+        "end": "2026-11-18T19:26:37.6177139-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap1",
+        "start": "2026-11-18T19:26:37.6214562-08:00",
+        "end": "2026-11-18T19:26:43.2656104-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "msi-tables-1",
+        "start": "2026-11-18T19:26:43.2674851-08:00",
+        "end": "2026-11-18T19:27:17.6468991-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "engine-harvest",
+        "start": "2026-11-18T19:27:17.6520738-08:00",
+        "end": "2026-11-18T19:27:30.0273982-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "uninstall",
+        "start": "2026-11-18T19:27:30.0343974-08:00",
+        "end": "2026-11-18T19:29:00.8099273-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists2",
+        "start": "2026-11-18T19:29:00.8175372-08:00",
+        "end": "2026-11-18T19:29:05.0219082-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "engine-inventory-2",
+        "start": "2026-11-18T19:29:05.0236587-08:00",
+        "end": "2026-11-18T19:29:05.1222454-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap2",
+        "start": "2026-11-18T19:29:05.1254156-08:00",
+        "end": "2026-11-18T19:29:10.7654513-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "msi-tables-2",
+        "start": "2026-11-18T19:29:10.7668767-08:00",
+        "end": "2026-11-18T19:29:30.3124556-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "edge-check",
+        "start": "2026-11-18T19:29:30.3158710-08:00",
+        "end": "2026-11-18T19:29:30.3762062-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "entries",
+        "start": "2026-11-18T19:29:30.3796710-08:00",
+        "end": "2026-11-18T19:29:30.5480932-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "engine-scan",
+        "start": "2026-11-18T19:29:30.5570500-08:00",
+        "end": "2026-11-18T19:29:45.7942792-08:00",
+        "ok": true,
+        "error": null
+      }
+    ],
+    "m1b": {
+      "msi_tables": true,
+      "traps": false,
+      "tables": [
+        "msi-tables-m1b-python312-with-313-1.json",
+        "msi-tables-m1b-python312-with-313-2.json"
+      ]
+    },
+    "pre": [
+      {
+        "id": "python313",
+        "url": "https://www.python.org/ftp/python/3.13.17/python-3.13.17-amd64.exe",
+        "installer": "C:\\cr\\inst\\python313.exe",
+        "installer_sha256": "5DA012101BA2E17113A9A1CD901E9CE1441086F2B7ECB5DE06EC94163899A190",
+        "installer_sig": "Valid CN=Python Software Foundation",
+        "installer_source": "download",
+        "cmd": "\"C:\\cr\\inst\\python313.exe\" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+        "start": "2026-11-18T19:22:12.2625016-08:00",
+        "end": "2026-11-18T19:22:58.8205140-08:00",
+        "exit": 0,
+        "timed_out": false,
+        "killed": [],
+        "ran_as": "elevated",
+        "entry": {
+          "key": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{9b3415f5-afcc-46ea-9954-a8000df10f86}",
+          "name": "Python 3.13.17 (64-bit)",
+          "version": "3.13.17150.0",
+          "publisher": "Python Software Foundation",
+          "sys": false,
+          "parent": null,
+          "uninstall": "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{9b3415f5-afcc-46ea-9954-a8000df10f86}\\python-3.13.17-amd64.exe\"  /uninstall",
+          "quiet": "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{9b3415f5-afcc-46ea-9954-a8000df10f86}\\python-3.13.17-amd64.exe\" /uninstall /quiet",
+          "loc": null,
+          "icon": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{9b3415f5-afcc-46ea-9954-a8000df10f86}\\python-3.13.17-amd64.exe,0",
+          "msi": null,
+          "size": 132761,
+          "install_date": null,
+          "bundle": true
+        }
+      }
+    ],
+    "engine": {
+      "exe": "C:\\cr\\bin\\purge-engine.exe",
+      "app": "python312-with-313",
+      "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+      "run": {
+        "schema": "purge.run/0",
+        "program_id": "HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}",
+        "cmd": "\"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\" /uninstall /quiet",
+        "signer": "Python Software Foundation",
+        "t_start": 134395324503010774,
+        "t_end": 134395325084562360,
+        "exit_code": 0,
+        "outcome": "Success",
+        "verify_gone": {
+          "arp_gone": true,
+          "msi_unknown_all_ctx": true,
+          "main_exes_gone": true,
+          "passed": true
+        },
+        "processes": [
+          {
+            "pid": 4784,
+            "name": "python-3.12.7-amd64.exe",
+            "path": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+            "start": null
+          },
+          {
+            "pid": 836,
+            "name": "python-3.12.7-amd64.exe",
+            "path": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+            "start": null
+          },
+          {
+            "pid": 2536,
+            "name": "python-3.12.7-amd64.exe",
+            "path": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe",
+            "start": null
+          }
+        ],
+        "co_removed": [
+          "HKLM|64|{1BB43BDF-D9E8-487A-B743-CA10AAE7B25F}",
+          "HKLM|64|{314BCBA9-14E3-41D1-B9DD-32ADF7EA8C5D}",
+          "HKLM|64|{680AB42D-FAF3-46E2-A16D-BDD38E4506BB}",
+          "HKLM|64|{8C1ACF90-E1B6-46A1-B4F0-DD6217005B25}",
+          "HKLM|64|{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}",
+          "HKLM|64|{A26ABCC2-F6AA-4B7D-A767-16BE012DB52E}",
+          "HKLM|64|{EA6E73B7-512D-4853-BBA5-331DAE48A6B1}",
+          "HKLM|64|{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE}"
+        ]
+      },
+      "files": {
+        "inv1": "inv-1.json",
+        "fp": "fp.json",
+        "run": "engine-run.json",
+        "plan": "plan-purge.json",
+        "inv2": "inv-2.json"
+      },
+      "baselines": [
+        "EnterpriseSEval-26100.1742.tsv.gz",
+        "Professional-26340.9882.tsv.gz"
+      ],
+      "calls": [
+        {
+          "step": "inventory-1",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" inventory --json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 4252,
+          "start": "2026-11-18T19:26:35.1908084-08:00",
+          "end": "2026-11-18T19:26:37.5304755-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "[  0.000s] inventory: reading the Uninstall keys and MSI",
+            "warning: inventory: HKU\\S-1-5-18\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall: cannot read the Uninstall key's subkeys: reparse point not traversed",
+            "[  0.166s] inventory: 53 entries, 0 MSI-only products"
+          ]
+        },
+        {
+          "step": "harvest",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" harvest \"HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}\" -o C:\\cr\\out\\m1b-python312-with-313\\fp.json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 5116,
+          "start": "2026-11-18T19:27:17.6892290-08:00",
+          "end": "2026-11-18T19:27:30.0239169-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "warning: fp: anchors: the app has no install root and no exe; no registry anchor can be attributed",
+            "warning: fp: refsnap: the reference scan is incomplete (31 keys unreadable, first: HKLM\\SOFTWARE\\Microsoft\\EAPSIMMethods\\18\\FastReauthContext (access denied))",
+            "warning: fp: subtree: 1 subtrees were recorded in part (size caps or baseline keys)",
+            "harvest: Python 3.12.7 (64-bit) (HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}); 0 root(s), 2 rejected; no Inno log; 0 co-product candidate(s); reference snapshot incomplete",
+            "wrote the fingerprint to C:\\cr\\out\\m1b-python312-with-313\\fp.json"
+          ]
+        },
+        {
+          "step": "uninstall",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" uninstall \"HKU:S-1-5-21-1336749127-99101324-1432799918-1000|64|{e9b7c837-5066-4f10-851a-69179f987b18}\" --quiet --fp C:\\cr\\out\\m1b-python312-with-313\\fp.json -o C:\\cr\\out\\m1b-python312-with-313\\engine-run.json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 3884,
+          "start": "2026-11-18T19:27:30.1464240-08:00",
+          "end": "2026-11-18T19:28:28.5258970-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "warning: uninstall: HKLM|64|{EA6E73B7-512D-4853-BBA5-331DAE48A6B1} disappeared during the run but was not a co-product candidate; it is not recorded as co-removed",
+            "warning: uninstall: HKLM|64|{FF6D0E73-2F53-4CF9-BD2C-F144E4FA02FE} disappeared during the run but was not a co-product candidate; it is not recorded as co-removed",
+            "uninstall: ran as Elevated; should run at medium integrity: true; wait ended Settled; command \"C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe\" /uninstall /quiet",
+            "wrote the run record to C:\\cr\\out\\m1b-python312-with-313\\engine-run.json",
+            "wrote the fingerprint to C:\\cr\\out\\m1b-python312-with-313\\fp.json"
+          ]
+        },
+        {
+          "step": "inventory-2",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" inventory --json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 6468,
+          "start": "2026-11-18T19:29:05.0423295-08:00",
+          "end": "2026-11-18T19:29:05.1203252-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "[  0.000s] inventory: reading the Uninstall keys and MSI",
+            "warning: inventory: HKU\\S-1-5-18\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall: cannot read the Uninstall key's subkeys: reparse point not traversed",
+            "[  0.028s] inventory: 44 entries, 0 MSI-only products"
+          ]
+        },
+        {
+          "step": "scan",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" scan --fp C:\\cr\\out\\m1b-python312-with-313\\fp.json --mode post --app python312-with-313 -o C:\\cr\\out\\m1b-python312-with-313\\plan-purge.json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 3004,
+          "start": "2026-11-18T19:29:30.5811576-08:00",
+          "end": "2026-11-18T19:29:45.7886822-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "warning: scan: COM-CLASS: the shared reference walk did not read every key (budget or unreadable keys): no COM registration is Safe on the walk's word that nothing else refers to it",
+            "warning: scan: COM-INTERFACE: the shared reference walk did not read every key (budget or unreadable keys): no COM registration is Safe on the walk's word that nothing else refers to it",
+            "scan: 6 candidate(s) from the scanners; plan 6 item(s): 0 Safe (0 preselected), 1 Likely, 0 Weak, 5 Blocked; 0 absorbed; hash 713b17f4253a6bd6b0f56b3f514f896e02dd622229da2643b15586303325572b",
+            "wrote the plan to C:\\cr\\out\\m1b-python312-with-313\\plan-purge.json",
+            "wrote the scan sidecar to C:\\cr\\out\\m1b-python312-with-313\\plan-purge.scan.json"
+          ]
+        }
+      ]
+    },
+    "installer_source": "rig-base"
+  },
+  "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "counts": {
+    "ambient": 76,
+    "kept_owner": 42,
+    "leftover": 44,
+    "user_data": 1
+  },
+  "counts_by_kind": {
+    "Path": {
+      "ambient": 2,
+      "kept_owner": 6,
+      "leftover": 24,
+      "user_data": 1
+    },
+    "RegKey": {
+      "ambient": 13,
+      "leftover": 5
+    },
+    "RegValue": {
+      "ambient": 14,
+      "leftover": 10
+    },
+    "RegValueChanged": {
+      "ambient": 41,
+      "leftover": 5
+    }
+  },
+  "ambient_by_run": {
+    "m1b-null1": 39,
+    "m1b-null2": 37,
+    "m1b-null3": 35
+  },
+  "deny_hits": [],
+  "snaps": {
+    "s0": {
+      "file": "runs/m1b-python312-with-313/snap-m1b-python312-with-313-0.tsv.gz",
+      "header": {
+        "time": "2026-11-19T03:24:45Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "s1": "runs/m1b-python312-with-313/snap-m1b-python312-with-313-1.tsv.gz",
+    "s2": {
+      "file": "runs/m1b-python312-with-313/snap-m1b-python312-with-313-2.tsv.gz",
+      "header": {
+        "time": "2026-11-19T03:29:05Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "kept_entries": []
+  },
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Program Files\\Python312"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 0,
+      "lwt": 134395325001221344,
+      "dir": true,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\d96bfd385cedf09ac22eb8ca9be3f75f2af2dbb8"
+      },
+      "label": "ambient",
+      "rule": "labels: Microsoft Defender real-time (dynamic) signature store: RtSigs\\Data\\<sha1> blobs Defender fetches and expires on its own schedule (the M0 null runs already showed them; ruling 2026-11-18).",
+      "size": 349,
+      "lwt": 134395323969431628,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 6452,
+      "lwt": 134395323113107508,
+      "dir": true,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\.idlerc"
+      },
+      "label": "user_data",
+      "rule": "labels: IDLE's per-user configuration and recent-files list, written by the launch step.",
+      "size": 0,
+      "lwt": 134395323522416521,
+      "dir": true,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\Caches\\{3DA71D5A-20CC-432F-A115-DFE92379E91F}.3.ver0x0000000000000016.db"
+      },
+      "label": "ambient",
+      "rule": "labels: Shell/Search per-user cache database, regenerated with a new version suffix whenever the Start menu app list changes.",
+      "size": 66392,
+      "lwt": 134395323134360877,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\DEL9D7B.tmp"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 879168,
+      "lwt": 134395322939619632,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 69981,
+      "lwt": 134395323256904332,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_000_core_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 87664,
+      "lwt": 134395322950589996,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_001_exe_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 115194,
+      "lwt": 134395322955028593,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_002_dev_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 503762,
+      "lwt": 134395322968342550,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_003_lib_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 1434492,
+      "lwt": 134395323006385046,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_004_doc_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 1222940,
+      "lwt": 134395323041987907,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_005_tcltk_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 3005748,
+      "lwt": 134395323116574270,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_006_pip_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 114680,
+      "lwt": 134395323252665889,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192453_007_path_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 88706,
+      "lwt": 134395323256106359,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 56410,
+      "lwt": 134395325065605986,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_000_path_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 78540,
+      "lwt": 134395324526042344,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_001_pip_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 106318,
+      "lwt": 134395324566093208,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_002_tcltk_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 2391962,
+      "lwt": 134395324696414056,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_003_doc_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 979798,
+      "lwt": 134395324771633365,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_004_lib_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 1199318,
+      "lwt": 134395324873455149,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_005_dev_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 418722,
+      "lwt": 134395324944023456,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_006_exe_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 105710,
+      "lwt": 134395324999567561,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\Python 3.12.7 (64-bit)_20261118192730_007_core_AllUsers.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 83272,
+      "lwt": 134395325064759350,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\102d1.msi"
+      },
+      "label": "ambient",
+      "rule": "temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)",
+      "size": 2035712,
+      "lwt": 133722583300000000,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\102d9.msi"
+      },
+      "label": "ambient",
+      "rule": "temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)",
+      "size": 393216,
+      "lwt": 133722583660000000,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\102dd.msi"
+      },
+      "label": "ambient",
+      "rule": "temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)",
+      "size": 7401472,
+      "lwt": 133722584380000000,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\102e1.msi"
+      },
+      "label": "ambient",
+      "rule": "temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)",
+      "size": 5746688,
+      "lwt": 133722584000000000,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\102e5.msi"
+      },
+      "label": "ambient",
+      "rule": "temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)",
+      "size": 3547136,
+      "lwt": 133722585060000000,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\102ed.msi"
+      },
+      "label": "ambient",
+      "rule": "temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)",
+      "size": 49152,
+      "lwt": 133722584800000000,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 57746,
+      "lwt": 134395323112887585,
+      "dir": true,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\PYTHON.EXE-E3BB012A.pf"
+      },
+      "label": "leftover",
+      "rule": "labels: Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash).",
+      "size": 34883,
+      "lwt": 134395324554802373,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\PYTHONW.EXE-3E88984D.pf"
+      },
+      "label": "leftover",
+      "rule": "labels: Prefetch trace of the app's own executable (FS-PREFETCH: unique exe name and path hash).",
+      "size": 23019,
+      "lwt": 134395323624171996,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\IdentityCRL\\NegativeCache"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134395325261730646,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\IdentityCRL\\ThrottleCache"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134395325261752033,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\Certificates\\5FB7EE0633E259DBAD0C4C9AE6D38F1A61C7DC25"
+      },
+      "label": "ambient",
+      "rule": "labels: Machine certificate stores (root auto-update, pin rules) written while verifying signatures; never a cleaner target.",
+      "lwt": 134395323120113054,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\WMIProv @ root/wmi"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134395323226710392,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\TempPackages"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Installer's list of temp packages it deletes itself after a transaction (the .msi files it names are relabelled by m1b.sh temp_packages).",
+      "lwt": 134395325001016705,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2652"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395323017564778,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\2672"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395323019755419,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3048"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395323015995357,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3308"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395323007633150,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3964"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395323015213737,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4028"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395323009385402,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\Help"
+      },
+      "label": "leftover",
+      "rule": "labels: The removed 3.12's own PythonCore subkey.",
+      "lwt": 134395323038494711,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\Idle"
+      },
+      "label": "leftover",
+      "rule": "labels: The removed 3.12's own PythonCore subkey.",
+      "lwt": 134395323113125659,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\IdleShortcuts"
+      },
+      "label": "leftover",
+      "rule": "labels: The removed 3.12's own PythonCore subkey.",
+      "lwt": 134395323113142755,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\InstalledFeatures"
+      },
+      "label": "leftover",
+      "rule": "labels: The removed 3.12's own PythonCore subkey.",
+      "lwt": 134395323254906096,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Python\\PythonCore\\3.12\\PythonPath"
+      },
+      "label": "leftover",
+      "rule": "labels: The removed 3.12's own PythonCore subkey.",
+      "lwt": 134395323004159957,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\.DEFAULT\\Software\\Classes\\Local Settings\\MuiCache\\1a"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI resource-string cache generation key with a hex name (1a); _os.json covers the decimal ones only. Not the shell MuiCache of exe names (Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache).",
+      "lwt": 134395325001258602,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\MuiCache\\1a"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI resource-string cache generation key with a hex name (1a); _os.json covers the decimal ones only. Not the shell MuiCache of exe names (Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache).",
+      "lwt": 134395325427457596,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\CIMWin32 @ root/CIMV2",
+        "name": "134395325085765013"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\CIMWin32 @ root/CIMV2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134395325449196452,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler",
+        "name": "134395325418040014"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134395325425845090,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\wfascim @ root/standardcimv2",
+        "name": "134395325439606679"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\wfascim @ ROOT/StandardCimv2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134395325444838731,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\Win32_WIN32_TERMINALSERVICE_Prov @ root/CIMV2",
+        "name": "134395325427628241"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\Win32_WIN32_TERMINALSERVICE_Prov @ root/CIMV2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134395325427766565,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\WDM",
+        "name": "C:\\WINDOWS\\system32\\drivers\\battc.sys[BATTCWMI]"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 160,
+      "lwt": 134395323379112725,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\WDM\\DREDGE",
+        "name": "C:\\WINDOWS\\system32\\drivers\\battc.sys[BATTCWMI]"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 160,
+      "lwt": 134395323379112725,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Fcon",
+        "name": "PDU"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 662,
+      "lwt": 134395323742249966,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Fcon",
+        "name": "PUU"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 78,
+      "lwt": 134395323742249966,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders",
+        "name": "C:\\Program Files\\Python312\\"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 2,
+      "lwt": 134395325001390648,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders",
+        "name": "C:\\Program Files\\Python312\\Doc\\"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 4,
+      "lwt": 134395325001390648,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders",
+        "name": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Python 3.12\\"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 2,
+      "lwt": 134395325001390648,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders",
+        "name": "C:\\WINDOWS\\Installer\\{984178D8-5728-48E7-89A1-C3E9A4D5F5DE}\\"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 2,
+      "lwt": 134395325001390648,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore",
+        "name": "SRInitDone"
+      },
+      "label": "ambient",
+      "rule": "labels: System Restore initialisation flag msiexec sets at its first restore-point check (the SystemRestore key itself is ambient in the app label files); Windows state.",
+      "size": 4,
+      "lwt": 134395322944194852,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+        "name": "PendingFileRenameOperations"
+      },
+      "label": "ambient",
+      "rule": "labels: Boot-time delete queue the uninstaller wrote for locked files; consumed at the next reboot. Purge only appends and removes its own pairs (plan §5 reconcile).",
+      "size": 110,
+      "lwt": 134395325065014540,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Program Files\\Python312\\pythonw.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134395325065763840,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134395325065763840,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Windows\\Temp\\{04B56224-3899-4674-B8D5-780461FCC752}\\.cr\\python.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134395325065763840,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Windows\\Temp\\{1FF34E85-B299-4A72-B356-56DA8E37B56A}\\.be\\python-3.12.7-amd64.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134395325065763840,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        "name": "C:\\Users\\tester\\AppData\\Local\\Package Cache\\{e9b7c837-5066-4f10-851a-69179f987b18}\\python-3.12.7-amd64.exe"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 108,
+      "lwt": 134395325085521196,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        "name": "C:\\Windows\\Temp\\{1FF34E85-B299-4A72-B356-56DA8E37B56A}\\.be\\python-3.12.7-amd64.exe"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 108,
+      "lwt": 134395325085521196,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+        "name": "Zvpebfbsg.NhgbTrarengrq.{401RRN19-N821-9P37-NS46-1S4QSR85QQO9}"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 72,
+      "lwt": 134395323559579385,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "3"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 260,
+      "lwt": 134395323134323924,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "4"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 370,
+      "lwt": 134395323134323924,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "5"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 306,
+      "lwt": 134395323134323924,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\Certificates\\0563B8630D62D75ABBC8AB1E4BDFB5A899B24D43",
+        "name": "Blob",
+        "before": "#8a12659390651c0b",
+        "after": "#c99c6e13f87206c4"
+      },
+      "label": "ambient",
+      "rule": "labels: Machine certificate stores (root auto-update, pin rules) written while verifying signatures; never a cleaner target.",
+      "size": 1423,
+      "lwt": 134395322946198914,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\PROVIDERS\\Performance",
+        "name": "Performance Data",
+        "before": "#bcd428503625d1ce",
+        "after": "#d991bb3a3912834a"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 7392,
+      "lwt": 134395323379091092,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Spynet",
+        "name": "LastMAPSSuccessTime",
+        "before": "#a9cee541b43672e1",
+        "after": "#e27757c627c96a7c"
+      },
+      "label": "ambient",
+      "rule": "labels: Defender cloud/MAPS state; Tamper Protection guards it anyway.",
+      "size": 8,
+      "lwt": 134395323969431628,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418A073AA3BC1C75",
+        "before": "#b005805c6407647b",
+        "after": "#ab285606bd61107f"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 3332,
+      "lwt": 134395325065623337,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418A073AA3BC3475",
+        "before": "#9ab942aaf62e6003",
+        "after": "#3b8bd2bb9d65ce35"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 274,
+      "lwt": 134395325065623337,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib",
+        "name": "Last Counter",
+        "before": "11772",
+        "after": "11784"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395323355818045,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib",
+        "name": "Last Help",
+        "before": "11773",
+        "after": "11785"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395323355818045,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\009",
+        "name": "Counter",
+        "before": "1\u00001847\u00002\u0000System\u00004\u0000Memory\u00006\u0000% Processor Time\u000010\u0000File Read Operations/sec\u000012\u0000File Write Operations/sec\u000014\u0000File Control Operations/sec\u000016\u0000File Read Bytes/sec\u000018\u0000File Write Bytes/sec\u000020\u0000File Control Bytes/sec\u000024\u0000Available Bytes\u000026\u0000Committed Bytes\u000028\u0000Page Faults/sec\u000030\u0000Commit Limit\u000032\u0000Write Copies/sec\u000034\u0000Transition Faults/sec\u000036\u0000Cache Faults/sec\u000038\u0000Demand Zero Faults/sec\u000040\u0000Pages/sec\u000042\u0000Page Reads/sec\u000044\u0000Processor Queue Length\u000046\u0000Thread State\u000048\u0000Pages Output/sec\u000050\u0000Page Writes/sec\u000052\u0000Browser\u000054\u0000Announcements Server/sec\u000056\u0000Pool Paged Bytes\u000058\u0000Pool Nonpaged Bytes\u000060\u0000Pool Paged Allocs\u000064\u0000Pool Nonpaged Allocs\u000066\u0000Pool Paged Resident Bytes\u000068\u0000System Code Total Bytes\u000070\u0000System Code Resident Bytes\u000072\u0000System Driver Total Bytes\u000074\u0000System Driver Resident Bytes\u000076\u0000System Cache Resident Bytes\u000078\u0000Announcements Domain/sec\u000080\u0000Election Packets/sec\u000082\u0000Mailslot Writes/sec\u000084\u0000Server List Requests/sec\u000086\u0000Cache\u000088\u0000Data Maps/sec\u000090\u0000Sync Data Maps/sec\u000092\u0000Async Data Maps/sec\u000094\u0000Data Map Hits %\u000096\u0000Data Map Pins/sec\u000098\u0000Pin Reads/sec\u0000100\u0000Syn",
+        "after": "1\u00001847\u00002\u0000System\u00004\u0000Memory\u00006\u0000% Processor Time\u000010\u0000File Read Operations/sec\u000012\u0000File Write Operations/sec\u000014\u0000File Control Operations/sec\u000016\u0000File Read Bytes/sec\u000018\u0000File Write Bytes/sec\u000020\u0000File Control Bytes/sec\u000024\u0000Available Bytes\u000026\u0000Committed Bytes\u000028\u0000Page Faults/sec\u000030\u0000Commit Limit\u000032\u0000Write Copies/sec\u000034\u0000Transition Faults/sec\u000036\u0000Cache Faults/sec\u000038\u0000Demand Zero Faults/sec\u000040\u0000Pages/sec\u000042\u0000Page Reads/sec\u000044\u0000Processor Queue Length\u000046\u0000Thread State\u000048\u0000Pages Output/sec\u000050\u0000Page Writes/sec\u000052\u0000Browser\u000054\u0000Announcements Server/sec\u000056\u0000Pool Paged Bytes\u000058\u0000Pool Nonpaged Bytes\u000060\u0000Pool Paged Allocs\u000064\u0000Pool Nonpaged Allocs\u000066\u0000Pool Paged Resident Bytes\u000068\u0000System Code Total Bytes\u000070\u0000System Code Resident Bytes\u000072\u0000System Driver Total Bytes\u000074\u0000System Driver Resident Bytes\u000076\u0000System Cache Resident Bytes\u000078\u0000Announcements Domain/sec\u000080\u0000Election Packets/sec\u000082\u0000Mailslot Writes/sec\u000084\u0000Server List Requests/sec\u000086\u0000Cache\u000088\u0000Data Maps/sec\u000090\u0000Sync Data Maps/sec\u000092\u0000Async Data Maps/sec\u000094\u0000Data Map Hits %\u000096\u0000Data Map Pins/sec\u000098\u0000Pin Reads/sec\u0000100\u0000Syn"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 342612,
+      "lwt": 0,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\009",
+        "name": "Help",
+        "before": "3\u0000The System performance object consists of counters that apply to more than one instance of a component processors on the computer.\u00005\u0000The Memory performance object  consists of counters that describe the behavior of physical and virtual memory on the computer.  Physical memory is the amount of random access memory on the computer.  Virtual memory consists of the space in physical memory and on disk.  Many of the memory counters monitor paging, which is the movement of pages of code and data between disk and physical memory.  Excessive paging, a symptom of a memory shortage, can cause delays which interfere with all system processes.\u00007\u0000% Processor Time is the percentage of elapsed time that the processor spends to execute a non-Idle thread. It is calculated by measuring the percentage of time that the processor spends executing the idle thread and then subtracting that value from 100%. (Each processor has an idle thread that consumes cycles when no other threads are ready to run). This counter is the primary ",
+        "after": "3\u0000The System performance object consists of counters that apply to more than one instance of a component processors on the computer.\u00005\u0000The Memory performance object  consists of counters that describe the behavior of physical and virtual memory on the computer.  Physical memory is the amount of random access memory on the computer.  Virtual memory consists of the space in physical memory and on disk.  Many of the memory counters monitor paging, which is the movement of pages of code and data between disk and physical memory.  Excessive paging, a symptom of a memory shortage, can cause delays which interfere with all system processes.\u00007\u0000% Processor Time is the percentage of elapsed time that the processor spends to execute a non-Idle thread. It is calculated by measuring the percentage of time that the processor spends executing the idle thread and then subtracting that value from 100%. (Each processor has an idle thread that consumes cycles when no other threads are ready to run). This counter is the primary "
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 1183506,
+      "lwt": 0,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\CurrentLanguage",
+        "name": "Counter",
+        "before": "1\u00001847\u00002\u0000System\u00004\u0000Memory\u00006\u0000% Processor Time\u000010\u0000File Read Operations/sec\u000012\u0000File Write Operations/sec\u000014\u0000File Control Operations/sec\u000016\u0000File Read Bytes/sec\u000018\u0000File Write Bytes/sec\u000020\u0000File Control Bytes/sec\u000024\u0000Available Bytes\u000026\u0000Committed Bytes\u000028\u0000Page Faults/sec\u000030\u0000Commit Limit\u000032\u0000Write Copies/sec\u000034\u0000Transition Faults/sec\u000036\u0000Cache Faults/sec\u000038\u0000Demand Zero Faults/sec\u000040\u0000Pages/sec\u000042\u0000Page Reads/sec\u000044\u0000Processor Queue Length\u000046\u0000Thread State\u000048\u0000Pages Output/sec\u000050\u0000Page Writes/sec\u000052\u0000Browser\u000054\u0000Announcements Server/sec\u000056\u0000Pool Paged Bytes\u000058\u0000Pool Nonpaged Bytes\u000060\u0000Pool Paged Allocs\u000064\u0000Pool Nonpaged Allocs\u000066\u0000Pool Paged Resident Bytes\u000068\u0000System Code Total Bytes\u000070\u0000System Code Resident Bytes\u000072\u0000System Driver Total Bytes\u000074\u0000System Driver Resident Bytes\u000076\u0000System Cache Resident Bytes\u000078\u0000Announcements Domain/sec\u000080\u0000Election Packets/sec\u000082\u0000Mailslot Writes/sec\u000084\u0000Server List Requests/sec\u000086\u0000Cache\u000088\u0000Data Maps/sec\u000090\u0000Sync Data Maps/sec\u000092\u0000Async Data Maps/sec\u000094\u0000Data Map Hits %\u000096\u0000Data Map Pins/sec\u000098\u0000Pin Reads/sec\u0000100\u0000Syn",
+        "after": "1\u00001847\u00002\u0000System\u00004\u0000Memory\u00006\u0000% Processor Time\u000010\u0000File Read Operations/sec\u000012\u0000File Write Operations/sec\u000014\u0000File Control Operations/sec\u000016\u0000File Read Bytes/sec\u000018\u0000File Write Bytes/sec\u000020\u0000File Control Bytes/sec\u000024\u0000Available Bytes\u000026\u0000Committed Bytes\u000028\u0000Page Faults/sec\u000030\u0000Commit Limit\u000032\u0000Write Copies/sec\u000034\u0000Transition Faults/sec\u000036\u0000Cache Faults/sec\u000038\u0000Demand Zero Faults/sec\u000040\u0000Pages/sec\u000042\u0000Page Reads/sec\u000044\u0000Processor Queue Length\u000046\u0000Thread State\u000048\u0000Pages Output/sec\u000050\u0000Page Writes/sec\u000052\u0000Browser\u000054\u0000Announcements Server/sec\u000056\u0000Pool Paged Bytes\u000058\u0000Pool Nonpaged Bytes\u000060\u0000Pool Paged Allocs\u000064\u0000Pool Nonpaged Allocs\u000066\u0000Pool Paged Resident Bytes\u000068\u0000System Code Total Bytes\u000070\u0000System Code Resident Bytes\u000072\u0000System Driver Total Bytes\u000074\u0000System Driver Resident Bytes\u000076\u0000System Cache Resident Bytes\u000078\u0000Announcements Domain/sec\u000080\u0000Election Packets/sec\u000082\u0000Mailslot Writes/sec\u000084\u0000Server List Requests/sec\u000086\u0000Cache\u000088\u0000Data Maps/sec\u000090\u0000Sync Data Maps/sec\u000092\u0000Async Data Maps/sec\u000094\u0000Data Map Hits %\u000096\u0000Data Map Pins/sec\u000098\u0000Pin Reads/sec\u0000100\u0000Syn"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 342612,
+      "lwt": 0,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\CurrentLanguage",
+        "name": "Help",
+        "before": "3\u0000The System performance object consists of counters that apply to more than one instance of a component processors on the computer.\u00005\u0000The Memory performance object  consists of counters that describe the behavior of physical and virtual memory on the computer.  Physical memory is the amount of random access memory on the computer.  Virtual memory consists of the space in physical memory and on disk.  Many of the memory counters monitor paging, which is the movement of pages of code and data between disk and physical memory.  Excessive paging, a symptom of a memory shortage, can cause delays which interfere with all system processes.\u00007\u0000% Processor Time is the percentage of elapsed time that the processor spends to execute a non-Idle thread. It is calculated by measuring the percentage of time that the processor spends executing the idle thread and then subtracting that value from 100%. (Each processor has an idle thread that consumes cycles when no other threads are ready to run). This counter is the primary ",
+        "after": "3\u0000The System performance object consists of counters that apply to more than one instance of a component processors on the computer.\u00005\u0000The Memory performance object  consists of counters that describe the behavior of physical and virtual memory on the computer.  Physical memory is the amount of random access memory on the computer.  Virtual memory consists of the space in physical memory and on disk.  Many of the memory counters monitor paging, which is the movement of pages of code and data between disk and physical memory.  Excessive paging, a symptom of a memory shortage, can cause delays which interfere with all system processes.\u00007\u0000% Processor Time is the percentage of elapsed time that the processor spends to execute a non-Idle thread. It is calculated by measuring the percentage of time that the processor spends executing the idle thread and then subtracting that value from 100%. (Each processor has an idle thread that consumes cycles when no other threads are ready to run). This counter is the primary "
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 1183506,
+      "lwt": 0,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{7F6F3E07-9CB5-42F1-AF2B-9331F44F776B}",
+        "name": "DynamicInfo",
+        "before": "#cca2e2dd893347fb",
+        "after": "#f8ab72ea3f7de511"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395322947323563,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{AFB51204-64DF-41BF-87B5-A4E48B1FD73E}",
+        "name": "DynamicInfo",
+        "before": "#7cc859911a565d51",
+        "after": "#4c9950fe2f69ea7a"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395323855875723,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{BA22629B-CEAD-4839-9CF1-4C9EEFB57D8B}",
+        "name": "DynamicInfo",
+        "before": "#3df84fd2c694bd53",
+        "after": "#01bcda85be9e149f"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395323855320546,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{F65E78D2-6CBA-464C-921F-C03CAD0A1A91}",
+        "name": "DynamicInfo",
+        "before": "#ce1b46d93a1226c4",
+        "after": "#e03811681fc58b7b"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Schedule\\\\TaskCache\\\\Tasks\\\\\\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\}?\\|DynamicInfo$",
+      "size": 36,
+      "lwt": 134395323221539552,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{F9906BC2-2EDF-4D21-8D90-8B48C397D43C}",
+        "name": "DynamicInfo",
+        "before": "#6d5e86efc1494da0",
+        "after": "#a729f6a7370b3e4d"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395323742249966,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Search\\UsnNotifier\\Windows\\Catalogs\\SystemIndex",
+        "name": "{3EAED263-1148-4E92-9C3C-80D5C50BD3D1}",
+        "before": "21430448",
+        "after": "27604864"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Search indexer state (USN positions).",
+      "size": 18,
+      "lwt": 134395324831809325,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack",
+        "name": "DiagTrackStatus",
+        "before": "3",
+        "after": "2"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395322897066275,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Fcon",
+        "name": "DU",
+        "before": "#3e1ffb33cc83fa6e",
+        "after": "#9b14e5862902e8b4"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 5192,
+      "lwt": 134395323742249966,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\VFUProvider",
+        "name": "StartTime",
+        "before": "134395322400148206",
+        "after": "134395325400126225"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395325400126225,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+        "name": "GlobalAssocChangedCounter",
+        "before": "3",
+        "after": "6"
+      },
+      "label": "ambient",
+      "rule": "labels: Shell association change counter (SHChangeNotify).",
+      "size": 4,
+      "lwt": 134395323113542897,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\MUI\\StringCacheSettings",
+        "name": "StringCacheGeneration",
+        "before": "10",
+        "after": "26"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI string cache generation counter.",
+      "size": 4,
+      "lwt": 134395325001258602,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+        "name": "Path",
+        "before": "C:\\Program Files\\Python313\\Scripts\\;C:\\Program Files\\Python313\\;%SystemRoot%\\system32;%SystemRoot%;%SystemRoot%\\System32\\Wbem;%SYSTEMROOT%\\System32\\WindowsPowerShell\\v1.0\\;%SYSTEMROOT%\\System32\\OpenSSH\\",
+        "after": "C:\\Program Files\\Python312\\Scripts\\;C:\\Program Files\\Python312\\;C:\\Program Files\\Python313\\Scripts\\;C:\\Program Files\\Python313\\;%SystemRoot%\\system32;%SystemRoot%;%SystemRoot%\\System32\\Wbem;%SYSTEMROOT%\\System32\\WindowsPowerShell\\v1.0\\;%SYSTEMROOT%\\System32\\OpenSSH\\"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 534,
+      "lwt": 134395323254939071,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\WMI\\Security",
+        "name": "3229cf58-fe8a-4983-a141-3677cf1135a9",
+        "before": "#0f8d915b69c8342d",
+        "after": "#10e9bf7574362f75"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\WMI\\\\Security\\|\\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\}?$",
+      "size": 612,
+      "lwt": 134395323825855608,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "MicrosoftWindows.Client.CBS_cw5n1h2txyewy",
+        "before": "#8c053714b84ceee9",
+        "after": "#fbc4bb11eb61e80d"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 24,
+      "lwt": 134395325065763840,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "SequenceNumber",
+        "before": "15",
+        "after": "20"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 4,
+      "lwt": 134395325065763840,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\BITS",
+        "name": "Start",
+        "before": "2",
+        "after": "3"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395323232925715,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "name": "SecureTimeEstimated",
+        "before": "134395320247189281",
+        "after": "134395323245886165"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 8,
+      "lwt": 134395325041518322,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "name": "SecureTimeHigh",
+        "before": "134395356247189281",
+        "after": "134395359245886165"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 8,
+      "lwt": 134395325041518322,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "name": "SecureTimeLow",
+        "before": "134395284247189281",
+        "after": "134395287245886165"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 8,
+      "lwt": 134395325041518322,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits\\RunTime",
+        "name": "SecureTimeTickCount",
+        "before": "131171",
+        "after": "431187"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 8,
+      "lwt": 134395325041518322,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WmiApRpl\\Performance",
+        "name": "Last Counter",
+        "before": "11772",
+        "after": "11784"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395323355818045,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WmiApRpl\\Performance",
+        "name": "Last Help",
+        "before": "11773",
+        "after": "11785"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395323355818045,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "CPUpct",
+        "before": "0.012271",
+        "after": "0.006583"
+      },
+      "label": "ambient",
+      "rule": "labels: Delivery Optimization (NETWORK SERVICE) usage counters and config (all null runs, 2026-11-15).",
+      "size": 18,
+      "lwt": 134395324163098395,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage",
+        "name": "MemoryUsageKB",
+        "before": "5216",
+        "after": "4392"
+      },
+      "label": "ambient",
+      "rule": "labels: Delivery Optimization (NETWORK SERVICE) usage counters and config (all null runs, 2026-11-15).",
+      "size": 8,
+      "lwt": 134395324163098395,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\Cache\\DefaultAccount\\$de${a4e98711-2506-4a5b-8f96-0f510ed03cf4}$$windows.data.unifiedtile.localstarttilepropertiesmap\\Current",
+        "name": "Data",
+        "before": "#379e6800083f26a4",
+        "after": "#e84f31304a5ec195"
+      },
+      "label": "ambient",
+      "rule": "labels: CloudStore (Start layout/tiles) blobs; rewritten whenever the app list changes.",
+      "size": 7419,
+      "lwt": 134395323134570345,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+        "name": "HRZR_PGYFRFFVBA",
+        "before": "#85ef8fca0ae14a37",
+        "after": "#35714f59b26f166a"
+      },
+      "label": "ambient",
+      "rule": "labels: UserAssist session counter (ROT13 of UEME_CTLSESSION), updated by every launch.",
+      "size": 1612,
+      "lwt": 134395323559579385,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+        "name": "InstalledWin32AppsRevision",
+        "before": "{2BA24B07-C575-4570-8103-91F3F1CF5BF5}",
+        "after": "{96E87009-D961-4738-B2BE-48268C5EDB5E}"
+      },
+      "label": "ambient",
+      "rule": "labels: Search app-list revision GUID.",
+      "size": 78,
+      "lwt": 134395323134380171,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.101",
+        "name": "CheckSetting",
+        "before": "#ac2677e4a4394c58",
+        "after": "#98df83889fe3580c"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395323226535439,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.102",
+        "name": "CheckSetting",
+        "before": "#bfd7480334b436ef",
+        "after": "#98df83889fe3580c"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395323226553259,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.DesktopSpotlight\\V1\\LU",
+        "name": "PTT",
+        "before": "134388829194099785",
+        "after": "134395323007689213"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395323007689213,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.IrisService\\V1\\LU",
+        "name": "PTT",
+        "before": "134388324725016444",
+        "after": "134395323019854883"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395323019854883,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.RulesEngine\\V1\\LU",
+        "name": "PTT",
+        "before": "134388801115433602",
+        "after": "134395323017672352"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395323017672352,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WebExperienceHost\\V1\\LU",
+        "name": "PTT",
+        "before": "134388801119995076",
+        "after": "134395323016085238"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395323016085238,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WindowsBackup\\V1\\LU",
+        "name": "PTT",
+        "before": "134388324720220381",
+        "after": "134395323009490269"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395323009490269,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.OOBE_cw5n1h2txyewy\\HAM\\AUI\\OobeHost\\V1\\LU",
+        "name": "PTT",
+        "before": "134388394664812028",
+        "after": "134395323015300677"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395323015300677,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.py"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: .py* extension keys of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pyc"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: .py* extension keys of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pyd"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: .py* extension keys of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pyo"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: .py* extension keys of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pyw"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: .py* extension keys of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pyz"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: .py* extension keys of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pyzw"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: .py* extension keys of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\CLSID\\{BEA218D2-6950-497B-9434-61683EC065FE}"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Shell drop handler class of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Installer\\Features"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Windows Installer registration containers that hold the still-installed MSI products' registration (the launcher's among them); counted as in the M0 python truth.",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Installer\\Features\\500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI product and feature registration of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Installer\\Products"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Windows Installer registration containers that hold the still-installed MSI products' registration (the launcher's among them); counted as in the M0 python truth.",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Installer\\Products\\500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI product and feature registration of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Installer\\UpgradeCodes"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Windows Installer registration containers that hold the still-installed MSI products' registration (the launcher's among them); counted as in the M0 python truth.",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Python.ArchiveFile"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Python.* ProgIDs of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Python.CompiledFile"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Python.* ProgIDs of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Python.Extension"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Python.* ProgIDs of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Python.File"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Python.* ProgIDs of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Python.NoConArchiveFile"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Python.* ProgIDs of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Python.NoConFile"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Python.* ProgIDs of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Windows Installer machine-state containers that hold the still-installed MSI products' state (the launcher's among them); counted as in the M0 python truth.",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Windows Installer machine-state containers that hold the still-installed MSI products' state (the launcher's among them); counted as in the M0 python truth.",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI per-machine product state of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: ARP entry of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Python"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: PyLauncher keys (32-bit view) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Burn's shared package cache root; it holds the cached package of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Package Cache\\{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}v3.13.17150.0"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Burn's cache folder of the package of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\102c5.msi"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Windows Installer's cached package (LocalPackage), icon folder and source hash of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\SourceHash{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Windows Installer's cached package (LocalPackage), icon folder and source hash of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Windows Installer's cached package (LocalPackage), icon folder and source hash of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\py.exe"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: py.exe, pyw.exe and the shell extension of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\pyshellext.amd64.dll"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: py.exe, pyw.exe and the shell extension of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\pyw.exe"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: py.exe, pyw.exe and the shell extension of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\CE0A86B13DD4431548E03758B480361F",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Upgrade-code membership of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\CE0A86B13DD4431548E03758B480361F",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: Upgrade-code membership of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\039BEA59C763C5741AE78AB9CF4D6C07",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI component client values (the product code as client) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\2047015B8596B164B8A004733D231706",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI component client values (the product code as client) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\563C14A472E483D46A1DA4104B6A05C0",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI component client values (the product code as client) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\6966395CA5A90A548A031D273C232928",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI component client values (the product code as client) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\A9D48FA5028DB6542B03E610505A2067",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI component client values (the product code as client) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\D369195C6CF7ECF46824E5106E8B48F8",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI component client values (the product code as client) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\DC8B25E8BB8447D448DC2683CB1DF102",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI component client values (the product code as client) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\DFE1147EDD1FBE040B7CB40AB23F7EF5",
+        "name": "500A87085ABEA1E4A9FACE64391A7D3C"
+      },
+      "label": "kept_owner",
+      "rule": "prestate: MSI component client values (the product code as client) of the Python Launcher, still installed (Python 3.13, installed before snap 0) and used by the removed Python too (L10).",
+      "prestate": true,
+      "product": "{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}"
+    }
+  ],
+  "temp_packages": [
+    "C:\\WINDOWS\\Installer\\102d1.msi",
+    "C:\\WINDOWS\\Installer\\102d9.msi",
+    "C:\\WINDOWS\\Installer\\102dd.msi",
+    "C:\\WINDOWS\\Installer\\102e1.msi",
+    "C:\\WINDOWS\\Installer\\102e5.msi",
+    "C:\\WINDOWS\\Installer\\102ed.msi"
+  ],
+  "prestate": {
+    "note": "vm/truth/m1b.sh prestate (RIG.md section 12.4)",
+    "label_file": "truth/labels/python312-with-313.json",
+    "products": [
+      {
+        "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3}",
+        "name": "Python Launcher",
+        "version": "3.13.17150.0",
+        "code": "8078A005-EBA5-4E1A-9AAF-EC4693A1D7C3",
+        "packed": "500A87085ABEA1E4A9FACE64391A7D3C",
+        "local_package": "102c5.msi",
+        "dependency_keys": []
+      }
+    ],
+    "rules": 15,
+    "matched_before_and_after": 206,
+    "added": 42,
+    "opened": [
+      {
+        "object": "K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders",
+        "holds": [
+          "v:hklm\\software\\microsoft\\windows\\currentversion\\installer\\folders|c:\\program files\\python312\\",
+          "v:hklm\\software\\microsoft\\windows\\currentversion\\installer\\folders|c:\\program files\\python312\\doc\\",
+          "v:hklm\\software\\microsoft\\windows\\currentversion\\installer\\folders|c:\\programdata\\microsoft\\windows\\start menu\\programs\\python 3.12\\",
+          "v:hklm\\software\\microsoft\\windows\\currentversion\\installer\\folders|c:\\windows\\installer\\{984178d8-5728-48e7-89a1-c3e9a4d5f5de}\\"
+        ]
+      }
+    ],
+    "already_in_truth": [],
+    "skipped_rules": [
+      "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\Installer\\\\Dependencies\\\\{DEPKEY}(\\\\[^|]*)?(\\|.*)?$ for Python Launcher (placeholder not resolved)"
+    ]
+  }
+}

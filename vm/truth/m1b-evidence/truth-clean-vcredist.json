@@ -1,0 +1,2332 @@
+{
+  "schema": "purge.rig.truth/1",
+  "id": "vcredist",
+  "run": {
+    "schema": "purge.rig.run/1",
+    "id": "vcredist",
+    "run": "m1b-vcredist",
+    "kind": "app",
+    "tech": "WiX Burn bundle",
+    "url": null,
+    "installer": "C:\\cr\\inst\\vc_redist.exe",
+    "installer_sha256": "CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B",
+    "installer_sig": "Valid CN=Microsoft Corporation",
+    "computer": "INBOUND-WIN11-T",
+    "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "user_sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+    "os": "EnterpriseSEval 26100.1742",
+    "started": "2026-11-18T19:51:08.2391781-08:00",
+    "finished": "2026-11-18T19:55:26.4475819-08:00",
+    "main": {
+      "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+      "name": "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211",
+      "version": "14.44.35211.0",
+      "publisher": "Microsoft Corporation",
+      "sys": false,
+      "parent": null,
+      "uninstall": "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\"  /uninstall",
+      "quiet": "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\" /uninstall /quiet",
+      "loc": null,
+      "icon": "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe,0",
+      "msi": null,
+      "size": 21235,
+      "install_date": null,
+      "bundle": true
+    },
+    "install": {
+      "cmd": "\"C:\\cr\\inst\\vc_redist.exe\" /install /quiet /norestart",
+      "start": "2026-11-18T19:53:34.0051222-08:00",
+      "end": "2026-11-18T19:53:41.2340100-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "killed": [],
+      "ran_as": "elevated"
+    },
+    "launch": {
+      "done": false,
+      "exe": null,
+      "args": null,
+      "start": null,
+      "end": null,
+      "found": false,
+      "closed": [],
+      "killed": [],
+      "reason": "app defines no launch"
+    },
+    "uninstall": {
+      "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" uninstall \"HKLM|32|{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\" --quiet --fp C:\\cr\\out\\m1b-vcredist\\fp.json -o C:\\cr\\out\\m1b-vcredist\\engine-run.json",
+      "t0": "2026-11-18T19:54:26.5180338-08:00",
+      "t1": "2026-11-18T19:54:31.5948584-08:00",
+      "exit": 0,
+      "timed_out": false,
+      "entry_gone": true,
+      "killed": [],
+      "via": "purge-engine",
+      "rig_t0": "2026-11-18T19:54:26.3824258-08:00",
+      "engine_exit": 0,
+      "times": "engine",
+      "outcome": "Success",
+      "verify_gone": {
+        "arp_gone": true,
+        "msi_unknown_all_ctx": true,
+        "main_exes_gone": true,
+        "passed": true
+      },
+      "rig_t1": "2026-11-18T19:54:33.8661768-08:00"
+    },
+    "entries_created": [
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{43B0D101-A022-48F4-9D04-BA404CEB1D53}",
+        "name": "Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.44.35211",
+        "version": "14.44.35211",
+        "publisher": "Microsoft Corporation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{43B0D101-A022-48F4-9D04-BA404CEB1D53}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{43B0D101-A022-48F4-9D04-BA404CEB1D53}",
+        "size": 2404,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}",
+        "name": "Microsoft Visual C++ 2022 X64 Additional Runtime - 14.44.35211",
+        "version": "14.44.35211",
+        "publisher": "Microsoft Corporation",
+        "sys": true,
+        "parent": null,
+        "uninstall": "MsiExec.exe /I{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}",
+        "quiet": null,
+        "loc": "",
+        "icon": null,
+        "msi": "{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}",
+        "size": 11892,
+        "install_date": "20261118",
+        "bundle": false
+      },
+      {
+        "key": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "name": "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211",
+        "version": "14.44.35211.0",
+        "publisher": "Microsoft Corporation",
+        "sys": false,
+        "parent": null,
+        "uninstall": "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\"  /uninstall",
+        "quiet": "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\" /uninstall /quiet",
+        "loc": null,
+        "icon": "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe,0",
+        "msi": null,
+        "size": 21235,
+        "install_date": null,
+        "bundle": true
+      }
+    ],
+    "entries_left": [],
+    "edge_pause": {
+      "method": "services stopped+disabled, MicrosoftEdgeUpdate* tasks disabled, running updater waited for/killed",
+      "start": "2026-11-18T19:51:08.4088549-08:00",
+      "end": "2026-11-18T19:51:15.7195333-08:00",
+      "services": [
+        {
+          "name": "edgeupdate",
+          "present": true,
+          "start_before": "Auto",
+          "state_before": "Stopped",
+          "start_after": "Disabled",
+          "state_after": "Stopped"
+        },
+        {
+          "name": "edgeupdatem",
+          "present": true,
+          "start_before": "Manual",
+          "state_before": "Stopped",
+          "start_after": "Disabled",
+          "state_after": "Stopped"
+        }
+      ],
+      "tasks": [
+        {
+          "path": "\\MicrosoftEdgeUpdateTaskMachineCore{CE164313-0EFA-47AA-BFE3-542DFBDC1B11}",
+          "state_before": "Ready",
+          "state_after": "Disabled"
+        },
+        {
+          "path": "\\MicrosoftEdgeUpdateTaskMachineUA{1AF5BD52-7897-43AA-9607-3B16D52A4B11}",
+          "state_before": "Ready",
+          "state_after": "Disabled"
+        }
+      ],
+      "updater_seen": [],
+      "waited_sec": 0,
+      "killed": [],
+      "errors": [],
+      "versions_before": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "versions_after": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "versions_end": {
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}": "Microsoft Edge 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}": "Microsoft Edge WebView2 Runtime 157.0.4341.46",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3C4FE00-EFD5-403B-9569-398A20F1BA4A}": "Microsoft Edge Update 1.3.315.17",
+        "EdgeUpdate|version": "1.3.315.17"
+      },
+      "held": true
+    },
+    "defender": {
+      "idle": {
+        "method": "loop: MpCmdRun -SignatureUpdate; on a non-zero exit wait for a change (busy_wait_sec) and run it again; done when the last run exited 0, versions + Definition Updates + Scans\\mpcache-* stayed unchanged for stable_sec after it and the signatures are current; bounded by max_wait_sec",
+        "start": "2026-11-18T19:51:16.9008531-08:00",
+        "end": "2026-11-18T19:53:07.8617226-08:00",
+        "before": {
+          "source": "MSFT_MpComputerStatus",
+          "av_signature": "1.463.242.0",
+          "as_signature": "1.463.242.0",
+          "nis_signature": "1.463.242.0",
+          "engine": "1.1.26100.4",
+          "platform": "4.18.26100.4",
+          "av_signature_updated": "2026-11-11T00:07:12.0000000-08:00",
+          "av_signature_age": 7,
+          "signatures_out_of_date": true,
+          "at": "2026-11-18T19:51:16.9132065-08:00",
+          "error": null
+        },
+        "attempts": [
+          {
+            "exe": "C:\\Program Files\\Windows Defender\\MpCmdRun.exe",
+            "args": "-SignatureUpdate",
+            "start": "2026-11-18T19:51:17.2276564-08:00",
+            "exit": 2,
+            "timed_out": false,
+            "sec": 0.3,
+            "error": null,
+            "n": 1
+          },
+          {
+            "exe": "C:\\Program Files\\Windows Defender\\MpCmdRun.exe",
+            "args": "-SignatureUpdate",
+            "start": "2026-11-18T19:51:32.7702546-08:00",
+            "exit": 2,
+            "timed_out": false,
+            "sec": 0.1,
+            "error": null,
+            "n": 2
+          },
+          {
+            "exe": "C:\\Program Files\\Windows Defender\\MpCmdRun.exe",
+            "args": "-SignatureUpdate",
+            "start": "2026-11-18T19:51:37.9405878-08:00",
+            "exit": 2,
+            "timed_out": false,
+            "sec": 0.1,
+            "error": null,
+            "n": 3
+          },
+          {
+            "exe": "C:\\Program Files\\Windows Defender\\MpCmdRun.exe",
+            "args": "-SignatureUpdate",
+            "start": "2026-11-18T19:51:43.1442149-08:00",
+            "exit": 0,
+            "timed_out": false,
+            "sec": 3.6,
+            "error": null,
+            "n": 4
+          }
+        ],
+        "trigger": {
+          "exe": "C:\\Program Files\\Windows Defender\\MpCmdRun.exe",
+          "args": "-SignatureUpdate",
+          "start": "2026-11-18T19:51:43.1442149-08:00",
+          "exit": 0,
+          "timed_out": false,
+          "sec": 3.6,
+          "error": null,
+          "n": 4
+        },
+        "changes": 4,
+        "stable": true,
+        "current": true,
+        "stable_sec": 60,
+        "busy_wait_sec": 240,
+        "max_age_days": 1,
+        "bounded": false,
+        "max_wait_sec": 600,
+        "after": {
+          "source": "MSFT_MpComputerStatus",
+          "av_signature": "1.463.364.0",
+          "as_signature": "1.463.364.0",
+          "nis_signature": "1.463.364.0",
+          "engine": "1.1.26100.4",
+          "platform": "4.18.26100.4",
+          "av_signature_updated": "2026-11-18T09:47:36.0000000-08:00",
+          "av_signature_age": 0,
+          "signatures_out_of_date": false,
+          "at": "2026-11-18T19:53:07.6805539-08:00",
+          "error": null
+        },
+        "updated": true,
+        "waited_sec": 111,
+        "logs": [
+          {
+            "from": "C:\\Users\\tester\\AppData\\Local\\Temp\\MpCmdRun.log",
+            "to": "defender-MpCmdRun.log",
+            "bytes": 6284,
+            "truncated": false,
+            "error": null
+          },
+          {
+            "from": "C:\\ProgramData\\Microsoft\\Windows Defender\\Support\\MPLog-20261108-140753.log",
+            "to": "defender-MPLog.log",
+            "bytes": 1515684,
+            "truncated": false,
+            "error": null
+          }
+        ],
+        "error": null
+      },
+      "snap0": {
+        "source": "MSFT_MpComputerStatus",
+        "av_signature": "1.463.364.0",
+        "as_signature": "1.463.364.0",
+        "nis_signature": "1.463.364.0",
+        "engine": "1.1.26100.4",
+        "platform": "4.18.26100.4",
+        "av_signature_updated": "2026-11-18T09:47:36.0000000-08:00",
+        "av_signature_age": 0,
+        "signatures_out_of_date": false,
+        "at": "2026-11-18T19:53:25.8810346-08:00",
+        "error": null
+      },
+      "snap2": {
+        "source": "MSFT_MpComputerStatus",
+        "av_signature": "1.463.364.0",
+        "as_signature": "1.463.364.0",
+        "nis_signature": "1.463.364.0",
+        "engine": "1.1.26100.4",
+        "platform": "4.18.26100.4",
+        "av_signature_updated": "2026-11-18T09:47:36.0000000-08:00",
+        "av_signature_age": 0,
+        "signatures_out_of_date": false,
+        "at": "2026-11-18T19:55:13.4706286-08:00",
+        "error": null
+      }
+    },
+    "planted": [],
+    "phases": [
+      {
+        "name": "edge-pause",
+        "start": "2026-11-18T19:51:08.3669939-08:00",
+        "end": "2026-11-18T19:51:15.7654871-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "setup",
+        "start": "2026-11-18T19:51:15.7754624-08:00",
+        "end": "2026-11-18T19:51:16.7903246-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "defender-idle",
+        "start": "2026-11-18T19:51:16.8556113-08:00",
+        "end": "2026-11-18T19:53:07.8915492-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "arp0",
+        "start": "2026-11-18T19:53:07.8932630-08:00",
+        "end": "2026-11-18T19:53:08.0631415-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists0",
+        "start": "2026-11-18T19:53:08.0663694-08:00",
+        "end": "2026-11-18T19:53:25.8629469-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap0",
+        "start": "2026-11-18T19:53:25.8663670-08:00",
+        "end": "2026-11-18T19:53:33.8791106-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "install",
+        "start": "2026-11-18T19:53:33.8842632-08:00",
+        "end": "2026-11-18T19:54:01.2495100-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "detect",
+        "start": "2026-11-18T19:54:01.2574723-08:00",
+        "end": "2026-11-18T19:54:01.4234312-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "launch",
+        "start": "2026-11-18T19:54:01.4267560-08:00",
+        "end": "2026-11-18T19:54:01.4563655-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists1",
+        "start": "2026-11-18T19:54:01.4640083-08:00",
+        "end": "2026-11-18T19:54:05.4802180-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "engine-inventory-1",
+        "start": "2026-11-18T19:54:05.4818038-08:00",
+        "end": "2026-11-18T19:54:07.6034683-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap1",
+        "start": "2026-11-18T19:54:07.6066099-08:00",
+        "end": "2026-11-18T19:54:13.3048194-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "msi-tables-1",
+        "start": "2026-11-18T19:54:13.3099628-08:00",
+        "end": "2026-11-18T19:54:14.5099333-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "engine-harvest",
+        "start": "2026-11-18T19:54:14.5134306-08:00",
+        "end": "2026-11-18T19:54:26.2721585-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "uninstall",
+        "start": "2026-11-18T19:54:26.2771486-08:00",
+        "end": "2026-11-18T19:55:03.8770835-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "lists2",
+        "start": "2026-11-18T19:55:03.8818256-08:00",
+        "end": "2026-11-18T19:55:08.0241345-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "engine-inventory-2",
+        "start": "2026-11-18T19:55:08.0258843-08:00",
+        "end": "2026-11-18T19:55:08.1191463-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "snap2",
+        "start": "2026-11-18T19:55:08.1226215-08:00",
+        "end": "2026-11-18T19:55:13.6017084-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "msi-tables-2",
+        "start": "2026-11-18T19:55:13.6396692-08:00",
+        "end": "2026-11-18T19:55:13.6744578-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "edge-check",
+        "start": "2026-11-18T19:55:13.6779013-08:00",
+        "end": "2026-11-18T19:55:13.7177847-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "entries",
+        "start": "2026-11-18T19:55:13.7215793-08:00",
+        "end": "2026-11-18T19:55:13.8161885-08:00",
+        "ok": true,
+        "error": null
+      },
+      {
+        "name": "engine-scan",
+        "start": "2026-11-18T19:55:13.8205291-08:00",
+        "end": "2026-11-18T19:55:26.4442074-08:00",
+        "ok": true,
+        "error": null
+      }
+    ],
+    "m1b": {
+      "msi_tables": true,
+      "traps": false,
+      "tables": [
+        "msi-tables-m1b-vcredist-1.json",
+        "msi-tables-m1b-vcredist-2.json"
+      ]
+    },
+    "engine": {
+      "exe": "C:\\cr\\bin\\purge-engine.exe",
+      "app": "vcredist",
+      "program_id": "HKLM|32|{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+      "run": {
+        "schema": "purge.run/0",
+        "program_id": "HKLM|32|{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "cmd": "\"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\" /uninstall /quiet",
+        "signer": "Microsoft Corporation",
+        "t_start": 134395340665180338,
+        "t_end": 134395340715948584,
+        "exit_code": 0,
+        "outcome": "Success",
+        "verify_gone": {
+          "arp_gone": true,
+          "msi_unknown_all_ctx": true,
+          "main_exes_gone": true,
+          "passed": true
+        },
+        "processes": [
+          {
+            "pid": 1504,
+            "name": "VC_redist.x64.exe",
+            "path": "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe",
+            "start": null
+          },
+          {
+            "pid": 8060,
+            "name": "VC_redist.x64.exe",
+            "path": "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe",
+            "start": null
+          },
+          {
+            "pid": 3648,
+            "name": "VC_redist.x64.exe",
+            "path": "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe",
+            "start": null
+          }
+        ],
+        "co_removed": [
+          "HKLM|64|{43B0D101-A022-48F4-9D04-BA404CEB1D53}",
+          "HKLM|64|{86AB2CC9-08BD-4643-B0F9-F82D006D72FF}"
+        ]
+      },
+      "files": {
+        "inv1": "inv-1.json",
+        "fp": "fp.json",
+        "run": "engine-run.json",
+        "plan": "plan-purge.json",
+        "inv2": "inv-2.json"
+      },
+      "baselines": [
+        "EnterpriseSEval-26100.1742.tsv.gz",
+        "Professional-26340.9882.tsv.gz"
+      ],
+      "calls": [
+        {
+          "step": "inventory-1",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" inventory --json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 5480,
+          "start": "2026-11-18T19:54:05.5313063-08:00",
+          "end": "2026-11-18T19:54:07.4819915-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "[  0.000s] inventory: reading the Uninstall keys and MSI",
+            "warning: inventory: HKU\\S-1-5-18\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall: cannot read the Uninstall key's subkeys: reparse point not traversed",
+            "[  0.157s] inventory: 37 entries, 0 MSI-only products"
+          ]
+        },
+        {
+          "step": "harvest",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" harvest \"HKLM|32|{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\" -o C:\\cr\\out\\m1b-vcredist\\fp.json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 1344,
+          "start": "2026-11-18T19:54:14.5456486-08:00",
+          "end": "2026-11-18T19:54:26.2686735-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "warning: fp: anchors: the app has no install root and no exe; no registry anchor can be attributed",
+            "warning: fp: refsnap: the reference scan is incomplete (31 keys unreadable, first: HKLM\\SOFTWARE\\Microsoft\\EAPSIMMethods\\18\\FastReauthContext (access denied))",
+            "warning: fp: subtree: 3 subtrees were recorded in part (size caps or baseline keys)",
+            "harvest: Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211 (HKLM|32|{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}); 0 root(s), 2 rejected; no Inno log; 0 co-product candidate(s); reference snapshot incomplete",
+            "wrote the fingerprint to C:\\cr\\out\\m1b-vcredist\\fp.json"
+          ]
+        },
+        {
+          "step": "uninstall",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" uninstall \"HKLM|32|{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\" --quiet --fp C:\\cr\\out\\m1b-vcredist\\fp.json -o C:\\cr\\out\\m1b-vcredist\\engine-run.json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 2732,
+          "start": "2026-11-18T19:54:26.3872703-08:00",
+          "end": "2026-11-18T19:54:31.6486686-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "warning: uninstall: HKLM|64|{43B0D101-A022-48F4-9D04-BA404CEB1D53} disappeared during the run but was not a co-product candidate; it is not recorded as co-removed",
+            "warning: uninstall: HKLM|64|{86AB2CC9-08BD-4643-B0F9-F82D006D72FF} disappeared during the run but was not a co-product candidate; it is not recorded as co-removed",
+            "uninstall: ran as Elevated; should run at medium integrity: false; wait ended Settled; command \"C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe\" /uninstall /quiet",
+            "wrote the run record to C:\\cr\\out\\m1b-vcredist\\engine-run.json",
+            "wrote the fingerprint to C:\\cr\\out\\m1b-vcredist\\fp.json"
+          ]
+        },
+        {
+          "step": "inventory-2",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" inventory --json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 7980,
+          "start": "2026-11-18T19:55:08.0449788-08:00",
+          "end": "2026-11-18T19:55:08.1156087-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "[  0.000s] inventory: reading the Uninstall keys and MSI",
+            "warning: inventory: HKU\\S-1-5-18\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall: cannot read the Uninstall key's subkeys: reparse point not traversed",
+            "[  0.022s] inventory: 34 entries, 0 MSI-only products"
+          ]
+        },
+        {
+          "step": "scan",
+          "cmd": "\"C:\\cr\\bin\\purge-engine.exe\" scan --fp C:\\cr\\out\\m1b-vcredist\\fp.json --mode post --app vcredist -o C:\\cr\\out\\m1b-vcredist\\plan-purge.json",
+          "exit": 0,
+          "timed_out": false,
+          "pid": 6204,
+          "start": "2026-11-18T19:55:13.8394488-08:00",
+          "end": "2026-11-18T19:55:26.4411255-08:00",
+          "output_complete": true,
+          "stderr_tail": [
+            "warning: scan: COM-CLASS: the shared reference walk did not read every key (budget or unreadable keys): no COM registration is Safe on the walk's word that nothing else refers to it",
+            "warning: scan: COM-INTERFACE: the shared reference walk did not read every key (budget or unreadable keys): no COM registration is Safe on the walk's word that nothing else refers to it",
+            "scan: 2 candidate(s) from the scanners; plan 2 item(s): 0 Safe (0 preselected), 1 Likely, 0 Weak, 1 Blocked; 0 absorbed; hash b10c49f8d2350db567384bbf4823910168dd34985e9fc3485b2a17094ff7d5a8",
+            "wrote the plan to C:\\cr\\out\\m1b-vcredist\\plan-purge.json",
+            "wrote the scan sidecar to C:\\cr\\out\\m1b-vcredist\\plan-purge.scan.json"
+          ]
+        }
+      ]
+    },
+    "installer_source": "rig-base"
+  },
+  "sid": "S-1-5-21-1336749127-99101324-1432799918-1000",
+  "counts": {
+    "ambient": 117,
+    "leftover": 9
+  },
+  "counts_by_kind": {
+    "Path": {
+      "ambient": 7,
+      "leftover": 8
+    },
+    "RegKey": {
+      "ambient": 17
+    },
+    "RegValue": {
+      "ambient": 8,
+      "leftover": 2
+    },
+    "RegValueChanged": {
+      "ambient": 84
+    }
+  },
+  "ambient_by_run": {
+    "m1b-null1": 85,
+    "m1b-null2": 85,
+    "m1b-null3": 45
+  },
+  "deny_hits": [],
+  "snaps": {
+    "s0": {
+      "file": "runs/m1b-vcredist/snap-m1b-vcredist-0.tsv.gz",
+      "header": {
+        "time": "2026-11-19T03:53:27Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "s1": "runs/m1b-vcredist/snap-m1b-vcredist-1.tsv.gz",
+    "s2": {
+      "file": "runs/m1b-vcredist/snap-m1b-vcredist-2.tsv.gz",
+      "header": {
+        "time": "2026-11-19T03:55:08Z",
+        "computer": "INBOUND-WIN11-T",
+        "edition": "EnterpriseSEval",
+        "build": "26100.1742"
+      },
+      "errors": 169
+    },
+    "kept_entries": []
+  },
+  "items": [
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Diagnosis\\AggregatorStorage\\Triggers\\4615479057323752154_data.dat"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 12528,
+      "lwt": 134395341023077089,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Diagnosis\\AggregatorStorage\\Triggers\\4615479057323752154_trigger.dat"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 5164,
+      "lwt": 134395341023077089,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Diagnosis\\DownloadedSettings\\telemetry.P-Eco3PTelDefault.json.bk"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 57,
+      "lwt": 134386189363092728,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Diagnosis\\DownloadedSettings\\utc.cert.json.bk"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 2723,
+      "lwt": 134386189352222931,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\RtSigs\\Data\\80c1ba2c72550928ae8d1bf9050102004fac918b"
+      },
+      "label": "ambient",
+      "rule": "labels: Microsoft Defender real-time (dynamic) signature store: RtSigs\\Data\\<sha1> blobs Defender fetches and expires on its own schedule (the M0 null runs already showed them; ruling 2026-11-18).",
+      "size": 349,
+      "lwt": 134395340469325981,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195335.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 17061,
+      "lwt": 134395340189532903,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195335_000_vcRuntimeMinimum_x64.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 130226,
+      "lwt": 134395340182780845,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195335_001_vcRuntimeAdditional_x64.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 134418,
+      "lwt": 134395340188804691,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195426.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 14193,
+      "lwt": 134395340703050477,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195426_000_vcRuntimeAdditional_x64.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 119640,
+      "lwt": 134395340687986596,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\dd_vcredist_amd64_20261118195426_001_vcRuntimeMinimum_x64.log"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 118798,
+      "lwt": 134395340702304326,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\DELB48C.tmp"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 686152,
+      "lwt": 134395340163814150,
+      "dir": false,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Installer\\2e6e2.msi"
+      },
+      "label": "ambient",
+      "rule": "temp package: Windows Installer\\TempPackages names it in snap 2 (msiexec deletes it itself)",
+      "size": 212992,
+      "lwt": 133941262680000000,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\DLLHOST.EXE-BF26B840.pf"
+      },
+      "label": "ambient",
+      "rule": "labels: SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state.",
+      "size": 3731,
+      "lwt": 134395340723198691,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\WINDOWS\\Prefetch\\MSIEXEC.EXE-7D20CFB0.pf"
+      },
+      "label": "ambient",
+      "rule": "labels: SysMain prefetch trace written for any executable that ran (installer, rig); Windows ages them out; not app state.",
+      "size": 21836,
+      "lwt": 134395340275016603,
+      "dir": false,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Installer / Burn dependency containers created by the first install on a clean base and left empty (v1 run: Classes\\Installer\\Dependencies); service-owned, not the runtime's.",
+      "lwt": 134395340702411361,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\IdentityCRL\\NegativeCache"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134395340470417865,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\IdentityCRL\\ThrottleCache"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134395340470440066,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\Certificates\\5EEED86FA37C675230642F55C84DDBF67CD33C80"
+      },
+      "label": "ambient",
+      "rule": "labels: Machine certificate stores (root auto-update, pin rules) written while verifying signatures; never a cleaner target.",
+      "lwt": 134395340158509698,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\WMIProv @ root/wmi"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "lwt": 134395340767072969,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\TempPackages"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Installer's list of temp packages it deletes itself after a transaction (the .msi files it names are relabelled by m1b.sh temp_packages).",
+      "lwt": 134395340702158488,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Installer machine-state containers created on first MSI use; the service's own keys.",
+      "lwt": 134395340180367081,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\UFH"
+      },
+      "label": "ambient",
+      "rule": "labels: UFH (shortcut/usage history) service state.",
+      "lwt": 134395340181040248,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3760"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395340366208247,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\3840"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395340352435926,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\4092"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395340362148386,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7612"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395340363319934,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\TermReason\\7956"
+      },
+      "label": "ambient",
+      "rule": "labels: Windows Error Reporting per-PID termination records TermReason\\<pid> and their container (approved 2026-11-14).",
+      "lwt": 134395340366359934,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore"
+      },
+      "label": "ambient",
+      "rule": "labels: msiexec's restore-point bookkeeping key (created on the first MSI transaction); Windows state.",
+      "lwt": 134395340673002782,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\.DEFAULT\\Software\\Classes\\Local Settings\\MuiCache\\5"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI resource-string cache generation key (not the shell MuiCache of exe names, which lives under Local Settings/Software/Microsoft/Windows/Shell/MuiCache).",
+      "lwt": 134395341004548640,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\RestartManager"
+      },
+      "label": "ambient",
+      "rule": "labels: Restart Manager session scratch, created by any MSI/Burn/NSIS session.",
+      "lwt": 134395340691904348,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\MuiCache\\5"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI resource-string cache generation key (not the shell MuiCache of exe names, which lives under Local Settings/Software/Microsoft/Windows/Shell/MuiCache).",
+      "lwt": 134395341057933073,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler",
+        "name": "134395340422941719"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\ScheduledTaskProv @ Root/Microsoft/Windows/TaskScheduler\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134395341056254113,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\wfascim @ ROOT/StandardCimv2",
+        "name": "134395341069968915"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Wbem\\\\Tracing\\\\Providers\\\\wfascim @ ROOT/StandardCimv2\\|[0-9a-f]{16,}$",
+      "size": 32,
+      "lwt": 134395341075004267,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\WDM",
+        "name": "C:\\WINDOWS\\system32\\drivers\\battc.sys[BATTCWMI]"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 160,
+      "lwt": 134395340906144755,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\WDM\\DREDGE",
+        "name": "C:\\WINDOWS\\system32\\drivers\\battc.sys[BATTCWMI]"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 160,
+      "lwt": 134395340906144755,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+        "name": "PendingFileRenameOperations"
+      },
+      "label": "ambient",
+      "rule": "labels: Boot-time delete queue the uninstaller wrote for locked files; consumed at the next reboot. Purge only appends and removes its own pairs (plan §5 reconcile).",
+      "size": 110,
+      "lwt": 134395340702428149,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134395340703226687,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Windows\\Temp\\{D7CA27E1-6F69-4444-8789-E4274FB4ED44}\\.be\\VC_redist.x64.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134395340703226687,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\Windows\\Temp\\{E6EF7376-7BCB-4E0B-967E-BDB3479F666A}\\.cr\\vc_redist.exe"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 24,
+      "lwt": 134395340703226687,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        "name": "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 108,
+      "lwt": 134395340722945975,
+      "in_s1": false
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        "name": "C:\\Windows\\Temp\\{D7CA27E1-6F69-4444-8789-E4274FB4ED44}\\.be\\VC_redist.x64.exe"
+      },
+      "label": "leftover",
+      "rule": "default",
+      "size": 108,
+      "lwt": 134395340722945975,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\IdentityCRL",
+        "name": "ClockSkew",
+        "before": "180",
+        "after": "179"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395341006894264,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\IdentityCRL\\ClockData",
+        "name": "ClockTimeSeconds",
+        "before": "1795060267",
+        "after": "1795060500"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341006894264,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\IdentityCRL\\ClockData",
+        "name": "TickCount",
+        "before": "39609",
+        "after": "273281"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341006894264,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\AutoUpdate",
+        "name": "EncodedCtl",
+        "before": "#2f402c0556aaa1dc",
+        "after": "#8944b786cafe3ce4"
+      },
+      "label": "ambient",
+      "rule": "labels: Machine certificate stores (root auto-update, pin rules) written while verifying signatures; never a cleaner target.",
+      "size": 201808,
+      "lwt": 134395340158110864,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\AutoUpdate",
+        "name": "LastSyncTime",
+        "before": "#0535e6fe6d404068",
+        "after": "#13ebec962e074fdd"
+      },
+      "label": "ambient",
+      "rule": "labels: Machine certificate stores (root auto-update, pin rules) written while verifying signatures; never a cleaner target.",
+      "size": 8,
+      "lwt": 134395340158110864,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\ROOT\\Certificates\\8F43288AD272F3103B6FB1428485EA3014C0BCFE",
+        "name": "Blob",
+        "before": "#bb5b422ca98d923d",
+        "after": "#b5b8a052efa23e15"
+      },
+      "label": "ambient",
+      "rule": "labels: Machine certificate stores (root auto-update, pin rules) written while verifying signatures; never a cleaner target.",
+      "size": 1885,
+      "lwt": 134395340176321295,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Wbem\\PROVIDERS\\Performance",
+        "name": "Performance Data",
+        "before": "#bcd428503625d1ce",
+        "after": "#e07b5b24c66ff37a"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 7392,
+      "lwt": 134395340906116880,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Spynet",
+        "name": "LastMAPSSuccessTime",
+        "before": "#42a0c50c00c3e56f",
+        "after": "#3f26780921a1082a"
+      },
+      "label": "ambient",
+      "rule": "labels: Defender cloud/MAPS state; Tamper Protection guards it anyway.",
+      "size": 8,
+      "lwt": 134395340469348109,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "41871D20A3BC3C75",
+        "before": "#64336eafde645866",
+        "after": "#104509820a9b0eff"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 12,
+      "lwt": 134395341010299206,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418A073AA3BC1C75",
+        "before": "#4ceb4f5bdc9bb7f8",
+        "after": "#dada46f9d83f4d79"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 854,
+      "lwt": 134395341010299206,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Notifications\\Data",
+        "name": "418A073AA3BC3475",
+        "before": "#f828e9d10d1889c5",
+        "after": "#8de410f71df61b79"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 218,
+      "lwt": 134395341010299206,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib",
+        "name": "Last Counter",
+        "before": "11772",
+        "after": "11784"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395340880920110,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib",
+        "name": "Last Help",
+        "before": "11773",
+        "after": "11785"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395340880920110,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\009",
+        "name": "Counter",
+        "before": "1\u00001847\u00002\u0000System\u00004\u0000Memory\u00006\u0000% Processor Time\u000010\u0000File Read Operations/sec\u000012\u0000File Write Operations/sec\u000014\u0000File Control Operations/sec\u000016\u0000File Read Bytes/sec\u000018\u0000File Write Bytes/sec\u000020\u0000File Control Bytes/sec\u000024\u0000Available Bytes\u000026\u0000Committed Bytes\u000028\u0000Page Faults/sec\u000030\u0000Commit Limit\u000032\u0000Write Copies/sec\u000034\u0000Transition Faults/sec\u000036\u0000Cache Faults/sec\u000038\u0000Demand Zero Faults/sec\u000040\u0000Pages/sec\u000042\u0000Page Reads/sec\u000044\u0000Processor Queue Length\u000046\u0000Thread State\u000048\u0000Pages Output/sec\u000050\u0000Page Writes/sec\u000052\u0000Browser\u000054\u0000Announcements Server/sec\u000056\u0000Pool Paged Bytes\u000058\u0000Pool Nonpaged Bytes\u000060\u0000Pool Paged Allocs\u000064\u0000Pool Nonpaged Allocs\u000066\u0000Pool Paged Resident Bytes\u000068\u0000System Code Total Bytes\u000070\u0000System Code Resident Bytes\u000072\u0000System Driver Total Bytes\u000074\u0000System Driver Resident Bytes\u000076\u0000System Cache Resident Bytes\u000078\u0000Announcements Domain/sec\u000080\u0000Election Packets/sec\u000082\u0000Mailslot Writes/sec\u000084\u0000Server List Requests/sec\u000086\u0000Cache\u000088\u0000Data Maps/sec\u000090\u0000Sync Data Maps/sec\u000092\u0000Async Data Maps/sec\u000094\u0000Data Map Hits %\u000096\u0000Data Map Pins/sec\u000098\u0000Pin Reads/sec\u0000100\u0000Syn",
+        "after": "1\u00001847\u00002\u0000System\u00004\u0000Memory\u00006\u0000% Processor Time\u000010\u0000File Read Operations/sec\u000012\u0000File Write Operations/sec\u000014\u0000File Control Operations/sec\u000016\u0000File Read Bytes/sec\u000018\u0000File Write Bytes/sec\u000020\u0000File Control Bytes/sec\u000024\u0000Available Bytes\u000026\u0000Committed Bytes\u000028\u0000Page Faults/sec\u000030\u0000Commit Limit\u000032\u0000Write Copies/sec\u000034\u0000Transition Faults/sec\u000036\u0000Cache Faults/sec\u000038\u0000Demand Zero Faults/sec\u000040\u0000Pages/sec\u000042\u0000Page Reads/sec\u000044\u0000Processor Queue Length\u000046\u0000Thread State\u000048\u0000Pages Output/sec\u000050\u0000Page Writes/sec\u000052\u0000Browser\u000054\u0000Announcements Server/sec\u000056\u0000Pool Paged Bytes\u000058\u0000Pool Nonpaged Bytes\u000060\u0000Pool Paged Allocs\u000064\u0000Pool Nonpaged Allocs\u000066\u0000Pool Paged Resident Bytes\u000068\u0000System Code Total Bytes\u000070\u0000System Code Resident Bytes\u000072\u0000System Driver Total Bytes\u000074\u0000System Driver Resident Bytes\u000076\u0000System Cache Resident Bytes\u000078\u0000Announcements Domain/sec\u000080\u0000Election Packets/sec\u000082\u0000Mailslot Writes/sec\u000084\u0000Server List Requests/sec\u000086\u0000Cache\u000088\u0000Data Maps/sec\u000090\u0000Sync Data Maps/sec\u000092\u0000Async Data Maps/sec\u000094\u0000Data Map Hits %\u000096\u0000Data Map Pins/sec\u000098\u0000Pin Reads/sec\u0000100\u0000Syn"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 342612,
+      "lwt": 0,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\009",
+        "name": "Help",
+        "before": "3\u0000The System performance object consists of counters that apply to more than one instance of a component processors on the computer.\u00005\u0000The Memory performance object  consists of counters that describe the behavior of physical and virtual memory on the computer.  Physical memory is the amount of random access memory on the computer.  Virtual memory consists of the space in physical memory and on disk.  Many of the memory counters monitor paging, which is the movement of pages of code and data between disk and physical memory.  Excessive paging, a symptom of a memory shortage, can cause delays which interfere with all system processes.\u00007\u0000% Processor Time is the percentage of elapsed time that the processor spends to execute a non-Idle thread. It is calculated by measuring the percentage of time that the processor spends executing the idle thread and then subtracting that value from 100%. (Each processor has an idle thread that consumes cycles when no other threads are ready to run). This counter is the primary ",
+        "after": "3\u0000The System performance object consists of counters that apply to more than one instance of a component processors on the computer.\u00005\u0000The Memory performance object  consists of counters that describe the behavior of physical and virtual memory on the computer.  Physical memory is the amount of random access memory on the computer.  Virtual memory consists of the space in physical memory and on disk.  Many of the memory counters monitor paging, which is the movement of pages of code and data between disk and physical memory.  Excessive paging, a symptom of a memory shortage, can cause delays which interfere with all system processes.\u00007\u0000% Processor Time is the percentage of elapsed time that the processor spends to execute a non-Idle thread. It is calculated by measuring the percentage of time that the processor spends executing the idle thread and then subtracting that value from 100%. (Each processor has an idle thread that consumes cycles when no other threads are ready to run). This counter is the primary "
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 1183506,
+      "lwt": 0,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\CurrentLanguage",
+        "name": "Counter",
+        "before": "1\u00001847\u00002\u0000System\u00004\u0000Memory\u00006\u0000% Processor Time\u000010\u0000File Read Operations/sec\u000012\u0000File Write Operations/sec\u000014\u0000File Control Operations/sec\u000016\u0000File Read Bytes/sec\u000018\u0000File Write Bytes/sec\u000020\u0000File Control Bytes/sec\u000024\u0000Available Bytes\u000026\u0000Committed Bytes\u000028\u0000Page Faults/sec\u000030\u0000Commit Limit\u000032\u0000Write Copies/sec\u000034\u0000Transition Faults/sec\u000036\u0000Cache Faults/sec\u000038\u0000Demand Zero Faults/sec\u000040\u0000Pages/sec\u000042\u0000Page Reads/sec\u000044\u0000Processor Queue Length\u000046\u0000Thread State\u000048\u0000Pages Output/sec\u000050\u0000Page Writes/sec\u000052\u0000Browser\u000054\u0000Announcements Server/sec\u000056\u0000Pool Paged Bytes\u000058\u0000Pool Nonpaged Bytes\u000060\u0000Pool Paged Allocs\u000064\u0000Pool Nonpaged Allocs\u000066\u0000Pool Paged Resident Bytes\u000068\u0000System Code Total Bytes\u000070\u0000System Code Resident Bytes\u000072\u0000System Driver Total Bytes\u000074\u0000System Driver Resident Bytes\u000076\u0000System Cache Resident Bytes\u000078\u0000Announcements Domain/sec\u000080\u0000Election Packets/sec\u000082\u0000Mailslot Writes/sec\u000084\u0000Server List Requests/sec\u000086\u0000Cache\u000088\u0000Data Maps/sec\u000090\u0000Sync Data Maps/sec\u000092\u0000Async Data Maps/sec\u000094\u0000Data Map Hits %\u000096\u0000Data Map Pins/sec\u000098\u0000Pin Reads/sec\u0000100\u0000Syn",
+        "after": "1\u00001847\u00002\u0000System\u00004\u0000Memory\u00006\u0000% Processor Time\u000010\u0000File Read Operations/sec\u000012\u0000File Write Operations/sec\u000014\u0000File Control Operations/sec\u000016\u0000File Read Bytes/sec\u000018\u0000File Write Bytes/sec\u000020\u0000File Control Bytes/sec\u000024\u0000Available Bytes\u000026\u0000Committed Bytes\u000028\u0000Page Faults/sec\u000030\u0000Commit Limit\u000032\u0000Write Copies/sec\u000034\u0000Transition Faults/sec\u000036\u0000Cache Faults/sec\u000038\u0000Demand Zero Faults/sec\u000040\u0000Pages/sec\u000042\u0000Page Reads/sec\u000044\u0000Processor Queue Length\u000046\u0000Thread State\u000048\u0000Pages Output/sec\u000050\u0000Page Writes/sec\u000052\u0000Browser\u000054\u0000Announcements Server/sec\u000056\u0000Pool Paged Bytes\u000058\u0000Pool Nonpaged Bytes\u000060\u0000Pool Paged Allocs\u000064\u0000Pool Nonpaged Allocs\u000066\u0000Pool Paged Resident Bytes\u000068\u0000System Code Total Bytes\u000070\u0000System Code Resident Bytes\u000072\u0000System Driver Total Bytes\u000074\u0000System Driver Resident Bytes\u000076\u0000System Cache Resident Bytes\u000078\u0000Announcements Domain/sec\u000080\u0000Election Packets/sec\u000082\u0000Mailslot Writes/sec\u000084\u0000Server List Requests/sec\u000086\u0000Cache\u000088\u0000Data Maps/sec\u000090\u0000Sync Data Maps/sec\u000092\u0000Async Data Maps/sec\u000094\u0000Data Map Hits %\u000096\u0000Data Map Pins/sec\u000098\u0000Pin Reads/sec\u0000100\u0000Syn"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 342612,
+      "lwt": 0,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Perflib\\CurrentLanguage",
+        "name": "Help",
+        "before": "3\u0000The System performance object consists of counters that apply to more than one instance of a component processors on the computer.\u00005\u0000The Memory performance object  consists of counters that describe the behavior of physical and virtual memory on the computer.  Physical memory is the amount of random access memory on the computer.  Virtual memory consists of the space in physical memory and on disk.  Many of the memory counters monitor paging, which is the movement of pages of code and data between disk and physical memory.  Excessive paging, a symptom of a memory shortage, can cause delays which interfere with all system processes.\u00007\u0000% Processor Time is the percentage of elapsed time that the processor spends to execute a non-Idle thread. It is calculated by measuring the percentage of time that the processor spends executing the idle thread and then subtracting that value from 100%. (Each processor has an idle thread that consumes cycles when no other threads are ready to run). This counter is the primary ",
+        "after": "3\u0000The System performance object consists of counters that apply to more than one instance of a component processors on the computer.\u00005\u0000The Memory performance object  consists of counters that describe the behavior of physical and virtual memory on the computer.  Physical memory is the amount of random access memory on the computer.  Virtual memory consists of the space in physical memory and on disk.  Many of the memory counters monitor paging, which is the movement of pages of code and data between disk and physical memory.  Excessive paging, a symptom of a memory shortage, can cause delays which interfere with all system processes.\u00007\u0000% Processor Time is the percentage of elapsed time that the processor spends to execute a non-Idle thread. It is calculated by measuring the percentage of time that the processor spends executing the idle thread and then subtracting that value from 100%. (Each processor has an idle thread that consumes cycles when no other threads are ready to run). This counter is the primary "
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 1183506,
+      "lwt": 0,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{6FD85B93-7A13-4DCA-B793-1D7D18FEAC39}",
+        "name": "DynamicInfo",
+        "before": "#2b2dae23a9981d27",
+        "after": "#30654c0ed87b1a35"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395340157969547,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{7285636E-5715-48F0-A8FF-3CFB5893A966}",
+        "name": "DynamicInfo",
+        "before": "#a55cdc7a50106b06",
+        "after": "#32fa36bfcd6cf0df"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395341038401094,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{7F6F3E07-9CB5-42F1-AF2B-9331F44F776B}",
+        "name": "DynamicInfo",
+        "before": "#7a314118eabafa4e",
+        "after": "#4c35fa0901532961"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395340490391129,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks\\{F65E78D2-6CBA-464C-921F-C03CAD0A1A91}",
+        "name": "DynamicInfo",
+        "before": "#ce1b46d93a1226c4",
+        "after": "#53fea4b3c70b7b57"
+      },
+      "label": "ambient",
+      "rule": "ambient:pattern ^[VC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Schedule\\\\TaskCache\\\\Tasks\\\\\\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\}?\\|DynamicInfo$",
+      "size": 36,
+      "lwt": 134395340259184569,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack",
+        "name": "LastSuccessfulNormalUploadTime",
+        "before": "134388826794766249",
+        "after": "134395341094211071"
+      },
+      "label": "ambient",
+      "rule": "labels: DiagTrack (telemetry service) settings refresh and upload bookkeeping; written on the service's own schedule.",
+      "size": 8,
+      "lwt": 134395341094211071,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack",
+        "name": "LastSuccessfulUploadTime",
+        "before": "134395339088070780",
+        "after": "134395341094211071"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341094211071,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests",
+        "name": "LastDownloadTime",
+        "before": "134388836856374411",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341000270510,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.ASM-WindowsDefault",
+        "name": "ETag",
+        "before": "\"A53ADC90293844464BE843F74D484901:73BCB0821C016FFF:2F2C90339D\"",
+        "after": "\"585F303739E8FB46A89E52D7131BDCC4:73BCB0821C016FFF:2F2C916FC5\""
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 126,
+      "lwt": 134395341031842369,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.ASM-WindowsDefault",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341031842369,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.ASM-WindowsDefault",
+        "name": "LastDownloadTime",
+        "before": "134388325530363251",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341031842369,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.ASM-WindowsDefault",
+        "name": "LastFileWrittenTime",
+        "before": "134388325539007258",
+        "after": "134395341031825270"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341031842369,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.ASM-WindowsDefault",
+        "name": "RefreshInterval",
+        "before": "1980",
+        "after": "1440"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395341031842369,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\TELEMETRY.ASM-WINDOWSSQ",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341028261069,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\TELEMETRY.ASM-WINDOWSSQ",
+        "name": "LastDownloadTime",
+        "before": "134388800827215537",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341028261069,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\TELEMETRY.ASM-WINDOWSSQ",
+        "name": "LastFileWrittenTime",
+        "before": "134388800838391480",
+        "after": "134395341028240784"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341028261069,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\TELEMETRY.ASM-WINDOWSSQ",
+        "name": "RefreshInterval",
+        "before": "330",
+        "after": "300"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395341028261069,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.P-ARIA-7005b72804a64fa4b2138faab88f877b-14cf798a-05a4-4b7b-9d02-4d99259ebd4a-7553",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341034698829,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.P-ARIA-7005b72804a64fa4b2138faab88f877b-14cf798a-05a4-4b7b-9d02-4d99259ebd4a-7553",
+        "name": "LastDownloadTime",
+        "before": "134386189284441034",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341034698829,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.P-ARIA-7005b72804a64fa4b2138faab88f877b-14cf798a-05a4-4b7b-9d02-4d99259ebd4a-7553",
+        "name": "LastFileWrittenTime",
+        "before": "134386189360109209",
+        "after": "134395341034698829"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341034698829,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.P-ARIA-af397ef28e484961ba48646a5d38cf54-77418283-d6f6-4a90-b0c8-37e0f5e7b087-7425",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341033962524,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.P-ARIA-af397ef28e484961ba48646a5d38cf54-77418283-d6f6-4a90-b0c8-37e0f5e7b087-7425",
+        "name": "LastDownloadTime",
+        "before": "134386189284441034",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341033962524,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.P-ARIA-af397ef28e484961ba48646a5d38cf54-77418283-d6f6-4a90-b0c8-37e0f5e7b087-7425",
+        "name": "LastFileWrittenTime",
+        "before": "134386189357114282",
+        "after": "134395341033934351"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341033962524,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.P-Eco3PTelDefault",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341035426198,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.P-Eco3PTelDefault",
+        "name": "LastDownloadTime",
+        "before": "134386189284441034",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341035426198,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\telemetry.P-Eco3PTelDefault",
+        "name": "LastFileWrittenTime",
+        "before": "134386189363092728",
+        "after": "134395341035405703"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341035426198,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.aggregators",
+        "name": "ETag",
+        "before": "\"E7B3ACB1C49DE529A80F50BCFD2AF6F8::2F2C90332C\"",
+        "after": "\"E7B3ACB1C49DE529A80F50BCFD2AF6F8::2F2C916CE8\""
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 94,
+      "lwt": 134395341033233965,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.aggregators",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341033233965,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.aggregators",
+        "name": "LastDownloadTime",
+        "before": "134388323542445565",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341033233965,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.aggregators",
+        "name": "LastFileWrittenTime",
+        "before": "134386189355270938",
+        "after": "134395341033233965"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341033233965,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.aggregators",
+        "name": "RefreshInterval",
+        "before": "1440",
+        "after": "2040"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395341033233965,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.allow",
+        "name": "ETag",
+        "before": "\"05A3CA718DEE08FB\"",
+        "after": "\"05A3CA7173E40239\""
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 38,
+      "lwt": 134395341023061564,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.allow",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341023061564,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.allow",
+        "name": "LastDownloadTime",
+        "before": "134388323542445565",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341023061564,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.allow",
+        "name": "LastFileWrittenTime",
+        "before": "134386189339322464",
+        "after": "134395341023039672"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341023061564,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.app",
+        "name": "ETag",
+        "before": "\"B7F45E0FD9B66B8994166CBC71F52E9B::2F2C903363\"",
+        "after": "\"B7F45E0FD9B66B8994166CBC71F52E9B::2F2C916D4A\""
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 94,
+      "lwt": 134395341030265015,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.app",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341030265015,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.app",
+        "name": "LastDownloadTime",
+        "before": "134388325524055975",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341030265015,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.app",
+        "name": "LastFileWrittenTime",
+        "before": "134388325530331447",
+        "after": "134395341030229532"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341030265015,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.app",
+        "name": "RefreshInterval",
+        "before": "1320",
+        "after": "1440"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395341030265015,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.cert",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341032535648,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.cert",
+        "name": "LastDownloadTime",
+        "before": "134386189284441034",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341032535648,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.cert",
+        "name": "LastFileWrittenTime",
+        "before": "134386189352229478",
+        "after": "134395341032519271"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341032535648,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.privacy",
+        "name": "ETag",
+        "before": "\"CE1E62A856F53F35\"",
+        "after": "\"CE1E62A8BFD016F0\""
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 38,
+      "lwt": 134395341027537402,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.privacy",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341027537402,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.privacy",
+        "name": "LastDownloadTime",
+        "before": "134386189284441034",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341027537402,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.privacy",
+        "name": "LastFileWrittenTime",
+        "before": "134386189342375011",
+        "after": "134395341027520307"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341027537402,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.tracing",
+        "name": "ETag",
+        "before": "\"66A2A386\"",
+        "after": "\"66A2A386C5A6F721\""
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 38,
+      "lwt": 134395341037621297,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.tracing",
+        "name": "ETagQueryParameters",
+        "before": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E",
+        "after": "?IsRetailOS=1&expId=FX%3A124117A5%2CFX%3A13083122%2CFX%3A1318CA30%2CFX%3A1318CAEE%2CFX%3A1318CAEF%2CFX%3A1318CBED%2CFX%3A1318CBF1%2CFX%3A13248A4A%2CFX%3A132C9769%2CFX%3A132EB35F%2CFX%3A132F2D42%2CFX%3A132F2D43%2CFX%3A13304F0A%2CFX%3A1335A0E2%2CFX%3A1335E57A%2CFX%3A13377B47%2CFX%3A13384013%2CFX%3A133A8EB8%2CFX%3A13430B2D%2CFX%3A13438657%2CFX%3A1346A1BE%2CFX%3A134D23F5%2CFX%3A134E98E0%2CFX%3A134FDBFA%2CFX%3A13537087%2CFX%3A135429A8%2CFX%3A1355BA21%2CFX%3A1356B163%2CFX%3A13570B2F%2CFX%3A13570B36%2CFX%3A13570B3C%2CFX%3A13570B41%2CFX%3A1358A347%2CFX%3A13596950%2CFX%3A1359A0CA%2CFX%3A1359FB39%2CFX%3A135A2764%2CFX%3A135A750D%2CFX%3A135B668B%2CFX%3A135C5A0B%2CFX%3A135E3503%2CFX%3A135E3E8F%2CFX%3A135E73EC%2CFX%3A135E75D7%2CFX%3A135E761C%2CFX%3A13603FE9%2CFX%3A13604C80%2CFX%3A1361229F%2CFX%3A13612C48%2CFX%3A1361A278%2CFX%3A136204AC%2CFX%3A13623ED6%2CFX%3A13628CB7%2CFX%3A1363677E%2CFX%3A1363E0C6%2CFX%3A1363EE77%2CFX%3A13642779%2CFX%3A1364277A%2CFX%3A13643205%2CFX%3A1364443F%2CFX%3A1364751C%2CFX%3A1364752C%2CFX%3A136494E"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 10936,
+      "lwt": 134395341037621297,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.tracing",
+        "name": "LastDownloadTime",
+        "before": "134388323542445565",
+        "after": "134395341000270510"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341037621297,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.tracing",
+        "name": "LastFileWrittenTime",
+        "before": "134388323582341840",
+        "after": "134395341037603101"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341037621297,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Diagnostics\\DiagTrack\\SettingsRequests\\utc.tracing",
+        "name": "RefreshInterval",
+        "before": "1035",
+        "after": "1440"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395341037621297,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\VFUProvider",
+        "name": "StartTime",
+        "before": "134395339800172106",
+        "after": "134395341000128373"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395341000128373,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\MUI\\StringCacheSettings",
+        "name": "StringCacheGeneration",
+        "before": "1",
+        "after": "5"
+      },
+      "label": "ambient",
+      "rule": "labels: MUI string cache generation counter.",
+      "size": 4,
+      "lwt": 134395340691163742,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "MicrosoftWindows.Client.CBS_cw5n1h2txyewy",
+        "before": "#ae52aadad3064573",
+        "after": "#63fe497a2edd1cb7"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 24,
+      "lwt": 134395340703226687,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "SequenceNumber",
+        "before": "12",
+        "after": "17"
+      },
+      "label": "ambient",
+      "rule": "labels: Background Activity Moderator execution record kept by the bam driver; report-only, never a cleaner target.",
+      "size": 4,
+      "lwt": 134395340703226687,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\BITS",
+        "name": "Start",
+        "before": "2",
+        "after": "3"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395340777190767,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WmiApRpl\\Performance",
+        "name": "Last Counter",
+        "before": "11772",
+        "after": "11784"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395340880920110,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WmiApRpl\\Performance",
+        "name": "Last Help",
+        "before": "11773",
+        "after": "11785"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4,
+      "lwt": 134395340880920110,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\.DEFAULT\\Software\\Microsoft\\IdentityCRL\\Immersive\\production\\Property",
+        "name": "0018001BDD773238",
+        "before": "#fa292a9c3d13fae7",
+        "after": "#e38b2def50354551"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 346,
+      "lwt": 134395341007025433,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\.DEFAULT\\Software\\Microsoft\\IdentityCRL\\Immersive\\production\\Token\\{2B379600-B42B-4FE9-A59C-A312FB934935}",
+        "name": "DeviceTicket",
+        "before": "#496dd021227ec896",
+        "after": "#22f4b68bf7b98099"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 4970,
+      "lwt": 134395341007025433,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.101",
+        "name": "CheckSetting",
+        "before": "#6e68b7b2fca1c350",
+        "after": "#29229c54cc7f382e"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395340779460678,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Security and Maintenance\\Checks\\{E8433B72-5842-4d43-8645-BC2C35960837}.check.102",
+        "name": "CheckSetting",
+        "before": "#f1d4f1334f5853af",
+        "after": "#29229c54cc7f382e"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 36,
+      "lwt": 134395340779460678,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.IrisService\\V1\\LU",
+        "name": "PTT",
+        "before": "134388324725016444",
+        "after": "134395340366433335"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395340366433335,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\Global.RulesEngine\\V1\\LU",
+        "name": "PTT",
+        "before": "134388801115433602",
+        "after": "134395340366329181"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395340366329181,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WebExperienceHost\\V1\\LU",
+        "name": "PTT",
+        "before": "134388801119995076",
+        "after": "134395340362359978"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395340362359978,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\HAM\\AUI\\WindowsBackup\\V1\\LU",
+        "name": "PTT",
+        "before": "134388324720220381",
+        "after": "134395340352576465"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395340352576465,
+      "in_s1": true
+    },
+    {
+      "target": {
+        "type": "RegValueChanged",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData\\MicrosoftWindows.Client.OOBE_cw5n1h2txyewy\\HAM\\AUI\\OobeHost\\V1\\LU",
+        "name": "PTT",
+        "before": "134388394664812028",
+        "after": "134395340363534536"
+      },
+      "label": "ambient",
+      "rule": "ambient:exact",
+      "size": 8,
+      "lwt": 134395340363546839,
+      "in_s1": true
+    }
+  ],
+  "temp_packages": [
+    "C:\\WINDOWS\\Installer\\2e6e2.msi"
+  ]
+}

@@ -1,0 +1,199 @@
+{
+  "schema": "purge.scan/0",
+  "app": "node",
+  "tool": "purge",
+  "mode": "post",
+  "policy_version": "m1b.1",
+  "plan_hash": "d66132efa1deef9e12547c0fc6294544cf9ea218840cd11e71069100f4fc34c9",
+  "items": [
+    {
+      "id": "c-08c4bb5b6a3aba80",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "1"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}",
+        "display_name": "Node.js"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "B",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\nodejs\\nodevars.bat",
+          "detail": {
+            "path": "c:\\program files\\nodejs\\nodevars.bat",
+            "place": "shared",
+            "root": "C:\\Program Files\\nodejs"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "B",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\nodejs\\nodevars.bat",
+          "detail": {
+            "path": "c:\\program files\\nodejs\\nodevars.bat",
+            "place": "shared",
+            "root": "C:\\Program Files\\nodejs"
+          }
+        },
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|1",
+          "detail": {
+            "anchor": "C:\\Program Files\\nodejs",
+            "place": "shared"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "UnmatchedChildren",
+          "n": 2
+        }
+      ],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 21,
+        "explanation": "Pointed to C:\\Program Files\\nodejs before uninstall · Points to c:\\program files\\nodejs\\nodevars.bat, which no longer exists · Points to c:\\program files\\nodejs\\nodevars.bat in Node.js's install folder · In a place other software and you also write to; nothing shows that Node.js put it there · Holds 2 items not known to belong to the app"
+      }
+    },
+    {
+      "id": "c-08c4be5b6a3abf99",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "2"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}",
+        "display_name": "Node.js"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "PointsIntoInstallRoot",
+          "tier": "B",
+          "weight": 6,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "points:c:\\program files\\nodejs\\node.exe",
+          "detail": {
+            "path": "c:\\program files\\nodejs\\node.exe",
+            "place": "shared",
+            "root": "C:\\Program Files\\nodejs"
+          }
+        },
+        {
+          "kind": "DanglingRef",
+          "tier": "B",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "dangling:c:\\program files\\nodejs\\node.exe",
+          "detail": {
+            "path": "c:\\program files\\nodejs\\node.exe",
+            "place": "shared",
+            "root": "C:\\Program Files\\nodejs"
+          }
+        },
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|2",
+          "detail": {
+            "anchor": "C:\\Program Files\\nodejs\\node.exe",
+            "place": "shared"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 21,
+        "explanation": "Pointed to C:\\Program Files\\nodejs\\node.exe before uninstall · Points to c:\\program files\\nodejs\\node.exe, which no longer exists · Points to c:\\program files\\nodejs\\node.exe in Node.js's install folder · In a place other software and you also write to; nothing shows that Node.js put it there"
+      }
+    },
+    {
+      "id": "c-08c4bd5b6a3abde6",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "3"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|64|{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}",
+        "display_name": "Node.js"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "InPreUninstallRefSnapshot",
+          "tier": "B",
+          "weight": 8,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "refsnap:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|3",
+          "detail": {
+            "anchor": "F3A57DD0-5D8B-4A74-A055-670A7BAA4176",
+            "anchor_kind": "id"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "UnmatchedChildren",
+          "n": 2
+        }
+      ],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 8,
+        "explanation": "Pointed to F3A57DD0-5D8B-4A74-A055-670A7BAA4176 before uninstall · Holds 2 items not known to belong to the app"
+      }
+    }
+  ],
+  "absorbed": []
+}

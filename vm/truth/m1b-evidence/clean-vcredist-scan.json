@@ -1,0 +1,98 @@
+{
+  "schema": "purge.scan/0",
+  "app": "vcredist",
+  "tool": "purge",
+  "mode": "post",
+  "policy_version": "m1b.1",
+  "plan_hash": "b10c49f8d2350db567384bbf4823910168dd34985e9fc3485b2a17094ff7d5a8",
+  "items": [
+    {
+      "id": "c-5b1395198d56c342",
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        "name": "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|32|{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "display_name": "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "Registration",
+      "evidence": [
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "token:arp:key",
+          "detail": {
+            "token": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+          }
+        }
+      ],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Likely",
+        "preselected": false,
+        "score": 7,
+        "explanation": "Carries Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211's identifier d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+      }
+    },
+    {
+      "id": "c-a0132e85b274668d",
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\ControlSet001\\Services\\bam\\State\\UserSettings\\S-1-5-21-1336749127-99101324-1432799918-1000",
+        "name": "\\Device\\HarddiskVolume4\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe"
+      },
+      "action": "DeleteValue",
+      "owner": {
+        "program_id": "HKLM|32|{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}",
+        "display_name": "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211"
+      },
+      "origin": "Scanner",
+      "scanner": "REF-ANY",
+      "category": "System",
+      "evidence": [
+        {
+          "kind": "HarvestedToken",
+          "tier": "A",
+          "weight": 7,
+          "scope": "Value",
+          "trust": "AdminOnly",
+          "source": "token:arp:key",
+          "detail": {
+            "token": "d8bbe9f9-7c5b-42c6-b715-9ee898a2e515"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "kind": "DenyListed",
+          "rule": "reg.hklm.system"
+        }
+      ],
+      "harm": "Critical",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Blocked",
+        "preselected": false,
+        "score": 7,
+        "explanation": "Kept: protected location (rule reg.hklm.system)"
+      }
+    }
+  ],
+  "absorbed": []
+}

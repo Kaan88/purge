@@ -1,0 +1,981 @@
+{
+    "schema":  "purge.rig.m1b-traps.planted/1",
+    "computer":  "INBOUND-WIN11-T",
+    "trap_a":  "7zip",
+    "trap_b":  "node",
+    "updated":  "2026-11-18T21:48:53.0394798-08:00",
+    "cases":  {
+                  "svc-owned":  {
+                                    "id":  "svc-owned",
+                                    "phase":  "pre",
+                                    "plant":  "Plant-OwnedService",
+                                    "at":  "2026-11-18T21:47:17.3972445-08:00",
+                                    "ok":  true,
+                                    "skipped":  false,
+                                    "error":  null,
+                                    "planted":  [
+                                                    {
+                                                        "kind":  "file",
+                                                        "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapSvcA.exe",
+                                                        "note":  ""
+                                                    },
+                                                    {
+                                                        "kind":  "service",
+                                                        "target":  "SVC:PurgeTrapSvcA",
+                                                        "note":  "ImagePath=\"C:\\Program Files\\7-Zip\\PurgeTrapSvcA.exe\""
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcA\\Parameters|PurgeTrapSetting",
+                                                        "note":  "planted by m1b-traps (svc-owned)"
+                                                    }
+                                                ]
+                                },
+                  "svc-owned-running":  {
+                                            "id":  "svc-owned-running",
+                                            "phase":  "pre",
+                                            "plant":  "Plant-OwnedRunningService",
+                                            "at":  "2026-11-18T21:47:18.6287770-08:00",
+                                            "ok":  true,
+                                            "skipped":  false,
+                                            "error":  null,
+                                            "planted":  [
+                                                            {
+                                                                "kind":  "file",
+                                                                "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapSvcRun.exe",
+                                                                "note":  ""
+                                                            },
+                                                            {
+                                                                "kind":  "service",
+                                                                "target":  "SVC:PurgeTrapSvcRun",
+                                                                "note":  "ImagePath=\"C:\\Program Files\\7-Zip\\PurgeTrapSvcRun.exe\""
+                                                            },
+                                                            {
+                                                                "kind":  "value",
+                                                                "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcRun\\Parameters|PurgeTrapSetting",
+                                                                "note":  "planted by m1b-traps (svc-owned-running)"
+                                                            },
+                                                            {
+                                                                "kind":  "service-state",
+                                                                "target":  "SVC:PurgeTrapSvcRun",
+                                                                "note":  "Running"
+                                                            }
+                                                        ]
+                                        },
+                  "svc-shared":  {
+                                     "id":  "svc-shared",
+                                     "phase":  "pre",
+                                     "plant":  "Plant-SharedService",
+                                     "at":  "2026-11-18T21:47:27.0577187-08:00",
+                                     "ok":  true,
+                                     "skipped":  false,
+                                     "error":  null,
+                                     "planted":  [
+                                                     {
+                                                         "kind":  "file",
+                                                         "target":  "P:C:\\Program Files\\nodejs\\PurgeTrapSvcShared.exe",
+                                                         "note":  ""
+                                                     },
+                                                     {
+                                                         "kind":  "service",
+                                                         "target":  "SVC:PurgeTrapSvcShared-7-Zip",
+                                                         "note":  "ImagePath=\"C:\\Program Files\\nodejs\\PurgeTrapSvcShared.exe\""
+                                                     },
+                                                     {
+                                                         "kind":  "value",
+                                                         "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcShared-7-Zip\\Parameters|PurgeTrapSetting",
+                                                         "note":  "planted by m1b-traps (svc-shared)"
+                                                     }
+                                                 ]
+                                 },
+                  "svc-dependent":  {
+                                        "id":  "svc-dependent",
+                                        "phase":  "pre",
+                                        "plant":  "Plant-DependentService",
+                                        "at":  "2026-11-18T21:47:27.1174580-08:00",
+                                        "ok":  true,
+                                        "skipped":  false,
+                                        "error":  null,
+                                        "planted":  [
+                                                        {
+                                                            "kind":  "file",
+                                                            "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapSvcA2.exe",
+                                                            "note":  ""
+                                                        },
+                                                        {
+                                                            "kind":  "file",
+                                                            "target":  "P:C:\\Program Files\\nodejs\\PurgeTrapSvcDep.exe",
+                                                            "note":  ""
+                                                        },
+                                                        {
+                                                            "kind":  "service",
+                                                            "target":  "SVC:PurgeTrapSvcA2",
+                                                            "note":  "ImagePath=\"C:\\Program Files\\7-Zip\\PurgeTrapSvcA2.exe\""
+                                                        },
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcA2\\Parameters|PurgeTrapSetting",
+                                                            "note":  "planted by m1b-traps (svc-dependent)"
+                                                        },
+                                                        {
+                                                            "kind":  "service",
+                                                            "target":  "SVC:PurgeTrapSvcDep",
+                                                            "note":  "ImagePath=\"C:\\Program Files\\nodejs\\PurgeTrapSvcDep.exe\"; DependOnService=PurgeTrapSvcA2"
+                                                        },
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcDep\\Parameters|PurgeTrapSetting",
+                                                            "note":  "planted by m1b-traps (svc-dependent)"
+                                                        }
+                                                    ]
+                                    },
+                  "svc-svchost":  {
+                                      "id":  "svc-svchost",
+                                      "phase":  "pre",
+                                      "plant":  "Plant-SvchostService",
+                                      "at":  "2026-11-18T21:47:27.2232266-08:00",
+                                      "ok":  true,
+                                      "skipped":  false,
+                                      "error":  null,
+                                      "planted":  [
+                                                      {
+                                                          "kind":  "file",
+                                                          "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapSvcHost.dll",
+                                                          "note":  ""
+                                                      },
+                                                      {
+                                                          "kind":  "service",
+                                                          "target":  "SVC:PurgeTrapSvcHost",
+                                                          "note":  "ImagePath=%SystemRoot%\\System32\\svchost.exe -k PurgeTrapGroup"
+                                                      },
+                                                      {
+                                                          "kind":  "value",
+                                                          "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcHost\\Parameters|PurgeTrapSetting",
+                                                          "note":  "planted by m1b-traps (svc-svchost)"
+                                                      },
+                                                      {
+                                                          "kind":  "value",
+                                                          "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeTrapSvcHost\\Parameters|ServiceDll",
+                                                          "note":  "C:\\Program Files\\7-Zip\\PurgeTrapSvcHost.dll"
+                                                      },
+                                                      {
+                                                          "kind":  "value",
+                                                          "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Svchost|PurgeTrapGroup",
+                                                          "note":  "PurgeTrapSvcHost"
+                                                      }
+                                                  ]
+                                  },
+                  "task-owned":  {
+                                     "id":  "task-owned",
+                                     "phase":  "pre",
+                                     "plant":  "Plant-OwnedTask",
+                                     "at":  "2026-11-18T21:47:27.5315796-08:00",
+                                     "ok":  true,
+                                     "skipped":  false,
+                                     "error":  null,
+                                     "planted":  [
+                                                     {
+                                                         "kind":  "task",
+                                                         "target":  "TASK:\\PurgeTrap\\7-Zip Update",
+                                                         "note":  "C:\\Program Files\\7-Zip\\7zFM.exe /PurgeTrap"
+                                                     }
+                                                 ]
+                                 },
+                  "task-similar-name":  {
+                                            "id":  "task-similar-name",
+                                            "phase":  "pre",
+                                            "plant":  "Plant-SimilarTask",
+                                            "at":  "2026-11-18T21:47:27.6985971-08:00",
+                                            "ok":  true,
+                                            "skipped":  false,
+                                            "error":  null,
+                                            "planted":  [
+                                                            {
+                                                                "kind":  "task",
+                                                                "target":  "TASK:\\PurgeTrap\\7-Zip Updater",
+                                                                "note":  "C:\\Program Files\\nodejs\\node.exe --version"
+                                                            }
+                                                        ]
+                                        },
+                  "task-interpreter":  {
+                                           "id":  "task-interpreter",
+                                           "phase":  "pre",
+                                           "plant":  "Plant-InterpreterTask",
+                                           "at":  "2026-11-18T21:47:27.7849695-08:00",
+                                           "ok":  true,
+                                           "skipped":  false,
+                                           "error":  null,
+                                           "planted":  [
+                                                           {
+                                                               "kind":  "task",
+                                                               "target":  "TASK:\\PurgeTrap\\7-Zip Script",
+                                                               "note":  "%SystemRoot%\\System32\\cmd.exe /c \"C:\\Program Files\\7-Zip\\7zFM.exe\""
+                                                           }
+                                                       ]
+                                       },
+                  "fw-owned":  {
+                                   "id":  "fw-owned",
+                                   "phase":  "pre",
+                                   "plant":  "Plant-OwnedFirewall",
+                                   "at":  "2026-11-18T21:47:27.8643692-08:00",
+                                   "ok":  true,
+                                   "skipped":  false,
+                                   "error":  null,
+                                   "planted":  [
+                                                   {
+                                                       "kind":  "firewall",
+                                                       "target":  "FW:PurgeTrapFwA",
+                                                       "note":  "DisplayName=PurgeTrap; App=C:\\Program Files\\7-Zip\\7zFM.exe"
+                                                   }
+                                               ]
+                               },
+                  "fw-same-display-name":  {
+                                               "id":  "fw-same-display-name",
+                                               "phase":  "pre",
+                                               "plant":  "Plant-SameNameFirewall",
+                                               "at":  "2026-11-18T21:47:28.4002769-08:00",
+                                               "ok":  true,
+                                               "skipped":  false,
+                                               "error":  null,
+                                               "planted":  [
+                                                               {
+                                                                   "kind":  "firewall",
+                                                                   "target":  "FW:PurgeTrapFwB",
+                                                                   "note":  "DisplayName=PurgeTrap; App=C:\\Program Files\\nodejs\\node.exe"
+                                                               }
+                                                           ]
+                                           },
+                  "fw-no-app":  {
+                                    "id":  "fw-no-app",
+                                    "phase":  "pre",
+                                    "plant":  "Plant-PortFirewall",
+                                    "at":  "2026-11-18T21:47:28.6953253-08:00",
+                                    "ok":  true,
+                                    "skipped":  false,
+                                    "error":  null,
+                                    "planted":  [
+                                                    {
+                                                        "kind":  "firewall",
+                                                        "target":  "FW:PurgeTrapFwPort",
+                                                        "note":  "DisplayName=PurgeTrap 7-Zip; no App, TCP 50123"
+                                                    }
+                                                ]
+                                },
+                  "com-owned":  {
+                                    "id":  "com-owned",
+                                    "phase":  "pre",
+                                    "plant":  "Plant-ComClass",
+                                    "at":  "2026-11-18T21:47:28.9835190-08:00",
+                                    "ok":  true,
+                                    "skipped":  false,
+                                    "error":  null,
+                                    "planted":  [
+                                                    {
+                                                        "kind":  "file",
+                                                        "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapCom.dll",
+                                                        "note":  ""
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}|",
+                                                        "note":  "PurgeTrap ComA"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}\\InprocServer32|",
+                                                        "note":  "C:\\Program Files\\7-Zip\\PurgeTrapCom.dll"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}\\InprocServer32|ThreadingModel",
+                                                        "note":  "Apartment"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}\\ProgID|",
+                                                        "note":  "PurgeTrap.ComA.1"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}|AppID",
+                                                        "note":  "{3369C8BA-2ECE-4D2A-9A30-0F5B1B336D44}"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}\\TypeLib|",
+                                                        "note":  "{59A8DA29-DD14-48B7-9BC7-24F169BF80DC}"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}\\VersionIndependentProgID|",
+                                                        "note":  "PurgeTrap.ComA"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\PurgeTrap.ComA.1|",
+                                                        "note":  "PurgeTrap ComA"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\PurgeTrap.ComA.1\\CLSID|",
+                                                        "note":  "{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\PurgeTrap.ComA|",
+                                                        "note":  "PurgeTrap ComA"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\PurgeTrap.ComA\\CLSID|",
+                                                        "note":  "{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\PurgeTrap.ComA\\CurVer|",
+                                                        "note":  "PurgeTrap.ComA.1"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\AppID\\{3369C8BA-2ECE-4D2A-9A30-0F5B1B336D44}|",
+                                                        "note":  "PurgeTrap ComA"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\TypeLib\\{59A8DA29-DD14-48B7-9BC7-24F169BF80DC}\\1.0|",
+                                                        "note":  "PurgeTrap ComA Library"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\TypeLib\\{59A8DA29-DD14-48B7-9BC7-24F169BF80DC}\\1.0\\0\\win64|",
+                                                        "note":  "C:\\Program Files\\7-Zip\\PurgeTrapCom.dll"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\TypeLib\\{59A8DA29-DD14-48B7-9BC7-24F169BF80DC}\\1.0\\FLAGS|",
+                                                        "note":  "0"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\Interface\\{5D7280DF-9A4A-41CE-9C99-3F6B7F0FE683}|",
+                                                        "note":  "IPurgeTrapComA"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\Interface\\{5D7280DF-9A4A-41CE-9C99-3F6B7F0FE683}\\ProxyStubClsid32|",
+                                                        "note":  "{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\Interface\\{5D7280DF-9A4A-41CE-9C99-3F6B7F0FE683}\\TypeLib|",
+                                                        "note":  "{59A8DA29-DD14-48B7-9BC7-24F169BF80DC}"
+                                                    },
+                                                    {
+                                                        "kind":  "value",
+                                                        "target":  "V:HKLM\\SOFTWARE\\Classes\\Interface\\{5D7280DF-9A4A-41CE-9C99-3F6B7F0FE683}\\TypeLib|Version",
+                                                        "note":  "1.0"
+                                                    }
+                                                ]
+                                },
+                  "shellex-approved":  {
+                                           "id":  "shellex-approved",
+                                           "phase":  "pre",
+                                           "plant":  "Plant-ShellexApproved",
+                                           "at":  "2026-11-18T21:47:29.1116560-08:00",
+                                           "ok":  true,
+                                           "skipped":  false,
+                                           "error":  null,
+                                           "planted":  [
+                                                           {
+                                                               "kind":  "value",
+                                                               "target":  "V:HKLM\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers\\PurgeTrapA|",
+                                                               "note":  "{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}"
+                                                           },
+                                                           {
+                                                               "kind":  "value",
+                                                               "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved|{22EAAAE6-9088-44CB-B30F-B8EFCD75B9C4}",
+                                                               "note":  "PurgeTrap A context menu"
+                                                           }
+                                                       ]
+                                       },
+                  "com-shared-class":  {
+                                           "id":  "com-shared-class",
+                                           "phase":  "pre",
+                                           "plant":  "Plant-SharedComClass",
+                                           "at":  "2026-11-18T21:47:29.1239622-08:00",
+                                           "ok":  true,
+                                           "skipped":  false,
+                                           "error":  null,
+                                           "planted":  [
+                                                           {
+                                                               "kind":  "file",
+                                                               "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapShared.dll",
+                                                               "note":  ""
+                                                           },
+                                                           {
+                                                               "kind":  "value",
+                                                               "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{AA0252AF-8AAD-4AAB-9CF2-50CFE0FD31DF}|",
+                                                               "note":  "PurgeTrap Shared Class"
+                                                           },
+                                                           {
+                                                               "kind":  "value",
+                                                               "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{AA0252AF-8AAD-4AAB-9CF2-50CFE0FD31DF}\\InprocServer32|",
+                                                               "note":  "C:\\Program Files\\7-Zip\\PurgeTrapShared.dll"
+                                                           },
+                                                           {
+                                                               "kind":  "value",
+                                                               "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{AA0252AF-8AAD-4AAB-9CF2-50CFE0FD31DF}\\InprocServer32|ThreadingModel",
+                                                               "note":  "Apartment"
+                                                           }
+                                                       ]
+                                       },
+                  "shareddlls-count":  {
+                                           "id":  "shareddlls-count",
+                                           "phase":  "pre",
+                                           "plant":  "Plant-SharedDlls",
+                                           "at":  "2026-11-18T21:47:29.1483269-08:00",
+                                           "ok":  true,
+                                           "skipped":  false,
+                                           "error":  null,
+                                           "planted":  [
+                                                           {
+                                                               "kind":  "file",
+                                                               "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapShared1.dll",
+                                                               "note":  ""
+                                                           },
+                                                           {
+                                                               "kind":  "file",
+                                                               "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapShared2.dll",
+                                                               "note":  ""
+                                                           },
+                                                           {
+                                                               "kind":  "value",
+                                                               "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs|C:\\Program Files\\7-Zip\\PurgeTrapShared1.dll",
+                                                               "note":  "1"
+                                                           },
+                                                           {
+                                                               "kind":  "value",
+                                                               "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs|C:\\Program Files\\7-Zip\\PurgeTrapShared2.dll",
+                                                               "note":  "2"
+                                                           },
+                                                           {
+                                                               "kind":  "value",
+                                                               "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs|C:\\Windows\\System32\\comctl32.dll",
+                                                               "note":  "1"
+                                                           }
+                                                       ]
+                                       },
+                  "eventlog-shared-source":  {
+                                                 "id":  "eventlog-shared-source",
+                                                 "phase":  "pre",
+                                                 "plant":  "Plant-EventLogSource",
+                                                 "at":  "2026-11-18T21:47:29.1952903-08:00",
+                                                 "ok":  true,
+                                                 "skipped":  false,
+                                                 "error":  null,
+                                                 "planted":  [
+                                                                 {
+                                                                     "kind":  "file",
+                                                                     "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapMsg.dll",
+                                                                     "note":  ""
+                                                                 },
+                                                                 {
+                                                                     "kind":  "value",
+                                                                     "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA|EventMessageFile",
+                                                                     "note":  "C:\\Program Files\\7-Zip\\PurgeTrapMsg.dll"
+                                                                 },
+                                                                 {
+                                                                     "kind":  "value",
+                                                                     "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA|TypesSupported",
+                                                                     "note":  "7"
+                                                                 },
+                                                                 {
+                                                                     "kind":  "value",
+                                                                     "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA2|EventMessageFile",
+                                                                     "note":  "%SystemRoot%\\Microsoft.NET\\Framework64\\v4.0.30319\\EventLogMessages.dll"
+                                                                 },
+                                                                 {
+                                                                     "kind":  "value",
+                                                                     "target":  "V:HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\PurgeTrapA2|TypesSupported",
+                                                                     "note":  "7"
+                                                                 }
+                                                             ]
+                                             },
+                  "tracing":  {
+                                  "id":  "tracing",
+                                  "phase":  "pre",
+                                  "plant":  "Plant-Tracing",
+                                  "at":  "2026-11-18T21:47:29.2454209-08:00",
+                                  "ok":  true,
+                                  "skipped":  false,
+                                  "error":  null,
+                                  "planted":  [
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32|EnableFileTracing",
+                                                      "note":  "0"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32|EnableAutoFileTracing",
+                                                      "note":  "0"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32|EnableConsoleTracing",
+                                                      "note":  "0"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32|FileTracingMask",
+                                                      "note":  "-65536"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32|ConsoleTracingMask",
+                                                      "note":  "-65536"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32|MaxFileSize",
+                                                      "note":  "1048576"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASAPI32|FileDirectory",
+                                                      "note":  "%windir%\\tracing"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS|EnableFileTracing",
+                                                      "note":  "0"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS|EnableAutoFileTracing",
+                                                      "note":  "0"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS|EnableConsoleTracing",
+                                                      "note":  "0"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS|FileTracingMask",
+                                                      "note":  "-65536"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS|ConsoleTracingMask",
+                                                      "note":  "-65536"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS|MaxFileSize",
+                                                      "note":  "1048576"
+                                                  },
+                                                  {
+                                                      "kind":  "value",
+                                                      "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Tracing\\7zFM_RASMANCS|FileDirectory",
+                                                      "note":  "%windir%\\tracing"
+                                                  }
+                                              ]
+                              },
+                  "privacy-twins":  {
+                                        "id":  "privacy-twins",
+                                        "phase":  "pre",
+                                        "plant":  "Plant-MuiCacheAndFriends",
+                                        "at":  "2026-11-18T21:47:29.3269853-08:00",
+                                        "ok":  true,
+                                        "skipped":  false,
+                                        "error":  null,
+                                        "planted":  [
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\7-Zip\\7zFM.exe.FriendlyAppName",
+                                                            "note":  "7-Zip (PurgeTrap)"
+                                                        },
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\7-Zip\\7zFM.exe.ApplicationCompany",
+                                                            "note":  "7-Zip (PurgeTrap)"
+                                                        },
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Program Files\\7-Zip\\7zFM.exe",
+                                                            "note":  "(24 bytes)"
+                                                        },
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers|C:\\Program Files\\7-Zip\\7zFM.exe",
+                                                            "note":  "~ HIGHDPIAWARE"
+                                                        },
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\nodejs\\node.exe.FriendlyAppName",
+                                                            "note":  "Node.js (PurgeTrap)"
+                                                        },
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache|C:\\Program Files\\nodejs\\node.exe.ApplicationCompany",
+                                                            "note":  "Node.js (PurgeTrap)"
+                                                        },
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store|C:\\Program Files\\nodejs\\node.exe",
+                                                            "note":  "(24 bytes)"
+                                                        },
+                                                        {
+                                                            "kind":  "value",
+                                                            "target":  "V:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers|C:\\Program Files\\nodejs\\node.exe",
+                                                            "note":  "~ HIGHDPIAWARE"
+                                                        }
+                                                    ]
+                                    },
+                  "wer-twins":  {
+                                    "id":  "wer-twins",
+                                    "phase":  "pre",
+                                    "plant":  "Plant-WerReports",
+                                    "at":  "2026-11-18T21:47:29.3828876-08:00",
+                                    "ok":  true,
+                                    "skipped":  false,
+                                    "error":  null,
+                                    "planted":  [
+                                                    {
+                                                        "kind":  "dir",
+                                                        "target":  "P:C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_7zFM.exe_6feb8ebc183bf561d06a69f0f9cc73a8619d2a05_6feb8ebc_619d2a05",
+                                                        "note":  ""
+                                                    },
+                                                    {
+                                                        "kind":  "file",
+                                                        "target":  "P:C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_7zFM.exe_6feb8ebc183bf561d06a69f0f9cc73a8619d2a05_6feb8ebc_619d2a05\\Report.wer",
+                                                        "note":  ""
+                                                    },
+                                                    {
+                                                        "kind":  "dir",
+                                                        "target":  "P:C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_node.exe_ed89c85063a9c1e6cf7892e1cd663d998ea984d1_ed89c850_8ea984d1",
+                                                        "note":  ""
+                                                    },
+                                                    {
+                                                        "kind":  "file",
+                                                        "target":  "P:C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive\\AppCrash_node.exe_ed89c85063a9c1e6cf7892e1cd663d998ea984d1_ed89c850_8ea984d1\\Report.wer",
+                                                        "note":  ""
+                                                    }
+                                                ]
+                                },
+                  "com-shared-class#between":  {
+                                                   "id":  "com-shared-class",
+                                                   "phase":  "between",
+                                                   "plant":  "Repoint-SharedComClass",
+                                                   "at":  "2026-11-18T21:48:16.0611742-08:00",
+                                                   "ok":  true,
+                                                   "skipped":  false,
+                                                   "error":  null,
+                                                   "planted":  [
+                                                                   {
+                                                                       "kind":  "file",
+                                                                       "target":  "P:C:\\Program Files\\nodejs\\PurgeTrapShared.dll",
+                                                                       "note":  ""
+                                                                   },
+                                                                   {
+                                                                       "kind":  "value",
+                                                                       "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{AA0252AF-8AAD-4AAB-9CF2-50CFE0FD31DF}\\InprocServer32|",
+                                                                       "note":  "C:\\Program Files\\nodejs\\PurgeTrapShared.dll"
+                                                                   }
+                                                               ]
+                                               },
+                  "msi-remnants":  {
+                                       "id":  "msi-remnants",
+                                       "phase":  "post",
+                                       "plant":  "Plant-MsiRemnants",
+                                       "at":  "2026-11-18T21:48:52.6919181-08:00",
+                                       "ok":  true,
+                                       "skipped":  false,
+                                       "error":  null,
+                                       "planted":  [
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000\\InstallProperties|DisplayName",
+                                                           "note":  "7-Zip 24.08 (x64 edition)"
+                                                       },
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000\\InstallProperties|DisplayVersion",
+                                                           "note":  "24.08.00.0"
+                                                       },
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000\\InstallProperties|Publisher",
+                                                           "note":  "PurgeTrap"
+                                                       },
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000\\InstallProperties|InstallLocation",
+                                                           "note":  "C:\\Program Files\\7-Zip\\"
+                                                       },
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000\\InstallProperties|LocalPackage",
+                                                           "note":  "C:\\Windows\\Installer\\PurgeTrap96F07132.msi"
+                                                       },
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000\\InstallProperties|UninstallString",
+                                                           "note":  "MsiExec.exe /X{23170F69-40C1-2702-2408-000001000000}"
+                                                       },
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000\\InstallProperties|WindowsInstaller",
+                                                           "note":  "1"
+                                                       },
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\96F071321C0420724280000010000000\\InstallProperties|PurgeTrap",
+                                                           "note":  "1"
+                                                       },
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\96F071321C0420720000000040000000|96F071321C0420724280000010000000",
+                                                           "note":  ""
+                                                       },
+                                                       {
+                                                           "kind":  "value",
+                                                           "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\9FF911E8E7F1D1649B3821BC1729781A|96F071321C0420724280000010000000",
+                                                           "note":  "C:\\Program Files\\7-Zip\\7zFM.exe"
+                                                       }
+                                                   ]
+                                   },
+                  "msi-remnants-foreign":  {
+                                               "id":  "msi-remnants-foreign",
+                                               "phase":  "post",
+                                               "plant":  "Plant-MsiRemnantsForeign",
+                                               "at":  "2026-11-18T21:48:52.7756370-08:00",
+                                               "ok":  true,
+                                               "skipped":  false,
+                                               "error":  null,
+                                               "planted":  [
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F\\InstallProperties|DisplayName",
+                                                                   "note":  "7-Zip PurgeTrap Foreign"
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F\\InstallProperties|DisplayVersion",
+                                                                   "note":  "1.0"
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F\\InstallProperties|Publisher",
+                                                                   "note":  "PurgeTrap"
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F\\InstallProperties|InstallLocation",
+                                                                   "note":  "C:\\Program Files\\7-Zip\\"
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F\\InstallProperties|LocalPackage",
+                                                                   "note":  "C:\\Windows\\Installer\\PurgeTrap6ED34AAE.msi"
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F\\InstallProperties|UninstallString",
+                                                                   "note":  "MsiExec.exe /X{EAA43DE6-884A-4789-98B3-FC27398D3AF1}"
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F\\InstallProperties|WindowsInstaller",
+                                                                   "note":  "1"
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\6ED34AAEA4889874893BCF7293D8A31F\\InstallProperties|PurgeTrap",
+                                                                   "note":  "1"
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Classes\\Installer\\UpgradeCodes\\0DF209647E2CF814AAB4A347574125FD|6ED34AAEA4889874893BCF7293D8A31F",
+                                                                   "note":  ""
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\941D6F575B3956C4DBBA534183F3D607|6ED34AAEA4889874893BCF7293D8A31F",
+                                                                   "note":  "C:\\Program Files\\7-Zip\\PurgeTrapForeign.dat"
+                                                               }
+                                                           ]
+                                           },
+                  "msi-shared-component":  {
+                                               "id":  "msi-shared-component",
+                                               "phase":  "post",
+                                               "plant":  "Plant-SharedComponent",
+                                               "at":  "2026-11-18T21:48:52.8450553-08:00",
+                                               "ok":  true,
+                                               "skipped":  false,
+                                               "error":  null,
+                                               "planted":  [
+                                                               {
+                                                                   "kind":  "file",
+                                                                   "target":  "P:C:\\Program Files\\7-Zip\\PurgeTrapComponent.dat",
+                                                                   "note":  ""
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\D81447BBA715AD443B803350640BA01C|96F071321C0420724280000010000000",
+                                                                   "note":  "C:\\Program Files\\7-Zip\\PurgeTrapComponent.dat"
+                                                               },
+                                                               {
+                                                                   "kind":  "value",
+                                                                   "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components\\D81447BBA715AD443B803350640BA01C|0DD75A3FB8D547A40A5576A0B7AA1467",
+                                                                   "note":  "C:\\Program Files\\7-Zip\\PurgeTrapComponent.dat"
+                                                               }
+                                                           ]
+                                           },
+                  "com-isimpledom":  {
+                                         "id":  "com-isimpledom",
+                                         "phase":  "post",
+                                         "plant":  "Plant-IsimpleDom",
+                                         "at":  "2026-11-18T21:48:52.8746189-08:00",
+                                         "ok":  true,
+                                         "skipped":  false,
+                                         "error":  null,
+                                         "planted":  [
+                                                         {
+                                                             "kind":  "value",
+                                                             "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{7F044EEC-7677-4F68-B63F-E36F074E7E89}|",
+                                                             "note":  "PurgeTrap A Proxy"
+                                                         },
+                                                         {
+                                                             "kind":  "value",
+                                                             "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{7F044EEC-7677-4F68-B63F-E36F074E7E89}\\InprocServer32|",
+                                                             "note":  "C:\\Program Files\\7-Zip\\PurgeTrapProxy.dll"
+                                                         },
+                                                         {
+                                                             "kind":  "value",
+                                                             "target":  "V:HKLM\\SOFTWARE\\Classes\\CLSID\\{7F044EEC-7677-4F68-B63F-E36F074E7E89}\\InprocServer32|ThreadingModel",
+                                                             "note":  "Apartment"
+                                                         },
+                                                         {
+                                                             "kind":  "value",
+                                                             "target":  "V:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}|",
+                                                             "note":  "ISimpleDOMNode"
+                                                         },
+                                                         {
+                                                             "kind":  "value",
+                                                             "target":  "V:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\ProxyStubClsid32|",
+                                                             "note":  "{7F044EEC-7677-4F68-B63F-E36F074E7E89}"
+                                                         },
+                                                         {
+                                                             "kind":  "value",
+                                                             "target":  "V:HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\NumMethods|",
+                                                             "note":  "18"
+                                                         },
+                                                         {
+                                                             "kind":  "value",
+                                                             "target":  "V:HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}|",
+                                                             "note":  "ISimpleDOMNode"
+                                                         },
+                                                         {
+                                                             "kind":  "value",
+                                                             "target":  "V:HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\ProxyStubClsid32|",
+                                                             "note":  "{7F044EEC-7677-4F68-B63F-E36F074E7E89}"
+                                                         },
+                                                         {
+                                                             "kind":  "value",
+                                                             "target":  "V:HKLM\\SOFTWARE\\WOW6432Node\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\NumMethods|",
+                                                             "note":  "18"
+                                                         }
+                                                     ]
+                                     },
+                  "burn-shared-package":  {
+                                              "id":  "burn-shared-package",
+                                              "phase":  "post",
+                                              "plant":  "Plant-BurnShared",
+                                              "at":  "2026-11-18T21:48:52.9319190-08:00",
+                                              "ok":  true,
+                                              "skipped":  false,
+                                              "error":  null,
+                                              "planted":  [
+                                                              {
+                                                                  "kind":  "value",
+                                                                  "target":  "V:HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\PurgeTrapPkg|",
+                                                                  "note":  "PurgeTrapPkg"
+                                                              },
+                                                              {
+                                                                  "kind":  "value",
+                                                                  "target":  "V:HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\PurgeTrapPkg|DisplayName",
+                                                                  "note":  "PurgeTrap Shared Package"
+                                                              },
+                                                              {
+                                                                  "kind":  "value",
+                                                                  "target":  "V:HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\PurgeTrapPkg|Version",
+                                                                  "note":  "1.0.0.0"
+                                                              },
+                                                              {
+                                                                  "kind":  "key",
+                                                                  "target":  "K:HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\PurgeTrapPkg\\Dependents\\{23170F69-40C1-2702-2408-000001000000}",
+                                                                  "note":  ""
+                                                              },
+                                                              {
+                                                                  "kind":  "key",
+                                                                  "target":  "K:HKLM\\SOFTWARE\\Classes\\Installer\\Dependencies\\PurgeTrapPkg\\Dependents\\{8F55F023-DF9B-4357-8AE7-2C820D0150CA}",
+                                                                  "note":  ""
+                                                              },
+                                                              {
+                                                                  "kind":  "dir",
+                                                                  "target":  "P:C:\\ProgramData\\Package Cache\\PurgeTrapPkg",
+                                                                  "note":  ""
+                                                              },
+                                                              {
+                                                                  "kind":  "file",
+                                                                  "target":  "P:C:\\ProgramData\\Package Cache\\PurgeTrapPkg\\PurgeTrapPkg.msi",
+                                                                  "note":  ""
+                                                              }
+                                                          ]
+                                          },
+                  "pkgcache-foreign":  {
+                                           "id":  "pkgcache-foreign",
+                                           "phase":  "post",
+                                           "plant":  "Plant-PkgCacheForeign",
+                                           "at":  "2026-11-18T21:48:52.9855443-08:00",
+                                           "ok":  true,
+                                           "skipped":  false,
+                                           "error":  null,
+                                           "planted":  [
+                                                           {
+                                                               "kind":  "dir",
+                                                               "target":  "P:C:\\ProgramData\\Package Cache\\{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}v20.18.0",
+                                                               "note":  ""
+                                                           },
+                                                           {
+                                                               "kind":  "file",
+                                                               "target":  "P:C:\\ProgramData\\Package Cache\\{F3A57DD0-5D8B-4A74-A055-670A7BAA4176}v20.18.0\\PurgeTrapForeign.msi",
+                                                               "note":  ""
+                                                           }
+                                                       ]
+                                       },
+                  "instfolders":  {
+                                      "id":  "instfolders",
+                                      "phase":  "post",
+                                      "plant":  "Plant-InstFolders",
+                                      "at":  "2026-11-18T21:48:53.0046846-08:00",
+                                      "ok":  true,
+                                      "skipped":  true,
+                                      "error":  null,
+                                      "planted":  [
+                                                      {
+                                                          "kind":  "value",
+                                                          "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\Program Files\\7-Zip\\",
+                                                          "note":  ""
+                                                      },
+                                                      {
+                                                          "kind":  "value",
+                                                          "target":  "V:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders|C:\\Program Files\\nodejs\\",
+                                                          "note":  "existed, kept: 1"
+                                                      }
+                                                  ]
+                                  }
+              }
+}
