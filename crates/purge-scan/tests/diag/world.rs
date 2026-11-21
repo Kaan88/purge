@@ -74,6 +74,7 @@ pub fn source_key(log: &str, source: &str) -> String {
 /// `setup.exe`.
 pub fn fingerprint() -> Fingerprint {
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, "App").unwrap(),
@@ -316,6 +317,7 @@ pub fn band(c: &Candidate) -> Band {
     decide(
         c,
         &PolicyCtx {
+            baseline_trust: purge_model::BaselineTrust::Exact,
             mode: ScanMode::Post,
             verify_gone: VerifyGone::new(true, true, true),
             target_scope: TargetScope::Machine,

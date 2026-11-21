@@ -61,8 +61,9 @@ use purge_inventory::arp::Inventory;
 use purge_inventory::runner::{ProcessHost, RunError, RunOptions, RunReport, RunRequest};
 use purge_inventory::verify_gone::{self, VerifyTarget};
 use purge_model::{
-    AnchorKind, AnchorRef, Candidate, Fingerprint, InstallScope, InstallerKind, InventoryDoc,
-    InventoryEntry, OsInfo, ProgramId, RawFlags, ScanMode, VerifyGone, View, WritableBy,
+    AnchorKind, AnchorRef, BaselineTrust, Candidate, Fingerprint, InstallScope, InstallerKind,
+    InventoryDoc, InventoryEntry, OsInfo, ProgramId, RawFlags, ScanMode, VerifyGone, View,
+    WritableBy,
 };
 use purge_plan::decide::{DecideCtx, Limits, M1bDecide, bundle_known};
 use purge_plan::emit::{Built, build};
@@ -1073,6 +1074,16 @@ fn run_scan(
         limits: Limits::default(),
         // The M1b exemption lists, from the fingerprint and fresh queries only (R2a S9).
         m1b: m1b_lists(sources, fp, &inv),
+        // P-BL-1 (BL-POLICY). The scan uses a baseline only on an exact match, so its own trust is
+        // Exact or None and caps nothing; a fingerprint that records an inferred view caps its keys.
+        baseline_trust: {
+            let scan = if baseline.is_some() {
+                BaselineTrust::Exact
+            } else {
+                BaselineTrust::None
+            };
+            BaselineTrust::for_policy(scan, fp.harvest_trust(baseline.is_some()))
+        },
     };
     let built = build(app_id, candidates.clone(), &decide);
     step.done(&format!(

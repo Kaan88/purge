@@ -61,6 +61,7 @@ fn cand(target: Target, action: Action, category: Category, evidence: Vec<Eviden
 
 fn post(target_scope: TargetScope) -> PolicyCtx {
     PolicyCtx {
+        baseline_trust: purge_model::BaselineTrust::Exact,
         mode: ScanMode::Post,
         verify_gone: VerifyGone::new(true, true, true),
         target_scope,
@@ -643,9 +644,11 @@ fn path_store_value_points_plus_dangling_is_safe_points_alone_is_likely() {
 // ---------------------------------------------------------------------------------------------------
 // Version and the M1a table
 
+/// The rules of this file came with policy `m1b.1`. Policy `bl.1` (BL-POLICY, the baseline trust cap)
+/// keeps every one of them: with trust Exact, as every context here has, it decides as `m1b.1` did.
 #[test]
-fn policy_version_is_m1b_1() {
-    assert_eq!(POLICY_VERSION, "m1b.1");
+fn policy_version_is_bl_1() {
+    assert_eq!(POLICY_VERSION, "bl.1");
 }
 
 /// FNV-1a over the text with line endings normalised, so a checkout with CRLF gives the same value.
@@ -659,28 +662,51 @@ fn fnv1a(text: &str) -> u64 {
 }
 
 /// The fingerprint of `tests/golden.rs` at the m1a.6 rows (commit 04d58c9), with its one
-/// `const GOLDEN_VERSION` line left out: the only line policy m1b.1 was allowed to touch.
+/// `const GOLDEN_VERSION` line left out: the only line policy m1b.1 was allowed to touch. Policy bl.1
+/// (BL-POLICY) did not change this value: besides the version key it added only
+/// [`BL_CONTEXT_LINE`], which is left out the same way.
 const M1A_GOLDEN_FINGERPRINT: u64 = 0xa367_5f14_bf46_703b;
+
+/// The one line policy bl.1 added to `tests/golden.rs`, in the two places that build a `PolicyCtx` in
+/// full (`ctx` and `random_ctx`): the new context field, at the trust under which nothing is capped.
+/// The rows and property checks of the table therefore run with trust Exact, and the rows of the
+/// baseline trust cap are in tests/bl_bands.rs.
+const BL_CONTEXT_LINE: &str = "baseline_trust: purge_model::BaselineTrust::Exact,";
 
 #[test]
 fn m1a_band_table_unchanged() {
-    // The rows of the M1a golden table (and its property checks) are not edited for m1b.1: only the
-    // version key moved. `golden_table` itself still runs and passes in tests/golden.rs.
+    // The rows of the M1a golden table (and its property checks) are not edited for m1b.1 or bl.1: only
+    // the version key moved, and bl.1 gave the two contexts their new field. `golden_table` itself still
+    // runs and passes in tests/golden.rs.
     let golden = include_str!("golden.rs");
     let version_lines: Vec<&str> = golden
         .lines()
         .filter(|l| l.starts_with("const GOLDEN_VERSION"))
         .collect();
-    assert_eq!(version_lines, [r#"const GOLDEN_VERSION: &str = "m1b.1";"#]);
+    assert_eq!(version_lines, [r#"const GOLDEN_VERSION: &str = "bl.1";"#]);
+    assert_eq!(
+        golden
+            .lines()
+            .filter(|l| l.trim() == BL_CONTEXT_LINE)
+            .count(),
+        2,
+        "the context field is set in `ctx` and `random_ctx` only"
+    );
+    assert!(
+        !golden
+            .replace(BL_CONTEXT_LINE, "")
+            .contains("BaselineTrust"),
+        "tests/golden.rs names a baseline trust outside the two context lines"
+    );
     let rows: String = golden
         .lines()
-        .filter(|l| !l.starts_with("const GOLDEN_VERSION"))
+        .filter(|l| !l.starts_with("const GOLDEN_VERSION") && l.trim() != BL_CONTEXT_LINE)
         .map(|l| format!("{l}\n"))
         .collect();
     assert_eq!(
         fnv1a(&rows),
         M1A_GOLDEN_FINGERPRINT,
-        "tests/golden.rs changed beyond its version key: an M1a band moved under m1b.1"
+        "tests/golden.rs changed beyond its version key: an M1a band moved under m1b.1 or bl.1"
     );
 
     // What m1b.1 added is inert for every M1a target: on a file, key or value, Partial alone still
@@ -822,6 +848,7 @@ fn random_object(rng: &mut Rng) -> (Candidate, PolicyCtx) {
         ]));
     }
     let ctx = PolicyCtx {
+        baseline_trust: purge_model::BaselineTrust::Exact,
         mode: rng.pick(&[
             ScanMode::Post,
             ScanMode::Post,

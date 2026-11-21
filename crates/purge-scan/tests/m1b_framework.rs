@@ -46,6 +46,7 @@ fn packed(guid: &str) -> String {
 /// The 7-Zip fingerprint: one admin-only InstallRoot and one exe.
 fn fingerprint() -> Fingerprint {
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, "7-Zip").unwrap(),

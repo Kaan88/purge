@@ -34,6 +34,7 @@ const LISTS: &str = include_str!("fs/fixtures/lists-npp-2-appx.json");
 /// Notepad++: an NSIS app in `C:\Program Files\Notepad++` whose sparse package the harvest linked.
 fn npp_fp() -> Fingerprint {
     let mut fp = Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, "Notepad++").unwrap(),
@@ -201,6 +202,7 @@ fn band(c: &Candidate) -> (Band, bool) {
     let d = decide(
         c,
         &PolicyCtx {
+            baseline_trust: purge_model::BaselineTrust::Exact,
             mode: ScanMode::Post,
             verify_gone: VerifyGone::new(true, true, true),
             target_scope: TargetScope::Machine,

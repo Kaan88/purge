@@ -42,10 +42,30 @@
 //! 7. **Ai.** Evidence of tier `Ai` counts for nothing above; one with a negative weight moves the item
 //!    down one band (Safe → Likely → Weak), except that `ExactFullName` keeps an item at least Likely.
 //! 8. `preselected` = band is Safe (and the origin is not an agent probe).
+//!
+//! # The baseline trust cap (BASELINE_LOCAL_DESIGN.md §4.4, invariant L4)
+//!
+//! Absence that is not from an exact shipped baseline never makes an item Safe or preselected. Two things
+//! enforce it here, each enough on its own:
+//!
+//! - **The carrier.** [`Blocker::BaselineInferred`] is a soft blocker, so by rule 3 an item that carries
+//!   it is never Safe, whatever the context says.
+//! - **P-BL-1, the backstop** ([`is_capped`]). On a registry key target, evidence of an absence-dependent
+//!   kind (`Evidence::is_absence_dependent`: `ProvenOwnedSkeleton`, `ComKeyOwnership`, `HarvestedToken`,
+//!   key-scope `InstallerManifest`, key-scope `ChainedRef`) is *capped* when
+//!   [`PolicyCtx::baseline_trust`] is Merged or Local, or when the evidence itself says so in its
+//!   `baseline_trust` detail fact. Capped evidence does not support Safe in rule 3, whether or not the
+//!   blocker is there: it is not the supporting Tier A evidence, and its weight does not count toward the
+//!   S ≥ 8 of rule 3 (nor toward the admin-only score of rule 6). The item must reach Safe on its other
+//!   evidence alone, exactly as if the inferred absence had not been answered. The score a decision
+//!   reports, and rule 4, still count all evidence, so the item is shown (Likely) with its explanation.
+//!
+//! With trust Exact or None and no such detail fact nothing is capped and every rule above decides as it
+//! did under policy `m1b.1`. Rule 7 (Ai) is untouched.
 
 use purge_model::{
-    Action, Band, Blocker, Candidate, Category, Decision, Evidence, EvidenceKind, Harm, Hive,
-    Origin, Reversibility, ScanMode, Scope, SourceTrust, Target, Tier, VerifyGone,
+    Action, Band, BaselineTrust, Blocker, Candidate, Category, Decision, Evidence, EvidenceKind,
+    Harm, Hive, Origin, Reversibility, ScanMode, Scope, SourceTrust, Target, Tier, VerifyGone,
 };
 
 use crate::explain::{self, Note};
@@ -54,7 +74,7 @@ use crate::score::{LIKELY_MIN, SAFE_MIN, effective_weight, score, score_where};
 
 /// Version of the rule set in this crate. Bump it with every change that can alter a decision or an
 /// explanation; the golden tests are keyed by it and it is part of the plan hash.
-pub const POLICY_VERSION: &str = "m1b.1";
+pub const POLICY_VERSION: &str = "bl.1";
 
 /// Whether a target is machine-wide or belongs to one user, for Rule T (§5.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -137,6 +157,21 @@ pub struct PolicyCtx {
     /// Whether the candidate's target is machine-wide or per-user, as classified by the caller from the
     /// canonical target (hive, or path class).
     pub target_scope: TargetScope,
+    /// The trust of the baseline view the candidates were found with (P-BL-1, see the module docs). Only
+    /// Merged and Local change a decision: they cap absence-dependent evidence on registry keys. Exact and
+    /// None decide alike, as policy `m1b.1` did. A caller whose scan mixes a view and a fingerprint
+    /// harvested with another one passes `BaselineTrust::for_policy(scan, harvest)`.
+    pub baseline_trust: BaselineTrust,
+}
+
+/// P-BL-1: whether `evidence` about `target` is under the baseline trust cap, so that it does not support
+/// Safe (see the module docs). True iff the evidence is of an absence-dependent kind for this target
+/// (only ever a registry key) and either `trust` is inferred (Merged or Local) or the evidence declares an
+/// inferred absence itself ([`explain::declares_inferred`]).
+#[must_use]
+pub fn is_capped(evidence: &Evidence, target: &Target, trust: BaselineTrust) -> bool {
+    evidence.is_absence_dependent(target)
+        && (trust.is_inferred() || explain::declares_inferred(evidence))
 }
 
 /// Order of the bands from worst to best: Blocked < Weak < Likely < Safe. "Raising a band" means a higher
@@ -217,7 +252,10 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
     // A service, task or firewall rule (P-OBJ-1).
     let typed_object = needed == Some(Scope::Object);
     let tier_of = |e: &Evidence| effective_tier(e, target_scope);
-    let supports = |e: &Evidence| {
+    // P-BL-1: evidence that rests on inferred absence.
+    let capped = |e: &Evidence| is_capped(e, &c.target, ctx.baseline_trust);
+    // What `supports` would say without the cap.
+    let supports_uncapped = |e: &Evidence| {
         tier_of(e) == Tier::A
             && Some(e.scope) == needed
             && effective_weight(e) > 0
@@ -226,9 +264,26 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
             // record or any other evidence recorded with Object scope does not.
             && (!typed_object || e.kind == EvidenceKind::OwnedSystemObject)
     };
+    let supports = |e: &Evidence| supports_uncapped(e) && !capped(e);
 
     let any_tier_a = c.evidence.iter().any(|e| tier_of(e) == Tier::A);
     let supported = c.evidence.iter().any(supports);
+    // The cap is in play: some evidence that counts (not an Ai note) is capped.
+    let cap_applies = c.evidence.iter().any(|e| e.tier != Tier::Ai && capped(e));
+    let cap_unstated = cap_applies
+        && !c
+            .blockers
+            .iter()
+            .any(|b| matches!(b, Blocker::BaselineInferred));
+    // The cap alone took the support away: without it some capped evidence would have supported.
+    let support_capped = !supported && c.evidence.iter().any(|e| supports_uncapped(e) && capped(e));
+    // The score that may carry the item into Safe: capped evidence does not count. Dropping positive
+    // evidence never raises a score, so this is at most `total`, and equal to it when nothing is capped.
+    let safe_score = if cap_applies {
+        score_where(&c.evidence, |e| !capped(e)).total()
+    } else {
+        total
+    };
     let rule_t_applied = c
         .evidence
         .iter()
@@ -302,7 +357,7 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
             .any(|e| e.kind == EvidenceKind::GenericName);
 
     let mut notes: Vec<Note> = Vec::new();
-    let strong = supported && total >= SAFE_MIN && !soft;
+    let strong = supported && safe_score >= SAFE_MIN && !soft;
     let safe = strong && harm <= Harm::Low && category_ok && actionable;
     let mut band = if safe {
         Band::Safe
@@ -319,7 +374,7 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
     // Why an item with Tier A evidence is not Safe, where no blocker line already says so.
     if !supported && rule_t_applied {
         notes.push(Note::UserWritableSource);
-    } else if !supported && any_tier_a {
+    } else if !supported && any_tier_a && !support_capped {
         notes.push(Note::ScopeMismatch);
     }
     if strong && !category_ok {
@@ -335,6 +390,11 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
     if partial_unstated {
         notes.push(Note::PartialUndo);
     }
+    // P-BL-1 without the carrier: say why the item is not ticked. An item that is Safe on its other
+    // evidence alone is not under the cap and gets no such line.
+    if cap_unstated && !safe {
+        notes.push(Note::BaselineInferred);
+    }
     if declared_segment && c.harm == Harm::Medium {
         notes.push(Note::DeclaredSegment);
     }
@@ -347,7 +407,8 @@ pub fn decide(candidate: &Candidate, ctx: &PolicyCtx) -> Decision {
 
     // Mode rules.
     if band == Band::Safe && ctx.mode == ScanMode::External {
-        let admin = |e: &Evidence| e.trust == SourceTrust::AdminOnly;
+        // Capped evidence counts no more here than in rule 3 (P-BL-1).
+        let admin = |e: &Evidence| e.trust == SourceTrust::AdminOnly && !capped(e);
         let admin_supported = c.evidence.iter().any(|e| admin(e) && supports(e));
         if !admin_supported || score_where(&c.evidence, admin).total() < SAFE_MIN {
             band = Band::Likely;

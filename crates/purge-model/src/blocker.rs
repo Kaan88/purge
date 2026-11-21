@@ -108,6 +108,11 @@ pub enum Blocker {
     ReversibilityPartial,
     /// Soft. The object's program path could not be resolved to one file (M1b).
     ProgramUnresolved,
+    /// Soft. The proof that the key is not Windows' own rests on *inferred* absence: no shipped baseline
+    /// matches this Windows exactly, and the key is merely in no list the baseline view holds (trust
+    /// Merged or Local, BASELINE_LOCAL_DESIGN.md §4.4). It carries the trust cap (L4): the item is
+    /// offered, at most Likely, and never preselected.
+    BaselineInferred,
 }
 
 impl Blocker {
@@ -149,7 +154,8 @@ impl Blocker {
             | MsiPackageUnreadable
             | ChangedSinceScan
             | ReversibilityPartial
-            | ProgramUnresolved => false,
+            | ProgramUnresolved
+            | BaselineInferred => false,
         }
     }
 
@@ -192,6 +198,7 @@ impl Blocker {
             ChangedSinceScan => "ChangedSinceScan",
             ReversibilityPartial => "ReversibilityPartial",
             ProgramUnresolved => "ProgramUnresolved",
+            BaselineInferred => "BaselineInferred",
         }
     }
 }
@@ -253,14 +260,16 @@ mod tests {
             ChangedSinceScan,
             ReversibilityPartial,
             ProgramUnresolved,
+            BaselineInferred,
         ]
     }
 
-    /// The hard/soft split of §5.3 with the M1b additions: 24 hard blockers, 11 soft ones.
+    /// The hard/soft split of §5.3 with the M1b additions and the baseline trust cap: 24 hard blockers,
+    /// 12 soft ones.
     #[test]
     fn hard_and_soft_split_matches_the_plan() {
         let (hard, soft) = (hard(), soft());
-        assert_eq!((hard.len(), soft.len()), (24, 11));
+        assert_eq!((hard.len(), soft.len()), (24, 12));
         for b in &hard {
             assert!(b.is_hard(), "{b:?} must be hard");
         }
@@ -270,7 +279,7 @@ mod tests {
         let mut names: Vec<_> = hard.iter().chain(&soft).map(Blocker::name).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 35, "a blocker is listed twice");
+        assert_eq!(names.len(), 36, "a blocker is listed twice");
     }
 
     /// C-MODEL-SCOPE: the classes of the M1b blockers, and the lists above cover every variant. The
@@ -286,7 +295,7 @@ mod tests {
         ] {
             assert!(b.is_hard(), "{b:?}");
         }
-        for b in [ReversibilityPartial, ProgramUnresolved] {
+        for b in [ReversibilityPartial, ProgramUnresolved, BaselineInferred] {
             assert!(!b.is_hard(), "{b:?}");
         }
         let all: Vec<Blocker> = hard().into_iter().chain(soft()).collect();
@@ -329,6 +338,7 @@ mod tests {
                 ChangedSinceScan => 32,
                 ReversibilityPartial => 33,
                 ProgramUnresolved => 34,
+                BaselineInferred => 35,
             };
             assert_eq!(b.is_hard(), position < 24, "{b:?}");
             covered.push(position);
@@ -336,7 +346,7 @@ mod tests {
         covered.sort_unstable();
         assert_eq!(
             covered,
-            (0..35).collect::<Vec<_>>(),
+            (0..36).collect::<Vec<_>>(),
             "a variant is missing from the lists"
         );
         assert_eq!(
@@ -369,6 +379,32 @@ mod tests {
             json!({"kind": "SyncRoot"})
         );
         assert!(serde_json::from_value::<Blocker>(json!({"kind": "Nope"})).is_err());
+    }
+
+    /// BL-POLICY: the trust-cap blocker is soft, is the last variant (position 35, so no earlier
+    /// position moved), has the stable wire form `{"kind":"BaselineInferred"}`, and a blocker list
+    /// written before it existed reads and writes as before.
+    #[test]
+    fn baseline_inferred_is_soft_and_old_lists_still_read() {
+        let b = Blocker::BaselineInferred;
+        assert!(!b.is_hard());
+        assert_eq!(b.name(), "BaselineInferred");
+        assert_eq!(soft().last(), Some(&b));
+        let wire = json!({"kind": "BaselineInferred"});
+        assert_eq!(serde_json::to_value(&b).unwrap(), wire);
+        assert_eq!(serde_json::from_value::<Blocker>(wire).unwrap(), b);
+        assert!(serde_json::from_value::<Blocker>(json!({"kind": "baselineinferred"})).is_err());
+        let old = json!([
+            {"kind": "WindowsBaseline"},
+            {"kind": "UnmatchedChildren", "n": 2},
+            {"kind": "HasDependents", "names": ["A"]},
+            {"kind": "ReversibilityPartial"},
+            {"kind": "ProgramUnresolved"}
+        ]);
+        let read: Vec<Blocker> = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(read.len(), 5);
+        assert!(!read.contains(&b));
+        assert_eq!(serde_json::to_value(&read).unwrap(), old);
     }
 
     #[test]

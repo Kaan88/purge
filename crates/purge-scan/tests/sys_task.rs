@@ -83,6 +83,7 @@ fn task(path: &str) -> TaskInfo {
 /// one COM class of its own.
 fn fingerprint() -> Fingerprint {
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, "Contoso Widget").unwrap(),
@@ -230,6 +231,7 @@ fn band(c: &Candidate) -> (Band, bool) {
     let d = decide(
         c,
         &PolicyCtx {
+            baseline_trust: purge_model::BaselineTrust::Exact,
             mode: ScanMode::Post,
             verify_gone: VerifyGone::new(true, true, true),
             target_scope: TargetScope::Machine,

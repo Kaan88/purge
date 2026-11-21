@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Scope, ScopeSet, SourceId, SourceTrust};
+use crate::{Scope, ScopeSet, SourceId, SourceTrust, Target};
 
 /// How strong a kind of evidence is (§5.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -352,6 +352,47 @@ impl Evidence {
         self.detail = detail;
         self
     }
+
+    /// Whether this evidence, about `target`, is of an **absence-dependent** kind
+    /// (BASELINE_LOCAL_DESIGN.md §4.4): one conjunct of its proof is "the clean-Windows baseline does not
+    /// have this key". That holds only for a registry key target, and there for `ProvenOwnedSkeleton`,
+    /// `ComKeyOwnership` and `HarvestedToken` with any scope, and for `InstallerManifest` (Inno, Msi,
+    /// Burn) and `ChainedRef` recorded with Key scope. The tier and the weight are not looked at.
+    ///
+    /// This is the one definition the trust cap uses: the policy (P-BL-1) and the scan seal
+    /// ([`Candidate::lacks_baseline_cap`](crate::Candidate::lacks_baseline_cap)) both ask it.
+    #[must_use]
+    pub fn is_absence_dependent(&self, target: &Target) -> bool {
+        use EvidenceKind::*;
+        if !matches!(target, Target::RegKey { .. }) {
+            return false;
+        }
+        // No wildcard arm: a new kind does not compile until it is classified here.
+        match self.kind {
+            ProvenOwnedSkeleton | ComKeyOwnership | HarvestedToken => true,
+            InstallerManifest(_) | ChainedRef => self.scope == Scope::Key,
+            InsideInstallRoot
+            | InPreUninstallRefSnapshot
+            | DanglingRef
+            | PointsIntoInstallRoot
+            | AppNamedKeyWithRootRef
+            | OwnedSystemObject
+            | UninstallerArtifact
+            | AppxExternalLocation
+            | ReferencedByApp
+            | ProductSubfolderOfVendor
+            | ExactFullName
+            | NameTokenExact
+            | VendorContainer
+            | TimeWindow
+            | EmptyAfterPlan
+            | ExecutablesPresent
+            | ManyFiles
+            | GenericName
+            | NameFuzzy
+            | ModifiedAfterUninstall => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -426,6 +467,77 @@ mod tests {
         // The golden table covers every kind exactly once, in the order of `ALL`.
         assert_eq!(GOLDEN.map(|row| row.0), EvidenceKind::ALL);
         assert_eq!(EvidenceKind::MEGA_VENDOR_WEIGHT, 0);
+    }
+
+    /// BL-POLICY: the absence-dependent kinds of design §4.4, for every kind, scope and target type.
+    #[test]
+    fn absence_dependent_kinds_are_the_five_of_the_design() {
+        let key = Target::RegKey {
+            path: r"HKLM\SOFTWARE\Classes\CLSID\{X}".into(),
+        };
+        let others = [
+            Target::Path {
+                path: r"C:\Program Files\App".into(),
+            },
+            Target::RegValue {
+                path: r"HKLM\SOFTWARE\App".into(),
+                name: "v".into(),
+            },
+            Target::RegMultiSzSegment {
+                path: r"HKLM\SOFTWARE\App".into(),
+                name: "Path".into(),
+                segment: "s".into(),
+                index: None,
+            },
+            Target::AppxPackage {
+                full_name: "p".into(),
+            },
+            Target::Service { name: "s".into() },
+            Target::Task {
+                path: r"\V\T".into(),
+            },
+        ];
+        let mut manifests = vec![
+            InstallerManifest(ManifestKind::Msi),
+            InstallerManifest(ManifestKind::Burn),
+        ];
+        manifests.extend(EvidenceKind::ALL);
+        for kind in manifests {
+            for scope in Scope::ALL {
+                // Also scopes the table does not allow for the kind: the predicate reads what is stored.
+                let e = Evidence {
+                    kind,
+                    tier: kind.default_tier(),
+                    weight: kind.default_weight(),
+                    scope,
+                    trust: SourceTrust::AdminOnly,
+                    source: "s".into(),
+                    detail: Facts::new(),
+                };
+                let expected = match kind {
+                    ProvenOwnedSkeleton | ComKeyOwnership | HarvestedToken => true,
+                    InstallerManifest(_) | ChainedRef => scope == Key,
+                    _ => false,
+                };
+                assert_eq!(e.is_absence_dependent(&key), expected, "{kind:?} {scope:?}");
+                for other in &others {
+                    assert!(
+                        !e.is_absence_dependent(other),
+                        "{kind:?} {scope:?} {other:?}"
+                    );
+                }
+                // Neither the tier nor the weight changes the answer.
+                let mut weak = e.clone();
+                weak.tier = Tier::Ai;
+                weak.weight = -3;
+                assert_eq!(weak.is_absence_dependent(&key), expected);
+            }
+        }
+        // Not absence-dependent on a key: these may support Safe at any trust.
+        for kind in [UninstallerArtifact, AppNamedKeyWithRootRef, EmptyAfterPlan] {
+            let e = Evidence::new(kind, Key, SourceTrust::AdminOnly, "s").unwrap();
+            assert!(!e.is_absence_dependent(&key), "{kind:?}");
+        }
     }
 
     /// C-MODEL-SCOPE: the one new row, and nothing else moved (the golden table above is otherwise the

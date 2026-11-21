@@ -158,6 +158,7 @@ fn fingerprint(
     trust: SourceTrust,
 ) -> Fingerprint {
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id,

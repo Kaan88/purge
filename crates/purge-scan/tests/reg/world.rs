@@ -92,6 +92,7 @@ pub fn fingerprint(
 ) -> Fingerprint {
     let exe = format!(r"{}\{main_exe}", root.path);
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, arp_key).expect("a valid program id"),

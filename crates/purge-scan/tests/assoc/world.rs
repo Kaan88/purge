@@ -44,6 +44,7 @@ pub fn user_toasts() -> String {
 /// A fingerprint of a machine-wide VS Code with the given ProgID set and no journal.
 pub fn fingerprint(progids: &[&str]) -> Fingerprint {
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, "{EA457B21-F73E-494C-ACAB-524FDE069978}_is1")

@@ -188,6 +188,7 @@ fn a_value_known_through_a_progid_needs_the_installers_record_to_be_tier_a() {
     let decision = purge_policy::band::decide(
         relative,
         &purge_policy::band::PolicyCtx {
+            baseline_trust: purge_model::BaselineTrust::Exact,
             mode: purge_model::ScanMode::Post,
             verify_gone: purge_model::VerifyGone::new(true, true, true),
             target_scope: purge_policy::band::TargetScope::Machine,

@@ -47,9 +47,9 @@ use purge_guard::canon::{GuardEnv, canon_key, canon_target};
 use purge_guard::deny::{DenyList, Exemptions, ObjectGuardFacts};
 use purge_guard::{containers, prefix};
 use purge_model::{
-    Action, Band, Blocker, Candidate, Category, Evidence, EvidenceKind, Fingerprint, Hive,
-    InventoryEntry, MsiContext, ObjectKind, Origin, ProgramId, Reversibility, ScanMode, Scope,
-    SourceTrust, Target, Tier, VerifyGone,
+    Action, Band, BaselineTrust, Blocker, Candidate, Category, Evidence, EvidenceKind, Fingerprint,
+    Hive, InventoryEntry, MsiContext, ObjectKind, Origin, ProgramId, Reversibility, ScanMode,
+    Scope, SourceTrust, Target, Tier, VerifyGone,
 };
 use purge_policy::band::{self, PolicyCtx, TargetScope};
 use purge_policy::score::effective_weight;
@@ -382,10 +382,17 @@ pub struct DecideCtx<'a> {
     /// The M1b exemption lists of this plan ([`M1bDecide::from_facts`]). The default, all empty, keeps
     /// the Windows Installer, Package Cache and Burn exemptions closed.
     pub m1b: M1bDecide,
+    /// The trust of the baseline view the candidates were found with, handed to the policy as
+    /// `PolicyCtx::baseline_trust` (P-BL-1, BASELINE_LOCAL_DESIGN.md §4.4). A scan whose view is below
+    /// Exact must set it (`BaselineTrust::for_policy`): Merged and Local cap absence-dependent evidence
+    /// on registry keys; Exact and None decide as policy `m1b.1` did.
+    pub baseline_trust: BaselineTrust,
 }
 
 impl<'a> DecideCtx<'a> {
-    /// A context with the default limits, no user, unresolved long names and empty M1b lists.
+    /// A context with the default limits, no user, unresolved long names, empty M1b lists and baseline
+    /// trust Exact (the M1b behaviour; a scan with any other view sets
+    /// [`DecideCtx::baseline_trust`]).
     pub fn new(deny: &'a DenyList, mode: ScanMode, verify_gone: VerifyGone) -> Self {
         Self {
             deny,
@@ -395,6 +402,7 @@ impl<'a> DecideCtx<'a> {
             long_names_resolved: false,
             limits: Limits::default(),
             m1b: M1bDecide::default(),
+            baseline_trust: BaselineTrust::Exact,
         }
     }
 
@@ -714,6 +722,7 @@ pub fn redecide(candidate: &mut Candidate, ctx: &DecideCtx<'_>) {
         mode: ctx.mode,
         verify_gone: ctx.verify_gone,
         target_scope: target_scope(&candidate.target, ctx),
+        baseline_trust: ctx.baseline_trust,
     };
     candidate.decision = Some(band::decide(candidate, &policy));
 }
@@ -1093,6 +1102,57 @@ mod tests {
             value(&format!(r"HKU\{SID}\Software\Vendor\App"), "InstallDir")
         );
         assert_eq!(band(&c), Band::Safe);
+    }
+
+    /// BL-POLICY: the context's baseline trust reaches the policy (P-BL-1). A key that is Safe on an
+    /// installer key record is Likely and unticked with an inferred view, with or without the carrier
+    /// blocker; `new` keeps the M1b behaviour; a value and a file are not touched by the cap.
+    #[test]
+    fn baseline_trust_reaches_the_policy() {
+        let deny = deny();
+        let exact = ctx(&deny);
+        assert_eq!(exact.baseline_trust, BaselineTrust::Exact);
+        let verdict = |c: Candidate, ctx: &DecideCtx<'_>| {
+            let c = one(c, ctx);
+            let d = c.decision.expect("decided");
+            (d.band, d.preselected)
+        };
+        let key_c = || owned_key("k", r"HKLM\SOFTWARE\Vendor\App");
+        let carried = || {
+            let mut c = key_c();
+            c.blockers.push(Blocker::BaselineInferred);
+            c
+        };
+        for trust in [BaselineTrust::Exact, BaselineTrust::None] {
+            let ctx = DecideCtx {
+                baseline_trust: trust,
+                ..exact.clone()
+            };
+            assert_eq!(verdict(key_c(), &ctx), (Band::Safe, true), "{trust:?}");
+            assert_eq!(verdict(carried(), &ctx), (Band::Likely, false), "{trust:?}");
+        }
+        for trust in [BaselineTrust::Merged, BaselineTrust::Local] {
+            let ctx = DecideCtx {
+                baseline_trust: trust,
+                ..exact.clone()
+            };
+            assert_eq!(verdict(key_c(), &ctx), (Band::Likely, false), "{trust:?}");
+            assert_eq!(verdict(carried(), &ctx), (Band::Likely, false), "{trust:?}");
+            let value = owned_value("v", r"HKLM\SOFTWARE\Vendor\App", "InstallDir");
+            assert_eq!(verdict(value, &ctx), (Band::Safe, true), "{trust:?}");
+            let file = owned_path("p", r"C:\Program Files\App");
+            assert_eq!(verdict(file, &ctx), (Band::Safe, true), "{trust:?}");
+            // Two scanners on one key: the carrier of one caps the merged item.
+            let merged = decide(vec![key_c(), carried()], &ctx);
+            assert_eq!(merged.len(), 1);
+            assert!(merged[0].blockers.contains(&Blocker::BaselineInferred));
+            // A redecision (after a blocker was added to a decided candidate) keeps the cap.
+            let mut again = one(key_c(), &ctx);
+            again.decision = None;
+            redecide(&mut again, &ctx);
+            let d = again.decision.expect("decided");
+            assert_eq!((d.band, d.preselected), (Band::Likely, false), "{trust:?}");
+        }
     }
 
     #[test]

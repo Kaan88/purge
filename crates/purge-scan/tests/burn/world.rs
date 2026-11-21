@@ -102,6 +102,7 @@ pub fn burn_facts() -> BurnFacts {
 /// The fingerprint of the bundle "App Bundle".
 pub fn fingerprint() -> Fingerprint {
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, BUNDLE).unwrap(),
@@ -311,6 +312,7 @@ pub fn band(c: &Candidate) -> (Band, bool) {
     let d = decide(
         c,
         &PolicyCtx {
+            baseline_trust: purge_model::BaselineTrust::Exact,
             mode: ScanMode::Post,
             verify_gone: VerifyGone::new(true, true, true),
             target_scope: TargetScope::Machine,

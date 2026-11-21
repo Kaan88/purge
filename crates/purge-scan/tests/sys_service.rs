@@ -34,6 +34,7 @@ fn machine() -> Fixture {
 /// The app "App": one admin-only InstallRoot and its main exe.
 fn fingerprint(fx: &Fixture) -> Fingerprint {
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, "App").unwrap(),
@@ -197,6 +198,7 @@ fn band(c: &Candidate) -> (Band, bool) {
     let d = decide(
         c,
         &PolicyCtx {
+            baseline_trust: purge_model::BaselineTrust::Exact,
             mode: ScanMode::Post,
             verify_gone: VerifyGone::new(true, true, true),
             target_scope: TargetScope::Machine,
