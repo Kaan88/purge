@@ -1,0 +1,10 @@
+{
+  "code": -32000,
+  "data": {
+    "kind": "needs_recovery",
+    "sessions": [
+      "20251115T101502Z-9f3a6c1d2b7e4a50"
+    ]
+  },
+  "message": "needs_recovery"
+}

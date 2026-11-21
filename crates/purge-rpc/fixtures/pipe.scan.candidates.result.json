@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "band": "Safe",
+      "candidate_id": "c-5a5a000000000001",
+      "category": "AppFiles",
+      "display_name": "C:\\Program Files\\Git",
+      "kind": "folder",
+      "owner_program": "Git",
+      "preselected": true,
+      "size_bytes": 12345,
+      "warnings": []
+    }
+  ],
+  "offset": 0,
+  "total": 29
+}

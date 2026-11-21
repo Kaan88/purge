@@ -1,0 +1,11 @@
+{
+  "code": -32000,
+  "data": {
+    "cap": 10000000000,
+    "kind": "cap_exceeded",
+    "needed": 2000000000,
+    "used": 9000000000,
+    "volume": "C:\\"
+  },
+  "message": "cap_exceeded"
+}

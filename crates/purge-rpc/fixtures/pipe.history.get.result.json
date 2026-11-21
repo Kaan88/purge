@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "display_name": "C:\\Program Files\\Git",
+      "kind": "folder",
+      "op": 1,
+      "outcome": {
+        "kind": "Done"
+      },
+      "undone": false
+    }
+  ],
+  "session": "20251115T101502Z-9f3a6c1d2b7e4a50",
+  "state": "Committed"
+}

@@ -1,0 +1,13 @@
+{
+  "request": 4,
+  "sizes": [
+    {
+      "bytes": 345000000,
+      "program_id": "HKLM|64|Git_is1"
+    },
+    {
+      "bytes": null,
+      "program_id": "HKU:S-1-5-21-1-2-3-1001|64|{771FD6B0-FA20-440A-A002-3B3BAC16DC50}_is1"
+    }
+  ]
+}

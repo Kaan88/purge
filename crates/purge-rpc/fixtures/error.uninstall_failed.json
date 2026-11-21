@@ -1,0 +1,9 @@
+{
+  "code": -32000,
+  "data": {
+    "exit_code": 1603,
+    "forced_offered": true,
+    "kind": "uninstall_failed"
+  },
+  "message": "uninstall_failed"
+}

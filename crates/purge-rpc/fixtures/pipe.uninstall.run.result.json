@@ -1,0 +1,10 @@
+{
+  "exit_code": 0,
+  "outcome": "Success",
+  "verify_gone": {
+    "arp_gone": true,
+    "main_exes_gone": true,
+    "msi_unknown_all_ctx": true,
+    "passed": true
+  }
+}

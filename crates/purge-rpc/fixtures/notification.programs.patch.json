@@ -1,0 +1,10 @@
+{
+  "patches": [
+    {
+      "appx": false,
+      "installer": "Inno",
+      "program_id": "HKLM|64|Git_is1"
+    }
+  ],
+  "request": 2
+}

@@ -1,0 +1,8 @@
+{
+  "code": -32000,
+  "data": {
+    "kind": "store_integrity",
+    "message": "journal chain broken at line 12"
+  },
+  "message": "store_integrity"
+}
