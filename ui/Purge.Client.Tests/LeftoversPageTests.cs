@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using Purge.App.Shell;
 using Purge.App.Views;
 using Purge.Client.Broker;
+using Purge.Client.Pipeline;
 using Purge.Client.Rpc;
 using Xunit;
 using RpcBand = Purge.Client.Rpc.Band;
@@ -352,6 +354,48 @@ public sealed class LeftoversPageTests
         Assert.True(Item(vm, 1).Checked);
     }
 
+    [Fact]
+    public async Task S2CompletesHandsTheScanToS3AndThePlanRunsToTheResult()
+    {
+        // S2: a broker-route uninstall runs, the broker scans, and the controller completes.
+        var s2 = new S2Broker();
+        var controller = new UninstallController(
+            _ => Task.FromResult(new UninstallLaunch(UninstallLaunchState.Started, s2, "")),
+            new NoMedium());
+        var asked = new TaskCompletionSource<UninstallConfirmation>(TaskCreationOptions.RunContinuationsAsynchronously);
+        controller.ConfirmationRequested += c => asked.TrySetResult(c);
+        var begin = controller.BeginAsync(new UninstallTarget("prog-1", "Mozilla Firefox"));
+        _ = await asked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.AnswerAsync(new UninstallAnswer(true, Quiet: false, RestorePoint.Always));
+        await begin.WaitAsync(TimeSpan.FromSeconds(5));
+        var outcome = controller.CompletedOutcome!;
+        Assert.Equal("scan-from-s2", outcome.ScanId);
+        Assert.Equal(1, s2.ScanCalls);
+
+        // S3: the request S2 builds, then candidate paging for the scan it was handed (no second scan).
+        var s3 = new ScriptedBroker();
+        s3.Rows.Add(Row(1, pre: true));
+        var request = new LeftoversRequest(outcome.Target.ProgramId, outcome.Target.ProgramName, outcome.SessionId,
+            outcome.ScanId, outcome.Mode, outcome.RestorePoint, outcome.Quiet, Broker: null);
+        var vm = new LeftoversViewModel(s3);
+        await vm.ShowRequestAsync(request);
+
+        Assert.Equal(0, s3.ScanCalls);
+        Assert.Equal("scan-from-s2", vm.Scan!.ScanId);
+        Assert.Equal("Mozilla Firefox", vm.ProgramName);
+        Assert.True(Item(vm, 1).Checked);
+
+        // plan.create, then plan.execute with the confirm dialog's restore-point choice, then the result.
+        await vm.MoveAsync(request.RestorePoint);
+
+        Assert.Equal(1, s3.CreatePlanCalls);
+        Assert.Equal(1, s3.ExecuteCalls);
+        Assert.Equal(RestorePoint.Always, s3.LastRestorePoint);
+        Assert.Equal(LeftoversPhase.Result, vm.Phase);
+        Assert.Contains("Moved 1 item", vm.ResultTitle);
+        Assert.True(vm.CanUndo);
+    }
+
     private static LeftoverItemModel Item(LeftoversViewModel vm, int n) =>
         vm.Items.Single(i => i.CandidateId == Id(n));
 
@@ -419,6 +463,8 @@ public sealed class LeftoversPageTests
 
         public Func<IReadOnlyList<string>, Task<PlanCreated>> CreatePlanHook { get; set; } = _ => Task.FromResult(Plan());
         public Func<string, Task<ExecResult>> ExecuteHook { get; set; } = _ => Task.FromResult(Complete(1, 0, "sess-1"));
+        public int CreatePlanCalls { get; private set; }
+        public RestorePoint LastRestorePoint { get; private set; }
 
         public void RaiseConsentShown(string code)
         {
@@ -457,12 +503,16 @@ public sealed class LeftoversPageTests
                 Blockers = [],
             });
 
-        public Task<PlanCreated> CreatePlanAsync(string scanId, IReadOnlyList<string> selected, CancellationToken ct) =>
-            CreatePlanHook(selected);
+        public Task<PlanCreated> CreatePlanAsync(string scanId, IReadOnlyList<string> selected, CancellationToken ct)
+        {
+            CreatePlanCalls++;
+            return CreatePlanHook(selected);
+        }
 
         public Task<ExecResult> ExecuteAsync(string planId, RestorePoint restorePoint, IProgress<Progress>? progress, CancellationToken ct)
         {
             ExecuteCalls++;
+            LastRestorePoint = restorePoint;
             return ExecuteHook(planId);
         }
 
@@ -471,5 +521,68 @@ public sealed class LeftoversPageTests
 
         public Task<OutcomeResult> RetryHeldAsync(string session, CancellationToken ct) =>
             Task.FromResult(new OutcomeResult { Outcome = Outcome.Complete });
+    }
+
+    /// <summary>The S2 side of the end-to-end test: a broker-route prepare, run and scan.</summary>
+    private sealed class S2Broker : IUninstallBroker
+    {
+        public int ScanCalls { get; private set; }
+
+        public Task<PrepareResult> PrepareAsync(IReadOnlyList<string> programIds, Action<Progress>? progress, CancellationToken ct) =>
+            Task.FromResult(new PrepareResult
+            {
+                Programs =
+                [
+                    new Prepared
+                    {
+                        ProgramId = programIds[0],
+                        SessionId = "us-1",
+                        Route = Route.Broker,
+                        Command = @"""C:\Program Files\App\unins000.exe""",
+                        FingerprintSummary = new FingerprintSummary(),
+                        CoProducts = [],
+                        Running = [],
+                        Warnings = [],
+                    },
+                ],
+            });
+
+        public Task<RunResult> RunAsync(string sessionId, bool quiet, Action<Progress>? progress, CancellationToken ct) =>
+            Task.FromResult(new RunResult
+            {
+                ExitCode = 0,
+                Outcome = RunOutcome.Success,
+                VerifyGone = new VerifyGone { ArpGone = true, MainExesGone = true, MsiUnknownAllCtx = true, Passed = true },
+            });
+
+        public Task<ObservedResult> ObservedAsync(string sessionId, CancellationToken ct) =>
+            Task.FromResult(new ObservedResult
+            {
+                VerifyGone = new VerifyGone { ArpGone = true, MainExesGone = true, MsiUnknownAllCtx = true, Passed = true },
+            });
+
+        public Task<ScanResult> ScanAsync(string sessionId, bool forced, Action<Progress>? progress, CancellationToken ct)
+        {
+            ScanCalls++;
+            return Task.FromResult(new ScanResult
+            {
+                ScanId = "scan-from-s2",
+                Mode = forced ? ScanMode.Forced : ScanMode.Post,
+                BaselineTrust = BaselineTrust.Exact,
+                Counts = new BandCounts(),
+                Warnings = [],
+            });
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class NoMedium : IMediumUninstall
+    {
+        public Task<RouteInfo> RouteAsync(string programId, CancellationToken ct) =>
+            throw new InvalidOperationException("a broker-route program never asks the medium engine");
+
+        public Task<RunUserResult> RunUserAsync(string programId, bool quiet, Action<Progress>? progress, CancellationToken ct) =>
+            throw new InvalidOperationException("a broker-route program never runs in the medium engine");
     }
 }

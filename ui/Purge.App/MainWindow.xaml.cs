@@ -95,19 +95,22 @@ public sealed partial class MainWindow : Window
         _barHost.Children.Add(bar);
     }
 
-    /// <summary>The S3 review page (built on first use), for the scan started from S1.</summary>
+    /// <summary>The S3 review page (built on first use); the Uninstall pipeline hands it the scan.</summary>
     public LeftoversView OpenReview()
     {
         Navigate("leftovers");
         return (LeftoversView)_views["leftovers"];
     }
 
-    /// <summary>Opens the review for a scan the Uninstall pipeline started (S2's hand-over).</summary>
-    public async Task OpenLeftoversAsync(LeftoversRequest request)
+    /// <summary>S2, built on first use; the Uninstall click on Programs starts its pipeline.</summary>
+    public UninstallView OpenUninstall()
     {
-        Navigate("leftovers");
-        await ((LeftoversView)_views["leftovers"]).OpenAsync(request);
+        Navigate("queue");
+        return (UninstallView)_views["queue"];
     }
+
+    /// <summary>The XamlRoot a dialog of a page uses (null before the window is loaded).</summary>
+    public XamlRoot? DialogRoot => Root.XamlRoot;
 
     private void OnFirstRendering(object? sender, object e)
     {
@@ -159,7 +162,7 @@ public sealed partial class MainWindow : Window
         {
             view = key switch
             {
-                "queue" => new QueueView(),
+                "queue" => new UninstallView(),
                 "leftovers" => new LeftoversView(),
                 "vault" => new VaultView(),
                 "history" => new HistoryView(),

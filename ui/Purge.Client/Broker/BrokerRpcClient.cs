@@ -8,23 +8,19 @@ using Purge.Client.Rpc;
 namespace Purge.Client.Broker;
 
 /// <summary>The broker answered with a JSON-RPC error (<c>error.data.kind</c> says which).</summary>
-public sealed class BrokerRpcException : Exception
+public sealed class BrokerRpcException(int code, string? kind, string message, ErrorData? data = null) : Exception(message)
 {
-    public BrokerRpcException(int code, string? kind, string message, ErrorData? data = null) : base(message)
-    {
-        Code = code;
-        Kind = kind;
-        Data = data;
-    }
-
-    public int Code { get; }
+    public int Code { get; } = code;
 
     /// <summary><c>error.data.kind</c> (for example <c>runtime</c> or <c>gone</c>), when the broker gave one.</summary>
-    public string? Kind { get; }
+    public string? Kind { get; } = kind;
 
-    /// <summary>The whole <c>error.data</c> object, for the kinds that carry details (<c>plan_refused</c>,
-    /// <c>cap_exceeded</c>, <c>gone</c>); null when the broker gave none.</summary>
-    public new ErrorData? Data { get; }
+    /// <summary>
+    /// The whole <c>error.data</c> object: the refusals of a <c>plan_refused</c>, <c>exit_code</c> and
+    /// <c>forced_offered</c> of an <c>uninstall_failed</c>, or the route of a <c>wrong_route</c>. Null when the
+    /// broker sent none.
+    /// </summary>
+    public ErrorData? Details { get; } = data;
 }
 
 /// <summary>The link to the broker broke: it could not be written to, or it ended.</summary>
@@ -252,7 +248,8 @@ public sealed class BrokerRpcClient : IAsyncDisposable
         var code = objectError?.Code ?? 0;
         var data = objectError?.Data;
         var message = data?.Message ?? objectError?.Message;
-        return new BrokerRpcException(code, data?.Kind, message is { Length: > 0 } ? message : "The administrator part reported an error.", data);
+        return new BrokerRpcException(code, data?.Kind, message is { Length: > 0 } ? message : "The administrator part reported an error.",
+            data);
     }
 
     private void Fail(string reason)

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
+using Purge.App.Shell;
 using Purge.Client.Broker;
 using Purge.Client.Rpc;
 using RpcBand = Purge.Client.Rpc.Band;
@@ -260,6 +261,65 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     /// <summary>Scans an uninstall session (or a stored fingerprint when <paramref name="sessionId"/> is null).</summary>
     public Task ScanAsync(string? sessionId, string? programId, bool forced, CancellationToken ct = default) =>
         LoadAsync(sessionId, programId, forced, rescan: false, ct);
+
+    /// <summary>
+    /// Shows the scan S2 already made: pages <c>scan.candidates</c> for its id and does not ask
+    /// <c>leftovers.scan</c> a second time. The session and program are kept so a re-scan can ask again later.
+    /// </summary>
+    public Task ShowRequestAsync(LeftoversRequest request, CancellationToken ct = default) =>
+        ShowScanAsync(request.ScanId, request.Mode, request.ProgramName, request.SessionId, request.ProgramId, ct);
+
+    /// <summary>The hand-off without the page's record, for the view model and its tests.</summary>
+    public async Task ShowScanAsync(string scanId, ScanMode mode, string programName, string? sessionId, string? programId,
+        CancellationToken ct = default)
+    {
+        if (_busy) return;
+        _busy = true;
+        ProgramName = programName;
+        _sessionId = sessionId;
+        _programId = programId;
+        _forced = mode == ScanMode.Forced;
+        _rescanTicks = null;
+        _rescanIds = null;
+        RescanOffered = false;
+        RescanMessage = null;
+        Error = null;
+        Info = null;
+        Attention.Clear();
+        RefusalLines.Clear();
+        Phase = LeftoversPhase.Scanning;
+        ScanProgress = "Reading the scan";
+        Notify();
+        try
+        {
+            Scan = new ScanResult { ScanId = scanId, Mode = mode };
+            await LoadCandidatesAsync(Scan, ct).ConfigureAwait(false);
+            BuildGroups();
+            ApplyTicks(null);
+            Phase = LeftoversPhase.Review;
+            ScanProgress = "";
+        }
+        catch (OperationCanceledException)
+        {
+            Phase = LeftoversPhase.Empty;
+            Info = "The scan was not loaded.";
+        }
+        catch (BrokerRpcException ex)
+        {
+            Phase = LeftoversPhase.Empty;
+            Error = DescribeError(ex);
+        }
+        catch (BrokerLinkException ex)
+        {
+            Phase = LeftoversPhase.Empty;
+            Error = "The administrator part ended before the scan could be shown. " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+            Notify();
+        }
+    }
 
     /// <summary>Scans again and re-applies the ticks by <c>CandidateId</c> (design 3.6).</summary>
     public Task RescanAsync(CancellationToken ct = default)
@@ -579,7 +639,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
 
     private void ApplyRefusals(BrokerRpcException error, int chosen)
     {
-        var refusals = error.Data?.Refusals ?? [];
+        var refusals = error.Details?.Refusals ?? [];
         foreach (var refusal in refusals)
         {
             if (refusal.CandidateId is { Length: > 0 } id && Items.FirstOrDefault(i => i.CandidateId == id) is { } item)
@@ -781,7 +841,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
 
     private static string DescribeError(BrokerRpcException error)
     {
-        var data = error.Data;
+        var data = error.Details;
         return error.Kind switch
         {
             "cap_exceeded" =>

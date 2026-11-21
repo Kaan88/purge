@@ -67,7 +67,7 @@ public sealed class LeftoversBrokerTests
         var refused = await Assert.ThrowsAsync<BrokerRpcException>(() =>
             broker.CreatePlanAsync("scan-1", ["c-0000000000000001"], CancellationToken.None));
         Assert.Equal("plan_refused", refused.Kind);
-        var refusal = Assert.Single(refused.Data!.Refusals!);
+        var refusal = Assert.Single(refused.Details!.Refusals!);
         Assert.Equal("c-0000000000000001", refusal.CandidateId);
         Assert.Equal("cannot back it up", refusal.Reason);
 

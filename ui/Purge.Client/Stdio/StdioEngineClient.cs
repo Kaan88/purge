@@ -22,9 +22,10 @@ public sealed class EngineLinkException(string message) : Exception(message);
 /// <summary>
 /// The product link to <c>purge-engine --stdio</c>: newline-delimited JSON-RPC 2.0 over the engine's stdin and stdout
 /// (crates/purge-rpc, <c>frame.rs</c>), reading and writing the DTOs of <c>Rpc/</c>. One reader thread; requests are
-/// numbered from 1 and may overlap. The read-only calls of the Programs page are implemented (<c>engine.hello</c>,
+/// numbered from 1 and may overlap. The Programs page's calls are implemented (<c>engine.hello</c>,
 /// <c>programs.list</c> with its batches and patches, <c>programs.get</c>, <c>programs.sizes</c>,
-/// <c>programs.icons</c>, <c>inventory.changes</c>); the rest need the broker (M3-BROKER-FLOW) and say so.
+/// <c>programs.icons</c>, <c>inventory.changes</c>), and so are the Uninstall pipeline's medium side
+/// (<c>uninstall.route</c>, <c>uninstall.run_user</c> with <c>uninstall.progress</c>).
 /// </summary>
 public sealed class StdioEngineClient : IEngineClient
 {
@@ -64,7 +65,8 @@ public sealed class StdioEngineClient : IEngineClient
 
     public bool IsLive => true;
 
-    public bool CanChangePc => false;
+    /// <summary>The engine is live, so the Uninstall click can start the broker (the broker is what changes the PC).</summary>
+    public bool CanChangePc => true;
 
     public event Action<IReadOnlyList<Rpc.ProgramPatch>>? ProgramsPatched;
 
@@ -142,6 +144,23 @@ public sealed class StdioEngineClient : IEngineClient
         return result.Deserialize(Rpc.RpcJsonContext.Default.InventoryChanges) ?? throw new InvalidDataException("empty inventory.changes result");
     }
 
+    public async Task<Rpc.RouteInfo> GetUninstallRouteAsync(string programId, CancellationToken ct = default)
+    {
+        var result = await CallAsync("uninstall.route", w => w.WriteString("program_id", programId), null, ct).ConfigureAwait(false);
+        return result.Deserialize(Rpc.RpcJsonContext.Default.RouteInfo) ?? throw new InvalidDataException("empty uninstall.route result");
+    }
+
+    public async Task<Rpc.RunUserResult> RunUserUninstallAsync(string programId, bool quiet, Action<Rpc.Progress>? progress = null,
+        CancellationToken ct = default)
+    {
+        var result = await CallAsync("uninstall.run_user", w =>
+        {
+            w.WriteString("program_id", programId);
+            w.WriteBoolean("quiet", quiet);
+        }, null, ct, onProgress: progress).ConfigureAwait(false);
+        return result.Deserialize(Rpc.RpcJsonContext.Default.RunUserResult) ?? throw new InvalidDataException("empty uninstall.run_user result");
+    }
+
     public Task<IReadOnlyList<LeftoverForecast>> GetForecastsAsync(IReadOnlyList<string> programIds, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<LeftoverForecast>>([]);
 
@@ -182,10 +201,10 @@ public sealed class StdioEngineClient : IEngineClient
     }
 
     private async Task<JsonElement> CallAsync(string method, Action<Utf8JsonWriter>? writeParams, Feed? feed, CancellationToken ct,
-        Action<ulong>? onSent = null)
+        Action<ulong>? onSent = null, Action<Rpc.Progress>? onProgress = null)
     {
         var id = Interlocked.Increment(ref _nextId);
-        var pending = new Pending(feed);
+        var pending = new Pending(feed, onProgress);
         if (_closedReason is { } closed) throw new EngineLinkException(closed);
         _pending[id] = pending;
         try
@@ -296,8 +315,20 @@ public sealed class StdioEngineClient : IEngineClient
         {
             var name = method.GetString();
             var known = _pending.TryGetValue(requestId, out var pending);
-            if (known && pending!.Feed is { } feed)
-                feed.Notification(name!, args);
+            if (known)
+            {
+                if (pending!.Feed is { } feed) feed.Notification(name!, args);
+                else if (pending.OnProgress is { } onProgress && name is not null
+                         && name.EndsWith(".progress", StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        var progress = args.Deserialize(Rpc.RpcJsonContext.Default.Progress);
+                        if (progress is not null) Raise(onProgress, progress);
+                    }
+                    catch (JsonException) { }
+                }
+            }
             if (name == "programs.patch" && (long)requestId == Interlocked.Read(ref _listRequest)
                 && (!known || Interlocked.Read(ref _listReplied) == 1))
             {
@@ -334,10 +365,11 @@ public sealed class StdioEngineClient : IEngineClient
         foreach (var pending in _pending.Values) pending.Fail(new EngineLinkException(reason));
     }
 
-    private sealed class Pending(Feed? feed)
+    private sealed class Pending(Feed? feed, Action<Rpc.Progress>? onProgress)
     {
         public TaskCompletionSource<JsonElement> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Feed? Feed { get; } = feed;
+        public Action<Rpc.Progress>? OnProgress { get; } = onProgress;
 
         public void Fail(Exception e)
         {

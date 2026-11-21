@@ -4,7 +4,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Purge.App.Shell;
 using Purge.Client.Broker;
-using Purge.Client.Model;
 using Purge.Client.Rpc;
 using RpcExecResult = Purge.Client.Rpc.ExecResult;
 using RpcUndoResult = Purge.Client.Rpc.UndoResult;
@@ -16,7 +15,7 @@ namespace Purge.App.Views;
 /// result page (design 6.4). The state and every rule live in <see cref="LeftoversViewModel"/>; this
 /// class only draws it and forwards clicks.
 /// </summary>
-public sealed partial class LeftoversView : UserControl
+public sealed partial class LeftoversView : UserControl, ILeftoversPage
 {
     private static readonly Brush Explicit = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0x2E, 0x9E, 0x44));
     private static readonly Brush Warning = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xD1, 0x34, 0x38));
@@ -24,6 +23,7 @@ public sealed partial class LeftoversView : UserControl
 
     private LeftoversViewModel? _vm;
     private LeftoversRequest? _request;
+    private BrokerSession? _ownedBroker;
     private bool _explaining;
 
     public LeftoversView()
@@ -45,42 +45,29 @@ public sealed partial class LeftoversView : UserControl
     /// <summary>The page's state, for the shell and the tests.</summary>
     public LeftoversViewModel? ViewModel => _vm;
 
-    /// <summary>Opens the page for a scan the Uninstall pipeline started.</summary>
-    public async Task OpenAsync(LeftoversRequest request)
+    /// <summary>
+    /// S2's hand-off: the scan is already made, so this pages <c>scan.candidates</c> for it and takes the broker
+    /// link (the caller no longer closes it). The page keeps <see cref="LeftoversRequest.RestorePoint"/> for
+    /// <c>plan.execute</c>.
+    /// </summary>
+    public void Show(LeftoversRequest request)
     {
+        var previous = _ownedBroker;
+        _ownedBroker = request.Broker;
+        if (previous is not null && !ReferenceEquals(previous, request.Broker))
+            _ = previous.DisposeAsync().AsTask();
+
         _request = request;
         if (request.Broker is null)
         {
             Use(new LeftoversViewModel(new OfflineBroker()));
-            _vm!.LoadSample(request.Name ?? "Mozilla Firefox");
+            ShowEmpty("The administrator part ended",
+                "The scan cannot be shown because its broker link is gone. Start the uninstall again from the Uninstall pipeline page.");
             return;
         }
         var broker = new LeftoversBroker(request.Broker.Rpc);
         Use(new LeftoversViewModel(broker, request.Broker.AllowForeground));
-        await _vm!.ScanAsync(request.SessionId, request.ProgramId, request.Forced);
-    }
-
-    /// <summary>The same hand-over under the name S2 may use.</summary>
-    public Task ScanAsync(LeftoversRequest request) => OpenAsync(request);
-
-    /// <summary>
-    /// Stopgap for the Programs page's Uninstall click before the Uninstall pipeline page is wired. It
-    /// cannot scan: the broker's session id comes from <c>uninstall.prepare</c>, which S2 owns. In sample
-    /// mode it shows the sample review.
-    /// </summary>
-    public Task ScanAsync(string programId, string name, ScanKind kind)
-    {
-        _request = new LeftoversRequest(programId, null, kind == ScanKind.ScanOnly, null, name);
-        if (!Program.Engine.IsLive)
-        {
-            Use(new LeftoversViewModel(new OfflineBroker()));
-            _vm!.LoadSample(name);
-            return Task.CompletedTask;
-        }
-        Use(new LeftoversViewModel(new OfflineBroker()));
-        ShowEmpty("The uninstall pipeline starts the scan",
-            "This page scans the broker's own uninstall session. Start the uninstall from the Uninstall pipeline page once it is wired; nothing was scanned here.");
-        return Task.CompletedTask;
+        _ = _vm!.ShowRequestAsync(request);
     }
 
     private void Use(LeftoversViewModel vm)
@@ -96,7 +83,7 @@ public sealed partial class LeftoversView : UserControl
     private void Refresh()
     {
         if (_vm is not { } vm) return;
-        var name = vm.ProgramName.Length > 0 ? vm.ProgramName : _request?.Name ?? "";
+        var name = vm.ProgramName.Length > 0 ? vm.ProgramName : _request?.ProgramName ?? "";
         TitleText.Text = name.Length > 0 ? $"Leftovers of {name}" : "Leftovers";
         AppInitial.Text = name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
         SubtitleText.Text = Subtitle(vm);
@@ -126,7 +113,7 @@ public sealed partial class LeftoversView : UserControl
         LeftoversPhase.Interrupted => "Interrupted · check History & undo",
         LeftoversPhase.Review => vm.Scan is { } scan
             ? $"{scan.Mode switch { ScanMode.Post => "Post-uninstall scan", ScanMode.Forced => "Forced scan", _ => "Stored-fingerprint scan" }} · " +
-              $"{vm.Items.Count.ToString(CultureInfo.CurrentCulture)} items · baseline {scan.BaselineTrust}"
+              $"{vm.Items.Count.ToString(CultureInfo.CurrentCulture)} items"
             : "Review the list",
         _ => "No scan yet",
     };
@@ -390,7 +377,7 @@ public sealed partial class LeftoversView : UserControl
     {
         if (_vm is null) return;
         MoveButton.IsEnabled = false;
-        await _vm.MoveAsync();
+        await _vm.MoveAsync(_request?.RestorePoint ?? RestorePoint.HighRisk);
     }
 
     private async void OnUndoAll(object sender, RoutedEventArgs e)
