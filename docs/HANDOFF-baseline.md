@@ -14,9 +14,12 @@ so the work can be continued from any harness: read it, then `git log --oneline 
   Notes: STDIO warms the inventory before the first request (+~1.5 s to engine.hello in debug; check against the
   launch gate in release). RUNNER level refusal uses error kind `runtime` (no dedicated kind). Unwired: worktree
   `m3-wire` (Flash, running) plugs icons + uninstall handlers into stdio.rs.
-- Running: M3-BROKER-CORE (Sonnet 5.5, worktree m3-broker-core), M3-UI-S1 (Sonnet 5.5, wave 4, worktree m3-ui-s1).
-- Wave 4 blockers: M3-BROKER-FLOW needs M3-ENGINE-OUT, whose rule says "after BL-GATE" (VM) -> user to decide
-  whether to waive. M3-CONSENT and M3-UI-CLIENT wait for BROKER-CORE.
+- Also merged: M3-WIRE (icons/uninstall served by stdio), M3-BROKER-CORE 2ec05f2 (notes docs/m3-notes/broker-core.md;
+  account-only mismatch gets no answer, console-window flash open), M3-UI-CLIENT 1c27e6b (docs/m3-notes/ui-client.md),
+  M3-ENGINE-OUT 3d183bd (user waived the "after BL-GATE" rule; frozen_plans.rs replays 18 M1b scans, hashes equal).
+- Running (worktrees of the same name): M3-UI-S1 + M3-CONSENT (Sonnet 5.5), M3-BROKER-FLOW (Flash). All wave 5
+  packages depend on CONSENT or BROKER-FLOW. Not yet run: full replay-all (frozen rig runs, ~47 min), unelevated ci.
+- VM backlog: broker real elevation + start test, UI-CLIENT runas/server check, RUNNER medium VS Code, TASKDLG/S6.
 - M3-BENCH reviewed + fixed (0202a25), merged into baseline 2a6aa97. Timings NOT taken: warm run needs an idle
   host (later), cold series needs 5 user reboots (`cargo xtask bench-launch --cold [--reset] --purge out\purge`).
 - Wave 3 started early, in parallel (unelevated ci deferred to merge time): worktrees `m3-stdio` (Flash),
