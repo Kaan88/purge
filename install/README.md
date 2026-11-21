@@ -28,6 +28,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Eng
 | `-UiPublishDir` | `<repo>\target\ui-publish` | The AOT publish folder; it must contain `Purge.exe`. |
 | `-Kb` | `<engine dir>\kb` if it exists, else `<repo>\kb` | Knowledge files copied to `%ProgramFiles%\Purge\kb` (the broker and the engine read `<exe dir>\kb`). |
 | `-SkipBuild` | | Deploy the artifacts as they are; run neither `cargo` nor `dotnet`. |
+| `-DataRootOnly` | | Inno Setup mode (install only): the setup copied the payload already. Create the data root and the event-log source; no build, no payload copy, no shortcut. |
+| `-ProtectOnly` | | Inno Setup mode (install only): set the payload's root, and every object in it that fails the broker's per-object rule, to the `ProgramFiles` descriptor (owner Administrators, protected DACL). |
 | `-EngineOnly` | | Legacy M1b/M2 rig mode: deploy `purge-engine.exe` and `kb\` plus the data root only; no broker, UI, event-log source or shortcut, and no build. `-Check` and `-Uninstall` honour it. |
 | `-ProgramFilesDir`, `-DataRoot`, `-StartMenuDir` | `%ProgramFiles%\Purge`, `%ProgramData%\Purge`, the all-users Start-menu `Programs` folder | Test overrides only (absolute drive paths). |
 | `-WhatIf` (alias `-DryRun`) | | Print every step and change nothing. Needs no elevation; exit 0 when the plan is valid. |
@@ -234,6 +236,75 @@ other exits).
 payload and data-tree installs, the protection pass, the event-log source and the shortcut - and returns 0
 without elevation or a single write.
 
+## Inno installer
+
+`install/inno/purge.iss` is the setup the v1 deploy script is not: one `Purge-Setup-<version>.exe` that
+installs, upgrades and uninstalls from one file, with an "Installed apps" entry. It needs Inno Setup 6.3
+or newer (built here with 6.7.3) and does not replace the script; it runs the script's protected-tree
+logic from its post-install step.
+
+```
+winget install --id JRSoftware.InnoSetup -e
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\inno\build-installer.ps1 [-SkipBuild] [-InnoCompiler <ISCC.exe>]
+```
+
+The script builds what "Release build" above describes (`cargo` twice, `cargo xtask check-deps`, the
+Native AOT publish), then compiles the setup into `target\installer\Purge-Setup-<version>.exe`, the
+version taken from `[workspace.package] version` in the root `Cargo.toml`. `-SkipBuild` packs the
+artifacts that already exist. Build-time only: no elevation and no change to the machine.
+
+**Install.** The setup is x64, `PrivilegesRequired=admin`, `DefaultDirName={autopf}\Purge` and
+`DisableDirPage=yes`: the broker refuses a directory a non-administrator can write, so the user cannot
+pick another one. `[Files]` copies `purge-engine.exe`, `purge-broker.exe`, the whole UI publish folder
+(`Purge.exe` and its Windows App SDK files) and `kb\` into `{app}` (`= %ProgramFiles%\Purge`), plus
+`install.ps1` into `{app}\setup\`. `[Icons]` creates the same all-users Start-menu shortcut the script
+does (`{commonprograms}\Purge`, i.e. `%ProgramData%\Microsoft\Windows\Start Menu\Programs\Purge.lnk`)
+and an optional desktop shortcut (unchecked task). `AppId` is a fixed GUID, so a second setup upgrades
+the same "Installed apps" entry; name, version and publisher ("Purge") come from `AppName`,
+`AppVersion` and `AppPublisher`.
+
+| Check (`bins/purge-broker/src/start.rs`) | What the setup does for it |
+|---|---|
+| `restrict_dll_search` | the broker's own first call; nothing to install |
+| token elevated | `PrivilegesRequired=admin` (the setup itself); the UI starts the broker with `runas` |
+| own directory: plain drive path, no reparse point, system volume, admin-only writable (`trusted_install_dir`) | `DefaultDirName={autopf}\Purge` + `DisableDirPage=yes` fixes `%ProgramFiles%\Purge`; Inno creates plain directories; `-ProtectOnly` applies the `ProgramFiles` constant |
+| `purge-broker.exe` admin-only writable | Inno's copy inherits Program Files (Users: read and execute), which the rule accepts; `-ProtectOnly` repairs it when the copied file's own descriptor fails |
+| `<install dir>\kb` passes the directory rule | `kb\` is copied below the protected root; `-ProtectOnly` visits the directory too |
+| `<install dir>\Purge.exe` admin-only writable | the UI publish tree goes into `{app}`; `-ProtectOnly` visits `Purge.exe` |
+| every file in `<install dir>\kb\baselines` admin-only writable | `kb\baselines\*` is copied by the same rule; `-ProtectOnly` walks every file of the tree |
+| data root `%ProgramData%\Purge` passes the directory rule and `StorageRoots::check` | `install.ps1 -DataRootOnly` creates `Purge`, `sessions`, `Quarantine`, `fp`, `kb` and `sessions\index.json` with the `DataRoot`, `Sessions`, `Store` and `Index` descriptors |
+| KB and baselines are `<install dir>\kb`, `PURGE_KB_DIR` is not read | `DestDir: "{app}\kb"`; nothing sets `PURGE_KB_DIR` |
+
+**Post-install.** In `[Code]` at `ssPostInstall` the setup runs, from `{app}\setup\install.ps1`:
+
+```
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File {app}\setup\install.ps1 -ProtectOnly -DataRootOnly -SkipBuild
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File {app}\setup\install.ps1 -Check
+```
+
+The first run gives the tree the layout's own descriptor. Inno's file copy inherits the Program Files
+DACL, which already grants Users only read and execute, but that is not the protected `ProgramFiles`
+constant, so `-ProtectOnly` sets the root to the constant itself and applies it to every object below
+it that fails the broker's per-object rule. The same run creates `%ProgramData%\Purge` with its
+protected descriptors and `sessions\index.json`, and registers the `Purge` event-log source, all through
+the script's native layer: the .iss adds no `Permissions:` entry and no SDDL of its own. The second run
+is the script's own `-Check` (both trees, every deployed file, the shortcut, the event-log source). If
+either run fails, the setup shows the end of the script's log and aborts, which rolls the install back,
+so nothing half-installed stays in "Installed apps". The setup's own log is the usual
+`%TEMP%\Setup Log*.txt`.
+
+**Uninstall.** From "Installed apps" (or `unins000.exe`). Before the uninstaller deletes any file,
+`CurUninstallStepChanged(usUninstall)` force-stops `Purge.exe`, `purge-broker.exe` and
+`purge-engine.exe` (`taskkill /F /T`), removes
+`HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Purge`, then asks whether to delete
+`%ProgramData%\Purge` too. The default is **No** (silent uninstalls keep it): the quarantine holds
+files that were removed from the PC and can still be restored, so deleting the folder is an explicit
+choice. The answer is only about the data root; the programs, `kb\`, `setup\`, the shortcuts and the
+registry source are always removed, and `[UninstallDelete]` clears `{app}` after that.
+
+The setup must be tested on the target machine, elevated: it writes Program Files, ProgramData and
+HKLM, which is exactly what cannot be verified by compiling it.
+
 ## For purge-exec (M2-X-STORE)
 
 - Directories that purge-exec creates under `sessions` and `Quarantine` should use the `Store` constant
@@ -267,7 +338,8 @@ left in place, the per-object protection rule (a file given an `Everyone` write 
 and re-protected by the next run), the shortcut create/verify/remove round trip, `Test-PayloadLayout`
 over the payload, the executor-marker check on a fake binary (clean, and a `purge-exec\src` marker
 refused), and the entry point's `-WhatIf` plan for install, check and uninstall (exit 0, no elevation,
-nothing written) plus the non-elevated real run (exit 1, "run elevated").
+nothing written) plus the non-elevated real run (exit 1, "run elevated"). The Inno setup mode adds one
+row: `-ProtectOnly -DataRootOnly -WhatIf` must name the tree protection and the data root, and no build.
 
 VM gate G0 (`-Mode m2-install`, run by the rig, elevated in the guest):
 - fresh install: the canonical SDDL of `Purge`, `sessions`, `Quarantine`, `fp`, `kb`, `index.json` and

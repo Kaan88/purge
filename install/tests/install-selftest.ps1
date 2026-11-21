@@ -405,6 +405,10 @@ Check 'install.ps1 compiles as a script block' ($null -ne $sb)
     $code = $LASTEXITCODE
     $text = ($out | Out-String)
     Check 'what-if: -EngineOnly names the engine and kb, not the broker or UI' ($code -eq 0 -and $text -match 'engine-only mode' -and $text -match 'purge-engine\.exe and kb' -and $text -notmatch 'purge-broker\.exe') "exit $code; $text"
+    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $InstallPs1 -ProtectOnly -DataRootOnly -SkipBuild -WhatIf -ProgramFilesDir (Join-Path $Work 'inno-pf') -DataRoot (Join-Path $Work 'inno-dr') 2>&1
+    $code = $LASTEXITCODE
+    $text = ($out | Out-String)
+    Check 'what-if: the setup mode protects the payload and makes the data root, no build' ($code -eq 0 -and $text -match 'setup mode' -and $text -match 'protect .* and every object below it' -and $text -match 'data-root tree' -and $text -match 'event-log source' -and $text -notmatch 'cargo build') "exit $code; $text"
 }
 
 # ---------------------------------------------------------------------- the real entry point refuses without elevation
