@@ -89,3 +89,34 @@ revert-then-close, panic unwind, abort on failed revert); the backup-restore han
 one NtSetSecurityObject per closure; owner-only check `sd.info == OWNER_SECURITY_INFORMATION`; link check on
 self before the reopen; only one thread sees it; `pub(crate)` + `write` gating; whether public
 `thread_impersonates`/`restore_privilege_enabled` should stay in read builds.
+
+## M3-RPC (f4c15b9, merged)
+Choices (DECISIONS candidates):
+1. One engine error code -32000 with tagged `error.data.kind`; protocol errors (-32700/-32600/-32601/-32602) no data.
+2. Invalid UTF-8 / non-JSON / empty line -> -32700, keep reading; oversize line or EOF mid-line closes; batch -> -32600.
+3. Envelope: unknown members -32600; id must be u64 (else -32600, id null); absent/null params = {}; array params -32602.
+4. Table per method: set + `served` (Stdio|Pipe|Both: one-sided Read methods are -32601 on the other) + `cancellable` + `consent`.
+5. No third call set: mask only from `Transport::mask()`, `SetMask` has no public constructor; `StdioCall` (no
+   Execute/Propose), `PipeCall` (no UserRun); `CallSet` sealed.
+6. Client notifications: only `$/cancel`; others dropped, incl. a request method sent without an id.
+7. Broker ids `u-`/`s-`/`p-`/`e-` + 16 lower hex (64 bits); new `ExpiryId` for quarantine.purge; executor
+   sessions keep model `SessionId`, ops `OpId`.
+8. Wire candidate ids `CandidateRef` `c-<16 hex>`; from model `CandidateId` is fallible.
+9. stdio `engine.hello` returns `MediumHello` (EngineHello + elevation_type + shell_matches); broker plain EngineHello.
+10. Params: plan.create / leftovers.scan untagged two-form enums, each deny_unknown_fields; `preselected` literally
+    true; forced default false; lists non-empty; absent item_ids = all; scan.candidates limit 1-500;
+    restore_point off|high_risk|always.
+11. Results/notifications accept unknown members (newer server may add fields).
+12. Output > 16 MiB: response -> runtime error; notification not written, call errors.
+13. Invented result shapes where 6.3 was vague (FingerprintSummary, CandidateRow + ItemKind, PlanCounts,
+    AttentionReason, Refusal, Warning{code free text until M3-ENGINE-OUT}, one shared Progress, broker.shutdown {exiting}).
+14. Fixture names `<stdio|pipe>.<method>.params|result`, `notification.<name>`, `error.<kind>`; `methods::dtos()` for M3-GEN-DTO.
+15. `serve` single-threaded; real cancelling servers use `route`/`write_response`/`write_notification` on their
+    threads; checking `cancellable` is the server's job.
+16. No MCP/CLI transport in the RPC layer for M3. 17. Deps: schemars, serde_json raw_value.
+Binding for M3-STDIO / M3-BROKER-CORE: use `route` (the only path doing the `served` + mask checks); never a
+custom lookup over `parse_incoming`. Server must refuse `$/cancel` of non-cancellable requests. Broker must
+look ProgramId up only in its own inventory (`HKLM|64|C:/x` parses: key-name part is free text).
+For M3-R1: `lookup`/`route`; `call_set!` `_ => method_not_found` arm; sealing + private SetMask;
+`Routed::Ignored`; `ID_TYPES` allowlist in the shape walk; ProgramId free text; untagged enums; duplicate keys
+refused via raw parse; `Dispatcher::call` returns untyped Value (result types by convention only).
