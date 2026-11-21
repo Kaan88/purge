@@ -20,7 +20,7 @@ Write-Host "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition
 
 try {
 # ------------------------------------------------------------------------------------------ parse
-foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item $PSCommandPath)) {
+foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item (Join-Path $Vm 'rig-baseline-local.ps1')) + @(Get-Item $PSCommandPath)) {
     $tok = $null; $err = $null
     $null = [Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tok, [ref]$err)
     Check "parse $($f.Name)" (@($err).Count -eq 0) (@($err | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join '; ')
@@ -75,6 +75,83 @@ foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item
     $ph = [pscustomobject]@{ task = 'PurgeRigLaunch'; start = (Get-Date).AddSeconds(-1); found = $false }
     $r = Stop-Launch $ph -GraceSec 0
     Check 'Stop-Launch with the placeholder record deletes the task' ($script:calls -contains 'unregister:PurgeRigLaunch') ($script:calls -join ', ')
+}
+
+# ------------------------------------------------- rig-baseline-local.ps1 (gate M R1, R2, R5): the pure parts
+& {
+    . (Join-Path $Vm 'rig-baseline-local.ps1') -Library
+    $ErrorActionPreference = 'Stop'
+    $r1 = Get-BlRunSpec 'R1'; $r2 = Get-BlRunSpec 'R2'; $r5 = Get-BlRunSpec 'R5'
+    Check 'baseline-local: R1 is Purge-CleanPro, truth Professional, neighbour EnterpriseSEval, 3D as it is' ($r1.vm -ceq 'Purge-CleanPro' -and $r1.run -ceq 'bl-r1-cleanpro' -and $r1.truth -ceq 'Professional-26340.9882' -and $r1.neighbour -ceq 'EnterpriseSEval-26100.1742' -and -not $r1.no3d)
+    Check 'baseline-local: R2 is Inbound with 3D off, truth and neighbour swapped' ($r2.vm -ceq 'Inbound-Win11-Test' -and $r2.run -ceq 'bl-r2-inbound' -and $r2.truth -ceq $r1.neighbour -and $r2.neighbour -ceq $r1.truth -and $r2.no3d)
+    Check 'baseline-local: R5 has no VM and both baselines' (-not $r5.vm -and $r5.run -ceq 'r5-host' -and (@($r5.baselines) -join ',') -ceq 'Professional-26340.9882,EnterpriseSEval-26100.1742')
+    $msg = $null; try { $null = Get-BlRunSpec 'R3' } catch { $msg = $_.Exception.Message }
+    Check 'baseline-local: an unknown mode is refused' ($msg -match 'unknown mode')
+    Check 'baseline-local: busy VM states refused, poweroff and saved not' ((Test-BlVmBusyState 'running') -and (Test-BlVmBusyState 'paused') -and (Test-BlVmBusyState 'onlinesnapshotting') -and -not (Test-BlVmBusyState 'poweroff') -and -not (Test-BlVmBusyState 'saved') -and -not (Test-BlVmBusyState 'aborted'))
+
+    $job = Get-BlBuildJob 'C:\cr\out\bl-r1-cleanpro' 'C:\cr\bin\purge-engine.exe'
+    $ptok = $null; $perr = $null; $null = [Management.Automation.Language.Parser]::ParseInput($job, [ref]$ptok, [ref]$perr)
+    Check 'baseline-local: the build job parses, placeholders replaced' (@($perr).Count -eq 0 -and $job -notmatch '__(DIR|ENGINE)__' -and $job.Contains("`$Dir = 'C:\cr\out\bl-r1-cleanpro'") -and $job.Contains("`$Engine = 'C:\cr\bin\purge-engine.exe'"))
+    Check 'baseline-local: the build job builds cold then warm with PURGE_TIMING and writes build.json' ($job.Contains("foreach (`$pass in 'cold', 'warm')") -and $job.Contains("`$env:PURGE_TIMING = '1'") -and $job.Contains("'build.json'") -and $job.Contains("baseline info"))
+    $msg = $null; try { $null = Get-BlBuildJob "C:\it's" 'C:\e.exe' } catch { $msg = $_.Exception.Message }
+    Check 'baseline-local: a quote in a job path is refused' ($msg -match 'bad path')
+    Check 'baseline-local: version hash parsed' ((Get-BlVersionHash @('rigtool 0.1.0 source-sha256 abc123')) -ceq 'abc123' -and $null -eq (Get-BlVersionHash @('rigtool 0.1.0')))
+    $da = Get-BlDiffArgs 't.gz' 'l.gz' 'n.gz' 'o.json'
+    Check 'baseline-local: diff arguments' (($da -join ' ') -ceq 'baseline-diff --truth t.gz --local l.gz --neighbour n.gz --areas kb\baselines\view.json --out o.json')
+
+    # Tree hash: CRLF reads as LF, sorted by path; the value computed independently here.
+    $tree = Join-Path $Work 'bltree'
+    New-Item -ItemType Directory -Force (Join-Path $tree 'src\sub') | Out-Null
+    $files = [ordered]@{ 'Cargo.toml' = "a`r`nb`n"; 'Cargo.lock' = 'lock'; 'build.rs' = "fn main() {}`r`n"; 'src\main.rs' = 'm'; 'src\sub\x.rs' = "x`r`n" }
+    foreach ($k in $files.Keys) { [IO.File]::WriteAllText((Join-Path $tree $k), $files[$k]) }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $hx = { param([byte[]]$b) -join ($sha.ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) }
+    $want = ''
+    foreach ($rel in @('Cargo.lock', 'Cargo.toml', 'build.rs', 'src/main.rs', 'src/sub/x.rs')) {
+        $want += (& $hx ([Text.Encoding]::UTF8.GetBytes($files[$rel.Replace('/', '\')].Replace("`r`n", "`n")))) + '  ' + $rel + "`n"
+    }
+    $want = & $hx ([Text.Encoding]::UTF8.GetBytes($want))
+    Check 'baseline-local: rigtool tree hash as build.rs computes it' ((Get-BlTreeSha256 $tree) -ceq $want) "got $(Get-BlTreeSha256 $tree), want $want"
+
+    # The final check on a synthetic run: good, then one mutation per problem.
+    $d = Join-Path $Work 'blrun'
+    New-Item -ItemType Directory -Force $d | Out-Null
+    function Write-Gz([string]$Path, [string]$Text) {
+        $fs = [IO.File]::Create($Path); $g = New-Object IO.Compression.GZipStream($fs, [IO.Compression.CompressionMode]::Compress)
+        $b = [Text.Encoding]::UTF8.GetBytes($Text); $g.Write($b, 0, $b.Length); $g.Dispose(); $fs.Dispose()
+    }
+    $body = "#src`tS1`tok`nK`tHKLM\SOFTWARE\A`nK`tHKLM\SOFTWARE\B`n"
+    $area = [ordered]@{ id = 'classes_clsid'; truth = 10; coverage_local = 0.9; coverage_merged = 1.0; shared_shape_false_absent_local = 0; shared_shape_false_absent_merged = 0; checks = [ordered]@{ s3_local = $true; s2_merged = $true } }
+    $mkRep = { param($Complete, $Name) [ordered]@{ inputs = [ordered]@{ local = [ordered]@{ name = $Name; complete = $Complete; incomplete_reasons = @($(if (-not $Complete) { 'S4 not ok' })) }
+                    truth = [ordered]@{ name = 'Professional-26340.9882' }; neighbours = @([ordered]@{ name = 'EnterpriseSEval-26100.1742' }) }
+                total = [ordered]@{ truth = 10; coverage_local = 0.9; coverage_merged = 1.0; false_absent_local = 1; false_absent_merged = 0; shared_shape_false_absent_local = 0; shared_shape_false_absent_merged = 0; checks = [ordered]@{ w1_scope = $true } }
+                areas = @($area) } }
+    $mkBuild = { param($ColdExit) [ordered]@{ cpus = 4; info = [ordered]@{ exit = 0; seconds = 0.5 }
+                passes = @([ordered]@{ pass = 'cold'; exit = $ColdExit; seconds = 20.1; peak_working_set_mb = 150.2; file_bytes = 4000000 }, [ordered]@{ pass = 'warm'; exit = 0; seconds = 12.3; peak_working_set_mb = 149; file_bytes = 4000000 }) } }
+    $setRun = { param($Rep, $Build, [string]$Warm)
+        [IO.File]::WriteAllText((Join-Path $d 'r.json'), (ConvertTo-Json -InputObject $Rep -Depth 8))
+        [IO.File]::WriteAllText((Join-Path $d 'build.json'), (ConvertTo-Json -InputObject $Build -Depth 8))
+        Write-Gz (Join-Path $d 'local-cold.tsv.gz') ("#purge-baseline-local 1`tcreated=1`n" + $body + "#end`t2`taaa`n")
+        Write-Gz (Join-Path $d 'local-warm.tsv.gz') ("#purge-baseline-local 1`tcreated=2`n" + $Warm + "#end`t2`tbbb`n") }
+    & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild 0) $body
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') 'professional-26340.9882' 'vm'
+    Check 'baseline-local check: a good run passes (header and #end may differ)' ($c.ok -and -not @($c.problems).Count) (@($c.problems) -join ' | ')
+    Check 'baseline-local check: the lines gate M reads' ($c.lines[0] -ceq "local Professional-26340.9882 complete=True; truth Professional-26340.9882 (10 keys in scope); neighbours ['EnterpriseSEval-26100.1742']" -and
+        ($c.lines -match '^TOTAL coverage local 0\.9 merged 1; false absent local 1 merged 0; ') -and ($c.lines -match '^  classes_clsid {15} truth      10  local 0.9  merged 1  shared fa 0/0  S3 local True  S2 merged True$') -and
+        ($c.lines -match '^W4: cold build 20.1 s \(budget 120 s on 4 CPUs\), warm 12.3 s; peak 150.2 MB')) ($c.lines -join ' | ')
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'host'
+    Check 'baseline-local check: no expected name, host budget 30 s' ($c.ok -and ($c.lines -match 'budget 30 s'))
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') 'EnterpriseSEval-26100.1742' 'vm'
+    Check 'baseline-local check: the wrong Windows is a problem' (-not $c.ok -and @($c.problems).Count -eq 1 -and $c.problems[0] -match 'the truth is EnterpriseSEval') (@($c.problems) -join ' | ')
+    & $setRun (& $mkRep $false 'Professional-26340.9882') (& $mkBuild 0) $body
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'vm'
+    Check 'baseline-local check: an incomplete local file is a problem' (-not $c.ok -and $c.problems[0] -match '^local baseline INCOMPLETE: S4 not ok') (@($c.problems) -join ' | ')
+    & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild 1) $body
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'vm'
+    Check 'baseline-local check: a build exit code is a problem' (-not $c.ok -and $c.problems[0] -ceq 'cold build exit 1') (@($c.problems) -join ' | ')
+    & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild 0) ($body + "K`tHKLM\SOFTWARE\C`n")
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'vm'
+    Check 'baseline-local check: cold and warm bodies that differ are a problem' (-not $c.ok -and $c.problems[0] -match '^cold and warm builds differ below the header') (@($c.problems) -join ' | ')
 }
 
 # ------------------------------------------------------------------- task priority in setup-base / riglib
