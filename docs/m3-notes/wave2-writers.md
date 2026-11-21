@@ -66,3 +66,26 @@ For M3-R1: can a local client set its pipe client pid (FSCTL_PIPE_SET_CLIENT_PRO
 denied / busy always an existing name? create-instance right held by the user SID); low-IL/AppContainer kept
 out; default owner rights; impersonation window; pid reuse vs creation-time check; overlapped cancel/wait,
 partial writes; refusal-loop DoS (accepted by design?).
+
+## M3-WIN-PRIV (d5d0002, merged)
+**Elevated path never ran.** Pending on the VM (win-unit elevated):
+`cargo test -p purge-win --features write --lib -- --ignored elevated_privilege_scope elevated_reopen_and_set_owner`
+and `cargo test -p purge-exec --features test-support --test act_service -- --include-ignored elevated_write_back`.
+Relies on: a registry open with REG_OPTION_BACKUP_RESTORE + SeRestorePrivilege grants WRITE_OWNER (from
+reading, not a run). If not, the step fails cleanly, the note stays, R8b M1 stays open.
+Choices (DECISIONS candidates):
+1. Copied token + SetThreadToken instead of ImpersonateSelf (same effect; a failed enable never touches the
+   thread). Refuses if not held (1314) or the thread already impersonates (5); process token never adjusted.
+2. Two privileged uses, both in purge-win: the M2 one-call use in `CreatedKey::set_security` (E1 SYSTEM-owned
+   restores depend on it) and the new `CreatedKey::reopen_and_set_owner` (one caller, act_service.rs
+   `set_recorded_security`). Literal only in `restore_luid`. M3-DEPS rule (e) / T10 wording must match.
+3. Owner only under the privilege; group/DACL via the plain handle; R8b "SCM-made key, both opens refused"
+   unchanged.
+4. Failure note text unchanged (does not say the privileged attempt was tried).
+5. Raw NtOpenKeyEx relative to the checked handle with an empty name (no name lookup again).
+Also touched: crates/purge-exec/tests/act_service.rs (existing converge test returns early when elevated).
+For M3-R1: every exit path of `with_restore_privilege` (no thread change before SetThreadToken, drop order
+revert-then-close, panic unwind, abort on failed revert); the backup-restore handle never leaves the closure;
+one NtSetSecurityObject per closure; owner-only check `sd.info == OWNER_SECURITY_INFORMATION`; link check on
+self before the reopen; only one thread sees it; `pub(crate)` + `write` gating; whether public
+`thread_impersonates`/`restore_privilege_enabled` should stay in read builds.
