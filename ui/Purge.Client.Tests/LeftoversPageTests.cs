@@ -555,7 +555,7 @@ public sealed class LeftoversPageTests
                 VerifyGone = new VerifyGone { ArpGone = true, MainExesGone = true, MsiUnknownAllCtx = true, Passed = true },
             });
 
-        public Task<ObservedResult> ObservedAsync(string sessionId, CancellationToken ct) =>
+        public Task<ObservedResult> ObservedAsync(string sessionId, RunOutcome? outcome, CancellationToken ct) =>
             Task.FromResult(new ObservedResult
             {
                 VerifyGone = new VerifyGone { ArpGone = true, MainExesGone = true, MsiUnknownAllCtx = true, Passed = true },

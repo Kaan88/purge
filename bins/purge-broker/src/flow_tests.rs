@@ -788,6 +788,85 @@ fn observed_answers_the_brokers_own_verify_gone() {
     b.exit(SECS);
 }
 
+/// The medium route's normal path: `prepare`, the engine's run, `observed`, then a `post` scan. The
+/// observation records the window `prepare`'s harvest opened, so the pipeline accepts `post` (only
+/// `uninstall.run` recorded one before).
+#[test]
+fn observed_records_the_window_a_post_scan_needs() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    b.machine.scripted_verify(VerifyGone::new(true, true, true));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[medium_id()]);
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let reply = ask(
+        &c,
+        3,
+        "uninstall.observed",
+        json!({ "session_id": session, "outcome": "Success" }),
+    );
+    assert!(reply["result"]["verify_gone"].is_object(), "{reply}");
+
+    let stored = b
+        .machine
+        .stored(&medium_id())
+        .expect("the observation writes the fingerprint back");
+    let (start, end) = (stored.window.t_start, stored.window.t_end);
+    assert!(
+        start.is_some(),
+        "the observation recorded no window: {stored:?}"
+    );
+    assert!(
+        end.is_some(),
+        "the observation left the window open: {stored:?}"
+    );
+    assert!(end >= start, "the window ends before it starts: {stored:?}");
+
+    let scan = scan_session(&c, 4, &session, false);
+    assert_eq!(scan["result"]["mode"], "post", "{scan}");
+    c.close();
+    b.exit(SECS);
+}
+
+/// A failed report records no window and the scan stays forced, even when the program is gone: the
+/// same rule as after a failed run the broker made itself.
+#[test]
+fn a_failed_observation_records_no_window_and_scans_forced() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    b.machine.scripted_verify(VerifyGone::new(true, true, true));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[medium_id()]);
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let reply = ask(
+        &c,
+        3,
+        "uninstall.observed",
+        json!({ "session_id": session, "outcome": "Failed" }),
+    );
+    assert!(
+        reply["result"]["verify_gone"]["passed"].as_bool().unwrap(),
+        "{reply}"
+    );
+
+    let stored = b
+        .machine
+        .stored(&medium_id())
+        .expect("the observation writes the fingerprint back");
+    assert_eq!(stored.window.t_start, None);
+    assert_eq!(stored.window.t_end, None);
+
+    let scan = scan_session(&c, 4, &session, false);
+    assert_eq!(scan["result"]["mode"], "forced", "{scan}");
+    assert_eq!(scan["result"]["counts"]["preselected"], 0, "{scan}");
+    c.close();
+    b.exit(SECS);
+}
+
 /// The medium engine's report of its own run (`outcome`): a failure makes the scan `forced` with
 /// nothing preselected even though the broker's verify-gone passes; a success is never believed alone
 /// (a failed verify-gone is forced whatever the client says); an absent report keeps the old rule; and
@@ -821,18 +900,7 @@ fn observed_outcome_can_only_make_the_scan_safer() {
         let reply = ask(&c, 3, "uninstall.observed", params);
         assert!(reply["result"]["verify_gone"].is_object(), "{reply}");
         let scan = scan_session(&c, 4, &session, false);
-        if expected == "post" {
-            // The broker did not run this uninstaller, so the fingerprint has no uninstall window and the
-            // pipeline refuses `post` itself (see the notes): what matters is that the mode asked for
-            // was `post`, not `forced`.
-            let asked_post = scan["result"]["mode"] == "post"
-                || scan["error"]["data"]["message"]
-                    .as_str()
-                    .is_some_and(|m| m.contains("--mode post needs a fingerprint"));
-            assert!(asked_post, "{outcome:?}: {scan}");
-        } else {
-            assert_eq!(scan["result"]["mode"], expected, "{outcome:?}: {scan}");
-        }
+        assert_eq!(scan["result"]["mode"], expected, "{outcome:?}: {scan}");
         if expected == "forced" {
             assert_eq!(
                 scan["result"]["counts"]["preselected"], 0,

@@ -91,7 +91,7 @@ public interface IUninstallBroker : IAsyncDisposable
 
     Task<RunResult> RunAsync(string sessionId, bool quiet, Action<Progress>? progress, CancellationToken ct);
 
-    Task<ObservedResult> ObservedAsync(string sessionId, CancellationToken ct);
+    Task<ObservedResult> ObservedAsync(string sessionId, RunOutcome? outcome, CancellationToken ct);
 
     Task<ScanResult> ScanAsync(string sessionId, bool forced, Action<Progress>? progress, CancellationToken ct);
 }
@@ -160,9 +160,9 @@ public sealed class BrokerUninstallClient : IUninstallBroker
         Send("uninstall.run", new RunParams { SessionId = sessionId, Quiet = quiet }, RpcJsonContext.Default.RunParams,
             RpcJsonContext.Default.RunResult, progress, ct);
 
-    public Task<ObservedResult> ObservedAsync(string sessionId, CancellationToken ct) =>
-        Send("uninstall.observed", new ObservedParams { SessionId = sessionId }, RpcJsonContext.Default.ObservedParams,
-            RpcJsonContext.Default.ObservedResult, null, ct);
+    public Task<ObservedResult> ObservedAsync(string sessionId, RunOutcome? outcome, CancellationToken ct) =>
+        Send("uninstall.observed", new ObservedParams { SessionId = sessionId, Outcome = outcome },
+            RpcJsonContext.Default.ObservedParams, RpcJsonContext.Default.ObservedResult, null, ct);
 
     public Task<ScanResult> ScanAsync(string sessionId, bool forced, Action<Progress>? progress, CancellationToken ct) =>
         Send("leftovers.scan", new LeftoversScanParams { SessionId = sessionId, Forced = forced },
@@ -644,7 +644,8 @@ public sealed class UninstallController : IAsyncDisposable
         SetStep(UninstallStep.Run, failed ? StepState.Failed : StepState.Done, ExitDetail(result.ExitCode, Quiet));
 
         // The order of design 3.2: run_user, then the broker's own observation. It is the broker that decides.
-        var observed = await _broker!.ObservedAsync(_prepared!.SessionId, ct).ConfigureAwait(false);
+        // The engine's report travels with it, so a failed or cancelled run is forced even if it left nothing.
+        var observed = await _broker!.ObservedAsync(_prepared!.SessionId, result.Outcome, ct).ConfigureAwait(false);
         var gone = observed.VerifyGone.Passed;
         SetStep(UninstallStep.CheckGone, gone ? StepState.Done : StepState.Warning,
             gone ? "Confirmed gone" : "Some parts remain");
