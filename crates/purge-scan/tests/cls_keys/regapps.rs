@@ -200,6 +200,6 @@ fn blockers_reach_the_candidates() {
 /// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
 #[test]
 fn l5_a_view_below_exact_only_takes_away() {
-    let offered = crate::l5_check("regapps", &world);
+    let offered = crate::l5_check("regapps", &world, &["CLS-REGAPPS"]);
     assert!(offered > 0, "the world offers something without a baseline");
 }

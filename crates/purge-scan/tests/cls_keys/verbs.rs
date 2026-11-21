@@ -171,6 +171,6 @@ fn trusted_installer_owned_verb_carries_the_blocker() {
 /// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
 #[test]
 fn l5_a_view_below_exact_only_takes_away() {
-    let offered = crate::l5_check("verbs", &world);
+    let offered = crate::l5_check("verbs", &world, &["CLS-VERBS"]);
     assert!(offered > 0, "the world offers something without a baseline");
 }

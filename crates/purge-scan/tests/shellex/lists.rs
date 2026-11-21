@@ -211,4 +211,6 @@ fn l5_a_view_below_exact_only_takes_away() {
         world.ready(&[]).shellex()
     });
     assert!(none.len() >= 2, "{none:#?}");
+    none.must_offer("approval lists", &["COM-SHELLEX"])
+        .must_change("approval lists");
 }

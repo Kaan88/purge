@@ -1204,10 +1204,10 @@ fn l5_a_view_below_exact_only_takes_away() {
         ("toasts", toasts_world),
     ];
     let scanners: [&dyn Scanner; 3] = [&ClsAssoc, &ClsFileExts, &ClsToasts];
-    let mut offered = 0;
+    let mut tally = l5::Tally::default();
     for (name, make) in worlds {
         for scanner in scanners {
-            let none = l5::check(
+            let checked = l5::check(
                 &format!("{name}/{}", scanner.id()),
                 &make().fp.os,
                 &|view| {
@@ -1216,11 +1216,9 @@ fn l5_a_view_below_exact_only_takes_away() {
                     world.scan(scanner)
                 },
             );
-            offered += none.len();
+            tally.add(scanner.id(), &checked);
         }
     }
-    assert!(
-        offered > 10,
-        "the worlds offer something to compare: {offered}"
-    );
+    // Every scanner offers something in some world, and presence changes it.
+    tally.assert_not_vacuous(&[], &[]);
 }

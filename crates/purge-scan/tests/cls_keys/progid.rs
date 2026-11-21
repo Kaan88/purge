@@ -345,6 +345,6 @@ fn incomplete_subtree_is_not_offered_as_a_key() {
 /// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
 #[test]
 fn l5_a_view_below_exact_only_takes_away() {
-    let offered = crate::l5_check("progid", &world);
+    let offered = crate::l5_check("progid", &world, &["CLS-PROGID"]);
     assert!(offered > 0, "the world offers something without a baseline");
 }

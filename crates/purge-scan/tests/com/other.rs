@@ -238,5 +238,6 @@ fn l5_a_view_below_exact_only_takes_away() {
             found
         });
         assert!(none.len() >= 3, "{name}: {none:#?}");
+        none.must_offer(name, &["COM-CLASS"]).must_change(name);
     }
 }

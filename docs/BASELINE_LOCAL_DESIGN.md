@@ -66,8 +66,18 @@ Two directions of use, which the whole design rests on:
 - **L3 Exact is untouched.** On a host with an exact shipped baseline the engine behaves byte-for-byte as
   at the M1b gate: the local baseline is not built, not read and not merged.
 - **L4 The cap.** Absence at a trust below Exact never yields Safe and never preselects (§4.4).
-- **L5 Monotone.** For every scan: `preselected(non-exact view) ⊆ preselected(no baseline)` and
-  `Blocked(non-exact view) ⊇ Blocked(no baseline)`.
+- **L5 Monotone.** A view below Exact only takes away: what a scan or a plan offers with a view below Exact,
+  the same scan or plan without a baseline offers at least as strongly. For every item offered below Exact
+  there is an item of the no-baseline result that (1) has the same target or, when the no-baseline result has
+  no item of that target, a key or directory that contains it; (2) has a band at least as high, with
+  not listed < Blocked < Weak < Likely < Safe; (3) is preselected if the item below Exact is. So nothing new is
+  offered (not even as Blocked), no band is raised, the preselected set is a subset, and what was Blocked is
+  Blocked or no longer listed. The Blocked set is *not* a superset: a scanner may withhold a Windows key it
+  listed as Blocked without a baseline. The containing case in (1) is the one named exception to "the same
+  target": a scanner told that a key is Windows' own may offer the app's values in it instead of the key.
+  This is the one statement of L5 (restated after review BL-R1 S7; the first wording, "Blocked sets are
+  supersets", was not what presence-only gives). It is checked per scanner (`purge-scan`
+  `tests/shared/l5.rs`) and per plan (`xtask replay`, `l5_violations`).
 - **L6 A local file is never an exact baseline.** Different header tag, directory and file name; the
   exact loader rejects it (§3.5).
 - **L7 Advice only lowers** (§7).
@@ -321,6 +331,19 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
   in `kb/baselines` under an exact name is refused (L6); a test that an incomplete local baseline gives
   trust None and still blocks.
 - Replay gate: with exact baselines the plans are byte-identical to the M1b gate plans (L3).
+- As built for L5 (presence-only; reviews BL-R1 S3, S7, M2). Per scanner, `tests/shared/l5.rs` runs each
+  scanner world without a baseline, with views below Exact that hold nothing (the candidates must be equal),
+  and with views that hold what the no-baseline candidates name: all of it, then seeded random parts of it
+  (keys, values, directories, files, the keys of services and tasks, the values of firewall rules). Each pair
+  must hold L5 as §2 states it, with the policy at trust None and at the view's own trust. A test fails when
+  a scanner offers nothing in any of its worlds or when no presence view changes what it offers, unless the
+  scanner is named exempt with the reason (SYS-APPX: a package is nothing a baseline holds); and the
+  comparison is shown to bite on the candidates of each scan. Per plan, `xtask replay --baseline-view
+  merged|local|none` with `--local` and `--neighbour` injects the view into the harvest **and** the scan
+  (`purge-engine` feature `inject-view`, enabled by xtask only; no CLI or RPC path reaches it), and
+  `l5_violations` compares the plan with the no-baseline plan. With presence-only the merged view is held
+  against the no-baseline golden, so the golden `cls_assoc_vscode_merged.txt` listed above was not made
+  (review BL-R1 N11).
 
 ## 5. Cache
 
@@ -486,8 +509,8 @@ in the COM areas of HKLM Classes, 60 to 80% in `SOFTWARE\Microsoft`, 50 to 70% i
   other false-absent keys at most 0.5% of the area's truth keys, each listed in the report.
 - **S3** Local, in every area marked `local`: the same two numbers with local-only sets. An area that
   fails is not marked; "no area marked" is an accepted outcome (Local is then presence-only).
-- **S4** L3 and L5 hold over R3: exact plans byte-identical; preselected sets are subsets; Blocked sets
-  are supersets.
+- **S4** L3 and L5 hold over R3: exact plans byte-identical; every plan made with an injected view below
+  Exact holds L5, as §2 states it, against the no-baseline plan of the same run (`l5_violations` is empty).
 - **S5** The completeness seal passes on both VMs and on the host, and fails when one source is made
   unreadable (fault injection in a unit test).
 

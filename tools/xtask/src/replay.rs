@@ -525,14 +525,6 @@ fn target_reg_key(target: &Target) -> Option<&str> {
 /// key with a key at or below it or with a value (or a segment of a value) of such a key, or a directory with
 /// a path at or below it.
 pub fn covers(outer: &Target, inner: &Target) -> bool {
-    let same = |a: &Target, b: &Target| {
-        let key = |t: &Target| {
-            serde_json::to_string(t)
-                .unwrap_or_else(|_| format!("{t:?}"))
-                .to_lowercase()
-        };
-        key(a) == key(b)
-    };
     match (outer, inner) {
         (Target::RegKey { path: outer }, inner) if target_reg_key(inner).is_some() => {
             target_reg_key(inner).is_some_and(|key| prefix::is_same_or_inside(key, outer))
@@ -540,34 +532,55 @@ pub fn covers(outer: &Target, inner: &Target) -> bool {
         (Target::Path { path: outer }, Target::Path { path: inner }) => {
             prefix::is_same_or_inside(inner, outer)
         }
-        _ => same(outer, inner),
+        _ => same_target(outer, inner),
     }
 }
 
-/// Invariant L5 for two plans of the same app and machines: `none` made without any baseline, `below` made
-/// with a view below Exact in the harvest and in the scan. The local baseline is presence-only, so a view
-/// below Exact may only take away: **what `below` offers, `none` offers at least as strongly.** For every
-/// item of `below` there is an item of `none` that
+/// Whether two targets are one target; names compare without case.
+fn same_target(a: &Target, b: &Target) -> bool {
+    let key = |t: &Target| {
+        serde_json::to_string(t)
+            .unwrap_or_else(|_| format!("{t:?}"))
+            .to_lowercase()
+    };
+    key(a) == key(b)
+}
+
+/// Invariant L5 for two plans of the same app and machines (BASELINE_LOCAL_DESIGN.md §2): `none` made
+/// without any baseline, `below` made with a view below Exact in the harvest and in the scan. The local
+/// baseline is presence-only, so a view below Exact may only take away: **what `below` offers, `none`
+/// offers at least as strongly.** For every item of `below` there is an item of `none` that
 ///
-/// 1. [`covers`] it: the same target, or a key (a directory) that contains it. Nothing new is offered, not
-///    even as Blocked. The containing case is the one named exception to "the same target": a scanner that
-///    is told a key is Windows' own no longer offers the key and offers the app's values in it instead,
-///    which removes less;
-/// 2. has a band at least as high ([`band_rank`]);
+/// 1. has the same target or, when `none` has no item of that target, a target that contains it
+///    ([`covers`]: a key, a directory). Nothing new is offered, not even as Blocked. The containing case is
+///    the one named exception to "the same target": a scanner that is told a key is Windows' own no longer
+///    offers the key and offers the app's values in it instead, which removes less;
+/// 2. has a band at least as high ([`band_rank`]): no band is raised;
 /// 3. is preselected if the item of `below` is.
 ///
-/// A target `none` lists and `below` does not is fine (a scanner may withhold what Windows owns). Returns
-/// one line per violation; empty means the invariant holds.
+/// A target `none` lists and `below` does not is fine (a scanner may withhold what Windows owns). The
+/// scanner tests check the same property per scanner (`purge-scan` `tests/shared/l5.rs`). Returns one line
+/// per violation; empty means the invariant holds.
 pub fn l5_violations(none: &purge_model::Plan, below: &purge_model::Plan) -> Vec<String> {
     let mut out = Vec::new();
     for item in &below.items {
         let what = format!("{} {:?}", item.scanner, item.target);
         let rank = band_rank(item.band);
-        let covering: Vec<&purge_model::PlanItem> = none
+        let same: Vec<&purge_model::PlanItem> = none
             .items
             .iter()
-            .filter(|n| covers(&n.target, &item.target))
+            .filter(|n| same_target(&n.target, &item.target))
             .collect();
+        // The item of the same target decides when there is one; a container only stands in for a
+        // target `none` does not list.
+        let covering: Vec<&purge_model::PlanItem> = if same.is_empty() {
+            none.items
+                .iter()
+                .filter(|n| covers(&n.target, &item.target))
+                .collect()
+        } else {
+            same
+        };
         if covering.is_empty() {
             out.push(format!(
                 "new item below Exact ({:?}{}): {what}",
@@ -1356,6 +1369,17 @@ mod tests {
         assert!(v.len() == 1 && v[0].starts_with("band raised"), "{v:?}");
         let v = one(value(r"HKLM\SOFTWARE\B", Band::Likely, true));
         assert!(v.len() == 1 && v[0].starts_with("preselected"), "{v:?}");
+        // The item of the same target decides when the no-baseline plan has one: a value it lists as
+        // Blocked is not covered by the Safe key around it.
+        let with_value = plan_of(vec![
+            plan_item(r"HKLM\SOFTWARE\A", Band::Safe, true),
+            value(r"HKLM\SOFTWARE\A", Band::Blocked, false),
+        ]);
+        let v = l5_violations(
+            &with_value,
+            &plan_of(vec![value(r"HKLM\SOFTWARE\A", Band::Likely, false)]),
+        );
+        assert!(v.len() == 1 && v[0].starts_with("band raised"), "{v:?}");
         // Not the other way round, and not a name that only starts alike.
         let v = one(plan_item(r"HKLM\SOFTWARE", Band::Blocked, false));
         assert!(v.len() == 1 && v[0].starts_with("new item"), "{v:?}");

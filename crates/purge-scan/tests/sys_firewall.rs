@@ -673,8 +673,8 @@ fn recorded_rule_unresolved_now_is_not_preselected() {
 #[path = "shared/l5.rs"]
 mod l5;
 /// The app's recorded, dangling rule: a view below Exact that holds nothing gives the no-baseline
-/// candidates exactly (`tests/shared/l5.rs`; a rule is a value of the baseline, which the fixture views
-/// of the second half do not hold).
+/// candidates exactly; one whose sets have the rule (a value of the firewall rules key) offers nothing
+/// that was not offered and preselects nothing new (`tests/shared/l5.rs`).
 #[test]
 fn l5_a_view_below_exact_only_takes_away() {
     let make = || {
@@ -689,4 +689,6 @@ fn l5_a_view_below_exact_only_takes_away() {
         w.run()
     });
     assert!(offered(&none, OWNED), "{none:#?}");
+    none.must_offer("firewall rules", &["SYS-FIREWALL"])
+        .must_change("firewall rules");
 }

@@ -329,18 +329,12 @@ fn l5_a_view_below_exact_only_takes_away() {
             sz(&mut fx, &star_menu(), CLS_A);
             app_world(fx)
         };
-        let none = crate::l5::check(
-            &format!("handler, dangling class {dangling}"),
-            &make().fp.os,
-            &|view| {
-                let mut world = make();
-                world.baseline = view;
-                world.ready(&[]).shellex()
-            },
-        );
-        assert!(
-            !none.is_empty(),
-            "the handler is offered without a baseline"
-        );
+        let what = format!("handler, dangling class {dangling}");
+        let none = crate::l5::check(&what, &make().fp.os, &|view| {
+            let mut world = make();
+            world.baseline = view;
+            world.ready(&[]).shellex()
+        });
+        none.must_offer(&what, &["COM-SHELLEX"]).must_change(&what);
     }
 }

@@ -18,8 +18,10 @@ mod regapps;
 mod verbs;
 
 /// Invariant L5 for one world of this crate, with each Classes key scanner (`tests/shared/l5.rs`).
-/// Returns how many candidates the no-baseline scans offer.
-fn l5_check(name: &str, make: &dyn Fn() -> common::World) -> usize {
+/// `offers`: the scanners that offer something in this world without a baseline; each of them must,
+/// and some presence view must change what it offers. Returns how many candidates the no-baseline
+/// scans offer.
+fn l5_check(name: &str, make: &dyn Fn() -> common::World, offers: &[&str]) -> usize {
     use purge_scan::framework::Scanner;
     let scanners: [&dyn Scanner; 5] = [
         &purge_scan::cls_progid::ClsProgId,
@@ -28,18 +30,29 @@ fn l5_check(name: &str, make: &dyn Fn() -> common::World) -> usize {
         &purge_scan::cls_aumid::ClsAumid,
         &purge_scan::cls_regapps::ClsRegApps,
     ];
+    for id in offers {
+        assert!(scanners.iter().any(|s| s.id() == *id), "{id} is no scanner");
+    }
     let mut offered = 0;
     for scanner in scanners {
-        let none = l5::check(
-            &format!("{name}/{}", scanner.id()),
-            &make().fp.os,
-            &|view| {
-                let mut world = make();
-                world.baseline = view;
-                world.run(scanner)
-            },
-        );
-        offered += none.len();
+        let what = format!("{name}/{}", scanner.id());
+        let checked = l5::check(&what, &make().fp.os, &|view| {
+            let mut world = make();
+            world.baseline = view;
+            world.run(scanner)
+        });
+        if offers.contains(&scanner.id()) {
+            checked
+                .must_offer(&what, &[scanner.id()])
+                .must_change(&what);
+        } else {
+            assert!(
+                checked.none.is_empty(),
+                "{what}: offers something and is not named: {:#?}",
+                checked.none
+            );
+        }
+        offered += checked.none.len();
     }
     offered
 }

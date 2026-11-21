@@ -7,7 +7,7 @@
     "L2 Complete or unused: an incomplete local baseline is used for presence only.",
     "L3 Exact is untouched: with an exact shipped baseline the plans are byte-identical to the M1b gate plans; the local baseline is not built or read.",
     "L4 The cap: absence below Exact never yields Safe and never preselects.",
-    "L5 Monotone: preselected(non-exact) is a subset of preselected(none); Blocked(non-exact) is a superset of Blocked(none).",
+    "L5 Monotone: a view below Exact only takes away. Every item offered below Exact has an item of the no-baseline result with the same target (or, when there is none, a key or directory that contains it) whose band is at least as high (not listed < Blocked < Weak < Likely < Safe) and which is preselected if the item is. Nothing new is offered, no band is raised, preselected(non-exact) is a subset of preselected(none); what was Blocked is Blocked or no longer listed (the Blocked set is not a superset).",
     "L6 A local file is never accepted as an exact baseline (header tag, directory, name).",
     "L7 Advice only lowers a band."
   ],
@@ -230,7 +230,7 @@
         "Per A site: Inferred gives evidence + blocker + band Likely + not preselected; Unknown gives today's result; Proven gives today's exact result.",
         "Golden cls_assoc_vscode_merged.txt; the existing baseline and no_baseline goldens unchanged.",
         "Seal test: a candidate built without the blocker is dropped and reported.",
-        "L5 property test over the scanner test worlds: preselected subset, Blocked superset.",
+        "L5 property test over the scanner test worlds, as L5 is stated in the invariants: nothing new offered, no band raised, preselected subset; per-scanner non-vacuity.",
         "Existing tests named in design 4.6 pass unchanged in meaning."
       ],
       "acceptance": "cargo test, clippy, xtask check-deps, scanner-coverage, no-new-walks, baseline-sites all pass; Fable review of the site table against the code."

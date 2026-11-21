@@ -175,6 +175,6 @@ fn a_scheme_another_app_also_claims_is_blocked() {
 /// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
 #[test]
 fn l5_a_view_below_exact_only_takes_away() {
-    let offered = crate::l5_check("protocol", &world);
+    let offered = crate::l5_check("protocol", &world, &["CLS-PROTOCOL"]);
     assert!(offered > 0, "the world offers something without a baseline");
 }

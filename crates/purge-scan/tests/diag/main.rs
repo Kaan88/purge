@@ -42,4 +42,6 @@ fn l5_a_view_below_exact_only_takes_away() {
         found
     });
     assert_eq!(none.len(), 4, "{:#?}", spots(&none));
+    none.must_offer("diag", &["REG-DIAG", "FS-WER"])
+        .must_change("diag");
 }

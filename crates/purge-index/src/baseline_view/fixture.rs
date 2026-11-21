@@ -22,37 +22,84 @@ pub fn open_rules() -> ViewRules {
     .expect("the open test rules parse")
 }
 
-/// Whether an entry of a fixture's `keys` is a directory (`C:\…`) rather than a registry key.
-fn is_dir(entry: &str) -> bool {
-    let b = entry.as_bytes();
-    b.len() > 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
+/// One entry of a fixture's `keys`.
+enum Entry<'a> {
+    Key(&'a str),
+    Value(&'a str, &'a str),
+    Dir(&'a str),
+    File(&'a str),
 }
 
-/// A shipped baseline of (`edition`, `build`.`ubr`) holding `keys`: registry keys, and directories
-/// for the entries spelled as a drive path (`C:\…`).
+/// The entry of a fixture's `keys` for the value `name` of `key` (`""`: the default value). A shipped
+/// baseline then has the value and not, by that entry alone, the key; a local baseline records the
+/// key with every value.
+pub fn value_entry(key: &str, name: &str) -> String {
+    format!("V\t{key}\t{name}")
+}
+
+/// The entry of a fixture's `keys` for a file; a bare drive path (`C:\…`) is a directory.
+pub fn file_entry(path: &str) -> String {
+    format!("F\t{path}")
+}
+
+/// Reads an entry: [`value_entry`], [`file_entry`], a directory for a drive path (`C:\…`), else a
+/// registry key.
+fn entry(text: &str) -> Entry<'_> {
+    if let Some(value) = text.strip_prefix("V\t") {
+        let (key, name) = value
+            .split_once('\t')
+            .expect("a value entry is V, key, name");
+        return Entry::Value(key, name);
+    }
+    if let Some(path) = text.strip_prefix("F\t") {
+        return Entry::File(path);
+    }
+    let b = text.as_bytes();
+    if b.len() > 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\' {
+        Entry::Dir(text)
+    } else {
+        Entry::Key(text)
+    }
+}
+
+/// A shipped baseline of (`edition`, `build`.`ubr`) holding `keys`: registry keys, directories for
+/// the entries spelled as a drive path (`C:\…`), values ([`value_entry`]) and files ([`file_entry`]).
 pub fn shipped(edition: &str, build: u32, ubr: u32, keys: &[&str]) -> Baseline {
     let mut text = format!("#purge-baseline 1\tT\tPC\t{edition}\t{build}.{ubr}\n");
+    let escaped = |field: &str| {
+        field
+            .replace('\\', "\\\\")
+            .replace('\t', "\\t")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\0', "\\0")
+    };
     for key in keys {
-        let escaped = key.replace('\\', "\\\\");
-        if is_dir(key) {
-            text.push_str(&format!("D\t{escaped}\n"));
-        } else {
-            text.push_str(&format!("K\t{escaped}\t0\t0\t0\n"));
+        match entry(key) {
+            Entry::Key(key) => text.push_str(&format!("K\t{}\t0\t0\t0\n", escaped(key))),
+            Entry::Value(key, name) => text.push_str(&format!(
+                "V\t{}\t{}\t1\t0000000000000000\n",
+                escaped(key),
+                escaped(name)
+            )),
+            Entry::Dir(path) => text.push_str(&format!("D\t{}\n", escaped(path))),
+            Entry::File(path) => text.push_str(&format!("F\t{}\n", escaped(path))),
         }
     }
     Baseline::from_bytes(text.as_bytes()).expect("the test baseline parses")
 }
 
-/// A complete local baseline of (`edition`, `build`.`ubr`) holding `keys` (registry keys, and
-/// directories as in [`shipped`]).
+/// A complete local baseline of (`edition`, `build`.`ubr`) holding `keys` (the entries of
+/// [`shipped`]).
 pub fn local(edition: &str, build: u32, ubr: u32, keys: &[&str]) -> LocalBaseline {
     let mut records = Records::new();
     for key in keys {
-        if is_dir(key) {
-            records.add_dir(key);
-        } else {
-            records.add_key(key);
-        }
+        match entry(key) {
+            Entry::Key(key) => records.add_key(key),
+            Entry::Value(key, name) => records.add_value(key, name, 1),
+            Entry::Dir(path) => records.add_dir(path),
+            Entry::File(path) => records.add_file(path),
+        };
     }
     let sources: Vec<SourceLine> = LocalSource::REQUIRED
         .map(|source| SourceLine {

@@ -550,4 +550,8 @@ fn l5_a_view_below_exact_only_takes_away() {
         world.run()
     });
     assert_eq!(none.len(), 1, "{none:#?}");
+    none.must_offer("packages", &["SYS-APPX"]);
+    // No presence view can change it: a package is no key, value or path of a baseline, and SYS-APPX
+    // asks the view nothing.
+    assert_eq!(none.changed, 0);
 }

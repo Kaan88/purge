@@ -694,4 +694,6 @@ fn l5_a_view_below_exact_only_takes_away() {
             .any(|c| matches!(&c.target, Target::Service { name } if name == "AppSvc")),
         "{none:#?}"
     );
+    none.must_offer("services", &["SYS-SERVICE"])
+        .must_change("services");
 }
