@@ -1,0 +1,76 @@
+{
+    "schema":  "purge.rig.baseline-local-build/2",
+    "computer":  "INBOUND-WIN11-T",
+    "elevated":  true,
+    "os":  "EnterpriseSEval-26100.1742",
+    "cpus":  4,
+    "started":  "2026-11-20T19:30:58.4090169-08:00",
+    "engine_sha256":  "5408fbeb7a64087c7c56d8683e58ae7a66ea39a67ec94e4c57642a6a4e32d94f",
+    "network_up":  {
+                       "start":  [
+
+                                 ],
+                       "settled":  [
+
+                                   ]
+                   },
+    "passes":  [
+                   {
+                       "pass":  "cold",
+                       "exit":  0,
+                       "seconds":  92.9,
+                       "peak_working_set_mb":  209.7,
+                       "file_bytes":  9711994,
+                       "uptime_sec":  132,
+                       "total_line":  "timing: baseline.local.total 90.070 s (wall)"
+                   },
+                   {
+                       "pass":  "warm",
+                       "exit":  0,
+                       "seconds":  11.27,
+                       "peak_working_set_mb":  212.9,
+                       "file_bytes":  9711992,
+                       "uptime_sec":  144,
+                       "total_line":  "timing: baseline.local.total 11.059 s (wall)"
+                   },
+                   {
+                       "pass":  "settled",
+                       "exit":  0,
+                       "seconds":  13.6,
+                       "peak_working_set_mb":  212.7,
+                       "file_bytes":  9711993,
+                       "uptime_sec":  346,
+                       "total_line":  "timing: baseline.local.total 13.003 s (wall)"
+                   }
+               ],
+    "settle":  {
+                   "boot":  {
+                                "session":  "ReadyBoot",
+                                "active_at_start":  false,
+                                "first_query":  {
+                                                    "exit":  -2144337918,
+                                                    "out":  [
+                                                                "Error:",
+                                                                "Data Collector Set was not found."
+                                                            ]
+                                                },
+                                "stopped":  true,
+                                "bounded":  false,
+                                "min_uptime_sec":  300,
+                                "floor_wait_sec":  155.1,
+                                "waited_sec":  155.3,
+                                "uptime_sec":  300,
+                                "error":  null
+                            },
+                   "cpu_settled":  true,
+                   "cpu_percent":  4.4,
+                   "cpu_waited_sec":  30,
+                   "cache_purged":  true,
+                   "error":  null
+               },
+    "info":  {
+                 "exit":  0,
+                 "seconds":  2.83
+             },
+    "finished":  "2026-11-20T19:36:11.3252994-08:00"
+}

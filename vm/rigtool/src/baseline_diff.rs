@@ -1106,7 +1106,21 @@ mod tests {
         assert_eq!(id("HKU\\.DEFAULT\\Software\\Microsoft"), "hku-default");
         assert_eq!(id("HKU\\S-1-5-18\\Control Panel"), "hku-default");
         assert_eq!(id("HKU\\S-1-5-19\\Software"), "hku-other");
-        assert!(a.list.iter().all(|x| !x.merged && !x.local), "flags are set by gate M (BL-MEASURE), not before");
+        // The flags gate M (BL-MEASURE round 2, review BL-RM) set: merged in seven areas, local nowhere.
+        let merged: Vec<&str> = a.list.iter().filter(|x| x.merged).map(|x| x.id.as_str()).collect();
+        assert_eq!(
+            merged,
+            [
+                "classes-wow6432node",
+                "classes-clsid",
+                "classes-interface",
+                "classes-appid",
+                "software-clients",
+                "software-wow6432node",
+                "software-vendor"
+            ]
+        );
+        assert!(a.list.iter().all(|x| !x.local), "no area is marked local (gate M)");
     }
 
     #[test]
@@ -1244,7 +1258,7 @@ mod tests {
         assert_eq!((c["extra_local"].clone(), c["extra_merged"].clone()), (json!(1), json!(2)));
         assert_eq!(c["checks"]["s2_merged"], true);
         assert_eq!(c["checks"]["s3_local"], false);
-        assert_eq!(c["flags"], json!({"merged": false, "local": false}));
+        assert_eq!(c["flags"], json!({"merged": true, "local": false}));
         let e = area("classes-ext");
         assert_eq!(
             (e["truth"].clone(), e["covered_local"].clone(), e["covered_merged"].clone()),

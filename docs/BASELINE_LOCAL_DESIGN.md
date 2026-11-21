@@ -435,14 +435,16 @@ in the COM areas of HKLM Classes, 60 to 80% in `SOFTWARE\Microsoft`, 50 to 70% i
 
 ### 8.4 Acceptance: the feature is worth it
 
-- **W1** Merged coverage of truth keys at least 99.0% over the scope and at least 99.8% in the areas
-  marked `merged`, on both VMs.
+- **W1** Merged coverage of truth keys, pooled over the areas marked `merged`, at least 99.8% on every
+  leave-one-out run; coverage over the whole scope is reported, not judged (restated after gate M, coordinator
+  2026-11-21, review BL-RM S4: the scope figure is dominated by versioned servicing state under `CurrentVersion`).
 - **W2** R3 and R4: of the key candidates that the exact view offers and the none view does not, the
   merged view offers at least 80% (as Likely). Below 50% the A side is dropped and the feature ships as
   presence-only.
 - **W3** Recall cost: items the exact view offers and the merged view blocks (extra presence) are at
   most 1% of the exact view's offered items.
-- **W4** The budgets of §5 on R1, R2 and R5. The rig job builds three times (gate M round 2, coordinator): *cold*
+- **W4** The budgets of §5 on R1, R2 and R5, judged on a first-read build on a settled machine; the cold build
+  right after boot is reported, not judged (restated after gate M, coordinator 2026-11-21). The rig job builds three times (gate M round 2, coordinator): *cold*
   right after boot (what a broker started at logon would see), *warm* (the determinism pair of cold), and *settled*:
   after the boot settle of the exec runs (ReadyBoot trace stopped, uptime at least 300 s), the CPU under 10 % over
   30 s, and the standby list emptied so the files are read from disk again. Background mode stays in every pass; the
@@ -452,7 +454,8 @@ in the COM areas of HKLM Classes, 60 to 80% in `SOFTWARE\Microsoft`, 50 to 70% i
 - **W5** R5: the merged view adds at least one `WindowsBaseline` block or Likely key per program on
   average over the ten programs; otherwise the report says the host gains nothing and why.
 
-The first `view.json` marks exactly the areas that pass S2 (merged) and S3 (local).
+The first `view.json` marks exactly the areas that pass S2 (merged) and S3 (local) on every leave-one-out run and
+that an A consumer asks about (gate M round 2: `merged` in seven areas, `local` in none; DECISIONS 2026-11-21).
 
 ### 8.5 Lifting the cap later (not part of this work)
 
