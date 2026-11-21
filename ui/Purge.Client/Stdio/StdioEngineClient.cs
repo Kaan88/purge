@@ -39,6 +39,7 @@ public sealed class StdioEngineClient : IEngineClient
     private readonly ArrayBufferWriter<byte> _buffer = new();
     private ulong _nextId;
     private long _listRequest;
+    private long _listReplied;
     private volatile string? _closedReason;
     private int _disposed;
 
@@ -86,7 +87,11 @@ public sealed class StdioEngineClient : IEngineClient
     public async Task<InventoryDoc> ListProgramsAsync(CancellationToken ct = default)
     {
         var feed = new ListFeed(patches => Raise(ProgramsPatched, patches));
-        await CallAsync("programs.list", null, feed, ct, onSent: id => Interlocked.Exchange(ref _listRequest, (long)id)).ConfigureAwait(false);
+        await CallAsync("programs.list", null, feed, ct, onSent: id =>
+        {
+            Interlocked.Exchange(ref _listRequest, (long)id);
+            Interlocked.Exchange(ref _listReplied, 0);
+        }).ConfigureAwait(false);
         var entries = feed.Rows.Select(ProgramEntries.FromRow).ToList();
         var byId = new Dictionary<string, int>(entries.Count, StringComparer.Ordinal);
         for (var i = 0; i < entries.Count; i++) byId[entries[i].ProgramId] = i;
@@ -279,6 +284,8 @@ public sealed class StdioEngineClient : IEngineClient
         if (root.TryGetProperty("id", out var idElement))
         {
             if (idElement.ValueKind != JsonValueKind.Number || !idElement.TryGetUInt64(out var id) || !_pending.TryGetValue(id, out var pending)) return;
+            // From here on a programs.patch for this list is "after the reply": deliver it on the event too.
+            if (id == (ulong)Interlocked.Read(ref _listRequest)) Interlocked.Exchange(ref _listReplied, 1);
             if (root.TryGetProperty("error", out var error)) pending.Fail(ToException(error));
             else if (root.TryGetProperty("result", out var result)) pending.Result.TrySetResult(result.Clone());
             else pending.Fail(new InvalidDataException("a response has neither result nor error"));
@@ -288,9 +295,11 @@ public sealed class StdioEngineClient : IEngineClient
                  && args.TryGetProperty("request", out var request) && request.TryGetUInt64(out var requestId))
         {
             var name = method.GetString();
-            if (_pending.TryGetValue(requestId, out var pending) && pending.Feed is { } feed)
+            var known = _pending.TryGetValue(requestId, out var pending);
+            if (known && pending!.Feed is { } feed)
                 feed.Notification(name!, args);
-            else if (name == "programs.patch" && (long)requestId == Interlocked.Read(ref _listRequest))
+            if (name == "programs.patch" && (long)requestId == Interlocked.Read(ref _listRequest)
+                && (!known || Interlocked.Read(ref _listReplied) == 1))
             {
                 // Patches of a list that already ended: the page applies them to the rows it has.
                 var late = args.Deserialize(Rpc.RpcJsonContext.Default.ProgramsPatch);

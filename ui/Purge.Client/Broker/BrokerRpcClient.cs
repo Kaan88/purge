@@ -8,12 +8,23 @@ using Purge.Client.Rpc;
 namespace Purge.Client.Broker;
 
 /// <summary>The broker answered with a JSON-RPC error (<c>error.data.kind</c> says which).</summary>
-public sealed class BrokerRpcException(int code, string? kind, string message) : Exception(message)
+public sealed class BrokerRpcException : Exception
 {
-    public int Code { get; } = code;
+    public BrokerRpcException(int code, string? kind, string message, ErrorData? data = null) : base(message)
+    {
+        Code = code;
+        Kind = kind;
+        Data = data;
+    }
+
+    public int Code { get; }
 
     /// <summary><c>error.data.kind</c> (for example <c>runtime</c> or <c>gone</c>), when the broker gave one.</summary>
-    public string? Kind { get; } = kind;
+    public string? Kind { get; }
+
+    /// <summary>The whole <c>error.data</c> object, for the kinds that carry details (<c>plan_refused</c>,
+    /// <c>cap_exceeded</c>, <c>gone</c>); null when the broker gave none.</summary>
+    public new ErrorData? Data { get; }
 }
 
 /// <summary>The link to the broker broke: it could not be written to, or it ended.</summary>
@@ -241,7 +252,7 @@ public sealed class BrokerRpcClient : IAsyncDisposable
         var code = objectError?.Code ?? 0;
         var data = objectError?.Data;
         var message = data?.Message ?? objectError?.Message;
-        return new BrokerRpcException(code, data?.Kind, message is { Length: > 0 } ? message : "The administrator part reported an error.");
+        return new BrokerRpcException(code, data?.Kind, message is { Length: > 0 } ? message : "The administrator part reported an error.", data);
     }
 
     private void Fail(string reason)

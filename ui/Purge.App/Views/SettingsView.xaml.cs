@@ -16,7 +16,7 @@ public sealed partial class SettingsView : UserControl
         [@"D:\Projects", @"%USERPROFILE%\Documents", @"HKCU\Software\Mozilla\Thunderbird"];
 
     // The preview counts over the same sample the Leftovers page shows (no real scan exists yet).
-    private readonly List<LeftoverRow> _sample = ReviewView.Sample().Where(r => !r.IsGroup && r.Band != Band.Weak).ToList();
+    private readonly List<LeftoverItemModel> _sample = LeftoversSample.Items().Where(r => r.Band != Band.Weak).ToList();
     private SafetyPreset? _hover;
 
     public SettingsView()

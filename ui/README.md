@@ -5,8 +5,10 @@ M3 pages (docs/M3_DESIGN.md sections 7, 7a and 10). The later UI packages restyl
 engine and the broker, and replace the hand-written DTOs. The custom `Main` starts `purge-engine --stdio` (next to
 `Purge.exe`, or the file named by `PURGE_ENGINE`) in a kill-on-close job with two inherited pipes and sends
 `engine.hello` and `programs.list` before XAML starts. `--sample` and `--bench-stub` use the sample-data stub
-(`FakeEngineClient`) instead; so does a missing or failing engine, with a notice in the Programs page. The client
-only reads so far (the Programs page's calls): scan, remove and undo wait for the broker, and no button changes anything on the PC.
+(`FakeEngineClient`) instead; so does a missing or failing engine, with a notice in the Programs page. The Programs page
+only reads. The Leftovers page (M3-UI-S3) sends `leftovers.scan`, `scan.candidates`, `candidate.explain`,
+`plan.create`, `plan.execute` and `undo.run` through the broker once the Uninstall pipeline hands it a
+`LeftoversRequest` with a live session; without one, in `--sample`, it shows sample rows and changes nothing on the PC.
 
 ## Pages (7a, nine)
 
@@ -14,7 +16,7 @@ only reads so far (the Programs page's calls): scan, remove and undo wait for th
 |---|---|
 | Programs, refined | `Views/ProgramsView` (rail key `programs`) |
 | Uninstall pipeline | `Views/QueueView` (`queue`) |
-| Leftovers, refined | `Views/ReviewView` (`leftovers`) |
+| Leftovers, refined | `Views/Leftovers/LeftoversView` (`leftovers`) |
 | Consent prompts, variant A | `Shell/ConsentPrompt.cs`, the TaskDialog layout kept as the reference for the broker's dialog, deleted later; the UI side becomes one "Confirm in the Purge security prompt" state of Leftovers |
 | History & undo | `Views/HistoryView` (`history`) |
 | Quarantine vault | `Views/VaultView` (`vault`) |
@@ -93,6 +95,13 @@ They show in Settings when present, and append one line per launch to the file n
   The "removed outside Purge" group comes from `inventory.changes`, asked before `programs.list` because the engine stores the new list
   when a list ends. Uninstall is disabled with its reason until the broker exists (`IEngineClient.CanChangePc`); Force remove, Modify and
   Remove entry are not offered. List rules are in `Purge.Client/Model/ProgramRules.cs`, tested in `ProgramsPageTests`.
+- Leftovers page (M3-UI-S3): eight groups in one virtualized `ListView` with header rows, group boxes that tick Safe
+  items only, a weak-matches toggle, Protected and report-only sections, and a detail pane fed by `candidate.explain`.
+  `plan.create`'s attention list is rendered from its own response (it can name absorbed ids that `scan.candidates`
+  never pages). The waiting state shows the `consent.shown` code; the result page shows `plan.execute`'s counts, held
+  items with their lockers and Undo all (`undo.run`). It never claims an item was moved before the result arrives, and
+  a broker that ends mid-execute becomes "interrupted", not a result. Rules and tests are in
+  `Views/Leftovers/LeftoversModel.cs` and `LeftoversPageTests`.
 - Still sample-only or pending the UI packages: the Settings expanders not in the M3 list (running apps, start as
   administrator, packs, other profiles, AI), sample banners, badges on the rail, "Check for leftovers" (needs the broker).
 

@@ -96,10 +96,17 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>The S3 review page (built on first use), for the scan started from S1.</summary>
-    public ReviewView OpenReview()
+    public LeftoversView OpenReview()
     {
         Navigate("leftovers");
-        return (ReviewView)_views["leftovers"];
+        return (LeftoversView)_views["leftovers"];
+    }
+
+    /// <summary>Opens the review for a scan the Uninstall pipeline started (S2's hand-over).</summary>
+    public async Task OpenLeftoversAsync(LeftoversRequest request)
+    {
+        Navigate("leftovers");
+        await ((LeftoversView)_views["leftovers"]).OpenAsync(request);
     }
 
     private void OnFirstRendering(object? sender, object e)
@@ -153,7 +160,7 @@ public sealed partial class MainWindow : Window
             view = key switch
             {
                 "queue" => new QueueView(),
-                "leftovers" => new ReviewView(),
+                "leftovers" => new LeftoversView(),
                 "vault" => new VaultView(),
                 "history" => new HistoryView(),
                 "settings" => new SettingsView(),
