@@ -144,12 +144,28 @@ never written into `kb/baselines` and never shipped.
 The build is *complete* only when all of these hold; the numbers are first guesses, fixed by the spike:
 
 - the `wcp.dll` base resource was found, and at least 99.9% of the manifests expanded and parsed;
-- at least 20,000 manifests were read and at least 150,000 distinct keys came from S1;
+- at least 15,000 manifests were read and at least 150,000 distinct keys came from S1 (gate M round 1: Windows 11
+  LTSC 26100.1742 has 18,489 manifests, all expanded and parsed, Clean-Pro 26340.9882 31,647, the host 35,842; a
+  partial read is caught by the per-file counts above, the listing floor only rejects a directory that is far too
+  small);
 - key names skipped for an unknown macro: at most 50;
-- S2 opened and gave at least 500 keys; S3 was readable;
+- S2 opened and gave at least 500 keys; S3 was readable: every key unreadable to the builder is on the short list of
+  keys Windows denies to Administrators by design (below), any other one keeps S3 incomplete;
 - S4: the package list was read (elevated) and at least 20 manifests parsed.
 
-The file records, per source, status, counts and the reason of an incomplete build.
+The file records, per source, status, counts and the reason of an incomplete build. The S2 and S3 lines name the
+first 16 unreadable and the first 16 vanished keys (`unreadable-keys=`, `vanished-keys=`, full paths, `, `-separated)
+so a seal reason can be looked at; S3 also counts `unreadable-by-design=`.
+
+**Keys denied by design (S3).** Exact paths, compared folded (`purge_index::local_baseline::S3_DENIED_BY_DESIGN`):
+
+| Key | Why an elevated Administrator cannot read it |
+|---|---|
+| `HKU\.DEFAULT\Software\Microsoft\SystemCertificates\Root\ProtectedRoots` | The protected root list of the account's certificate store. Its DACL is protected (not inherited) and grants only the account itself (`HKU\.DEFAULT`: SYSTEM), `NT SERVICE\CryptSvc` and one capability SID; Administrators get nothing. Checked on the host (2026-11-21): its own `HKCU` copy has `D:PAI(A;CI;KR;;;<user>)(A;CI;KA;;;<CryptSvc>)(A;CI;KR;;;S-1-15-3-9)`; of the 7 `HKU\.DEFAULT` keys an unelevated walk cannot open, it is the only one whose `HKCU` twin grants Administrators nothing (the other 6 grant `BA` full control). So it is taken to be the one unreadable key of S3 on both rig VMs in gate M round 1; the `unreadable-keys=` detail of round 2 confirms or refutes it |
+
+A listed key costs nothing: what the elevated builder cannot read, the elevated scanner cannot read either, so no
+candidate is judged against what the baseline misses there. A key is added only with the same kind of evidence (its
+DACL, and that Windows sets it so), never because a run met it.
 
 ### 3.5 File
 
@@ -311,7 +327,8 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
 - **The shipped directory.** When the engine is elevated, `kb\baselines` (also when it comes from
   `PURGE_KB_DIR`) must pass the same admin-only check, or no shipped baseline is used at all. This closes
   a gap that exists today and that this feature would widen.
-- **Budget** (`PURGE_TIMING` phases `baseline.local.*`): cold build at background I/O and CPU priority,
+- **Budget** (`PURGE_TIMING` phases `baseline.local.*`; `read` is the workers' time taking the next manifest and
+  reading it, outside the listing lock since gate M round 2): cold build at background I/O and CPU priority,
   in parallel over the manifests: at most 30 s on the 591-program host, at most 120 s on a 2-vCPU VM;
   peak memory at most 300 MB; file at most 15 MB; source-id check at most 0.3 s; warm load of the view
   (local plus two neighbours) at most 1.5 s and at most 80 MB resident. The build starts when the broker
@@ -425,7 +442,13 @@ in the COM areas of HKLM Classes, 60 to 80% in `SOFTWARE\Microsoft`, 50 to 70% i
   presence-only.
 - **W3** Recall cost: items the exact view offers and the merged view blocks (extra presence) are at
   most 1% of the exact view's offered items.
-- **W4** The budgets of §5 on R1, R2 and R5.
+- **W4** The budgets of §5 on R1, R2 and R5. The rig job builds three times (gate M round 2, coordinator): *cold*
+  right after boot (what a broker started at logon would see), *warm* (the determinism pair of cold), and *settled*:
+  after the boot settle of the exec runs (ReadyBoot trace stopped, uptime at least 300 s), the CPU under 10 % over
+  30 s, and the standby list emptied so the files are read from disk again. Background mode stays in every pass; the
+  settled pass separates the builder's own cost from the boot-time I/O it yields to. R1 and R2 build with the VM's NAT
+  cable disconnected; passes whose bodies differ are a determinism failure only with the same header source id
+  (another id: the source changed, the run is invalid).
 - **W5** R5: the merged view adds at least one `WindowsBaseline` block or Likely key per program on
   average over the ten programs; otherwise the report says the host gains nothing and why.
 

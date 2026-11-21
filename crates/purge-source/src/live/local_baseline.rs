@@ -151,9 +151,9 @@ mod tests {
         let mut n = 0usize;
         let mut bytes = 0usize;
         let mut failed = 0usize;
-        for (_, b) in local.manifests().expect("S1 listing") {
+        for (_, read) in local.manifests().expect("S1 listing") {
             n += 1;
-            match b {
+            match read() {
                 Ok(b) => bytes += b.len(),
                 Err(_) => failed += 1,
             }

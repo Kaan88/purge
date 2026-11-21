@@ -550,16 +550,28 @@ rigtool baseline-diff --truth SHIPPED.tsv.gz --local LOCAL.tsv.gz [--neighbour S
 - **Runs** (`tools/linux/campaigns/`, design §8.2; BL-MEASURE runs them): `baseline-local-r1.sh` (Purge-CleanPro, truth
   `Professional-26340.9882`, neighbour `EnterpriseSEval-26100.1742`) and `baseline-local-r2.sh` (Inbound-Win11-Test,
   `-No3D`, truth and neighbour the other way round), both through `baseline-local-vm.sh`: restore `rig-base` (nothing is
-  installed), `Push-Tools -NoBaselines` (no shipped baseline in the guest), one guest job that builds twice (cold, warm)
-  with `PURGE_TIMING=1` into `C:\cr\out\<run>\` (`local-cold.tsv.gz`, `local-warm.tsv.gz`, `build-<pass>.log`,
-  `info.txt`, `build.json`: seconds, peak working set, file size, the `baseline info` load time, CPUs, elevation),
+  installed), the VM's NAT cable disconnected until the job is done (`Set-BlNatLink`: `controlvm <vm> setlinkstate<N>
+  off` for every `nic<N>="nat"` that `showvminfo --machinereadable` names, other adapters left alone and logged; the rig
+  reaches the guest through guestcontrol, not the network; gate M round 1 had Store apps update between the passes),
+  `Push-Tools -NoBaselines` (no shipped baseline in the guest), one guest job that builds three times with
+  `PURGE_TIMING=1` into `C:\cr\out\<run>\`: `cold` right after boot, `warm`, and `settled` after riglib
+  `Wait-M2BootSettle` (ReadyBoot stopped, uptime at least 300 s), the CPU under 10 % over 30 s (at most 600 s) and the
+  standby and modified page lists emptied (`NtSetSystemInformation`, elevated) so the files come from disk again
+  (`local-<pass>.tsv.gz`, `build-<pass>.log`, `info.txt`, `build.json` schema `purge.rig.baseline-local-build/2`:
+  per pass seconds, peak working set, file size, uptime; the settle record; the guest's adapters that are up at the
+  start and before the settled pass; the `baseline info` load time, CPUs, elevation),
   `Pull-Run`, then on the host `rigtool baseline-diff` into `vm/truth/baseline-local/<run>.json` with `build.json`
   copied beside it as `<run>-build.json`. `baseline-local-r5.sh` is R5's build part on the Windows host itself (Git
   Bash, elevated; files under `target/baseline-local/`, reports `vm/truth/baseline-local/r5-host-*.json` against each
-  shipped baseline as a proxy truth, for the budgets and context only). Each script refuses a rigtool not built from
+  shipped baseline as a proxy truth, for the budgets and context only; the same three passes, so the settled pass
+  empties the host's standby list too). Each script refuses a rigtool not built from
   the tree's sources (the `rigtool version` hash, as BIND) and an engine without the builder, and its final check
-  (`bl_check` in `baseline-local-lib.sh`) exits 3 when the seal failed, the two passes differ below the header, the
-  local file is not of the truth's Windows, or a build exit code was not 0. The guest needs a `rigtool.exe` built from
+  (`bl_check` in `baseline-local-lib.sh`) exits 3 when the seal failed, a pass differs from the cold one below the
+  header with the same header source id (a determinism failure), the run is **INVALID** (a pass with another source id:
+  the source changed between the passes, e.g. a package updated, which is not a determinism failure; or, R1/R2, the
+  guest reported a network adapter up), the local file is not of the truth's Windows, or a build exit code was not 0.
+  The `#src` lines that differ are named. It also prints the settled pass (`W4 settled:` with the settle record) and
+  each pass's `read`/`expand`/`parse`/`s1`/`total` phases from its log. The guest needs a `rigtool.exe` built from
   this tree (Push-Tools pushes it), and the Linux host a Linux rigtool (§9).
 - **Running gate M on the Windows rig host** (the laptop since 2026-11-19, docs/MIGRATION-laptop.md; VirtualBox 7.2,
   Windows PowerShell 5.1): `vm\rig-baseline-local.ps1` is the way; the bash scripts above stay as the Linux path. From
@@ -578,7 +590,8 @@ rigtool baseline-diff --truth SHIPPED.tsv.gz --local LOCAL.tsv.gz [--neighbour S
   the builder, a missing shipped baseline, a rigtool whose `version` hash is not the tree's or without baseline-diff,
   under 6 GiB RAM free), the same guest job (`Get-BlBuildJob`: the text of `bl_build_job`), the same outputs and the
   same final check (`Test-BlReport`: `bl_check` in PowerShell, exit 3). Differences: the host diff uses the Windows
-  rigtool (the one checked is also the one pushed); after `Pull-Run` the VM is restored to `rig-base` and left off;
+  rigtool (the one checked is also the one pushed); after `Pull-Run` the NAT cable is connected again and the VM is
+  restored to `rig-base` and left off (the restore resets the cable too; the log names its state after the restore);
   R5 refuses while a VirtualBox VM runs (its times are the W4 budgets), takes `-AllowUnelevated` for
   `--allow-unelevated`, and writes its build files to `vm\runs\r5-host\` (not `target\baseline-local\`). `-Engine` and
   `-RigTool` (default `$env:RIG_RIGTOOL`, else the path above) override the binaries. Console log:

@@ -2,9 +2,10 @@
 # baseline-local-vm: gate M run R1 or R2 (docs/BASELINE_LOCAL_DESIGN.md 8.2, vm/RIG.md 8a) on one rig VM, from the Linux
 # host. Called by baseline-local-r1.sh (Purge-CleanPro) and baseline-local-r2.sh (Inbound-Win11-Test); arguments:
 #   <vm> <run> <truth baseline name> <neighbour baseline name> [-No3D]
-# Restores rig-base (clean; nothing is installed), pushes rigtool.exe + purge-engine.exe + guest scripts and NO shipped
-# baseline (the exact file stays hidden; the build reads only Windows' own sources), builds the local baseline twice
-# (cold, warm) with PURGE_TIMING=1, measures time, peak working set, file size and a load (baseline info), pulls
+# Restores rig-base (clean; nothing is installed), disconnects the VM's NAT cable (Set-BlNatLink of
+# vm/rig-baseline-local.ps1) until the job is done, pushes rigtool.exe + purge-engine.exe + guest scripts and NO shipped
+# baseline (the exact file stays hidden; the build reads only Windows' own sources), builds the local baseline three
+# times (cold, warm, settled) with PURGE_TIMING=1, measures time, peak working set, file size and a load (baseline info), pulls
 # C:\cr\out\<run>\ to vm/runs/<run>/, then on the host runs `rigtool baseline-diff` (truth = the VM's own shipped
 # baseline, local = the cold build, neighbour = the other shipped baseline: leave-one-out) into
 # vm/truth/baseline-local/<run>.json and copies build.json beside it as <run>-build.json.
@@ -47,26 +48,35 @@ avail=$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)
 if [ "$avail" -lt 6144 ]; then echo "$NAME: REFUSED: only $avail MiB RAM available (need 6144 for a 4 GiB VM)" >&2; exit 2; fi
 
 JOB=$RIG_TMP/$NAME-job.ps1
-bl_build_job "C:\\cr\\out\\$NAME" 'C:\cr\bin\purge-engine.exe' > "$JOB"
+bl_build_job "C:\\cr\\out\\$NAME" 'C:\cr\bin\purge-engine.exe' 'C:\cr\guest\riglib.ps1' > "$JOB"
 stamp=$(date +%s)
 {
   echo "== $NAME start $(date -Is) on $VM; engine $(sha256sum "$ENGINE" | cut -c1-12); truth $TRUTH; neighbour $NEIGHBOUR"
 } | tee "$OUT"
 "$PWSH" -NoProfile -NonInteractive -Command "
 . ./vm/rig.ps1 -VmName '$VM'
+# Set-BlNatLink in a child scope: the -Library dot-source must not replace rig.ps1's own parameters.
+function Set-Nat([string]\$State) { & { . ./vm/rig-baseline-local.ps1 -Library; Set-BlNatLink '$VM' \$State } }
+\$nat = @()
 try {
   \$null = Move-RunToOld -Run '$NAME'
   Restore-Base -Snapshot rig-base $( [ "$NO3D" = -No3D ] && echo '-No3D' )
+  \$nat = @(Set-Nat 'off')
   Push-Tools -Engine '$ENGINE' -NoBaselines
-  \$j = Invoke-GuestJob -Text ([IO.File]::ReadAllText('$JOB')) -Name '$NAME-build' -TimeoutSec 1800
+  \$j = Invoke-GuestJob -Text ([IO.File]::ReadAllText('$JOB')) -Name '$NAME-build' -TimeoutSec 3600
   \$j.log
   if (-not \$j.done) { throw 'the build job did not finish' }
   \$got = @(Pull-Run -Run '$NAME')
-  foreach (\$f in 'local-cold.tsv.gz', 'local-warm.tsv.gz', 'build.json', 'build-cold.log', 'info.txt') {
+  foreach (\$f in 'local-cold.tsv.gz', 'local-warm.tsv.gz', 'local-settled.tsv.gz', 'build.json', 'build-cold.log', 'info.txt') {
     if (\$got -notcontains \$f) { throw \"not pulled: \$f\" }
   }
+  if (\$nat.Count) { \$null = Set-Nat 'on' }
   exit 0
-} catch { Write-RigLog \"!! $NAME failed: \$(\$_.Exception.Message)\"; exit 1 }
+} catch {
+  Write-RigLog \"!! $NAME failed: \$(\$_.Exception.Message)\"
+  if (\$nat.Count) { \$null = Set-Nat 'on' }
+  exit 1
+}
 " 2>&1 9>&- | grep -v -E 'vboxdrv kernel module|available for the current kernel|failed to load\. Please|vboxconfig|You will not be able to start VMs' | tee -a "$OUT"
 rc=${PIPESTATUS[0]}
 if [ "$rc" -eq 0 ]; then

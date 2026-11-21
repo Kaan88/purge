@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(enc.record_count, 9, "{}", text_of(&enc.bytes));
         let text = text_of(&enc.bytes);
         assert!(text.starts_with(
-            "#purge-baseline-local 1\t2026-11-21T00:00:00Z\tPC\tProfessional\t26100.9711\tbl.1\t0123456789abcdef\n#src\tS1\tok\t1\t2\t0\tkeys=2\n"
+            "#purge-baseline-local 1\t2026-11-21T00:00:00Z\tPC\tProfessional\t26100.9711\tbl.2\t0123456789abcdef\n#src\tS1\tok\t1\t2\t0\tkeys=2\n"
         ));
         assert!(text.contains(
             "#src\tS3\tincomplete\t1\t2\t0\twhy=1 key vanished; keys=2; origin=HKU\\\\.DEFAULT\n"
@@ -925,7 +925,7 @@ mod tests {
             Err(LocalBaselineError::AfterEnd)
         ));
         // Another builder version.
-        let other = text.replacen("\tbl.1\t", "\tbl.0\t", 1);
+        let other = text.replacen("\tbl.2\t", "\tbl.1\t", 1);
         assert!(matches!(
             LocalBaseline::from_bytes(&gz(&other)),
             Err(LocalBaselineError::BuilderVersion { .. })

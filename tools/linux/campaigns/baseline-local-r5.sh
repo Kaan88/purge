@@ -2,7 +2,7 @@
 # baseline-local-r5: gate M run R5, build part (docs/BASELINE_LOCAL_DESIGN.md 8.2, vm/RIG.md 8a), on the Windows HOST
 # itself, read-only: run from Git Bash in an ELEVATED session at the repository root (S4 reads every user's packages
 # only elevated; unelevated the build is incomplete and the script exits 3 unless --allow-unelevated is given).
-# Builds the host's local baseline twice (cold, warm) with target/release/purge-engine.exe into
+# Builds the host's local baseline three times (cold, warm, settled) with target/release/purge-engine.exe into
 # target/baseline-local/r5-host/ (never into kb/ or vm/runs/), measures time, peak working set, size and a load, and runs
 # `rigtool baseline-diff` against each shipped baseline with the other as neighbour. There is no truth for the host: the
 # two reports (vm/truth/baseline-local/r5-host-vs-<baseline>.json) say how much of each neighbouring clean install the
@@ -30,7 +30,7 @@ RUN=target/baseline-local/$NAME
 R=vm/truth/baseline-local
 mkdir -p "$RUN" "$R"
 JOB=$RUN/build-job.ps1
-bl_build_job "$(cygpath -w "$PWD/$RUN")" "$(cygpath -w "$PWD/$ENGINE")" > "$JOB"
+bl_build_job "$(cygpath -w "$PWD/$RUN")" "$(cygpath -w "$PWD/$ENGINE")" "$(cygpath -w "$PWD/vm/guest/riglib.ps1")" > "$JOB"
 echo "== $NAME start $(date -Is); engine $(sha256sum "$ENGINE" | cut -c1-12)"
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$JOB")" || { echo "$NAME: build job failed" >&2; exit 2; }
 cp "$RUN/build.json" "$R/$NAME-build.json"

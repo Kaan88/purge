@@ -49,7 +49,7 @@ use crate::baseline::RecordCounts;
 /// The builder's version, written into the header. A file of another builder version is a miss
 /// (`LocalBaseline::from_bytes`). Raise it whenever the records a host gives change: the mapping, the
 /// macro table, the sources or the seal.
-pub const BUILDER_VERSION: &str = "bl.1";
+pub const BUILDER_VERSION: &str = "bl.2";
 
 /// Failures named in a `#src` line (the first ones by name); the count is always complete.
 const LISTED_FAILURES: usize = 5;
@@ -77,7 +77,7 @@ impl Default for SealFloors {
     fn default() -> Self {
         SealFloors {
             s1_parsed_per_mille: 999,
-            s1_manifests: 20_000,
+            s1_manifests: 15_000,
             s1_keys: 150_000,
             s1_max_key_unknown_macro: 50,
             s2_keys: 500,
@@ -201,6 +201,9 @@ pub struct BuildOptions {
 pub struct BuildTimings {
     /// S1 listing (`LocalSources::manifests`).
     pub list: Duration,
+    /// Taking the next manifest from the listing, its file read included, summed over the worker
+    /// threads (waiting for another worker's read counts too).
+    pub read: Duration,
     /// Expanding manifests, summed over the worker threads.
     pub expand: Duration,
     /// Parsing manifests, summed over the worker threads.
@@ -225,6 +228,10 @@ impl BuildTimings {
         let s = |d: Duration| format!("{:.3} s", d.as_secs_f64());
         vec![
             format!("timing: baseline.local.list {}", s(self.list)),
+            format!(
+                "timing: baseline.local.read {} (thread time, {threads} threads)",
+                s(self.read)
+            ),
             format!(
                 "timing: baseline.local.expand {} (thread time, {threads} threads)",
                 s(self.expand)
@@ -368,6 +375,7 @@ pub fn build(
         stamp,
         timings: BuildTimings {
             list: s1.list_time,
+            read: s1.read_time,
             expand: s1.expand_time,
             parse: s1.parse_time,
             s1: s1.wall,
@@ -406,6 +414,7 @@ struct S1 {
     failures: Vec<(String, String)>,
     stats: StatsSum,
     list_time: Duration,
+    read_time: Duration,
     expand_time: Duration,
     parse_time: Duration,
     merge_time: Duration,
@@ -545,6 +554,7 @@ fn read_s1(src: &dyn LocalSources, base: Option<&SxsBase>, threads: usize, backg
         out.parsed += p.parsed;
         out.failures.extend(p.failures);
         out.stats.merge(p.stats);
+        out.read_time += p.read_time;
         out.expand_time += p.expand_time;
         out.parse_time += p.parse_time;
         out.merge_time += p.merge_time;
@@ -590,10 +600,17 @@ fn s1_worker(
     // `expand` reads the base only for a `DCM` file, which never reaches it without one.
     let no_base = SxsBase::from_bytes(Vec::new(), PathBuf::new());
     loop {
+        let t = Instant::now();
+        // Only the next name is taken under the lock; the file is read outside it, so the workers
+        // read at the same time.
         let next = queue.lock().unwrap_or_else(PoisonError::into_inner).next();
-        let Some((name, bytes)) = next else { break };
+        let Some((name, read)) = next else {
+            part.read_time += t.elapsed();
+            break;
+        };
         part.listed += 1;
-        let bytes: SourceResult<Vec<u8>> = bytes;
+        let bytes: SourceResult<Vec<u8>> = read();
+        part.read_time += t.elapsed();
         let bytes = match bytes {
             Ok(b) => b,
             Err(e) => {
@@ -845,6 +862,35 @@ fn names_of(inbox: &InboxPackages) -> Vec<String> {
     names
 }
 
+/// Keys of `HKU\.DEFAULT` whose DACL Windows sets so that an elevated Administrator cannot read them
+/// (design §3.4). An S3 walk that cannot read one of these, and nothing else, is still complete:
+/// what the elevated builder cannot read, the elevated scanner cannot read either, so no candidate
+/// can be judged against what the baseline misses there. Exact paths, compared folded.
+///
+/// - `…\SystemCertificates\Root\ProtectedRoots`: the protected root list of the account's certificate
+///   store. Its DACL is protected (not inherited) and grants only the account itself (here SYSTEM),
+///   `NT SERVICE\CryptSvc` and one capability SID; Administrators get nothing (checked on the host's
+///   own `HKCU` copy, 2026-11-21). Taken to be the one `unreadable=1` key of S3 on both rig VMs in
+///   gate M round 1; the `unreadable-keys` detail of the next run confirms it.
+pub const S3_DENIED_BY_DESIGN: &[&str] =
+    &[r"HKU\.DEFAULT\Software\Microsoft\SystemCertificates\Root\ProtectedRoots"];
+
+/// `key` (a full path as the walk spells it) is on [`S3_DENIED_BY_DESIGN`].
+fn denied_by_design(key: &str) -> bool {
+    let key = crate::baseline::normalised_key(key);
+    S3_DENIED_BY_DESIGN
+        .iter()
+        .any(|k| crate::baseline::normalised_key(k) == key)
+}
+
+/// A walk's named keys as one detail value (`, `-separated, each as the format can carry it).
+fn key_list(keys: &[String]) -> String {
+    keys.iter()
+        .map(|k| fact_value(k))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn hive_line(
     source: LocalSource,
     s: &Result<HiveStats, String>,
@@ -866,8 +912,19 @@ fn hive_line(
     };
     let w = &stats.walk;
     let mut reasons = Vec::new();
-    if w.unreadable > 0 {
-        reasons.push(format!("{} keys not read whole (unreadable)", w.unreadable));
+    // S3 only: the named unreadable keys Windows denies to Administrators by design do not make the
+    // walk incomplete. A key beyond the named ones is never on the list, so it always counts.
+    let by_design = if source == LocalSource::S3 {
+        w.unreadable_keys
+            .iter()
+            .filter(|k| denied_by_design(k))
+            .count() as u64
+    } else {
+        0
+    };
+    let unreadable = w.unreadable.saturating_sub(by_design);
+    if unreadable > 0 {
+        reasons.push(format!("{unreadable} keys not read whole (unreadable)"));
     }
     if w.vanished > 0 {
         reasons.push(format!(
@@ -881,7 +938,7 @@ fn hive_line(
     if source == LocalSource::S2 && w.keys < floors.s2_keys {
         reasons.push(format!("{} keys, below {}", w.keys, floors.s2_keys));
     }
-    let facts = vec![
+    let mut facts = vec![
         ("origin".to_owned(), fact_value(&w.origin)),
         ("keys".to_owned(), w.keys.to_string()),
         ("values".to_owned(), w.values.to_string()),
@@ -890,6 +947,11 @@ fn hive_line(
         ("links".to_owned(), w.links.to_string()),
         ("capped".to_owned(), w.capped.to_string()),
     ];
+    if source == LocalSource::S3 {
+        facts.push(("unreadable-by-design".to_owned(), by_design.to_string()));
+    }
+    facts.push(("unreadable-keys".to_owned(), key_list(&w.unreadable_keys)));
+    facts.push(("vanished-keys".to_owned(), key_list(&w.vanished_keys)));
     SourceLine {
         source,
         status: if reasons.is_empty() {
@@ -1189,7 +1251,7 @@ mod tests {
 
         let t = text(&built);
         assert!(t.starts_with(&format!(
-            "#purge-baseline-local 1\t2025-11-21T00:00:00Z\tTEST-PC\tProfessional\t26100.9711\tbl.1\t{}\n#src\tS1\tok\t4\t",
+            "#purge-baseline-local 1\t2025-11-21T00:00:00Z\tTEST-PC\tProfessional\t26100.9711\tbl.2\t{}\n#src\tS1\tok\t4\t",
             built.stamp.id()
         )));
         assert_eq!(t.matches("\n#src\t").count(), 4);
@@ -1241,7 +1303,7 @@ mod tests {
             assert_eq!(again.bytes, built.bytes, "{threads} threads");
         }
         let timing = built.timings.lines(built.threads);
-        assert_eq!(timing.len(), 9);
+        assert_eq!(timing.len(), 10);
         assert!(
             timing
                 .iter()
@@ -1360,8 +1422,108 @@ mod tests {
                 .denied(r"HKU\.DEFAULT\Software\Secret")
                 .build(),
         );
-        let (_, r) = incomplete(&f, |_| {});
+        let (built, r) = incomplete(&f, |_| {});
         one_reason(&r, "S3 incomplete", "1 keys not read whole");
+        // The key is named in the detail, as the file carries it.
+        let s3 = line(&built, LocalSource::S3);
+        assert_eq!(
+            s3.fact("unreadable-keys"),
+            Some(r"HKU\.DEFAULT\Software\Secret")
+        );
+        assert_eq!(
+            (s3.fact("unreadable-by-design"), s3.fact("vanished-keys")),
+            (Some("0"), Some(""))
+        );
+        let lb = LocalBaseline::from_bytes(&built.bytes).unwrap();
+        assert_eq!(
+            lb.sources()[2].fact("unreadable-keys"),
+            s3.fact("unreadable-keys")
+        );
+        assert!(
+            s3.line()
+                .contains(r"unreadable-keys=HKU\\.DEFAULT\\Software\\Secret; ")
+        );
+    }
+
+    #[test]
+    fn s3_keys_denied_by_design() {
+        const PROTECTED: &str =
+            r"HKU\.DEFAULT\Software\Microsoft\SystemCertificates\Root\ProtectedRoots";
+        // ProtectedRoots alone (spelled in another case): complete, and still named.
+        let f = with_hive(
+            machine()
+                .key(&format!(r"{PROTECTED}\Inner"))
+                .denied(&PROTECTED.to_ascii_lowercase())
+                .build(),
+        );
+        let built = build(&f, &os(), &options(&f)).unwrap();
+        assert!(built.complete(), "{:?}", built.incomplete_reasons());
+        let s3 = line(&built, LocalSource::S3);
+        assert_eq!(s3.status, SourceStatus::Ok);
+        assert_eq!(
+            (s3.fact("unreadable"), s3.fact("unreadable-by-design")),
+            (Some("1"), Some("1"))
+        );
+        assert!(
+            s3.fact("unreadable-keys")
+                .unwrap()
+                .eq_ignore_ascii_case(PROTECTED)
+        );
+        assert!(LocalBaseline::from_bytes(&built.bytes).unwrap().complete());
+
+        // ProtectedRoots and one other key: incomplete, counting only the other one.
+        let f = with_hive(
+            machine()
+                .key(&format!(r"{PROTECTED}\Inner"))
+                .denied(PROTECTED)
+                .key(r"HKU\.DEFAULT\Software\Secret\Deeper")
+                .denied(r"HKU\.DEFAULT\Software\Secret")
+                .build(),
+        );
+        let (built, r) = incomplete(&f, |_| {});
+        one_reason(&r, "S3 incomplete", "1 keys not read whole (unreadable)");
+        let s3 = line(&built, LocalSource::S3);
+        assert_eq!(
+            (s3.fact("unreadable"), s3.fact("unreadable-by-design")),
+            (Some("2"), Some("1"))
+        );
+
+        // A key below ProtectedRoots or beside it is not on the list (exact paths only).
+        for other in [
+            format!(r"{PROTECTED}\Inner"),
+            r"HKU\.DEFAULT\Software\Microsoft\SystemCertificates\Root".to_owned(),
+        ] {
+            let f = with_hive(
+                machine()
+                    .key(&format!(r"{other}\Deeper"))
+                    .denied(&other)
+                    .build(),
+            );
+            let (_, r) = incomplete(&f, |_| {});
+            one_reason(&r, "S3 incomplete", "1 keys not read whole");
+        }
+
+        // More unreadable keys than the line names: those beyond the list always count.
+        let mut b = machine()
+            .key(&format!(r"{PROTECTED}\Inner"))
+            .denied(PROTECTED);
+        for i in 0..20 {
+            b = b
+                .key(&format!(r"HKU\.DEFAULT\Software\Z{i:02}\Deeper"))
+                .denied(&format!(r"HKU\.DEFAULT\Software\Z{i:02}"));
+        }
+        let (built, r) = incomplete(&with_hive(b.build()), |_| {});
+        one_reason(&r, "S3 incomplete", "20 keys not read whole");
+        let s3 = line(&built, LocalSource::S3);
+        assert_eq!(
+            s3.fact("unreadable-keys").unwrap().split(", ").count(),
+            purge_source::local_baseline::LISTED_WALK_KEYS
+        );
+
+        // Folded, exact.
+        assert!(denied_by_design(PROTECTED));
+        assert!(denied_by_design(&PROTECTED.to_ascii_uppercase()));
+        assert!(!denied_by_design(&format!(r"{PROTECTED}\x")));
     }
 
     #[test]
@@ -1441,6 +1603,8 @@ mod tests {
     /// Budget run on the real machine (the rig and the host; not in CI): builds from the live
     /// sources and prints the `#src` and timing lines.
     /// `cargo test -p purge-index --release --lib -- --ignored live_build_budget --nocapture`.
+    /// For the W4 investigation only (test knobs, never read by the engine): `PURGE_TEST_BL_FOREGROUND=1`
+    /// builds at normal priority, `PURGE_TEST_BL_THREADS=<n>` sets the S1 worker count.
     #[test]
     #[ignore = "reads the whole live machine; run on the rig"]
     fn live_build_budget() {
@@ -1448,13 +1612,19 @@ mod tests {
         let live = Live::new();
         let local = LiveLocal::new();
         let os = purge_source::system::SystemSource::os_info(&live.system).unwrap();
+        let foreground = std::env::var("PURGE_TEST_BL_FOREGROUND").is_ok_and(|v| v == "1");
+        let threads = std::env::var("PURGE_TEST_BL_THREADS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0usize);
+        eprintln!("background {}, threads {threads} (0 = all)", !foreground);
         let opts = BuildOptions {
             built_at: iso_utc(0),
             computer: "budget".into(),
             base: sxs::find_base().map_err(|e| e.to_string()),
             stamps: file_stamps(&live.fs, &live.registry, &live.system),
-            threads: 0,
-            background: true,
+            threads,
+            background: !foreground,
             floors: SealFloors::default(),
         };
         let built = build(&local, &os, &opts).unwrap();
@@ -1474,7 +1644,7 @@ mod tests {
             built.complete(),
             built.incomplete_reasons()
         );
-        assert_eq!(lines.len(), 9);
+        assert_eq!(lines.len(), 10);
         assert!(
             lines
                 .iter()

@@ -89,11 +89,39 @@ foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item
     Check 'baseline-local: an unknown mode is refused' ($msg -match 'unknown mode')
     Check 'baseline-local: busy VM states refused, poweroff and saved not' ((Test-BlVmBusyState 'running') -and (Test-BlVmBusyState 'paused') -and (Test-BlVmBusyState 'onlinesnapshotting') -and -not (Test-BlVmBusyState 'poweroff') -and -not (Test-BlVmBusyState 'saved') -and -not (Test-BlVmBusyState 'aborted'))
 
-    $job = Get-BlBuildJob 'C:\cr\out\bl-r1-cleanpro' 'C:\cr\bin\purge-engine.exe'
+    $job = Get-BlBuildJob 'C:\cr\out\bl-r1-cleanpro' 'C:\cr\bin\purge-engine.exe' 'C:\cr\guest\riglib.ps1'
     $ptok = $null; $perr = $null; $null = [Management.Automation.Language.Parser]::ParseInput($job, [ref]$ptok, [ref]$perr)
-    Check 'baseline-local: the build job parses, placeholders replaced' (@($perr).Count -eq 0 -and $job -notmatch '__(DIR|ENGINE)__' -and $job.Contains("`$Dir = 'C:\cr\out\bl-r1-cleanpro'") -and $job.Contains("`$Engine = 'C:\cr\bin\purge-engine.exe'"))
-    Check 'baseline-local: the build job builds cold then warm with PURGE_TIMING and writes build.json' ($job.Contains("foreach (`$pass in 'cold', 'warm')") -and $job.Contains("`$env:PURGE_TIMING = '1'") -and $job.Contains("'build.json'") -and $job.Contains("baseline info"))
-    $msg = $null; try { $null = Get-BlBuildJob "C:\it's" 'C:\e.exe' } catch { $msg = $_.Exception.Message }
+    Check 'baseline-local: the build job parses, placeholders replaced' (@($perr).Count -eq 0 -and $job -notmatch '__(DIR|ENGINE|RIGLIB)__' -and $job.Contains("`$Dir = 'C:\cr\out\bl-r1-cleanpro'") -and $job.Contains("`$Engine = 'C:\cr\bin\purge-engine.exe'") -and $job.Contains("`$RigLib = 'C:\cr\guest\riglib.ps1'"))
+    Check 'baseline-local: the build job builds cold, warm, settled with PURGE_TIMING and writes build.json' ($job.Contains("foreach (`$pass in 'cold', 'warm', 'settled')") -and $job.Contains("`$env:PURGE_TIMING = '1'") -and $job.Contains("'build.json'") -and $job.Contains("baseline info"))
+    Check 'baseline-local: the settled pass waits with riglib Wait-M2BootSettle, a quiet CPU, then empties the standby list' ($job.Contains('. $RigLib') -and $job.Contains('Wait-M2BootSettle -MaxSec 600 -MinUptimeSec 300') -and $job.Contains('-lt 10') -and $job.Contains('NtSetSystemInformation(80') -and $job.Contains('SeProfileSingleProcessPrivilege'))
+    # The C# of the settle compiles (the job's Add-Type text, run here without calling the purge).
+    $cs = [regex]::Match($job, '(?s)Add-Type -TypeDefinition @"\n(.*?)\n"@').Groups[1].Value
+    $cerr = $null; try { Add-Type -TypeDefinition $cs } catch { $cerr = $_.Exception.Message }
+    Check 'baseline-local: the settle helper compiles' ($cs.Length -gt 0 -and -not $cerr -and ('PurgeRig.BlSettle' -as [type])) "$cerr"
+    $msg = $null; try { $null = Get-BlBuildJob 'C:\d' 'C:\e.exe' '' } catch { $msg = $_.Exception.Message }
+    Check 'baseline-local: an empty riglib path is refused' ($msg -match 'bad path')
+    $mr = @{ nic1 = 'nat'; nic2 = 'none'; nic3 = 'bridged'; nic10 = 'nat'; natnet1 = 'nat'; cableconnected1 = 'on' }
+    Check 'baseline-local: NAT adapters from showvminfo, numbered, others apart' (((@(Get-BlNatNics $mr)) -join ',') -ceq '1,10' -and ((@(Get-BlOtherNics $mr)) -join ',') -ceq '3=bridged' -and @(Get-BlNatNics @{ nic1 = 'none' }).Count -eq 0)
+    # Set-BlNatLink against a fake VBoxManage: only the NAT adapter is switched, and 'off' is verified.
+    & {
+        $script:vbCalls = @(); $script:vbCable = 'on'; $script:vbStuck = $false
+        function Write-RigLog([string]$Message) { }
+        function ConvertFrom-MachineReadable([string[]]$Lines) {
+            $h = @{}; foreach ($l in $Lines) { $m = [regex]::Match("$l", '^"?([^"=]+)"?="?(.*?)"?$'); if ($m.Success) { $h[$m.Groups[1].Value] = $m.Groups[2].Value } }; $h }
+        function Invoke-VBox([string[]]$A) {
+            $script:vbCalls += ($A -join ' ')
+            if ($A[0] -eq 'controlvm' -and -not $script:vbStuck) { $script:vbCable = $A[3] }
+            [pscustomobject]@{ code = 0; out = @('VMState="running"', 'nic1="nat"', 'nic2="intnet"', 'nic3="none"', "cableconnected1=`"$script:vbCable`"", 'cableconnected2="on"') }
+        }
+        $n = @(Set-BlNatLink 'Purge-CleanPro' 'off')
+        Check 'baseline-local: Set-BlNatLink off switches only nic1 (NAT) and returns it' (($n -join ',') -ceq '1' -and @($script:vbCalls | Where-Object { $_ -like 'controlvm*' }).Count -eq 1 -and ($script:vbCalls -contains 'controlvm Purge-CleanPro setlinkstate1 off') -and $script:vbCable -ceq 'off') ($script:vbCalls -join ' | ')
+        $null = Set-BlNatLink 'Purge-CleanPro' 'on'
+        Check 'baseline-local: Set-BlNatLink on reconnects it' (($script:vbCalls -contains 'controlvm Purge-CleanPro setlinkstate1 on') -and $script:vbCable -ceq 'on')
+        $script:vbStuck = $true; $msg = $null
+        try { $null = Set-BlNatLink 'Purge-CleanPro' 'off' } catch { $msg = $_.Exception.Message }
+        Check 'baseline-local: Set-BlNatLink off throws when the cable still shows connected' ($msg -match 'still connected') "$msg"
+    }
+    $msg = $null; try { $null = Get-BlBuildJob "C:\it's" 'C:\e.exe' 'C:\r.ps1' } catch { $msg = $_.Exception.Message }
     Check 'baseline-local: a quote in a job path is refused' ($msg -match 'bad path')
     Check 'baseline-local: version hash parsed' ((Get-BlVersionHash @('rigtool 0.1.0 source-sha256 abc123')) -ceq 'abc123' -and $null -eq (Get-BlVersionHash @('rigtool 0.1.0')))
     $da = Get-BlDiffArgs 't.gz' 'l.gz' 'n.gz' 'o.json'
@@ -128,11 +156,23 @@ foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item
                 areas = @($area) } }
     $mkBuild = { param($ColdExit) [ordered]@{ cpus = 4; info = [ordered]@{ exit = 0; seconds = 0.5 }
                 passes = @([ordered]@{ pass = 'cold'; exit = $ColdExit; seconds = 20.1; peak_working_set_mb = 150.2; file_bytes = 4000000 }, [ordered]@{ pass = 'warm'; exit = 0; seconds = 12.3; peak_working_set_mb = 149; file_bytes = 4000000 }) } }
-    $setRun = { param($Rep, $Build, [string]$Warm)
+    # Schema 2: three passes, the settle record and the guest's network.
+    $mkBuild3 = { param($NetUp) [ordered]@{ schema = 'purge.rig.baseline-local-build/2'; cpus = 4; info = [ordered]@{ exit = 0; seconds = 0.5 }
+                network_up = [ordered]@{ start = @($NetUp); settled = @() }
+                settle = [ordered]@{ boot = [ordered]@{ waited_sec = 41.2; bounded = $false; uptime_sec = 300 }; cpu_settled = $true; cpu_percent = 3.4; cpu_waited_sec = 30.1; cache_purged = $true; error = $null }
+                passes = @([ordered]@{ pass = 'cold'; exit = 0; seconds = 20.1; peak_working_set_mb = 150.2; file_bytes = 4000000; uptime_sec = 90 },
+                           [ordered]@{ pass = 'warm'; exit = 0; seconds = 12.3; peak_working_set_mb = 149; file_bytes = 4000000; uptime_sec = 110 },
+                           [ordered]@{ pass = 'settled'; exit = 0; seconds = 15.7; peak_working_set_mb = 149; file_bytes = 4000000; uptime_sec = 400 }) } }
+    # Local files of the passes: a real header (source id in field 7) and #src lines; $Ids / $Bodies per pass.
+    $hdr = { param($Id, $T) "#purge-baseline-local 1`t$T`tPC`tProfessional`t26340.9882`tbl.2`t$Id`n" }
+    $setRun = { param($Rep, $Build, [string]$Warm, $Ids = @('aaaa', 'aaaa', 'aaaa'), $Bodies = $null)
         [IO.File]::WriteAllText((Join-Path $d 'r.json'), (ConvertTo-Json -InputObject $Rep -Depth 8))
         [IO.File]::WriteAllText((Join-Path $d 'build.json'), (ConvertTo-Json -InputObject $Build -Depth 8))
-        Write-Gz (Join-Path $d 'local-cold.tsv.gz') ("#purge-baseline-local 1`tcreated=1`n" + $body + "#end`t2`taaa`n")
-        Write-Gz (Join-Path $d 'local-warm.tsv.gz') ("#purge-baseline-local 1`tcreated=2`n" + $Warm + "#end`t2`tbbb`n") }
+        if (-not $Bodies) { $Bodies = @($body, $Warm, $body) }
+        $i = 0
+        foreach ($pass in 'cold', 'warm', 'settled') {
+            Write-Gz (Join-Path $d "local-$pass.tsv.gz") ((& $hdr $Ids[$i] "created=$i") + $Bodies[$i] + "#end`t2`t$i$i$i`n"); $i++
+        } }
     & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild 0) $body
     $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') 'professional-26340.9882' 'vm'
     Check 'baseline-local check: a good run passes (header and #end may differ)' ($c.ok -and -not @($c.problems).Count) (@($c.problems) -join ' | ')
@@ -152,6 +192,39 @@ foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item
     & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild 0) ($body + "K`tHKLM\SOFTWARE\C`n")
     $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'vm'
     Check 'baseline-local check: cold and warm bodies that differ are a problem' (-not $c.ok -and $c.problems[0] -match '^cold and warm builds differ below the header') (@($c.problems) -join ' | ')
+    Check 'baseline-local check: same source id and other bytes is a determinism failure, not INVALID' (-not $c.invalid -and $c.problems[0] -match 'with the same source id aaaa \(a determinism failure; every #src line equal\)') (@($c.problems) -join ' | ')
+
+    # Gate M round 2: the source changed between the passes (another source id): INVALID, not a determinism failure.
+    $b4 = "#src`tS1`tok`n#src`tS4`tok`t91`t2513`t0`tnot-inbox=14`nK`tHKLM\SOFTWARE\A`n"
+    $b4w = "#src`tS1`tok`n#src`tS4`tok`t91`t2536`t0`tnot-inbox=18`nK`tHKLM\SOFTWARE\A`nK`tHKLM\SOFTWARE\B`n"
+    & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild 0) $b4w @('82593a02ec71a6e2', 'b06903a6c2174f0e') @($b4, $b4w)
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'vm'
+    Check 'baseline-local check: other source ids make the run INVALID (exit 3), naming the #src lines that differ' (-not $c.ok -and $c.invalid -and @($c.problems).Count -eq 1 -and
+        $c.problems[0] -match '^RUN INVALID: the source changed between the cold and warm passes \(source id 82593a02ec71a6e2 vs b06903a6c2174f0e; #src lines that differ: S4\)' -and
+        -not ($c.problems -match '\(a determinism failure')) (@($c.problems) -join ' | ')
+    & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild 0) $b4w @('82593a02ec71a6e2', '82593a02ec71a6e2') @($b4, $b4w)
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'vm'
+    Check 'baseline-local check: the same source id with other #src lines is a determinism failure' (-not $c.ok -and -not $c.invalid -and $c.problems[0] -match 'same source id 82593a02ec71a6e2 \(a determinism failure; #src lines that differ: S4\)') (@($c.problems) -join ' | ')
+
+    # Schema 2: three passes, all equal: ok, the settled line and the phases are printed.
+    & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild3 @()) $body
+    [IO.File]::WriteAllLines((Join-Path $d 'build-cold.log'), [string[]]@('timing: baseline.local.list 0.1 s', 'timing: baseline.local.read 400.5 s (thread time, 4 threads)', 'timing: baseline.local.s1 120.2 s (wall)', 'timing: baseline.local.total 125.0 s (wall)'))
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') 'professional-26340.9882' 'vm'
+    Check 'baseline-local check: three equal passes pass; warm is the warm pass, not the last' ($c.ok -and -not $c.invalid -and ($c.lines -match '^W4: cold build 20.1 s \(budget 120 s on 4 CPUs\), warm 12.3 s; ')) (($c.lines + $c.problems) -join ' | ')
+    Check 'baseline-local check: the settled pass line' (@($c.lines -match '^W4 settled: cold build 15.7 s \(budget 120 s on 4 CPUs\) at uptime 400 s, after boot settle 41.2 s \(ReadyBoot stopped, uptime 300 s\), CPU 3.4 % over 30 s \(settled after 30.1 s\), standby list purged True$').Count -eq 1) ($c.lines -join ' | ')
+    Check 'baseline-local check: the phases of a pass from its log' (@($c.lines -match '^  phases cold: read 400.5 s \(thread time, 4 threads\); s1 120.2 s \(wall\); total 125.0 s \(wall\)$').Count -eq 1) ($c.lines -join ' | ')
+    Remove-Item -LiteralPath (Join-Path $d 'build-cold.log') -Force
+    & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild3 @()) $body @('aaaa', 'aaaa', 'cccc')
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'vm'
+    Check 'baseline-local check: equal bodies with other source ids are not a problem' ($c.ok) (@($c.problems) -join ' | ')
+    & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild3 @()) $body @('aaaa', 'aaaa', 'cccc') @($body, $body, ($body + "K`tHKLM\SOFTWARE\Z`n"))
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'vm'
+    Check 'baseline-local check: the settled pass is compared with the cold one too' ($c.invalid -and $c.problems[0] -match '^RUN INVALID: the source changed between the cold and settled passes') (@($c.problems) -join ' | ')
+    & $setRun (& $mkRep $true 'Professional-26340.9882') (& $mkBuild3 @('Ethernet')) $body
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'vm'
+    Check 'baseline-local check: a guest adapter up makes a VM run INVALID' (-not $c.ok -and $c.invalid -and $c.problems[0] -ceq 'RUN INVALID: the guest had a network adapter up (start: Ethernet); the build must run offline') (@($c.problems) -join ' | ')
+    $c = Test-BlReport (Join-Path $d 'r.json') (Join-Path $d 'build.json') '-' 'host'
+    Check 'baseline-local check: the host (R5) may be online' ($c.ok) (@($c.problems) -join ' | ')
 }
 
 # ------------------------------------------------------------------- task priority in setup-base / riglib
