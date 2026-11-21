@@ -129,3 +129,29 @@ elevated_write_back` 3/3. **R8b M1 fixed on the VM**: the key created without it
 back after the resumed write-back, no note, privilege off before and after. Evidence
 E:\purge-build\gate-evidence\m3-win-elev\ (drive script win-elev.ps1 copied there). vm/win-unit.sh stays
 Linux-host only.
+
+## M3-HARDEN (b15a2bd, merged)
+Key finding: SHGetKnownFolderPath(FOLDERID_ProgramData) expands %SystemDrive% from the caller's environment
+(SystemDrive=Q: -> Q:\ProgramData, pinned by a test). New `known_folders::machine_program_data()`: reads
+ProfileList\ProgramData, fills only %SystemDrive%/%SystemRoot%/%windir% from GetSystemWindowsDirectoryW, refuses
+any other variable; broker and engine use it.
+Choices (DECISIONS candidates):
+1. Data root from machine_program_data, not the known folder (departs from design text).
+2. Broker exit codes 20 not_elevated, 21 install_untrusted, 22 store_integrity (design 6.4 mapped the first two to 7).
+3. Event-log source "Purge" not registered (event id = exit code); registering in install.ps1 open.
+4. Unelevated engine also uses machine_program_data; volume rule only when elevated.
+5. Stricter install-dir rule: any reparse tag, short names, subst refused. Order: plain X:\ spelling, no
+   reparse on any component, final path equals given, system volume (GUID path from a handle), admin-only.
+6. Needs an owner: purge-exec `StorageRoots::installed()` (rig CLI exec path) still env-dependent; static
+   imports before main not covered by SetDefaultDllDirectories -> `/DEPENDENTLOADFLAG:0x800` in
+   bins/purge-broker/build.rs; closing std handles -> M3-BROKER-CORE; BL-R1 N5/N6 -> broker flow.
+7. Elevated binary tests need PURGE_TEST_BROKER_EXE / PURGE_TEST_ENGINE_EXE / PURGE_TEST_OTHER_VOLUME_DIR in the
+   elevated pass; each broker test run writes an Application event-log entry.
+Also touched outside its list: purge-win Cargo.toml (Win32_System_EventLog), lib.rs (eventlog), broker main.rs
+(runs the checks, still exits 1), bl-r1-review.md S4 row.
+PURGE_KB_DIR: read only unelevated or in rig-exec builds; unreadable elevation counts as elevated.
+For M3-R1: trusted_install_dir spellings (trailing dot/space, 8.3, non-ASCII case, GLOBALROOT, UNC), reparse
+any tag, final-path comparison, volume identity (VHD, WebDAV, mapped, subst); residual: later redefinition of
+C: in the process's DOS-device directory; machine_program_data source and odd values; check_with ordering;
+elevated release never reads PURGE_KB_DIR; rig-exec still honours it; restrict_dll_search vs comctl32 v6 SxS,
+COM, WinRT; T6/T7 on a VM (planted DLL in a user-writable copy; runas env block) not verified.

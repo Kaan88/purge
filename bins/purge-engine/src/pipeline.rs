@@ -143,9 +143,60 @@ pub struct Settings {
     /// alone can write it (design §5 "The shipped directory"). Off for fixtures and replays, whose
     /// file system knows nothing about the directory the engine reads its baselines from.
     pub check_shipped_dir: bool,
+    /// The volume every directory a trust decision of an elevated engine rests on must be on: the
+    /// shipped baseline directory, the local baseline cache, the MSI table cache (BL-R1 S4, M3
+    /// design 3.4). [`VolumeRule::Any`] for fixtures and replays.
+    pub volume_rule: VolumeRule,
     /// The background build of the local baseline that this engine process started
     /// ([`baseline::start_local_build`]); `None` when it started none.
     pub local_build: Option<LocalBuild>,
+}
+
+/// Where the directories an elevated engine trusts must lie ([`Settings::volume_rule`]).
+///
+/// The directory rule (`is_admin_only_writable`) compares well-known SIDs, which are the same on
+/// every machine: a volume prepared on another machine (a removable or external disk) can carry
+/// administrator-only descriptors over content a standard user chose (BL-R1 S4). The volume of the
+/// running Windows directory cannot be such a volume.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum VolumeRule {
+    /// No volume rule. For fixtures and replays, whose sources are not the machine the directories
+    /// are on.
+    #[default]
+    Any,
+    /// The directory must be on the volume of this volume GUID path (`\\?\volume{…}\`), as
+    /// `purge_win::secure::volume_of` reads it from the directory itself. The live engine names the
+    /// system volume ([`VolumeRule::live`]).
+    On(String),
+    /// The live engine could not read the system volume: an elevated engine trusts no directory.
+    Unreadable,
+}
+
+impl VolumeRule {
+    /// The rule of the live engine: the system volume (`purge_win::secure::system_volume`), or
+    /// [`VolumeRule::Unreadable`] when it cannot be read.
+    pub fn live() -> VolumeRule {
+        purge_win::secure::system_volume().map_or(VolumeRule::Unreadable, VolumeRule::On)
+    }
+
+    /// Whether `dir`, which exists, passes the rule. A directory whose volume cannot be read does
+    /// not pass [`VolumeRule::On`].
+    pub fn admits(&self, dir: &Path) -> bool {
+        match self {
+            VolumeRule::Any => true,
+            VolumeRule::On(volume) => {
+                purge_win::secure::volume_of(dir).is_ok_and(|v| v.eq_ignore_ascii_case(volume))
+            }
+            VolumeRule::Unreadable => false,
+        }
+    }
+}
+
+/// Whether `dir` passes [`Settings::volume_rule`] for this engine: always when it is not elevated
+/// (an unelevated engine's trust decisions do not rest on the directory), otherwise as the rule
+/// says.
+pub(crate) fn volume_admits(sources: Sources<'_>, settings: &Settings, dir: &Path) -> bool {
+    !sources.sys.elevated() || settings.volume_rule.admits(dir)
 }
 
 /// Which MSI table cache an engine call uses ([`table_cache`]).
@@ -166,6 +217,9 @@ pub enum TableCacheKind {
 /// directory created under a weaker parent would inherit the parent's write grants and could never be
 /// trusted. An unelevated run never creates it; it still reads an existing admin-only cache (its writes
 /// then fail silently, and the next elevated run fills it).
+///
+/// Elevated, the data root and the directory must also pass [`Settings::volume_rule`] (BL-R1 S4): a
+/// cache on another volume is never created, read or written.
 pub fn table_cache(
     sources: Sources<'_>,
     settings: &Settings,
@@ -180,12 +234,19 @@ pub fn table_cache(
         p.to_str()
             .is_some_and(|s| sources.fs.is_admin_only_writable(s) == Ok(true))
     };
+    let on_volume = |p: &Path| volume_admits(sources, settings, p);
     if sources.sys.elevated()
         && !dir.is_dir()
-        && dir.parent().and_then(Path::parent).is_some_and(admin_only)
+        && dir
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|root| on_volume(root) && admin_only(root))
     {
         // Failing to create it leaves the memory cache; the next run tries again.
         let _ = std::fs::create_dir_all(dir);
+    }
+    if !on_volume(dir) {
+        return memory();
     }
     match DiskTableCache::open(dir, sources.fs) {
         Some(disk) => (Box::new(disk), TableCacheKind::Disk),
@@ -1791,6 +1852,49 @@ mod tests {
 
         let (_, kind) = table_cache(Sources::of(&unelevated), &Settings::default());
         assert_eq!(kind, TableCacheKind::Memory);
+    }
+
+    /// BL-R1 S4: elevated, the MSI table cache is made and used only on the volume of the rule. The
+    /// temp tree is on the system volume; a rule naming another volume stands for a data root on a
+    /// disk written elsewhere, with descriptors the file system source calls admin-only.
+    #[test]
+    fn pipeline_elevated_table_cache_only_on_the_rule_s_volume() {
+        let base = std::env::temp_dir().join(format!("purge-tcv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("Purge");
+        std::fs::create_dir_all(&root).unwrap();
+        let system = purge_win::secure::system_volume().unwrap();
+        if purge_win::secure::volume_of(&root).unwrap() != system {
+            let _ = std::fs::remove_dir_all(&base);
+            eprintln!("the temp directory is not on the system volume: skipped");
+            return;
+        }
+        let dir = root.join("fp").join("msitables");
+        let root_text = root.to_str().unwrap();
+        let elevated = probe_machine()
+            .elevated(true)
+            .dir(root_text)
+            .admin_only_writable(root_text, true)
+            .dir(dir.to_str().unwrap())
+            .build();
+        let with = |rule: VolumeRule| Settings {
+            msi_table_dir: Some(dir.clone()),
+            volume_rule: rule,
+            ..Settings::default()
+        };
+        let other = VolumeRule::On(r"\\?\volume{00000000-0000-0000-0000-000000000000}\".into());
+        for rule in [other.clone(), VolumeRule::Unreadable] {
+            let (_, kind) = table_cache(Sources::of(&elevated), &with(rule.clone()));
+            assert_eq!(kind, TableCacheKind::Memory, "{rule:?}");
+            assert!(!dir.exists(), "{rule:?}: made {}", dir.display());
+        }
+        let (_, kind) = table_cache(Sources::of(&elevated), &with(VolumeRule::On(system)));
+        assert_eq!(kind, TableCacheKind::Disk);
+        assert!(dir.is_dir());
+        // An existing cache directory on a refused volume is not used either.
+        let (_, kind) = table_cache(Sources::of(&elevated), &with(other));
+        assert_eq!(kind, TableCacheKind::Memory);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     fn entry(key: &str, name: &str) -> InventoryEntry {
