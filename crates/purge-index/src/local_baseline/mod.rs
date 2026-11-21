@@ -11,9 +11,12 @@
 //! - [`manifest`]: S1, component manifests (`WinSxS\Manifests`), with the macro table in [`macros`].
 //! - [`hive`]: S2, the default profile's hive, and S3, `HKU\.DEFAULT`.
 //! - [`appx`]: S4, inbox package manifests and the package repository's generated ProgIDs.
+//!
+//! [`cache`] stores the result per source in an admin-only directory and loads it back (design §5).
 
 pub mod appx;
 pub mod build;
+pub mod cache;
 pub mod file;
 pub mod hive;
 pub mod macros;
@@ -21,9 +24,11 @@ pub mod manifest;
 mod records;
 
 pub use build::{
-    BUILDER_VERSION, BuildOptions, BuildTimings, FileStamps, LocalBaselineFile,
-    S3_DENIED_BY_DESIGN, SealFloors, SourceStamp, build, file_stamps, iso_utc,
+    BUILDER_VERSION, BuildControl, BuildOptions, BuildTimings, FileStamps, LocalBaselineFile,
+    LocalPartFile, S3_DENIED_BY_DESIGN, SealFloors, SourceStamp, build, build_part, file_stamps,
+    iso_utc, read_s3,
 };
+pub use cache::{LoadedLocal, LocalCache, PartIds, PartState};
 pub use file::{
     LocalBaseline, LocalBaselineError, LocalHeader, LocalSource, SourceLine, SourceStatus,
     local_file_name,

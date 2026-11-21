@@ -295,6 +295,7 @@ pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
         baseline_dir: opts.baselines.clone(),
         purge_dirs: Vec::new(),
         msi_table_dir: None,
+        ..Settings::default()
     };
     let mut progress = |line: &str| eprintln!("replay: {line}");
 

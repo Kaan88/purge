@@ -38,7 +38,7 @@ pub const NO_DATA_HASH: &str = "0000000000000000";
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueRecord {
     key: Arc<str>,
-    name: Box<str>,
+    name: Arc<str>,
     ty: u32,
 }
 
@@ -66,6 +66,9 @@ pub struct Records {
     values: BTreeSet<ValueRecord>,
     dirs: BTreeSet<Box<str>>,
     files: BTreeSet<Box<str>>,
+    /// Every value name in `values`, once: the records share the text (most names repeat many
+    /// thousand times, and one allocation each was a fifth of the build's memory).
+    names: BTreeSet<Arc<str>>,
 }
 
 impl Records {
@@ -86,11 +89,8 @@ impl Records {
         let Some(key) = self.intern_key(key) else {
             return false;
         };
-        self.values.insert(ValueRecord {
-            key,
-            name: prefix::fold(name).into_boxed_str(),
-            ty,
-        });
+        let name = self.intern_name(Arc::from(prefix::fold(name)));
+        self.values.insert(ValueRecord { key, name, ty });
         true
     }
 
@@ -129,7 +129,12 @@ impl Records {
         for value in other.values {
             // Share the key text with the key record.
             let key = self.keys.get(&*value.key).cloned().unwrap_or(value.key);
-            self.values.insert(ValueRecord { key, ..value });
+            let name = self.intern_name(value.name);
+            self.values.insert(ValueRecord {
+                key,
+                name,
+                ty: value.ty,
+            });
         }
         self.dirs.extend(other.dirs);
         self.files.extend(other.files);
@@ -147,7 +152,7 @@ impl Records {
         };
         let bound = |ty| ValueRecord {
             key: Arc::from(key.as_str()),
-            name: prefix::fold(name).into_boxed_str(),
+            name: Arc::from(prefix::fold(name)),
             ty,
         };
         self.values
@@ -216,16 +221,7 @@ impl Records {
             out.write_all(line.as_bytes())?;
         }
         for v in &self.values {
-            line.clear();
-            line.push_str("V\t");
-            escape_into(&v.key, &mut line);
-            line.push('\t');
-            escape_into(&v.name, &mut line);
-            line.push('\t');
-            line.push_str(&v.ty.to_string());
-            line.push('\t');
-            line.push_str(NO_DATA_HASH);
-            line.push('\n');
+            value_line(&mut line, v);
             out.write_all(line.as_bytes())?;
         }
         for dir in &self.dirs {
@@ -237,6 +233,49 @@ impl Records {
             out.write_all(line.as_bytes())?;
         }
         Ok(())
+    }
+
+    /// [`Records::write_records`], consuming the records: every record is freed once it is written,
+    /// so the memory the sets hold goes down while the output grows. The same bytes.
+    pub fn write_records_owned<W: Write>(self, out: &mut W) -> io::Result<()> {
+        let Records {
+            keys,
+            values,
+            dirs,
+            files,
+            names,
+        } = self;
+        drop(names);
+        let mut line = String::with_capacity(512);
+        // A key's text is shared with its value records; it is freed with the last of them.
+        for key in keys {
+            record_line(&mut line, 'K', &[&key]);
+            out.write_all(line.as_bytes())?;
+        }
+        for v in values {
+            value_line(&mut line, &v);
+            out.write_all(line.as_bytes())?;
+        }
+        for dir in dirs {
+            record_line(&mut line, 'D', &[&dir]);
+            out.write_all(line.as_bytes())?;
+        }
+        for file in files {
+            record_line(&mut line, 'F', &[&file]);
+            out.write_all(line.as_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// The shared text of a value name (folded), recorded on first use.
+    fn intern_name(&mut self, name: Arc<str>) -> Arc<str> {
+        match self.names.get(&*name) {
+            Some(shared) => Arc::clone(shared),
+            None => {
+                self.names.insert(Arc::clone(&name));
+                name
+            }
+        }
     }
 
     /// Records a key with its ancestors and returns the shared text of the key itself.
@@ -260,6 +299,19 @@ pub fn escape_into(s: &str, out: &mut String) {
             c => out.push(c),
         }
     }
+}
+
+fn value_line(line: &mut String, v: &ValueRecord) {
+    line.clear();
+    line.push_str("V\t");
+    escape_into(&v.key, line);
+    line.push('\t');
+    escape_into(&v.name, line);
+    line.push('\t');
+    line.push_str(&v.ty.to_string());
+    line.push('\t');
+    line.push_str(NO_DATA_HASH);
+    line.push('\n');
 }
 
 fn record_line(line: &mut String, tag: char, fields: &[&str]) {

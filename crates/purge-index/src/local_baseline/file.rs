@@ -197,7 +197,8 @@ impl SourceLine {
         out
     }
 
-    fn parse(line: &str) -> Option<SourceLine> {
+    /// Parses a `#src` line (without its line end); `None` when it is not one.
+    pub(super) fn parse(line: &str) -> Option<SourceLine> {
         let fields: Vec<&str> = line.split('\t').collect();
         let [tag, source, status, items, records, skipped, detail] = fields.as_slice() else {
             return None;
@@ -281,7 +282,8 @@ impl LocalHeader {
         )
     }
 
-    fn parse(line: &str) -> Result<LocalHeader, LocalBaselineError> {
+    /// Parses a header line (without its line end). The builder version is not judged here.
+    pub(super) fn parse(line: &str) -> Result<LocalHeader, LocalBaselineError> {
         let bad = || LocalBaselineError::BadHeader(line.chars().take(200).collect());
         let fields: Vec<&str> = line.split('\t').collect();
         let (tag, version) = fields
@@ -350,6 +352,32 @@ pub fn encode(
     sources: &[SourceLine],
     records: &Records,
 ) -> io::Result<Encoded> {
+    encode_with(header, sources, records.counts(), |w| {
+        records.write_records(w)
+    })
+}
+
+/// [`encode`] over records it may consume: each set is freed as it is written, so the text records
+/// and the growing file are never both whole in memory (the build's peak, design §5 "Budget"). The
+/// bytes are the ones [`encode`] gives.
+pub fn encode_owned(
+    header: &LocalHeader,
+    sources: &[SourceLine],
+    records: Records,
+) -> io::Result<Encoded> {
+    encode_with(header, sources, records.counts(), |w| {
+        records.write_records_owned(w)
+    })
+}
+
+fn encode_with(
+    header: &LocalHeader,
+    sources: &[SourceLine],
+    c: RecordCounts,
+    write_records: impl FnOnce(
+        &mut HashingWriter<io::BufWriter<flate2::write::GzEncoder<Vec<u8>>>>,
+    ) -> io::Result<()>,
+) -> io::Result<Encoded> {
     let gz = flate2::GzBuilder::new().write(Vec::new(), flate2::Compression::default());
     let mut w = HashingWriter {
         inner: io::BufWriter::with_capacity(1 << 20, gz),
@@ -362,8 +390,7 @@ pub fn encode(
         w.write_all(s.line().as_bytes())?;
         w.write_all(b"\n")?;
     }
-    records.write_records(&mut w)?;
-    let c = records.counts();
+    write_records(&mut w)?;
     let record_count = c.keys + c.values + c.dirs + c.files;
     let sha256 = hex(&w.sha.finalize_reset());
     let text_bytes = w.bytes;
@@ -377,7 +404,7 @@ pub fn encode(
     })
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(super) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

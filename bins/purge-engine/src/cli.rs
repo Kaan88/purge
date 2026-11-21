@@ -308,6 +308,57 @@ fn executor(verb: ExecVerb, env: &mut Env<'_>) -> Exit {
     exec::run_live(verb, env)
 }
 
+/// Runs a pipeline verb as one engine start (BASELINE_LOCAL_DESIGN.md §5, W4): when the settings
+/// name a local baseline cache (the live engine), the background build of this machine's local
+/// baseline is started first ([`pipeline::start_local_build`]; nothing on a Windows with an exact
+/// shipped baseline, nothing unelevated), the verb runs without waiting for it, and the process then
+/// stays until the build it started has ended, at normal priority, so that the next run finds the
+/// cache. The build reads the live machine: a cache directory belongs in the settings of the live
+/// engine only.
+fn with_local_build(env: &mut Env<'_>, verb: impl FnOnce(&mut Env<'_>) -> Exit) -> Exit {
+    if env.settings.local_baseline_dir.is_none() {
+        return verb(env);
+    }
+    let local = purge_source::live::LiveLocal::new();
+    let sources = env.sources;
+    std::thread::scope(|scope| {
+        let build = pipeline::start_local_build(scope, sources, &env.settings, &local, || {
+            purge_win::sxs::find_base().map_err(|e| e.to_string())
+        });
+        env.settings.local_build = build.clone();
+        let exit = verb(env);
+        if let Some(build) = build {
+            finish_local_build(env, &build);
+        }
+        exit
+    })
+}
+
+/// Waits for the background build this process started and says how it ended.
+fn finish_local_build(env: &mut Env<'_>, build: &pipeline::LocalBuild) {
+    use purge_rpc::BaselineBuild;
+    if build.in_progress() {
+        env.note(
+            "baseline: finishing the local baseline build this run started (later runs use it)",
+        );
+        build.raise_priority();
+    }
+    match build.wait() {
+        BaselineBuild::Done { rescan: true } => {
+            env.note("baseline: this PC's local baseline is built; scan again to use it");
+        }
+        BaselineBuild::Done { rescan: false } => {
+            env.note("baseline: this PC's local baseline is built");
+        }
+        BaselineBuild::Failed { reason } => {
+            env.warnings(&[format!(
+                "baseline: the local baseline build failed: {reason}"
+            )]);
+        }
+        BaselineBuild::None { .. } | BaselineBuild::Checking | BaselineBuild::Building { .. } => {}
+    }
+}
+
 fn run_inner(
     args: &[String],
     env: &mut Env<'_>,
@@ -342,9 +393,9 @@ fn run_inner(
             Exit::NotImplemented
         }
         Invocation::Inventory(a) => inventory(&a, env, started),
-        Invocation::Harvest(a) => harvest(&a, env, started),
-        Invocation::Uninstall(a) => uninstall(&a, env, started),
-        Invocation::Scan(a) => scan(&a, env, started),
+        Invocation::Harvest(a) => with_local_build(env, |env| harvest(&a, env, started)),
+        Invocation::Uninstall(a) => with_local_build(env, |env| uninstall(&a, env, started)),
+        Invocation::Scan(a) => with_local_build(env, |env| scan(&a, env, started)),
         Invocation::PlanShow(a) => plan_show(&a, env),
         Invocation::BaselineBuild(a) => baseline::build_verb(
             &a,
