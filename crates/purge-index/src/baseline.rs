@@ -140,6 +140,116 @@ pub struct RecordCounts {
     pub files: u64,
 }
 
+/// The hashed membership sets of a baseline, as plain data: what a derived cache form stores so that
+/// a load does not parse the text again (BASELINE_LOCAL_DESIGN.md §5; DECISIONS 2026-11-21, the
+/// view's load budget). Presence only: a value is its id, without type or data hash, so nothing built
+/// from these sets can restore a value or stand in for an exact baseline.
+///
+/// Every set is strictly ascending (sorted, no duplicates); [`HashedSets::check`] says so. The hashes
+/// depend on the normalisation and the hash function of this module: a stored form must also store
+/// [`HashedSets::scheme`] and is a miss under any other value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HashedSets {
+    /// Record lines of each type the sets were made from (before normalisation merged any).
+    pub counts: RecordCounts,
+    /// Normalised keys.
+    pub keys: Vec<u64>,
+    /// Value ids (key and folded name).
+    pub values: Vec<u64>,
+    /// Normalised directory paths.
+    pub dirs: Vec<u64>,
+    /// Normalised file paths.
+    pub files: Vec<u64>,
+    /// Last segments of keys and paths, and value names.
+    pub leaves: Vec<u64>,
+    /// Delimited parts of the leaves.
+    pub parts: Vec<u64>,
+}
+
+/// A set of [`HashedSets`] that is not strictly ascending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetsError {
+    /// Which set: `keys`, `values`, `dirs`, `files`, `leaves` or `parts`.
+    pub set: &'static str,
+    /// The index of the first element that is not above the one before it.
+    pub index: usize,
+}
+
+impl fmt::Display for SetsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the hashed set {:?} is not strictly ascending at index {}",
+            self.set, self.index
+        )
+    }
+}
+
+impl std::error::Error for SetsError {}
+
+impl HashedSets {
+    /// Whether every set is strictly ascending, which the membership queries (binary search) need.
+    pub fn check(&self) -> Result<(), SetsError> {
+        for (set, v) in [
+            ("keys", &self.keys),
+            ("values", &self.values),
+            ("dirs", &self.dirs),
+            ("files", &self.files),
+            ("leaves", &self.leaves),
+            ("parts", &self.parts),
+        ] {
+            if let Some(at) = v.windows(2).position(|w| w[0] >= w[1]) {
+                return Err(SetsError { set, index: at + 1 });
+            }
+        }
+        Ok(())
+    }
+
+    /// The identity of the normalisation and hashing these sets were made with: a fixed corpus of
+    /// spellings (one per rule of the module documentation) put through the normaliser and the hash
+    /// of this build. A change to a rule the corpus exercises, or to the hash, changes the text, so a
+    /// stored form made by another build is recognised and missed.
+    pub fn scheme() -> String {
+        const KEYS: [&str; 12] = [
+            r"HKEY_LOCAL_MACHINE\SOFTWARE\Vendor\Ünïcode",
+            r"HKEY_USERS\S-1-5-21-1-2-3-1001\Software\Classes\.x",
+            r"HKCU\Software\Wow6432Node\Classes\CLSID",
+            r"HKCR\.x\OpenWithProgids",
+            r"HKLM\SOFTWARE\WOW6432Node\Classes\CLSID\{A}",
+            r"HKLM\SOFTWARE\WOW6432Node\Vendor",
+            r"HKLM\SOFTWARE\Classes\WOW6432Node\Interface",
+            r"HKLM\SYSTEM\ControlSet001\Services\X",
+            r"HKU\S-1-5-18\Environment",
+            r"HKU\S-1-12-1-1-2-3-4_Classes\Local Settings",
+            r"HKU\S-1-5-19\Environment",
+            r"\HKLM\\SOFTWARE\Trailing\",
+        ];
+        const PATHS: [&str; 5] = [
+            r"\\?\C:\Users\someone\AppData/Local\",
+            r"C:\Users\Public\Desktop",
+            r"D:\Users\someone",
+            r"C:\Program Files\Common Files\X.dll",
+            r"\??\C:\Windows\System32",
+        ];
+        let mut h = FNV_OFFSET;
+        for key in KEYS {
+            for form in key_forms(key) {
+                h = hash_from(hash_from(h, form.as_bytes()), &[0xff]);
+                h = hash_from(h, &value_id(hash(form.as_bytes()), "näme").to_le_bytes());
+            }
+        }
+        for path in PATHS {
+            h = hash_from(hash_from(h, normalised_path(path).as_bytes()), &[0xff]);
+        }
+        let mut parts = Vec::new();
+        push_parts("volume{a-b}.c_d e", &mut parts);
+        for p in parts {
+            h = hash_from(h, &p.to_le_bytes());
+        }
+        format!("fnv1a64-{h:016x}")
+    }
+}
+
 /// What the baseline records about one registry value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BaselineValue {
@@ -303,6 +413,57 @@ impl Baseline {
             files: Vec::new(),
             leaves: Vec::new(),
             parts: Vec::new(),
+        }
+    }
+
+    /// A baseline over hashed sets that were made elsewhere (a derived cache form), for the two
+    /// presence-only holders of the baseline view: the local baseline and a neighbour. Never an exact
+    /// baseline: the value records carry no type and no data hash, and no public constructor of
+    /// [`Baseline`] leads here. The sets must have passed [`HashedSets::check`].
+    pub(crate) fn from_hashed_sets(
+        edition: &str,
+        build: u32,
+        ubr: u32,
+        captured_at: &str,
+        source: &str,
+        sets: HashedSets,
+    ) -> Baseline {
+        let values: Vec<ValueRec> = sets
+            .values
+            .iter()
+            .map(|id| ValueRec {
+                id: *id,
+                ty: 0,
+                data_hash: 0,
+            })
+            .collect();
+        Baseline {
+            edition: edition.to_owned(),
+            build,
+            ubr,
+            captured_at: captured_at.to_owned(),
+            computer: String::new(),
+            source: source.to_owned(),
+            counts: sets.counts,
+            keys: sets.keys,
+            values,
+            dirs: sets.dirs,
+            files: sets.files,
+            leaves: sets.leaves,
+            parts: sets.parts,
+        }
+    }
+
+    /// The hashed membership sets, without the value types and data hashes.
+    pub(crate) fn into_hashed_sets(self) -> HashedSets {
+        HashedSets {
+            counts: self.counts,
+            keys: self.keys,
+            values: self.values.iter().map(|v| v.id).collect(),
+            dirs: self.dirs,
+            files: self.files,
+            leaves: self.leaves,
+            parts: self.parts,
         }
     }
 
@@ -728,7 +889,7 @@ fn hash(bytes: &[u8]) -> u64 {
 }
 
 /// `path` is `root` or below it (both normalised).
-fn under(path: &str, root: &str) -> bool {
+pub(crate) fn under(path: &str, root: &str) -> bool {
     path.strip_prefix(root)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('\\'))
 }
@@ -783,7 +944,7 @@ fn views_are_separate(forms: &[String]) -> bool {
 /// The normalised spellings under which a queried key may be recorded: the key itself and, for a
 /// 32-bit-view spelling, its 64-bit twin (see the module documentation). `HKCR` yields the machine and
 /// the user classes.
-fn key_forms(key: &str) -> Vec<String> {
+pub(crate) fn key_forms(key: &str) -> Vec<String> {
     let folded = prefix::fold(key);
     let trimmed = folded.trim_start_matches('\\');
     let (root, rest) = trimmed.split_once('\\').unwrap_or((trimmed, ""));

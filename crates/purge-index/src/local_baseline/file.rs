@@ -39,7 +39,9 @@ use sha2::{Digest, Sha256};
 
 use super::Records;
 use super::records::escape_into;
-use crate::baseline::{Baseline, BaselineError, PathKind, RecordCounts, RecordParser};
+use crate::baseline::{
+    Baseline, BaselineError, HashedSets, PathKind, RecordCounts, RecordParser, SetsError,
+};
 
 /// The first field of a local baseline's header.
 pub const LOCAL_HEADER_TAG: &str = "#purge-baseline-local";
@@ -442,6 +444,8 @@ pub enum LocalBaselineError {
     HashMismatch,
     /// Something follows the `#end` line.
     AfterEnd,
+    /// Hashed sets handed to [`LocalBaseline::from_hashed_sets`] are not strictly ascending.
+    BadSets(SetsError),
 }
 
 impl fmt::Display for LocalBaselineError {
@@ -471,6 +475,7 @@ impl fmt::Display for LocalBaselineError {
             ),
             Self::HashMismatch => write!(f, "the local baseline's #end hash does not match"),
             Self::AfterEnd => write!(f, "the local baseline has lines after #end"),
+            Self::BadSets(e) => write!(f, "local baseline: {e}"),
         }
     }
 }
@@ -642,6 +647,44 @@ impl LocalBaseline {
         })
     }
 
+    /// A local baseline from the hashed sets of one that was read before, for a derived cache form
+    /// that does not parse the text again (BL-CACHE). `header` and `sources` are the ones the text
+    /// file had; the caller answers for the sets being that file's (it binds its stored form to the
+    /// text file's hash). Refused: another builder version, sets that are not strictly ascending.
+    /// Record counts come from `sets.counts`.
+    pub fn from_hashed_sets(
+        header: LocalHeader,
+        sources: Vec<SourceLine>,
+        sets: HashedSets,
+    ) -> Result<LocalBaseline, LocalBaselineError> {
+        if header.builder_version != super::BUILDER_VERSION {
+            return Err(LocalBaselineError::BuilderVersion {
+                found: header.builder_version,
+            });
+        }
+        sets.check().map_err(LocalBaselineError::BadSets)?;
+        let c = sets.counts;
+        Ok(LocalBaseline {
+            record_count: c.keys + c.values + c.dirs + c.files,
+            sets: Baseline::from_hashed_sets(
+                &header.edition,
+                header.build,
+                header.ubr,
+                &header.built_at,
+                "local",
+                sets,
+            ),
+            header,
+            sources,
+        })
+    }
+
+    /// The hashed membership sets ([`LocalBaseline::from_hashed_sets`] reads them back; store
+    /// [`HashedSets::scheme`] beside them).
+    pub fn into_hashed_sets(self) -> HashedSets {
+        self.sets.into_hashed_sets()
+    }
+
     /// The header.
     pub fn header(&self) -> &LocalHeader {
         &self.header
@@ -671,6 +714,11 @@ impl LocalBaseline {
     /// Record lines in the file.
     pub fn record_count(&self) -> u64 {
         self.record_count
+    }
+
+    /// The hashed sets, for the baseline view's presence union.
+    pub(crate) fn sets(&self) -> &Baseline {
+        &self.sets
     }
 
     /// Records of each type in the file.
