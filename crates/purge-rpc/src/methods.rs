@@ -1139,6 +1139,9 @@ pub struct HistoryItem {
     pub outcome: ItemOutcome,
     /// Whether it has been undone.
     pub undone: bool,
+    /// A reconcile that found another object in quarantine in this op's place (review M3-R2 S5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alert: Option<Alert>,
 }
 
 /// `history.get`.
@@ -1163,6 +1166,19 @@ pub struct ConflictRow {
     pub conflict: UndoConflict,
 }
 
+/// Another object was found in quarantine in place of the one a boot-time move recorded: Purge moved
+/// it back, or kept it there because it could not (review M3-R2 S5, ruling 1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Alert {
+    /// The op whose boot-time move this reconcile looked at.
+    pub op: OpId,
+    /// The source path the boot-time move was to take.
+    pub original_path: String,
+    /// Whether the other object was moved back to `original_path`; `false` when it is kept in
+    /// quarantine.
+    pub moved_back: bool,
+}
+
 /// `undo.run`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UndoResult {
@@ -1170,6 +1186,9 @@ pub struct UndoResult {
     pub outcome: crate::error::Outcome,
     /// The conflicts.
     pub conflicts: Vec<ConflictRow>,
+    /// Objects reconcile found in quarantine in place of the recorded ones.
+    #[serde(default)]
+    pub alerts: Vec<Alert>,
 }
 
 /// An interrupted session.
@@ -1195,10 +1214,13 @@ pub struct PendingList {
 }
 
 /// `journal.resume`, `journal.rollback`, `journal.retry_held`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct OutcomeResult {
     /// What the run did.
     pub outcome: crate::error::Outcome,
+    /// Objects reconcile found in quarantine in place of the recorded ones.
+    #[serde(default)]
+    pub alerts: Vec<Alert>,
 }
 
 /// One entry past retention.

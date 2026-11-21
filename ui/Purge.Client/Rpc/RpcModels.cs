@@ -331,6 +331,23 @@ public enum WritableBy
 }
 
 /// <summary>
+/// Another object was found in quarantine in place of the one a boot-time move recorded: Purge moved
+/// it back, or kept it there because it could not (review M3-R2 S5, ruling 1).
+/// </summary>
+public sealed class Alert
+{
+    [JsonPropertyName("moved_back")]
+    public bool MovedBack { get; set; }
+
+    [JsonPropertyName("op")]
+    public uint Op { get; set; }
+
+    [JsonPropertyName("original_path")]
+    public string OriginalPath { get; set; } = "";
+
+}
+
+/// <summary>
 /// The app something belongs to: its stable id plus the name to show.
 /// </summary>
 public sealed class AppRef
@@ -923,6 +940,10 @@ public sealed class HistoryIndex
 /// </summary>
 public sealed class HistoryItem
 {
+    [JsonPropertyName("alert")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Alert? Alert { get; set; }
+
     [JsonPropertyName("display_name")]
     public string DisplayName { get; set; } = "";
 
@@ -1194,6 +1215,9 @@ public sealed class OutcomeCounts
 /// </summary>
 public sealed class OutcomeResult
 {
+    [JsonPropertyName("alerts")]
+    public System.Collections.Generic.List<Alert> Alerts { get; set; } = new();
+
     [JsonPropertyName("outcome")]
     public Outcome Outcome { get; set; } = default!;
 
@@ -1953,6 +1977,9 @@ public sealed class UndoParams
 /// </summary>
 public sealed class UndoResult
 {
+    [JsonPropertyName("alerts")]
+    public System.Collections.Generic.List<Alert> Alerts { get; set; } = new();
+
     [JsonPropertyName("conflicts")]
     public System.Collections.Generic.List<ConflictRow> Conflicts { get; set; } = new();
 

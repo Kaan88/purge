@@ -26,8 +26,8 @@ use purge_model::{
 use purge_plan::emit::{ScanDoc, ScanSchema};
 use purge_rpc::error::Outcome;
 use purge_rpc::methods::{
-    ConflictRow, HistoryDetail, HistoryItem, ItemKind, OutcomeResult, PendingSession, PipeCall,
-    UndoResult,
+    Alert, ConflictRow, HistoryDetail, HistoryItem, ItemKind, OutcomeResult, PendingSession,
+    PipeCall, UndoResult,
 };
 use purge_win::taskdialog::Outcome as Answer;
 use serde_json::{Value, json};
@@ -246,10 +246,12 @@ impl FakeBackend {
             undo: Mutex::new(Ok(UndoResult {
                 outcome: Outcome::Complete,
                 conflicts: Vec::new(),
+                alerts: Vec::new(),
             })),
             recover_preview: Mutex::new(gone()),
             recover: Mutex::new(Ok(OutcomeResult {
                 outcome: Outcome::Complete,
+                alerts: Vec::new(),
             })),
             calls: Mutex::new(Vec::new()),
             undone: Mutex::new(Vec::new()),
@@ -500,6 +502,7 @@ fn history_get_answers_from_the_backend_and_an_unknown_session_is_gone() {
             kind: ItemKind::File,
             outcome: ItemOutcome::Done,
             undone: false,
+            alert: None,
         }],
     });
     let rig = Rig::start(backend.clone());
@@ -754,6 +757,7 @@ fn an_undo_over_a_taken_place_lists_it_as_attention_and_needs_the_box() {
             display_name: r"C:\Vendor\b.txt".into(),
             conflict: UndoConflict::DestinationExists,
         }],
+        alerts: Vec::new(),
     });
     let c = rig.client();
     c.send_line(&request(2, "undo.run", &undo_params(None)));
@@ -1189,6 +1193,7 @@ fn the_outcome_of_a_recovery_reaches_the_client() {
     let (rig, backend) = recover_rig(recover_preview(Some(files_plan()), Want::Resume, &[1]));
     *backend.recover.lock().unwrap() = Ok(OutcomeResult {
         outcome: Outcome::NotClosed,
+        alerts: Vec::new(),
     });
     let c = rig.client();
     let reply = ask(
@@ -1200,6 +1205,58 @@ fn the_outcome_of_a_recovery_reaches_the_client() {
         Answer::Approved,
     );
     assert_eq!(reply["result"]["outcome"], "not_closed", "{reply}");
+}
+
+/// M3-R2 S5: an object reconcile found in quarantine in place of the recorded one reaches the client
+/// in the undo and the recovery result (`live.rs` fills them from the run's reconcile results).
+#[test]
+fn a_reconcile_alert_reaches_the_undo_and_recovery_results() {
+    let alert = Alert {
+        op: OpId(2),
+        original_path: r"C:\Vendor\b.txt".into(),
+        moved_back: true,
+    };
+
+    let (rig, backend) = restore_rig(files_plan(), &[3, 2, 1]);
+    *backend.undo.lock().unwrap() = Ok(UndoResult {
+        outcome: Outcome::Complete,
+        conflicts: Vec::new(),
+        alerts: vec![alert.clone()],
+    });
+    let c = rig.client();
+    let reply = ask(
+        &rig,
+        &c,
+        2,
+        "undo.run",
+        &undo_params(None),
+        Answer::Approved,
+    );
+    assert_eq!(
+        reply["result"]["alerts"],
+        json!([{ "op": 2, "original_path": r"C:\Vendor\b.txt", "moved_back": true }]),
+        "{reply}"
+    );
+
+    let (rig, backend) = recover_rig(recover_preview(Some(files_plan()), Want::Resume, &[1]));
+    *backend.recover.lock().unwrap() = Ok(OutcomeResult {
+        outcome: Outcome::Complete,
+        alerts: vec![alert],
+    });
+    let c = rig.client();
+    let reply = ask(
+        &rig,
+        &c,
+        2,
+        "journal.resume",
+        &session_params(),
+        Answer::Approved,
+    );
+    assert_eq!(
+        reply["result"]["alerts"],
+        json!([{ "op": 2, "original_path": r"C:\Vendor\b.txt", "moved_back": true }]),
+        "{reply}"
+    );
 }
 
 #[test]

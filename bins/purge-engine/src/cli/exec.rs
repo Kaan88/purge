@@ -1908,6 +1908,7 @@ mod tests {
                 retries: Vec::new(),
                 index_updated,
                 warnings: Vec::new(),
+                alerts: Vec::new(),
             };
         let committed = Some(SessionState::Committed);
         assert_eq!(

@@ -873,18 +873,30 @@ fn ids_that_are_not_this_brokers_plans_never_open_a_dialog() {
     rig.exit(SECS);
 }
 
-/// Two scans, two plans: each plan id runs the object frozen for it, and neither can run the other's.
+/// Two programs, two scans, two plans: each plan id runs the object frozen for it, and neither can run
+/// the other's.
 #[test]
 fn a_plan_runs_its_own_scans_object_and_not_another() {
     let mut rig = Rig::start();
     let c = rig.client();
-    let p = planned(&rig, &c, &[broker_id(), medium_id()]);
+    let prepare = prepared(&c, 2, &[broker_id(), medium_id()]);
+    let sessions: Vec<String> = prepare["result"]["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["session_id"].as_str().unwrap().to_owned())
+        .collect();
+    let scan_a = scan_session(&c, 3, &sessions[0], true);
+    let scan_a = scan_a["result"]["scan_id"].as_str().unwrap().to_owned();
+    let item_a = first_selectable(&rig.scan().scan).id.0.clone();
+    let reply = create_selected(&c, 4, &scan_a, &[&item_a]);
+    let plan_a = created_id(&reply);
     let first = rig.plan();
-    // A second scan of the same session, planned over the same item.
-    let scan = scan_session(&c, 5, &p.sessions[0], true);
-    let scan_b = scan["result"]["scan_id"].as_str().unwrap().to_owned();
-    assert_ne!(scan_b, p.scan);
-    let reply = create_selected(&c, 6, &scan_b, &[&p.item]);
+
+    let scan_b = scan_session(&c, 5, &sessions[1], true);
+    let scan_b = scan_b["result"]["scan_id"].as_str().unwrap().to_owned();
+    let item_b = first_selectable(&rig.scan().scan).id.0.clone();
+    let reply = create_selected(&c, 6, &scan_b, &[&item_b]);
     let plan_b = created_id(&reply);
     let second = rig.plan();
     assert!(!Arc::ptr_eq(&first.bound, &second.bound));
@@ -896,12 +908,65 @@ fn a_plan_runs_its_own_scans_object_and_not_another() {
         assert!(Arc::ptr_eq(&called[0].plan, &second.bound));
         assert!(!Arc::ptr_eq(&called[0].plan, &first.bound));
     }
-    // The first plan is still its own scan's and still unused.
-    let (reply, _) = execute_answering(&rig, &c, 8, &p.plan, "off", Answer::Approved);
+    // The other program is another scan and another plan: still its own object, still unused.
+    let (reply, _) = execute_answering(&rig, &c, 8, &plan_a, "off", Answer::Approved);
     assert_eq!(reply["result"]["outcome"], "complete", "{reply}");
     let called = rig.exec.called.lock().unwrap();
     assert!(Arc::ptr_eq(&called[1].plan, &first.bound));
     drop(called);
+    c.close();
+    rig.exit(SECS);
+}
+
+/// M3-R2 S2: a run spends every scan of its program, not only the plan's. A sibling scan made before
+/// the run can be neither planned nor run afterwards; a fresh scan from the stored fingerprint
+/// describes the machine now and can.
+#[test]
+fn a_run_spends_every_scan_of_the_program() {
+    let mut rig = Rig::start();
+    let c = rig.client();
+    let p = planned(&rig, &c, &[broker_id(), medium_id()]);
+    // A sibling scan of the same session, made and planned before the run.
+    let sibling = scan_session(&c, 5, &p.sessions[0], true);
+    let sibling_id = sibling["result"]["scan_id"].as_str().unwrap().to_owned();
+    let sibling_plan = created_id(&create_selected(&c, 6, &sibling_id, &[&p.item]));
+
+    let (reply, _) = execute_answering(&rig, &c, 7, &p.plan, "off", Answer::Approved);
+    assert_eq!(reply["result"]["outcome"], "complete", "{reply}");
+    assert_eq!(rig.exec.calls(), 1);
+
+    // A plan already made from the sibling scan cannot run: its document is the machine before the run.
+    c.send_line(&request(
+        8,
+        "plan.execute",
+        &execute_params(&sibling_plan, "off"),
+    ));
+    let refused_plan = answer_of(&c);
+    assert_eq!(kind(&refused_plan), "plan_refused", "{refused_plan}");
+    assert!(!rig.dialog_opens(), "a spent scan opens no dialog");
+    assert_eq!(rig.exec.calls(), 1);
+
+    // A new plan from that scan is refused too.
+    let refused_create = create_selected(&c, 9, &sibling_id, &[&p.item]);
+    assert_eq!(kind(&refused_create), "plan_refused", "{refused_create}");
+
+    // A fresh scan (from the stored fingerprint) is not spent and can be planned.
+    let fresh = ask(
+        &c,
+        10,
+        "leftovers.scan",
+        json!({ "program_id": broker_id() }),
+    );
+    let fresh_id = fresh["result"]["scan_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{fresh}"))
+        .to_owned();
+    let fresh_item = first_selectable(&rig.scan().scan).id.0.clone();
+    let planned_from_fresh = create_selected(&c, 11, &fresh_id, &[&fresh_item]);
+    assert!(
+        planned_from_fresh["result"]["plan_id"].is_string(),
+        "{planned_from_fresh}"
+    );
     c.close();
     rig.exit(SECS);
 }

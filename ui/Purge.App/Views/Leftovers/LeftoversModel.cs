@@ -751,6 +751,8 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
             UndoConflictLines.Clear();
             foreach (var conflict in undo.Conflicts)
                 UndoConflictLines.Add($"{conflict.DisplayName}: {conflict.Conflict.Kind}");
+            foreach (var alert in undo.Alerts)
+                UndoConflictLines.Add(AlertText(alert));
             UndoTitle = undo.Outcome == Outcome.UndoConflicts ? "Put back, with conflicts" : "Put back";
             UndoDetail = undo.Conflicts.Count == 0
                 ? "Everything this session moved is back where it was."
@@ -802,6 +804,8 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
             Info = retried.Outcome == Outcome.Complete
                 ? "The held items were tried again and moved."
                 : "The held items were tried again; some are still in use. See History & undo.";
+            if (retried.Alerts.Count > 0)
+                Info = string.Join(" ", retried.Alerts.Select(AlertText).Prepend(Info));
         }
         catch (BrokerRpcException ex) when (ex.Kind == "consent_declined")
         {
@@ -838,6 +842,11 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         Phase = LeftoversPhase.Review;
         Notify();
     }
+
+    /// <summary>The line a reconcile alert adds to the undone panel (review M3-R2 S5).</summary>
+    private static string AlertText(Alert alert) => alert.MovedBack
+        ? $"Purge found another file in quarantine and put it back at {alert.OriginalPath}."
+        : $"Purge found another file in quarantine and kept it there: {alert.OriginalPath}.";
 
     private static string DescribeError(BrokerRpcException error)
     {

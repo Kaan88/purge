@@ -1,4 +1,11 @@
 {
+  "alerts": [
+    {
+      "moved_back": true,
+      "op": 2,
+      "original_path": "C:\\Program Files\\Git\\cmd"
+    }
+  ],
   "conflicts": [
     {
       "conflict": {
