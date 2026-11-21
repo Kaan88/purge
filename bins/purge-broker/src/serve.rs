@@ -44,7 +44,8 @@ use purge_model::ProgramId;
 use purge_rpc::error::{ErrorData, ErrorObject, INVALID_REQUEST, IdKind};
 use purge_rpc::frame::{FrameError, FrameReader, FrameWriter, RequestId, Response};
 use purge_rpc::methods::{
-    BaselineChanged, LeftoversScanParams, PipeCall, ServerNotification, ShutdownResult,
+    BaselineChanged, ConfirmCode, ConsentShown, LeftoversScanParams, PipeCall, ServerNotification,
+    ShutdownResult,
 };
 use purge_rpc::sets::{CapSet, OUT_LIMIT, PIPE_IN_LIMIT, Transport};
 use purge_rpc::table::{Method, Routed, route, write_notification, write_response};
@@ -77,8 +78,15 @@ pub trait Consent: Send + Sync + 'static {
     /// Shows the dialog described by `pages` (`primary` is the id whose click approves) and waits for
     /// the answer. Arms `closer` with the way to close the window as soon as it is open
     /// ([`Closer::arm`]) and disarms it when it ends; the dialog closes as Cancel when the closer
-    /// fires. An error means it could not be shown, and counts as Cancel.
-    fn ask(&self, pages: &[Page], primary: i32, closer: &Closer) -> io::Result<Outcome>;
+    /// fires. `shown` is called once, when the window is up and can be answered (`consent.shown`),
+    /// never when it could not be shown. An error means it could not be shown, and counts as Cancel.
+    fn ask(
+        &self,
+        pages: &[Page],
+        primary: i32,
+        closer: &Closer,
+        shown: &(dyn Fn() + Sync),
+    ) -> io::Result<Outcome>;
 }
 
 /// Runs the requests the serving loop does not answer itself: everything but `engine.hello` and
@@ -364,14 +372,22 @@ impl<H: Handler> Ctx<'_, H> {
 
     /// Shows the consent dialog and waits for the answer: [`Outcome::Approved`] only when the user
     /// approved. A dialog that cannot be shown, one whose broker is ending (parent or pipe lost),
-    /// and one closed because of that, are [`Outcome::Declined`].
-    pub fn consent(&self, pages: &[Page], primary: i32) -> Outcome {
+    /// and one closed because of that, are [`Outcome::Declined`]. When the window is up the client is
+    /// sent `consent.shown` with `code`; a client that cannot be written to is lost, which closes the
+    /// dialog as Cancel.
+    pub fn consent(&self, pages: &[Page], primary: i32, code: ConfirmCode) -> Outcome {
         if self.shared.closer.fired() || self.lost() {
             return Outcome::Declined;
         }
+        let shown = || {
+            let _ = self.notify(&ServerNotification::ConsentShown(ConsentShown {
+                request: self.request,
+                code,
+            }));
+        };
         self.shared
             .consent
-            .ask(pages, primary, &self.shared.closer)
+            .ask(pages, primary, &self.shared.closer, &shown)
             .unwrap_or(Outcome::Declined)
     }
 }

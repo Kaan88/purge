@@ -462,6 +462,27 @@ fn a_broker_nobody_connects_to_ends_when_idle() {
 
 /// Row: a completed change with no other session open sends its result, waits for the client to
 /// close, and ends.
+/// Design 8.1: the broker sends `consent.shown` with the code when the dialog is up, before the client
+/// can have an answer; a dialog that is declined still ends in `consent_declined`.
+#[test]
+fn consent_shown_is_sent_when_the_dialog_is_up() {
+    let mut h = Harness::start();
+    h.consent.announce_shown();
+    let c = h.client();
+    let plan = make_plan(&c, 2);
+    c.send_line(&request(3, "plan.execute", &execute_params(&plan)));
+    let shown = c.reply();
+    assert_eq!(shown["method"], "consent.shown");
+    assert_eq!(shown["params"]["request"], 3);
+    assert_eq!(shown["params"]["code"], "A1B2-C3D4");
+    assert!(h.consent.wait_open(SECS));
+    assert_eq!(h.consent.primary(), 100);
+    h.consent.answer(Outcome::Declined);
+    assert_eq!(kind(&c.reply()), "consent_declined");
+    c.close();
+    h.exit(SECS);
+}
+
 #[test]
 fn a_completed_change_ends_the_broker_after_the_client_closes() {
     let mut h = Harness::start();

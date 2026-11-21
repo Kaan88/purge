@@ -89,16 +89,29 @@ impl Link for PipeLink {
     }
 }
 
+/// How long the broker waits for the window to come up before it stops waiting to say so. The dialog
+/// itself keeps running; `consent.shown` is then simply not sent.
+const CREATE_WAIT: Duration = Duration::from_secs(30);
+
 /// The consent dialog: `purge_win::taskdialog` on its own thread, closed as Cancel through the
 /// [`Closer`] when the parent or the pipe is lost.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TaskDialogConsent;
 
 impl Consent for TaskDialogConsent {
-    fn ask(&self, pages: &[Page], primary: i32, closer: &Closer) -> io::Result<Outcome> {
+    fn ask(
+        &self,
+        pages: &[Page],
+        primary: i32,
+        closer: &Closer,
+        shown: &(dyn Fn() + Sync),
+    ) -> io::Result<Outcome> {
         let dialog = Dialog::open(pages, primary)?;
         let handle = dialog.close_handle();
         closer.arm(move || handle.close());
+        if dialog.wait_created(CREATE_WAIT) {
+            shown();
+        }
         let outcome = dialog.wait();
         closer.disarm();
         outcome

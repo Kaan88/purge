@@ -38,6 +38,7 @@ impl Consent for NoConsent {
         _: &[Page],
         _: i32,
         _: &purge_broker::lifetime::Closer,
+        _: &(dyn Fn() + Sync),
     ) -> std::io::Result<Outcome> {
         Ok(Outcome::Declined)
     }

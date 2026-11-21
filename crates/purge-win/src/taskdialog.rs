@@ -12,6 +12,10 @@
 //! close from another thread, is [`Outcome::Declined`]; a failure to show is an `Err` that the caller
 //! treats the same way.
 //!
+//! The window is centred on the work area of the monitor the cursor is on when it is created, and again
+//! after every page change (a page resizes it); a window larger than the work area keeps its top left
+//! corner on screen.
+//!
 //! `comctl32` v6 is needed for `TaskDialogIndirect`; the binary carries a manifest for it
 //! (`bins/purge-broker/purge-broker.manifest`). The function is looked up at run time, so a process without the
 //! manifest (a test binary) links and loads fine and showing returns `ErrorKind::Unsupported`.
@@ -26,14 +30,18 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+};
 use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 use windows_sys::Win32::UI::Controls::{TASKDIALOG_BUTTON, TASKDIALOGCONFIG};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, PostMessageW, SendMessageW,
-    SetForegroundWindow,
+    FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, GetCursorPos, GetWindowRect,
+    PostMessageW, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
+    SetWindowPos,
 };
 use windows_sys::core::{BOOL, HRESULT, PCWSTR};
 
@@ -308,7 +316,74 @@ struct State {
     clicked: i32,
     /// When the primary button of the current page may be enabled; `None` when there is nothing to arm.
     arm_at: Option<Instant>,
+    /// Work area `(left, top, right, bottom)` of the monitor the cursor was on when the window was
+    /// created; every page is centred on it.
+    work_area: Option<(i32, i32, i32, i32)>,
     shared: Arc<Shared>,
+}
+
+/// Top-left corner that centres a `w` x `h` window on `work` and, when it is larger than the work area,
+/// keeps its top left corner (title bar and first lines) on screen.
+fn centered(work: (i32, i32, i32, i32), w: i32, h: i32) -> (i32, i32) {
+    let (left, top, right, bottom) = work;
+    let x = left + ((right - left) - w) / 2;
+    let y = top + ((bottom - top) - h) / 2;
+    (x.max(left), y.max(top))
+}
+
+/// Work area of the monitor that holds the cursor, nearest monitor when it is in none.
+fn cursor_work_area() -> Option<(i32, i32, i32, i32)> {
+    let mut pt = POINT { x: 0, y: 0 };
+    // SAFETY: `pt` is a valid out pointer.
+    if unsafe { GetCursorPos(&mut pt) } == 0 {
+        return None;
+    }
+    // SAFETY: plain value argument.
+    let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_null() {
+        return None;
+    }
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `info` has its size set and is a valid out pointer.
+    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        return None;
+    }
+    let w = info.rcWork;
+    Some((w.left, w.top, w.right, w.bottom))
+}
+
+/// Moves the dialog to the centre of the work area chosen at creation. A page change resizes the window,
+/// so this runs again after every navigation.
+fn place(st: &State, hwnd: HWND) {
+    let Some(work) = st.work_area else {
+        return;
+    };
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    // SAFETY: `rect` is a valid out pointer; the window is the dialog's own.
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return;
+    }
+    let (x, y) = centered(work, rect.right - rect.left, rect.bottom - rect.top);
+    // SAFETY: moves the dialog's own window without resizing, restacking or activating it.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
 }
 
 unsafe extern "system" fn callback(
@@ -323,6 +398,8 @@ unsafe extern "system" fn callback(
     match msg {
         TDN_CREATED => {
             st.shared.hwnd.store(hwnd as isize, Ordering::SeqCst);
+            st.work_area = cursor_work_area();
+            place(st, hwnd);
             // SAFETY: plain window calls on the dialog's own handle.
             unsafe {
                 if SetForegroundWindow(hwnd) == 0 {
@@ -350,6 +427,7 @@ unsafe extern "system" fn callback(
             st.verified = false;
             apply_gate(st, hwnd);
             delay_primary(st, hwnd);
+            place(st, hwnd);
             if st.shared.close_requested.load(Ordering::SeqCst) {
                 st.shared.click_cancel();
             }
@@ -358,15 +436,11 @@ unsafe extern "system" fn callback(
         TDN_VERIFICATION_CLICKED => {
             st.verified = wparam != 0;
             if let Some(g) = st.pages[st.current].gated {
+                // A gated primary button is also held back by the arming delay: ticking the box in
+                // the first second does not enable it, the timer does once the delay has passed.
+                let enable = st.verified && (g != st.primary || st.arm_at.is_none());
                 // SAFETY: message to the dialog window.
-                unsafe {
-                    SendMessageW(
-                        hwnd,
-                        TDM_ENABLE_BUTTON,
-                        g as WPARAM,
-                        isize::from(st.verified),
-                    )
-                };
+                unsafe { SendMessageW(hwnd, TDM_ENABLE_BUTTON, g as WPARAM, isize::from(enable)) };
             }
         }
         TDN_BUTTON_CLICKED => {
@@ -424,8 +498,8 @@ fn delay_primary(st: &mut State, hwnd: HWND) {
 }
 
 /// Enables the primary button once [`ARM_DELAY`] has passed on the page that holds it. A gated primary
-/// stays disabled: the verification box enables it. A timer that only enables a button is not a
-/// timeout answer (review M3-R1 S6).
+/// is enabled only if the verification box is ticked by then (otherwise the tick enables it). A timer
+/// that only enables a button is not a timeout answer (review M3-R1 S6).
 fn arm_primary(st: &mut State, hwnd: HWND) {
     let Some(at) = st.arm_at else {
         return;
@@ -434,7 +508,7 @@ fn arm_primary(st: &mut State, hwnd: HWND) {
         return;
     }
     st.arm_at = None;
-    if st.pages[st.current].gated != Some(st.primary) {
+    if st.pages[st.current].gated != Some(st.primary) || st.verified {
         // SAFETY: message to the dialog window.
         unsafe { SendMessageW(hwnd, TDM_ENABLE_BUTTON, st.primary as WPARAM, 1) };
     }
@@ -480,6 +554,7 @@ fn run(pages: Vec<Built>, primary: i32, shared: Arc<Shared>) -> io::Result<Outco
         verified: false,
         clicked: 0,
         arm_at: None,
+        work_area: None,
         shared,
     });
     let st_ptr: *mut State = &mut *st;
@@ -567,6 +642,13 @@ impl Dialog {
             .join()
             .unwrap_or_else(|_| Err(io::Error::other("dialog thread panicked")))
     }
+}
+
+/// Validates and builds `pages` exactly as [`Dialog::open`] does, without showing anything: the rules
+/// of ids, the gate and the primary button, and every string (no NUL). For callers that test the pages
+/// they build.
+pub fn check(pages: &[Page], primary: i32) -> io::Result<()> {
+    build_all(pages, primary).map(|_| ())
 }
 
 /// Shows the dialog and waits for the answer.
@@ -704,6 +786,17 @@ mod tests {
         let mut p = three_pages();
         p[0].content = "a\0b".into();
         assert!(build_all(&p, 100).is_err(), "NUL in text");
+    }
+
+    #[test]
+    fn centring_on_a_work_area() {
+        // A second monitor to the left, with a negative origin.
+        assert_eq!(centered((-1920, 0, 0, 1040), 520, 400), (-1220, 320));
+        assert_eq!(centered((0, 0, 1920, 1040), 520, 400), (700, 320));
+        // Taller than the work area: the top stays on screen.
+        assert_eq!(centered((0, 40, 1280, 760), 600, 1500), (340, 40));
+        // Wider than the work area: the left edge stays on screen.
+        assert_eq!(centered((100, 0, 900, 700), 1000, 300), (100, 200));
     }
 
     /// Without the broker manifest the test binary has comctl32 v5, so showing fails fast with
