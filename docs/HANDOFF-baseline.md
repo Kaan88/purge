@@ -1,4 +1,4 @@
-# Local baseline handoff (updated 2026-11-21 afternoon)
+# Local baseline handoff (paused 2026-11-21 evening)
 
 Branch `baseline`, pushed to `origin/baseline`. Design `docs/BASELINE_LOCAL_DESIGN.{md,json}`; every decision of
 this work is a 2026-11-21 row in `docs/DECISIONS.md` (Post-M1b), mostly "(coordinator)". This file is kept current
@@ -25,17 +25,27 @@ so the work can be continued from any harness: read it, then `git log --oneline 
 - BL-R1 Fable review: `docs/reviews/baseline/bl-r1-review.md`, no B; 3 M, 7 S, 11 N. Confirmed: no A site reaches
   an offer below Exact, no plant/poison path for a standard user, no false Exact, `is_admin_only_writable` holds.
 
-## In progress: BL-R1 fixes (critical, Fable)
-- Worktree `.claude/worktrees/bl-r1-fixes`, branch `bl-r1-fixes` (from e285d26). Committed: M3 957c1be (one
+## PAUSED 2026-11-21 evening (user continues from Claude Desktop). Pushed: `baseline`, `bl-r1-fixes` (081f507,
+## clean tree), `m3-design` (695bd7e). No agent or build is running. Resume order: 1) BL-R1 final checks and merge,
+## 2) M3 design, 3) answer the M3 open questions with the user.
+
+## Paused: BL-R1 fixes (critical, Fable), branch `bl-r1-fixes` at 081f507 (pushed, not merged)
+- 10 commits on e285d26; 081f507 adds the review's Disposition section, a DECISIONS row for what the fixes decided
+  (marked "to be confirmed by the coordinator": confirm or edit it), and a fix to the ignored frozen-run test.
+  M1 also added a `hello` CLI verb. Rig self-test 422/0 (one known timing flake, `Wait-DefenderIdle`, not ours).
+- **Not run yet**: the whole final suite (below). Per-crate tests passed at each commit; purge-scan ran in full
+  only at S2. The ignored frozen-run L5 test (`l5_holds_for_the_frozen_runs_with_an_injected_view`) has never
+  passed end to end: vscode and git held, firefox failed on a comparison artifact that 081f507 fixes, npp not
+  reached. Run it alone (~12+ min, no other xtask build at the same time):
+  `$env:PURGE_RUNS_DIR='<repo>\vm\runs'; cargo test -p xtask l5_holds_for_the_frozen_runs -- --ignored --nocapture`.
+- Deferred to BL-GATE: a purge-harvest "whole fingerprint is a subset" test (M2 suggestion).
+- Commits: M3 957c1be (one
   `has_classes_hive` for regpath, guard canon, harvest source_key), M2 7c114e1 + ba949a1 (replay
   `--baseline-view merged|local` injects the view into harvest and scan; `--l5-against <no-baseline plan>`),
   M1 d645393 (rig protects its baseline tree, asserts baseline_trust from engine.hello per run; **untested on a
   VM**), S5 f094230, S2 2a8a917, S3/S7 ba07878 (L5 stated once: nothing new, no band raised, preselected subset),
   S1 2c415f4 (docs), S6 c588741 (baseline-sites reads past test items, every crate, classifies view methods).
-- Last uncommitted bits there: review "Disposition" section, a small M2 test fix, DECISIONS/design edits. The
-  agent was running the frozen-run L5 check (`cargo test -p xtask l5_holds_for_the_frozen_runs -- --ignored`, env
-  `PURGE_RUNS_DIR=<repo>\vm\runs`, `PURGE_L5_DRAWS=2`), then the final checks.
-- To finish: commit the rest; in the worktree run `cargo test --workspace --no-fail-fast`, clippy -D warnings
+- To finish: in the worktree run `cargo test --workspace --no-fail-fast`, clippy -D warnings
   (workspace, `-p purge-mcp`, `-p purge-engine -p purge-exec --features purge-engine/rig-exec,purge-exec/test-support`),
   `cargo fmt --all --check`, xtask check-deps, no-new-walks, scanner-coverage, baseline-sites. Then on `baseline`:
   delete the untracked copy `docs/reviews/baseline/bl-r1-review.md` (the branch has it), `git merge --no-ff
@@ -47,6 +57,25 @@ so the work can be continued from any harness: read it, then `git log --oneline 
 ## Started in parallel: milestone M3 (UI + broker), user's request 2026-11-21
 - Design first (Fable): worktree `.claude/worktrees/m3-design`, branch `m3-design`, delivering
   `docs/M3_DESIGN.{md,json}` in the BASELINE_LOCAL/M2 design schema, plus DECISIONS rows and open user questions.
+- Paused at draft 695bd7e: only `docs/M3_DESIGN.md` exists. Done: code state (`purge-rpc` holds only EngineHello;
+  `--stdio`/`--broker` are stubs exiting 1; check-deps rule 4 forbids the executor in release), inherited
+  requirements table, draft architecture (medium vs elevated, ids only over the pipe, consent and execution on the
+  same in-memory bound plan), draft broker threat table, package names. TODO (marked in the doc): scope, RPC
+  additions, launch gates + S1 skeleton bench, screens S1-S4/S7, consent dialog content, tests (VM rig, UAC-on),
+  gate criteria, risks, waves/review points/cut_or_move, `M3_DESIGN.json`, DECISIONS rows. Not yet read: the
+  M2_DESIGN.json schema, install.ps1, xtask ui-strings/ci, the stopgap UI branches' content; WinAppSDK 2.6.x restore
+  not checked.
+- Open user questions (ask before finishing the design):
+  1. Per-user apps: BL-R1 says do not trust a harvest made at medium integrity, the plan says per-user apps need
+     no UAC. Prompt UAC for per-user uninstalls too, or cap medium-made evidence below Safe/preselection?
+  2. The broker needs the executor, ending the 2026-11-15 "no executor in release" rule: one executable, or a
+     separate broker binary so the medium engine stays executor-free?
+  3. Standard-user accounts (over-the-shoulder elevation): support in M3, or refuse clearly and defer to M4?
+  4. Code-signing route (decides whether the broker's caller check verifies a signature or only a path).
+  5. Closing apps / restarting Explorer / boot-time ops (M2 never does them): enable with consent in M3, or
+     report-only?
+  6. `SeRestorePrivilege` for undo's owner restore (R8b M1): allow for that one step, or keep the known limit?
+  7. Reuse of the stopgap UI (not assessed yet).
   Inputs: ENGINE_PLAN 3, 7, 9, 11; M2_GATE 8; M1B_GATE (R8b M1); HANDOFF-m1b M3 notes; BL-R1 S4/N5/N6; prior-art
   stopgap shell on `origin/worktree-agent-a7c285be2b9791f54` (0d9c008).
 - Toolchain: .NET SDK 10.0.404 is installed at `C:\Program Files\dotnet` but not on PATH in agent shells.
