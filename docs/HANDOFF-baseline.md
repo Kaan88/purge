@@ -4,6 +4,53 @@ Branch `baseline`, pushed to `origin/baseline`. Design `docs/BASELINE_LOCAL_DESI
 this work is a 2026-11-21 row in `docs/DECISIONS.md` (Post-M1b), mostly "(coordinator)". This file is kept current
 so the work can be continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+
+## PAUSED 2026-11-21 ~21:00 (third pause, user asked for a handoff). Nothing pushed this session.
+State: `baseline` holds M3 waves 1-2 except M3-BENCH, plus BL-RESIDUE. No VM running, no build running.
+- Merged (local only): M3-S0 a9aa940, M3-UI-IMPORT, M3-RIG-UAC 77ded10, M3-WIN-TASKDLG 9404a2a, M3-WIN-PIPE
+  2e6c265, M3-WIN-PRIV, M3-RPC, M3-HARDEN 9d2bfe4, M3-DEPS (merge after 4bdff2b; check-deps 5/5 ok), BL-RESIDUE
+  (bbd38a0, local-baseline wave 6). DECISIONS: 7 coordinator rows for the writer choices (5b579d0), the 5 security
+  rows say "pending review M3-R1"; M3-DEPS 4e row written by its writer.
+- Writer digest for the review and DECISIONS: `docs/m3-notes/wave2-writers.md` (choices, binding notes for
+  M3-STDIO/M3-BROKER-CORE, what M3-R1 should attack).
+- Elevated VM unit run PASSED (32/32, Windows-native route: host-built test exes run by the elevated rig agent;
+  vm/win-unit.sh is Linux-host only): R8b M1 owner restore fixed. Evidence E:\purge-build\gate-evidence\m3-win-elev.
+- RIG-UAC: medium->high dialog 0/9, high control 4/4, secure desktop answered from the host (Alt+Y/Alt+N
+  scancodes); vm/truth/m3-rig-uac.md, snapshot `m3-uac-on`.
+- Checks on the merged tree: fmt, workspace clippy -D warnings, check-deps, tests of purge-win/broker/exec. Full
+  unelevated `xtask ci` NOT run since 02f8830.
+- Open from UI-IMPORT: `xtask ui-strings` not run (reference file not on the laptop; needs PURGE_UT_STRINGS).
+
+### Stopped mid-work (resume these first)
+1. **Fable review M3-R1** (critical, wave 2): stopped before writing anything. Restart it: reviewer Fable medium,
+   output docs/reviews/m3/r1-review.md, scope `git diff 02f8830..baseline` for purge-rpc, check_deps.rs,
+   purge-win pipe/token/process/privilege/reg_write/secure/known_folders/eventlog/taskdialog, broker start.rs/
+   main.rs/build.rs/manifest, engine main.rs/pipeline(.rs, /baseline.rs), purge-exec act_service.rs; attacks in
+   M3_DESIGN.json review_points M3-R1; also rule on the writer choices. Then fix B/S, confirm the 5 pending
+   DECISIONS rows.
+2. **M3-BENCH** (Sonnet): uncommitted work in worktree `.claude/worktrees/agent-a0d483433fd069807` (based on
+   4bdff2b): xtask bench_launch.rs + main.rs, ui/bench/ (BareWinUI), LaunchMarkers.cs, MainWindow, Program.cs,
+   ProgramsView, FakeEngineClient. Its last words: "Fixed. Run the bench." -> builds were done, no timings taken.
+   Review the diff, run the bench on an idle host (cold-boot runs need the user's 5 laptop reboots: pending),
+   commit, merge.
+3. Then unelevated ci (`schtasks /run /tn PurgeCiUnelev`, log C:\purge-build\ci-unelev-laptop.log), then M3 wave 3
+   (M3-STDIO, M3-ICONS, M3-RUNNER, M3-BROKER-CORE, M3-GEN-DTO, M3-ENGINE-OUT, M3-UI-SHELL).
+
+### Owners needed (from writer reports)
+- HARDEN: purge-exec `StorageRoots::installed()` still env-dependent (rig CLI path); `/DEPENDENTLOADFLAG:0x800` in
+  bins/purge-broker/build.rs (allowed by rule 4f); event-log source "Purge" registration in install.ps1; elevated
+  tests need PURGE_TEST_BROKER_EXE/ENGINE_EXE/OTHER_VOLUME_DIR; T6/T7 on a VM.
+- TASKDLG: "opens on the cursor's monitor" (M3-CONSENT); paging/gating/close untested on a VM.
+- BL-GATE (wave 6 rest) still open, needs a VM.
+
+### Harness notes from this session
+- Agent worktrees (`isolation: worktree`) are cut from origin HEAD (m1b c8370f9), not `baseline`: brief every
+  writer to `git reset --hard baseline` first.
+- Parallel writers touching crates/purge-win/Cargo.toml conflict on the one-line windows-sys feature list:
+  resolve by union.
+- DeepSeek Flash jobs time out at 900 s server-side; the edits survive in the worktree, continue with `session`.
+- Don't pipe a check into `tail` before `&& git commit` (exit code lost).
+
 ## Done
 - Waves 1-4 merged: BL-WIN-SXS, BL-WIN-OFFREG, BL-MANIFEST, BL-SOURCES, BL-BUILD, BL-RIG-DIFF, BL-MEASURE
   (gate M on both VMs and the host, `vm/rig-baseline-local.ps1`), BL-VIEW, BL-POLICY.
