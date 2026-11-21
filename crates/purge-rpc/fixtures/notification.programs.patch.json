@@ -3,7 +3,8 @@
     {
       "appx": false,
       "installer": "Inno",
-      "program_id": "HKLM|64|Git_is1"
+      "program_id": "HKLM|64|Git_is1",
+      "system_component": false
     }
   ],
   "request": 2

@@ -6,7 +6,7 @@ engine and the broker, and replace the hand-written DTOs. The custom `Main` star
 `Purge.exe`, or the file named by `PURGE_ENGINE`) in a kill-on-close job with two inherited pipes and sends
 `engine.hello` and `programs.list` before XAML starts. `--sample` and `--bench-stub` use the sample-data stub
 (`FakeEngineClient`) instead; so does a missing or failing engine, with a notice in the Programs page. The client
-only lists programs so far: scan, remove and undo wait for the broker, and no button changes anything on the PC.
+only reads so far (the Programs page's calls): scan, remove and undo wait for the broker, and no button changes anything on the PC.
 
 ## Pages (7a, nine)
 
@@ -87,8 +87,14 @@ They show in Settings when present, and append one line per launch to the file n
 - Under Native AOT, `ListView.ContainerFromIndex` returns a `ContentControl`; cast to `FrameworkElement`.
 - A `LinearGradientBrush` with `SpreadMethod="Repeat"` corrupts rendering of the region.
 - Never test with global keystrokes; drive the app through UI Automation and `--page`.
+- Programs page (M3-UI-S1): tabs Apps, Components, Unnamed and Recent (AppX packages are apps, chipped "Store app"); rows
+  start raw and take `programs.patch` (installer, MSI, Burn, AppX, system component, unnamed, parent key), `size.ready`,
+  `icon.batch` (cache first, `IconLoader`, viewport first, placeholder tile on any failure) and `programs.get` (details pane) in place.
+  The "removed outside Purge" group comes from `inventory.changes`, asked before `programs.list` because the engine stores the new list
+  when a list ends. Uninstall is disabled with its reason until the broker exists (`IEngineClient.CanChangePc`); Force remove, Modify and
+  Remove entry are not offered. List rules are in `Purge.Client/Model/ProgramRules.cs`, tested in `ProgramsPageTests`.
 - Still sample-only or pending the UI packages: the Settings expanders not in the M3 list (running apps, start as
-  administrator, packs, other profiles, AI), sample banners, badges on the rail, removed-outside-Purge data.
+  administrator, packs, other profiles, AI), sample banners, badges on the rail, "Check for leftovers" (needs the broker).
 
 All UI text is Purge's own. `cargo xtask ui-strings` checks every `*.cs` string literal and `*.xaml` attribute value of
 12+ characters here (set `PURGE_UT_STRINGS` to the reference language file kept outside the repo).

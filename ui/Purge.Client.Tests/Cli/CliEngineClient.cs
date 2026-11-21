@@ -71,9 +71,20 @@ public sealed class CliEngineClient : IEngineClient
         return doc;
     }
 
-    /// <summary>Not measured by the engine yet: every program shows "not measured".</summary>
-    public Task<IReadOnlyDictionary<string, long>> GetSizesAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyDictionary<string, long>>(new Dictionary<string, long>());
+    public bool CanChangePc => true;
+
+    public event Action<IReadOnlyList<Rpc.ProgramPatch>>? ProgramsPatched { add { } remove { } }
+
+    /// <summary>Not measured by the CLI: every program shows "not measured".</summary>
+    public Task MeasureSizesAsync(IReadOnlyList<string> programIds, Action<IReadOnlyList<Rpc.ProgramSize>> onBatch, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    public Task LoadIconsAsync(IReadOnlyList<string> programIds, int px, Action<IReadOnlyList<ProgramIcon>> onBatch, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    public Task<Rpc.ProgramDetails?> GetProgramAsync(string programId, CancellationToken ct = default) => Task.FromResult<Rpc.ProgramDetails?>(null);
+
+    public Task<Rpc.InventoryChanges> GetInventoryChangesAsync(CancellationToken ct = default) => Task.FromResult(new Rpc.InventoryChanges());
 
     /// <summary>Not in the engine yet: every program stays "not known yet".</summary>
     public Task<IReadOnlyList<LeftoverForecast>> GetForecastsAsync(IReadOnlyList<string> programIds, CancellationToken ct = default) =>

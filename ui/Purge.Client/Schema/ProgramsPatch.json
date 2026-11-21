@@ -89,6 +89,13 @@
             }
           ]
         },
+        "parent_key": {
+          "description": "The name of the parent Uninstall key (`ParentKeyName`), for entries that hang under another.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "product_code": {
           "description": "The MSI ProductCode.",
           "type": [
@@ -99,6 +106,20 @@
         "program_id": {
           "description": "The entry.",
           "$ref": "#/$defs/ProgramId"
+        },
+        "system_component": {
+          "description": "Whether the entry has `SystemComponent` set.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "unnamed": {
+          "description": "Whether the entry has no `DisplayName` (the row's `name` is then its key name).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [

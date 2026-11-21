@@ -19,14 +19,33 @@ public sealed partial class ExpectLine(ForecastLineKind? kind, string text, stri
     public Visibility UnknownVisibility => kind is null ? Visibility.Visible : Visibility.Collapsed;
 }
 
+/// <summary>A program the stored list had and the registry no longer has ("removed outside Purge", 7a delta 5).</summary>
+public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program, bool canCheck, string checkHint)
+{
+    public string ProgramId { get; } = program.ProgramId;
+    public string Name { get; } = program.Name;
+    public string Initial { get; } = program.Name.Length > 0 && char.IsLetterOrDigit(program.Name[0]) ? char.ToUpperInvariant(program.Name[0]).ToString() : "?";
+
+    /// <summary>No stored fingerprint exists for it, so no leftover count is claimed.</summary>
+    public string Detail => "Not installed any more. Removed outside Purge, so there is no record of what it left.";
+
+    public bool CanCheck { get; } = canCheck;
+    public string CheckHint { get; } = checkHint;
+}
+
 public sealed partial class ProgramsView : UserControl
 {
     private const int ForecastBatch = 8;
+    private const int SizeChunk = 16;
+    private const int MaxRemovedShown = 5;
 
     private List<ProgramRow> _all = [];
-    private IReadOnlyDictionary<string, long> _sizes = new Dictionary<string, long>();
+    private readonly Dictionary<string, ProgramRow> _byId = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _sizes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Microsoft.UI.Xaml.Media.ImageSource> _icons = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LeftoverForecast?> _forecasts = new(StringComparer.Ordinal);
     private InventoryDoc? _doc;
+    private StartupResult? _startup;
     private ProgramTab _tab = ProgramTab.Apps;
     private string _query = "";
     private string _sortKey = "name";
@@ -34,6 +53,13 @@ public sealed partial class ProgramsView : UserControl
     private bool _firstTickDone;
     private bool _refreshing;
     private bool _onlyLeftovers, _onlyPerUser, _only32;
+    private bool _changesShown;
+    private bool _patchesHooked;
+    private long _maxSize = 1;
+    private int _sizesDone;
+    private bool _sizing;
+    private CancellationTokenSource? _enrich;
+    private IconAtlas? _atlas;
     private ProgramRow? _current;
     private readonly (Button Button, Border Selection, TextBlock Label, TextBlock Count, ProgramTab Tab)[] _tabs;
 
@@ -47,10 +73,10 @@ public sealed partial class ProgramsView : UserControl
             (TabApps, TabAppsSel, TabAppsLabel, TabAppsCount, ProgramTab.Apps),
             (TabComponents, TabComponentsSel, TabComponentsLabel, TabComponentsCount, ProgramTab.Components),
             (TabUnnamed, TabUnnamedSel, TabUnnamedLabel, TabUnnamedCount, ProgramTab.Unnamed),
-            (TabStore, TabStoreSel, TabStoreLabel, TabStoreCount, ProgramTab.Store),
             (TabRecent, TabRecentSel, TabRecentLabel, TabRecentCount, ProgramTab.Recent),
         ];
         UpdateSortHeaders();
+        UpdateCommandState();
         ProgramList.ContainerContentChanging += (_, _) =>
         {
             if (!_firstRowSeen) { _firstRowSeen = true; LaunchMarkers.Mark("first_row"); }
@@ -66,14 +92,16 @@ public sealed partial class ProgramsView : UserControl
     public void Load(StartupResult data)
     {
         _doc = data.Inventory;
+        _startup = data;
+        if (!_patchesHooked)
+        {
+            _patchesHooked = true;
+            data.Engine.ProgramsPatched += OnLatePatches;
+        }
+        UpdateCommandState();
         Rebuild();
-        _ = LoadSizesAsync();
-    }
-
-    private async Task LoadSizesAsync()
-    {
-        _sizes = await Program.Engine.GetSizesAsync();
-        Rebuild();
+        // The list can arrive after the first tick; then what the tick would have started starts here.
+        if (_firstTickDone) StartAfterFirstFrame();
     }
 
     private void Rebuild()
@@ -82,35 +110,170 @@ public sealed partial class ProgramsView : UserControl
         var today = DateTime.Today;
         var currentId = _current?.Entry.ProgramId;
         _all = _doc.Entries.Select(e => new ProgramRow(e, _sizes.TryGetValue(e.ProgramId, out var s) ? s : null, today)).ToList();
-        var max = Math.Max(1, _all.Max(r => r.SizeBytes ?? 0));
+        _byId.Clear();
         foreach (var r in _all)
         {
-            r.BarWidth = r.SizeBytes is { } b and > 0 ? Math.Max(2, 96.0 * b / max) : 0;
+            _byId[r.Entry.ProgramId] = r;
+            if (_icons.TryGetValue(r.Entry.ProgramId, out var image)) r.SetIcon(image);
+        }
+        UpdateBars();
+        foreach (var r in _all)
+        {
             if (_forecasts.TryGetValue(r.Entry.ProgramId, out var f)) r.Forecast = f;
             r.Extras = _firstTickDone;
         }
-        _current = currentId is null ? null : _all.FirstOrDefault(r => r.Entry.ProgramId == currentId);
+        _current = currentId is not null && _byId.TryGetValue(currentId, out var again) ? again : null;
         if (_firstTickDone) UpdateTabCounts();
         UpdateSummary();
         MainWindow.Instance.SetProgramsCount(_all.Count);
         Refresh();
     }
 
-    /// <summary>Work deferred to after the first Rendering tick (§9.2 step 3).</summary>
+    private void UpdateBars()
+    {
+        _maxSize = Math.Max(1, _all.Max(r => r.SizeBytes ?? 0));
+        foreach (var r in _all)
+            r.BarWidth = r.SizeBytes is { } b and > 0 ? Math.Max(2, 96.0 * b / _maxSize) : 0;
+    }
+
+    /// <summary>Work deferred to after the first Rendering tick (A9.2 step 3).</summary>
     public void OnFirstTick()
     {
         _firstTickDone = true;
         UpdateTabCounts();
         FindName(nameof(Commands));
         PlainCommands.Visibility = Visibility.Collapsed;
-        // Sample: in M3 this group comes from inventory.changes (programs removed outside Purge).
-        FindName(nameof(Attention));
         foreach (var r in _all) r.Extras = true;
-        // The details pane is created here, not for the first frame (§9.2 step 3).
+        // The details pane is created here, not for the first frame (A9.2 step 3).
         ShowDetails(_current);
         UpdateSummary();
+        if (_doc is not null) StartAfterFirstFrame();
+    }
+
+    private void StartAfterFirstFrame()
+    {
+        _ = ShowRemovedAsync(_startup?.Changes);
+        StartEnrichment();
         _ = LoadForecastsAsync();
     }
+
+    /// <summary>
+    /// Fills the rows' icons and sizes, viewport first: what the list shows now comes first, then the rest in list
+    /// order. The engine answers one request at a time, so both go in small chunks and a details request waits for
+    /// at most one of them.
+    /// </summary>
+    private void StartEnrichment()
+    {
+        _enrich?.Cancel();
+        var cts = _enrich = new CancellationTokenSource();
+        var engine = Program.Engine;
+        var shown = ProgramList.ItemsSource as List<ProgramRow> ?? [];
+        var order = shown.Concat(_all).Select(r => r.Entry).DistinctBy(e => e.ProgramId).ToList();
+        _sizesDone = 0;
+        _sizing = true;
+        _ = RunIconsAsync(engine, order, cts.Token);
+        _ = RunSizesAsync(engine, order.Select(e => e.ProgramId).ToList(), cts.Token);
+    }
+
+    private async Task RunIconsAsync(IEngineClient engine, List<InventoryEntry> order, CancellationToken ct)
+    {
+        var request = order.Select(e => (e.ProgramId, IconLoader.Stamp(e.Version, e.InstallTimeEvidence is { Count: > 0 } ev ? ev.Min(x => x.Time) : null))).ToList();
+        try
+        {
+            await Task.Run(async () =>
+            {
+                // Sample data keeps no cache: its icons are made up and must not reach the user's atlas file.
+                var atlas = engine.IsLive ? _atlas ??= new IconAtlas() : null;
+                await IconLoader.LoadAsync(engine, atlas, request, (id, icon) =>
+                    DispatcherQueue.TryEnqueue(() => { if (!ct.IsCancellationRequested) ApplyIcon(id, icon); }), ct).ConfigureAwait(false);
+            }, ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e) when (e is not OutOfMemoryException) { }
+    }
+
+    private void ApplyIcon(string id, AtlasIcon icon)
+    {
+        Microsoft.UI.Xaml.Media.ImageSource image;
+        try { image = ProgramRow.ToImage(icon); }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or IOException) { return; } // Keeps the tile.
+        _icons[id] = image;
+        if (_byId.TryGetValue(id, out var row)) row.SetIcon(image);
+        if (_current is not null && _current.Entry.ProgramId == id) ShowDetailsTile(_current);
+    }
+
+    private async Task RunSizesAsync(IEngineClient engine, List<string> ids, CancellationToken ct)
+    {
+        try
+        {
+            for (var i = 0; i < ids.Count; i += SizeChunk)
+            {
+                ct.ThrowIfCancellationRequested();
+                var chunk = ids.GetRange(i, Math.Min(SizeChunk, ids.Count - i));
+                await engine.MeasureSizesAsync(chunk, batch => DispatcherQueue.TryEnqueue(() => { if (!ct.IsCancellationRequested) ApplySizes(batch); }), ct);
+            }
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception e) when (e is not OutOfMemoryException) { }
+        // Back on the page's thread (the call came back through its context).
+        if (ct.IsCancellationRequested) return;
+        _sizing = false;
+        if (_sortKey == "size") Refresh();
+        UpdateSummary();
+    }
+
+    private void ApplySizes(IReadOnlyList<Purge.Client.Rpc.ProgramSize> batch)
+    {
+        foreach (var size in batch)
+        {
+            _sizesDone++;
+            if (size.Bytes is not { } bytes) continue;
+            _sizes[size.ProgramId] = (long)bytes;
+            if (_byId.TryGetValue(size.ProgramId, out var row)) row.SetSize((long)bytes);
+        }
+        UpdateBars();
+        UpdateSummary();
+        if (_current is not null) ShowDetailsSize(_current);
+    }
+
+    /// <summary>Patches that came after the list reply: applied to the rows, which move between tabs when they change.</summary>
+    private void OnLatePatches(IReadOnlyList<Purge.Client.Rpc.ProgramPatch> patches) =>
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_doc is null) return;
+            var changed = false;
+            foreach (var patch in patches)
+            {
+                if (!_byId.TryGetValue(patch.ProgramId, out var row)) continue;
+                row.Update(ProgramEntries.Apply(row.Entry, patch));
+                changed = true;
+            }
+            if (!changed) return;
+            _doc = _doc with { Entries = _all.Select(r => r.Entry).ToList() };
+            if (_firstTickDone) UpdateTabCounts();
+            Refresh();
+        });
+
+    /// <summary>Shows the "removed outside Purge" group from <c>inventory.changes</c> once, when there is something in it.</summary>
+    private async Task ShowRemovedAsync(Task<Purge.Client.Rpc.InventoryChanges?>? asked)
+    {
+        if (_changesShown || asked is null) return;
+        _changesShown = true;
+        var changes = await asked;
+        if (changes is null || changes.Disappeared.Count == 0) return;
+        var can = Program.Engine.CanChangePc;
+        var hint = can ? "Looks for what it left on the PC" : "Needs the Purge security prompt, which this build doesn't have yet";
+        FindName(nameof(Attention));
+        var live = Program.Engine.IsLive;
+        var more = changes.Disappeared.Count - MaxRemovedShown;
+        AttentionHeader.Text = "\uE7BA  REMOVED OUTSIDE PURGE · " + changes.Disappeared.Count.ToString(CultureInfo.CurrentCulture)
+                               + (more > 0 ? $" (showing {MaxRemovedShown})" : "") + (live ? "" : "   SAMPLE DATA");
+        AttentionList.ItemsSource = changes.Disappeared.Take(MaxRemovedShown).Select(p => new RemovedRow(p, can, hint)).ToList();
+        UpdateSummary();
+    }
+
+    private void OnCheckRemoved(object sender, RoutedEventArgs e) =>
+        ShowNotice("Checking a removed program for leftovers needs the Purge security prompt, which this build doesn't have yet.");
 
     /// <summary>
     /// Asks for expected leftovers in small batches, in list order, so the visible rows fill first. Until a
@@ -141,12 +304,10 @@ public sealed partial class ProgramsView : UserControl
         var total = _all.Sum(r => r.SizeBytes ?? 0);
         var text = $"{_all.Count} entries · {ProgramRow.FormatSize(total)}";
         var apps = _all.Where(r => r.IsApp).ToList();
-        if (_forecasts.Count >= _all.Count)
+        if (_forecasts.Count >= _all.Count && _forecasts.Values.Any(f => f is not null))
             text += $" · {apps.Count(r => r.Verdict is ForecastVerdict.Some or ForecastVerdict.Large)} would leave leftovers";
-        else if (_firstTickDone)
-            text += " · checking expected leftovers…";
         Summary.Text = text;
-        if (_firstTickDone)
+        if (_firstTickDone && AllAppsLabel is not null)
             AllAppsLabel.Text = $"ALL {TabLabel(_tab).ToUpper(CultureInfo.CurrentCulture)} · {(ProgramList.ItemsSource as List<ProgramRow>)?.Count ?? 0}";
         UpdateStatus();
     }
@@ -156,7 +317,10 @@ public sealed partial class ProgramsView : UserControl
         if (!_firstTickDone) return;
         var shown = ProgramList.ItemsSource as List<ProgramRow> ?? [];
         StatusLeft.Text = $"{shown.Count} {TabLabel(_tab).ToLower(CultureInfo.CurrentCulture)} · {ProgramRow.FormatSize(shown.Sum(r => r.SizeBytes ?? 0))}";
-        var right = Program.Engine.IsLive ? "Engine connected · sizes and expected leftovers not measured" : "Sample data · engine not connected";
+        var engine = Program.Engine;
+        var right = engine.IsLive ? "Engine connected" : "Sample data · engine not connected";
+        if (engine.IsLive && _sizing && _all.Count > 0) right += $" · measuring sizes {Math.Min(_sizesDone, _all.Count)} of {_all.Count}";
+        if (!engine.CanChangePc && engine.IsLive) right += " · uninstalling needs the Purge security prompt";
         if (LaunchMarkers.Get("list_reply") is { } reply) right += $" · list in {reply.ToString("F0", CultureInfo.CurrentCulture)} ms";
         if (LaunchMarkers.Get("presented") is { } ms) right += $" · on screen in {ms.ToString("F0", CultureInfo.CurrentCulture)} ms";
         StatusRight.Text = right;
@@ -167,7 +331,6 @@ public sealed partial class ProgramsView : UserControl
         ProgramTab.Apps => "Apps",
         ProgramTab.Components => "Components",
         ProgramTab.Unnamed => "Unnamed",
-        ProgramTab.Store => "Store apps",
         _ => "Recent",
     };
 
@@ -219,31 +382,17 @@ public sealed partial class ProgramsView : UserControl
         if (_firstTickDone) UpdateSummary();
     }
 
-    private IEnumerable<ProgramRow> Order<TKey>(IEnumerable<ProgramRow> rows, Func<ProgramRow, TKey> key)
-    {
-        // Child rows (updates, Burn children) stay directly under their parent.
-        // A key name can repeat on a real machine (the same key under the 32- and the 64-bit view, or HKLM and HKCU).
-        var byKey = _all.Select(r => KeyName(r.Entry.KeyPath)).ToHashSet();
-        var all = rows.ToList();
-        var parents = all.Where(r => !r.IsChild || !byKey.Contains(r.Entry.Flags.ParentKey!));
-        var ordered = _sortDescending ? parents.OrderByDescending(key) : parents.OrderBy(key);
-        var children = all.Where(r => r.IsChild && byKey.Contains(r.Entry.Flags.ParentKey!)).ToList();
-        foreach (var p in ordered)
-        {
-            yield return p;
-            foreach (var c in children)
-                if (c.Entry.Flags.ParentKey == KeyName(p.Entry.KeyPath)) yield return c;
-        }
-    }
+    // Child rows (updates, Burn children) stay directly under their parent.
+    private IEnumerable<ProgramRow> Order<TKey>(IEnumerable<ProgramRow> rows, Func<ProgramRow, TKey> key) =>
+        ProgramRules.Order(rows, r => r.Entry, key, _sortDescending);
 
-    private static string KeyName(string keyPath) => keyPath[(keyPath.LastIndexOf('\\') + 1)..];
+    private static string KeyName(string keyPath) => ProgramRules.KeyName(keyPath);
 
     private void UpdateTabCounts()
     {
         TabAppsCount.Text = _all.Count(r => r.IsApp).ToString(CultureInfo.CurrentCulture);
         TabComponentsCount.Text = _all.Count(r => r.IsComponent).ToString(CultureInfo.CurrentCulture);
         TabUnnamedCount.Text = _all.Count(r => r.IsUnnamed).ToString(CultureInfo.CurrentCulture);
-        TabStoreCount.Text = "…";
         TabRecentCount.Text = _all.Count(r => r.IsRecent).ToString(CultureInfo.CurrentCulture);
     }
 
@@ -302,7 +451,7 @@ public sealed partial class ProgramsView : UserControl
 
     private void OnFilter(object sender, RoutedEventArgs e)
     {
-        // Built on first use (§9.2 step 3).
+        // Built on first use (A9.2 step 3).
         if (FilterButton.Flyout is null)
         {
             var menu = new MenuFlyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
@@ -343,12 +492,69 @@ public sealed partial class ProgramsView : UserControl
     {
         var n = ProgramList.SelectedItems.Count;
         SelectedCount.Text = n == 0 ? "" : $"{n} selected";
+        UninstallLabel.Text = n > 1 ? $"Uninstall {n}" : "Uninstall";
+    }
+
+    /// <summary>
+    /// Uninstall changes the PC, so it waits for the broker: until then the buttons are disabled and the tooltip says
+    /// why. Sample data has no engine to ask at all.
+    /// </summary>
+    private void UpdateCommandState()
+    {
+        var engine = Program.Engine;
+        var can = engine.CanChangePc;
+        UninstallButton.IsEnabled = can;
+        ToolTipService.SetToolTip(UninstallButton, can ? null : UninstallHint(engine));
+        if (DUninstallButton is not null)
+        {
+            DUninstallButton.IsEnabled = can;
+            ToolTipService.SetToolTip(DUninstallButton, can ? null : UninstallHint(engine));
+        }
+    }
+
+    private static string UninstallHint(IEngineClient engine) => engine.IsLive
+        ? "Uninstalling arrives with the Purge security prompt. This build lists programs only."
+        : "Sample data: no engine is connected.";
+
+    private void ShowDetailsTile(ProgramRow row)
+    {
+        if (!_firstTickDone || Details is null) return;
+        DTile.Background = row.HasIcon ? null : row.TileBrush;
+        DInitial.Text = row.HasIcon ? "" : row.Initial;
+        DIcon.Source = row.Icon;
+        DIcon.Visibility = row.HasIcon ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ShowDetailsSize(ProgramRow row)
+    {
+        if (!_firstTickDone || Details is null || _current != row) return;
+        DSize.Text = row.SizeText.Length > 0 ? row.SizeText : (_sizing ? "Measuring…" : "Not measured");
+    }
+
+    private async Task LoadDetailsAsync(ProgramRow row)
+    {
+        row.DetailsRequested = true;
+        try
+        {
+            var details = await Program.Engine.GetProgramAsync(row.Entry.ProgramId);
+            if (details is not null)
+            {
+                row.Update(ProgramEntries.Apply(row.Entry, details));
+                row.DetailsLoaded = true;
+            }
+            else row.DetailsLoaded = true;
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            row.DetailsLoaded = true; // The pane then shows what the list knew; the error is not worth a bar.
+        }
+        if (_current == row) ShowDetails(row);
     }
 
     private void ShowDetails(ProgramRow? row)
     {
         // The details pane is created on first use after the first Rendering tick, not for the first frame
-        // (§9.2 step 3). Before the tick the row is only remembered in _current and shown by OnFirstTick.
+        // (A9.2 step 3). Before the tick the row is only remembered in _current and shown by OnFirstTick.
         if (!_firstTickDone) return;
         if (row is null)
         {
@@ -357,18 +563,25 @@ public sealed partial class ProgramsView : UserControl
         }
         FindName(nameof(Details));
         Details.Visibility = Visibility.Visible;
+        UpdateCommandState();
         var e = row.Entry;
-        DTile.Background = row.TileBrush;
-        DInitial.Text = row.Initial;
+        // The list rows carry no uninstaller, folder or product code: programs.get brings them, once per row.
+        var engine = Program.Engine;
+        if (!engine.IsLive) row.DetailsLoaded = true;
+        else if (!row.DetailsRequested) _ = LoadDetailsAsync(row);
+        var reading = !row.DetailsLoaded;
+        ShowDetailsTile(row);
         DName.Text = row.Name;
         DSub.Text = Join(" · ", row.Publisher, row.Version, row.KindChip);
-        DUninstaller.Text = e.UninstallString is null
-            ? "None registered"
-            : row.KindText + (e.QuietUninstallString is not null || e.InstallerKind == InstallerKind.Msi ? " · quiet mode available" : "");
-        DLocation.Content = e.InstallLocation ?? "Not recorded";
+        DUninstaller.Text = reading
+            ? "Reading…"
+            : e.UninstallString is null
+                ? "None registered"
+                : row.KindText + (e.QuietUninstallString is not null || e.InstallerKind == InstallerKind.Msi ? " · quiet mode available" : "");
+        DLocation.Content = reading ? "Reading…" : e.InstallLocation ?? "Not recorded";
         DLocation.IsEnabled = e.InstallLocation is not null;
         DInstalled.Text = Join(" · ", row.InstalledText, "for " + row.ScopeText);
-        DSize.Text = row.SizeText.Length > 0 ? row.SizeText : "Not measured";
+        ShowDetailsSize(row);
         DPlatform.Text = row.BitsText;
 
         DExpects.ItemsSource = row.Forecast is { } f
@@ -384,8 +597,8 @@ public sealed partial class ProgramsView : UserControl
         DOwns.Text = string.Join(", ", owns);
         DOwnsLabel.Visibility = DOwns.Visibility = owns.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        DUninstall.Text = e.UninstallString ?? "None";
-        DQuiet.Text = e.QuietUninstallString ?? "None";
+        DUninstall.Text = reading ? "…" : e.UninstallString ?? "None";
+        DQuiet.Text = reading ? "…" : e.QuietUninstallString ?? "None";
         var code = e.ProductCode ?? e.UpgradeCode;
         DProductLabel.Visibility = DProduct.Visibility = code is null ? Visibility.Collapsed : Visibility.Visible;
         DProduct.Text = code ?? "";
@@ -417,44 +630,38 @@ public sealed partial class ProgramsView : UserControl
 
     /// <summary>
     /// Runs a program command. Buttons and the command box both come here, so a typed command takes exactly the
-    /// steps its button takes.
+    /// steps its button takes. Force remove, Modify and Remove entry are not offered in M3 (design 10).
     /// </summary>
     public void RunCommand(string tag)
     {
-        if (tag == "more-pending")
+        switch (tag)
         {
-            // Clicked before the first tick finished: load the CommandBar now and open its overflow.
-            FindName(nameof(Commands));
-            PlainCommands.Visibility = Visibility.Collapsed;
-            Commands.IsOpen = true;
-            return;
+            case "more-pending":
+                // Clicked before the first tick finished: load the CommandBar now and open its overflow.
+                FindName(nameof(Commands));
+                PlainCommands.Visibility = Visibility.Collapsed;
+                Commands.IsOpen = true;
+                return;
+            case "open-folder" when _current?.Entry.InstallLocation is { } dir && Directory.Exists(dir):
+                Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = false });
+                return;
+            case "open-folder":
+                ShowNotice("The install folder is not recorded for this program, or is not on this PC any more.");
+                return;
+            case "web" when _current is { } found:
+                Process.Start(new ProcessStartInfo("https://www.bing.com/search?q=" + Uri.EscapeDataString(Join(" ", found.Name, found.Publisher)))
+                {
+                    UseShellExecute = true,
+                });
+                return;
+            case "refresh" when Program.Engine.IsLive:
+                _ = ReloadAsync();
+                return;
+            case "uninstall" when Program.Engine.CanChangePc && _current is { } row:
+                _ = ConfirmUninstallAsync(row);
+                return;
         }
-        if (tag == "open-folder" && _current?.Entry.InstallLocation is { } dir && Directory.Exists(dir))
-        {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = false });
-            return;
-        }
-        if (Program.Engine.IsLive)
-        {
-            switch (tag)
-            {
-                case "uninstall" when _current is { } row:
-                    _ = ConfirmUninstallAsync(row);
-                    return;
-                case "force" when _current is { } row:
-                    _ = MainWindow.Instance.OpenReview().ScanAsync(row.Entry.ProgramId, row.Name, ScanKind.ScanOnly);
-                    return;
-                case "refresh":
-                    _ = ReloadAsync();
-                    return;
-                default:
-                    ShowNotice("Not in this build: only Uninstall, Force remove (scan only) and Refresh list use the engine.");
-                    return;
-            }
-        }
-        var n = ProgramList.SelectedItems.Count;
-        var what = n > 1 ? $"{n} programs" : _current?.Name ?? "this program";
-        ShowNotice($"Not connected yet: this preview runs on sample data, so nothing happens to {what}. The engine connection arrives in M3.");
+        ShowNotice(UninstallHint(Program.Engine));
     }
 
     /// <summary>Asks before the vendor's uninstaller runs, then hands over to S3, which scans when it is done.</summary>
@@ -482,6 +689,7 @@ public sealed partial class ProgramsView : UserControl
         {
             _doc = await Program.Engine.ListProgramsAsync();
             Rebuild();
+            StartEnrichment();
         }
         catch (Exception e)
         {
@@ -491,8 +699,6 @@ public sealed partial class ProgramsView : UserControl
 
     /// <summary>Shows why the engine could not be used (startup).</summary>
     public void ShowEngineNotice(string message) => ShowNotice(message);
-
-    private void OnReviewRemoved(object sender, RoutedEventArgs e) => MainWindow.Instance.Navigate("leftovers");
 
     private void ShowNotice(string message)
     {

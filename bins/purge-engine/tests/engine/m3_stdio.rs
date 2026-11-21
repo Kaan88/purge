@@ -63,6 +63,8 @@ fn machine() -> Fixture {
     let beta = format!(r"{UNINSTALL}\Beta");
     fx.set_value(&beta, "DisplayName", RegData::from_sz("Beta App"));
     fx.set_value(&beta, "InstallLocation", RegData::from_sz(r"C:\Apps\Beta"));
+    fx.set_value(&beta, "SystemComponent", RegData::from_dword(1));
+    fx.set_value(&beta, "ParentKeyName", RegData::from_sz("Alpha"));
 
     let msi = format!(r"{UNINSTALL}\{MSI_CODE}");
     fx.set_value(&msi, "DisplayName", RegData::from_sz("Msi App"));
@@ -260,6 +262,11 @@ fn programs_list_sends_raw_rows_first_then_patches() {
     assert_eq!(burn["bundle"], format!("HKLM|64|{BURN_CODE}"));
     let appx = patch("Vendor.App");
     assert_eq!(appx["appx"], true);
+    let beta = patch("Beta");
+    assert_eq!(beta["system_component"], true);
+    assert_eq!(beta["parent_key"], "Alpha");
+    assert!(patch("Alpha").get("system_component").is_none());
+    assert!(patch("Alpha").get("unnamed").is_none());
 
     let response = response(&lines, 1);
     assert_eq!(response["result"]["count"], 5);

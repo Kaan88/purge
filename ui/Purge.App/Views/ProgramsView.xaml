@@ -71,46 +71,27 @@
                     <TextBlock Text="Programs" Style="{StaticResource TitleTextBlockStyle}" />
                     <TextBlock x:Name="Summary" VerticalAlignment="Bottom" Margin="0,0,0,5" Style="{StaticResource SecondaryText}" />
                 </StackPanel>
-                <Button Grid.Column="1" Style="{StaticResource AccentButtonStyle}" Click="OnCommand" Tag="uninstall" VerticalAlignment="Center">
+                <Button x:Name="UninstallButton" Grid.Column="1" Style="{StaticResource AccentButtonStyle}" Click="OnCommand" Tag="uninstall" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <FontIcon Glyph="&#xE74D;" FontSize="14" />
-                        <TextBlock Text="Uninstall" />
+                        <TextBlock x:Name="UninstallLabel" Text="Uninstall" />
                     </StackPanel>
                 </Button>
                 <StackPanel x:Name="PlainCommands" Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                    <Button Style="{StaticResource SubtleButton}" Content="Force remove" Click="OnCommand" Tag="force" />
-                    <Button Style="{StaticResource SubtleButton}" Content="Modify" Click="OnCommand" Tag="modify" />
                     <Button Style="{StaticResource SubtleButton}" Click="OnCommand" Tag="more-pending" AutomationProperties.Name="More actions">
                         <FontIcon Glyph="&#xE712;" FontSize="14" />
                     </Button>
                 </StackPanel>
                 <CommandBar x:Name="Commands" x:Load="False" Grid.Column="2" VerticalAlignment="Center"
                             DefaultLabelPosition="Right" IsDynamicOverflowEnabled="False" Background="Transparent">
-                    <AppBarButton Label="Force remove" Click="OnCommand" Tag="force"
-                                  ToolTipService.ToolTip="Remove without running its uninstaller">
-                        <AppBarButton.Icon><FontIcon Glyph="&#xE945;" /></AppBarButton.Icon>
-                    </AppBarButton>
-                    <AppBarButton Label="Modify" Click="OnCommand" Tag="modify">
-                        <AppBarButton.Icon><FontIcon Glyph="&#xE9E9;" /></AppBarButton.Icon>
-                    </AppBarButton>
                     <CommandBar.SecondaryCommands>
-                        <AppBarButton Label="Remove entry only" Click="OnCommand" Tag="remove-entry">
-                            <AppBarButton.Icon><FontIcon Glyph="&#xE738;" /></AppBarButton.Icon>
-                        </AppBarButton>
-                        <AppBarSeparator />
                         <AppBarButton Label="Open install folder" Click="OnCommand" Tag="open-folder">
                             <AppBarButton.Icon><FontIcon Glyph="&#xE838;" /></AppBarButton.Icon>
-                        </AppBarButton>
-                        <AppBarButton Label="Open registry entry" Click="OnCommand" Tag="open-key">
-                            <AppBarButton.Icon><FontIcon Glyph="&#xE74C;" /></AppBarButton.Icon>
                         </AppBarButton>
                         <AppBarButton Label="Search the web for this program" Click="OnCommand" Tag="web">
                             <AppBarButton.Icon><FontIcon Glyph="&#xE774;" /></AppBarButton.Icon>
                         </AppBarButton>
                         <AppBarSeparator />
-                        <AppBarButton Label="Export list as JSON" Click="OnCommand" Tag="export">
-                            <AppBarButton.Icon><FontIcon Glyph="&#xEDE1;" /></AppBarButton.Icon>
-                        </AppBarButton>
                         <AppBarButton Label="Refresh list" Click="OnCommand" Tag="refresh">
                             <AppBarButton.Icon><FontIcon Glyph="&#xE72C;" /></AppBarButton.Icon>
                         </AppBarButton>
@@ -147,15 +128,6 @@
                             <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
                                 <TextBlock x:Name="TabUnnamedLabel" Text="Unnamed" />
                                 <TextBlock x:Name="TabUnnamedCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
-                            </StackPanel>
-                        </Grid>
-                    </Button>
-                    <Button x:Name="TabStore" Style="{StaticResource SubtleButton}" Padding="0" Tag="Store" Click="OnTab" AutomationProperties.Name="Store">
-                        <Grid>
-                            <Border x:Name="TabStoreSel" Style="{StaticResource TabSelection}" />
-                            <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
-                                <TextBlock x:Name="TabStoreLabel" Text="Store" />
-                                <TextBlock x:Name="TabStoreCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
                             </StackPanel>
                         </Grid>
                     </Button>
@@ -220,34 +192,29 @@
                         <Button x:Name="SortDate" Grid.Column="4" Style="{StaticResource ColumnHeader}" Tag="date" Click="OnSort" Content="Installed" Margin="-4,0,0,0" />
                     </Grid>
 
-                    <!-- "Needs attention": programs removed outside Purge. Loaded on the first tick. Sample rows, labelled as such:
-                         the engine has no "removed outside Purge" report yet (engine question). -->
+                    <!-- "Removed outside Purge" (7a delta 5): programs the stored list had and the registry no longer has, from
+                         inventory.changes. Loaded on the first tick, and only when there is something to show. A program
+                         without a stored fingerprint is listed with no leftover count; "Check for leftovers" needs the broker. -->
                     <StackPanel x:Name="Attention" x:Load="False" Grid.Row="1" Spacing="2" Margin="0,0,0,4">
-                        <TextBlock Margin="12,4,0,2" FontSize="11" CharacterSpacing="50" Foreground="{ThemeResource SystemFillColorCautionBrush}">
-                            <Run Text="&#xE7BA;" FontFamily="Segoe Fluent Icons" /><Run Text="  NEEDS ATTENTION · 2" FontWeight="SemiBold" /><Run Text="   SAMPLE · removed-outside-Purge detection isn't in the engine yet" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                        </TextBlock>
-                        <Grid Padding="12,6" ColumnSpacing="12" CornerRadius="4" Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <Border Width="28" Height="28" CornerRadius="6" Background="{ThemeResource ControlStrongFillColorDisabledBrush}">
-                                <TextBlock Text="N" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Border>
-                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                <TextBlock Text="Notion" />
-                                <TextBlock Text="Removed outside Purge today · 4 leftovers found" FontSize="12" Style="{StaticResource SecondaryText}" />
-                            </StackPanel>
-                            <Button Grid.Column="2" Content="Review leftovers" Click="OnReviewRemoved" Tag="Notion" />
-                        </Grid>
-                        <Grid Padding="12,6" ColumnSpacing="12" CornerRadius="4" Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <Border Width="28" Height="28" CornerRadius="6" Background="{ThemeResource ControlStrongFillColorDisabledBrush}">
-                                <TextBlock Text="S" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Border>
-                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                <TextBlock Text="Slack" />
-                                <TextBlock Text="Removed outside Purge today · 7 leftovers found" FontSize="12" Style="{StaticResource SecondaryText}" />
-                            </StackPanel>
-                            <Button Grid.Column="2" Content="Review leftovers" Click="OnReviewRemoved" Tag="Slack" />
-                        </Grid>
+                        <TextBlock x:Name="AttentionHeader" Margin="12,4,0,2" FontSize="11" CharacterSpacing="50" FontWeight="SemiBold"
+                                   Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+                        <ItemsControl x:Name="AttentionList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="local:RemovedRow">
+                                    <Grid Padding="12,6" ColumnSpacing="12" CornerRadius="4" Margin="0,0,0,2" Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <Border Width="28" Height="28" CornerRadius="6" Background="{ThemeResource ControlStrongFillColorDisabledBrush}">
+                                            <TextBlock Text="{x:Bind Initial}" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                                            <Run Text="{x:Bind Name}" /><LineBreak /><Run Text="{x:Bind Detail}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        </TextBlock>
+                                        <Button Grid.Column="2" Content="Check for leftovers" IsEnabled="{x:Bind CanCheck}" Click="OnCheckRemoved" Tag="{x:Bind ProgramId}"
+                                                ToolTipService.ToolTip="{x:Bind CheckHint}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                         <TextBlock x:Name="AllAppsLabel" Margin="12,8,0,0" FontSize="11" CharacterSpacing="50" FontWeight="SemiBold"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                     </StackPanel>
@@ -281,9 +248,11 @@
                                              Foreground="{ThemeResource SystemFillColorSuccessBrush}" /><LineBreak /><Run Text="{x:Bind SubLine}" FontSize="12"
                                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     </TextBlock>
-                                    <TextBlock Grid.Column="2" x:Phase="1" Text="{x:Bind SizeText}" FontSize="13" VerticalAlignment="Center" Margin="0,0,0,6" />
+                                    <TextBlock Grid.Column="2" x:Phase="1" Text="{x:Bind SizeText, Mode=OneWay}" FontSize="13" VerticalAlignment="Center" Margin="0,0,0,6" />
+                                    <Image x:Name="RowIcon" x:Load="{x:Bind HasIcon, Mode=OneWay}" Width="26" Height="26" Stretch="Uniform"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" Source="{x:Bind Icon, Mode=OneWay}" />
                                     <Rectangle x:Name="RowBar" x:Load="{x:Bind Extras, Mode=OneWay}" Grid.Column="2" Height="3" RadiusX="1.5" RadiusY="1.5"
-                                               Width="{x:Bind BarWidth}" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,22,0,0"
+                                               Width="{x:Bind BarWidth, Mode=OneWay}" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,22,0,0"
                                                Fill="{ThemeResource AccentFillColorDefaultBrush}" Opacity="0.7" />
                                     <TextBlock x:Name="RowClean" x:Load="{x:Bind ShowClean, Mode=OneWay}" Style="{StaticResource LeftoverCell}">
                                         <Run Text="&#xE73E;" FontFamily="Segoe Fluent Icons" Foreground="{ThemeResource SystemFillColorSuccessBrush}" /><Run Text="  Clean" />
@@ -317,8 +286,11 @@
                                 <ColumnDefinition />
                             </Grid.ColumnDefinitions>
                             <Border x:Name="DTile" Width="44" Height="44" CornerRadius="10">
-                                <TextBlock x:Name="DInitial" Foreground="White" FontSize="20" FontWeight="SemiBold"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <Grid>
+                                    <TextBlock x:Name="DInitial" Foreground="White" FontSize="20" FontWeight="SemiBold"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    <Image x:Name="DIcon" Width="40" Height="40" Stretch="Uniform" Visibility="Collapsed" />
+                                </Grid>
                             </Border>
                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                 <TextBlock x:Name="DName" FontSize="18" LineHeight="24" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="2" />
@@ -328,8 +300,7 @@
 
                         <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <Button Style="{StaticResource AccentButtonStyle}" Content="Uninstall" HorizontalAlignment="Stretch" Click="OnCommand" Tag="uninstall" />
-                            <Button Grid.Column="1" Content="Modify" Click="OnCommand" Tag="modify" />
+                            <Button x:Name="DUninstallButton" Style="{StaticResource AccentButtonStyle}" Content="Uninstall" HorizontalAlignment="Stretch" Click="OnCommand" Tag="uninstall" />
                         </Grid>
 
                         <Border Style="{StaticResource Divider}" />
