@@ -318,7 +318,8 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 New-Item -ItemType Directory -Force $script:RunsDir | Out-Null
 $script:RigLogFile = Join-Path $script:RunsDir "bl-$($Spec.run)-$stamp.log"
 $started = Get-Date
-$R = Join-Path $BlRigDir 'truth\baseline-local'
+# Not $R: rig.ps1 code in this scope assigns $r (PowerShell names are case-insensitive).
+$BlReportDir = Join-Path $BlRigDir 'truth\baseline-local'
 $RRel = 'vm\truth\baseline-local'
 
 # ------------------------------------------------------------------------------------------ R5: this host
@@ -332,7 +333,7 @@ if ($Spec.mode -eq 'R5') {
     if ($vms.Count) { Stop-Bl 2 "REFUSED: a VirtualBox VM runs on the host ($($vms -join ', ')); the build times are the W4 budgets" }
     $null = Move-RunToOld -Run $Spec.run
     $run = Join-Path $script:RunsDir $Spec.run
-    New-Item -ItemType Directory -Force $run, $R | Out-Null
+    New-Item -ItemType Directory -Force $run, $BlReportDir | Out-Null
     $job = Join-Path $run 'build-job.ps1'
     [IO.File]::WriteAllText($job, (Get-BlBuildJob $run $tools.engine), (New-Object System.Text.UTF8Encoding($true)))
     Write-RigLog "== $($Spec.run) start $($started.ToString('o')); engine $((Get-FileHash -Algorithm SHA256 -LiteralPath $tools.engine).Hash.ToLower().Substring(0, 12)) ($($tools.engine)); elevated $admin"
@@ -341,7 +342,7 @@ if ($Spec.mode -eq 'R5') {
     $jc = $LASTEXITCODE
     $ErrorActionPreference = $old
     if ($jc -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $run 'build.json'))) { Stop-Bl 2 "build job failed (exit $jc)" }
-    Copy-Item -LiteralPath (Join-Path $run 'build.json') -Destination (Join-Path $R "$($Spec.run)-build.json") -Force
+    Copy-Item -LiteralPath (Join-Path $run 'build.json') -Destination (Join-Path $BlReportDir "$($Spec.run)-build.json") -Force
     $rc = 0
     foreach ($truth in $Spec.baselines) {
         foreach ($nb in $Spec.baselines) {
@@ -416,7 +417,7 @@ try {
     Remove-PwTemp
 }
 if ($rc -eq 0) {
-    New-Item -ItemType Directory -Force $R | Out-Null
+    New-Item -ItemType Directory -Force $BlReportDir | Out-Null
     $out = "$RRel\$($Spec.run).json"
     Write-RigLog "== baseline-diff (host): truth $($Spec.truth), local vm\runs\$($Spec.run)\local-cold.tsv.gz, neighbour $($Spec.neighbour)"
     $code = Invoke-BlDiff $tools.rigtool (Get-BlDiffArgs "kb\baselines\$($Spec.truth).tsv.gz" "vm\runs\$($Spec.run)\local-cold.tsv.gz" "kb\baselines\$($Spec.neighbour).tsv.gz" $out)
@@ -425,7 +426,7 @@ if ($rc -eq 0) {
         $rc = 1
     } else {
         $build = Join-Path $script:RunsDir "$($Spec.run)\build.json"
-        Copy-Item -LiteralPath $build -Destination (Join-Path $R "$($Spec.run)-build.json") -Force
+        Copy-Item -LiteralPath $build -Destination (Join-Path $BlReportDir "$($Spec.run)-build.json") -Force
         $chk = Test-BlReport (Join-Path $BlRepo $out) $build $Spec.truth 'vm'
         Write-BlLines $chk.lines
         $rc = $(if ($chk.ok) { 0 } else { 3 })
