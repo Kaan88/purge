@@ -17,8 +17,13 @@ so the work can be continued from any harness: read it, then `git log --oneline 
 - Also merged: M3-WIRE (icons/uninstall served by stdio), M3-BROKER-CORE 2ec05f2 (notes docs/m3-notes/broker-core.md;
   account-only mismatch gets no answer, console-window flash open), M3-UI-CLIENT 1c27e6b (docs/m3-notes/ui-client.md),
   M3-ENGINE-OUT 3d183bd (user waived the "after BL-GATE" rule; frozen_plans.rs replays 18 M1b scans, hashes equal).
-- Running (worktrees of the same name): M3-UI-S1 + M3-CONSENT (Sonnet 5.5), M3-BROKER-FLOW (Flash). All wave 5
-  packages depend on CONSENT or BROKER-FLOW. Not yet run: full replay-all (frozen rig runs, ~47 min), unelevated ci.
+- Wave 4 merged: M3-CONSENT (docs/m3-notes/consent.md), M3-UI-S1 (real Programs page), m3-list-first (list reply
+  before patches; hello 13-18 ms release), M3-BROKER-FLOW ae35e06 (docs/m3-notes/broker-flow.md). Wave 5: M3-PURGE
+  merged 3b4b877 (broker module, wired by EXEC).
+- Running (worktrees of the same name): M3-UNDO + M3-EXEC (Sonnet 5.5; EXEC also wires purge + ObservedParams
+  outcome + Plan::release + irreversible ack), M3-UI-S2 + M3-UI-S3 (Flash; they may both define LeftoversRequest).
+  Not yet run: full replay-all (frozen rig runs, ~47 min), unelevated ci. UI test
+  ProgramsPageTests.Patches_after_the_reply... failed once under load (flaky?), passes 3/3 idle.
 - VM backlog: broker real elevation + start test, UI-CLIENT runas/server check, RUNNER medium VS Code, TASKDLG/S6.
 - M3-BENCH reviewed + fixed (0202a25), merged into baseline 2a6aa97. Timings NOT taken: warm run needs an idle
   host (later), cold series needs 5 user reboots (`cargo xtask bench-launch --cold [--reset] --purge out\purge`).
