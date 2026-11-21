@@ -667,7 +667,11 @@ fn fnv1a(text: &str) -> u64 {
 /// `const GOLDEN_VERSION` line left out: the only line policy m1b.1 was allowed to touch. Policy bl.1
 /// (BL-POLICY) did not change this value: besides the version key it added only
 /// [`BL_CONTEXT_LINE`], which is left out the same way.
-const M1A_GOLDEN_FINGERPRINT: u64 = 0xa367_5f14_bf46_703b;
+///
+/// M3-ENGINE-OUT (1f680df) moved it from `0xa367_5f14_bf46_703b`: it added only
+/// `display_name: None,` and `owner_program: None,` to the `cand` helper's struct literal, no band row.
+/// Checked by restoring the file at 1f680df^, which matches the old value.
+const M1A_GOLDEN_FINGERPRINT: u64 = 0x845e_d78e_266b_08df;
 
 /// The one line policy bl.1 added to `tests/golden.rs`, in the two places that build a `PolicyCtx` in
 /// full (`ctx` and `random_ctx`): the new context field, at the trust under which nothing is capped.
