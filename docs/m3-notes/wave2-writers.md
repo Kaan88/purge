@@ -120,3 +120,12 @@ look ProgramId up only in its own inventory (`HKLM|64|C:/x` parses: key-name par
 For M3-R1: `lookup`/`route`; `call_set!` `_ => method_not_found` arm; sealing + private SetMask;
 `Routed::Ignored`; `ID_TYPES` allowlist in the shape walk; ProgramId free text; untagged enums; duplicate keys
 refused via raw parse; `Dispatcher::call` returns untyped Value (result types by convention only).
+
+## Elevated unit run on the VM (2026-11-21 20:06, baseline 341f7c3)
+Windows-native route (host-built test exes, run through the elevated rig agent on Inbound-Win11-Test
+26100.1742, TEMP with D:AI): purge-win `token pipe process` (write,run) 27/27; purge-win `--ignored
+elevated_privilege_scope elevated_reopen_and_set_owner` 2/2; purge-exec act_service `--include-ignored
+elevated_write_back` 3/3. **R8b M1 fixed on the VM**: the key created without its SYSTEM owner gets `O:SY`
+back after the resumed write-back, no note, privilege off before and after. Evidence
+E:\purge-build\gate-evidence\m3-win-elev\ (drive script win-elev.ps1 copied there). vm/win-unit.sh stays
+Linux-host only.
