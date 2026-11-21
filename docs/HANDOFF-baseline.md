@@ -9,8 +9,14 @@ so the work can be continued from any harness: read it, then `git log --oneline 
 - M3-R1 DONE: review docs/reviews/m3/r1-review.md (B0 M2 S9 N11, Fixes section), fixes merged bfde762. Deferred:
   S1 + S7 rest -> M3-BROKER-CORE; S8 (release provenance, design decision). No "pending review" DECISIONS rows left.
 - Disk: C: ran full (parallel worktree targets ~10 GB each). Use CARGO_INCREMENTAL=0; delete merged worktrees' target/.
-- Running now: M3-STDIO, M3-ICONS (Flash, from 2a6aa97), M3-UI-SHELL (Sonnet 5.5, worktree `m3-ui-shell-b`; old
-  `m3-ui-shell` abandoned), M3-BROKER-CORE (Sonnet 5.5) and M3-GEN-DTO (Flash) from bfde762.
+- Wave 3 merged into baseline (946b915): M3-ICONS, M3-UI-SHELL, M3-GEN-DTO (hand-written C# DTOs, NJsonSchema
+  rejected; gen-dto output LF via .gitattributes), M3-STDIO, M3-RUNNER. Merged-tree fmt/clippy/engine tests ok.
+  Notes: STDIO warms the inventory before the first request (+~1.5 s to engine.hello in debug; check against the
+  launch gate in release). RUNNER level refusal uses error kind `runtime` (no dedicated kind). Unwired: worktree
+  `m3-wire` (Flash, running) plugs icons + uninstall handlers into stdio.rs.
+- Running: M3-BROKER-CORE (Sonnet 5.5, worktree m3-broker-core), M3-UI-S1 (Sonnet 5.5, wave 4, worktree m3-ui-s1).
+- Wave 4 blockers: M3-BROKER-FLOW needs M3-ENGINE-OUT, whose rule says "after BL-GATE" (VM) -> user to decide
+  whether to waive. M3-CONSENT and M3-UI-CLIENT wait for BROKER-CORE.
 - M3-BENCH reviewed + fixed (0202a25), merged into baseline 2a6aa97. Timings NOT taken: warm run needs an idle
   host (later), cold series needs 5 user reboots (`cargo xtask bench-launch --cold [--reset] --purge out\purge`).
 - Wave 3 started early, in parallel (unelevated ci deferred to merge time): worktrees `m3-stdio` (Flash),
