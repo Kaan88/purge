@@ -40,7 +40,7 @@
 //! deleted nor created again), and its MSI and Burn records give the run's M1b exemption lists, judged
 //! now by [`pipeline::m1b_lists`] over a fresh inventory (never taken from the plan). The fingerprint
 //! must be of an owner of the plan's items, of the owner of every selected system object, and must
-//! record each of them in `sys` with the digest the plan holds ([`unbound_objects`]); the executor
+//! record each of them in `sys` with the digest the plan holds ([`plan_in::unbound_objects`]); the executor
 //! drops every root the guard refuses as an app's root (review R3b S3). Without `--fp` the roots and
 //! lists are empty: every object delete is refused, one without a program too (review R3b S2), and
 //! those exemptions stay closed.
@@ -306,7 +306,7 @@ fn journal_exit(e: &JournalError) -> Exit {
 /// The exit code of a run that did not start or stopped with an error.
 fn exec_error_exit(e: &ExecError) -> Exit {
     match e {
-        ExecError::Plan(_) => Exit::PlanRefused,
+        ExecError::Plan(_) | ExecError::ObjectsUnbound(_) => Exit::PlanRefused,
         ExecError::NeedsElevation(_) => Exit::NeedsElevation,
         ExecError::Store(s) => storage_exit(s),
         ExecError::Journal(j) => journal_exit(j),
@@ -779,7 +779,7 @@ fn exec<R: RestorePointBackend + Clone>(
         }
     };
     if let Some(fp) = &fingerprint {
-        let unbound = unbound_objects(&bound, fp);
+        let unbound = plan_in::unbound_objects(&bound, fp);
         if !unbound.is_empty() {
             env.error(&format!(
                 "the fingerprint of {} does not record the selected system object(s) {} as the \
@@ -890,48 +890,6 @@ fn app_facts(
         lists.gone_burn().len()
     ));
     Ok((fp, roots, GoneLists::from_decide(&lists)))
-}
-
-/// The selected system objects of `bound` that `fp` does not vouch for (review R3b S3): an object op
-/// whose candidate is owned by another program, or whose target and scan-time digest (`object_fp`)
-/// are not recorded in `fp.sys` (the record the scan's `OwnedSystemObject` rests on). The roots of
-/// `fp` become the run's roots; this ties them to the objects they are to judge, so that a
-/// fingerprint of another harvest of the app, or an edited one, cannot lend its roots to them. The
-/// fuller binding (the fingerprint's hash in the sidecar) comes with the M3 broker (DECISIONS.md, M1b).
-fn unbound_objects(bound: &plan_in::BoundPlan, fp: &Fingerprint) -> Vec<String> {
-    let eq = purge_guard::prefix::eq_ci;
-    bound
-        .items()
-        .iter()
-        .filter(|item| item.exec_op.as_ref().is_some_and(|op| op.is_object()))
-        .filter_map(|item| bound.candidate(item))
-        .filter(|candidate| {
-            let Some(digest) = candidate.object_fp.as_ref() else {
-                return true;
-            };
-            let same = |recorded: purge_model::object::ObjectFp| *digest == recorded;
-            let recorded = match &candidate.target {
-                Target::Service { name } => fp
-                    .sys
-                    .services
-                    .iter()
-                    .any(|s| eq(&s.identity.name, name) && same(s.identity.fp())),
-                Target::Task { path } => fp
-                    .sys
-                    .tasks
-                    .iter()
-                    .any(|t| eq(&t.identity.path, path) && same(t.identity.fp())),
-                Target::FirewallRule { id } => fp
-                    .sys
-                    .firewall_rules
-                    .iter()
-                    .any(|r| r.identity.id == *id && same(r.identity.fp())),
-                _ => false,
-            };
-            candidate.owner.program_id != fp.app.program_id || !recorded
-        })
-        .map(|candidate| candidate.id.0.clone())
-        .collect()
 }
 
 /// [`Exit::Unrecorded`], with a warning for each part missing, unless the run's session is closed

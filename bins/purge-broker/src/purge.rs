@@ -68,7 +68,7 @@ const UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
 
 /// The current time as a FILETIME. The executor judges retention on this value and records it in its
 /// expire records.
-fn system_now() -> FileTime {
+pub(crate) fn system_now() -> FileTime {
     let since = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() / 100);

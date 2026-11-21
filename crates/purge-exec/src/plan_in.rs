@@ -51,7 +51,7 @@ use purge_guard::prefix;
 use purge_model::ObjectKind;
 use purge_model::exec::journal::{GoneMsiForSid, RestorePointPolicy, RunSettings};
 use purge_model::exec::op::{ExecOp, Mismatch, OpId, Sha256Hex, resolve};
-use purge_model::{Action, Band, Blocker, Candidate, CandidateId, Target};
+use purge_model::{Action, Band, Blocker, Candidate, CandidateId, Fingerprint, Target};
 use purge_plan::collapse::nests_in;
 use purge_plan::emit::ScanDoc;
 
@@ -426,6 +426,49 @@ pub fn selection_hash<'a>(ids: impl IntoIterator<Item = &'a CandidateId>) -> Sha
 /// the selection hash, both as lower-case hex. See the module docs for a fixed vector.
 pub fn confirm_hash(plan_hash: Sha256Hex, selection_hash: Sha256Hex) -> Sha256Hex {
     sha256_bytes(format!("{plan_hash}{selection_hash}").as_bytes())
+}
+
+/// The selected system objects of `bound` that `fp` does not vouch for (review R3b S3): an object op
+/// whose candidate is owned by another program, or whose target and scan-time digest (`object_fp`)
+/// are not recorded in `fp.sys` (the record the scan's `OwnedSystemObject` rests on). The roots of
+/// `fp` become the run's roots; this ties them to the objects they are to judge, so that a
+/// fingerprint of another harvest of the app, or an edited one, cannot lend its roots to them. The
+/// broker passes its own session's fingerprint every time ([`crate::execute::execute_bound`]); the
+/// rig's `exec --fp` passes the file it was given. Returns the candidate ids, in plan order.
+pub fn unbound_objects(bound: &BoundPlan, fp: &Fingerprint) -> Vec<String> {
+    let eq = prefix::eq_ci;
+    bound
+        .items()
+        .iter()
+        .filter(|item| item.exec_op.as_ref().is_some_and(|op| op.is_object()))
+        .filter_map(|item| bound.candidate(item))
+        .filter(|candidate| {
+            let Some(digest) = candidate.object_fp.as_ref() else {
+                return true;
+            };
+            let same = |recorded: purge_model::object::ObjectFp| *digest == recorded;
+            let recorded = match &candidate.target {
+                Target::Service { name } => fp
+                    .sys
+                    .services
+                    .iter()
+                    .any(|s| eq(&s.identity.name, name) && same(s.identity.fp())),
+                Target::Task { path } => fp
+                    .sys
+                    .tasks
+                    .iter()
+                    .any(|t| eq(&t.identity.path, path) && same(t.identity.fp())),
+                Target::FirewallRule { id } => fp
+                    .sys
+                    .firewall_rules
+                    .iter()
+                    .any(|r| r.identity.id == *id && same(r.identity.fp())),
+                _ => false,
+            };
+            candidate.owner.program_id != fp.app.program_id || !recorded
+        })
+        .map(|candidate| candidate.id.0.clone())
+        .collect()
 }
 
 /// Checks `request` (see the module docs) and returns the selected items in plan order. Pure: reads and

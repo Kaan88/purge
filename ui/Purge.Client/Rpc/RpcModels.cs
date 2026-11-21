@@ -1143,6 +1143,15 @@ public sealed class ObservedParams
     [JsonPropertyName("session_id")]
     public string SessionId { get; set; } = "";
 
+    /// <summary>
+    /// How the medium engine's run ended, when it reports it. A failure (or a cancel, or a time-out)
+    /// makes the scan `forced` with nothing preselected even when the program is gone; a success is
+    /// never believed on its own: the broker's own verify-gone still decides.
+    /// </summary>
+    [JsonPropertyName("outcome")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RunOutcome? Outcome { get; set; }
+
 }
 
 /// <summary>
@@ -1255,6 +1264,14 @@ public sealed class PlanCreateParams
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Preselected { get; set; }
 
+    /// <summary>
+    /// With `selected` only: offer the removals that cannot be put back (packages) to the consent
+    /// dialog. Absent or false, the dialog lists them as "Leave alone".
+    /// </summary>
+    [JsonPropertyName("allow_irreversible")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? AllowIrreversible { get; set; }
+
 }
 
 /// <summary>
@@ -1321,6 +1338,15 @@ public sealed class PlanSelectedParams
 
     [JsonPropertyName("selected")]
     public System.Collections.Generic.List<string> Selected { get; set; } = new();
+
+    /// <summary>
+    /// Offer the removals that cannot be put back (packages) to the consent dialog. Off (the default),
+    /// the dialog lists them as "Leave alone". On, the dialog names each of them, warns that it cannot
+    /// be put back and gates its button behind the verification box.
+    /// </summary>
+    [JsonPropertyName("allow_irreversible")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool AllowIrreversible { get; set; }
 
 }
 

@@ -21,7 +21,14 @@
 
 // M3-UNDO: `history.get`, `undo.run` and the `journal.*` methods ([`undo::UndoMethods`]) over a
 // [`backend::Backend`]; [`live::LiveBackend`] is the real one.
+// M3-EXEC: `plan.execute` ([`execute`], the real executor is [`exec_live::LiveExec`]) and the handler that
+// puts every package's methods behind one dispatch ([`broker::BrokerHandler`]).
 pub mod backend;
+pub mod broker;
+pub mod exec_live;
+#[cfg(test)]
+mod exec_tests;
+pub mod execute;
 pub mod history;
 pub mod live;
 pub mod live_host;

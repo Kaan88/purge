@@ -104,6 +104,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use purge_guard::deny::{DenyList, Exemptions};
@@ -113,7 +114,7 @@ use purge_model::exec::journal::{
 };
 use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, SkipReason};
 use purge_model::exec::session::{ExecReport, SessionId, SessionIndex, SessionState, VolumeUsage};
-use purge_model::{Candidate, CandidateId, ObjectKind, Reversibility};
+use purge_model::{Candidate, CandidateId, Fingerprint, ObjectKind, Reversibility};
 use purge_plan::emit::ScanDoc;
 
 use crate::act_firewall::{self, FirewallBackend, FwPrepared, FwRemoval, FwValidated};
@@ -296,6 +297,14 @@ pub enum ExecError {
     /// The session cannot be resumed.
     #[error("the session cannot be resumed: {0}")]
     NotResumable(String),
+    /// The plan selects these system objects (candidate ids), and the fingerprint the run was given does
+    /// not record them as the app's with the digest the plan holds: another owner, an older or another
+    /// harvest, or an object the harvest did not prove. Raised before the session exists.
+    #[error(
+        "the fingerprint does not vouch for the selected system object(s) {}; nothing was done",
+        .0.join(", ")
+    )]
+    ObjectsUnbound(Vec<String>),
     /// The plan selects this many service, scheduled task or firewall rule items and the process has no
     /// backends to change them ([`ExecEnv::objects`]: it is not elevated). Raised before the session
     /// exists (a resumed run: before anything is read or written).
@@ -1002,7 +1011,7 @@ enum Route {
 #[derive(Debug)]
 pub struct Run<'a> {
     env: ExecEnv<'a>,
-    plan: BoundPlan,
+    plan: Arc<BoundPlan>,
     settings: ExecSettings,
     session: SessionDir,
     ctx: GateCtx,
@@ -1054,7 +1063,26 @@ impl<'a> Run<'a> {
     /// ([`SessionDir::remove_unstarted`]: by handle, only when it holds nothing or only the scan copy);
     /// a failure of that cleanup leaves the directory, which holds no journal and so describes no run.
     fn start(request: ExecRequest, env: ExecEnv<'a>) -> Result<Run<'a>, ExecError> {
-        let plan = plan_in::bind(&request)?;
+        let plan = Arc::new(plan_in::bind(&request)?);
+        Run::start_bound(plan, request.settings, None, env)
+    }
+
+    /// [`Run::start`] for a plan that was bound already: the run takes that very object and binds
+    /// nothing again. With `fingerprint`, every selected service, task or firewall rule must be one the
+    /// fingerprint records with the plan's scan-time digest ([`plan_in::unbound_objects`]); a plan that
+    /// is not vouched for is refused before the store is touched.
+    fn start_bound(
+        plan: Arc<BoundPlan>,
+        settings: ExecSettings,
+        fingerprint: Option<&Fingerprint>,
+        env: ExecEnv<'a>,
+    ) -> Result<Run<'a>, ExecError> {
+        if let Some(fingerprint) = fingerprint {
+            let unbound = plan_in::unbound_objects(&plan, fingerprint);
+            if !unbound.is_empty() {
+                return Err(ExecError::ObjectsUnbound(unbound));
+            }
+        }
         let objects = object_ops(&plan);
         if objects > 0 && env.objects.is_none() {
             return Err(ExecError::NeedsElevation(objects));
@@ -1068,9 +1096,9 @@ impl<'a> Run<'a> {
         // M2 wrote it; a root the guard refuses as an app's root is dropped first (review R3b S3).
         let program_roots = if objects > 0 {
             checked_roots(
-                &request.settings.program_roots,
+                &settings.program_roots,
                 env.deny,
-                request.settings.user_sid.as_deref(),
+                settings.user_sid.as_deref(),
                 &mut notes.warnings,
             )
         } else {
@@ -1092,8 +1120,8 @@ impl<'a> Run<'a> {
             let scope = env.roots.store_scope(session.id(), &volume_roots)?;
             let mut ctx = GateCtx::new(env.deny.clone(), &plan.exec_ops(), scope)?;
             ctx.set_run_ops(run_ops(&plan));
-            ctx.bind_user(request.settings.user_sid.as_deref());
-            ctx.set_gone(&request.settings.gone);
+            ctx.bind_user(settings.user_sid.as_deref());
+            ctx.set_gone(&settings.gone);
             let header = Header {
                 schema: JournalSchema,
                 session: session.id().clone(),
@@ -1111,14 +1139,14 @@ impl<'a> Run<'a> {
             };
             // The selected ids in op order go into the settings record, so that a run stopped in its
             // validation is bound to its selection again without a search (`rebind_interrupted`).
-            let mut settings = request.settings.to_journal();
-            settings.selected = plan
+            let mut record = settings.to_journal();
+            record.selected = plan
                 .items()
                 .iter()
                 .filter_map(|item| plan.candidate(item))
                 .map(|candidate| candidate.id.clone())
                 .collect();
-            let journal = JournalWriter::create_with_settings(&session, header, settings)?;
+            let journal = JournalWriter::create_with_settings(&session, header, record)?;
             Ok((ctx, journal))
         })();
         let (ctx, journal) = match opened {
@@ -1134,7 +1162,7 @@ impl<'a> Run<'a> {
             data_volume: report::data_volume(env.roots),
             env,
             plan,
-            settings: request.settings,
+            settings,
             session,
             ctx,
             ledger: Ledger { journal, notes },
@@ -1239,7 +1267,7 @@ impl<'a> Run<'a> {
         let mut run = Run {
             data_volume,
             env,
-            plan,
+            plan: Arc::new(plan),
             settings,
             session,
             ctx,
@@ -2309,7 +2337,35 @@ pub fn execute<R: RestorePointBackend>(
     env: ExecEnv<'_>,
     restore_points: R,
 ) -> Result<ExecOutput, ExecError> {
-    let mut run = Run::start(request, env)?;
+    let run = Run::start(request, env)?;
+    drive(run, restore_points)
+}
+
+/// Executes a plan that [`plan_in::bind`] bound already, and runs that very object: nothing is bound or
+/// derived again (the broker draws its consent dialog from the same `Arc`). The result is the one
+/// [`execute`] gives for the request the plan was bound from, with these differences:
+///
+/// - `settings` are the run's settings, taken from the caller (never from the plan);
+/// - `fingerprint` is mandatory: every selected service, task or firewall rule must be recorded in it
+///   with the digest the plan holds ([`plan_in::unbound_objects`]), else the run does not start
+///   ([`ExecError::ObjectsUnbound`]); the act-time gates then re-check each object against the live
+///   machine.
+pub fn execute_bound<R: RestorePointBackend>(
+    plan: Arc<BoundPlan>,
+    settings: ExecSettings,
+    fingerprint: &Fingerprint,
+    env: ExecEnv<'_>,
+    restore_points: R,
+) -> Result<ExecOutput, ExecError> {
+    let run = Run::start_bound(plan, settings, Some(fingerprint), env)?;
+    drive(run, restore_points)
+}
+
+/// Steps 7 to 10 of a started run.
+fn drive<R: RestorePointBackend>(
+    mut run: Run<'_>,
+    restore_points: R,
+) -> Result<ExecOutput, ExecError> {
     let validated = match run.validate() {
         Ok(validated) => validated,
         Err(abort) => return Ok(run.abort(abort)),

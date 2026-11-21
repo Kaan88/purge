@@ -4,15 +4,21 @@
 //! directories); the command line is read; the parent process is opened and its creation time
 //! compared; the pipe is created (first instance only: a name that exists ends the broker); the
 //! standard handles are closed; the local-baseline build starts on its own thread; and the serving
-//! loop runs until it ends. The handler is [`purge_broker::uninstall::Flow`] over the live machine
-//! (M3-BROKER-FLOW): the methods of the other packages are not wired yet and answer a `runtime` error.
+//! loop runs until it ends. The handler is [`purge_broker::broker::BrokerHandler`]: the flow over the live
+//! machine (M3-BROKER-FLOW), `plan.execute` (M3-EXEC), history, undo and recovery (M3-UNDO) and the purge
+//! of expired quarantine (M3-PURGE).
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use purge_broker::baseline::{BuildHandle, LiveHost};
+use purge_broker::broker::BrokerHandler;
+use purge_broker::exec_live::LiveExec;
 use purge_broker::lifetime::{SystemClock, codes};
+use purge_broker::live::LiveBackend;
+use purge_broker::purge::Purger;
 use purge_broker::serve::{Limits, Wiring, run};
+use purge_broker::undo::UndoMethods;
 use purge_broker::uninstall::{Flow, LiveMachine};
 use purge_broker::wire::{PipeLink, ProcessParent, TaskDialogConsent};
 use purge_broker::{args, start};
@@ -102,7 +108,15 @@ fn main() -> ExitCode {
         settings.local_build = build.clone();
         let exit = run(Wiring {
             link,
-            handler: Flow::new(Arc::new(LiveMachine::new(started.store))),
+            handler: BrokerHandler::new(
+                Flow::new(Arc::new(LiveMachine::new(started.store.clone()))),
+                Purger::from_store(started.store.clone()),
+                UndoMethods::new(LiveBackend::new(
+                    started.store.clone(),
+                    settings.purge_dirs.clone(),
+                )),
+                Arc::new(LiveExec::new(started.store, settings.purge_dirs.clone())),
+            ),
             expected,
             parent: Arc::new(parent),
             consent: Arc::new(TaskDialogConsent),
