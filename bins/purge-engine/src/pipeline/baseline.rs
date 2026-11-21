@@ -41,7 +41,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::Scope;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use purge_index::baseline::Baseline;
+use purge_index::baseline::{Baseline, RecordCounts};
 use purge_index::baseline_view::{BaselineView, HostOs, VIEW_FILE_NAME, ViewRules};
 use purge_index::local_baseline::cache::{load_neighbours, read_live_s3};
 use purge_index::local_baseline::{
@@ -55,27 +55,14 @@ use purge_win::sxs::SxsBase;
 
 use super::{Settings, Sources, load_baseline};
 
-/// The trust of a view in the model's vocabulary (the policy's and the fingerprint's type).
-// BL-FRAMEWORK: purge-index's own `BaselineTrust` goes away; then this is the identity.
-pub fn model_trust(trust: purge_index::baseline_view::BaselineTrust) -> BaselineTrust {
-    use purge_index::baseline_view::BaselineTrust as T;
-    match trust {
-        T::Exact => BaselineTrust::Exact,
-        T::Merged => BaselineTrust::Merged,
-        T::Local => BaselineTrust::Local,
-        T::None => BaselineTrust::None,
-    }
-}
-
 /// What a pipeline step knows about "Windows' own": the view, and how it came about.
 #[derive(Debug, Clone)]
 pub struct PipelineBaseline {
-    /// The view. Exact: the shipped baseline of this Windows and nothing else.
+    /// The view the harvest and the scan work with. Exact: the shipped baseline of this Windows
+    /// and nothing else.
     pub view: BaselineView,
-    /// The exact shipped baseline the view was made from, for the scan and harvest contexts that
-    /// still take `Option<&Baseline>`.
-    // BL-FRAMEWORK: the contexts take `&view`; this copy and `exact()` go away.
-    exact: Option<Baseline>,
+    /// The record counts of the exact shipped baseline, when the view is Exact (the progress line).
+    exact_counts: Option<RecordCounts>,
     /// A baseline directory is configured.
     configured: bool,
     /// How each cached part of the local baseline answered; `None` when no cache was opened.
@@ -92,23 +79,24 @@ impl PipelineBaseline {
                 Vec::new(),
                 &ViewRules::closed(),
             ),
-            exact: None,
+            exact_counts: None,
             configured: false,
             parts: None,
         }
     }
 
-    /// The exact shipped baseline, when the view is Exact.
-    pub fn exact(&self) -> Option<&Baseline> {
-        self.exact.as_ref()
+    /// The record counts of the exact shipped baseline, when the view is Exact.
+    pub fn exact_counts(&self) -> Option<RecordCounts> {
+        self.exact_counts
     }
 
     /// The view's trust.
     pub fn trust(&self) -> BaselineTrust {
-        model_trust(self.view.trust())
+        self.view.trust()
     }
 
-    /// The view as a fingerprint and `engine.hello` name it; `None` without a baseline directory.
+    /// The view as `engine.hello` names it, with the view's own trust; `None` without a baseline
+    /// directory. (What a fingerprint records is `purge_harvest::harvest::baseline_view_ref`.)
     pub fn view_ref(&self) -> Option<BaselineViewRef> {
         self.configured.then(|| BaselineViewRef {
             name: self.view.name(),
@@ -246,8 +234,8 @@ fn load_with(
     };
     if let Some(exact) = exact {
         return PipelineBaseline {
-            view: BaselineView::exact(exact.clone()),
-            exact: Some(exact),
+            exact_counts: Some(exact.counts()),
+            view: BaselineView::exact(exact),
             configured: true,
             parts: None,
         };
@@ -339,7 +327,7 @@ fn load_with(
     }
     PipelineBaseline {
         view,
-        exact: None,
+        exact_counts: None,
         configured: true,
         parts,
     }
@@ -849,11 +837,9 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(loaded.trust(), BaselineTrust::Exact);
         assert_eq!(loaded.view.name(), "Professional-26100.9711");
-        assert!(
-            loaded
-                .exact()
-                .is_some_and(|b| b.has_key(r"HKLM\SOFTWARE\ExactKey"))
-        );
+        assert!(loaded.exact_counts().is_some_and(|n| n.keys == 1));
+        assert!(loaded.view.has_key(r"HKLM\SOFTWARE\ExactKey"));
+        assert!(loaded.view.is_exact_for("Professional", 26100, 9711));
         // The neighbour is not mixed in.
         assert!(!loaded.view.has_key(r"HKLM\SOFTWARE\NeighbourKey"));
         assert!(loaded.parts.is_none());
@@ -908,7 +894,7 @@ mod tests {
         // Presence from the neighbour, the old line about the missing exact file, and why there is
         // no local baseline.
         assert!(loaded.view.has_key(r"HKLM\SOFTWARE\NeighbourKey"));
-        assert!(loaded.exact().is_none());
+        assert!(loaded.exact_counts().is_none());
         assert!(
             has(&warnings, "no Professional-26100.9711.tsv.gz in"),
             "{warnings:?}"
@@ -971,7 +957,7 @@ mod tests {
             let mut warnings = Vec::new();
             let loaded = load(Sources::of(&f), &settings, &os(), &mut warnings);
             assert_eq!(loaded.trust(), BaselineTrust::None, "{kb_state:?}");
-            assert!(loaded.exact().is_none());
+            assert!(loaded.exact_counts().is_none());
             assert_eq!(loaded.view.name(), "none");
             assert!(!loaded.view.has_key(r"HKLM\SOFTWARE\ExactKey"));
             assert!(!loaded.view.has_key(r"HKLM\SOFTWARE\NeighbourKey"));
@@ -994,7 +980,7 @@ mod tests {
         let mut warnings = Vec::new();
         let loaded = load(Sources::of(&f), &settings, &os(), &mut warnings);
         assert_eq!(loaded.trust(), BaselineTrust::None);
-        assert!(loaded.exact().is_none());
+        assert!(loaded.exact_counts().is_none());
         assert_eq!(loaded.view.name(), "none+1");
         assert!(!loaded.view.has_key(r"HKLM\SOFTWARE\ExactKey"));
         assert!(loaded.view.has_key(r"HKLM\SOFTWARE\NeighbourKey"));
@@ -1351,7 +1337,7 @@ mod tests {
         .unwrap();
         let merged = PipelineBaseline {
             view: BaselineView::merged(&host, local, vec![neighbour], &ViewRules::closed()),
-            exact: None,
+            exact_counts: None,
             configured: true,
             parts: None,
         };
@@ -1362,31 +1348,18 @@ mod tests {
         let view = status.baseline_view.unwrap();
         assert_eq!(view.name, "local-Professional-26100.9711+1");
         assert_eq!(view.local_id.as_deref(), Some("0123456789abcdef"));
-        // The policy's trust: capped as soon as the scan's view or the harvest's is inferred.
+        // The policy's trust is that of the absence answers a scan consumed
+        // (`ScanCtx::absence_trust`): presence-only, a Merged view answers none.
+        assert_eq!(merged.trust().presence_only(), BaselineTrust::None);
+        assert_eq!(
+            BaselineTrust::for_policy(merged.trust().presence_only(), BaselineTrust::None),
+            BaselineTrust::None
+        );
+        // Were inferred absence ever consumed, the cap would hold.
         assert_eq!(
             BaselineTrust::for_policy(merged.trust(), BaselineTrust::None),
             BaselineTrust::Merged
         );
-        for (index, model) in [
-            (
-                purge_index::baseline_view::BaselineTrust::Exact,
-                BaselineTrust::Exact,
-            ),
-            (
-                purge_index::baseline_view::BaselineTrust::Merged,
-                BaselineTrust::Merged,
-            ),
-            (
-                purge_index::baseline_view::BaselineTrust::Local,
-                BaselineTrust::Local,
-            ),
-            (
-                purge_index::baseline_view::BaselineTrust::None,
-                BaselineTrust::None,
-            ),
-        ] {
-            assert_eq!(model_trust(index), model);
-        }
     }
 
     /// A measurement on the machine the test runs on, not a test of anything: the warm load of the

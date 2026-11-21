@@ -8,6 +8,8 @@
 mod com;
 mod golden;
 mod hostile;
+#[path = "../shared/l5.rs"]
+mod l5;
 mod world;
 
 use purge_guard::containers;
@@ -2201,34 +2203,37 @@ fn ref_any_key_with_something_new_in_it_is_not_offered() {
 
 #[test]
 fn ref_any_git_skeleton_key() {
-    let auto = r"HKLM\SOFTWARE\Classes\sh_auto_file";
-    let mut fp = git();
-    fp.subtrees = vec![subtree(
-        auto,
-        &[(r"shell\open\command", "")],
-        &["shell", r"shell\open", r"shell\open\command"],
-    )];
-    // The uninstaller removed the command; the value-free parents stayed.
-    let left = || {
-        machine()
-            .key(&format!(r"{auto}\shell\open"))
-            .ti_owned(auto, false)
-            .ti_owned(&format!(r"{auto}\shell"), false)
-            .ti_owned(&format!(r"{auto}\shell\open"), false)
-    };
-    let world = World::new(left(), fp);
-    let found = world.scan(&RefAny);
-    golden::check("ref_any_git_skeleton", &found);
-    assert_eq!(found.len(), 1, "{}", golden::render(&found));
-    assert_eq!(found[0].target, key(auto));
-    assert_eq!(kinds(&found[0]), vec![EvidenceKind::ProvenOwnedSkeleton]);
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let auto = r"HKLM\SOFTWARE\Classes\sh_auto_file";
+        let mut fp = git();
+        fp.subtrees = vec![subtree(
+            auto,
+            &[(r"shell\open\command", "")],
+            &["shell", r"shell\open", r"shell\open\command"],
+        )];
+        // The uninstaller removed the command; the value-free parents stayed.
+        let left = || {
+            machine()
+                .key(&format!(r"{auto}\shell\open"))
+                .ti_owned(auto, false)
+                .ti_owned(&format!(r"{auto}\shell"), false)
+                .ti_owned(&format!(r"{auto}\shell\open"), false)
+        };
+        let world = World::new(left(), fp);
+        let found = world.scan(&RefAny);
+        golden::check("ref_any_git_skeleton", &found);
+        assert_eq!(found.len(), 1, "{}", golden::render(&found));
+        assert_eq!(found[0].target, key(auto));
+        assert_eq!(kinds(&found[0]), vec![EvidenceKind::ProvenOwnedSkeleton]);
 
-    // Without a baseline nothing proves the key is not Windows' own.
-    let mut fp = git();
-    fp.subtrees = vec![subtree(auto, &[], &["shell", r"shell\open"])];
-    let mut world = World::new(left(), fp);
-    world.baseline = None;
-    assert!(world.scan(&RefAny).is_empty());
+        // Without a baseline nothing proves the key is not Windows' own.
+        let mut fp = git();
+        fp.subtrees = vec![subtree(auto, &[], &["shell", r"shell\open"])];
+        let mut world = World::new(left(), fp);
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        assert!(world.scan(&RefAny).is_empty());
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -2637,4 +2642,75 @@ fn ref_any_same_output_with_shared_hits() {
         .run(&RefAny, &app);
         assert_eq!(run_alone, run_shared, "{}", world.fp.app.display_name);
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Invariant L5 (BASELINE_LOCAL_DESIGN.md §2): a view below Exact only takes away
+// ---------------------------------------------------------------------------------------------------------
+
+/// The Firefox leftovers, Git with the installer's key records, and Git's skeleton key, with each of
+/// the five scanners: a view below Exact that holds nothing gives the no-baseline candidates exactly;
+/// one that says Windows has the keys preselects nothing new and unblocks nothing
+/// (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let own = r"HKLM\SOFTWARE\GitForWindows";
+    let vendor = r"HKLM\SOFTWARE\Shared Tools Vendor";
+    let auto = r"HKLM\SOFTWARE\Classes\sh_auto_file";
+    let git_inno = || {
+        let mut fp = git();
+        fp.inno = vec![
+            inno(InnoRecordKind::RegDeleteEntireKey, key(own)),
+            inno(InnoRecordKind::RegDeleteKeyIfEmpty, key(vendor)),
+        ];
+        World::new(
+            machine()
+                .sz(own, "InstallPath", GIT)
+                .sz(&format!(r"{vendor}\Other Product"), "x", "y"),
+            fp,
+        )
+    };
+    let git_skeleton = || {
+        let mut fp = git();
+        fp.subtrees = vec![subtree(
+            auto,
+            &[(r"shell\open\command", "")],
+            &["shell", r"shell\open", r"shell\open\command"],
+        )];
+        World::new(
+            machine()
+                .key(&format!(r"{auto}\shell\open"))
+                .ti_owned(auto, false)
+                .ti_owned(&format!(r"{auto}\shell"), false)
+                .ti_owned(&format!(r"{auto}\shell\open"), false),
+            fp,
+        )
+    };
+    let firefox_world = || World::new(firefox_leftovers(), firefox());
+    type Make<'a> = &'a dyn Fn() -> World;
+    let worlds: [(&str, Make<'_>); 3] = [
+        ("firefox", &firefox_world),
+        ("git inno", &git_inno),
+        ("git skeleton", &git_skeleton),
+    ];
+    let scanners: [&dyn Scanner; 5] = [&RegSoftware, &RefAny, &RegAppPaths, &RegRun, &RegEnv];
+    let mut offered = 0;
+    for (name, make) in worlds {
+        for scanner in scanners {
+            let none = l5::check(
+                &format!("{name}/{}", scanner.id()),
+                &make().fp.os,
+                &|view| {
+                    let mut world = make();
+                    world.baseline = view;
+                    world.scan(scanner)
+                },
+            );
+            offered += none.len();
+        }
+    }
+    assert!(
+        offered > 10,
+        "the worlds offer something to compare: {offered}"
+    );
 }

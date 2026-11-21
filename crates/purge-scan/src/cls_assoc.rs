@@ -204,8 +204,9 @@ fn restore_source(ctx: &ScanCtx<'_>, entry: &ExtJournalEntry) -> Option<Restore>
             data: backup.data.trim().to_owned(),
         });
     }
-    let (baseline, name) = handler::matching_baseline(ctx)?;
-    let value = baseline.value(&entry.key, "")?;
+    // Exact value: only the exact baseline of this Windows has data to restore (§3.3).
+    let name = handler::matching_baseline(ctx)?;
+    let value = ctx.baseline.exact_value(&entry.key, "")?;
     let data = entry
         .previous_default
         .as_deref()

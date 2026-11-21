@@ -136,17 +136,20 @@ fn recorded_registrations_are_offered_without_their_capabilities_key() {
 
 #[test]
 fn without_a_baseline_keys_are_not_offered() {
-    let mut world = world();
-    world.baseline = None;
-    // The client key carries the app's name: its values are the app's registration.
-    world.fp.identity.tokens = vec!["acme".into(), "mail".into()];
-    assert_golden(
-        world.golden(&ClsRegApps),
-        &[
-            r"value HKLM\SOFTWARE\Clients\Mail\Acme Mail\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
-            r"value HKLM\SOFTWARE\RegisteredApplications|Acme Mail DeleteValue [ChainedRef/A/Value]",
-        ],
-    );
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut world = world();
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        // The client key carries the app's name: its values are the app's registration.
+        world.fp.identity.tokens = vec!["acme".into(), "mail".into()];
+        assert_golden(
+            world.golden(&ClsRegApps),
+            &[
+                r"value HKLM\SOFTWARE\Clients\Mail\Acme Mail\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+                r"value HKLM\SOFTWARE\RegisteredApplications|Acme Mail DeleteValue [ChainedRef/A/Value]",
+            ],
+        );
+    }
 }
 
 #[test]
@@ -192,4 +195,11 @@ fn blockers_reach_the_candidates() {
     );
     // Windows ships the Capabilities key: values only, and none of them points into the app.
     assert!(on_key(&candidates, CAPABILITIES).is_none());
+}
+
+/// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let offered = crate::l5_check("regapps", &world);
+    assert!(offered > 0, "the world offers something without a baseline");
 }

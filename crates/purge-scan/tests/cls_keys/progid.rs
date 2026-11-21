@@ -84,27 +84,30 @@ fn progid_in_p_on_the_harvests_word_alone_is_chained_at_tier_b() {
 
 #[test]
 fn without_a_baseline_the_key_is_not_offered_only_its_values() {
-    let mut world = world();
-    world.baseline = None;
-    assert_golden(
-        world.golden(&ClsProgId),
-        &[
-            r"value HKLM\SOFTWARE\Classes\Acme.Document\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
-        ],
-    );
-    // The harvest's record of the value counts as well.
-    world.fp.ref_snapshot = vec![snap_data_value(
-        DOC_COMMAND,
-        "",
-        AnchorKind::Exe,
-        &format!(r"{ROOT}\editor.exe"),
-    )];
-    assert_golden(
-        world.golden(&ClsProgId),
-        &[
-            r"value HKLM\SOFTWARE\Classes\Acme.Document\shell\open\command| DeleteValue [DanglingRef/A/Value, InPreUninstallRefSnapshot/A/Value, PointsIntoInstallRoot/A/Value]",
-        ],
-    );
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut world = world();
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        assert_golden(
+            world.golden(&ClsProgId),
+            &[
+                r"value HKLM\SOFTWARE\Classes\Acme.Document\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+            ],
+        );
+        // The harvest's record of the value counts as well.
+        world.fp.ref_snapshot = vec![snap_data_value(
+            DOC_COMMAND,
+            "",
+            AnchorKind::Exe,
+            &format!(r"{ROOT}\editor.exe"),
+        )];
+        assert_golden(
+            world.golden(&ClsProgId),
+            &[
+                r"value HKLM\SOFTWARE\Classes\Acme.Document\shell\open\command| DeleteValue [DanglingRef/A/Value, InPreUninstallRefSnapshot/A/Value, PointsIntoInstallRoot/A/Value]",
+            ],
+        );
+    }
 }
 
 #[test]
@@ -337,4 +340,11 @@ fn incomplete_subtree_is_not_offered_as_a_key() {
     let app = purge_scan::framework::AppIdentityView::from_fingerprint(&world.fp, &world.env);
     let candidates = purge_scan::framework::Scanner::scan(&ClsProgId, &ctx, &app);
     assert!(on_key(&candidates, DOC).is_none());
+}
+
+/// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let offered = crate::l5_check("progid", &world);
+    assert!(offered > 0, "the world offers something without a baseline");
 }

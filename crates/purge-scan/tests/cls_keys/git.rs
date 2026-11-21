@@ -59,6 +59,14 @@ fn after_uninstall() -> Fixture {
 }
 
 fn world() -> World {
+    let mut world = world_before_baseline();
+    world.baseline = Some(ltsc_baseline());
+    world
+}
+
+/// [`world`] without the LTSC baseline (which takes seconds to read): for the tests that put their own
+/// baseline in.
+fn world_before_baseline() -> World {
     let mut fp = machine_fp("Git_is1", "Git", GIT_ROOT);
     fp.os.edition = LTSC_EDITION.into();
     fp.os.build = LTSC_BUILD;
@@ -80,8 +88,18 @@ fn world() -> World {
             ],
         ),
     ];
-    let mut world = World::new(after_uninstall(), fp);
-    world.baseline = Some(ltsc_baseline());
+    World::new(after_uninstall(), fp)
+}
+
+/// Git's verbs under `Directory\shell` and `*\shell`, as they are before its uninstall.
+fn with_git_verbs(mut world: World) -> World {
+    for (shell, verb) in [(DIRECTORY_SHELL, "git_shell"), (STAR_SHELL, "git_gui")] {
+        world.fixture.set_value(
+            &format!(r"{shell}\{verb}\command"),
+            "",
+            RegData::from_sz(r#""C:\Program Files\Git\git-bash.exe" "--cd=%1""#),
+        );
+    }
     world
 }
 
@@ -90,7 +108,7 @@ fn skeletons_are_tier_a_key_scope_on_the_ltsc_baseline() {
     let world = world();
     // What the test rests on: clean LTSC has the shell objects but neither of Git's keys.
     let baseline = world.baseline.as_ref().unwrap();
-    assert!(baseline.is_for(LTSC_EDITION, LTSC_BUILD, LTSC_UBR));
+    assert!(baseline.is_exact_for(LTSC_EDITION, LTSC_BUILD, LTSC_UBR));
     assert!(baseline.has_key(r"HKLM\SOFTWARE\Classes\LibraryFolder\background"));
     assert!(baseline.has_key(DIRECTORY_SHELL));
     assert!(baseline.has_key(STAR_SHELL));
@@ -121,14 +139,17 @@ fn skeletons_are_tier_a_key_scope_on_the_ltsc_baseline() {
 
 #[test]
 fn without_a_baseline_neither_key_is_offered() {
-    let mut world = world();
-    world.baseline = None;
-    assert_golden(world.golden(&ClsProgId), &[]);
-    assert_golden(world.golden(&ClsVerbs), &[]);
-    // A baseline of another edition is no baseline for this Windows.
-    world.baseline = Some(baseline_for("Professional", &[]));
-    assert_golden(world.golden(&ClsProgId), &[]);
-    assert_golden(world.golden(&ClsVerbs), &[]);
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut world = world_before_baseline();
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        assert_golden(world.golden(&ClsProgId), &[]);
+        assert_golden(world.golden(&ClsVerbs), &[]);
+        // A baseline of another edition is no baseline for this Windows.
+        world.baseline = Some(baseline_for("Professional", &[]));
+        assert_golden(world.golden(&ClsProgId), &[]);
+        assert_golden(world.golden(&ClsVerbs), &[]);
+    }
 }
 
 #[test]
@@ -152,14 +173,7 @@ fn a_skeleton_that_is_no_longer_empty_is_not_offered() {
 fn structural_shell_roots_are_never_offered() {
     // Even when Git's verbs are still there, only the verbs are offered, never `Directory\shell`,
     // `*\shell` or the shell objects.
-    let mut world = world();
-    for (shell, verb) in [(DIRECTORY_SHELL, "git_shell"), (STAR_SHELL, "git_gui")] {
-        world.fixture.set_value(
-            &format!(r"{shell}\{verb}\command"),
-            "",
-            RegData::from_sz(r#""C:\Program Files\Git\git-bash.exe" "--cd=%1""#),
-        );
-    }
+    let world = with_git_verbs(world());
     let verbs = world.run(&ClsVerbs);
     assert_golden(
         render(&verbs),
@@ -169,4 +183,19 @@ fn structural_shell_roots_are_never_offered() {
             r"key HKLM\SOFTWARE\Classes\LibraryFolder\background\shell DeleteKey [ProvenOwnedSkeleton/A/Key]",
         ],
     );
+}
+
+/// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    // After the uninstall only the two skeletons are left, and both rest on absence: no view below
+    // Exact offers either, however permissive its rules (`without_a_baseline_neither_key_is_offered`).
+    let offered = crate::l5_check("git", &world_before_baseline);
+    assert_eq!(offered, 0, "a skeleton is offered without a baseline");
+    // With Git's verbs still there the scan has something to take away.
+    let offered = crate::l5_check(
+        "git with verbs",
+        &|| with_git_verbs(world_before_baseline()),
+    );
+    assert!(offered > 0, "the world offers something without a baseline");
 }

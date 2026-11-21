@@ -54,6 +54,7 @@ use purge_harvest::refsnap::HarvestCtx;
 use purge_harvest::roots::guard_env;
 use purge_identity::kbdata::Kb;
 use purge_index::baseline::{Baseline, RecordCounts};
+use purge_index::baseline_view::BaselineView;
 use purge_index::matcher::AnchorSet;
 use purge_index::ownership::{
     CacheKey, DiskTableCache, MemTableCache, OwnershipLimits, TableCache,
@@ -427,8 +428,7 @@ pub fn harvest(
         table_cache: Some(&cache),
         shared: None,
     };
-    // BL-FRAMEWORK: the harvest takes `&baseline.view`.
-    let mut report = harvest_report_with(entry, &inv.doc, sources, baseline.exact(), kb, &opts);
+    let mut report = harvest_report_with(entry, &inv.doc, sources, &baseline.view, kb, &opts);
     cache.report(cache_kind, settings);
     if !sources.sys.elevated() {
         let w = not_elevated_warning("harvest");
@@ -467,10 +467,10 @@ fn baseline_for(
     };
     step.say(&format!("loading the baseline {}", os.baseline_name()));
     let loaded = baseline::load(sources, settings, &os, warnings);
-    match loaded.exact() {
-        Some(b) => {
+    match loaded.exact_counts() {
+        Some(counts) => {
             let timing = purge_source::metered::installed().is_some();
-            step.done(&baseline_loaded(&os.baseline_name(), b.counts(), timing));
+            step.done(&baseline_loaded(&os.baseline_name(), counts, timing));
         }
         None => step.done(&format!(
             "baseline view {} loaded: trust {}",
@@ -575,7 +575,7 @@ pub fn uninstall(
                 anchors: &anchors,
                 roots: &fp.roots,
                 inno: &fp.inno,
-                baseline: None,
+                baseline: BaselineView::empty(),
                 inventory: &before.doc.entries,
                 target: entry,
                 cutoff: None,
@@ -797,7 +797,7 @@ pub fn scan_path(
         table_cache: Some(&cache),
         shared: None,
     };
-    let report = harvest_report_with(&entry, &inv.doc, sources, None, kb, &opts);
+    let report = harvest_report_with(&entry, &inv.doc, sources, BaselineView::empty(), kb, &opts);
     cache.report(cache_kind, settings);
     if report.fingerprint.roots.is_empty() {
         let why = report
@@ -1043,8 +1043,7 @@ fn run_scan(
         fs: sources.fs,
         sys: sources.sys,
         fp,
-        // BL-FRAMEWORK: the scan takes `&baseline.view`.
-        baseline: baseline.exact(),
+        baseline: &baseline.view,
         mode,
         verify_gone,
         env: &env,
@@ -1103,14 +1102,17 @@ fn run_scan(
         limits: Limits::default(),
         // The M1b exemption lists, from the fingerprint and fresh queries only (R2a S9).
         m1b: m1b_lists(sources, fp, &inv),
-        // P-BL-1 (BL-POLICY): the trust of this scan's view, or of the view the fingerprint was
-        // harvested with when that one is inferred (not the plain minimum, see `for_policy`).
-        // BL-FRAMEWORK: the scan side becomes `ScanCtx::absence_trust()`. Until then it is the
-        // view's trust, which caps a Merged or Local view although this scan asks only the exact
-        // baseline about absence (the stricter of the two readings).
+        // P-BL-1 (BL-POLICY): the trust of the absence answers this scan consumed (presence-only:
+        // Exact for an Exact view, None below it), or of the view the fingerprint was harvested
+        // with when that one is inferred (not the plain minimum, see `for_policy`). A fingerprint's
+        // Exact is believed only with the shipped baseline of its own Windows in hand.
         baseline_trust: BaselineTrust::for_policy(
-            baseline.trust(),
-            fp.harvest_trust(baseline.exact().is_some()),
+            ctx.absence_trust(),
+            fp.harvest_trust(
+                baseline
+                    .view
+                    .is_exact_for(&fp.os.edition, fp.os.build, fp.os.ubr),
+            ),
         ),
     };
     let built = build(app_id, candidates.clone(), &decide);

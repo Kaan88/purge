@@ -44,7 +44,7 @@ use std::collections::BTreeMap;
 
 use purge_guard::canon::{GuardEnv, canon_path};
 use purge_guard::prefix;
-use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::ownership::msi_rows::{self, ResolvedRow, RowContext};
 use purge_index::ownership::{CacheKey, OwnershipIndex, TableCache, pack_guid, unpack_guid};
 use purge_model::{
@@ -655,8 +655,9 @@ pub struct TableAnchorInput<'a> {
     pub ownership: &'a OwnershipIndex,
     /// The packed codes of the app's own products.
     pub own_codes: &'a [String],
-    /// The baseline of this Windows, when there is one.
-    pub baseline: Option<&'a Baseline>,
+    /// The baseline view of this Windows ([`BaselineView::empty`] without one). Presence only: a row
+    /// whose key some set of it has gives no anchor.
+    pub baseline: &'a BaselineView,
     /// Names the M1a anchor harvest found registered by something else, or only modified by the app.
     pub foreign: &'a [String],
 }
@@ -726,7 +727,7 @@ pub fn table_anchors(harvests: &[MsiHarvest], inp: &TableAnchorInput<'_>) -> Tab
                     .push(format!("msi: {} {name}: also a row of {other}", row.table));
                 continue;
             }
-            if inp.baseline.is_some_and(|b| b.has_key(row.key())) {
+            if inp.baseline.has_key(row.key()) {
                 out.notes.push(format!(
                     "msi: {} {name}: in the Windows baseline",
                     row.table

@@ -35,7 +35,7 @@
 //! details. Everything is ordered by key, case-insensitively.
 
 use purge_guard::prefix;
-use purge_index::baseline::Baseline;
+use purge_index::baseline_view::Absence;
 use purge_model::{ExtJournalEntry, VendorBackup};
 use purge_source::types::{RegValue, SourceError};
 
@@ -77,11 +77,13 @@ pub struct ExtRecord {
     pub ext_exists: bool,
     /// The extension's default is a ProgID of P.
     pub default_is_ours: bool,
-    /// The extension's key is part of clean Windows; `None` without a baseline for this Windows.
+    /// The extension's key is part of clean Windows. `Some(false)` only from the exact baseline of
+    /// this Windows; below Exact `Some(true)` when some set of the view has it and `None` otherwise
+    /// (absence is not inferred). `None` without any baseline.
     pub ext_in_baseline: Option<bool>,
     /// The key has an `OpenWithProgids` subkey.
     pub openwith_exists: bool,
-    /// `OpenWithProgids` is part of clean Windows; `None` without a baseline for this Windows.
+    /// `OpenWithProgids` is part of clean Windows; as [`ExtRecord::ext_in_baseline`].
     pub openwith_in_baseline: Option<bool>,
     /// `OpenWithProgids` is owned by TrustedInstaller or carries a TrustedInstaller ACE.
     pub openwith_ti_owned: bool,
@@ -137,7 +139,8 @@ fn non_empty_string(value: &RegValue) -> Option<String> {
 
 struct Journal<'a, 'c> {
     ctx: &'c HarvestCtx<'a>,
-    baseline: Option<&'a Baseline>,
+    /// A: whether the view is the exact baseline of this Windows.
+    exact: bool,
     exe_names: Vec<&'a str>,
     warnings: Vec<String>,
 }
@@ -244,7 +247,13 @@ impl Journal<'_, '_> {
         } else {
             None
         };
-        let in_baseline = |key: &str| self.baseline.map(|b| b.has_key(key));
+        // A: "not in the baseline" is recorded only from the exact baseline (which answers for every
+        // key, as before the view); below Exact only presence is.
+        let in_baseline = |key: &str| match self.ctx.key_absence(key) {
+            Absence::Present => Some(true),
+            Absence::Proven => Some(false),
+            Absence::Unknown | Absence::Inferred(_) => self.exact.then_some(false),
+        };
         Some(ExtRecord {
             ext_exists: exists,
             default_is_ours,
@@ -365,7 +374,7 @@ impl Journal<'_, '_> {
 pub fn capture_detailed(ctx: &HarvestCtx<'_>) -> AssocJournal {
     let mut journal = Journal {
         ctx,
-        baseline: ctx.matching_baseline(),
+        exact: ctx.has_exact_baseline(),
         exe_names: ctx.exe_names().collect(),
         warnings: Vec::new(),
     };

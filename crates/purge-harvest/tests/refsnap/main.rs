@@ -8,6 +8,7 @@
 use purge_harvest::refsnap::HarvestCtx;
 use purge_harvest::{assoc, coproducts, refsnap, subtree};
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::matcher::AnchorSet;
 use purge_index::queries::SubtreeLimits;
 use purge_model::{
@@ -35,7 +36,7 @@ struct World {
     anchors: AnchorSet,
     roots: Vec<Root>,
     inno: Vec<InnoRecord>,
-    baseline: Option<Baseline>,
+    baseline: Option<BaselineView>,
     inventory: Vec<InventoryEntry>,
 }
 
@@ -49,7 +50,7 @@ impl World {
             anchors: &self.anchors,
             roots: &self.roots,
             inno: &self.inno,
-            baseline: self.baseline.as_ref(),
+            baseline: BaselineView::or_empty(self.baseline.as_ref()),
             inventory: &self.inventory,
             target: &self.inventory[0],
             cutoff: None,
@@ -75,12 +76,12 @@ fn builder() -> FixtureBuilder {
 }
 
 /// A baseline of the test Windows holding `keys`.
-fn baseline(keys: &[&str]) -> Baseline {
+fn baseline(keys: &[&str]) -> BaselineView {
     let mut text = format!("#purge-baseline 1\tT\tPC\t{EDITION}\t{BUILD}.{UBR}\n");
     for key in keys {
         text.push_str(&format!("K\t{}\t0\t0\t0\n", key.replace('\\', "\\\\")));
     }
-    Baseline::from_bytes(text.as_bytes()).expect("the baseline parses")
+    BaselineView::exact(Baseline::from_bytes(text.as_bytes()).expect("the baseline parses"))
 }
 
 fn install_root(path: &str) -> Root {
@@ -597,12 +598,12 @@ fn without_a_baseline_only_the_referencing_keys_are_recorded() {
 
     // A baseline of another build is no baseline.
     let mut other = vscode_world(false, true);
-    other.baseline = Some(
+    other.baseline = Some(BaselineView::exact(
         Baseline::from_bytes(
             format!("#purge-baseline 1\tT\tPC\t{EDITION}\t{BUILD}.{}\n", UBR + 1).as_bytes(),
         )
         .unwrap(),
-    );
+    ));
     assert_eq!(other.subtrees(), subtrees);
 }
 
@@ -1297,7 +1298,7 @@ fn perf_refsnap_and_subtrees_on_the_vscode_snapshot() {
     }
     let os = fixture.os_info().unwrap();
     let kb = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../kb/baselines");
-    let baseline = Baseline::select(&kb, &os.edition, os.build, os.ubr);
+    let baseline = Baseline::select(&kb, &os.edition, os.build, os.ubr).map(BaselineView::exact);
     eprintln!(
         "{} ProgIDs in P; baseline for {}: {}",
         progids,
@@ -1966,4 +1967,142 @@ fn shared_keys_are_never_attributed_even_when_asked_for_directly() {
     let subtrees = subtree::capture(&ctx, &[run.as_str(), CLASSES]);
     assert!(!attributed(&subtrees, &run));
     assert!(!attributed(&subtrees, CLASSES));
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Views below Exact: presence only (BASELINE_LOCAL_DESIGN.md §4.3; DECISIONS.md Post-M1b, 2026-11-21)
+// ---------------------------------------------------------------------------------------------------------
+
+/// The A sites of the harvest (the subtree climb, the journal's "in the baseline" facts) below Exact:
+/// a view that holds nothing gives the no-baseline harvest exactly; a view that says Windows has the
+/// `.txt` keys records that presence, never an absence, and attributes no subtree the no-baseline
+/// harvest did not.
+#[test]
+fn below_exact_the_harvest_takes_presence_and_no_absence() {
+    use purge_index::baseline_view::{Absence, BaselineTrust, fixture};
+    let os = purge_model::OsInfo {
+        edition: EDITION.into(),
+        build: BUILD,
+        ubr: UBR,
+    };
+    let txt = format!(r"{CLASSES}\.txt");
+    let txt_progids = format!(r"{CLASSES}\.txt\OpenWithProgids");
+    let aaa = format!(r"{CLASSES}\.aaa");
+    let keys_of = |world: &World| {
+        let ctx = world.ctx();
+        subtree::keys(&ctx, &refsnap::capture(&ctx))
+    };
+
+    let none = vscode_world(false, false);
+    let none_journal = assoc::capture_detailed(&none.ctx());
+    let none_snapshot = refsnap::capture(&none.ctx());
+    let none_keys = keys_of(&none);
+    let none_subtrees = none.subtrees();
+    assert!(!none.ctx().has_exact_baseline());
+
+    // The exact baseline proves, and the climb above a proven key records more keys.
+    let exact = vscode_world(false, true);
+    assert!(exact.ctx().has_exact_baseline());
+    assert_eq!(exact.ctx().key_absence(&aaa), Absence::Proven);
+    assert_eq!(exact.ctx().key_absence(&txt), Absence::Present);
+    let exact_keys = keys_of(&exact);
+    assert!(
+        exact_keys.len() > none_keys.len() && none_keys.iter().all(|k| exact_keys.contains(k)),
+        "exact {exact_keys:?}\nnone {none_keys:?}"
+    );
+
+    // 1. A view below Exact that holds nothing.
+    for which in 1..fixture::BELOW_EXACT {
+        let mut world = vscode_world(false, false);
+        world.baseline = fixture::below_exact(which, &os);
+        let view = world.baseline.clone().unwrap();
+        // The view itself would infer; the harvest's capped path does not hand that out.
+        if view.trust().is_inferred() {
+            assert_eq!(view.key_absent(&aaa), Absence::Inferred(view.trust()));
+        }
+        let ctx = world.ctx();
+        assert_eq!(ctx.key_absence(&aaa), Absence::Unknown, "{}", view.name());
+        assert!(!ctx.has_exact_baseline());
+        assert_eq!(
+            assoc::capture_detailed(&ctx),
+            none_journal,
+            "{}",
+            view.name()
+        );
+        assert_eq!(refsnap::capture(&ctx), none_snapshot, "{}", view.name());
+        assert_eq!(keys_of(&world), none_keys, "{}", view.name());
+        assert_eq!(world.subtrees(), none_subtrees, "{}", view.name());
+    }
+
+    // 2. Windows' own extension key is in the local baseline, or in a neighbour.
+    let known = [txt.as_str(), txt_progids.as_str()];
+    let views = [
+        fixture::merged_view(EDITION, BUILD, UBR, &known, &[]),
+        fixture::merged_view(EDITION, BUILD, UBR, &[], &known),
+        fixture::local_view(EDITION, BUILD, UBR, &known),
+        fixture::none_view(EDITION, BUILD, UBR, &known),
+    ];
+    for view in views {
+        let name = format!("{} ({})", view.name(), view.trust());
+        assert_ne!(view.trust(), BaselineTrust::Exact);
+        let mut world = vscode_world(false, false);
+        world.baseline = Some(view);
+        let ctx = world.ctx();
+        assert_eq!(ctx.key_absence(&txt), Absence::Present, "{name}");
+        assert_eq!(ctx.key_absence(&aaa), Absence::Unknown, "{name}");
+
+        let journal = assoc::capture_detailed(&ctx);
+        for record in &journal.records {
+            let windows = record.entry.key == txt;
+            assert_eq!(
+                record.ext_in_baseline,
+                windows.then_some(true),
+                "{name}: {}",
+                record.entry.key
+            );
+            assert_ne!(record.openwith_in_baseline, Some(false), "{name}");
+        }
+        assert_eq!(
+            journal
+                .records
+                .iter()
+                .find(|r| r.entry.key == txt)
+                .unwrap()
+                .openwith_in_baseline,
+            Some(true),
+            "{name}"
+        );
+        // The fingerprint's journal entries do not depend on the view.
+        assert_eq!(assoc::capture(&ctx), assoc::capture(&none.ctx()), "{name}");
+
+        // The climb ends where it ends without a baseline; presence only takes attribution away.
+        assert_eq!(keys_of(&world), none_keys, "{name}");
+        let subtrees = world.subtrees();
+        assert_eq!(subtrees.len(), none_subtrees.len(), "{name}");
+        for (below, without) in subtrees.iter().zip(&none_subtrees) {
+            assert_eq!(below.key, without.key, "{name}");
+            assert!(
+                !below.fully_attributed || without.fully_attributed,
+                "{name}: {} is fully attributed only below Exact",
+                below.key
+            );
+            if below.key == txt || below.key == txt_progids {
+                assert!(
+                    !below.fully_attributed,
+                    "{name}: a Windows key is never the app's"
+                );
+            }
+        }
+    }
+
+    // An exact baseline of another Windows is no baseline here, for presence either.
+    let mut world = vscode_world(false, false);
+    world.baseline = Some(BaselineView::exact(fixture::shipped(
+        "Core", BUILD, UBR, &known,
+    )));
+    let ctx = world.ctx();
+    assert!(!ctx.has_exact_baseline());
+    assert!(ctx.presence().holds_nothing());
+    assert_eq!(ctx.key_absence(&txt), Absence::Unknown);
+    assert_eq!(assoc::capture_detailed(&ctx), none_journal);
 }

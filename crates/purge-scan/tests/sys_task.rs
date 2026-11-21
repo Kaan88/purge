@@ -7,6 +7,7 @@ use std::path::Path;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::ownership::OwnershipIndex;
 use purge_index::sysobj;
 use purge_model::object::{TaskAction, TaskIdentity};
@@ -158,7 +159,7 @@ fn record(identity: &TaskIdentity, why: ObjectWhy) -> Recorded {
 struct World {
     fixture: Fixture,
     fp: Fingerprint,
-    baseline: Option<Baseline>,
+    baseline: Option<BaselineView>,
     env: BTreeMap<String, String>,
     guard: GuardEnv,
     other_apps: OtherApps,
@@ -193,7 +194,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: self.baseline.as_ref(),
+            baseline: BaselineView::or_empty(self.baseline.as_ref()),
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &self.env,
@@ -821,7 +822,7 @@ fn baseline_task_never() {
             "#purge-baseline 1\tT\tPC\tProfessional\t26340.9882\nK\t{}\t0\t0\t0\n",
             tree_key.replace('\\', "\\\\")
         );
-        Baseline::from_bytes(text.as_bytes()).expect("baseline parses")
+        BaselineView::exact(Baseline::from_bytes(text.as_bytes()).expect("baseline parses"))
     };
     let mut world = World::new(machine_with(&[UPDATE]));
     world.baseline = Some(baseline());
@@ -926,4 +927,24 @@ fn budget_no_key_opens() {
     ] {
         assert_eq!(calls.get(op).calls, 0, "{}", op.name());
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Invariant L5 (BASELINE_LOCAL_DESIGN.md §2): a view below Exact only takes away
+// ---------------------------------------------------------------------------------------------------------
+
+#[path = "shared/l5.rs"]
+mod l5;
+/// The app's recorded, dangling task: a view below Exact that holds nothing gives the no-baseline
+/// candidates exactly; one whose sets have the task's key offers nothing that was not offered and
+/// preselects nothing new (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let make = || World::new(machine_with(&[UPDATE])).recorded(UPDATE, ObjectWhy::ProgramIsAppExe);
+    let none = l5::check("tasks", &make().fp.os, &|view| {
+        let mut world = make();
+        world.baseline = view;
+        world.run()
+    });
+    assert!(find(&none, UPDATE).is_some(), "{none:#?}");
 }

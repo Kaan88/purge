@@ -5,6 +5,7 @@ use std::path::Path;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::ownership::{OwnershipIndex, OwnershipInput};
 use purge_index::sysobj::SysObjectIndex;
 use purge_model::{
@@ -162,7 +163,7 @@ pub fn other_apps() -> Vec<OtherApp> {
 pub struct World {
     pub fixture: Fixture,
     pub fp: Fingerprint,
-    pub baseline: Baseline,
+    pub baseline: BaselineView,
     pub env: BTreeMap<String, String>,
     pub guard: GuardEnv,
     pub other_apps: OtherApps,
@@ -191,7 +192,9 @@ impl World {
         Self {
             fixture,
             fp: fingerprint(),
-            baseline: Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            baseline: BaselineView::exact(
+                Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            ),
             env,
             guard: GuardEnv::sample(),
             other_apps: OtherApps::new(other_apps()),
@@ -232,7 +235,9 @@ impl World {
         Self {
             fixture,
             fp,
-            baseline: Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            baseline: BaselineView::exact(
+                Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            ),
             env,
             guard: GuardEnv::sample(),
             other_apps: OtherApps::new(vec![OtherApp {
@@ -266,7 +271,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: Some(&self.baseline),
+            baseline: &self.baseline,
             mode: ScanMode::Post,
             verify_gone: self.verify_gone,
             env: &self.env,

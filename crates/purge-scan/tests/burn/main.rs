@@ -16,6 +16,44 @@
 //! package provider record at all, the Python Launcher linked through the kb ([`world::World::python`]).
 
 mod burndeps;
+#[path = "../shared/l5.rs"]
+mod l5;
 mod launcher;
 mod pkgcache;
 mod world;
+
+/// Invariant L5 over both bundle worlds, with both scanners: a view below Exact that holds nothing
+/// gives the no-baseline candidates exactly; one that says Windows has the keys and directories
+/// preselects nothing new and unblocks nothing (`tests/shared/l5.rs`). These scanners never ask the
+/// baseline for absence.
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    use purge_index::baseline_view::BaselineView;
+    use purge_scan::framework::Scanner;
+    use world::World;
+    type Make = fn() -> World;
+    let worlds: [(&str, Make); 2] = [("bundle", World::new), ("python", World::python)];
+    let scanners: [&dyn Scanner; 2] = [
+        &purge_scan::sys_burndeps::SysBurnDeps,
+        &purge_scan::fs_pkgcache::FsPkgCache,
+    ];
+    let mut offered = 0;
+    for (name, make) in worlds {
+        for scanner in scanners {
+            let none = l5::check(
+                &format!("{name}/{}", scanner.id()),
+                &make().fp.os,
+                &|view| {
+                    let mut world = make();
+                    world.baseline = view.unwrap_or_else(|| BaselineView::empty().clone());
+                    world.run(scanner)
+                },
+            );
+            offered += none.len();
+        }
+    }
+    assert!(
+        offered > 4,
+        "the worlds offer something to compare: {offered}"
+    );
+}

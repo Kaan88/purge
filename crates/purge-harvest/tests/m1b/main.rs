@@ -115,7 +115,7 @@ pub fn harvest_of(f: &Fixture, name: &str) -> HarvestReport {
         entry,
         &doc,
         Sources::of(f),
-        None,
+        purge_index::baseline_view::BaselineView::empty(),
         Kb::shipped(),
         &HarvestOpts::default(),
     )

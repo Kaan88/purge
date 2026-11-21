@@ -675,11 +675,11 @@ fn names_and_trust_order() {
         (T::Merged, T::Merged, T::Merged),
         (T::Exact, T::Exact, T::Exact),
     ] {
-        assert_eq!(a.weaker(b), weaker);
-        assert_eq!(b.weaker(a), weaker);
+        assert_eq!(a.min(b), weaker);
+        assert_eq!(b.min(a), weaker);
     }
     assert_eq!(
-        [T::Exact, T::Merged, T::Local, T::None].map(BaselineTrust::as_str),
+        [T::Exact, T::Merged, T::Local, T::None].map(BaselineTrust::as_fact),
         ["exact", "merged", "local", "none"]
     );
 }

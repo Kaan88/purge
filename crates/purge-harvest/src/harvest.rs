@@ -46,7 +46,7 @@ use purge_guard::prefix;
 use purge_identity::identity::{AppIdentity, IdentityHints};
 use purge_identity::kbdata::Kb;
 use purge_identity::tokenizer::vendor_key;
-use purge_index::baseline::Baseline;
+use purge_index::baseline_view::{BaselineTrust, BaselineView};
 use purge_index::matcher::AnchorSet;
 use purge_index::ownership::{
     OwnershipIndex, OwnershipInput, OwnershipStats, TableCache, area as ownership_area, pack_guid,
@@ -184,13 +184,14 @@ pub struct HarvestReport {
     pub ownership: Option<OwnershipStats>,
 }
 
-/// Harvests `entry`: see the module documentation. `baseline` is used only when it is for exactly the
-/// Windows the sources describe; `kb` supplies vendor aliases.
+/// Harvests `entry`: see the module documentation. `baseline` is the baseline view
+/// ([`BaselineView::empty`] without one); an Exact view is used only when it is for exactly the Windows
+/// the sources describe. `kb` supplies vendor aliases.
 pub fn harvest(
     entry: &InventoryEntry,
     inventory: &InventoryDoc,
     sources: Sources<'_>,
-    baseline: Option<&Baseline>,
+    baseline: &BaselineView,
     kb: &Kb,
 ) -> Fingerprint {
     harvest_report(entry, inventory, sources, baseline, kb).fingerprint
@@ -335,12 +336,33 @@ impl<'a> SharedIndexes<'a> {
     }
 }
 
+/// What the fingerprint records about the view it was harvested with (BASELINE_LOCAL_DESIGN.md §4.5).
+///
+/// - An Exact view and a view that holds nothing record **nothing**: such a fingerprint is, byte for
+///   byte, what it was before the field existed, and reads back as Exact with the matching shipped
+///   baseline in hand and as None otherwise (`Fingerprint::harvest_trust`), which is what it is (L3).
+/// - A view below Exact that holds a set records its name and local id, and as trust the trust of the
+///   absence facts the harvest made with it. The local baseline is presence-only (DECISIONS.md,
+///   Post-M1b, 2026-11-21), so that is `None` whatever the view's own trust
+///   (`BaselineTrust::presence_only`): the harvest took "this is Windows' own" from the view and no
+///   absence.
+pub fn baseline_view_ref(view: &BaselineView) -> Option<purge_model::BaselineViewRef> {
+    if view.trust() == BaselineTrust::Exact || view.holds_nothing() {
+        return None;
+    }
+    Some(purge_model::BaselineViewRef {
+        name: view.name(),
+        trust: view.trust().presence_only(),
+        local_id: view.local_id().map(str::to_owned),
+    })
+}
+
 /// Like [`harvest`], with the facts the fingerprint has no field for.
 pub fn harvest_report(
     entry: &InventoryEntry,
     inventory: &InventoryDoc,
     sources: Sources<'_>,
-    baseline: Option<&Baseline>,
+    baseline: &BaselineView,
     kb: &Kb,
 ) -> HarvestReport {
     harvest_report_with(
@@ -377,7 +399,7 @@ pub fn harvest_report_with(
     entry: &InventoryEntry,
     inventory: &InventoryDoc,
     sources: Sources<'_>,
-    baseline: Option<&Baseline>,
+    baseline: &BaselineView,
     kb: &Kb,
     opts: &HarvestOpts<'_>,
 ) -> HarvestReport {
@@ -416,16 +438,22 @@ pub fn harvest_report_with(
             user_sids.push(sid.clone());
         }
     }
-    let matching_baseline = baseline.filter(|b| b.is_for(&os.edition, os.build, os.ubr));
-    if let (Some(b), None) = (baseline, matching_baseline) {
+    // The view the harvest asks "is this Windows' own?" (presence, at any trust). An Exact view of
+    // another Windows says nothing about this machine and is not used at all.
+    let mismatched = baseline.trust() == BaselineTrust::Exact
+        && !baseline.is_exact_for(&os.edition, os.build, os.ubr);
+    if mismatched {
         warnings.push(format!(
-            "harvest: the baseline is for {}-{}.{}, not for this Windows ({}); it is not used",
-            b.edition(),
-            b.build(),
-            b.ubr(),
+            "harvest: the baseline is for {}, not for this Windows ({}); it is not used",
+            baseline.name(),
             os.baseline_name()
         ));
     }
+    let matching_baseline: &BaselineView = if mismatched {
+        BaselineView::empty()
+    } else {
+        baseline
+    };
     // The two M1b indexes, once per engine call: the caller's, or this harvest's own, which the
     // harvests of the co-product candidates then share. The ownership index (component clients, MSI
     // rows, Burn dependents) is read only for an MSI or Burn entry: nothing else of the harvest asks it.
@@ -742,9 +770,7 @@ pub fn harvest_report_with(
         msi: msi_harvests.iter().map(|h| h.facts.clone()).collect(),
         burn: burn_harvest.map(|b| b.facts),
         sys: SysObjects::default(),
-        // BL-POLICY added the field; the harvest records its view with BL-FRAMEWORK. `None` reads as
-        // Exact with a matching shipped baseline and as None otherwise, which is what a harvest is today.
-        baseline_view: None,
+        baseline_view: baseline_view_ref(matching_baseline),
         os,
         user_sid,
         window: TimeWindow {
@@ -1069,7 +1095,13 @@ mod tests {
         let f = vscode_machine();
         let doc = inventory_of(&f);
         let entry = entry_named(&doc, "Microsoft Visual Studio Code");
-        let report = harvest_report(entry, &doc, Sources::of(&f), None, Kb::shipped());
+        let report = harvest_report(
+            entry,
+            &doc,
+            Sources::of(&f),
+            BaselineView::empty(),
+            Kb::shipped(),
+        );
         let fp = &report.fingerprint;
 
         // Roots: one InstallRoot, admin-only, with its volume.
@@ -1212,7 +1244,13 @@ mod tests {
 
         // `harvest` is the fingerprint of the report.
         assert_eq!(
-            &harvest(entry, &doc, Sources::of(&f), None, Kb::shipped()),
+            &harvest(
+                entry,
+                &doc,
+                Sources::of(&f),
+                BaselineView::empty(),
+                Kb::shipped()
+            ),
             fp
         );
     }
@@ -1223,13 +1261,25 @@ mod tests {
             let f = vscode_machine();
             let doc = inventory_of(&f);
             let entry = entry_named(&doc, "Microsoft Visual Studio Code");
-            to_json(&harvest(entry, &doc, Sources::of(&f), None, Kb::shipped()))
+            to_json(&harvest(
+                entry,
+                &doc,
+                Sources::of(&f),
+                BaselineView::empty(),
+                Kb::shipped(),
+            ))
         };
         let second = {
             let f = vscode_machine();
             let doc = inventory_of(&f);
             let entry = entry_named(&doc, "Microsoft Visual Studio Code");
-            to_json(&harvest(entry, &doc, Sources::of(&f), None, Kb::shipped()))
+            to_json(&harvest(
+                entry,
+                &doc,
+                Sources::of(&f),
+                BaselineView::empty(),
+                Kb::shipped(),
+            ))
         };
         assert_eq!(first, second);
         assert!(
@@ -1289,7 +1339,13 @@ mod tests {
         let doc = inventory_of(&f);
         let entry = entry_named(&doc, "Tool");
         assert_eq!(entry.hive_sid.as_deref(), Some(SID));
-        let report = harvest_report(entry, &doc, Sources::of(&f), None, Kb::shipped());
+        let report = harvest_report(
+            entry,
+            &doc,
+            Sources::of(&f),
+            BaselineView::empty(),
+            Kb::shipped(),
+        );
         let fp = &report.fingerprint;
         assert_eq!(
             fp.roots.len(),
@@ -1384,7 +1440,13 @@ mod tests {
             .build();
         let doc = inventory_of(&f);
         let entry = entry_named(&doc, "Broken App");
-        let report = harvest_report(entry, &doc, Sources::of(&f), None, Kb::shipped());
+        let report = harvest_report(
+            entry,
+            &doc,
+            Sources::of(&f),
+            BaselineView::empty(),
+            Kb::shipped(),
+        );
         let fp = &report.fingerprint;
         assert!(fp.roots.is_empty(), "{:?}", fp.roots);
         assert!(!report.rejected_roots.is_empty());
@@ -1490,13 +1552,15 @@ mod tests {
 
             use purge_source::system::SystemSource;
             let os = f.os_info().unwrap();
-            let baseline = Baseline::select(&baselines, &os.edition, os.build, os.ubr);
+            let baseline =
+                purge_index::baseline::Baseline::select(&baselines, &os.edition, os.build, os.ubr)
+                    .map(BaselineView::exact);
             let started = std::time::Instant::now();
             let report = harvest_report(
                 entry,
                 &doc,
                 Sources::of(&f),
-                baseline.as_ref(),
+                BaselineView::or_empty(baseline.as_ref()),
                 Kb::shipped(),
             );
             let took = started.elapsed();
@@ -1616,10 +1680,98 @@ mod tests {
                 entry,
                 &doc,
                 Sources::of(&f),
-                baseline.as_ref(),
+                BaselineView::or_empty(baseline.as_ref()),
                 Kb::shipped(),
             );
             assert_eq!(to_json(&again), to_json(fp), "{app}: not deterministic");
         }
+    }
+
+    /// §4.5: what the fingerprint records about its view. An Exact view and an empty one record
+    /// nothing (the document is what it was before the field existed, L3); a view below Exact that
+    /// holds a set records its name and local id, and the trust of the absence facts made with it,
+    /// which is None while the local baseline is presence-only.
+    #[test]
+    fn the_fingerprint_records_a_view_below_exact_as_presence_only() {
+        use purge_index::baseline_view::fixture;
+        use purge_model::{BaselineTrust, BaselineViewRef};
+        let (e, b, u) = ("Professional", 26100, 1742);
+        assert_eq!(
+            baseline_view_ref(&BaselineView::exact(fixture::shipped(e, b, u, &[]))),
+            None
+        );
+        assert_eq!(baseline_view_ref(BaselineView::empty()), None);
+        let merged = fixture::merged_view(e, b, u, &[], &[]);
+        assert_eq!(merged.trust(), BaselineTrust::Merged);
+        assert_eq!(
+            baseline_view_ref(&merged),
+            Some(BaselineViewRef {
+                name: "local-Professional-26100.1742+1".into(),
+                trust: BaselineTrust::None,
+                local_id: Some("0123456789abcdef".into()),
+            })
+        );
+        assert_eq!(
+            baseline_view_ref(&fixture::local_view(e, b, u, &[])),
+            Some(BaselineViewRef {
+                name: "local-Professional-26100.1742".into(),
+                trust: BaselineTrust::None,
+                local_id: Some("0123456789abcdef".into()),
+            })
+        );
+        assert_eq!(
+            baseline_view_ref(&fixture::none_view(e, b, u, &[])),
+            Some(BaselineViewRef {
+                name: "none+1".into(),
+                trust: BaselineTrust::None,
+                local_id: None,
+            })
+        );
+
+        // A whole harvest: with a view below Exact that holds nothing the app touches, the fingerprint
+        // is the no-baseline fingerprint plus the field; the recorded trust caps nothing at scan time.
+        let f = vscode_machine();
+        let doc = inventory_of(&f);
+        let entry = entry_named(&doc, "Microsoft Visual Studio Code");
+        let os = {
+            use purge_source::system::SystemSource;
+            f.os_info().unwrap()
+        };
+        let none = harvest(
+            entry,
+            &doc,
+            Sources::of(&f),
+            BaselineView::empty(),
+            Kb::shipped(),
+        );
+        assert_eq!(none.baseline_view, None);
+        assert!(!to_json(&none).contains("baseline_view"));
+        for which in 1..fixture::BELOW_EXACT {
+            let view = fixture::below_exact(which, &os).unwrap();
+            let mut fp = harvest(entry, &doc, Sources::of(&f), &view, Kb::shipped());
+            let recorded = fp.baseline_view.take().expect("the view is recorded");
+            assert_eq!(recorded.name, view.name());
+            assert_eq!(recorded.trust, BaselineTrust::None);
+            assert_eq!(to_json(&fp), to_json(&none), "{}", view.name());
+            fp.baseline_view = Some(recorded);
+            for exact_shipped in [false, true] {
+                assert_eq!(fp.harvest_trust(exact_shipped), BaselineTrust::None);
+            }
+            let back: Fingerprint = serde_json::from_str(&to_json(&fp)).unwrap();
+            assert_eq!(back, fp);
+        }
+
+        // An exact baseline of another Windows is not used at all, as before the view.
+        let other = BaselineView::exact(fixture::shipped("EnterpriseS", os.build, os.ubr, &[]));
+        let fp = harvest(entry, &doc, Sources::of(&f), &other, Kb::shipped());
+        assert_eq!(fp.baseline_view, None);
+        assert!(
+            fp.warnings
+                .iter()
+                .any(|w| w.contains("harvest: the baseline is for EnterpriseS-")
+                    && w.contains("it is not used")),
+            "{:?}",
+            fp.warnings
+        );
     }
 }

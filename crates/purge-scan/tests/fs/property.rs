@@ -2,7 +2,7 @@
 //! app's root, and no scanner decides a band.
 
 use purge_guard::prefix;
-use purge_model::{Candidate, InnoRecordKind, Target};
+use purge_model::{Candidate, Fingerprint, InnoRecordKind, Target};
 use purge_scan::framework::Scanner;
 use purge_scan::fs_appdata::FsAppData;
 use purge_scan::fs_installdir::FsInstallDir;
@@ -10,6 +10,7 @@ use purge_scan::fs_shortcuts::FsShortcuts;
 use purge_scan::fs_uninstaller::FsUninstaller;
 use purge_scan::fs_vendorparent::FsVendorParent;
 use purge_scan::sys_appx::SysAppx;
+use purge_source::fixture::Fixture;
 use purge_source::types::ShortcutInfo;
 
 use crate::appdata::firefox_with_thunderbird;
@@ -62,10 +63,8 @@ fn firefox_next_to_thunderbird() {
     }
 }
 
-/// Other apps whose roots sit exactly where Firefox's leftovers are: every scanner would have something
-/// to offer there, and none may.
-#[test]
-fn other_apps_on_top_of_every_leftover() {
+/// Firefox's leftovers after its uninstaller, one for every scanner but SYS-APPX, and its fingerprint.
+fn firefox_leftovers() -> (Fixture, Fingerprint) {
     let link = |target: &str| ShortcutInfo {
         raw_path: Some(target.to_owned()),
         ..ShortcutInfo::default()
@@ -93,6 +92,14 @@ fn other_apps_on_top_of_every_leftover() {
         InnoRecordKind::DeleteFile,
         r"C:\Users\tester\AppData\Roaming\Firefox\declared.dat",
     )];
+    (fixture, fp)
+}
+
+/// Other apps whose roots sit exactly where Firefox's leftovers are: every scanner would have something
+/// to offer there, and none may.
+#[test]
+fn other_apps_on_top_of_every_leftover() {
+    let (fixture, fp) = firefox_leftovers();
 
     // With nobody else installed, every scanner but SYS-APPX finds something.
     let alone = World::new(fixture.clone(), fp.clone());
@@ -120,4 +127,39 @@ fn other_apps_on_top_of_every_leftover() {
         .with_other_app("Squatter G", &[&format!(r"{ROAMING}\Firefox")], &[]);
     let found = scan_all(&world);
     assert_nothing_inside_another_app(&world, &found);
+}
+
+/// Invariant L5 over the file-system worlds, with each scanner: a view below Exact that holds nothing
+/// gives the no-baseline candidates exactly; one that says Windows has the keys and directories
+/// preselects nothing new and unblocks nothing (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let leftovers = || {
+        let (fixture, fp) = firefox_leftovers();
+        World::new(fixture, fp)
+    };
+    type Make<'a> = &'a dyn Fn() -> World;
+    let worlds: [(&str, Make<'_>); 2] = [
+        ("firefox leftovers", &leftovers),
+        ("firefox next to thunderbird", &firefox_with_thunderbird),
+    ];
+    let mut offered = 0;
+    for (name, make) in worlds {
+        for scanner in scanners() {
+            let none = crate::l5::check(
+                &format!("{name}/{}", scanner.id()),
+                &make().fp.os,
+                &|view| {
+                    let mut world = make();
+                    world.baseline = view;
+                    world.scan(scanner.as_ref())
+                },
+            );
+            offered += none.len();
+        }
+    }
+    assert!(
+        offered > 10,
+        "the worlds offer something to compare: {offered}"
+    );
 }

@@ -97,7 +97,7 @@ fn harvest_adds_no_walk() {
         entry,
         &doc,
         sources,
-        None,
+        purge_index::baseline_view::BaselineView::empty(),
         Kb::shipped(),
         &HarvestOpts::default(),
     );

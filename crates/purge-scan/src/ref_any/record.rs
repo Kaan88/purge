@@ -182,11 +182,8 @@ pub(super) fn record_refs(refs: &RefMatcher, value: &RegValue) -> Option<RecordR
 
 /// Whether a baseline for exactly this Windows is loaded, so that "not in the baseline" is a fact.
 fn has_matching_baseline(ctx: &ScanCtx<'_>) -> bool {
-    ctx.baseline.is_some_and(|baseline| {
-        // The machine as it is now decides; the fingerprint's record of it is the fallback.
-        let os = ctx.sys.os_info().unwrap_or_else(|_| ctx.fp.os.clone());
-        baseline.is_for(&os.edition, os.build, os.ubr)
-    })
+    // A: the machine as it is now decides; the fingerprint's record of it is the fallback.
+    ctx.has_matching_exact_baseline()
 }
 
 /// What the pre-uninstall reference snapshot says about the entries of the record: the harvest
@@ -289,6 +286,7 @@ mod tests {
     use crate::ref_any::RefAny;
     use purge_guard::canon::GuardEnv;
     use purge_index::baseline::Baseline;
+    use purge_index::baseline_view::BaselineView;
     use purge_model::{AnchorKind, AnchorRef, EvidenceKind, RefCarrier, RefSnapEntry, Scope, Tier};
     use purge_source::fixture::{Fixture, FixtureBuilder};
 
@@ -336,14 +334,14 @@ mod tests {
     }
 
     /// A baseline of the test Windows with `REG_MULTI_SZ` values `(key, name)`.
-    fn baseline_with_values(values: &[(&str, &str)]) -> Baseline {
+    fn baseline_with_values(values: &[(&str, &str)]) -> BaselineView {
         let mut text = format!("#purge-baseline 1\tT\tPC\t{EDITION}\t{BUILD}.{UBR}\n");
         for (key, name) in values {
             let key = key.replace('\\', "\\\\");
             text.push_str(&format!("K\t{key}\n"));
             text.push_str(&format!("V\t{key}\t{name}\t7\tf512a6c9a655adb5\n"));
         }
-        Baseline::from_bytes(text.as_bytes()).expect("the baseline parses")
+        BaselineView::exact(Baseline::from_bytes(text.as_bytes()).expect("the baseline parses"))
     }
 
     fn scan(world: &World) -> Vec<Candidate> {
@@ -476,18 +474,21 @@ mod tests {
     /// with the unattributed fields counted, so never preselected.
     #[test]
     fn a_record_is_not_preselected_without_a_matching_baseline() {
-        let mut none = World::new(git_slots().build());
-        none.baseline = None;
-        // A baseline of another edition is not this Windows' baseline.
-        let mut other = World::new(git_slots().build());
-        other.baseline = Some(baseline("Enterprise", &[]));
-        for world in [&none, &other] {
-            let found = scan(world);
-            assert_eq!(segments(&found), 0, "{found:#?}");
-            for (name, n) in [("0", 2), ("1", 2), ("2", 1)] {
-                let c = expect(&found, &value(&shc(), name));
-                assert_eq!(c.blockers, vec![Blocker::UnmatchedChildren { n }], "{name}");
-                assert!(!c.blockers.iter().any(Blocker::is_hard));
+        // Every view below Exact takes the no-baseline path (presence-only, design L5).
+        for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+            let mut none = World::new(git_slots().build());
+            none.baseline = purge_index::baseline_view::fixture::below_exact(below, &none.fp.os);
+            // A baseline of another edition is not this Windows' baseline.
+            let mut other = World::new(git_slots().build());
+            other.baseline = Some(baseline("Enterprise", &[]));
+            for world in [&none, &other] {
+                let found = scan(world);
+                assert_eq!(segments(&found), 0, "{found:#?}");
+                for (name, n) in [("0", 2), ("1", 2), ("2", 1)] {
+                    let c = expect(&found, &value(&shc(), name));
+                    assert_eq!(c.blockers, vec![Blocker::UnmatchedChildren { n }], "{name}");
+                    assert!(!c.blockers.iter().any(Blocker::is_hard));
+                }
             }
         }
     }
@@ -523,31 +524,34 @@ mod tests {
     /// baseline needed: neither is a record.
     #[test]
     fn lists_and_values_that_are_all_the_apps_are_left_to_the_common_rule() {
-        let folders = r"HKLM\SOFTWARE\Vendor\Indexer";
-        let own = r"HKLM\SOFTWARE\Vendor\Tools";
-        let fixture = machine()
-            .multi_sz(folders, "Folders", &[r"C:\Data", &exe("cmd"), r"D:\Media"])
-            .multi_sz(own, "Git", &[&exe("git-bash.exe"), &exe(r"cmd\git.exe")]);
-        let mut world = World::new(fixture.build());
-        world.baseline = None;
-        let found = scan(&world);
-        assert_eq!(found.len(), 2, "{found:#?}");
+        // Every view below Exact takes the no-baseline path (presence-only, design L5).
+        for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+            let folders = r"HKLM\SOFTWARE\Vendor\Indexer";
+            let own = r"HKLM\SOFTWARE\Vendor\Tools";
+            let fixture = machine()
+                .multi_sz(folders, "Folders", &[r"C:\Data", &exe("cmd"), r"D:\Media"])
+                .multi_sz(own, "Git", &[&exe("git-bash.exe"), &exe(r"cmd\git.exe")]);
+            let mut world = World::new(fixture.build());
+            world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+            let found = scan(&world);
+            assert_eq!(found.len(), 2, "{found:#?}");
 
-        let entry = expect(
-            &found,
-            &Target::RegMultiSzSegment {
-                path: folders.into(),
-                name: "Folders".into(),
-                segment: exe("cmd"),
-                index: None,
-            },
-        );
-        assert_eq!(entry.action, Action::EditSegment);
-        assert!(find(&found, &value(folders, "Folders")).is_none());
+            let entry = expect(
+                &found,
+                &Target::RegMultiSzSegment {
+                    path: folders.into(),
+                    name: "Folders".into(),
+                    segment: exe("cmd"),
+                    index: None,
+                },
+            );
+            assert_eq!(entry.action, Action::EditSegment);
+            assert!(find(&found, &value(folders, "Folders")).is_none());
 
-        let whole = expect(&found, &value(own, "Git"));
-        assert_eq!(whole.action, Action::DeleteValue);
-        assert!(whole.blockers.is_empty(), "{:?}", whole.blockers);
+            let whole = expect(&found, &value(own, "Git"));
+            assert_eq!(whole.action, Action::DeleteValue);
+            assert!(whole.blockers.is_empty(), "{:?}", whole.blockers);
+        }
     }
 
     /// A list that is not all of one kind is no list to edit by entry, but its other entries are still

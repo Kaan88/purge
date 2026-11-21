@@ -42,7 +42,7 @@
 use std::collections::BTreeMap;
 
 use purge_guard::prefix;
-use purge_index::baseline::Baseline;
+use purge_index::baseline_view::{Absence, BaselineTrust, BaselineView};
 use purge_index::matcher::{AnchorSet, RefMatcher};
 use purge_index::queries::hash_hex;
 use purge_index::refscan::{
@@ -78,9 +78,11 @@ pub struct HarvestCtx<'a> {
     /// The records of the app's Inno Setup uninstall log, with user-hive records already bound to
     /// `HKU\<sid>`; empty when it has none.
     pub inno: &'a [InnoRecord],
-    /// The clean-Windows baseline, when one is loaded. It is used only when it is for exactly the
-    /// Windows the sources describe ([`HarvestCtx::matching_baseline`]).
-    pub baseline: Option<&'a Baseline>,
+    /// The baseline view ([`BaselineView::empty`] without one). Presence is asked of
+    /// [`HarvestCtx::presence`]; absence only through [`HarvestCtx::key_absence`] and
+    /// [`HarvestCtx::has_exact_baseline`]. An Exact view is used only when it is for exactly the
+    /// Windows the sources describe.
+    pub baseline: &'a BaselineView,
     /// Every entry of the inventory, the target included.
     pub inventory: &'a [InventoryEntry],
     /// The entry being harvested.
@@ -161,14 +163,37 @@ impl<'a> HarvestCtx<'a> {
             .map(|a| a.text.as_str())
     }
 
-    /// The baseline, when it is for exactly the Windows the sources describe. A baseline of another
-    /// edition or build proves nothing about this machine and is treated as absent.
-    pub fn matching_baseline(&self) -> Option<&'a Baseline> {
-        let baseline = self.baseline?;
-        let os = self.sys.os_info().ok()?;
-        baseline
-            .is_for(&os.edition, os.build, os.ubr)
-            .then_some(baseline)
+    /// **A.** Whether the view is the exact shipped baseline of the Windows the sources describe: the
+    /// only view whose absence is proof. A baseline of another edition or build proves nothing about
+    /// this machine.
+    pub fn has_exact_baseline(&self) -> bool {
+        self.baseline.trust() == BaselineTrust::Exact
+            && self
+                .sys
+                .os_info()
+                .is_ok_and(|os| self.baseline.is_exact_for(&os.edition, os.build, os.ubr))
+    }
+
+    /// **P.** The view to ask "is this Windows' own?": the context's view at any trust, except an
+    /// Exact view of another Windows, which is treated as absent ([`BaselineView::empty`]).
+    pub fn presence(&self) -> &'a BaselineView {
+        if self.baseline.trust() == BaselineTrust::Exact && !self.has_exact_baseline() {
+            BaselineView::empty()
+        } else {
+            self.baseline
+        }
+    }
+
+    /// **A.** What the harvest may conclude about `key` not being Windows' own: the one place of this
+    /// crate that asks the view for absence (`cargo xtask baseline-sites`). The local baseline is
+    /// presence-only (DECISIONS.md, Post-M1b, 2026-11-21): `Proven` comes from the exact baseline of
+    /// this Windows alone, and what a view below Exact infers is handed out as `Unknown`, so an
+    /// absence fact is recorded below Exact exactly as it was without a baseline. Never `Inferred`.
+    pub fn key_absence(&self, key: &str) -> Absence {
+        match self.presence().key_absent(key) {
+            Absence::Inferred(_) => Absence::Unknown,
+            answer @ (Absence::Present | Absence::Proven | Absence::Unknown) => answer,
+        }
     }
 
     /// The Classes roots the app can have registered under: `HKLM\SOFTWARE\Classes`, then

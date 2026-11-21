@@ -5,6 +5,8 @@
 //! spell out the properties the design depends on.
 
 mod golden;
+#[path = "../shared/l5.rs"]
+mod l5;
 mod vscode_run;
 mod world;
 
@@ -277,10 +279,18 @@ fn vscode_system_with_matching_baseline() {
 
 #[test]
 fn vscode_system_without_baseline() {
-    for mismatched in [false, true] {
+    use purge_index::baseline_view::fixture;
+    // No baseline at all, a view below Exact (Merged, Local, None with a neighbour: presence-only, so
+    // the golden of a merged view *is* the no-baseline golden), or an exact baseline of another
+    // edition: all mean "no matching baseline".
+    for case in 0..=fixture::BELOW_EXACT {
+        let mismatched = case == fixture::BELOW_EXACT;
         let mut world = vscode_world();
-        // No baseline at all, or one of another edition: both mean "no matching baseline".
-        world.baseline = mismatched.then(|| baseline("Professional", &[], &[]));
+        world.baseline = if mismatched {
+            Some(baseline("Professional", &[], &[]))
+        } else {
+            fixture::below_exact(case, &world.fp.os)
+        };
         let out = world.scan(&ClsAssoc);
         if !mismatched {
             golden::check("cls_assoc_vscode_no_baseline", &out);
@@ -1173,4 +1183,44 @@ fn skeleton_fails_closed_on_keys_it_cannot_vouch_for() {
     );
     world.fp.ext_journal[0].openwith_ours = vec!["VSCode.vsnew".into(), "Other.vsnew".into()];
     assert!(of_ext(&world.scan(&ClsAssoc), ".vsnew").is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Invariant L5 (BASELINE_LOCAL_DESIGN.md §2): a view below Exact only takes away
+// ---------------------------------------------------------------------------------------------------------
+
+/// Every world of this file, with each of the three association scanners: a view below Exact that
+/// holds nothing gives the no-baseline candidates exactly; one that says Windows has the keys
+/// preselects nothing new and unblocks nothing (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    use purge_scan::framework::Scanner;
+    type Make = fn() -> World;
+    let worlds: [(&str, Make); 5] = [
+        ("vscode", vscode_world),
+        ("defaults", defaults_world),
+        ("exe_keys", exe_keys_world),
+        ("file_exts", file_exts_world),
+        ("toasts", toasts_world),
+    ];
+    let scanners: [&dyn Scanner; 3] = [&ClsAssoc, &ClsFileExts, &ClsToasts];
+    let mut offered = 0;
+    for (name, make) in worlds {
+        for scanner in scanners {
+            let none = l5::check(
+                &format!("{name}/{}", scanner.id()),
+                &make().fp.os,
+                &|view| {
+                    let mut world = make();
+                    world.baseline = view;
+                    world.scan(scanner)
+                },
+            );
+            offered += none.len();
+        }
+    }
+    assert!(
+        offered > 10,
+        "the worlds offer something to compare: {offered}"
+    );
 }

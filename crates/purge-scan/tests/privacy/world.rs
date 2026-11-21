@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::ownership::{MACHINE_SID, OwnershipLimits, USERDATA};
 use purge_model::{
     Anchors, AppRef, Band, Candidate, Category, EvidenceKind, ExeFile, Fingerprint,
@@ -218,9 +219,9 @@ pub fn fingerprint() -> Fingerprint {
 }
 
 /// An empty baseline of this Windows.
-pub fn baseline() -> Baseline {
+pub fn baseline() -> BaselineView {
     let text = format!("#purge-baseline 1\tT\tPC\t{EDITION}\t{BUILD}.{UBR}\n");
-    Baseline::from_bytes(text.as_bytes()).expect("the baseline parses")
+    BaselineView::exact(Baseline::from_bytes(text.as_bytes()).expect("the baseline parses"))
 }
 
 /// The machine after the uninstall: drive `C:`, `C:\Program Files` without the app's folder, the other
@@ -260,7 +261,7 @@ pub fn sz(fx: &mut Fixture, key: &str, name: &str, data: &str) {
 pub struct World {
     pub fixture: Fixture,
     pub fp: Fingerprint,
-    pub baseline: Option<Baseline>,
+    pub baseline: Option<BaselineView>,
     pub env: BTreeMap<String, String>,
     pub guard: GuardEnv,
     pub other_apps: OtherApps,
@@ -316,7 +317,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: self.baseline.as_ref(),
+            baseline: BaselineView::or_empty(self.baseline.as_ref()),
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &self.env,
