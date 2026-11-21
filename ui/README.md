@@ -60,9 +60,14 @@ Development switches:
 | `--theme light` / `--theme dark` | Override the Windows theme for this run. |
 | `--page <key>` | Open on `programs`, `queue`, `leftovers`, `history`, `vault` or `settings`. |
 | `--bench-exit` | Close right after the first presented frame (launch bench). |
+| `--bench-stub` | The stub engine answers `programs.list` with 300 rows after 20 ms (launch bench). |
+| `--xaml-changes A,B` | Enable XAML optional changes, one at a time: `DefaultStyleOptimizations`, `IconNoGridOptimization`, `DeferContextFlyoutInit` (`OptimizeApplyStyles` is refused on 2.6.5). |
 
-Launch markers (milliseconds since process creation): `main`, `list_reply`, `window_ctor`, `first_tick`, `presented`.
-They show in Settings, and append one line per launch to the file named by `PURGE_BENCH_OUT`.
+Launch markers (milliseconds since process creation): `module_init`, `main`, `engine_ready`, `list_reply`,
+`on_launched`, `window_ctor`, `w_backdrop`, `w_titlebar`, `w_icon`, `w_size`, `programs_enter`,
+`programs_xaml`, `programs_ctor`, `rows_set`, `first_row`, `first_tick`, `presented`.
+They show in Settings when present, and append one line per launch to the file named by `PURGE_BENCH_OUT`
+(only that file turns them on). The bench itself is `docs/M3_BENCH.md`.
 
 ## Notes
 

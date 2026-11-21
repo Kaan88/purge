@@ -16,6 +16,8 @@
 //!   snap-2) and write its `purge.plan/0`; `replay-all` does so for the M0 runs and scores them with
 //!   rigtool when it is built; `replay-diff` replays the M0 runs and compares the plans with the
 //!   committed m1a.6 plans, every difference with an allowed reason (see replay.rs).
+//! - `bench-launch`: the launch bench of the WinUI shell against the bare-WinUI control (not part of `ci`; see
+//!   bench_launch.rs).
 //! - `ci`: fmt check, clippy, tests, a standalone clippy of `purge-mcp`, clippy and the feature-gated
 //!   tests of the rig-exec build (engine CLI), every purge-exec test target with its `fault-inject` and
 //!   `test-support` features (crash matrix, object ops), check-deps, no-new-walks, ui-strings,
@@ -38,7 +40,7 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context, Result, bail};
 
 const USAGE: &str = "usage: cargo xtask <ui-strings | check-deps | no-new-walks | baseline-sites | \
-                     scanner-coverage | replay | replay-all | replay-diff | ci>";
+                     scanner-coverage | replay | replay-all | replay-diff | bench-launch | ci>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -51,6 +53,7 @@ fn main() -> ExitCode {
         Some("replay") => replay::run_one(&workspace_root(), &args[1..]),
         Some("replay-all") => replay::run_all(&workspace_root(), &args[1..]),
         Some("replay-diff") => replay_diff::run(&workspace_root(), &args[1..]),
+        Some("bench-launch") => bench_launch::run(&workspace_root(), &args[1..]),
         Some("ci") => ci(&workspace_root()),
         Some("-h" | "--help") => {
             println!("{USAGE}");

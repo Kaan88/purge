@@ -7,16 +7,31 @@ namespace Purge.App;
 /// Launch markers relative to process creation (ENGINE_PLAN.md §9.2, measurement (a)). Each marker is the
 /// time in milliseconds since the kernel created this process. When <c>PURGE_BENCH_OUT</c> names a file, the
 /// markers are appended to it as one line per launch once the first frame has been presented.
+/// Off the bench (<see cref="Enabled"/> false) <see cref="Mark"/> costs one branch and records nothing.
 /// TraceLogging output comes later.
 /// </summary>
 public static partial class LaunchMarkers
 {
-    private static readonly long CreationFileTime = GetCreationTime();
+    /// <summary>True when <c>PURGE_BENCH_OUT</c> names a file: the launch bench, and only then, keeps markers.</summary>
+    public static readonly bool Enabled = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PURGE_BENCH_OUT"));
+
     private static readonly List<(string Name, double Ms)> Marks = [];
     private static readonly Lock Gate = new();
+    private static long CreationFileTime;
+
+    static LaunchMarkers()
+    {
+        // Read the process creation time once, and only for a bench launch.
+        if (Enabled) CreationFileTime = GetCreationTime();
+    }
+
+    /// <summary>The first marker: runs when the assembly loads, before <c>Main</c>.</summary>
+    [System.Runtime.CompilerServices.ModuleInitializer]
+    internal static void ModuleInit() => Mark("module_init");
 
     public static double Mark(string name)
     {
+        if (!Enabled) return 0;
         GetSystemTimePreciseAsFileTime(out var now);
         var ms = (now - CreationFileTime) / 10_000.0;
         lock (Gate) Marks.Add((name, ms));
