@@ -12,18 +12,22 @@
   names a readable file, the VM exists and is not running (or paused, starting, ...), no other rig script for that VM
   is alive, the engine holds the local baseline builder, both shipped baselines exist, rigtool was built from the
   tree's sources (`rigtool version` hash = the hash of vm\rigtool, as BIND) and has baseline-diff, and 6 GiB RAM are
-  available. Then: vm\runs\<run>\ moved to vm\runs\_old\, restore rig-base (nothing installed), Push-Tools
-  -NoBaselines (the exact baseline stays hidden; the checked rigtool and the engine are pushed), one guest job that
-  builds the local baseline twice (cold, warm) with PURGE_TIMING=1 into C:\cr\out\<run>\ (Get-BlBuildJob, the same
-  text as baseline-local-lib.sh bl_build_job), Pull-Run to vm\runs\<run>\, the VM restored to rig-base and left off;
+  available. Then: vm\runs\<run>\ moved to vm\runs\_old\, restore rig-base (nothing installed), the VM's NAT cable
+  disconnected (controlvm setlinkstate<N> off for each NAT adapter showvminfo names; the rig talks to the guest through
+  guestcontrol) until the end, Push-Tools -NoBaselines (the exact baseline stays hidden; the checked rigtool and the
+  engine are pushed), one guest job that builds the local baseline three times with PURGE_TIMING=1 into
+  C:\cr\out\<run>\ (Get-BlBuildJob, the same text as baseline-local-lib.sh bl_build_job): cold right after boot, warm,
+  and settled (after Wait-M2BootSettle, a quiet CPU and an emptied standby list), Pull-Run to vm\runs\<run>\, the cable
+  connected again and the VM restored to rig-base and left off;
   then on the host `rigtool baseline-diff` (truth = the VM's own shipped baseline, local = the cold build, neighbour =
   the other shipped baseline) into vm\truth\baseline-local\<run>.json, build.json copied beside it as
   <run>-build.json, and the final check (Test-BlReport, as bl_check).
 
   R5 (run r5-host): refuses unless elevated (S4 reads every user's packages only elevated; -AllowUnelevated builds an
   incomplete file, which the check then reports), the engine and rigtool pass the same checks and no VirtualBox VM
-  runs on the host (the build times are the W4 budgets). Builds the host's local baseline twice into vm\runs\r5-host\
-  (the same job, run by a child powershell.exe), copies build.json to vm\truth\baseline-local\r5-host-build.json and
+  runs on the host (the build times are the W4 budgets). Builds the host's local baseline three times into
+  vm\runs\r5-host\ (the same job, run by a child powershell.exe; the settled pass empties the host's standby list
+  too), copies build.json to vm\truth\baseline-local\r5-host-build.json and
   runs baseline-diff against each shipped baseline as a proxy truth with the other as neighbour
   (vm\truth\baseline-local\r5-host-vs-<baseline>.json): context and budgets, not a safety measurement.
 
@@ -31,8 +35,10 @@
   $env:RIG_RIGTOOL, else vm\rigtool\target\release\rigtool.exe (cargo build --release in vm\rigtool).
   Console log: vm\runs\bl-<run>-<stamp>.log (every line also on the console).
   Exit code: 0 ok; 1 the VM part or the diff failed; 2 refused to start (R5: also the build job or a diff failed);
-  3 the report shows a problem (seal failed or file incomplete, the passes differ below the header, the local file is
-  not of the truth's Windows, a build exit code was not 0).
+  3 the report shows a problem (seal failed or file incomplete, a pass differs from the cold one below the header with
+  the same source id (a determinism failure), the local file is not of the truth's Windows, a build exit code was not
+  0) or the run is INVALID (the passes' source ids differ: the source changed between them; or, R1/R2, the guest saw
+  a network adapter up).
   -Library: define the functions and return (vm\guest\tests\rig-selftest.ps1).
 #>
 [CmdletBinding()]
@@ -67,6 +73,54 @@ function Get-BlRunSpec([string]$M) {
 # VBoxManage VMState values in which a VM is in use (baseline-local-vm.sh refuses these).
 $BlBusyStates = @('running', 'paused', 'starting', 'restoring', 'saving', 'stopping', 'stuck', 'livesnapshotting', 'onlinesnapshotting')
 function Test-BlVmBusyState([string]$State) { $BlBusyStates -contains $State }
+
+# The VM's NAT adapters from showvminfo --machinereadable (ConvertFrom-MachineReadable): the numbers N of nic<N>="nat",
+# ascending. R1 and R2 disconnect exactly these for the whole build (coordinator, gate M round 2: in round 1 Store apps
+# updated between the cold and warm passes of Clean-Pro).
+function Get-BlNatNics([hashtable]$Info) {
+    @($Info.Keys | ForEach-Object { $m = [regex]::Match("$_", '^nic(\d+)$'); if ($m.Success -and "$($Info[$_])" -ceq 'nat') { [int]$m.Groups[1].Value } } | Sort-Object)
+}
+
+# The VM's other attached adapters ('N=<type>', neither nat nor none), for the log.
+function Get-BlOtherNics([hashtable]$Info) {
+    @($Info.Keys | ForEach-Object { $m = [regex]::Match("$_", '^nic(\d+)$'); $v = "$($Info[$_])"; if ($m.Success -and $v -and $v -cne 'nat' -and $v -cne 'none') { [int]$m.Groups[1].Value } } |
+        Sort-Object | ForEach-Object { "$_=$($Info["nic$_"])" })
+}
+
+# Sets the link of the running VM's NAT adapters (Get-BlNatNics on showvminfo) with controlvm setlinkstate<N>: 'off'
+# for the whole build (it throws when an adapter cannot be disconnected or still shows connected), 'on' again before
+# the VM is powered off and restored (logged, never throws; the restore of rig-base resets the cable anyway). Adapters
+# of another kind are logged and left alone. Returns the NAT adapter numbers. Needs rig.ps1 (Invoke-VBox, Write-RigLog);
+# defined here, before -Library returns, for baseline-local-vm.sh too.
+function Set-BlNatLink([string]$Vm, [ValidateSet('on', 'off')][string]$State) {
+    $vi = Invoke-VBox @('showvminfo', $Vm, '--machinereadable')
+    if ($vi.code -ne 0) {
+        $msg = "showvminfo $Vm failed: $($vi.out -join ' ')"
+        if ($State -eq 'off') { throw $msg }
+        Write-RigLog "  !! network: $msg"; return @()
+    }
+    $info = ConvertFrom-MachineReadable $vi.out
+    $nics = @(Get-BlNatNics $info)
+    if ($State -eq 'off') {
+        foreach ($o in @(Get-BlOtherNics $info)) { Write-RigLog "  network: adapter $o is not NAT; left as it is" }
+        if (-not $nics.Count) { Write-RigLog '  network: no NAT adapter to disconnect'; return @() }
+    }
+    foreach ($n in $nics) {
+        $r = Invoke-VBox @('controlvm', $Vm, "setlinkstate$n", $State)
+        if ($r.code -ne 0) {
+            $msg = "controlvm $Vm setlinkstate$n $State failed: $($r.out -join ' ')"
+            if ($State -eq 'off') { throw $msg }
+            Write-RigLog "  !! network: $msg"
+        }
+    }
+    $after = ConvertFrom-MachineReadable (Invoke-VBox @('showvminfo', $Vm, '--machinereadable')).out
+    Write-RigLog "  network: NAT cable set $State on $(@($nics | ForEach-Object { "nic$_ (now cableconnected$_=$($after["cableconnected$_"]))" }) -join ', ')"
+    if ($State -eq 'off') {
+        $still = @($nics | Where-Object { $after.ContainsKey("cableconnected$_") -and "$($after["cableconnected$_"])" -cne 'off' })
+        if ($still.Count) { throw "NAT adapter(s) $($still -join ', ') still connected after setlinkstate off" }
+    }
+    $nics
+}
 
 function Initialize-BlNative {
     if ('PurgeRig.BlHash' -as [type]) { return }
@@ -106,6 +160,22 @@ public static class BlHash {
             h.TransformFinalBlock(new byte[0], 0, 0);
             return Hex(h.Hash);
         }
+    }
+    // The header's source id (its 7th TAB field; "" when the header has fewer fields) and the #src lines of a gzip
+    // local baseline: what tells "the source changed between two passes" from "the same source gave other bytes".
+    public static string[] HeaderAndSources(string path) {
+        var list = new System.Collections.Generic.List<string>();
+        using (var f = File.OpenRead(path)) using (var g = new GZipStream(f, CompressionMode.Decompress)) using (var r = new StreamReader(g, new UTF8Encoding(false))) {
+            string first = r.ReadLine() ?? "";
+            string[] h = first.Split('\t');
+            list.Add(h.Length >= 7 ? h[6] : "");
+            string line;
+            while ((line = r.ReadLine()) != null) {
+                if (line.StartsWith("#src\t")) list.Add(line);
+                else if (line.Length > 0 && line[0] != '#') break;   // records follow the #src lines
+            }
+        }
+        return list.ToArray();
     }
     // True when the file holds the ASCII text (the engine's builder marker).
     public static bool FileContains(string path, string text) {
@@ -148,23 +218,94 @@ function Get-BlVersionHash([string[]]$Lines) {
     $null
 }
 
-# The guest (or host) job that builds the local baseline twice: the text of baseline-local-lib.sh bl_build_job with
-# __DIR__ = the run directory as the builder sees it and __ENGINE__ = purge-engine.exe there.
-function Get-BlBuildJob([string]$Dir, [string]$EnginePath) {
-    foreach ($v in $Dir, $EnginePath) { if (-not $v -or $v.Contains("'") -or $v -match '[\r\n]') { throw "bad path for the build job: '$v'" } }
+# The guest (or host) job that builds the local baseline three times: the text of baseline-local-lib.sh bl_build_job with
+# __DIR__ = the run directory as the builder sees it, __ENGINE__ = purge-engine.exe there and __RIGLIB__ = riglib.ps1
+# there (vm\guest\riglib.ps1, for Wait-M2BootSettle). Passes: cold (right after boot, as the broker may), warm (the
+# determinism pair), settled (after the guest settled and the standby list was emptied: W4 without boot-time I/O).
+function Get-BlBuildJob([string]$Dir, [string]$EnginePath, [string]$RigLibPath) {
+    foreach ($v in $Dir, $EnginePath, $RigLibPath) { if (-not $v -or $v.Contains("'") -or $v -match '[\r\n]') { throw "bad path for the build job: '$v'" } }
     $t = @'
 $ErrorActionPreference = 'Stop'
 $Dir = '__DIR__'
 $Engine = '__ENGINE__'
+$RigLib = '__RIGLIB__'
 New-Item -ItemType Directory -Force $Dir | Out-Null
 $env:PURGE_TIMING = '1'
 $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-$m = [ordered]@{ schema = 'purge.rig.baseline-local-build/1'; computer = $env:COMPUTERNAME; elevated = $admin
+# The adapters Windows reports up (the R1/R2 builds run with the VM's NAT cable disconnected).
+function Get-BlNetUp { try { @(Get-NetAdapter -ErrorAction Stop | Where-Object { "$($_.Status)" -eq 'Up' } | ForEach-Object { "$($_.Name)" }) } catch { @("? $($_.Exception.Message)") } }
+$m = [ordered]@{ schema = 'purge.rig.baseline-local-build/2'; computer = $env:COMPUTERNAME; elevated = $admin
     os = "$($cv.EditionID)-$($cv.CurrentBuildNumber).$($cv.UBR)"; cpus = [Environment]::ProcessorCount
     started = (Get-Date).ToString('o'); engine_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Engine).Hash.ToLower()
-    passes = @(); info = $null }
-foreach ($pass in 'cold', 'warm') {
+    network_up = [ordered]@{ start = @(Get-BlNetUp); settled = $null }; passes = @(); settle = $null; info = $null }
+# Before the settled pass: the boot settle of the exec runs (riglib Wait-M2BootSettle: ReadyBoot trace stopped, uptime
+# at least 300 s), then the CPU load under 10 % over 30 s (as rig.ps1 Wait-RigHostSettled; at most 600 s), then the
+# standby and modified page lists emptied so the build reads from disk again (NtSetSystemInformation
+# SystemMemoryListInformation; elevated only, the record says when it failed). Never throws.
+function Wait-BlSettle {
+    $rec = [ordered]@{ boot = $null; cpu_settled = $false; cpu_percent = $null; cpu_waited_sec = $null; cache_purged = $false; error = $null }
+    try {
+        $eap = $ErrorActionPreference
+        . $RigLib
+        $ErrorActionPreference = $eap
+        $rec.boot = Wait-M2BootSettle -MaxSec 600 -MinUptimeSec 300
+        if (-not ('PurgeRig.BlSettle' -as [type])) {
+            Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+namespace PurgeRig {
+public static class BlSettle {
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
+    [DllImport("ntdll.dll")] static extern int NtSetSystemInformation(int cls, ref int info, int len);
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, int access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool LookupPrivilegeValue(string system, string name, out long luid);
+    [StructLayout(LayoutKind.Sequential, Pack = 4)] struct Privs { public int Count; public long Luid; public int Attr; }
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool AdjustTokenPrivileges(IntPtr token, bool none, ref Privs state, int len, IntPtr prev, IntPtr retLen);
+    [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    // Empties the modified page list (3) and the standby list (4); "" when both calls returned STATUS_SUCCESS.
+    public static string PurgeStandby() {
+        IntPtr token;
+        if (!OpenProcessToken(GetCurrentProcess(), 0x28, out token)) return "OpenProcessToken " + Marshal.GetLastWin32Error();
+        try {
+            Privs p = new Privs(); p.Count = 1; p.Attr = 2;
+            if (!LookupPrivilegeValue(null, "SeProfileSingleProcessPrivilege", out p.Luid)) return "LookupPrivilegeValue " + Marshal.GetLastWin32Error();
+            if (!AdjustTokenPrivileges(token, false, ref p, Marshal.SizeOf(p), IntPtr.Zero, IntPtr.Zero) || Marshal.GetLastWin32Error() != 0) return "AdjustTokenPrivileges " + Marshal.GetLastWin32Error();
+        } finally { CloseHandle(token); }
+        foreach (int cmd in new int[] { 3, 4 }) {
+            int c = cmd;
+            int st = NtSetSystemInformation(80, ref c, 4);
+            if (st != 0) return "NtSetSystemInformation(" + cmd + ") 0x" + st.ToString("x8");
+        }
+        return "";
+    }
+}
+}
+"@
+        }
+        $t0 = Get-Date
+        while ($true) {
+            $i0 = [long]0; $k0 = [long]0; $u0 = [long]0; $i1 = [long]0; $k1 = [long]0; $u1 = [long]0
+            $null = [PurgeRig.BlSettle]::GetSystemTimes([ref]$i0, [ref]$k0, [ref]$u0)
+            Start-Sleep -Seconds 30
+            $null = [PurgeRig.BlSettle]::GetSystemTimes([ref]$i1, [ref]$k1, [ref]$u1)
+            $total = ($k1 - $k0) + ($u1 - $u0)
+            if ($total -gt 0) { $rec.cpu_percent = [Math]::Round(100.0 * (1.0 - (($i1 - $i0) / [double]$total)), 1) }
+            if ($null -ne $rec.cpu_percent -and $rec.cpu_percent -lt 10) { $rec.cpu_settled = $true; break }
+            if (((Get-Date) - $t0).TotalSeconds -ge 600) { break }
+        }
+        $rec.cpu_waited_sec = [Math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+        $why = [PurgeRig.BlSettle]::PurgeStandby()
+        if ($why) { $rec.error = "standby purge: $why" } else { $rec.cache_purged = $true }
+    } catch { $rec.error = $_.Exception.Message }
+    $rec
+}
+foreach ($pass in 'cold', 'warm', 'settled') {
+    if ($pass -eq 'settled') {
+        $m.settle = Wait-BlSettle
+        $m.network_up.settled = @(Get-BlNetUp)
+    }
     $out = Join-Path $Dir "local-$pass.tsv.gz"
     $log = Join-Path $Dir "build-$pass.log"
     Remove-Item -LiteralPath $out, $log, "$log.out" -Force -ErrorAction SilentlyContinue
@@ -182,6 +323,7 @@ foreach ($pass in 'cold', 'warm') {
     $len = $null; if (Test-Path -LiteralPath $out) { $len = (Get-Item -LiteralPath $out).Length }
     $m.passes += [ordered]@{ pass = $pass; exit = $p.ExitCode; seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2)
         peak_working_set_mb = [Math]::Round($peak / 1MB, 1); file_bytes = $len
+        uptime_sec = [int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds
         total_line = @(Get-Content -LiteralPath $log | Where-Object { $_ -match '^timing: baseline\.local\.total' }) -join ' ' }
 }
 # A load of the file (baseline info: read, #end check, hashed sets): the warm-load proxy until BL-VIEW exists.
@@ -193,10 +335,11 @@ $ErrorActionPreference = 'Stop'
 [IO.File]::WriteAllLines((Join-Path $Dir 'info.txt'), [string[]]$info)
 $m.info = [ordered]@{ exit = $LASTEXITCODE; seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2) }
 $m.finished = (Get-Date).ToString('o')
-[IO.File]::WriteAllText((Join-Path $Dir 'build.json'), (ConvertTo-Json -InputObject $m -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText((Join-Path $Dir 'build.json'), (ConvertTo-Json -InputObject $m -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
 "baseline-local build: $(($m.passes | ForEach-Object { '{0} exit {1} {2}s {3} MB peak {4} bytes' -f $_.pass, $_.exit, $_.seconds, $_.peak_working_set_mb, $_.file_bytes }) -join '; ')"
+"settle: $(if ($m.settle.boot) { "boot waited $($m.settle.boot.waited_sec) s, uptime $($m.settle.boot.uptime_sec) s; " })CPU $($m.settle.cpu_percent) % (settled $($m.settle.cpu_settled), waited $($m.settle.cpu_waited_sec) s); cache purged $($m.settle.cache_purged)$(if ($m.settle.error) { '; ' + $m.settle.error }); network up at start: $(@($m.network_up.start) -join ', ')"
 '@
-    $t.Replace("`r`n", "`n").Replace('__DIR__', $Dir).Replace('__ENGINE__', $EnginePath)
+    $t.Replace("`r`n", "`n").Replace('__DIR__', $Dir).Replace('__ENGINE__', $EnginePath).Replace('__RIGLIB__', $RigLibPath)
 }
 
 # The rigtool baseline-diff arguments (paths as given; the caller runs it from the repository root).
@@ -215,25 +358,59 @@ function Read-BlJson([string]$Path) { [IO.File]::ReadAllText($Path).TrimStart([c
 
 # The final check of a run (baseline-local-lib.sh bl_check): the numbers gate M reads ({lines}) and the problems
 # ({problems}; exit 3 when there is one): the local file incomplete (seal), not of the expected Windows ($Expect, '-'
-# none), a pass with an exit code other than 0, the cold and warm bodies (below the header, without #end) not equal.
-# $Budget 'host' (30 s) or 'vm' (120 s) for the cold build. The local-<pass>.tsv.gz files are next to $BuildPath.
+# none), a pass with an exit code other than 0, a pass whose body (below the header, without #end) is not the cold
+# pass's. A body that differs is told apart by the headers' source ids: other ids mean the source changed between the
+# passes (Windows serviced or a package updated: the run is INVALID, {invalid}, and says so; not a determinism failure),
+# the same id means the same source gave other bytes (a determinism failure). $Budget 'host' (30 s) or 'vm' (120 s) for
+# the cold build. The local-<pass>.tsv.gz files and build-<pass>.log are next to $BuildPath. A build.json of two passes
+# (schema 1, no settled pass) is read as before.
 function Test-BlReport([string]$ReportPath, [string]$BuildPath, [string]$Expect, [string]$Budget) {
     Initialize-BlNative
     $rep = Read-BlJson $ReportPath
     $build = Read-BlJson $BuildPath
     $bad = @()
+    $invalid = $false
     $loc = $rep.inputs.local
     if ($loc.complete -ne $true) { $bad += 'local baseline INCOMPLETE: ' + (@($loc.incomplete_reasons) -join '; ') }
     if ($Expect -ne '-' -and "$($loc.name)".ToLowerInvariant() -ne $Expect.ToLowerInvariant()) { $bad += "local baseline is of $($loc.name), the truth is $Expect" }
     $passes = @($build.passes)
     foreach ($p in $passes) { if ($p.exit -ne 0) { $bad += "$($p.pass) build exit $(Format-BlValue $p.exit)" } }
-    $bodies = @()
     $dir = Split-Path -Parent $BuildPath
+    $body = @{}
     foreach ($p in $passes) {
         $f = Join-Path $dir "local-$($p.pass).tsv.gz"
-        try { $bodies += [PurgeRig.BlHash]::BodySha256($f) } catch { $bad += "$f`: $($_.Exception.InnerException.Message)$(if (-not $_.Exception.InnerException) { $_.Exception.Message })" }
+        try {
+            $hs = [PurgeRig.BlHash]::HeaderAndSources($f)
+            $body[$p.pass] = [pscustomobject]@{ sha = [PurgeRig.BlHash]::BodySha256($f); id = $hs[0]; src = @($hs | Select-Object -Skip 1) }
+        } catch { $bad += "$f`: $($_.Exception.InnerException.Message)$(if (-not $_.Exception.InnerException) { $_.Exception.Message })" }
     }
-    if ($bodies.Count -eq 2 -and $bodies[0] -ne $bodies[1]) { $bad += "cold and warm builds differ below the header: $($bodies[0]) vs $($bodies[1])" }
+    $first = $passes[0].pass
+    foreach ($p in @($passes | Select-Object -Skip 1)) {
+        $a = $body[$first]; $o = $body[$p.pass]
+        if (-not $a -or -not $o -or $a.sha -eq $o.sha) { continue }
+        # The sources whose #src line differs, for the reader.
+        $diff = @(foreach ($s in 'S1', 'S2', 'S3', 'S4', 'S5') {
+            $x = @($a.src | Where-Object { $_.StartsWith("#src`t$s`t") }) -join "`n"
+            $y = @($o.src | Where-Object { $_.StartsWith("#src`t$s`t") }) -join "`n"
+            if ($x -cne $y) { $s }
+        })
+        $srcText = $(if ($diff.Count) { "#src lines that differ: $($diff -join ', ')" } else { 'every #src line equal' })
+        if ($a.id -and $o.id -and $a.id -cne $o.id) {
+            $invalid = $true
+            $bad += "RUN INVALID: the source changed between the $first and $($p.pass) passes (source id $($a.id) vs $($o.id); $srcText): not a determinism failure; rerun with the source held still"
+        } elseif ($a.id -and $a.id -ceq $o.id) {
+            $bad += "$first and $($p.pass) builds differ below the header with the same source id $($a.id) (a determinism failure; $srcText): $($a.sha) vs $($o.sha)"
+        } else {
+            $bad += "$first and $($p.pass) builds differ below the header (no source id to compare; $srcText): $($a.sha) vs $($o.sha)"
+        }
+    }
+    # R1, R2 (budget 'vm') build with the NAT cable disconnected: an adapter the guest reports up means it was not.
+    if ($Budget -eq 'vm' -and $build.network_up) {
+        foreach ($w in 'start', 'settled') {
+            $up = @($build.network_up.$w | Where-Object { $_ })
+            if ($up.Count) { $invalid = $true; $bad += "RUN INVALID: the guest had a network adapter up ($w`: $($up -join ', ')); the build must run offline" }
+        }
+    }
     $t = $rep.total
     $nbs = '[' + ((@($rep.inputs.neighbours) | ForEach-Object { "'$($_.name)'" }) -join ', ') + ']'
     $lines = @()
@@ -243,11 +420,28 @@ function Test-BlReport([string]$ReportPath, [string]$BuildPath, [string]$Expect,
         $lines += ('  {0,-28} truth {1,7}  local {2}  merged {3}  shared fa {4}/{5}  S3 local {6}  S2 merged {7}' -f $a.id, $a.truth, $a.coverage_local, $a.coverage_merged,
             $a.shared_shape_false_absent_local, $a.shared_shape_false_absent_merged, (Format-BlValue $a.checks.s3_local), (Format-BlValue $a.checks.s2_merged))
     }
-    $cold = $passes[0]
+    $named = { param($Name, $Index) $q = @($passes | Where-Object { $_.pass -eq $Name } | Select-Object -First 1); if ($q.Count) { $q[0] } elseif ($null -ne $Index -and $Index -lt $passes.Count) { $passes[$Index] } else { $null } }
+    $cold = & $named 'cold' 0
+    $warm = & $named 'warm' 1
+    $settled = & $named 'settled' $null
     $budgetSec = $(if ($Budget -eq 'host') { 30 } else { 120 })
-    $lines += "W4: cold build $($cold.seconds) s (budget $budgetSec s on $($build.cpus) CPUs), warm $($passes[-1].seconds) s; peak $($cold.peak_working_set_mb) MB (300); file $($cold.file_bytes) bytes (15 MB); load (baseline info) $($build.info.seconds) s (1.5 s for the view)"
+    $lines += "W4: cold build $($cold.seconds) s (budget $budgetSec s on $($build.cpus) CPUs), warm $($warm.seconds) s; peak $($cold.peak_working_set_mb) MB (300); file $($cold.file_bytes) bytes (15 MB); load (baseline info) $($build.info.seconds) s (1.5 s for the view)"
+    if ($settled) {
+        $st = $build.settle
+        $boot = $(if ($st.boot) { "boot settle $($st.boot.waited_sec) s (ReadyBoot $(if ($st.boot.bounded) { 'bound reached' } else { 'stopped' }), uptime $($st.boot.uptime_sec) s)" } else { 'no boot settle' })
+        $lines += "W4 settled: cold build $($settled.seconds) s (budget $budgetSec s on $($build.cpus) CPUs) at uptime $($settled.uptime_sec) s, after $boot, CPU $($st.cpu_percent) % over 30 s ($(if ($st.cpu_settled) { 'settled' } else { 'NOT settled' }) after $($st.cpu_waited_sec) s), standby list purged $(Format-BlValue $st.cache_purged)$(if (-not $st.cache_purged) { ' (not a cold read)' })$(if ($st.error) { '; ' + $st.error })"
+    }
+    if ($build.network_up) {
+        $lines += "network: adapters up at the start [$(@($build.network_up.start) -join ', ')], before the settled pass [$(@($build.network_up.settled) -join ', ')]"
+    }
+    foreach ($p in $passes) {
+        $log = Join-Path $dir "build-$($p.pass).log"
+        if (-not (Test-Path -LiteralPath $log)) { continue }
+        $ph = @(Get-Content -LiteralPath $log | Where-Object { $_ -match '^timing: baseline\.local\.(read|expand|parse|s1|total) ' } | ForEach-Object { $_.Substring('timing: baseline.local.'.Length) })
+        if ($ph.Count) { $lines += "  phases $($p.pass): $($ph -join '; ')" }
+    }
     foreach ($b in $bad) { $lines += 'PROBLEM: ' + $b }
-    [pscustomobject]@{ lines = $lines; problems = $bad; ok = (-not $bad.Count) }
+    [pscustomobject]@{ lines = $lines; problems = $bad; ok = (-not $bad.Count); invalid = $invalid }
 }
 
 if ($Library) { return }
@@ -335,7 +529,7 @@ if ($Spec.mode -eq 'R5') {
     $run = Join-Path $script:RunsDir $Spec.run
     New-Item -ItemType Directory -Force $run, $BlReportDir | Out-Null
     $job = Join-Path $run 'build-job.ps1'
-    [IO.File]::WriteAllText($job, (Get-BlBuildJob $run $tools.engine), (New-Object System.Text.UTF8Encoding($true)))
+    [IO.File]::WriteAllText($job, (Get-BlBuildJob $run $tools.engine (Join-Path $BlRigDir 'guest\riglib.ps1')), (New-Object System.Text.UTF8Encoding($true)))
     Write-RigLog "== $($Spec.run) start $($started.ToString('o')); engine $((Get-FileHash -Algorithm SHA256 -LiteralPath $tools.engine).Hash.ToLower().Substring(0, 12)) ($($tools.engine)); elevated $admin"
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $job 2>&1 | ForEach-Object { Write-RigLog "$_" }
@@ -379,19 +573,23 @@ Add-Type -AssemblyName Microsoft.VisualBasic
 $avail = [int]((New-Object Microsoft.VisualBasic.Devices.ComputerInfo).AvailablePhysicalMemory / 1MB)
 if ($avail -lt 6144) { Stop-Bl 2 "REFUSED: only $avail MiB RAM available (need 6144 for a 4 GiB VM)" }
 
-$job = Get-BlBuildJob "C:\cr\out\$($Spec.run)" 'C:\cr\bin\purge-engine.exe'
+$job = Get-BlBuildJob "C:\cr\out\$($Spec.run)" 'C:\cr\bin\purge-engine.exe' 'C:\cr\guest\riglib.ps1'
 Write-RigLog "== $($Spec.run) start $($started.ToString('o')) on $($Spec.vm); engine $((Get-FileHash -Algorithm SHA256 -LiteralPath $tools.engine).Hash.ToLower().Substring(0, 12)) ($($tools.engine)); truth $($Spec.truth); neighbour $($Spec.neighbour)"
 $rc = 1
+$script:BlNat = @()
 try {
     $null = Get-PwFile
     $null = Move-RunToOld -Run $Spec.run
     if ($Spec.no3d) { Restore-Base -Snapshot rig-base -No3D } else { Restore-Base -Snapshot rig-base }
+    # Offline for the whole build (gate M round 2): the rig reaches the guest through guestcontrol, not the network.
+    $script:BlNat = @(Set-BlNatLink $Spec.vm 'off')
     Push-Tools -RigTool $tools.rigtool -Engine $tools.engine -NoBaselines
-    $j = Invoke-GuestJob -Text $job -Name "$($Spec.run)-build" -TimeoutSec 1800
+    # Three passes and the settle wait before the third (Get-BlBuildJob).
+    $j = Invoke-GuestJob -Text $job -Name "$($Spec.run)-build" -TimeoutSec 3600
     Write-BlLines @("$($j.log)" -split "`r?`n" | Where-Object { $_ -ne '' })
     if (-not $j.done) { throw 'the build job did not finish' }
     $got = @(Pull-Run -Run $Spec.run)
-    foreach ($n in 'local-cold.tsv.gz', 'local-warm.tsv.gz', 'build.json', 'build-cold.log', 'info.txt') {
+    foreach ($n in 'local-cold.tsv.gz', 'local-warm.tsv.gz', 'local-settled.tsv.gz', 'build.json', 'build-cold.log', 'info.txt') {
         if ($got -notcontains $n) { throw "not pulled: $n" }
     }
     $rc = 0
@@ -402,6 +600,7 @@ try {
     # Leave the VM as the run found it: rig-base, powered off (a live snapshot comes back 'saved').
     try {
         $st = Get-VmState
+        if ($script:BlNat.Count -and $st -eq 'running') { $null = Set-BlNatLink $script:VmName 'on' }
         if (Test-BlVmBusyState $st) {
             $r = Invoke-VBox @('controlvm', $script:VmName, 'poweroff')
             if ($r.code -ne 0) { Write-RigLog "  poweroff: $($r.out -join ' ')" }
@@ -413,6 +612,8 @@ try {
             if ($r.code -eq 0) { $ok = $true } else { Start-Sleep -Seconds 3 }
         }
         Write-RigLog "VM $script:VmName restored to rig-base and left off: $ok (state $(Get-VmState))"
+        $cfg = ConvertFrom-MachineReadable (Invoke-VBox @('showvminfo', $script:VmName, '--machinereadable')).out
+        Write-RigLog "  network after the restore: $(@(Get-BlNatNics $cfg | ForEach-Object { "nic$_ cableconnected$_=$($cfg["cableconnected$_"])" }) -join ', ')"
     } catch { Write-RigLog "!! leaving the VM at rig-base failed: $($_.Exception.Message)" }
     Remove-PwTemp
 }

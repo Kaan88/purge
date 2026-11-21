@@ -442,7 +442,13 @@ in the COM areas of HKLM Classes, 60 to 80% in `SOFTWARE\Microsoft`, 50 to 70% i
   presence-only.
 - **W3** Recall cost: items the exact view offers and the merged view blocks (extra presence) are at
   most 1% of the exact view's offered items.
-- **W4** The budgets of §5 on R1, R2 and R5.
+- **W4** The budgets of §5 on R1, R2 and R5. The rig job builds three times (gate M round 2, coordinator): *cold*
+  right after boot (what a broker started at logon would see), *warm* (the determinism pair of cold), and *settled*:
+  after the boot settle of the exec runs (ReadyBoot trace stopped, uptime at least 300 s), the CPU under 10 % over
+  30 s, and the standby list emptied so the files are read from disk again. Background mode stays in every pass; the
+  settled pass separates the builder's own cost from the boot-time I/O it yields to. R1 and R2 build with the VM's NAT
+  cable disconnected; passes whose bodies differ are a determinism failure only with the same header source id
+  (another id: the source changed, the run is invalid).
 - **W5** R5: the merged view adds at least one `WindowsBaseline` block or Likely key per program on
   average over the ten programs; otherwise the report says the host gains nothing and why.
 
