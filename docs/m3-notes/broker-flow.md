@@ -100,8 +100,9 @@ items still takes the old path; only the executor's own act-time checks matter t
   the dialog cannot acknowledge it. M3-EXEC needs a way to set the acknowledgement before
   `execute_bound` (an RPC field or a method on the plan); until then packages in a broker plan are
   skipped.
-- `uninstall.observed` has no outcome from the medium engine, so a medium run that failed but left
-  the program gone is scanned `post` (the broker only sees verify-gone). If the rule "a failed
-  uninstaller gives forced" must hold across the two processes, `ObservedParams` needs the outcome.
+- `uninstall.observed` had no outcome from the medium engine, so a medium run that failed but left
+  the program gone was scanned `post` (the broker only saw verify-gone). **Resolved:** `ObservedParams`
+  carries the outcome (M3-EXEC), and M3-GLUE records the uninstall window in `observed` from `prepare`'s
+  harvest to the observation, so the medium route's `post` scan works without a broker `uninstall.run`.
 - The soft blockers (`BaselineInferred`, `InUse`, `ChangedSinceScan`) are not attention reasons in
   the view either; this package reports exactly what the view reports.

@@ -39,7 +39,9 @@ use purge_identity::kbdata::Kb;
 use purge_inventory::quiet::QuietCommand;
 use purge_inventory::runner::{LiveHost, RunOptions};
 use purge_inventory::verify_gone::{self, VerifyTarget};
-use purge_model::{Candidate, Fingerprint, InventoryEntry, ProgramId, Target, VerifyGone};
+use purge_model::{
+    Candidate, FileTime, Fingerprint, InventoryEntry, ProgramId, Target, VerifyGone,
+};
 use purge_rpc::error::{ErrorData, ErrorObject, IdKind, Refusal};
 use purge_rpc::methods::PipeCall;
 use purge_rpc::methods::{
@@ -359,6 +361,9 @@ pub struct Session {
     pub route: Route,
     /// The commands `prepare` resolved and reported.
     pub commands: UninstallCommands,
+    /// When `prepare` harvested the program: the uninstall window's start when an observation records
+    /// one (the medium engine runs the uninstaller between the two requests).
+    window_start: FileTime,
     /// The fingerprint, updated by the run and the observation.
     fingerprint: Mutex<Fingerprint>,
     /// The broker's own verify-gone, once the uninstaller ran or was observed.
@@ -549,6 +554,7 @@ fn prepare<H: FlowHandler>(
             &running_roots(entry, &commands),
         );
 
+        let window_start = crate::purge::system_now();
         let harvested = {
             let mut progress = NotifyProgress {
                 ctx,
@@ -584,6 +590,7 @@ fn prepare<H: FlowHandler>(
             display_name: entry.display_name.clone(),
             route,
             commands,
+            window_start,
             fingerprint: Mutex::new(fingerprint),
             verify_gone: Mutex::new(None),
             ran: AtomicBool::new(false),
@@ -807,6 +814,10 @@ fn run<H: FlowHandler>(
 /// cancelled or timed out is a failed uninstaller whatever the broker finds: the scan is `forced` with
 /// nothing preselected, as after a failed run of the broker's own. A reported success is never taken
 /// as one: the broker's verify-gone still has to pass. So the report can only make the scan safer.
+///
+/// When both hold, the session's fingerprint gets the uninstall window `prepare`'s harvest opened and
+/// this observation closed, which is what a `post` scan checks for (as `uninstall.run` records for a
+/// broker-route run). No window is recorded in every other case, so the scan stays forced.
 fn observed<H: FlowHandler>(
     flow: &Flow,
     ctx: &Ctx<'_, H>,
@@ -814,6 +825,7 @@ fn observed<H: FlowHandler>(
 ) -> Result<Value, ErrorObject> {
     let session = ctx.tables().sessions.get(params.session_id)?;
     let machine = flow.machine();
+    let reported_ok = params.outcome.is_none_or(|outcome| outcome.is_success());
     let verify = {
         let mut fingerprint = session
             .fingerprint
@@ -821,10 +833,19 @@ fn observed<H: FlowHandler>(
             .unwrap_or_else(|e| e.into_inner());
         let verify = machine.verify_gone(&session.program, &fingerprint);
         fingerprint.verify_gone = Some(verify);
+        if reported_ok && verify.is_passed() {
+            // The medium engine ran the uninstaller between `prepare`'s harvest and this observation,
+            // so that is the window a `post` scan needs (which only the broker's `run` recorded
+            // before). A failed report, a failed verify-gone or a cancel records no window: the scan
+            // is forced, as it is after such a run of the broker's own.
+            let start = fingerprint.window.t_start.unwrap_or(session.window_start);
+            let end = crate::purge::system_now();
+            fingerprint.window.t_start = Some(start);
+            fingerprint.window.t_end = Some(FileTime(end.0.max(start.0)));
+        }
         let _ = machine.write_fingerprint(&session.program, &fingerprint);
         verify
     };
-    let reported_ok = params.outcome.is_none_or(|outcome| outcome.is_success());
     session.set_ran(reported_ok && verify.is_passed());
     session.set_verify(verify);
     serde_json::to_value(ObservedResult {

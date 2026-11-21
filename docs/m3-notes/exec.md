@@ -98,11 +98,14 @@ never skips the broker's verify-gone; an absent field keeps the old rule. Tests:
 
 ## Open points
 
-- **`uninstall.observed` then `post` fails.** After a medium-route run the broker's fingerprint has no uninstall window (only
-  `uninstall.run` records one), so `leftovers.scan` in `post` mode answers the pipeline's `--mode post needs a fingerprint with a
-  completed uninstall window` as a `runtime` error. The forced scan (and every case the new outcome forces) works. Fixing it needs
-  `observed` to record a window from the client's report, or the UI to scan `external`/`forced`; left to the UI/STDIO packages.
-- The UI does not send `outcome` or `allow_irreversible` yet (C# models are updated; no call site uses them).
+- **`uninstall.observed` then `post` fails.** After a medium-route run the broker's fingerprint had no
+  uninstall window (only `uninstall.run` recorded one), so `leftovers.scan` in `post` mode answered the
+  pipeline's `--mode post needs a fingerprint with a completed uninstall window` as a `runtime` error.
+  **Resolved (M3-GLUE):** `observed` records the window, from `prepare`'s harvest to the observation, when
+  the broker's verify-gone passes and the reported outcome is not a failure; every other case stays a
+  forced scan with nothing preselected. Tests: `observed_records_the_window_a_post_scan_needs`,
+  `a_failed_observation_records_no_window_and_scans_forced`.
+- The UI sends `outcome` on `uninstall.observed` (M3-GLUE); it does not send `allow_irreversible` yet.
 - The M1b exemption lists are judged when the run starts, not when the dialog is shown (seconds to minutes apart).
 - `plan_in::bind` runs at `plan.create`; `execute_bound` trusts that object (that is B3). A `BoundPlan` cannot be built outside
   `bind`/`rebind`, so the broker cannot hand the executor a plan `bind` did not check.

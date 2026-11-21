@@ -88,6 +88,7 @@ public sealed class UninstallPageTests
         Assert.Equal(medium.CommandFor(true), confirmation.Command);
         Assert.Equal(0, broker.RunCalls);
         Assert.Equal(1, broker.ObservedCalls);
+        Assert.Equal(RunOutcome.Success, broker.ObservedOutcome);
         Assert.True(broker.ObservedBeforeScan, "the order is prepare, run_user, observed");
         Assert.Equal(RestorePoint.Always, controller.CompletedOutcome!.RestorePoint);
     }
@@ -264,6 +265,7 @@ public sealed class UninstallPageTests
         await begin.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(1, broker.ObservedCalls);
+        Assert.Equal(RunOutcome.Failed, broker.ObservedOutcome);
         var notice = Assert.Single(controller.Notices);
         Assert.Equal(UninstallNoticeKind.Error, notice.Kind);
         Assert.Equal(1603U, notice.ExitCode);
@@ -489,6 +491,7 @@ public sealed class UninstallPageTests
         public int RunCalls { get; private set; }
         public bool RunQuiet { get; private set; }
         public int ObservedCalls { get; private set; }
+        public RunOutcome? ObservedOutcome { get; private set; }
         public int ScanCalls { get; private set; }
         public bool ScanForced { get; private set; }
         public bool ObservedBeforeScan { get; private set; }
@@ -509,9 +512,10 @@ public sealed class UninstallPageTests
             return Task.FromResult(Run);
         }
 
-        public Task<ObservedResult> ObservedAsync(string sessionId, CancellationToken ct)
+        public Task<ObservedResult> ObservedAsync(string sessionId, RunOutcome? outcome, CancellationToken ct)
         {
             ObservedCalls++;
+            ObservedOutcome = outcome;
             return Task.FromResult(new ObservedResult
             {
                 VerifyGone = new VerifyGone { ArpGone = true, MainExesGone = true, MsiUnknownAllCtx = true, Passed = true },
