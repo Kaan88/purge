@@ -141,9 +141,55 @@ clean Windows start, SendInput test); install.ps1 update; engine output addition
    **Answer (user 2026-11-21):** Allow `SeRestorePrivilege` in the broker only around the owner-set call of undo, dropped right after.
 7. **Reuse of the stopgap UI.** Not yet assessed; may become a question once both branches are read.
 
+## 7a. Mockup deltas (coordinator, 2026-11-21)
+
+The refined mockups hold; six deltas follow from the answers in section 7 and from what the engine
+does.
+
+| # | Mockup page and element | Change for M3 | Reason |
+|---|---|---|---|
+| 1 | "Uninstall pipeline", button "Close python.exe" next to "python.exe × 2 still running" | Keep the running-process line; replace the button with a hint to close it and a Retry button. In "Safety dial settings", the row "Uninstall: Quiet mode, restore points, running apps" drops "running apps" | Open question 5 answer: report-only |
+| 2 | The "Standard user" chip in the title bar on every page | Removed. An "Administrator" chip with a shield shows only when the UI itself runs elevated (setting "Always start as administrator") | Open question 3 refuses standard-user accounts, so "Standard user" would read as the account type |
+| 3 | "Consent prompts", variant A (Win32 TaskDialog) | Built, as ENGINE_PLAN 9 says. Variant B (WinUI take) is not built. Variant C ("type to confirm", "Remove 5.8 GB for good", items without undo removed at once) is out of M3: items that cannot go to quarantine (no undo, or over the quarantine cap) are reported in the plan and not offered for removal | The M2 executor quarantines everything; a no-undo delete path is new risk with no gate |
+| 4 | "Uninstall pipeline" Safety net "Restore point made at 04:12", and the "Quarantine vault" per-volume limit "1.8 GB of 10 GB" | Keep both. The executor's prepare step already requests a restore point per setting (default high-risk only, ENGINE_PLAN 7.7, `crates/purge-exec/src/execute.rs` step 8); the line shows only when one was made. The cap is min(10 GB, 5 % of the volume) (ENGINE_PLAN 7.8 size cap); the UI shows the real cap, not a fixed 10 GB | The plan already holds both, so the mockup reads true |
+| 5 | "Removed outside Purge" banners ("Today: Programs", "Programs, refined", "Tidiness home": Notion and Slack) | Shown only for a program whose fingerprint was stored before it was removed (the per-user/machine fingerprint store, ENGINE_PLAN 8). Without one, the program is listed as removed with no leftover count | ENGINE_RESEARCH notes that external uninstalls without a stored record are unattributable |
+| 6 | The 22 pages in the mockup | Nine pages in M3, eight later, five explorations (the table below) | M3 covers S1, S2, S3, S7 and the shell; the rest are later or superseded |
+
+Scope of the 22 pages:
+
+| Page | M3 status |
+|---|---|
+| "Programs, refined" (S1) | In M3 |
+| "Leftovers, refined" (S3) | In M3 |
+| "Uninstall pipeline" (S2) | In M3 |
+| "Consent prompts" variant A | In M3 |
+| "Time scrubber" | In M3 as the History & undo screen, but without the drag marker (a plain list with Restore) |
+| "Quarantine vault" | In M3 |
+| "Safety dial settings" (S7) | In M3 |
+| "Snapped narrow" | In M3 (narrow layout) |
+| "High contrast" | In M3 |
+| "Command palette" | Later, not M3 |
+| "Tabs in the title bar" | Later, not M3 |
+| "One-at-a-time triage" | Later, not M3 |
+| "Drop target" (portable apps) | Later, not M3 |
+| "Before and after diff" | Later, not M3 |
+| "Tidiness home" | Later, not M3 |
+| "Footprint map" | Later, not M3, already a future idea |
+| "Inline assistant" | Later, M6 |
+| "Today: Programs" | Exploration, not planned (superseded by the refined page) |
+| "Programs as weight cards" | Exploration, not planned |
+| "Leftovers in three lanes" | Exploration, not planned |
+| "Autopsy rings" | Exploration, not planned |
+| "Ownership graph" | Exploration, not planned (its "shared with Thunderbird" fact is shown as text in the Leftovers detail pane instead) |
+
+The per-user uninstaller itself still runs at medium with the user's token even though the queue asks
+for one admin prompt (ENGINE_PLAN 6, line about never becoming an elevation vehicle); the broker only
+harvests and executes the leftover plan.
+
 ## 8. Decisions added to DECISIONS.md
 
 2026-11-21 (user): answers to open questions 1-6, one row.
+2026-11-21 (coordinator): mockup deltas, one row.
 
 ## 9. For the resuming session
 
