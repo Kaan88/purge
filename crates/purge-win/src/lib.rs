@@ -45,5 +45,6 @@ pub mod sid;
 pub mod signer;
 #[cfg(feature = "write")]
 pub mod sr;
+pub mod sxs;
 pub mod taskschd;
 pub mod versioninfo;
