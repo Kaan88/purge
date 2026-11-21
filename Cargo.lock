@@ -138,6 +138,7 @@ dependencies = [
  "purge-engine",
  "purge-exec",
  "purge-model",
+ "purge-plan",
  "purge-rpc",
  "purge-source",
  "purge-win",

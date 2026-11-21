@@ -16,5 +16,8 @@ purge-rpc.workspace = true
 purge-win = { workspace = true, features = ["write"] }
 serde_json.workspace = true
 
+[dev-dependencies]
+purge-plan.workspace = true
+
 [lints]
 workspace = true

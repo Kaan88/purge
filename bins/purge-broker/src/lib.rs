@@ -13,12 +13,14 @@
 //! | [`session`] | the session, scan and plan tables and their `gone` |
 //! | [`lifetime`] | clock, parent, exit reasons and codes, the consent closer |
 //! | [`baseline`] | the local-baseline build as the loop sees it, `engine.hello` from the live machine |
+//! | [`consent`] | the consent view model and the dialog, four variants |
 //! | [`wire`] | the named pipe, the TaskDialog and the parent handle |
 //!
 //! There is no cargo feature: the scripted fakes of the tests exist only under `cfg(test)`.
 
 pub mod args;
 pub mod baseline;
+pub mod consent;
 pub mod lifetime;
 pub mod link;
 pub mod serve;

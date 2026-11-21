@@ -357,6 +357,7 @@ struct ConsentState {
     answer: Option<Outcome>,
     closed_by_broker: bool,
     pages: Vec<Page>,
+    primary: i32,
 }
 
 /// A consent dialog the test answers (`cfg(test)` only).
@@ -364,9 +365,16 @@ struct ConsentState {
 pub struct ScriptedConsent {
     state: Mutex<ConsentState>,
     cv: Condvar,
+    /// Whether the dialog says it is up (`consent.shown`). Off by default so that tests that read the
+    /// next line as the reply do not meet the notification.
+    announce: AtomicBool,
 }
 
 impl ScriptedConsent {
+    pub fn announce_shown(&self) {
+        self.announce.store(true, Ordering::SeqCst);
+    }
+
     pub fn wait_open(&self, timeout: Duration) -> bool {
         let g = self.state.lock().unwrap();
         let (g, _) = self.cv.wait_timeout_while(g, timeout, |s| !s.open).unwrap();
@@ -385,16 +393,31 @@ impl ScriptedConsent {
     pub fn pages(&self) -> Vec<Page> {
         self.state.lock().unwrap().pages.clone()
     }
+
+    /// The primary button id of the dialog that was asked last.
+    pub fn primary(&self) -> i32 {
+        self.state.lock().unwrap().primary
+    }
 }
 
 impl Consent for Arc<ScriptedConsent> {
-    fn ask(&self, pages: &[Page], _primary: i32, closer: &Closer) -> io::Result<Outcome> {
+    fn ask(
+        &self,
+        pages: &[Page],
+        primary: i32,
+        closer: &Closer,
+        shown: &(dyn Fn() + Sync),
+    ) -> io::Result<Outcome> {
         {
             let mut g = self.state.lock().unwrap();
             g.open = true;
             g.answer = None;
             g.pages = pages.to_vec();
+            g.primary = primary;
             self.cv.notify_all();
+        }
+        if self.announce.load(Ordering::SeqCst) {
+            shown();
         }
         let this = self.clone();
         closer.arm(move || {
@@ -443,6 +466,8 @@ pub struct Probe {
 /// A handler for the test table of methods.
 #[derive(Clone)]
 pub struct TestHandler(pub Arc<Probe>);
+
+const TEST_CODE: &str = "A1B2-C3D4";
 
 pub fn id_text(prefix: &str, n: u64) -> String {
     format!("{prefix}-{n:016x}")
@@ -507,7 +532,7 @@ impl Handler for TestHandler {
             }
             PipeCall::PlanExecute(e) => {
                 let _plan = ctx.tables().plans.take(e.plan_id)?;
-                let outcome = ctx.consent(&[Page::default()], 100);
+                let outcome = ctx.consent(&[Page::default()], 100, TEST_CODE.parse().unwrap());
                 *p.consent_outcome.lock().unwrap() = Some(outcome);
                 match outcome {
                     Outcome::Approved => {
