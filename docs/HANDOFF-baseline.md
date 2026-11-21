@@ -1,9 +1,128 @@
-# Local baseline handoff (paused 2026-11-21 evening)
+# Local baseline handoff (paused 2026-11-22, fourth pause: harness switch, Claude credits ran out)
 
-Branch `baseline`, pushed to `origin/baseline`. Design `docs/BASELINE_LOCAL_DESIGN.{md,json}`; every decision of
-this work is a 2026-11-21 row in `docs/DECISIONS.md` (Post-M1b), mostly "(coordinator)". This file is kept current
-so the work can be continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
+Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_LOCAL_DESIGN.{md,json}`; every
+decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
+continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+## PAUSED 2026-11-22 (harness switch). Read this section first; everything below it is older history.
+
+State: **M3 waves 1-5 are merged into `baseline` 8c7142f (pushed)**, plus M3-R2 fix round 1. The app can do a full
+uninstall end to end in code. Four branches are FINISHED but **NOT MERGED** (see below). No build/runtime was left
+running; no VM was started this session.
+
+### Not merged, in merge order
+1. `r2-s` 5b0b22a (parent 8c7142f) - M3-R2 S1 + S2 + S5, by Flash, all checks reported green
+   (broker 204, exec 463/8 ignored, rpc 31, 98 UI tests; gen-dto ok; build 0 warnings).
+   - S1: `serve.rs` `mark_broken` uses `try_send` + a `broken` AtomicBool, so a full 256-slot event channel can no
+     longer stall the supervisor. Test: `a_full_event_channel_does_not_block_the_pipe_broken_signal`.
+     Not reproduced end to end over a real pipe (only the flag path).
+   - S2: a successful run spends **every scan of the program** (`Scan.program` + `spent`); `plan.create` refuses a
+     spent scan or a vanished session; `plan.execute` also refuses a plan pre-created from a sibling scan.
+     Test: `a_run_spends_every_scan_of_the_program`. Refusal kind for a vanished session is `plan_refused`
+     ("scan again"), not `gone` - a judgement call.
+   - S5: reconcile alerts reach the client - `UndoResult.alerts[]` / `OutcomeResult.alerts[]`
+     (`Alert { op, original_path, moved_back }`), `HistoryItem.alert` mark, shown on the Leftovers "Put back"
+     result panel. HistoryView is still sample data, so the live History page does not render it yet.
+     RPC + fixtures + schemas + `RpcModels.cs` changed.
+2. `r2-m1` 743ca9a (parent 8c7142f) - M3-R2 M1 (broker consent dialog before `uninstall.run`), by Sonnet 5.5.
+   Checks reported green (215 broker, 100 UI, gen-dto, 0 warnings). RPC: `RunParams.restore_point` (optional,
+   display only), `uninstall.run` marked `consent: true` in `table.rs`, fixture + `RunParams.json` + `RpcModels.cs`
+   hand-edited. Adds `text::shown_line` / `quote_line`. UI: waiting state + Retry bar in `UninstallPipeline.cs`.
+   **Expect merge conflicts with `r2-s`** in `crates/purge-rpc/src/methods.rs`, `lib.rs`, fixtures/schemas and
+   `ui/Purge.Client/Rpc/RpcModels.cs`. Merge `r2-s` first, then `r2-m1`; re-run `cargo xtask gen-dto` and
+   `gen-dto --check` after resolving.
+3. `r2-s7` 641dcf7 (parent 8c7142f) - M3-R2 S7: broker built for the Windows subsystem
+   (`#![windows_subsystem = "windows"]` in `bins/purge-broker/src/main.rs`) and `BrokerLauncher.cs` uses
+   `SW_SHOWNORMAL` instead of `SW_HIDE`; notes updated. dumpbin: "2 subsystem (Windows GUI)", load config still
+   `0800 Dependent Load Flag`. Broker 201 + 10 + start test, 98 UI tests.
+   **Already contained in `inno-installer`** (that worktree merged r2-s7), so merging the installer brings it.
+4. `inno-installer` b5b9fa4 - Inno Setup installer (user asked for one; see below). Contains `r2-s7`.
+
+### DIRTY main checkout - clear it before merging
+The M1 writer left three partially-edited files **in the main checkout** (not the worktree), from running commands
+with relative paths. They are not the committed `r2-m1` content and are NOT wanted:
+```
+bins/purge-broker/src/consent/view.rs
+bins/purge-broker/src/flow_tests.rs
+crates/purge-rpc/fixtures/pipe.uninstall.run.params.json
+```
+Do `git checkout -- bins/purge-broker/src/consent/view.rs bins/purge-broker/src/flow_tests.rs crates/purge-rpc/fixtures/pipe.uninstall.run.params.json`
+before merging (or `git stash` if you want to inspect them). Untracked and harmless: `.claude/`, `EngineLink.cs`,
+`vm/truth/m1b-evidence/budgets/`.
+
+### Inno Setup installer (for the desktop PC)
+- Script `install/inno/purge.iss`, builder `install/inno/build-installer.ps1` (builds engine + broker + AOT
+  publish, runs ISCC), docs in `install/README.md` ("Inno installer" section).
+- Built artifact (in the worktree, NOT tracked by git):
+  `.claude/worktrees/inno-installer/target/installer/Purge-Setup-0.1.0.exe`
+  42,953,088 bytes, SHA-256 `B49FF9107E82D0B0D910533F7D5C3A69FAD3469F83CF14C94766DA101FC61CB8`.
+  **The user has not been told to install it yet and it has never been run** (needs elevation). It will be
+  overwritten/regenerated by `build-installer.ps1`, so tell the user how to copy it to the desktop PC.
+- Layout: `%ProgramFiles%\Purge` (dir page disabled - the broker only trusts a protected Program Files path), the
+  engine, the broker, the whole self-contained AOT publish tree (`SelfContained=true`,
+  `WindowsAppSDKSelfContained=true`, `PublishAot=true` in the csproj - no .NET or Windows App Runtime needed on
+  the target), `kb\`, and `setup\install.ps1`. Post-install runs `install.ps1 -ProtectOnly -DataRootOnly
+  -SkipBuild` (creates `%ProgramData%\Purge` with protected descriptors + the "Purge" event-log source) then
+  `install.ps1 -Check`; failure rolls the install back. Uninstall kills the three processes, removes the event
+  source, files and shortcuts, and asks (default **No**) whether to delete `%ProgramData%\Purge` (quarantine +
+  history).
+- New `install.ps1` switches: `-DataRootOnly`, `-ProtectOnly`; protection pass extracted to `Protect-Tree`, which
+  now also sets the tree root to the exact `ProgramFiles` constant. Self-test 120/0.
+- Untested (target PC only): real elevation and resulting file owners passing `start.rs`, `-Check` returning 0,
+  real broker start from the installed layout, `Purge.exe` running with no runtimes installed, uninstall +
+  rollback, SmartScreen for an unsigned setup.
+
+### What the user was told, and where the trial stands
+- The user wants to see a UI that deletes things; they will install on a **desktop PC**, remove it easily, and
+  will not risk important software. Trial conditions (from r2-review.md, last section): install with
+  `install.ps1`/the Inno setup, restore point = always, a test app with a plain `.exe` uninstaller (7-Zip,
+  Notepad++), keep the default ticks, no user-data item, no expired-quarantine purge, compare the dialog code
+  with the UI's, close the UI if no dialog appears in ~10 s, keep a `rig-exec` engine build as the undo fallback.
+- The user was told M1 was still open at trial time (broker had no dialog of its own); it is fixed in `r2-m1`.
+  It is also now **essential** to merge `r2-s7` (console flash / window show state) for a clean first impression.
+- Before the trial: check `HKCU\Environment` for values named like system variables (`ProgramData`,
+  `ProgramFiles`, `SystemRoot`, ...). B1 is fixed, but a machine-scope route still depends on that hygiene.
+- Recommended first move on the new harness: discard the dirty files, merge `r2-s` -> `r2-m1` -> `r2-s7`
+  (or let the installer merge carry s7), run on the merged tree: fmt, clippy `-D warnings`, `check-deps`,
+  `cargo test -p purge-broker -p purge-exec -p purge-rpc -p purge-engine`, `gen-dto --check`,
+  `dotnet build ui\Purge.App -c Release` (0 warnings), `dotnet test ui\Purge.Client.Tests` (UI tests build the
+  Rust pipe harness with `cargo`, so cargo must be on PATH), push, then build the Inno setup and hand it over.
+
+### Still open from M3-R2 (round 2 is done; these remain)
+- Point 2 phrasing: reword B4 in the design to "changes outside Purge's store" (recovery with nothing to change
+  runs without a dialog).
+- N1-N9 nits (docs/reviews/m3/r2-review.md, Notes).
+- Write a "Fixes" section into `docs/reviews/m3/r2-review.md` (r1 has one) and add DECISIONS rows for the R2
+  rulings (M1 consent, B1 machine env, M2 interpreters, M3 observed rules, S2 program-wide spend, S5 alerts,
+  S7 subsystem, point 3 declined purge, point 6).
+- The `freeze-plan`/`bind` performance note: `nested_candidates` is O(items x document) per selected item (M4
+  fix). Fine so far; index it if a large consent view is ever slow.
+
+### Not run (unchanged backlog)
+- Full `cargo xtask replay-all` on the frozen rig runs (~47 min, needs `PURGE_RUNS_DIR`), and the two ignored
+  xtask replay tests. Unelevated `xtask ci` (`schtasks /run /tn PurgeCiUnelev`, log
+  `C:\purge-build\ci-unelev-laptop.log`) - not run since e285d26 (M3 waves 2+).
+- Bench timings: warm run needs an idle host; cold series needs the user's 5 reboots
+  (`cargo xtask bench-launch --cold --reset --purge out\purge`, then plain `--cold` x4).
+- VM: real elevated broker start (exit codes 20-27), UAC + server check, both uninstall routes end to end, the
+  four+one consent dialogs on the secure desktop (arming, paging, footer code, foreground), `allow_irreversible`
+  packages, real Restart Manager/System Restore, crash-at-every-step, `undo_fidelity` over the pipe, medium-route
+  VS Code, a real failed uninstaller 1603/3010, installer/uninstaller of the Inno setup.
+- `xtask ui-strings` (needs `PURGE_UT_STRINGS` + the reference file, not on this laptop).
+
+### Harness notes from this session
+- Flash (deepseek-flash subagent) jobs die at ~900 s; send a follow-up with the same sessionID to continue; the
+  worktree keeps the edits. Parallel jobs: max 3 Flash, 2 Claude subagents.
+- Sonnet here is `anthropic/claude-sonnet-5-5`; the reviewer is `anthropic/claude-fable-5-2#medium`. Look model
+  ids up, do not type them from memory.
+- Writers sometimes run commands in the MAIN checkout (M3-EXEC reverted its own; the M1 writer did not). Check
+  `git status` in the main checkout after every writer, not only in the worktree.
+- `cargo`/`dotnet` builds: `CARGO_INCREMENTAL=0`, `TEMP=TMP=C:\purge-build\tmp`. Each worktree's target is
+  6-12 GB; delete merged worktrees' `target/`. ~40 GB free at pause.
+- Known cosmetic: 3 unused-import/dead-code warnings in `purge-exec/src/act_service.rs` show only in the test
+  profile; `clippy -D warnings` is clean.
+- Writer notes (read before touching a package): `docs/m3-notes/{broker-core,consent,broker-flow,exec,undo,
+  ui-client,ui-s2}.md`. Reviews: `docs/reviews/m3/{r1,r2}-review.md`.
 
 ## RESUMED 2026-11-21 night (OpenCode, Opus coordinating, Flash/Sonnet writers). Goal: reach wave 5 fast.
 - M3-R1 DONE: review docs/reviews/m3/r1-review.md (B0 M2 S9 N11, Fixes section), fixes merged bfde762. Deferred:
