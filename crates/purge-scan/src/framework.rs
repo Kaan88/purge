@@ -39,13 +39,14 @@ use purge_guard::canon::GuardEnv;
 use purge_guard::prefix::{self, Relation};
 use purge_identity::identity::{AppIdentity, IdentityMatch};
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::{Absence, BaselineView};
 use purge_index::matcher::{AnchorSet, MatchHow, RefMatcher};
 use purge_model::exec::op::FileIdHex;
 use purge_model::{
-    Action, AnchorKind, AnchorRef, AppRef, Blocker, Candidate, CandidateId, Category, Evidence,
-    EvidenceKind, Facts, FileTime, Fingerprint, Harm, InnoRecord, InnoRecordKind, ManifestKind,
-    Origin, RefSnapEntry, Reversibility, Root, RootKind, RootSource, ScanMode, Scope, SourceTrust,
-    Target, Tier, VerifyGone,
+    Action, AnchorKind, AnchorRef, AppRef, BaselineTrust, Blocker, Candidate, CandidateId,
+    Category, Evidence, EvidenceKind, Facts, FileTime, Fingerprint, Harm, InnoRecord,
+    InnoRecordKind, ManifestKind, Origin, RefSnapEntry, Reversibility, Root, RootKind, RootSource,
+    ScanMode, Scope, SourceTrust, Target, Tier, VerifyGone,
 };
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
@@ -54,8 +55,13 @@ use purge_source::types::{ExistsState, RegData};
 
 use crate::skeleton;
 
+mod absence;
 mod m1b;
 
+pub use absence::{
+    BASELINE_FACT, BASELINE_FACT_NONE, BASELINE_NEIGHBOURS_FACT, BASELINE_TRUST_FACT,
+    WINDOWS_BUILD_FACT, claims_absence,
+};
 pub use m1b::{PathStore, ScanExt, inventory_lists_product, product_known_in};
 
 // ---------------------------------------------------------------------------------------------------------
@@ -369,9 +375,13 @@ pub struct ScanCtx<'a> {
     pub sys: &'a dyn SystemSource,
     /// What the harvest learned about the app before its uninstaller ran.
     pub fp: &'a Fingerprint,
-    /// The clean-Windows baseline of exactly this (edition, build.ubr), when one is shipped. `None` means
-    /// values-only work: no key is proven "not Windows' own" (§5.7.1 step 3).
-    pub baseline: Option<&'a Baseline>,
+    /// The baseline view: what the scan knows about "Windows' own" (BASELINE_LOCAL_DESIGN.md §4).
+    /// Presence is asked of it directly, at every trust ([`ScanCtx::in_baseline`], `has_*`). Absence
+    /// is asked only through [`ScanCtx::key_absence`] and the two gates beside it
+    /// ([`ScanCtx::has_exact_baseline`]): only an Exact view, the clean-Windows baseline of exactly
+    /// this (edition, build.ubr), proves a key "not Windows' own"; below Exact the work is values-only
+    /// (§5.7.1 step 3). A scan without any baseline passes [`BaselineView::empty`].
+    pub baseline: &'a BaselineView,
     /// The scan mode (§5.1).
     pub mode: ScanMode,
     /// The verify-gone result of the uninstall; `None` when no uninstall was observed.
@@ -682,6 +692,10 @@ impl<'a> ScanCtx<'a> {
     ///   ([`ScanCtx::seal_object`]);
     /// - after the rule about what a value holds, the MSI blockers of the target
     ///   ([`ScanCtx::msi_blockers`]).
+    ///
+    /// The baseline trust cap is sealed here too: with a view of trust Merged or Local a key candidate
+    /// whose evidence claims baseline absence without the `BaselineInferred` blocker is dropped as a
+    /// scanner fault ([`ScanCtx::baseline_cap_missing`]).
     pub fn run(&self, scanner: &dyn Scanner, app: &AppIdentityView) -> Vec<Candidate> {
         let found = scanner.scan(self, app);
         let mut sealed = Vec::with_capacity(found.len());
@@ -708,6 +722,20 @@ impl<'a> ScanCtx<'a> {
                 continue;
             }
             ctx.seal(&mut candidate);
+            // The trust cap (BASELINE_LOCAL_DESIGN.md §4.4 layer 2). Nothing reaches it today: no
+            // scanner is handed an inferred absence (`framework/absence.rs`).
+            if ctx.baseline_cap_missing(&candidate) {
+                let line = format!(
+                    "{}: dropped {:?}: its evidence rests on inferred baseline absence (trust {}) \
+                     without the BaselineInferred cap",
+                    scanner.id(),
+                    candidate.target,
+                    ctx.baseline.trust()
+                );
+                self.ext.fault(line.clone());
+                debug_assert!(false, "{line}");
+                continue;
+            }
             for blocker in ctx.msi_blockers(&candidate.target) {
                 if !candidate.blockers.contains(&blocker) {
                     candidate.blockers.push(blocker);
@@ -999,7 +1027,7 @@ impl<'a> ScanCtx<'a> {
                                 .other_apps
                                 .claimant(AnchorKind::Token, &t.token)
                                 .is_none()
-                            && !self.baseline.is_some_and(|b| b.has_token(&t.token))
+                            && !self.baseline.has_token(&t.token)
                     })
             });
         }
@@ -1050,14 +1078,27 @@ impl<'a> ScanCtx<'a> {
                     name.is_some_and(|name| self.same_key(path, key) && prefix::eq_ci(n, name))
                 }
                 Target::RegKey { path } => {
-                    self.baseline
-                        .is_some_and(|b| !(Baseline::key_in_scope(key) && b.has_key(key)))
+                    self.key_record_covers(key)
                         && r.key_create
                         && r.kind == InnoRecordKind::RegDeleteEntireKey
                         && self.same_key(path, key)
                 }
                 _ => false,
             })
+    }
+
+    /// **A.** Whether a delete-the-whole-key record on `key` vouches for the values in it as far as
+    /// the baseline goes: a baseline whose absence is proof is at hand ([`ScanCtx::has_exact_baseline`])
+    /// and it does not have the key inside the scope it captures. Outside that scope the baseline
+    /// cannot object, as before the view. Below Exact: never (values-only work).
+    fn key_record_covers(&self, key: &str) -> bool {
+        match self.key_absence(key) {
+            Absence::Proven => true,
+            Absence::Present | Absence::Unknown => {
+                self.has_exact_baseline() && !Baseline::key_in_scope(key)
+            }
+            Absence::Inferred(_) => false,
+        }
     }
 
     /// The canonical spelling of `key` when it is a 32-bit-view spelling of a key of the machine's
@@ -1142,12 +1183,11 @@ impl<'a> ScanCtx<'a> {
         })
     }
 
-    /// Whether the clean Windows of this build has the target (key, value, file or directory). `false`
-    /// without a baseline, and for a segment of a list value (the value itself is expected to exist).
+    /// **P.** Whether Windows itself has the target (key, value, file or directory): some set of the
+    /// baseline view has it, at any trust. `false` when the view holds nothing, and for a segment of a
+    /// list value (the value itself is expected to exist).
     pub fn in_baseline(&self, target: &Target) -> bool {
-        let Some(baseline) = self.baseline else {
-            return false;
-        };
+        let baseline = self.baseline;
         match target {
             Target::Path { path } => baseline.has_path(path),
             Target::RegKey { path } => baseline.has_key(path),
@@ -1241,6 +1281,7 @@ impl<'a> ScanCtx<'a> {
         let ctx: &ScanCtx<'_> = self;
         CandidateBuilder {
             ctx,
+            inferred: None,
             candidate: Candidate {
                 id: candidate_id(&target),
                 target,
@@ -1813,6 +1854,8 @@ pub const SHARED_PLACE_VALUE: &str = "shared";
 pub struct CandidateBuilder<'c> {
     ctx: &'c ScanCtx<'c>,
     candidate: Candidate,
+    /// The weakest inferred trust handed to [`CandidateBuilder::absence`], if any.
+    inferred: Option<BaselineTrust>,
 }
 
 impl CandidateBuilder<'_> {
@@ -1971,9 +2014,10 @@ impl CandidateBuilder<'_> {
         // do put such a record on keys they share (`.sh`, a vendor key). With a baseline of this
         // Windows the key is at least shown not to be Windows' own; without one nothing shows that,
         // and the work is values-only (§5.7.1 step 3): the record is then a strong hint, no proof.
-        if scope == Scope::Key && self.ctx.baseline.is_none() {
+        // A: only an Exact view is "a baseline of this Windows"; below it the record is the hint.
+        if scope == Scope::Key && !self.ctx.has_exact_baseline() {
             evidence.tier = evidence.tier.at_most(Tier::B);
-            detail = detail.with("baseline", "none");
+            detail = detail.with(BASELINE_FACT, BASELINE_FACT_NONE);
         }
         self.push_evidence(evidence.with_detail(detail))
     }
@@ -2166,13 +2210,13 @@ impl CandidateBuilder<'_> {
         };
         if !own_name.is_some_and(|name| contains_delimited(name, token))
             || ctx.other_apps.claimant(AnchorKind::Token, token).is_some()
-            || ctx.baseline.is_some_and(|b| b.has_token(token))
+            || ctx.baseline.has_token(token)
         {
             return false;
         }
-        // Without a baseline "absent from the baseline" is unchecked, and no key is proven not to be
-        // Windows' own (§5.7.1 step 3: values only).
-        if ctx.baseline.is_none() && matches!(self.candidate.target, Target::RegKey { .. }) {
+        // A: without a baseline whose absence is proof (an Exact view) "absent from the baseline" is
+        // unchecked, and no key is proven not to be Windows' own (§5.7.1 step 3: values only).
+        if !ctx.has_exact_baseline() && matches!(self.candidate.target, Target::RegKey { .. }) {
             return false;
         }
         let detail = Facts::new().with("token", harvested.token.clone());
@@ -2586,6 +2630,7 @@ impl CandidateBuilder<'_> {
     /// merges candidates on one target, which all passed there, and adds `EmptyAfterPlan` to
     /// containers, never to a value.
     pub fn build(mut self) -> Candidate {
+        self.mark_inferred();
         self.ctx.seal(&mut self.candidate);
         self.candidate
     }
@@ -2631,6 +2676,7 @@ fn family_matches(family: &str, full_name: &str) -> bool {
 #[cfg(test)]
 pub(crate) mod testkit {
     use super::*;
+    use purge_index::baseline_view::fixture;
     use purge_model::{
         Anchors, FingerprintSchema, IdentitySnapshot, OsInfo, ProgramId, TimeWindow, View,
     };
@@ -2691,20 +2737,40 @@ pub(crate) mod testkit {
         }
     }
 
-    /// A baseline of this test Windows holding `keys`.
-    pub(crate) fn baseline(edition: &str, keys: &[&str]) -> Baseline {
-        let mut text = format!("#purge-baseline 1\tT\tPC\t{edition}\t{BUILD}.{UBR}\n");
-        for key in keys {
-            text.push_str(&format!("K\t{}\t0\t0\t0\n", key.replace('\\', "\\\\")));
-        }
-        Baseline::from_bytes(text.as_bytes()).expect("the baseline parses")
+    /// The Exact view over a baseline of this test Windows holding `keys`.
+    pub(crate) fn baseline(edition: &str, keys: &[&str]) -> BaselineView {
+        BaselineView::exact(shipped(edition, BUILD, UBR, keys))
+    }
+
+    /// A shipped baseline of (`edition`, `build`.`ubr`) holding `keys`.
+    pub(crate) fn shipped(edition: &str, build: u32, ubr: u32, keys: &[&str]) -> Baseline {
+        fixture::shipped(edition, build, ubr, keys)
+    }
+
+    /// A view of trust Merged for this test Windows: a complete local baseline holding `local_keys`
+    /// and one shipped neighbour (the next build) holding `neighbour_keys`, with rules that accept
+    /// inferred absence everywhere under `HKLM\SOFTWARE` and `HKU` (so the view itself would answer
+    /// `Inferred` wherever a scanner could ask).
+    pub(crate) fn merged_view(local_keys: &[&str], neighbour_keys: &[&str]) -> BaselineView {
+        fixture::merged_view(EDITION, BUILD, UBR, local_keys, neighbour_keys)
+    }
+
+    /// A view of trust Local for this test Windows: a complete local baseline holding `keys`, no
+    /// neighbour, the same open rules.
+    pub(crate) fn local_view(keys: &[&str]) -> BaselineView {
+        fixture::local_view(EDITION, BUILD, UBR, keys)
+    }
+
+    /// A view of trust None that holds one shipped neighbour with `keys`: presence only.
+    pub(crate) fn none_view(keys: &[&str]) -> BaselineView {
+        fixture::none_view(EDITION, BUILD, UBR, keys)
     }
 
     /// Everything a [`ScanCtx`] borrows, owned in one place.
     pub(crate) struct World {
         pub(crate) fixture: Fixture,
         pub(crate) fp: Fingerprint,
-        pub(crate) baseline: Option<Baseline>,
+        pub(crate) baseline: Option<BaselineView>,
         pub(crate) env: BTreeMap<String, String>,
         pub(crate) guard: GuardEnv,
         pub(crate) other_apps: OtherApps,
@@ -2731,7 +2797,7 @@ pub(crate) mod testkit {
                 fs: &self.fixture,
                 sys: &self.fixture,
                 fp: &self.fp,
-                baseline: self.baseline.as_ref(),
+                baseline: BaselineView::or_empty(self.baseline.as_ref()),
                 mode: ScanMode::Post,
                 verify_gone: self.verify_gone,
                 env: &self.env,
@@ -3514,35 +3580,38 @@ mod tests {
     /// key-level evidence; values and paths keep theirs.
     #[test]
     fn harvested_token_on_a_key_needs_a_baseline() {
-        let token = "308046B0AF4A39CB";
-        let mut world = World::new(uninstalled());
-        world.fp.tokens = vec![HarvestedToken {
-            token: token.into(),
-            source: "arp:key".into(),
-        }];
-        let named = format!(r"HKLM\SOFTWARE\Classes\FirefoxHTML-{token}");
-        let add = |world: &World, target: Target, action: Action| {
-            let ctx = world.ctx();
-            ctx.candidate("T", target, action, Category::Registration)
-                .harvested_token(token)
-        };
-        assert!(add(&world, key(&named), Action::DeleteKey));
-        world.baseline = None;
-        assert!(!add(&world, key(&named), Action::DeleteKey));
-        assert!(add(
-            &world,
-            value(r"HKLM\SOFTWARE\RegisteredApplications", &named),
-            Action::DeleteValue
-        ));
-        // A token Windows itself uses is nobody's, on any target.
-        let shipped = format!(r"HKLM\SOFTWARE\Microsoft\Shipped\{token}");
-        world.baseline = Some(baseline(EDITION, &[&shipped]));
-        assert!(!add(&world, key(&named), Action::DeleteKey));
-        assert!(!add(
-            &world,
-            value(r"HKLM\SOFTWARE\RegisteredApplications", &named),
-            Action::DeleteValue
-        ));
+        // Every view below Exact takes the no-baseline path (presence-only, design L5).
+        for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+            let token = "308046B0AF4A39CB";
+            let mut world = World::new(uninstalled());
+            world.fp.tokens = vec![HarvestedToken {
+                token: token.into(),
+                source: "arp:key".into(),
+            }];
+            let named = format!(r"HKLM\SOFTWARE\Classes\FirefoxHTML-{token}");
+            let add = |world: &World, target: Target, action: Action| {
+                let ctx = world.ctx();
+                ctx.candidate("T", target, action, Category::Registration)
+                    .harvested_token(token)
+            };
+            assert!(add(&world, key(&named), Action::DeleteKey));
+            world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+            assert!(!add(&world, key(&named), Action::DeleteKey));
+            assert!(add(
+                &world,
+                value(r"HKLM\SOFTWARE\RegisteredApplications", &named),
+                Action::DeleteValue
+            ));
+            // A token Windows itself uses is nobody's, on any target.
+            let shipped = format!(r"HKLM\SOFTWARE\Microsoft\Shipped\{token}");
+            world.baseline = Some(baseline(EDITION, &[&shipped]));
+            assert!(!add(&world, key(&named), Action::DeleteKey));
+            assert!(!add(
+                &world,
+                value(r"HKLM\SOFTWARE\RegisteredApplications", &named),
+                Action::DeleteValue
+            ));
+        }
     }
 
     #[test]
@@ -4075,118 +4144,124 @@ mod tests {
     /// wrote, which only point at Git.
     #[test]
     fn a_value_that_points_at_the_app_is_not_the_apps_registration() {
-        let user = format!(r"HKU\{SID}");
-        let mut world = World::new(uninstalled());
-        world.fp.exes = vec![purge_model::ExeFile {
-            path: format!(r"{GIT_ROOT}\git-bash.exe"),
-            main: true,
-        }];
-        world.fp.anchors.progids = vec!["GitBash.Document".into()];
-        world.fp.inno = vec![
-            recorded_value(
+        // Every view below Exact takes the no-baseline path (presence-only, design L5).
+        for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+            let user = format!(r"HKU\{SID}");
+            let mut world = World::new(uninstalled());
+            world.fp.exes = vec![purge_model::ExeFile {
+                path: format!(r"{GIT_ROOT}\git-bash.exe"),
+                main: true,
+            }];
+            world.fp.anchors.progids = vec!["GitBash.Document".into()];
+            world.fp.inno = vec![
+                recorded_value(
+                    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+                    "GitTray",
+                ),
+                recorded_key(r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell"),
+            ];
+            let ctx = world.ctx();
+            let foreign = [
+                (format!(r"{user}\Software\TortoiseGit"), "MSysGit"),
+                (
+                    format!(r"{user}\Software\ContosoTools\Settings"),
+                    "GitExecutable",
+                ),
+                (
+                    format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\Run"),
+                    "GitAutoFetch",
+                ),
+                (
+                    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run".to_owned(),
+                    "Backup",
+                ),
+                (format!(r"{user}\Environment"), "Path"),
+                (format!(r"{user}\Environment"), "GIT_SSH"),
+                (
+                    r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment".to_owned(),
+                    "Path",
+                ),
+                (
+                    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\rg.exe".to_owned(),
+                    "",
+                ),
+                (
+                    format!(r"{user}\Software\Microsoft\RestartManager\Session0000"),
+                    "RegFiles0000",
+                ),
+                (
+                    r"HKLM\SOFTWARE\Classes\Directory\shell\my_verb\command".to_owned(),
+                    "",
+                ),
+                // Below a key the installer deletes whole: the record is about that key, and does not
+                // say who made the subkey.
+                (
+                    r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell\command".to_owned(),
+                    "",
+                ),
+                (
+                    r"HKLM\SOFTWARE\Classes\txtfile\shell\open\command".to_owned(),
+                    "",
+                ),
+                (r"HKLM\SOFTWARE\RegisteredApplications".to_owned(), "Git"),
+                (r"HKLM\SOFTWARE\Policies\Git".to_owned(), "Path"),
+            ];
+            for (key, name) in &foreign {
+                assert!(!ctx.owns_registration(key, name), "{key}|{name}");
+            }
+            let own = [
+                // The installer's record: the value itself, or the key it deletes whole.
+                (
+                    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run".to_owned(),
+                    "GitTray",
+                ),
+                (
+                    r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell".to_owned(),
+                    "Icon",
+                ),
+                // The app's own ProgID, Uninstall key, App Paths key and settings key.
+                (
+                    r"HKLM\SOFTWARE\Classes\GitBash.Document\shell\open\command".to_owned(),
+                    "",
+                ),
+                (
+                    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1".to_owned(),
+                    "InstallLocation",
+                ),
+                (
+                    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\git-bash.exe"
+                        .to_owned(),
+                    "",
+                ),
+                (
+                    r"HKLM\SOFTWARE\The Git Development Community\Settings".to_owned(),
+                    "Path",
+                ),
+            ];
+            // Dirty-base runs f0d-git, f0d-npp, f0d-vlc: slot 15 of Windows' ring of new Start-menu
+            // shortcuts held another product's record before the install reused it.
+            assert!(!ctx.owns_registration(
+                &format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\UFH\SHC"),
+                "15"
+            ));
+            for (key, name) in &own {
+                assert!(ctx.owns_registration(key, name), "{key}|{name}");
+            }
+            // A key of the baseline is Windows' own: the record on it vouches for no value in it.
+            let git_shell = r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell";
+            world.baseline = Some(baseline(EDITION, &[git_shell]));
+            assert!(!world.ctx().owns_registration(git_shell, "Icon"));
+            // Without a baseline the key record is a hint, no proof; the value record stays.
+            world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+            let ctx = world.ctx();
+            assert!(
+                !ctx.owns_registration(r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell", "Icon")
+            );
+            assert!(ctx.owns_registration(
                 r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
-                "GitTray",
-            ),
-            recorded_key(r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell"),
-        ];
-        let ctx = world.ctx();
-        let foreign = [
-            (format!(r"{user}\Software\TortoiseGit"), "MSysGit"),
-            (
-                format!(r"{user}\Software\ContosoTools\Settings"),
-                "GitExecutable",
-            ),
-            (
-                format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\Run"),
-                "GitAutoFetch",
-            ),
-            (
-                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run".to_owned(),
-                "Backup",
-            ),
-            (format!(r"{user}\Environment"), "Path"),
-            (format!(r"{user}\Environment"), "GIT_SSH"),
-            (
-                r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment".to_owned(),
-                "Path",
-            ),
-            (
-                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\rg.exe".to_owned(),
-                "",
-            ),
-            (
-                format!(r"{user}\Software\Microsoft\RestartManager\Session0000"),
-                "RegFiles0000",
-            ),
-            (
-                r"HKLM\SOFTWARE\Classes\Directory\shell\my_verb\command".to_owned(),
-                "",
-            ),
-            // Below a key the installer deletes whole: the record is about that key, and does not
-            // say who made the subkey.
-            (
-                r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell\command".to_owned(),
-                "",
-            ),
-            (
-                r"HKLM\SOFTWARE\Classes\txtfile\shell\open\command".to_owned(),
-                "",
-            ),
-            (r"HKLM\SOFTWARE\RegisteredApplications".to_owned(), "Git"),
-            (r"HKLM\SOFTWARE\Policies\Git".to_owned(), "Path"),
-        ];
-        for (key, name) in &foreign {
-            assert!(!ctx.owns_registration(key, name), "{key}|{name}");
+                "GitTray"
+            ));
         }
-        let own = [
-            // The installer's record: the value itself, or the key it deletes whole.
-            (
-                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run".to_owned(),
-                "GitTray",
-            ),
-            (
-                r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell".to_owned(),
-                "Icon",
-            ),
-            // The app's own ProgID, Uninstall key, App Paths key and settings key.
-            (
-                r"HKLM\SOFTWARE\Classes\GitBash.Document\shell\open\command".to_owned(),
-                "",
-            ),
-            (
-                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1".to_owned(),
-                "InstallLocation",
-            ),
-            (
-                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\git-bash.exe".to_owned(),
-                "",
-            ),
-            (
-                r"HKLM\SOFTWARE\The Git Development Community\Settings".to_owned(),
-                "Path",
-            ),
-        ];
-        // Dirty-base runs f0d-git, f0d-npp, f0d-vlc: slot 15 of Windows' ring of new Start-menu
-        // shortcuts held another product's record before the install reused it.
-        assert!(!ctx.owns_registration(
-            &format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\UFH\SHC"),
-            "15"
-        ));
-        for (key, name) in &own {
-            assert!(ctx.owns_registration(key, name), "{key}|{name}");
-        }
-        // A key of the baseline is Windows' own: the record on it vouches for no value in it.
-        let git_shell = r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell";
-        world.baseline = Some(baseline(EDITION, &[git_shell]));
-        assert!(!world.ctx().owns_registration(git_shell, "Icon"));
-        // Without a baseline the key record is a hint, no proof; the value record stays.
-        world.baseline = None;
-        let ctx = world.ctx();
-        assert!(!ctx.owns_registration(r"HKLM\SOFTWARE\Classes\Directory\shell\git_shell", "Icon"));
-        assert!(ctx.owns_registration(
-            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
-            "GitTray"
-        ));
     }
 
     /// Reference evidence keeps its Tier A in the app's own key and drops to Tier B, marked, anywhere
@@ -4245,32 +4320,472 @@ mod tests {
     /// alone, on a Windows without a matching baseline.
     #[test]
     fn a_key_record_without_a_baseline_is_tier_b() {
-        let sh = r"HKLM\SOFTWARE\Classes\sh_auto_file";
-        let mut world = World::new(uninstalled());
-        world.fp.inno = vec![
-            recorded_key(sh),
-            recorded_value(r"HKLM\SOFTWARE\Classes\.sh", "Content Type"),
-        ];
-        let manifest = |world: &World, target: Target, action: Action| {
-            let ctx = world.ctx();
-            let mut b = ctx.candidate("T", target, action, Category::Registration);
-            assert!(b.installer_manifest());
-            b.build().evidence.remove(0)
-        };
-        let e = manifest(&world, key(sh), Action::DeleteKey);
-        assert_eq!((e.tier, e.scope), (Tier::A, Scope::Key));
-        assert_eq!(e.detail.get("baseline"), None);
+        // Every view below Exact takes the no-baseline path (presence-only, design L5).
+        for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+            let sh = r"HKLM\SOFTWARE\Classes\sh_auto_file";
+            let mut world = World::new(uninstalled());
+            world.fp.inno = vec![
+                recorded_key(sh),
+                recorded_value(r"HKLM\SOFTWARE\Classes\.sh", "Content Type"),
+            ];
+            let manifest = |world: &World, target: Target, action: Action| {
+                let ctx = world.ctx();
+                let mut b = ctx.candidate("T", target, action, Category::Registration);
+                assert!(b.installer_manifest());
+                b.build().evidence.remove(0)
+            };
+            let e = manifest(&world, key(sh), Action::DeleteKey);
+            assert_eq!((e.tier, e.scope), (Tier::A, Scope::Key));
+            assert_eq!(e.detail.get("baseline"), None);
 
-        world.baseline = None;
-        let e = manifest(&world, key(sh), Action::DeleteKey);
-        assert_eq!((e.tier, e.scope), (Tier::B, Scope::Key));
-        assert_eq!(e.detail.get("baseline"), Some("none"));
-        // A value record names the value the installer wrote: it needs no baseline.
-        let e = manifest(
-            &world,
-            value(r"HKLM\SOFTWARE\Classes\.sh", "Content Type"),
-            Action::DeleteValue,
+            world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+            let e = manifest(&world, key(sh), Action::DeleteKey);
+            assert_eq!((e.tier, e.scope), (Tier::B, Scope::Key));
+            assert_eq!(e.detail.get("baseline"), Some("none"));
+            // A value record names the value the installer wrote: it needs no baseline.
+            let e = manifest(
+                &world,
+                value(r"HKLM\SOFTWARE\Classes\.sh", "Content Type"),
+                Action::DeleteValue,
+            );
+            assert_eq!((e.tier, e.scope), (Tier::A, Scope::Value));
+        }
+    }
+
+    // ---- the baseline view: presence, the capped path, the carrier, the seal -------------------------
+
+    const SH_AUTO: &str = r"HKLM\SOFTWARE\Classes\sh_auto_file";
+    const WINDOWS_KEY: &str = r"HKLM\SOFTWARE\Classes\Windows.Document";
+
+    /// The band and the tick the real policy gives `c` after an uninstall that verified gone.
+    fn band_of(c: &Candidate, trust: BaselineTrust) -> (purge_model::Band, bool) {
+        use purge_policy::band::{PolicyCtx, TargetScope, decide};
+        let d = decide(
+            c,
+            &PolicyCtx {
+                baseline_trust: trust,
+                mode: ScanMode::Post,
+                verify_gone: VerifyGone::new(true, true, true),
+                target_scope: TargetScope::Machine,
+            },
         );
-        assert_eq!((e.tier, e.scope), (Tier::A, Scope::Value));
+        (d.band, d.preselected)
+    }
+
+    /// `ProvenOwnedSkeleton` on a key, as a site that took absence for proof would add it.
+    fn skeleton_evidence(key: &str) -> Evidence {
+        Evidence::new(
+            EvidenceKind::ProvenOwnedSkeleton,
+            Scope::Key,
+            SourceTrust::AdminOnly,
+            format!("subtree:{key}"),
+        )
+        .expect("a key-scope skeleton")
+        .with_detail(Facts::new().with("key", key).with("via", "subtree"))
+    }
+
+    /// Every view below Exact, each holding [`WINDOWS_KEY`] in one of its sets, with its trust.
+    fn views_below_exact() -> Vec<(BaselineView, BaselineTrust)> {
+        vec![
+            (merged_view(&[WINDOWS_KEY], &[]), BaselineTrust::Merged),
+            (merged_view(&[], &[WINDOWS_KEY]), BaselineTrust::Merged),
+            (local_view(&[WINDOWS_KEY]), BaselineTrust::Local),
+            (none_view(&[WINDOWS_KEY]), BaselineTrust::None),
+        ]
+    }
+
+    /// L3 and the presence-only rule at the one door: an Exact view proves, a view below Exact never
+    /// hands out absence (although the view itself infers it under the open test rules), and
+    /// presence blocks at every trust.
+    #[test]
+    fn the_capped_path_never_hands_out_inferred_absence() {
+        let mut world = World::new(uninstalled());
+
+        // Exact: what the baseline itself says.
+        world.baseline = Some(baseline(EDITION, &[WINDOWS_KEY]));
+        let ctx = world.ctx();
+        assert_eq!(ctx.key_absence(SH_AUTO), Absence::Proven);
+        assert_eq!(ctx.key_absence(WINDOWS_KEY), Absence::Present);
+        assert_eq!(
+            ctx.key_absence(r"HKLM\SYSTEM\CurrentControlSet\Enum\X"),
+            Absence::Unknown,
+            "outside the capture scope"
+        );
+        assert!(ctx.has_exact_baseline() && ctx.has_matching_exact_baseline());
+        assert_eq!(ctx.absence_trust(), BaselineTrust::Exact);
+
+        // An exact baseline of another Windows: a baseline, not this Windows' own.
+        world.baseline = Some(baseline("EnterpriseS", &[]));
+        let ctx = world.ctx();
+        assert!(ctx.has_exact_baseline() && !ctx.has_matching_exact_baseline());
+
+        for (view, trust) in views_below_exact() {
+            // The view itself: inferred where its trust and the (open) rules allow.
+            let own = view.key_absent(SH_AUTO);
+            if trust.is_inferred() {
+                assert_eq!(own, Absence::Inferred(trust));
+            } else {
+                assert_eq!(own, Absence::Unknown);
+            }
+            world.baseline = Some(view);
+            let ctx = world.ctx();
+            // A: nothing below Exact.
+            assert_eq!(ctx.key_absence(SH_AUTO), Absence::Unknown, "{trust}");
+            assert!(!ctx.has_exact_baseline() && !ctx.has_matching_exact_baseline());
+            assert_eq!(ctx.absence_trust(), BaselineTrust::None);
+            // P: the union, at every trust.
+            assert_eq!(ctx.key_absence(WINDOWS_KEY), Absence::Present, "{trust}");
+            assert!(ctx.in_baseline(&key(WINDOWS_KEY)), "{trust}");
+            assert!(!ctx.in_baseline(&key(SH_AUTO)));
+            let mut b = ctx.candidate(
+                "T",
+                key(WINDOWS_KEY),
+                Action::DeleteKey,
+                Category::Registration,
+            );
+            b.baseline_blocker();
+            assert_eq!(b.build().blockers, [Blocker::WindowsBaseline], "{trust}");
+        }
+
+        // No baseline at all.
+        world.baseline = None;
+        let ctx = world.ctx();
+        assert_eq!(ctx.key_absence(SH_AUTO), Absence::Unknown);
+        assert!(!ctx.in_baseline(&key(WINDOWS_KEY)));
+        assert_eq!(ctx.absence_trust(), BaselineTrust::None);
+    }
+
+    /// The A sites of the framework below Exact, with the view saying the key is Windows' own or
+    /// saying nothing: the key record vouches for no value, is Tier B itself, and a token names no
+    /// key. A token a set of the view knows is nobody's on any target (presence).
+    #[test]
+    fn framework_sites_below_exact_take_the_no_baseline_path() {
+        let token = "308046B0AF4A39CB";
+        let named = format!(r"HKLM\SOFTWARE\Classes\FirefoxHTML-{token}");
+        let shipped = format!(r"HKLM\SOFTWARE\Microsoft\Shipped\{token}");
+        let views = vec![
+            merged_view(&[], &[]),
+            merged_view(&[SH_AUTO], &[]),
+            local_view(&[]),
+            none_view(&[SH_AUTO]),
+        ];
+        for view in views {
+            let mut world = World::new(uninstalled());
+            world.fp.inno = vec![recorded_key(SH_AUTO)];
+            world.fp.tokens = vec![HarvestedToken {
+                token: token.into(),
+                source: "arp:key".into(),
+            }];
+            // With the exact baseline the record covers the value and the token names the key.
+            assert!(world.ctx().installer_recorded_value(SH_AUTO, "x"));
+            world.baseline = Some(view);
+            let ctx = world.ctx();
+            assert!(!ctx.installer_recorded_value(SH_AUTO, "x"));
+            let mut b = ctx.candidate("T", key(SH_AUTO), Action::DeleteKey, Category::Registration);
+            assert!(b.installer_manifest());
+            let c = b.build();
+            assert_eq!(c.evidence[0].tier, Tier::B);
+            assert_eq!(
+                c.evidence[0].detail.get(BASELINE_FACT),
+                Some(BASELINE_FACT_NONE)
+            );
+            assert!(
+                !ctx.baseline_cap_missing(&c),
+                "the no-baseline form claims nothing"
+            );
+            let mut b = ctx.candidate("T", key(&named), Action::DeleteKey, Category::Registration);
+            assert!(!b.harvested_token(token));
+            let mut b = ctx.candidate(
+                "T",
+                value(r"HKLM\SOFTWARE\RegisteredApplications", &named),
+                Action::DeleteValue,
+                Category::Registration,
+            );
+            assert!(b.harvested_token(token));
+        }
+        // Presence: the local baseline or a neighbour knows the token.
+        for view in [
+            merged_view(&[&shipped], &[]),
+            merged_view(&[], &[&shipped]),
+            local_view(&[&shipped]),
+            none_view(&[&shipped]),
+        ] {
+            let mut world = World::new(uninstalled());
+            world.fp.tokens = vec![HarvestedToken {
+                token: token.into(),
+                source: "arp:key".into(),
+            }];
+            world.baseline = Some(view);
+            let ctx = world.ctx();
+            let mut b = ctx.candidate(
+                "T",
+                value(r"HKLM\SOFTWARE\RegisteredApplications", &named),
+                Action::DeleteValue,
+                Category::Registration,
+            );
+            assert!(!b.harvested_token(token));
+        }
+    }
+
+    /// The carrier (§4.4 layer 1): an inferred answer adds the soft blocker and the facts to the
+    /// absence-dependent evidence, whichever comes first; the evidence keeps its tier; the item is
+    /// Likely and not ticked, with the backstop on or off. Any other answer changes nothing.
+    #[test]
+    fn the_carrier_caps_inferred_absence() {
+        let mut world = World::new(uninstalled());
+        world.baseline = Some(merged_view(&[], &[]));
+        let ctx = world.ctx();
+        let inferred = ctx.baseline.key_absent(SH_AUTO);
+        assert_eq!(inferred, Absence::Inferred(BaselineTrust::Merged));
+
+        for absence_first in [false, true] {
+            let mut b = ctx.candidate("T", key(SH_AUTO), Action::DeleteKey, Category::Registration);
+            if absence_first {
+                b.absence(inferred);
+            }
+            b.push_evidence(skeleton_evidence(SH_AUTO));
+            if !absence_first {
+                b.absence(inferred);
+            }
+            let c = b.build();
+            assert_eq!(c.blockers, [Blocker::BaselineInferred]);
+            let e = &c.evidence[0];
+            assert_eq!(
+                (e.kind, e.tier),
+                (EvidenceKind::ProvenOwnedSkeleton, Tier::A)
+            );
+            assert_eq!(
+                e.detail.get(BASELINE_FACT),
+                Some("local-Professional-26340.9882+1")
+            );
+            assert_eq!(e.detail.get(BASELINE_TRUST_FACT), Some("merged"));
+            assert_eq!(
+                e.detail.get(BASELINE_NEIGHBOURS_FACT),
+                Some("Professional-26341.9882")
+            );
+            assert_eq!(e.detail.get(WINDOWS_BUILD_FACT), Some("26340.9882"));
+            assert_eq!(
+                e.detail.get("via"),
+                Some("subtree"),
+                "the site's facts stay"
+            );
+            assert!(!c.lacks_baseline_cap() && !ctx.baseline_cap_missing(&c));
+            for trust in [
+                BaselineTrust::None,
+                BaselineTrust::Merged,
+                BaselineTrust::Exact,
+            ] {
+                assert_eq!(
+                    band_of(&c, trust),
+                    (purge_model::Band::Likely, false),
+                    "{trust}"
+                );
+            }
+        }
+
+        // The same evidence from proof is Safe and ticked: the cap is what the carrier adds.
+        let mut b = ctx.candidate("T", key(SH_AUTO), Action::DeleteKey, Category::Registration);
+        b.push_evidence(skeleton_evidence(SH_AUTO));
+        for answer in [Absence::Proven, Absence::Present, Absence::Unknown] {
+            b.absence(answer);
+        }
+        let c = b.build();
+        assert!(c.blockers.is_empty());
+        assert_eq!(c.evidence, [skeleton_evidence(SH_AUTO)]);
+        assert_eq!(
+            band_of(&c, BaselineTrust::Exact),
+            (purge_model::Band::Safe, true)
+        );
+        // The policy backstop alone (P-BL-1) already refuses it under an inferred trust.
+        assert_ne!(
+            band_of(&c, BaselineTrust::Merged).0,
+            purge_model::Band::Safe
+        );
+
+        // Evidence that does not rest on absence gets no fact, and a value target no blocker-less
+        // surprise: the blocker is the candidate's, the facts are the key evidence's.
+        let mut b = ctx.candidate(
+            "T",
+            value(SH_AUTO, "x"),
+            Action::DeleteValue,
+            Category::Registration,
+        );
+        b.absence(Absence::Inferred(BaselineTrust::Local));
+        b.push_evidence(
+            Evidence::new(
+                EvidenceKind::InPreUninstallRefSnapshot,
+                Scope::Value,
+                SourceTrust::AdminOnly,
+                "refsnap".to_owned(),
+            )
+            .expect("value-scope evidence"),
+        );
+        let c = b.build();
+        assert_eq!(c.blockers, [Blocker::BaselineInferred]);
+        assert_eq!(c.evidence[0].detail.get(BASELINE_TRUST_FACT), None);
+    }
+
+    /// What the seal looks at (§4.4 layer 2): under a view of trust Merged or Local, a key candidate
+    /// whose evidence claims baseline absence and that lacks the blocker. The forms the no-baseline
+    /// paths make claim nothing; neither does anything under an Exact view or a view of trust None.
+    #[test]
+    fn the_seal_tells_a_claimed_absence_from_the_no_baseline_forms() {
+        let mut world = World::new(uninstalled());
+        let ev = |kind: EvidenceKind, scope: Scope, facts: Facts| {
+            Evidence::new(kind, scope, SourceTrust::AdminOnly, "t".to_owned())
+                .expect("the scope is allowed")
+                .with_detail(facts)
+        };
+        let none_fact = || Facts::new().with(BASELINE_FACT, BASELINE_FACT_NONE);
+        let inno = EvidenceKind::InstallerManifest(ManifestKind::Inno);
+        let msi = EvidenceKind::InstallerManifest(ManifestKind::Msi);
+        // (evidence, claims absence on a key)
+        let cases = vec![
+            (
+                ev(EvidenceKind::ProvenOwnedSkeleton, Scope::Key, Facts::new()),
+                true,
+            ),
+            (
+                ev(EvidenceKind::HarvestedToken, Scope::Key, Facts::new()),
+                true,
+            ),
+            (
+                ev(EvidenceKind::ComKeyOwnership, Scope::Key, Facts::new()),
+                true,
+            ),
+            (
+                ev(EvidenceKind::ComKeyOwnership, Scope::Key, none_fact()),
+                false,
+            ),
+            (ev(inno, Scope::Key, Facts::new()), true),
+            (ev(inno, Scope::Key, none_fact()), false),
+            // The carrier's fact without the blocker: a claim, whatever the kind says.
+            (
+                ev(
+                    inno,
+                    Scope::Key,
+                    none_fact().with(BASELINE_TRUST_FACT, "merged"),
+                ),
+                true,
+            ),
+            // Sites that never ask the baseline.
+            (ev(msi, Scope::Key, Facts::new()), false),
+            (
+                ev(EvidenceKind::ChainedRef, Scope::Key, Facts::new()),
+                false,
+            ),
+            (
+                ev(
+                    EvidenceKind::InPreUninstallRefSnapshot,
+                    Scope::Value,
+                    Facts::new(),
+                ),
+                false,
+            ),
+        ];
+        let candidate = |world: &World, target: Target, e: &Evidence, capped: bool| {
+            let ctx = world.ctx();
+            let mut b = ctx.candidate("T", target, Action::DeleteKey, Category::Registration);
+            b.push_evidence(e.clone());
+            if capped {
+                b.blocker(Blocker::BaselineInferred);
+            }
+            b.build()
+        };
+        for (e, claims) in &cases {
+            assert_eq!(claims_absence(e, &key(SH_AUTO)), *claims, "{e:?}");
+            // Never on a value: absence is a fact about keys.
+            assert!(!claims_absence(e, &value(SH_AUTO, "x")), "{e:?}");
+
+            for (view, trust) in views_below_exact() {
+                world.baseline = Some(view);
+                let c = candidate(&world, key(SH_AUTO), e, false);
+                assert_eq!(
+                    world.ctx().baseline_cap_missing(&c),
+                    *claims && trust.is_inferred(),
+                    "{trust}: {e:?}"
+                );
+                let capped = candidate(&world, key(SH_AUTO), e, true);
+                assert!(!world.ctx().baseline_cap_missing(&capped), "{trust}: {e:?}");
+            }
+            // Exact: the claim is proof; no baseline: there is no claim to make.
+            for exact in [Some(baseline(EDITION, &[])), None] {
+                world.baseline = exact;
+                let c = candidate(&world, key(SH_AUTO), e, false);
+                assert!(!world.ctx().baseline_cap_missing(&c), "{e:?}");
+            }
+        }
+    }
+
+    /// Emits one key candidate with `ProvenOwnedSkeleton`, with or without the carrier.
+    struct ClaimsAbsence {
+        carried: bool,
+    }
+
+    impl Scanner for ClaimsAbsence {
+        fn id(&self) -> &'static str {
+            "TEST-CLAIMS-ABSENCE"
+        }
+
+        fn captured_roots(&self) -> &[RootSpec] {
+            &[]
+        }
+
+        fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
+            let mut b = ctx.candidate(
+                self.id(),
+                key(SH_AUTO),
+                Action::DeleteKey,
+                Category::Registration,
+            );
+            b.push_evidence(skeleton_evidence(SH_AUTO));
+            if self.carried {
+                b.absence(ctx.baseline.key_absent(SH_AUTO));
+            }
+            vec![b.build()]
+        }
+    }
+
+    /// The seal in [`ScanCtx::run`]: with the carrier the candidate leaves the scan capped; under an
+    /// Exact view and without a baseline the seal does not act.
+    #[test]
+    fn run_lets_a_capped_or_proven_key_through() {
+        let mut world = World::new(uninstalled());
+        let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
+        world.baseline = Some(merged_view(&[], &[]));
+        let found = world.ctx().run(&ClaimsAbsence { carried: true }, &app);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].blockers, [Blocker::BaselineInferred]);
+        for baseline in [Some(baseline(EDITION, &[])), None, Some(none_view(&[]))] {
+            world.baseline = baseline;
+            let found = world.ctx().run(&ClaimsAbsence { carried: false }, &app);
+            assert_eq!(found.len(), 1);
+            assert!(found[0].blockers.is_empty());
+        }
+    }
+
+    /// The seal in [`ScanCtx::run`]: a key that claims absence under a Merged view without the
+    /// carrier is dropped and reported as a scanner fault. A debug build fails on it outright.
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "without the BaselineInferred cap")
+    )]
+    fn run_drops_a_key_that_claims_absence_without_the_cap() {
+        let mut world = World::new(uninstalled());
+        let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
+        world.baseline = Some(merged_view(&[], &[]));
+        let found = world.ctx().run(&ClaimsAbsence { carried: false }, &app);
+        // Release builds: dropped, with the fault for the scan's warnings.
+        assert!(found.is_empty());
+        let faults = ScanExt::none().take_faults();
+        assert!(
+            faults
+                .iter()
+                .any(|f| f.starts_with("TEST-CLAIMS-ABSENCE: dropped")
+                    && f.contains("trust merged")
+                    && f.contains("without the BaselineInferred cap")),
+            "{faults:?}"
+        );
     }
 }

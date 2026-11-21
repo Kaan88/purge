@@ -66,7 +66,7 @@
 //! (§5.7.1 step 4).
 
 use purge_guard::prefix;
-use purge_index::baseline::Baseline;
+use purge_index::baseline_view::Absence;
 use purge_model::{
     Action, AnchorKind, Blocker, Candidate, Category, Evidence, EvidenceKind, ExtJournalEntry,
     Facts, Scope, Target, Tier,
@@ -242,14 +242,11 @@ pub(crate) fn complete_string(value: &RegValue) -> Option<String> {
     value.data.string().map(|s| s.trim().to_owned())
 }
 
-/// The loaded baseline when it describes exactly this Windows, with its name (`<edition>-<build>.<ubr>`).
-/// The machine as it is now decides; the fingerprint's record of it is the fallback.
-pub(crate) fn matching_baseline<'a>(ctx: &ScanCtx<'a>) -> Option<(&'a Baseline, String)> {
-    let baseline = ctx.baseline?;
-    let os = ctx.sys.os_info().unwrap_or_else(|_| ctx.fp.os.clone());
-    baseline
-        .is_for(&os.edition, os.build, os.ubr)
-        .then(|| (baseline, os.baseline_name()))
+/// **A.** The name (`<edition>-<build>.<ubr>`) of the exact baseline of this Windows, when the scan's
+/// view is that: the only view whose absence is proof. The machine as it is now decides; the
+/// fingerprint's record of it is the fallback.
+pub(crate) fn matching_baseline(ctx: &ScanCtx<'_>) -> Option<String> {
+    ctx.matching_exact_baseline()
 }
 
 /// `InPreUninstallRefSnapshot` from the extension journal: the harvest listed the value `name` of `key`
@@ -393,12 +390,13 @@ pub(crate) struct Skeleton {
 /// The standing of a skeleton made of `keys` as far as the baseline goes; `None` when a matching
 /// baseline has one of the keys, or cannot speak about one, so that no key candidate is offered.
 fn baseline_standing(ctx: &ScanCtx<'_>, keys: &[&str]) -> Option<Standing> {
-    let Some((baseline, name)) = matching_baseline(ctx) else {
+    // A: below Exact this is the no-baseline standing, whatever the view infers.
+    let Some(name) = matching_baseline(ctx) else {
         return Some(Standing::NoBaseline);
     };
     if keys
         .iter()
-        .any(|key| !Baseline::key_in_scope(key) || baseline.has_key(key))
+        .any(|key| !matches!(ctx.key_absence(key), Absence::Proven))
     {
         return None;
     }

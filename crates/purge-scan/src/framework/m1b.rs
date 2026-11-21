@@ -221,7 +221,7 @@ impl ScanExt {
     }
 
     /// Records a scanner fault.
-    fn fault(&self, line: String) {
+    pub(super) fn fault(&self, line: String) {
         self.faults
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -1107,6 +1107,7 @@ impl<'a> ScanCtx<'a> {
         const NOT_FOUND: &str = "not in the system-object index";
         const OTHER: &str = "its digest is not the digest of the object the index holds";
         let index = &self.ext.sysobj;
+        // P: presence in any set of the view guards a system object.
         let baseline = self.baseline;
         match target {
             Target::Service { name } => {
@@ -1125,8 +1126,7 @@ impl<'a> ScanCtx<'a> {
                     service_type: (ty & KNOWN_SERVICE_TYPE_BITS != 0).then_some(ty),
                     delete_flag: facts.delete_flag,
                     per_user_template: facts.per_user_template,
-                    in_baseline: baseline
-                        .is_some_and(|b| b.has_key(&format!(r"{SERVICES_KEY}\{name}"))),
+                    in_baseline: baseline.has_key(&format!(r"{SERVICES_KEY}\{name}")),
                     ..ObjectGuardFacts::default()
                 };
                 Ok(deny.check_object(ObjectKind::Service, &guard))
@@ -1143,8 +1143,7 @@ impl<'a> ScanCtx<'a> {
                 }
                 let base = ObjectGuardFacts {
                     name_or_path_or_id: &identity.path,
-                    in_baseline: baseline
-                        .is_some_and(|b| b.has_key(&format!("{TASK_TREE}{}", identity.path))),
+                    in_baseline: baseline.has_key(&format!("{TASK_TREE}{}", identity.path)),
                     ..ObjectGuardFacts::default()
                 };
                 if let Some(blocker) = deny.check_object(ObjectKind::Task, &base) {
@@ -1197,8 +1196,7 @@ impl<'a> ScanCtx<'a> {
                     program: rule.program.file(),
                     package_bound: rule.package_bound,
                     resource_name: rule.resource_name || resource_named,
-                    in_baseline: baseline
-                        .is_some_and(|b| b.has_value(sysobj::FIREWALL_RULES_KEY, id)),
+                    in_baseline: baseline.has_value(sysobj::FIREWALL_RULES_KEY, id),
                     ..ObjectGuardFacts::default()
                 };
                 Ok(deny.check_object(ObjectKind::FirewallRule, &guard))

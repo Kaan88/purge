@@ -861,7 +861,7 @@ fn build(ctx: &ScanCtx<'_>, target: Target, clsid: &str, standing: &Standing) ->
     if is_key && key_tier != Tier::A {
         b.cap_at_tier_b("the handler key is not proven not Windows' own");
     }
-    if !is_key && classes::matching_baseline(ctx).is_none() {
+    if !is_key && !classes::has_matching_baseline(ctx) {
         b.cap_at_tier_b("no baseline of this Windows");
     }
     // R3a S3: the handlers and their classes' referrers come from the walk; an incomplete walk proves

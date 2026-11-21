@@ -7,6 +7,8 @@
 mod appdata;
 mod appx;
 mod installdir;
+#[path = "../shared/l5.rs"]
+mod l5;
 mod property;
 mod shortcuts;
 mod uninstaller;
@@ -18,6 +20,7 @@ use std::path::PathBuf;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_model::{
     Anchors, AppRef, Candidate, Fingerprint, FingerprintSchema, HarvestedToken, IdentitySnapshot,
     InnoRecord, InnoRecordKind, OsInfo, ProgramId, Root, RootKind, RootSource, ScanMode, SourceId,
@@ -62,7 +65,7 @@ pub struct World {
     /// The fingerprint of the app being cleaned.
     pub fp: Fingerprint,
     /// The clean-Windows baseline.
-    pub baseline: Option<Baseline>,
+    pub baseline: Option<BaselineView>,
     /// The interactive user's environment.
     pub env: BTreeMap<String, String>,
     /// The machine layout.
@@ -92,9 +95,10 @@ impl World {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
-        let baseline =
+        let baseline = BaselineView::exact(
             Baseline::from_bytes(b"#purge-baseline 1\tT\tPC\tProfessional\t26340.9882\n")
-                .expect("the baseline parses");
+                .expect("the baseline parses"),
+        );
         Self {
             fixture,
             fp,
@@ -126,7 +130,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: self.baseline.as_ref(),
+            baseline: BaselineView::or_empty(self.baseline.as_ref()),
             mode: ScanMode::Post,
             verify_gone: self.verify_gone,
             env: &self.env,

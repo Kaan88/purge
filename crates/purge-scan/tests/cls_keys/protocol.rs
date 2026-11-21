@@ -103,17 +103,20 @@ fn the_inno_key_record_adds_the_manifest() {
 
 #[test]
 fn without_a_baseline_only_the_command_value_is_offered() {
-    let mut world = world();
-    world.baseline = None;
-    // The harvest found the scheme to be the app's own registration.
-    world.fp.anchors.progids = vec!["vscode".into()];
-    assert_golden(
-        world.golden(&ClsProtocol),
-        &[&format!(
-            r"value {}\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
-            vscode()
-        )],
-    );
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut world = world();
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        // The harvest found the scheme to be the app's own registration.
+        world.fp.anchors.progids = vec!["vscode".into()];
+        assert_golden(
+            world.golden(&ClsProtocol),
+            &[&format!(
+                r"value {}\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+                vscode()
+            )],
+        );
+    }
 }
 
 /// VM run x0-vscode-zipcopy: the scheme key was made by a portable copy before the install, which
@@ -121,16 +124,19 @@ fn without_a_baseline_only_the_command_value_is_offered() {
 /// that points at the app does not make the key the app's: Tier B, listed and not preselected.
 #[test]
 fn the_command_of_a_scheme_that_is_not_the_apps_is_not_tier_a() {
-    let mut world = world();
-    world.baseline = None;
-    assert!(world.fp.anchors.progids.is_empty());
-    assert_golden(
-        world.golden(&ClsProtocol),
-        &[&format!(
-            r"value {}\shell\open\command| DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]",
-            vscode()
-        )],
-    );
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut world = world();
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        assert!(world.fp.anchors.progids.is_empty());
+        assert_golden(
+            world.golden(&ClsProtocol),
+            &[&format!(
+                r"value {}\shell\open\command| DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]",
+                vscode()
+            )],
+        );
+    }
 }
 
 #[test]
@@ -164,4 +170,11 @@ fn a_scheme_another_app_also_claims_is_blocked() {
             vscode()
         )],
     );
+}
+
+/// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let offered = crate::l5_check("protocol", &world);
+    assert!(offered > 0, "the world offers something without a baseline");
 }

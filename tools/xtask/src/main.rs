@@ -7,6 +7,9 @@
 //!   fail if purge-win's code names a forbidden service, MSI or firewall API, `netsh` or PowerShell.
 //! - `no-new-walks`: fail if a file of `purge-scan/src` outside `ref_any.rs`, `framework.rs` and
 //!   `framework/m1b.rs` calls `.walker(` or `refscan::scan` (the scan makes one reference walk).
+//! - `baseline-sites`: fail if the scan or the harvest uses the baseline view at a place that is not a
+//!   listed site with a class (presence or absence), asks the view for absence outside the capped
+//!   path, or negates a presence answer (BASELINE_LOCAL_DESIGN.md §4.3).
 //! - `scanner-coverage`: fail if a scanner declares a root the VM rig does not capture, or if the
 //!   scanners' value containers differ from the guard's table (ENGINE_PLAN.md §5.6, §5.10).
 //! - `replay`: run the engine pipeline offline over one frozen rig run (harvest at snap-1, scan at
@@ -18,6 +21,7 @@
 //!   `test-support` features (crash matrix, object ops), check-deps, no-new-walks, ui-strings,
 //!   scanner-coverage.
 
+mod baseline_sites;
 mod check_deps;
 mod lex;
 mod no_new_walks;
@@ -31,8 +35,8 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, bail};
 
-const USAGE: &str = "usage: cargo xtask <ui-strings | check-deps | no-new-walks | scanner-coverage | \
-                     replay | replay-all | replay-diff | ci>";
+const USAGE: &str = "usage: cargo xtask <ui-strings | check-deps | no-new-walks | baseline-sites | \
+                     scanner-coverage | replay | replay-all | replay-diff | ci>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,6 +44,7 @@ fn main() -> ExitCode {
         Some("ui-strings") => ui_strings::run(&workspace_root()),
         Some("check-deps") => check_deps::run(&workspace_root()),
         Some("no-new-walks") => no_new_walks::run(&workspace_root()),
+        Some("baseline-sites") => baseline_sites::run(&workspace_root()),
         Some("scanner-coverage") => scanner_coverage::run(),
         Some("replay") => replay::run_one(&workspace_root(), &args[1..]),
         Some("replay-all") => replay::run_all(&workspace_root(), &args[1..]),
@@ -163,6 +168,10 @@ fn ci(root: &Path) -> Result<bool> {
     println!("xtask ci: no-new-walks");
     if !no_new_walks::run(root)? {
         bail!("step failed: no-new-walks");
+    }
+    println!("xtask ci: baseline-sites");
+    if !baseline_sites::run(root)? {
+        bail!("step failed: baseline-sites");
     }
     println!("xtask ci: ui-strings");
     if !ui_strings::run(root)? {

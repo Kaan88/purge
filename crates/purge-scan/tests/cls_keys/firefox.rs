@@ -313,41 +313,51 @@ fn the_same_holds_while_the_install_directory_still_exists() {
 
 #[test]
 fn without_a_baseline_only_values_are_offered() {
-    let mut world = world();
-    world.baseline = None;
-    let candidates = all(&world);
-    assert!(
-        candidates.iter().all(|c| target(c).starts_with("value ")),
-        "{:?}",
-        render(&candidates)
-    );
-    assert_golden(
-        world.golden(&ClsProgId),
-        &[
-            &format!(
-                r"value {}\DefaultIcon| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
-                fx_html()
-            ),
-            &format!(
-                r"value {}\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
-                fx_html()
-            ),
-            &format!(
-                r"value {}\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
-                fx_url()
-            ),
-        ],
-    );
-    assert_golden(
-        world.golden(&ClsAumid),
-        &[&format!(
-            "value {}|IconUri DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
-            fx_toast()
-        )],
-    );
-    // The RegisteredApplications value is a value either way.
-    let regapps = world.golden(&ClsRegApps);
-    assert!(regapps.contains(&format!(
-        "value {REGISTERED}|Firefox-{HASH} DeleteValue [ChainedRef/A/Value, HarvestedToken/A/Value]"
-    )));
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut world = world();
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        let candidates = all(&world);
+        assert!(
+            candidates.iter().all(|c| target(c).starts_with("value ")),
+            "{:?}",
+            render(&candidates)
+        );
+        assert_golden(
+            world.golden(&ClsProgId),
+            &[
+                &format!(
+                    r"value {}\DefaultIcon| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+                    fx_html()
+                ),
+                &format!(
+                    r"value {}\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+                    fx_html()
+                ),
+                &format!(
+                    r"value {}\shell\open\command| DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+                    fx_url()
+                ),
+            ],
+        );
+        assert_golden(
+            world.golden(&ClsAumid),
+            &[&format!(
+                "value {}|IconUri DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+                fx_toast()
+            )],
+        );
+        // The RegisteredApplications value is a value either way.
+        let regapps = world.golden(&ClsRegApps);
+        assert!(regapps.contains(&format!(
+            "value {REGISTERED}|Firefox-{HASH} DeleteValue [ChainedRef/A/Value, HarvestedToken/A/Value]"
+        )));
+    }
+}
+
+/// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let offered = crate::l5_check("firefox", &world);
+    assert!(offered > 0, "the world offers something without a baseline");
 }

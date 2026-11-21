@@ -327,10 +327,7 @@ impl<'a> TargetFacts<'a> {
         prefix::depth(&folded) < 2
             || self.system_dirs.contains(&folded)
             || prefix::leaf(&folded).is_some_and(|leaf| NAMES.contains(&leaf))
-            || self
-                .ctx
-                .matching_baseline()
-                .is_some_and(|baseline| baseline.has_path(&folded))
+            || self.ctx.presence().has_path(&folded)
     }
 
     fn reasons(&self, entry: &InventoryEntry, dirs: &[String]) -> Vec<CoProductReason> {
@@ -539,7 +536,7 @@ mod tests {
             anchors: &anchors,
             roots: &roots,
             inno: &[],
-            baseline: None,
+            baseline: purge_index::baseline_view::BaselineView::empty(),
             inventory: &inventory,
             target: &inventory[0],
             cutoff: None,

@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_model::{
     AnchorKind, AnchorRef, Anchors, AppRef, Blocker, Candidate, Evidence, EvidenceKind, ExeFile,
     Fingerprint, FingerprintSchema, IdentitySnapshot, InnoRecord, InnoRecordKind, OsInfo,
@@ -38,7 +39,7 @@ pub fn user_classes() -> String {
 pub struct World {
     pub fixture: Fixture,
     pub fp: Fingerprint,
-    pub baseline: Option<Baseline>,
+    pub baseline: Option<BaselineView>,
     pub env: BTreeMap<String, String>,
     pub guard: GuardEnv,
     pub other_apps: OtherApps,
@@ -63,7 +64,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: self.baseline.as_ref(),
+            baseline: BaselineView::or_empty(self.baseline.as_ref()),
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &self.env,
@@ -103,28 +104,28 @@ pub fn machine() -> FixtureBuilder {
 }
 
 /// A baseline of the synthetic Windows holding `keys`.
-pub fn baseline(keys: &[&str]) -> Baseline {
+pub fn baseline(keys: &[&str]) -> BaselineView {
     baseline_for(EDITION, keys)
 }
 
 /// A baseline of `edition` (same build) holding `keys`.
-pub fn baseline_for(edition: &str, keys: &[&str]) -> Baseline {
+pub fn baseline_for(edition: &str, keys: &[&str]) -> BaselineView {
     let mut text = format!("#purge-baseline 1\tT\tPC\t{edition}\t{BUILD}.{UBR}\n");
     for key in keys {
         text.push_str(&format!("K\t{}\t0\t0\t0\n", key.replace('\\', "\\\\")));
     }
-    Baseline::from_bytes(text.as_bytes()).expect("the baseline parses")
+    BaselineView::exact(Baseline::from_bytes(text.as_bytes()).expect("the baseline parses"))
 }
 
 /// The committed clean-Windows baseline of the LTSC corpus VM (`EnterpriseSEval` 26100.1742).
-pub fn ltsc_baseline() -> Baseline {
+pub fn ltsc_baseline() -> BaselineView {
     static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
     let bytes = BYTES.get_or_init(|| {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../kb/baselines/EnterpriseSEval-26100.1742.tsv.gz");
         std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
     });
-    Baseline::from_bytes(bytes).expect("the LTSC baseline parses")
+    BaselineView::exact(Baseline::from_bytes(bytes).expect("the LTSC baseline parses"))
 }
 
 pub const LTSC_EDITION: &str = "EnterpriseSEval";

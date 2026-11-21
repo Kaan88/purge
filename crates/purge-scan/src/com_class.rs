@@ -63,7 +63,6 @@ use std::sync::OnceLock;
 
 use purge_guard::deny::SharedIids;
 use purge_guard::prefix;
-use purge_index::baseline::Baseline;
 use purge_index::refscan::RefHit;
 use purge_index::sysobj::{Env, ProgramRef, resolve_file, resolve_program};
 use purge_model::{
@@ -74,8 +73,8 @@ use purge_source::types::{ExistsState, RegData, SourceError};
 
 use crate::cls_progid::classes;
 use crate::framework::{
-    AppIdentityView, CLASSES_REDIRECTED, Dangling, RootSpec, ScanCtx, Scanner, anchor_trust,
-    weakest,
+    AppIdentityView, BASELINE_FACT, BASELINE_FACT_NONE, CLASSES_REDIRECTED, Dangling, RootSpec,
+    ScanCtx, Scanner, anchor_trust, weakest,
 };
 
 /// The scanner's catalog id.
@@ -467,7 +466,7 @@ pub(crate) fn env_for(ctx: &ScanCtx<'_>, key: &str) -> Env {
 /// Whether the matching baseline of this Windows shows `key` is not Windows' own: it is loaded, it
 /// captures the key's place, and it does not have the key.
 pub(crate) fn proven_not_windows(ctx: &ScanCtx<'_>, key: &str) -> bool {
-    classes::matching_baseline(ctx).is_some_and(|b| Baseline::key_in_scope(key) && !b.has_key(key))
+    classes::proven_not_windows(ctx, key)
 }
 
 /// What a server or type-library path is, as far as the app is concerned.
@@ -562,7 +561,7 @@ pub(crate) fn com_key_ownership(
     let mut detail = detail;
     if !proven_not_windows(ctx, key) {
         evidence.tier = evidence.tier.at_most(Tier::B);
-        detail = detail.with("baseline", "none");
+        detail = detail.with(BASELINE_FACT, BASELINE_FACT_NONE);
     }
     if let Err(why) = standard {
         evidence.tier = evidence.tier.at_most(Tier::B);

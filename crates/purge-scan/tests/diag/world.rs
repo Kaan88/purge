@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::ownership::{OwnershipLimits, pack_guid};
 use purge_model::{
     Anchors, AppRef, Band, Candidate, EvidenceKind, ExeFile, Fingerprint, FingerprintSchema,
@@ -155,12 +156,12 @@ pub fn msi_with_whole_key(key: &str, row: &str) -> MsiFacts {
 }
 
 /// A baseline of this Windows holding `keys`.
-pub fn baseline(keys: &[&str]) -> Baseline {
+pub fn baseline(keys: &[&str]) -> BaselineView {
     let mut text = format!("#purge-baseline 1\tT\tPC\t{EDITION}\t{BUILD}.{UBR}\n");
     for key in keys {
         text.push_str(&format!("K\t{}\t0\t0\t0\n", key.replace('\\', "\\\\")));
     }
-    Baseline::from_bytes(text.as_bytes()).expect("the baseline parses")
+    BaselineView::exact(Baseline::from_bytes(text.as_bytes()).expect("the baseline parses"))
 }
 
 /// The machine after the uninstall: drive `C:`, `C:\Program Files` without the app's folder, the other
@@ -219,7 +220,7 @@ pub fn event_source(fx: &mut Fixture, log: &str, source: &str, files: &str) {
 pub struct World {
     pub fixture: Fixture,
     pub fp: Fingerprint,
-    pub baseline: Option<Baseline>,
+    pub baseline: Option<BaselineView>,
     pub env: BTreeMap<String, String>,
     pub guard: GuardEnv,
     pub other_apps: OtherApps,
@@ -275,7 +276,7 @@ impl World {
             fs,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: self.baseline.as_ref(),
+            baseline: BaselineView::or_empty(self.baseline.as_ref()),
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &self.env,
