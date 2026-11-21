@@ -445,6 +445,12 @@ pub enum AttentionReason {
     NotPreselected,
     /// The item is over 1 GB.
     Large,
+    /// The removal cannot be put back (a package, or an item its op cannot undo).
+    NoUndo,
+    /// An item absorbed into it needs attention; that item is listed on its own.
+    Inside,
+    /// The item's name needs escapes for hidden or look-alike characters, or was shortened in the dialog.
+    Name,
 }
 
 /// A warning for the user. `code` is stable for the client to switch on; `message` is shown.

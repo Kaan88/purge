@@ -24,11 +24,16 @@ pub mod baseline;
 pub mod consent;
 pub mod lifetime;
 pub mod link;
+pub mod plan;
 pub mod purge;
+pub mod scan;
 pub mod serve;
 pub mod session;
 pub mod start;
+pub mod uninstall;
 pub mod wire;
 
+#[cfg(test)]
+mod flow_tests;
 #[cfg(test)]
 mod testkit;

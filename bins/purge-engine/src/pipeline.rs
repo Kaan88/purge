@@ -981,6 +981,10 @@ pub struct Scanned {
     /// Warnings of the pipeline, each with its typed kind (M3-ENGINE-OUT). The text is the line the
     /// CLI prints.
     pub warnings: Vec<ScanWarning>,
+    /// The trust of the baseline view's absence answers, as the policy used it
+    /// ([`DecideCtx::baseline_trust`](purge_plan::decide::DecideCtx)). The broker reports it as
+    /// `leftovers.scan`'s `baseline_trust`.
+    pub baseline_trust: BaselineTrust,
 }
 
 /// The plan's default app id: the ARP key name, lowercased.
@@ -1458,6 +1462,14 @@ fn run_scan(
         ));
     }
     let user_sid = Some(fp.user_sid.as_str()).filter(|s| !s.is_empty());
+    let baseline_trust = BaselineTrust::for_policy(
+        ctx.absence_trust(),
+        fp.harvest_trust(
+            baseline
+                .view
+                .is_exact_for(&fp.os.edition, fp.os.build, fp.os.ubr),
+        ),
+    );
     let decide = DecideCtx {
         deny: &deny,
         mode,
@@ -1472,14 +1484,7 @@ fn run_scan(
         // Exact for an Exact view, None below it), or of the view the fingerprint was harvested
         // with when that one is inferred (not the plain minimum, see `for_policy`). A fingerprint's
         // Exact is believed only with the shipped baseline of its own Windows in hand.
-        baseline_trust: BaselineTrust::for_policy(
-            ctx.absence_trust(),
-            fp.harvest_trust(
-                baseline
-                    .view
-                    .is_exact_for(&fp.os.edition, fp.os.build, fp.os.ubr),
-            ),
-        ),
+        baseline_trust,
     };
     // M3-R1 M2: an id is the client's selection key. Two different targets with one id would make a
     // tick name either of them, so neither is served: drop every candidate of a colliding id and say
@@ -1508,6 +1513,7 @@ fn run_scan(
         per_scanner,
         residue,
         warnings: warnings.into_iter().map(ScanWarning::classify).collect(),
+        baseline_trust,
     })
 }
 

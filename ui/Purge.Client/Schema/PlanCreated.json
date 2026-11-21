@@ -114,6 +114,21 @@
           "description": "The item is over 1 GB.",
           "type": "string",
           "const": "large"
+        },
+        {
+          "description": "The removal cannot be put back (a package, or an item its op cannot undo).",
+          "type": "string",
+          "const": "no_undo"
+        },
+        {
+          "description": "An item absorbed into it needs attention; that item is listed on its own.",
+          "type": "string",
+          "const": "inside"
+        },
+        {
+          "description": "The item's name needs escapes for hidden or look-alike characters, or was shortened in the dialog.",
+          "type": "string",
+          "const": "name"
         }
       ]
     },
