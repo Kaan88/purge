@@ -8,7 +8,7 @@
 //!
 //! The dispatcher in `stdio.rs` owns the inventory and the transport, so the two handlers are
 //! self-contained functions over the request, the pipeline sources, the process host, the token facts
-//! and a [`Notify`] sink (the same shape as [`crate::icons`]).
+//! and a [`Notify`] sink (the same shape as [`crate::stdio::icons`]).
 //!
 //! Three rules (M3_DESIGN.md, package M3-RUNNER):
 //!
@@ -231,6 +231,24 @@ pub fn handle_run_user(
         .doc
         .entry(&params.program_id)
         .ok_or_else(|| gone_program(&params.program_id))?;
+    handle_run_user_entry(
+        request, params, entry, sources, host, level, options, notify,
+    )
+}
+
+/// [`handle_run_user`] over an entry the caller already looked up (the stdio server keeps the
+/// inventory), so the same program is routed and run from the same list.
+#[allow(clippy::too_many_arguments)] // The handler's inputs are the request, the entry and its five sources.
+pub fn handle_run_user_entry(
+    request: RequestId,
+    params: &RunUserParams,
+    entry: &InventoryEntry,
+    sources: Sources<'_>,
+    host: &mut dyn ProcessHost,
+    level: &Level,
+    options: &RunOptions,
+    notify: &mut dyn Notify,
+) -> Result<RunUserResult, ErrorObject> {
     let env = sources.sys.env().unwrap_or_default();
     let route = pipeline::route(entry, sources.fs, &env);
     if route != Route::Medium {

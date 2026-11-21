@@ -15,10 +15,13 @@
 //!
 //! # Extension points
 //!
-//! `programs.icons` (M3-ICONS) and `uninstall.route` / `uninstall.run_user` (M3-RUNNER) belong to
-//! other packages. They plug in through [`Extension`]: a server built with one or more extensions
-//! offers every decoded request to them first. Without an extension those three methods answer a
-//! `runtime` error that names the package, so the rest of the server works on its own.
+//! `programs.icons` ([`icons`], M3-ICONS) and `uninstall.route` / `uninstall.run_user`
+//! ([`uninstall`], M3-RUNNER) are served here from the inventory the server already keeps. They can
+//! also be replaced or wrapped through [`Extension`]: a server built with one or more extensions
+//! offers every decoded request to them first.
+
+pub mod icons;
+pub mod uninstall;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, Write};
@@ -26,15 +29,16 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use purge_inventory::runner::{LiveHost, ProcessHost, RunOptions};
 use purge_model::cap::cap_bytes;
 use purge_model::exec::session::{SessionIndex, SessionSummary};
-use purge_model::{InventoryDoc, InventoryEntry};
+use purge_model::{InventoryDoc, InventoryEntry, ProgramId};
 use purge_rpc::error::{ErrorData, ErrorObject, IdKind};
 use purge_rpc::frame::{FrameError, FrameReader, FrameWriter, RequestId, Response};
 use purge_rpc::methods::{
-    HistoryIndex, InventoryChanges, MediumHello, ProgramDetails, ProgramParams, ProgramPatch,
-    ProgramRef, ProgramRow, ProgramSize, ProgramsBatch, ProgramsParams, ProgramsPatch,
-    ServerNotification, SizeReady, Started, StdioCall, VolumeCap,
+    HistoryIndex, IconsParams, InventoryChanges, MediumHello, ProgramDetails, ProgramParams,
+    ProgramPatch, ProgramRef, ProgramRow, ProgramSize, ProgramsBatch, ProgramsParams,
+    ProgramsPatch, RunUserParams, ServerNotification, SizeReady, Started, StdioCall, VolumeCap,
 };
 use purge_rpc::sets::{OUT_LIMIT, STDIO_IN_LIMIT, Transport};
 use purge_rpc::table::{self, CallSet, Dispatcher, Notify, Routed};
@@ -171,6 +175,10 @@ pub struct Server<'a> {
     local_data: Option<PathBuf>,
     /// The inventory read for this server, once a request needed it.
     inventory: Option<InventoryDoc>,
+    /// The Job-object host of `uninstall.run_user` (M3-RUNNER).
+    host: Box<dyn ProcessHost + Send>,
+    /// How long `uninstall.run_user` waits for its command.
+    run_options: RunOptions,
     extensions: Vec<Box<dyn Extension>>,
     cancellation: Cancellation,
 }
@@ -184,6 +192,8 @@ impl<'a> Server<'a> {
             settings,
             local_data,
             inventory: None,
+            host: Box::new(LiveHost::new()),
+            run_options: RunOptions::default(),
             extensions: Vec::new(),
             cancellation: Cancellation::default(),
         }
@@ -212,10 +222,19 @@ impl<'a> Server<'a> {
         let _ = self.inventory();
     }
 
+    /// Reads the inventory if this is the first request that needs it.
+    fn load_inventory(&mut self) {
+        if self.inventory.is_none() {
+            self.inventory = Some(pipeline::inventory(self.sources).doc);
+        }
+    }
+
     /// The inventory of this machine, read once per server.
     fn inventory(&mut self) -> &InventoryDoc {
+        self.load_inventory();
         self.inventory
-            .get_or_insert_with(|| pipeline::inventory(self.sources).doc)
+            .as_ref()
+            .expect("the inventory was just loaded")
     }
 
     fn list(&mut self, id: RequestId, notify: &mut dyn Notify) -> Result<Value, ErrorObject> {
@@ -348,6 +367,69 @@ impl<'a> Server<'a> {
             appeared,
         })
         .map_err(|e| ErrorObject::runtime(e.to_string()))
+    }
+
+    /// `programs.icons`: the `DisplayIcon` path of each program, or its uninstaller when the entry
+    /// names no icon, sent as `icon.batch` lines through [`icons::handle`].
+    fn icons(
+        &mut self,
+        id: RequestId,
+        params: &IconsParams,
+        notify: &mut dyn Notify,
+    ) -> Result<Value, ErrorObject> {
+        let env = self.sources.sys.env().unwrap_or_default();
+        let programs = InventoryIcons {
+            entries: &self.inventory().entries,
+            env: &env,
+        };
+        let count = icons::handle(id, params, &programs, &icons::WindowsIcons, notify)
+            .map_err(|e| ErrorObject::runtime(format!("cannot send icon.batch: {e}")))?;
+        serde_json::to_value(Started {
+            count: u32::try_from(count).unwrap_or(u32::MAX),
+        })
+        .map_err(|e| ErrorObject::runtime(e.to_string()))
+    }
+
+    /// `uninstall.route`: where the uninstaller of `params.program_id` belongs and the commands it
+    /// names, from the inventory this server keeps.
+    fn route(&mut self, params: &ProgramParams) -> Result<Value, ErrorObject> {
+        let sources = self.sources;
+        let entry = self
+            .inventory()
+            .entry(&params.program_id)
+            .ok_or_else(|| gone_program(&params.program_id))?;
+        let info = uninstall::route_info(entry, sources)?;
+        serde_json::to_value(info).map_err(|e| ErrorObject::runtime(e.to_string()))
+    }
+
+    /// `uninstall.run_user`: runs a medium-route uninstaller at the engine's own level, if the token
+    /// facts of this process and of the shell owner agree ([`uninstall::Level`]).
+    fn run_user(
+        &mut self,
+        id: RequestId,
+        params: &RunUserParams,
+        notify: &mut dyn Notify,
+    ) -> Result<Value, ErrorObject> {
+        let sources = self.sources;
+        self.load_inventory();
+        let entry = self
+            .inventory
+            .as_ref()
+            .and_then(|inventory| inventory.entry(&params.program_id))
+            .ok_or_else(|| gone_program(&params.program_id))?;
+        let level = uninstall::Level::live()
+            .map_err(|e| ErrorObject::runtime(format!("cannot read the token facts: {e}")))?;
+        let result = uninstall::handle_run_user_entry(
+            id,
+            params,
+            entry,
+            sources,
+            self.host.as_mut(),
+            &level,
+            &self.run_options,
+            notify,
+        )?;
+        serde_json::to_value(result).map_err(|e| ErrorObject::runtime(e.to_string()))
     }
 
     fn history(&self) -> Result<Value, ErrorObject> {
@@ -550,9 +632,9 @@ impl Dispatcher for Server<'_> {
             StdioCall::ProgramsSizes(params) => self.sizes(id, params, notify),
             StdioCall::InventoryChanges(_) => self.changes(),
             StdioCall::HistoryIndex(_) => self.history(),
-            StdioCall::ProgramsIcons(_) => Err(not_installed("M3-ICONS", "programs.icons")),
-            StdioCall::UninstallRoute(_) => Err(not_installed("M3-RUNNER", "uninstall.route")),
-            StdioCall::UninstallRunUser(_) => Err(not_installed("M3-RUNNER", "uninstall.run_user")),
+            StdioCall::ProgramsIcons(params) => self.icons(id, &params, notify),
+            StdioCall::UninstallRoute(params) => self.route(&params),
+            StdioCall::UninstallRunUser(params) => self.run_user(id, &params, notify),
         };
         self.cancellation.end(id);
         result
@@ -563,11 +645,39 @@ impl Dispatcher for Server<'_> {
     }
 }
 
-/// Why a method another package owns is not in this server.
-fn not_installed(package: &str, method: &str) -> ErrorObject {
-    ErrorObject::runtime(format!(
-        "{method} is provided by {package}, which is not linked into this engine"
-    ))
+/// `program_id` is no longer in the inventory: the client asked about a program that is gone.
+fn gone_program(_program_id: &ProgramId) -> ErrorObject {
+    ErrorObject::server(ErrorData::Gone {
+        id: IdKind::Program,
+    })
+}
+
+/// [`icons::ProgramIcons`] over the inventory the server keeps: the entry's `DisplayIcon`, or the
+/// executable of its uninstall command (interactive first, quiet second) when it has none.
+struct InventoryIcons<'a> {
+    entries: &'a [InventoryEntry],
+    env: &'a BTreeMap<String, String>,
+}
+
+impl icons::ProgramIcons for InventoryIcons<'_> {
+    fn display_icon(&self, program_id: &ProgramId) -> Option<String> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| &entry.program_id == program_id)?;
+        let icon = entry
+            .display_icon
+            .as_deref()
+            .map(str::trim)
+            .filter(|icon| !icon.is_empty());
+        if let Some(icon) = icon {
+            return Some(icon.to_owned());
+        }
+        let commands = pipeline::uninstall_commands(entry, self.env);
+        let exe = commands.command.as_ref().or(commands.quiet.as_ref())?;
+        let exe = exe.exe.trim();
+        (!exe.is_empty()).then(|| format!("\"{exe}\""))
+    }
 }
 
 fn notify_error(error: FrameError) -> ErrorObject {

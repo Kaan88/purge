@@ -9,7 +9,5 @@
 //! environment into [`cli::run`].
 
 pub mod cli;
-pub mod icons;
 pub mod pipeline;
 pub mod stdio;
-pub mod uninstall_rpc;
