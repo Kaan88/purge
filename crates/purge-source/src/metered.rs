@@ -449,6 +449,11 @@ impl SystemSource for MeteredSystem<'_> {
         self.meter.time(Op::System, none, || self.inner.env())
     }
 
+    fn machine_env(&self) -> SourceResult<BTreeMap<String, String>> {
+        self.meter
+            .time(Op::System, none, || self.inner.machine_env())
+    }
+
     fn processes(&self) -> SourceResult<Vec<ProcessInfo>> {
         self.meter.time(Op::System, none, || self.inner.processes())
     }

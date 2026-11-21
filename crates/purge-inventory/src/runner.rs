@@ -3,11 +3,14 @@
 //! [`run_uninstall`] runs one inventory entry's quiet uninstall command and records what happened as a
 //! `purge.run/0` [`RunDoc`]. The sequence:
 //!
-//! 1. Resolve the quiet command ([`crate::quiet::quiet_command`]; or use [`RunRequest::command`]
-//!    when the caller showed another one) and expand it with the interactive user's environment.
+//! 1. Resolve the quiet command ([`crate::quiet::quiet_command`]) and expand it with the interactive
+//!    user's environment; when the caller passes [`RunRequest::command`], it is already the string
+//!    that was shown and is run exactly as given, never expanded again.
 //! 2. Record the Authenticode signer CN of the uninstaller exe, and the routing facts of §4.4
 //!    ([`Routing`]: how the engine runs and whether the entry should run at medium integrity). The routing
-//!    rule is **recorded, not enforced** in M1a: the CLI runs the command with its own token.
+//!    rule is **recorded, not enforced** in M1a: the CLI runs the command with its own token. An elevated
+//!    start gets the machine environment plus the profile variables and the uninstaller's own directory,
+//!    never the engine's environment or working directory (review M3-R2 S4).
 //! 3. List running processes whose image is under the app's roots. M1a does not close or terminate them
 //!    (`WM_CLOSE` and termination need consent, M2/M3); they only appear in [`RunDoc::processes`].
 //! 4. Start the command inside a Job object with breakaway disallowed, so NSIS/Inno copies re-launched from
@@ -54,14 +57,23 @@ pub use purge_win::process::MSI_EXECUTE_MUTEX;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct JobId(pub u64);
 
+/// What a started command runs with. `None` fields inherit the engine's own (the default).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpawnContext<'a> {
+    /// The full environment block; `None` inherits the engine's.
+    pub environment: Option<&'a BTreeMap<String, String>>,
+    /// The working directory; `None` inherits the engine's.
+    pub current_dir: Option<&'a Path>,
+}
+
 /// What the runner needs from the machine to start and watch an uninstaller.
 ///
 /// There is deliberately no method to terminate or close anything: M1a never kills an uninstaller or an
 /// app process.
 pub trait ProcessHost {
     /// Starts `command_line` (passed verbatim to `CreateProcessW`) inside a new Job object that does not
-    /// allow breakaway.
-    fn spawn_in_job(&mut self, command_line: &str) -> io::Result<JobId>;
+    /// allow breakaway, with `context`'s environment and working directory.
+    fn spawn_in_job(&mut self, command_line: &str, context: SpawnContext<'_>) -> io::Result<JobId>;
 
     /// The ids of the processes currently alive in the job (the root included while it runs).
     fn job_active_pids(&mut self, job: JobId) -> io::Result<Vec<u32>>;
@@ -154,9 +166,10 @@ pub struct RunRequest<'a> {
     /// The inventory entries before the run; when given, entries that disappeared with the target are
     /// reported as co-removed.
     pub before: Option<&'a [InventoryEntry]>,
-    /// The exact command to run instead of the entry's quiet uninstall command. The engine's
-    /// `uninstall.run_user` uses it to run the quiet or the interactive command that
-    /// `uninstall.route` showed; `None` keeps the quiet-command rule of [`quiet_command`].
+    /// The exact command to run instead of the entry's quiet uninstall command, already expanded by
+    /// the caller. The engine's `uninstall.run_user` uses it to run the quiet or the interactive
+    /// command that `uninstall.route` showed; `None` keeps the quiet-command rule of
+    /// [`quiet_command`]. It is never expanded again.
     pub command: Option<&'a QuietCommand>,
 }
 
@@ -370,6 +383,43 @@ fn routing(
     }
 }
 
+/// The environment an elevated uninstaller starts with: the machine block (Windows-derived values and
+/// `HKLM\...\Session Manager\Environment`) plus the interactive user's profile variables. It never
+/// carries a value from `HKCU\Environment`, so a medium process cannot choose `SystemRoot`, `PATH`,
+/// `ComSpec`, `ProgramData` and the like through that key (review M3-R2 B1/S4).
+fn uninstaller_environment(sys: &dyn SystemSource) -> BTreeMap<String, String> {
+    let mut env = sys.machine_env().unwrap_or_default();
+    let user = sys.env().unwrap_or_default();
+    let profile = sys
+        .user_sid()
+        .ok()
+        .and_then(|sid| {
+            sys.profiles()
+                .ok()?
+                .into_iter()
+                .find(|p| p.sid.eq_ignore_ascii_case(&sid))
+        })
+        .map(|p| p.path)
+        .or_else(|| user.get("USERPROFILE").cloned());
+    if let Some(profile) = profile {
+        let drive: String = profile.chars().take(2).collect();
+        let tail: String = profile.chars().skip(2).collect();
+        let user_name = profile.rsplit('\\').next().unwrap_or_default().to_owned();
+        let local = format!(r"{profile}\AppData\Local");
+        env.insert("USERPROFILE".into(), profile.clone());
+        env.insert("HOMEDRIVE".into(), drive);
+        env.insert("HOMEPATH".into(), tail);
+        env.insert("APPDATA".into(), format!(r"{profile}\AppData\Roaming"));
+        env.insert("LOCALAPPDATA".into(), local.clone());
+        env.insert("TEMP".into(), format!(r"{local}\Temp"));
+        env.insert("TMP".into(), format!(r"{local}\Temp"));
+        if !user_name.is_empty() {
+            env.insert("USERNAME".into(), user_name);
+        }
+    }
+    env
+}
+
 /// Runs the quiet uninstall command of `req.entry` and waits for it (see the module documentation).
 ///
 /// `reg`, `fs` and `sys` are read before and after the run (environment, signer, routing, the ARP key while
@@ -392,10 +442,11 @@ pub fn run_uninstall(
         BTreeMap::new()
     });
     let command = match req.command {
+        // The caller already expanded the command it showed (`prepare` or `uninstall.route`);
+        // expanding it again here would run a different string than the one shown (review M3-R2 B1).
         Some(command) => command.clone(),
-        None => quiet_command(entry)?,
-    }
-    .expand(&env);
+        None => quiet_command(entry)?.expand(&env),
+    };
     let cmd = command.to_command_line();
 
     let signer = match fs.signer_cn(&command.exe) {
@@ -410,8 +461,22 @@ pub fn run_uninstall(
 
     note_processes_under_roots(host, req.roots, &mut log);
 
+    // An elevated uninstaller must not inherit the broker's environment or working directory
+    // (review M3-R2 S4). A medium run keeps the engine's own environment: that is the user's.
+    let elevated = sys.elevated();
+    let clean_environment = elevated.then(|| uninstaller_environment(sys));
+    let working_dir = elevated
+        .then(|| Path::new(&command.exe).parent())
+        .flatten()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(Path::to_path_buf);
+    let spawn = SpawnContext {
+        environment: clean_environment.as_ref(),
+        current_dir: working_dir.as_deref(),
+    };
+
     let t_start = host.now();
-    let (wait_end, t_end, exit_code) = match host.spawn_in_job(&cmd) {
+    let (wait_end, t_end, exit_code) = match host.spawn_in_job(&cmd, spawn) {
         Err(e) => {
             log.warnings
                 .push(format!("cannot start the uninstaller: {e}"));
@@ -531,11 +596,12 @@ fn file_name(path: &Path) -> String {
 }
 
 impl ProcessHost for LiveHost {
-    fn spawn_in_job(&mut self, command_line: &str) -> io::Result<JobId> {
+    fn spawn_in_job(&mut self, command_line: &str, context: SpawnContext<'_>) -> io::Result<JobId> {
         let process = JobProcess::spawn(
             command_line,
             &SpawnOptions {
-                current_dir: None,
+                current_dir: context.current_dir,
+                environment: context.environment,
                 hide_console: self.hide_console,
                 kill_on_drop: false,
             },
@@ -637,6 +703,9 @@ mod tests {
         }
     }
 
+    /// The environment and working directory of one spawn.
+    type SpawnRecord = (Option<BTreeMap<String, String>>, Option<std::path::PathBuf>);
+
     /// A scripted host: the first process is the root; time only moves in `sleep`.
     struct FakeHost {
         clock: Arc<AtomicU64>,
@@ -647,6 +716,8 @@ mod tests {
         msi: Vec<(u64, u64)>,
         running: Vec<ProcessSeen>,
         spawned: Vec<String>,
+        /// The environment and working directory of each spawn.
+        spawn_contexts: Vec<SpawnRecord>,
         polls: u32,
     }
 
@@ -660,6 +731,7 @@ mod tests {
                 msi: Vec::new(),
                 running: Vec::new(),
                 spawned: Vec::new(),
+                spawn_contexts: Vec::new(),
                 polls: 0,
             }
         }
@@ -670,8 +742,16 @@ mod tests {
     }
 
     impl ProcessHost for FakeHost {
-        fn spawn_in_job(&mut self, command_line: &str) -> io::Result<JobId> {
+        fn spawn_in_job(
+            &mut self,
+            command_line: &str,
+            context: SpawnContext<'_>,
+        ) -> io::Result<JobId> {
             self.spawned.push(command_line.to_owned());
+            self.spawn_contexts.push((
+                context.environment.cloned(),
+                context.current_dir.map(Path::to_path_buf),
+            ));
             if self.spawn_fails {
                 return Err(io::Error::from_raw_os_error(2));
             }
@@ -916,6 +996,110 @@ mod tests {
         c.fixture
             .set_admin_only_writable(r"C:\Program Files\App", false);
         assert!(c.run().routing.should_run_medium);
+    }
+
+    #[test]
+    fn a_given_command_is_run_exactly_as_frozen() {
+        let mut c = Case::new(secs(1), 0, Some(0));
+        c.fixture.system_mut().env.insert(
+            "X".into(),
+            r"C:\Users\tester\AppData\Local\planted.exe".into(),
+        );
+        let frozen = QuietCommand {
+            exe: UNINS.into(),
+            args: "%X% /S".into(),
+            generated: false,
+            kind: InstallerKind::Inno,
+        };
+        let roots = [r"C:\Program Files\App".to_string()];
+        let exes = [r"C:\Program Files\App\app.exe".to_string()];
+        let req = RunRequest {
+            entry: &c.entry,
+            main_exes: &exes,
+            roots: &roots,
+            before: None,
+            command: Some(&frozen),
+        };
+        let report = run_uninstall(
+            &mut c.host,
+            &c.fixture,
+            &c.fixture,
+            &c.fixture,
+            &req,
+            &c.opts,
+        )
+        .unwrap();
+        let expected = format!("\"{UNINS}\" %X% /S");
+        assert_eq!(c.host.spawned, vec![expected.clone()]);
+        assert_eq!(report.doc.cmd, expected, "the shown command is the one run");
+    }
+
+    #[test]
+    fn an_elevated_run_gets_the_machine_environment_and_the_uninstaller_directory() {
+        let mut c = Case::new(secs(1), 0, Some(0));
+        let facts = c.fixture.system_mut();
+        facts.elevated = true;
+        facts.machine_env = [
+            ("PATH", r"C:\Windows\system32;C:\Windows"),
+            ("PROGRAMDATA", r"C:\ProgramData"),
+            ("COMSPEC", r"C:\Windows\system32\cmd.exe"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        facts.env = [
+            ("PATH", r"C:\Users\tester\bin"),
+            ("PROGRAMDATA", r"C:\Users\tester\planted"),
+            ("USERPROFILE", r"C:\Users\tester"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let frozen = QuietCommand {
+            exe: UNINS.into(),
+            args: "/S".into(),
+            generated: false,
+            kind: InstallerKind::Inno,
+        };
+        let roots = [r"C:\Program Files\App".to_string()];
+        let exes = [r"C:\Program Files\App\app.exe".to_string()];
+        let req = RunRequest {
+            entry: &c.entry,
+            main_exes: &exes,
+            roots: &roots,
+            before: None,
+            command: Some(&frozen),
+        };
+        run_uninstall(
+            &mut c.host,
+            &c.fixture,
+            &c.fixture,
+            &c.fixture,
+            &req,
+            &c.opts,
+        )
+        .unwrap();
+        let (environment, current_dir) = c.host.spawn_contexts.first().expect("a spawn");
+        let environment = environment.as_ref().expect("a clean environment");
+        assert_eq!(
+            environment.get("PATH").map(String::as_str),
+            Some(r"C:\Windows\system32;C:\Windows"),
+            "the user's PATH was inherited"
+        );
+        assert_eq!(
+            environment.get("PROGRAMDATA").map(String::as_str),
+            Some(r"C:\ProgramData"),
+            "a planted PROGRAMDATA was inherited"
+        );
+        assert_eq!(
+            environment.get("USERPROFILE").map(String::as_str),
+            Some(r"C:\Users\tester")
+        );
+        assert_eq!(
+            current_dir.as_deref(),
+            Some(std::path::Path::new(r"C:\Program Files\App")),
+            "the working directory is the uninstaller's own"
+        );
     }
 
     #[test]

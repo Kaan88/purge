@@ -718,7 +718,11 @@ mod tests {
     struct NoHost;
 
     impl ProcessHost for NoHost {
-        fn spawn_in_job(&mut self, _: &str) -> std::io::Result<purge_inventory::runner::JobId> {
+        fn spawn_in_job(
+            &mut self,
+            _: &str,
+            _: purge_inventory::runner::SpawnContext<'_>,
+        ) -> std::io::Result<purge_inventory::runner::JobId> {
             panic!("no process may be started")
         }
         fn job_active_pids(

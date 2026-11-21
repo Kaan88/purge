@@ -185,6 +185,9 @@ impl SystemSource for Switch {
     fn env(&self) -> SourceResult<BTreeMap<String, String>> {
         self.now().env()
     }
+    fn machine_env(&self) -> SourceResult<BTreeMap<String, String>> {
+        self.now().machine_env()
+    }
     fn processes(&self) -> SourceResult<Vec<ProcessInfo>> {
         self.now().processes()
     }
@@ -233,6 +236,12 @@ fn switch_forwards_msi_tables_and_tasks_to_the_active_side() {
 // The fake process host
 // ---------------------------------------------------------------------------------------------------------
 
+/// The environment and working directory of one start.
+pub type SpawnRecord = (
+    Option<std::collections::BTreeMap<String, String>>,
+    Option<std::path::PathBuf>,
+);
+
 /// A scripted uninstaller: it "runs" for `run_ms` of fake time, then exits with `exit` (`None`: never).
 /// Starting it switches the machine to "after" when `removes` is set. Nothing real is ever started.
 pub struct FakeHost {
@@ -244,6 +253,8 @@ pub struct FakeHost {
     started_at: Option<u64>,
     /// The command lines it was asked to start.
     pub spawned: Vec<String>,
+    /// The environment and working directory of each start.
+    pub spawned_with: Vec<SpawnRecord>,
 }
 
 impl FakeHost {
@@ -257,6 +268,7 @@ impl FakeHost {
             clock_ms: 0,
             started_at: None,
             spawned: Vec::new(),
+            spawned_with: Vec::new(),
         }
     }
 
@@ -270,8 +282,16 @@ impl FakeHost {
 }
 
 impl ProcessHost for FakeHost {
-    fn spawn_in_job(&mut self, command_line: &str) -> io::Result<JobId> {
+    fn spawn_in_job(
+        &mut self,
+        command_line: &str,
+        context: purge_inventory::runner::SpawnContext<'_>,
+    ) -> io::Result<JobId> {
         self.spawned.push(command_line.to_owned());
+        self.spawned_with.push((
+            context.environment.cloned(),
+            context.current_dir.map(|d| d.to_path_buf()),
+        ));
         self.started_at = Some(self.clock_ms);
         if self.removes {
             self.flag.store(true, Ordering::SeqCst);

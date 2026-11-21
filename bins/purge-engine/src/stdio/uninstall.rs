@@ -123,7 +123,16 @@ pub fn handle_route(
 /// [`pipeline::route`] the run uses.
 pub fn route_info(entry: &InventoryEntry, sources: Sources<'_>) -> Result<RouteInfo, ErrorObject> {
     let env = sources.sys.env().unwrap_or_default();
-    let commands = pipeline::uninstall_commands(entry, &env);
+    let machine_env = sources.sys.machine_env().unwrap_or_default();
+    let route = pipeline::route(entry, sources.fs, &env, &machine_env);
+    // A broker-route command is expanded with the machine environment only: that is the string the
+    // broker shows and starts, and a value in `HKCU\Environment` must never change it (review M3-R2 B1).
+    let command_env = if route == Route::Broker {
+        &machine_env
+    } else {
+        &env
+    };
+    let commands = pipeline::uninstall_commands(entry, command_env);
     let command = commands
         .command_line()
         .or_else(|| commands.quiet_command_line())
@@ -138,7 +147,7 @@ pub fn route_info(entry: &InventoryEntry, sources: Sources<'_>) -> Result<RouteI
     let processes = sources.sys.processes().unwrap_or_default();
     let running = running_under(&processes, &running_roots(entry, &commands));
     Ok(RouteInfo {
-        route: pipeline::route(entry, sources.fs, &env),
+        route,
         command,
         quiet_command,
         signer,
@@ -250,7 +259,8 @@ pub fn handle_run_user_entry(
     notify: &mut dyn Notify,
 ) -> Result<RunUserResult, ErrorObject> {
     let env = sources.sys.env().unwrap_or_default();
-    let route = pipeline::route(entry, sources.fs, &env);
+    let machine_env = sources.sys.machine_env().unwrap_or_default();
+    let route = pipeline::route(entry, sources.fs, &env, &machine_env);
     if route != Route::Medium {
         return Err(ErrorObject::server(ErrorData::WrongRoute { route }));
     }
@@ -448,7 +458,7 @@ mod tests {
             ),
         ];
         for (what, entry, expected) in cases {
-            assert_eq!(pipeline::route(&entry, &fs, &env), expected, "{what}");
+            assert_eq!(pipeline::route(&entry, &fs, &env, &env), expected, "{what}");
         }
     }
 

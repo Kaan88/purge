@@ -229,6 +229,26 @@ pub fn restrict_dll_search() -> Result<(), StartFailure> {
     })
 }
 
+/// Sets the process's working directory to the broker's own install directory, so an elevated start
+/// does not keep the directory the `runas` caller chose (review M3-R2 S4).
+pub fn restrict_working_directory() -> Result<(), StartFailure> {
+    let exe = std::env::current_exe().map_err(|e| {
+        StartFailure::InstallUntrusted(format!("the own image path could not be read: {e}"))
+    })?;
+    let dir = exe
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .ok_or_else(|| {
+            StartFailure::InstallUntrusted(format!("{} has no directory", exe.display()))
+        })?;
+    purge_win::secure::set_current_directory(dir).map_err(|e| {
+        StartFailure::InstallUntrusted(format!(
+            "the working directory {} could not be set: {e}",
+            dir.display()
+        ))
+    })
+}
+
 /// The start checks on the live machine ([`check_with`] of [`LiveFacts`]).
 pub fn check() -> Result<Started<StorageRoots>, StartFailure> {
     check_with(&LiveFacts)

@@ -51,6 +51,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     GetFinalPathNameByHandleW, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE, VOLUME_NAME_GUID,
 };
+use windows_sys::Win32::System::Environment::SetCurrentDirectoryW;
 use windows_sys::Win32::System::LibraryLoader::{
     LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories,
 };
@@ -569,6 +570,21 @@ pub fn trusted_install_dir(dir: &Path) -> Result<(), UntrustedDir> {
 pub fn restrict_dll_search() -> Result<(), Win32Error> {
     // SAFETY: takes a flag value only.
     if unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) } == 0 {
+        return Err(Win32Error::last());
+    }
+    Ok(())
+}
+
+/// `SetCurrentDirectoryW(dir)`: the process's working directory. The broker runs elevated and would
+/// otherwise keep the directory its `runas` caller passed (review M3-R2 S4).
+pub fn set_current_directory(dir: &Path) -> Result<(), Win32Error> {
+    let dir: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `dir` is a NUL-terminated wide string.
+    if unsafe { SetCurrentDirectoryW(dir.as_ptr()) } == 0 {
         return Err(Win32Error::last());
     }
     Ok(())

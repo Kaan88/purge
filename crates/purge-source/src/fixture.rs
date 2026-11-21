@@ -467,6 +467,10 @@ pub struct SystemFacts {
     /// The interactive user's environment, names upper-cased.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// The machine-only environment (no `HKCU\Environment`), names upper-cased. Empty means "the
+    /// same as [`env`](Self::env)"; a fixture that models a planted user override sets both.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub machine_env: BTreeMap<String, String>,
     /// Running processes; `None` = not captured.
     #[serde(default = "some_empty")]
     pub processes: Option<Vec<ProcessInfo>>,
@@ -485,6 +489,7 @@ impl Default for SystemFacts {
             profiles: Some(Vec::new()),
             known_folders: BTreeMap::new(),
             env: BTreeMap::new(),
+            machine_env: BTreeMap::new(),
             processes: Some(Vec::new()),
             now: None,
         }
@@ -1418,6 +1423,14 @@ impl SystemSource for Fixture {
         Ok(self.system.env.clone())
     }
 
+    fn machine_env(&self) -> SourceResult<BTreeMap<String, String>> {
+        Ok(if self.system.machine_env.is_empty() {
+            self.system.env.clone()
+        } else {
+            self.system.machine_env.clone()
+        })
+    }
+
     fn processes(&self) -> SourceResult<Vec<ProcessInfo>> {
         self.system
             .processes
@@ -2147,6 +2160,9 @@ impl Fixture {
 
         if self.system.env.is_empty() {
             self.system.env = env;
+        }
+        if self.system.machine_env.is_empty() {
+            self.system.machine_env = self.system.env.clone();
         }
         if self.system.known_folders.is_empty() {
             self.system.known_folders = kf;
@@ -3060,6 +3076,16 @@ impl FixtureBuilder {
         self.0
             .system
             .env
+            .insert(name.to_uppercase(), value.to_string());
+        self
+    }
+
+    /// Sets a machine-only environment variable (the name is upper-cased). The user's
+    /// [`env`](Self::env) keeps its own value, so a test can model a planted user override.
+    pub fn machine_env(mut self, name: &str, value: &str) -> Self {
+        self.0
+            .system
+            .machine_env
             .insert(name.to_uppercase(), value.to_string());
         self
     }
