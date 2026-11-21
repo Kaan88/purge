@@ -5,8 +5,9 @@
 //! every trust: a wrong "present" costs a missed leftover. **A** (absence, "is this key proven not
 //! Windows' own?") enables a delete, so it is asked only through the **capped path** of each crate:
 //!
-//! - `crates/purge-scan/src/framework/absence.rs` (`ScanCtx::key_absence`, `has_exact_baseline`,
-//!   `has_matching_exact_baseline`);
+//! - `crates/purge-scan/src/framework/absence.rs` (`ScanCtx::key_absence`, `has_exact_baseline` and its
+//!   other name `has_matching_exact_baseline`: both need the exact baseline of the Windows the scan runs
+//!   on);
 //! - `crates/purge-harvest/src/refsnap.rs` (`HarvestCtx::key_absence`, `has_exact_baseline`).
 //!
 //! The local baseline is presence-only: the capped path hands a view's inferred absence out as
@@ -108,6 +109,7 @@ pub const CALLS: &[&str] = &[
     "key_absence",
     "has_exact_baseline",
     "has_matching_exact_baseline",
+    "has_foreign_exact_baseline",
     "matching_exact_baseline",
     "absence_trust",
     "presence",
@@ -178,7 +180,8 @@ pub const SITES: &[Site] = &[
         Class::M,
         3,
         0,
-        "has_exact_baseline, absence_trust, the seal's trust test",
+        "matching_exact_baseline and has_foreign_exact_baseline (is the view Exact at all), the seal's \
+         trust test",
     ),
     site(
         SCAN,
@@ -187,16 +190,20 @@ pub const SITES: &[Site] = &[
         Class::M,
         1,
         0,
-        "matching_exact_baseline: false below Exact",
+        "matching_exact_baseline: the exact baseline must be of the Windows the scan runs on; false \
+         below Exact",
     ),
     site(
         SCAN,
         "framework/absence.rs",
         "has_exact_baseline",
         Class::M,
-        1,
-        1,
-        "matching_exact_baseline: None below Exact",
+        4,
+        2,
+        "false below Exact: key_absence turns a Proven of another Windows' baseline into Unknown (the \
+         listed negation), has_matching_exact_baseline is its other name, has_foreign_exact_baseline \
+         (the second listed negation) names an Exact view that is not this Windows', absence_trust is \
+         None",
     ),
     site(
         SCAN,
@@ -205,7 +212,7 @@ pub const SITES: &[Site] = &[
         Class::M,
         1,
         0,
-        "has_matching_exact_baseline: false below Exact",
+        "has_exact_baseline: false below Exact and for a baseline of another Windows",
     ),
     site(
         SCAN,
@@ -329,11 +336,11 @@ pub const SITES: &[Site] = &[
     site(
         SCAN,
         "skeleton.rs",
-        "has_matching_exact_baseline",
+        "has_foreign_exact_baseline",
         Class::A,
         1,
-        1,
-        "not reached below Exact (NoBaseline first)",
+        0,
+        "false below Exact; it only names the reason (BaselineMismatch) when the gate above is false",
     ),
     site(
         SCAN,

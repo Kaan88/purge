@@ -115,16 +115,18 @@ pub fn check(ctx: &ScanCtx<'_>, key: &str) -> Result<Evidence, NotProven> {
     if ctx.in_unowned_com_class(key) {
         return Err(NotProven::UnownedComRegistration);
     }
-    // A: only an Exact view proves absence. Below Exact (a local baseline, neighbours, nothing) there
-    // is no baseline in this sense, whatever the view holds for presence.
+    // A: only the exact baseline of this Windows proves absence. Below Exact (a local baseline,
+    // neighbours, nothing) there is no baseline in this sense, whatever the view holds for presence;
+    // an exact baseline of another Windows is named as what it is. The machine as it is now decides;
+    // the fingerprint's record of it is the fallback.
     if !ctx.has_exact_baseline() {
-        return Err(NotProven::NoBaseline);
+        return Err(if ctx.has_foreign_exact_baseline() {
+            NotProven::BaselineMismatch
+        } else {
+            NotProven::NoBaseline
+        });
     }
-    // The machine as it is now decides; the fingerprint's record of it is the fallback.
     let os = ctx.os_now();
-    if !ctx.has_matching_exact_baseline() {
-        return Err(NotProven::BaselineMismatch);
-    }
     let mut budget = ctx.limits.max_key_children;
     let proof = prove(ctx, key, 0, &mut budget)?;
     let (trust, source, via): (SourceTrust, String, &str) = match proof {
