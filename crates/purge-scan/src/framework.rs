@@ -1437,6 +1437,10 @@ impl<'a> ScanCtx<'a> {
                 // Filled in by `ScanCtx::run` for path items, after the scanner is done.
                 item_fp: None,
                 object_fp: None,
+                // Display-only details of services, tasks and firewall rules: the engine fills them
+                // after the scanners (M3-ENGINE-OUT).
+                display_name: None,
+                owner_program: None,
             },
         }
     }

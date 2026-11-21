@@ -43,6 +43,8 @@ fn cand(id: &str, path: &str, evidence: Vec<Evidence>, blockers: Vec<Blocker>) -
         decision: None,
         item_fp: None,
         object_fp: None,
+        display_name: None,
+        owner_program: None,
     }
 }
 

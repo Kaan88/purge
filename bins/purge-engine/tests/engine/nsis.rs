@@ -165,7 +165,7 @@ fn external_and_forced_scans_check_verify_gone_afresh() {
                 scanned
                     .warnings
                     .iter()
-                    .any(|w| w.contains("verify-gone failed")),
+                    .any(|w| w.message.contains("verify-gone failed")),
                 "{:?}",
                 scanned.warnings
             );

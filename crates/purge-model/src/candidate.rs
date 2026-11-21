@@ -236,6 +236,23 @@ pub struct Candidate {
     /// it can only make the executor refuse or skip an item, never act on another object.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_fp: Option<ObjectFp>,
+    /// The readable name of the object, when the target is a service, a scheduled task or a firewall
+    /// rule and the system gave one (a service's `DisplayName`, a firewall rule's `Name=`). `None` when
+    /// the target's own text is the best name there is (files, registry keys and values), and for an
+    /// indirect `@resource` name the scan cannot resolve. Display only (M3-ENGINE-OUT).
+    ///
+    /// **Not part of the plan hash** (`purge.planhash/0`): it names the same object the target already
+    /// binds, so removing it or editing it can never widen what a plan does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// The program the object runs, when the target is a service, a task or a firewall rule and the
+    /// scan could resolve it (a service's `ImagePath`/`ServiceDll`, a task action's file, a firewall
+    /// rule's `App=`). Display only (M3-ENGINE-OUT).
+    ///
+    /// **Not part of the plan hash** (`purge.planhash/0`), for the same reason as
+    /// [`Candidate::display_name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_program: Option<String>,
 }
 
 impl Candidate {
@@ -426,6 +443,30 @@ mod tests {
         assert!(serde_json::from_value::<Candidate>(v).is_err());
     }
 
+    /// The display fields (M3-ENGINE-OUT) are omitted when absent, so every document written before
+    /// they existed reads and writes unchanged, and round-trip when present.
+    #[test]
+    fn display_fields_are_omitted_when_absent_and_round_trip_when_present() {
+        let c: Candidate = serde_json::from_value(sample()).unwrap();
+        assert_eq!(c.display_name, None);
+        assert_eq!(c.owner_program, None);
+        let text = serde_json::to_string(&c).unwrap();
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert!(v.get("display_name").is_none());
+        assert!(v.get("owner_program").is_none());
+
+        let mut c = c;
+        c.display_name = Some("Tool Updater".into());
+        c.owner_program = Some(r"C:\Program Files\Tool\update.exe".into());
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["display_name"], json!("Tool Updater"));
+        assert_eq!(
+            v["owner_program"],
+            json!(r"C:\Program Files\Tool\update.exe")
+        );
+        assert_eq!(serde_json::from_value::<Candidate>(v).unwrap(), c);
+    }
+
     /// A scan document the M2 executor gate ran on (Firefox, `vm/` cleanpro run `cp2-m2-fidelity`):
     /// every item, with its `item_fp`, reads and writes back unchanged.
     #[test]
@@ -608,6 +649,8 @@ mod tests {
             "item_fp",
             "volume_serial",
             "object_fp",
+            "display_name",
+            "owner_program",
         ] {
             assert!(text.contains(name), "schema lacks {name}");
         }

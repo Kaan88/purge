@@ -56,6 +56,19 @@ pub fn target_text(target: &Target) -> String {
     }
 }
 
+/// One line for a target, with the object's own name from the sidecar when it has one (M3-ENGINE-OUT).
+/// A firewall rule's InstanceID is unique but unreadable; its `Name=` is what the user knows.
+pub fn target_text_with_name(target: &Target, candidate: Option<&Candidate>) -> String {
+    let text = target_text(target);
+    if matches!(target, Target::FirewallRule { .. })
+        && let Some(name) = candidate.and_then(|c| c.display_name.as_deref())
+        && !name.is_empty()
+    {
+        return format!("{text} ({name})");
+    }
+    text
+}
+
 /// Checks that a sidecar belongs to `plan`: same app and mode, the same items in the same order, and a
 /// stored hash equal to the one recomputed from its candidates.
 ///
@@ -138,9 +151,13 @@ pub fn render(plan: &Plan, sidecar: Result<&ScanDoc, String>) -> String {
         let _ = writeln!(out, "\n{band:?} ({})", rows.len());
         for (index, item) in rows {
             let tick = if item.preselected { "[x]" } else { "[ ]" };
-            let _ = writeln!(out, "  {tick} {}", target_text(&item.target));
-            let mut facts = format!("{}, {:?}", item.scanner, item.category);
             let candidate = candidates.get(index).copied();
+            let _ = writeln!(
+                out,
+                "  {tick} {}",
+                target_text_with_name(&item.target, candidate)
+            );
+            let mut facts = format!("{}, {:?}", item.scanner, item.category);
             if let (Some(c), Some(scan)) = (candidate, scan) {
                 let absorbed = scan
                     .absorbed
@@ -214,6 +231,8 @@ mod tests {
             }),
             item_fp: None,
             object_fp: None,
+            display_name: None,
+            owner_program: None,
         }
     }
 
@@ -351,5 +370,50 @@ mod tests {
         for (target, text) in cases {
             assert_eq!(target_text(&target), text);
         }
+    }
+
+    /// A firewall rule shows its readable `Name=` from the sidecar beside its unique id
+    /// (M3-ENGINE-OUT); a sidecar without one keeps the old line.
+    #[test]
+    fn a_firewall_rule_shows_its_name_from_the_sidecar() {
+        let mut rule = candidate(
+            "f",
+            Target::FirewallRule {
+                id: "{0000BBBB-0000-0000-0000-000000000001}".into(),
+            },
+            Band::Likely,
+            "The rule's program is gone.",
+        );
+        rule.display_name = Some("Tool".into());
+        rule.owner_program = Some(r"C:\Program Files\Tool\tool.exe".into());
+        let items = vec![rule.clone()];
+        let scan = ScanDoc {
+            schema: ScanSchema,
+            app: "app".into(),
+            tool: Tool::Purge,
+            mode: ScanMode::Post,
+            policy_version: "test".into(),
+            plan_hash: plan_hash(&items, "test", ScanMode::Post),
+            items: items.clone(),
+            absorbed: Vec::new(),
+        };
+        let plan = purge_plan::emit::to_plan0("app", ScanMode::Post, &items);
+        let text = render(&plan, Ok(&scan));
+        assert!(
+            text.contains("FirewallRule {0000BBBB-0000-0000-0000-000000000001} (Tool)"),
+            "{text}"
+        );
+
+        // No name in the sidecar: the line is the target's own text.
+        let mut unnamed = items[0].clone();
+        unnamed.display_name = None;
+        assert_eq!(
+            target_text_with_name(&unnamed.target, Some(&unnamed)),
+            "FirewallRule {0000BBBB-0000-0000-0000-000000000001}"
+        );
+        assert_eq!(
+            target_text_with_name(&items[0].target, None),
+            "FirewallRule {0000BBBB-0000-0000-0000-000000000001}"
+        );
     }
 }

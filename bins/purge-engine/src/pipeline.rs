@@ -41,6 +41,13 @@
 //! Nothing here fails because a fact could not be read: what is missing becomes a warning line and the
 //! pipeline goes on with less. Only a broken precondition (an unknown program id, a fingerprint of another
 //! app, a post scan without an uninstall) is an error.
+//!
+//! # Scan output for the UI (M3-ENGINE-OUT)
+//!
+//! A scan's warnings are [`ScanWarning`]s: the same lines as before, each with a typed
+//! [`WarningKind`](purge_model::WarningKind). Service, task and firewall-rule candidates also carry
+//! [`Candidate::display_name`] and [`Candidate::owner_program`]. Both fields are display only and are
+//! outside the plan hash (`purge.planhash/0`): the frozen M1b plans keep their hashes.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -62,14 +69,15 @@ use purge_index::matcher::AnchorSet;
 use purge_index::ownership::{
     CacheKey, DiskTableCache, MemTableCache, OwnershipLimits, TableCache,
 };
+use purge_index::sysobj::{ProgramRef, SysObjectIndex};
 use purge_inventory::arp::Inventory;
 use purge_inventory::quiet::{QuietCommand, quiet_command};
 use purge_inventory::runner::{ProcessHost, RunError, RunOptions, RunReport, RunRequest};
 use purge_inventory::verify_gone::{self, VerifyTarget};
 use purge_model::{
     AnchorKind, AnchorRef, BaselineTrust, Candidate, Fingerprint, InstallScope, InstallerKind,
-    InventoryDoc, InventoryEntry, OsInfo, ProgramId, RawFlags, ResidueDoc, ScanMode, VerifyGone,
-    View, WritableBy,
+    InventoryDoc, InventoryEntry, OsInfo, ProgramId, RawFlags, ResidueDoc, ScanMode, ScanWarning,
+    Target, VerifyGone, View, WritableBy,
 };
 use purge_plan::decide::{DecideCtx, Limits, M1bDecide, bundle_known, colliding_ids};
 use purge_plan::emit::{Built, build};
@@ -970,8 +978,9 @@ pub struct Scanned {
     /// The residue (`purge.residue/1`): what the baseline could not answer, for the advisory model
     /// (BASELINE_LOCAL_DESIGN.md §7).
     pub residue: ResidueDoc,
-    /// Warnings of the pipeline.
-    pub warnings: Vec<String>,
+    /// Warnings of the pipeline, each with its typed kind (M3-ENGINE-OUT). The text is the line the
+    /// CLI prints.
+    pub warnings: Vec<ScanWarning>,
 }
 
 /// The plan's default app id: the ARP key name, lowercased.
@@ -1437,6 +1446,9 @@ fn run_scan(
             ext.ownership.unreadable().len()
         ));
     }
+    // Display only: the readable name and the program of every service, task and firewall rule
+    // candidate (M3-ENGINE-OUT). Outside the plan hash and the plan itself.
+    attach_object_display(&mut candidates, &ext.sysobj, &env);
 
     // Decide, collapse, emit.
     let deny = DenyList::compile(&guard);
@@ -1495,8 +1507,83 @@ fn run_scan(
         built,
         per_scanner,
         residue,
-        warnings,
+        warnings: warnings.into_iter().map(ScanWarning::classify).collect(),
     })
+}
+
+/// The program text of `program`, for display: a resolved file, or the raw text when it could not be
+/// resolved. `None` when the object names no program.
+fn program_text(program: &ProgramRef) -> Option<String> {
+    match program {
+        ProgramRef::File(path) => Some(path.clone()),
+        ProgramRef::Unresolved { raw } => Some(raw.clone()),
+        ProgramRef::None => None,
+    }
+}
+
+/// Fills [`Candidate::display_name`] and [`Candidate::owner_program`] for service, task and firewall
+/// rule candidates (M3-ENGINE-OUT). Display only: neither field is part of the plan hash, and neither
+/// reaches `purge.plan/0`.
+///
+/// - A service's name is its `DisplayName` (not an indirect `@resource` reference the scan cannot
+///   resolve); its program is the file `ImagePath`/`ServiceDll` names.
+/// - A firewall rule's name is its `Name=` field; its program is the resolved `App=`.
+/// - A task has no name of its own to add (its path is the target); its program is the file of its
+///   first action, when every action resolved to a file.
+fn attach_object_display(
+    candidates: &mut [Candidate],
+    sysobj: &SysObjectIndex,
+    env: &BTreeMap<String, String>,
+) {
+    let service = |name: &str| {
+        sysobj
+            .services
+            .iter()
+            .find(|s| s.identity.name.eq_ignore_ascii_case(name))
+    };
+    let rule = |id: &str| sysobj.firewall.iter().find(|r| r.identity.id == id);
+    let env = purge_index::sysobj::Env::new(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    for candidate in candidates {
+        match &candidate.target {
+            Target::Service { name } => {
+                let Some(facts) = service(name) else {
+                    continue;
+                };
+                candidate.display_name = facts
+                    .display_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty() && !name.starts_with('@'))
+                    .map(str::to_owned);
+                candidate.owner_program = program_text(&facts.program);
+            }
+            Target::FirewallRule { id } => {
+                let Some(facts) = rule(id) else {
+                    continue;
+                };
+                candidate.display_name = facts
+                    .fields
+                    .get("Name")
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty() && !name.starts_with('@'))
+                    .map(str::to_owned);
+                candidate.owner_program = program_text(&facts.program);
+            }
+            Target::Task { path } => {
+                let Some(task) = sysobj
+                    .tasks
+                    .iter()
+                    .find(|t| t.identity.path.eq_ignore_ascii_case(path))
+                else {
+                    continue;
+                };
+                candidate.owner_program = purge_index::sysobj::task_programs(&task.identity, &env)
+                    .files()
+                    .and_then(|files| files.first().map(|file| (*file).to_owned()));
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The M1b exemption lists of a plan (C-GUARD, R2a S9): [`M1bDecide::from_facts`] over the fingerprint,

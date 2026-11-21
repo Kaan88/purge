@@ -76,6 +76,8 @@ fn cand(id: &str, target: Target, scanner: &str) -> Candidate {
         decision: None,
         item_fp: None,
         object_fp: None,
+        display_name: None,
+        owner_program: None,
     }
 }
 

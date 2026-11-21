@@ -239,6 +239,31 @@ mod tests {
         assert_eq!(plan_hash(&items, "m1a.2", ScanMode::Post), GOLDEN_HASH);
     }
 
+    /// The display fields (M3-ENGINE-OUT) name the same objects the targets bind: they are outside the
+    /// plan hash, and the golden document and hash stay exactly what they were.
+    #[test]
+    fn display_fields_do_not_enter_the_hash() {
+        let mut items = items();
+        assert!(
+            items
+                .iter()
+                .all(|c| c.display_name.is_none() && c.owner_program.is_none())
+        );
+        for (i, item) in items.iter_mut().enumerate() {
+            item.display_name = Some(format!("Object {i}"));
+            item.owner_program = Some(format!(r"C:\Program Files\Vendor\app{i}.exe"));
+        }
+        assert_eq!(
+            canonical_plan_json(&items, "m1a.2", ScanMode::Post),
+            GOLDEN_JSON
+        );
+        assert_eq!(plan_hash(&items, "m1a.2", ScanMode::Post), GOLDEN_HASH);
+        // Other values, same hash: nothing here can widen what a plan does.
+        items[0].display_name = Some("Something else".into());
+        items[0].owner_program = None;
+        assert_eq!(plan_hash(&items, "m1a.2", ScanMode::Post), GOLDEN_HASH);
+    }
+
     #[test]
     fn empty_plan_has_a_hash_too() {
         assert_eq!(

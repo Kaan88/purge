@@ -656,7 +656,8 @@ fn scan(a: &ScanArgs, env: &mut Env<'_>, started: Instant) -> Exit {
         Ok(s) => s,
         Err(e) => return env.pipeline_error(&e),
     };
-    env.warnings(&scanned.warnings);
+    let lines: Vec<String> = scanned.warnings.iter().map(ToString::to_string).collect();
+    env.warnings(&lines);
     env.note(&scan_summary(&scanned));
     let exit = env.write_file(&a.out, &output::json_text(&scanned.built.plan), "plan");
     if exit != Exit::Ok {
