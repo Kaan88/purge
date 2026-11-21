@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Hand-written test fixture: one file and one directory per macro, amd64 (BL-MANIFEST); not a Microsoft file. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0">
+  <assemblyIdentity name="Purge-Test-Paths" version="10.0.26100.1" processorArchitecture="amd64" language="neutral" publicKeyToken="31bf3856ad364e35" />
+  <file name="purgetest.txt" destinationPath="$(runtime.windows)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.system32)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.drivers)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.fonts)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.inf)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.wbem)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.programFiles)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.programFilesX86)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.commonFiles)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.commonFilesX86)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.programData)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.bootDrive)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.systemRoot)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.help)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.userProfile)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.public)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.startMenu)\PurgeTestFile\" />
+  <file name="purgetest.txt" destinationPath="$(runtime.documentsSettings)\PurgeTestFile\" />
+  <file name="purgestore.dll" />
+  <file name="relative.dll" destinationPath=".\sub\" />
+  <file name="unknown.dll" destinationPath="$(runtime.nope)\" />
+  <directories>
+    <directory destinationPath="$(runtime.windows)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.system32)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.drivers)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.fonts)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.inf)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.wbem)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.programFiles)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.programFilesX86)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.commonFiles)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.commonFilesX86)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.programData)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.bootDrive)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.systemRoot)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.help)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.userProfile)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.public)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.startMenu)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.documentsSettings)\PurgeTestDir" />
+    <directory destinationPath="$(runtime.windows)\..\Escape" />
+  </directories>
+</assembly>

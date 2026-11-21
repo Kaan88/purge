@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Hand-written test fixture: a 32-bit (wow64) component (BL-MANIFEST); not a Microsoft file. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0">
+  <assemblyIdentity name="Purge-Test-Wow64" version="10.0.26100.1" processorArchitecture="wow64" language="neutral" buildType="release" publicKeyToken="31bf3856ad364e35" versionScope="nonSxS" />
+  <file name="purgetest32.dll" destinationPath="$(runtime.system32)\" sourceName="purgetest32.dll" />
+  <directories>
+    <directory destinationPath="$(runtime.programFiles)\PurgeTest" />
+  </directories>
+  <registryKeys>
+    <registryKey keyName="HKEY_CLASSES_ROOT\CLSID\{0D7A1F64-3C2B-4E5A-9F10-0000000000B2}">
+      <registryValue name="" valueType="REG_SZ" value="Purge Test Object (32-bit)" />
+    </registryKey>
+    <registryKey keyName="HKEY_CLASSES_ROOT\CLSID\{0D7A1F64-3C2B-4E5A-9F10-0000000000B2}\InProcServer32">
+      <registryValue name="" valueType="REG_EXPAND_SZ" value="%SystemRoot%\SysWOW64\purgetest32.dll" />
+    </registryKey>
+    <registryKey keyName="HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PurgeTest32">
+      <registryValue name="Version" valueType="REG_SZ" value="1" />
+    </registryKey>
+    <registryKey keyName="HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\PurgeVendor32" />
+    <registryKey keyName="HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\PurgeTest32">
+      <registryValue name="Start" valueType="REG_DWORD" value="3" />
+    </registryKey>
+  </registryKeys>
+</assembly>

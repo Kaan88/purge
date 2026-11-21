@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Hand-written test fixture: per-user keys (BL-MANIFEST); not a Microsoft file. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0">
+  <assemblyIdentity name="Purge-Test-PerUser" version="10.0.26100.1" processorArchitecture="amd64" language="neutral" publicKeyToken="31bf3856ad364e35" versionScope="nonSxS" />
+  <registryKeys>
+    <registryKey keyName="HKEY_CURRENT_USER\Software\Microsoft\PurgeTest\Settings">
+      <registryValue name="Theme" valueType="REG_SZ" value="light" />
+    </registryKey>
+    <registryKey keyName="HKEY_CURRENT_USER\Software\Classes\.purgeuser">
+      <registryValue name="" valueType="REG_SZ" value="PurgeTest.User" />
+    </registryKey>
+    <registryKey keyName="HKEY_USERS\.DEFAULT\Control Panel\PurgeTest">
+      <registryValue name="Delay" valueType="REG_SZ" value="1" />
+    </registryKey>
+  </registryKeys>
+</assembly>
