@@ -6,12 +6,22 @@
 //! resolved with `KF_FLAG_DONT_VERIFY`, so nothing is created and an unavailable redirected folder
 //! still yields its configured path. Other profiles' folders are derived by `purge-source` from
 //! `ProfileList` and the user's `User Shell Folders`, not here.
+//!
+//! # The environment (BL-R1 S4)
+//!
+//! `SHGetKnownFolderPath` expands the stored definition of a folder against the environment of the
+//! calling process: with `SystemDrive=Q:` in the environment, `FOLDERID_ProgramData` is
+//! `Q:\ProgramData` (checked on the host, and pinned by a test below). A medium-integrity process can
+//! choose the environment an elevated process starts with, so an elevated process takes the
+//! directories it trusts from [`system_windows_dir`] and [`machine_program_data`], which read no
+//! environment variable, and still judges each one (`secure::trusted_install_dir`).
 #![cfg(feature = "read")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use windows_sys::Win32::System::Com::CoTaskMemFree;
+use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
 use windows_sys::Win32::UI::Shell::{
     FOLDERID_CommonPrograms, FOLDERID_CommonStartMenu, FOLDERID_CommonStartup,
     FOLDERID_CommonTemplates, FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads,
@@ -27,7 +37,8 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::core::GUID;
 
-use crate::os::{Win32Error, from_wide_ptr};
+use crate::os::{Win32Error, from_wide, from_wide_ptr};
+use crate::reg::{Key, RegRoot, RegView};
 
 /// The Known Folders the engine reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -260,6 +271,87 @@ pub fn all_known_folders() -> Vec<(KnownFolder, PathBuf)> {
         .collect()
 }
 
+/// The Windows directory of the running system (`GetSystemWindowsDirectoryW`), e.g. `C:\Windows`.
+/// It comes from the kernel's record of the boot (the shared user data), not from `%SystemRoot%` or
+/// `%windir%`, so the environment of the process cannot move it. Its volume is the system volume
+/// of M3 design 3.4 (`secure::system_volume`).
+pub fn system_windows_dir() -> Result<PathBuf, Win32Error> {
+    let mut buf = vec![0u16; 260];
+    loop {
+        // SAFETY: `buf` has `buf.len()` writable units.
+        let n = unsafe { GetSystemWindowsDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+        if n == 0 {
+            return Err(Win32Error::last());
+        }
+        if n < buf.len() {
+            return Ok(PathBuf::from(from_wide(&buf[..n])));
+        }
+        // Too small: `n` is the size needed, terminator included.
+        buf.resize(n + 1, 0);
+    }
+}
+
+/// `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`, whose `ProgramData` value is
+/// the stored definition of `FOLDERID_ProgramData`.
+const PROFILE_LIST: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
+
+/// The machine's `ProgramData` directory without the environment: the `ProgramData` value of
+/// `ProfileList` (normally `%SystemDrive%\ProgramData`), with `%SystemDrive%`, `%SystemRoot%` and
+/// `%windir%` taken from [`system_windows_dir`]. Any other variable in the value, a value that is
+/// missing or not a string, or a result that is not an absolute drive path is
+/// `ERROR_INVALID_DATA`: no environment variable is ever consulted.
+///
+/// This is where an elevated Purge puts its data root (`<this>\Purge`); [`known_folder`] for
+/// `ProgramData` follows `%SystemDrive%` of the process and is used only where nothing is trusted
+/// on its word.
+pub fn machine_program_data() -> Result<PathBuf, Win32Error> {
+    let key = Key::open(RegRoot::Hklm, PROFILE_LIST, RegView::K64)?;
+    let raw = key
+        .value("ProgramData")?
+        .and_then(|v| v.as_string())
+        .ok_or(Win32Error::INVALID_DATA)?;
+    expand_machine(&raw, &system_windows_dir()?).ok_or(Win32Error::INVALID_DATA)
+}
+
+/// `raw` with `%SystemDrive%` (the drive of `windows`), `%SystemRoot%` and `%windir%` (`windows`)
+/// replaced, case-insensitively. `None` for any other `%` in `raw`, or when the result is not
+/// `X:\...` with at least one component below the drive.
+fn expand_machine(raw: &str, windows: &Path) -> Option<PathBuf> {
+    const BS: char = '\\';
+    let windows = windows.to_str()?.trim_end_matches(BS);
+    let drive = windows.get(..2).filter(|d| {
+        let b = d.as_bytes();
+        b[0].is_ascii_alphabetic() && b[1] == b':'
+    })?;
+    let mut out = String::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let end = after.find('%')?;
+        let name = &after[..end];
+        if name.eq_ignore_ascii_case("SystemDrive") {
+            out.push_str(drive);
+        } else if name.eq_ignore_ascii_case("SystemRoot") || name.eq_ignore_ascii_case("windir") {
+            out.push_str(windows);
+        } else {
+            return None;
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    let out = out.trim_end_matches(BS);
+    let b = out.as_bytes();
+    let plain = b.len() > 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && b[2] == BS as u8
+        && !out[3..]
+            .split(BS)
+            .any(|c| c.is_empty() || c == "." || c == ".." || c.contains(['%', ':', '/']));
+    plain.then(|| PathBuf::from(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +429,117 @@ mod tests {
             hresult_error(0x8000_4005u32 as i32),
             Win32Error(0x8000_4005)
         );
+    }
+
+    #[test]
+    fn machine_expansion_takes_nothing_from_the_environment() {
+        let win = Path::new(r"C:\Windows");
+        let ok = |raw: &str| expand_machine(raw, win).map(|p| p.to_string_lossy().into_owned());
+        assert_eq!(ok(r"%SystemDrive%\ProgramData").unwrap(), r"C:\ProgramData");
+        assert_eq!(
+            ok(r"%systemdrive%\ProgramData\").unwrap(),
+            r"C:\ProgramData"
+        );
+        assert_eq!(ok(r"%SystemRoot%\Data").unwrap(), r"C:\Windows\Data");
+        assert_eq!(ok(r"%WINDIR%\Data").unwrap(), r"C:\Windows\Data");
+        assert_eq!(ok(r"D:\ProgramData").unwrap(), r"D:\ProgramData");
+        assert_eq!(
+            expand_machine(r"%SystemDrive%\ProgramData", Path::new(r"E:\Win\"))
+                .unwrap()
+                .to_string_lossy(),
+            r"E:\ProgramData"
+        );
+        for bad in [
+            r"%ProgramData%",
+            r"%ALLUSERSPROFILE%\x",
+            r"%SystemDrive%\%USERNAME%",
+            r"%SystemDrive%\ProgramData%",
+            r"%SystemDrive%",
+            r"%SystemDrive%\",
+            r"\\server\share\ProgramData",
+            r"ProgramData",
+            r"%SystemDrive%\a\..\b",
+            r"%SystemDrive%\a\\b",
+            r"%SystemDrive%\a:b",
+            r"%SystemDrive%/ProgramData",
+            "",
+        ] {
+            assert_eq!(expand_machine(bad, win), None, "{bad:?}");
+        }
+        assert_eq!(
+            expand_machine(r"%SystemDrive%\x", Path::new(r"\\?\C:\Windows")),
+            None
+        );
+    }
+
+    #[test]
+    fn machine_folders_agree_with_the_known_folders() {
+        let win = system_windows_dir().unwrap();
+        assert!(same(&win, &known_folder(KnownFolder::Windows).unwrap()));
+        assert!(same(
+            &machine_program_data().unwrap(),
+            &known_folder(KnownFolder::ProgramData).unwrap()
+        ));
+    }
+
+    /// Set by [`a_planted_environment_moves_the_known_folder_not_the_machine_folders`] for its child.
+    const CHILD_VAR: &str = "PURGE_TEST_KNOWN_FOLDERS_CHILD";
+
+    /// The child half: prints what this process sees. Does nothing when run normally.
+    #[test]
+    fn child_prints_folders() {
+        if std::env::var_os(CHILD_VAR).is_none() {
+            return;
+        }
+        let show = |r: Result<PathBuf, Win32Error>| match r {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(e) => format!("error {}", e.code()),
+        };
+        println!("KF={}", show(known_folder(KnownFolder::ProgramData)));
+        println!("MACHINE={}", show(machine_program_data()));
+        println!("WINDOWS={}", show(system_windows_dir()));
+    }
+
+    /// BL-R1 S4, M3 design T7: a process started with `SystemDrive`, `SystemRoot`, `windir`,
+    /// `ProgramData` and `ALLUSERSPROFILE` pointing at a planted tree. The known folder follows
+    /// `SystemDrive` (which is why no elevated decision rests on it); the machine folders do not.
+    #[test]
+    fn a_planted_environment_moves_the_known_folder_not_the_machine_folders() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "known_folders::tests::child_prints_folders",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_VAR, "1")
+            .env("SystemDrive", "Q:")
+            .env("SystemRoot", r"Q:\planted\Windows")
+            .env("windir", r"Q:\planted\Windows")
+            .env("ProgramData", r"Q:\planted\ProgramData")
+            .env("ALLUSERSPROFILE", r"Q:\planted\ProgramData")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(out.status.success(), "{text}");
+        let line = |key: &str| {
+            text.lines()
+                .find_map(|l| l.split_once(&format!("{key}=")).map(|(_, v)| v))
+                .unwrap_or_else(|| panic!("no {key} line in {text}"))
+                .to_owned()
+        };
+        assert!(
+            line("KF").eq_ignore_ascii_case(r"Q:\ProgramData"),
+            "the known folder no longer follows %SystemDrive%: {text}"
+        );
+        assert!(same(
+            Path::new(&line("MACHINE")),
+            &machine_program_data().unwrap()
+        ));
+        assert!(same(
+            Path::new(&line("WINDOWS")),
+            &system_windows_dir().unwrap()
+        ));
+        assert!(!line("MACHINE").starts_with('Q') && !line("WINDOWS").starts_with('Q'));
     }
 }

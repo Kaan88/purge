@@ -1,0 +1,479 @@
+//! The broker's start checks (M3 design 3.4, package M3-HARDEN; BL-R1 S4), run before the pipe or
+//! the store is touched.
+//!
+//! | Order | Check | Failure |
+//! |---|---|---|
+//! | 0 | [`restrict_dll_search`] is the first call of `main` | (none) |
+//! | 1 | The process token is elevated | [`StartFailure::NotElevated`] |
+//! | 2 | Own directory (of the running executable): plain drive path, no reparse point on it, on the system volume, every ancestor writable by administrators only (`purge_win::secure::trusted_install_dir`); the executable itself admin-only writable | [`StartFailure::InstallUntrusted`] |
+//! | 3 | Data root `<ProgramData>\Purge`, `ProgramData` from the machine (`purge_win::known_folders::machine_program_data`), passes the same directory rule, and `StorageRoots::check` passes on it | [`StartFailure::StoreIntegrity`] |
+//! | 4 | KB and baselines are `<own directory>\kb`; `PURGE_KB_DIR` is not read | (none) |
+//!
+//! No directory comes from the environment: the own directory is the running image's path, and
+//! `ProgramData` is read from `ProfileList` with `%SystemDrive%` taken from the running Windows
+//! directory, because the known-folder API itself expands `%SystemDrive%` of the process, which the
+//! caller of `ShellExecuteExW("runas")` chooses (`purge_win::known_folders`, "The environment").
+//!
+//! A failure is one line in the Application event log (source [`EVENT_SOURCE`], event id = exit
+//! code) and on stderr, and the process exit code of [`StartFailure::exit_code`]; the UI shows
+//! "The administrator part could not start" with [`StartFailure::code`].
+//!
+//! The checks read the machine through [`StartFacts`], so their order and the "nothing after a
+//! failure" rule are tested on fakes; [`LiveFacts`] is the machine.
+
+use std::path::{Path, PathBuf};
+
+use purge_engine::pipeline::{Settings, VolumeRule};
+use purge_exec::storage::StorageRoots;
+
+/// The event source of the broker's start failures in the Application log.
+pub const EVENT_SOURCE: &str = "Purge";
+
+/// Why the broker refused to start. Each variant carries the reason in words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartFailure {
+    /// The process token is not elevated, or its elevation could not be read.
+    NotElevated(String),
+    /// The broker's own directory or executable fails the directory rule, or its path could not
+    /// be read.
+    InstallUntrusted(String),
+    /// The data root could not be located, fails the directory rule, or the store's own check
+    /// (`StorageRoots::check`) fails.
+    StoreIntegrity(String),
+}
+
+impl StartFailure {
+    /// The error kind of M3 design 6.4 (`not_elevated`, `install_untrusted`, `store_integrity`).
+    pub fn code(&self) -> &'static str {
+        match self {
+            StartFailure::NotElevated(_) => "not_elevated",
+            StartFailure::InstallUntrusted(_) => "install_untrusted",
+            StartFailure::StoreIntegrity(_) => "store_integrity",
+        }
+    }
+
+    /// The process exit code, one per kind so the UI can name it from the process handle alone:
+    /// 20 `not_elevated`, 21 `install_untrusted`, 22 `store_integrity`. (1 is the stub's "not
+    /// implemented"; the CLI's codes 2 to 12 are not reused.)
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            StartFailure::NotElevated(_) => 20,
+            StartFailure::InstallUntrusted(_) => 21,
+            StartFailure::StoreIntegrity(_) => 22,
+        }
+    }
+
+    /// The reason in words.
+    pub fn reason(&self) -> &str {
+        match self {
+            StartFailure::NotElevated(r)
+            | StartFailure::InstallUntrusted(r)
+            | StartFailure::StoreIntegrity(r) => r,
+        }
+    }
+
+    /// The one line that goes to the event log and stderr.
+    pub fn line(&self) -> String {
+        format!(
+            "purge-broker did not start: {} (exit code {}): {}",
+            self.code(),
+            self.exit_code(),
+            self.reason()
+        )
+    }
+
+    /// Writes [`StartFailure::line`] to the Application event log and to stderr. Failures to
+    /// write are ignored: the exit code still says it.
+    pub fn report(&self) {
+        let line = self.line();
+        let _ = purge_win::eventlog::report_error(EVENT_SOURCE, u32::from(self.exit_code()), &line);
+        eprintln!("{line}");
+    }
+}
+
+/// What the start checks established; everything the broker later reads from disk is below these
+/// directories.
+#[derive(Debug, Clone)]
+pub struct Started<S> {
+    /// The broker's own directory (checked).
+    pub install_dir: PathBuf,
+    /// `<install_dir>\kb`, the knowledge base; its `baselines` subdirectory holds the baselines.
+    pub kb_dir: PathBuf,
+    /// `<ProgramData>\Purge` (checked).
+    pub data_root: PathBuf,
+    /// The system volume (`\\?\volume{…}\`) the checks compared against.
+    pub system_volume: String,
+    /// The store over the data root, checked once.
+    pub store: S,
+}
+
+impl<S> Started<S> {
+    /// The engine settings of the broker's pipeline steps: baselines from `<install_dir>\kb\baselines`
+    /// (never `PURGE_KB_DIR`), the MSI table cache and the local baseline cache under the checked
+    /// data root, the shipped-directory check on and the system-volume rule of the checks.
+    pub fn engine_settings(&self) -> Settings {
+        let path = |p: &Path| p.to_string_lossy().into_owned();
+        Settings {
+            baseline_dir: Some(self.kb_dir.join("baselines")),
+            purge_dirs: vec![path(&self.install_dir), path(&self.data_root)],
+            msi_table_dir: Some(self.data_root.join("fp").join("msitables")),
+            local_baseline_dir: Some(self.data_root.join("baseline")),
+            check_shipped_dir: true,
+            volume_rule: VolumeRule::On(self.system_volume.clone()),
+            local_build: None,
+        }
+    }
+}
+
+/// The facts the start checks read. Every error is a reason in words.
+pub trait StartFacts {
+    /// The store a checked data root opens to.
+    type Store;
+    /// Whether the process token is elevated.
+    fn elevated(&self) -> Result<bool, String>;
+    /// The path of the running executable.
+    fn exe_path(&self) -> Result<PathBuf, String>;
+    /// The directory rule (`purge_win::secure::trusted_install_dir`).
+    fn trusted_dir(&self, dir: &Path) -> Result<(), String>;
+    /// Whether only administrators can write the file and every ancestor.
+    fn trusted_file(&self, file: &Path) -> Result<(), String>;
+    /// The machine's `ProgramData`, not from the environment.
+    fn program_data(&self) -> Result<PathBuf, String>;
+    /// The system volume.
+    fn system_volume(&self) -> Result<String, String>;
+    /// Opens and checks the store at `data_root`.
+    fn open_store(&self, data_root: &Path) -> Result<Self::Store, String>;
+}
+
+/// The live machine.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LiveFacts;
+
+impl StartFacts for LiveFacts {
+    type Store = StorageRoots;
+
+    fn elevated(&self) -> Result<bool, String> {
+        purge_win::sid::is_elevated().map_err(|e| format!("the token's elevation: {e}"))
+    }
+
+    fn exe_path(&self) -> Result<PathBuf, String> {
+        std::env::current_exe().map_err(|e| format!("the executable's path: {e}"))
+    }
+
+    fn trusted_dir(&self, dir: &Path) -> Result<(), String> {
+        purge_win::secure::trusted_install_dir(dir).map_err(|e| e.to_string())
+    }
+
+    fn trusted_file(&self, file: &Path) -> Result<(), String> {
+        match purge_win::sid::is_admin_only_writable(file) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err("a non-administrator can write it".into()),
+            Err(e) => Err(format!("its protection could not be read: {e}")),
+        }
+    }
+
+    fn program_data(&self) -> Result<PathBuf, String> {
+        purge_win::known_folders::machine_program_data()
+            .map_err(|e| format!("the machine's ProgramData: {e}"))
+    }
+
+    fn system_volume(&self) -> Result<String, String> {
+        purge_win::secure::system_volume().map_err(|e| format!("the system volume: {e}"))
+    }
+
+    fn open_store(&self, data_root: &Path) -> Result<StorageRoots, String> {
+        let roots = StorageRoots::new(data_root).map_err(|e| e.to_string())?;
+        roots.check().map_err(|e| e.to_string())?;
+        Ok(roots)
+    }
+}
+
+/// `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`: the first call of the broker's
+/// `main`. A failure leaves the default search order; it has no failure path of its own (the
+/// imports resolved before `main` are covered by the directory check, not by this).
+pub fn restrict_dll_search() {
+    let _ = purge_win::secure::restrict_dll_search();
+}
+
+/// The start checks on the live machine ([`check_with`] of [`LiveFacts`]).
+pub fn check() -> Result<Started<StorageRoots>, StartFailure> {
+    check_with(&LiveFacts)
+}
+
+/// The start checks in the order of the module table. The first failure is returned and nothing
+/// after it is read: a broker that is not elevated looks at no directory, and one whose own
+/// directory fails never locates or opens the store.
+pub fn check_with<F: StartFacts>(facts: &F) -> Result<Started<F::Store>, StartFailure> {
+    match facts.elevated() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(StartFailure::NotElevated(
+                "the process token is not elevated".into(),
+            ));
+        }
+        Err(e) => return Err(StartFailure::NotElevated(e)),
+    }
+
+    let untrusted = |what: &Path, why: String| {
+        StartFailure::InstallUntrusted(format!("{}: {why}", what.display()))
+    };
+    let exe = facts.exe_path().map_err(StartFailure::InstallUntrusted)?;
+    let install_dir = exe
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| untrusted(&exe, "has no directory".into()))?;
+    facts
+        .trusted_dir(&install_dir)
+        .map_err(|why| untrusted(&install_dir, why))?;
+    facts
+        .trusted_file(&exe)
+        .map_err(|why| untrusted(&exe, why))?;
+
+    let store = |what: &Path, why: String| {
+        StartFailure::StoreIntegrity(format!("{}: {why}", what.display()))
+    };
+    let program_data = facts.program_data().map_err(StartFailure::StoreIntegrity)?;
+    let data_root = program_data.join("Purge");
+    facts
+        .trusted_dir(&data_root)
+        .map_err(|why| store(&data_root, why))?;
+    let system_volume = facts
+        .system_volume()
+        .map_err(StartFailure::StoreIntegrity)?;
+    let opened = facts
+        .open_store(&data_root)
+        .map_err(|why| store(&data_root, why))?;
+
+    Ok(Started {
+        kb_dir: install_dir.join("kb"),
+        install_dir,
+        data_root,
+        system_volume,
+        store: opened,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// Facts from a table; every call is recorded.
+    struct Fake {
+        elevated: Result<bool, String>,
+        exe: PathBuf,
+        untrusted_dirs: Vec<PathBuf>,
+        untrusted_files: Vec<PathBuf>,
+        program_data: Result<PathBuf, String>,
+        store: Result<(), String>,
+        calls: RefCell<Vec<String>>,
+    }
+
+    impl Fake {
+        fn passing() -> Fake {
+            Fake {
+                elevated: Ok(true),
+                exe: PathBuf::from(r"C:\Program Files\Purge\purge-broker.exe"),
+                untrusted_dirs: Vec::new(),
+                untrusted_files: Vec::new(),
+                program_data: Ok(PathBuf::from(r"C:\ProgramData")),
+                store: Ok(()),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn note(&self, call: String) {
+            self.calls.borrow_mut().push(call);
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl StartFacts for Fake {
+        type Store = PathBuf;
+
+        fn elevated(&self) -> Result<bool, String> {
+            self.note("elevated".into());
+            self.elevated.clone()
+        }
+
+        fn exe_path(&self) -> Result<PathBuf, String> {
+            self.note("exe".into());
+            Ok(self.exe.clone())
+        }
+
+        fn trusted_dir(&self, dir: &Path) -> Result<(), String> {
+            self.note(format!("dir {}", dir.display()));
+            if self.untrusted_dirs.iter().any(|d| d == dir) {
+                Err("refused by the fake".into())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn trusted_file(&self, file: &Path) -> Result<(), String> {
+            self.note(format!("file {}", file.display()));
+            if self.untrusted_files.iter().any(|f| f == file) {
+                Err("refused by the fake".into())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn program_data(&self) -> Result<PathBuf, String> {
+            self.note("program_data".into());
+            self.program_data.clone()
+        }
+
+        fn system_volume(&self) -> Result<String, String> {
+            self.note("system_volume".into());
+            Ok(r"\\?\volume{1}\".into())
+        }
+
+        fn open_store(&self, data_root: &Path) -> Result<PathBuf, String> {
+            self.note(format!("store {}", data_root.display()));
+            self.store.clone().map(|()| data_root.to_path_buf())
+        }
+    }
+
+    const INSTALL: &str = r"C:\Program Files\Purge";
+    const EXE: &str = r"C:\Program Files\Purge\purge-broker.exe";
+    const ROOT: &str = r"C:\ProgramData\Purge";
+
+    #[test]
+    fn all_checks_pass_in_order() {
+        let f = Fake::passing();
+        let started = check_with(&f).unwrap();
+        assert_eq!(
+            f.calls(),
+            [
+                "elevated".to_owned(),
+                "exe".into(),
+                format!("dir {INSTALL}"),
+                format!("file {EXE}"),
+                "program_data".into(),
+                format!("dir {ROOT}"),
+                "system_volume".into(),
+                format!("store {ROOT}"),
+            ]
+        );
+        assert_eq!(started.install_dir, Path::new(INSTALL));
+        assert_eq!(started.kb_dir, Path::new(r"C:\Program Files\Purge\kb"));
+        assert_eq!(started.data_root, Path::new(ROOT));
+        assert_eq!(started.store, Path::new(ROOT));
+
+        let s = started.engine_settings();
+        assert_eq!(
+            s.baseline_dir.as_deref(),
+            Some(Path::new(r"C:\Program Files\Purge\kb\baselines"))
+        );
+        assert_eq!(s.purge_dirs, [INSTALL, ROOT]);
+        assert_eq!(
+            s.msi_table_dir.as_deref(),
+            Some(Path::new(r"C:\ProgramData\Purge\fp\msitables"))
+        );
+        assert_eq!(
+            s.local_baseline_dir.as_deref(),
+            Some(Path::new(r"C:\ProgramData\Purge\baseline"))
+        );
+        assert!(s.check_shipped_dir);
+        assert_eq!(s.volume_rule, VolumeRule::On(r"\\?\volume{1}\".into()));
+    }
+
+    #[test]
+    fn not_elevated_reads_no_directory() {
+        for elevated in [Ok(false), Err("no token".to_owned())] {
+            let f = Fake {
+                elevated,
+                ..Fake::passing()
+            };
+            let e = check_with(&f).unwrap_err();
+            assert_eq!((e.code(), e.exit_code()), ("not_elevated", 20));
+            assert_eq!(f.calls(), ["elevated"]);
+        }
+    }
+
+    #[test]
+    fn an_untrusted_install_never_reaches_the_store() {
+        let dir = Fake {
+            untrusted_dirs: vec![PathBuf::from(INSTALL)],
+            ..Fake::passing()
+        };
+        let file = Fake {
+            untrusted_files: vec![PathBuf::from(EXE)],
+            ..Fake::passing()
+        };
+        let bare = Fake {
+            exe: PathBuf::from("purge-broker.exe"),
+            ..Fake::passing()
+        };
+        for f in [&dir, &file, &bare] {
+            let e = check_with(f).unwrap_err();
+            assert_eq!(
+                (e.code(), e.exit_code()),
+                ("install_untrusted", 21),
+                "{e:?}"
+            );
+            assert!(
+                !f.calls()
+                    .iter()
+                    .any(|c| c == "program_data" || c.starts_with("store")),
+                "{:?}",
+                f.calls()
+            );
+        }
+        assert!(dir.calls().last().unwrap().starts_with("dir "));
+        assert!(file.calls().last().unwrap().starts_with("file "));
+        assert!(
+            check_with(&dir)
+                .unwrap_err()
+                .line()
+                .contains(r"C:\Program Files\Purge: refused by the fake")
+        );
+    }
+
+    #[test]
+    fn an_untrusted_data_root_is_never_opened() {
+        let root = Fake {
+            untrusted_dirs: vec![PathBuf::from(ROOT)],
+            ..Fake::passing()
+        };
+        let located = Fake {
+            program_data: Err("no ProgramData".into()),
+            ..Fake::passing()
+        };
+        for f in [&root, &located] {
+            let e = check_with(f).unwrap_err();
+            assert_eq!((e.code(), e.exit_code()), ("store_integrity", 22), "{e:?}");
+            assert!(
+                !f.calls().iter().any(|c| c.starts_with("store")),
+                "{:?}",
+                f.calls()
+            );
+        }
+        let failing = Fake {
+            store: Err("index.json is user-writable".into()),
+            ..Fake::passing()
+        };
+        let e = check_with(&failing).unwrap_err();
+        assert_eq!(e.code(), "store_integrity");
+        assert!(
+            e.line().contains("index.json is user-writable"),
+            "{}",
+            e.line()
+        );
+    }
+
+    #[test]
+    fn failure_lines_name_code_and_exit_code() {
+        let e = StartFailure::InstallUntrusted(r"D:\x: on volume a".into());
+        assert_eq!(
+            e.line(),
+            r"purge-broker did not start: install_untrusted (exit code 21): D:\x: on volume a"
+        );
+        assert_eq!(e.reason(), r"D:\x: on volume a");
+    }
+}
