@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Purge.Client;
 using Purge.Client.Model;
 
 namespace Purge.App.Views;
@@ -62,7 +63,7 @@ public sealed partial class ProgramsView : UserControl
     public IReadOnlyList<ProgramRow> All => _all;
 
     /// <summary>Takes the <c>programs.list</c> reply. Called before Activate() when it has already arrived.</summary>
-    public void Load(StartupData data)
+    public void Load(StartupResult data)
     {
         _doc = data.Inventory;
         Rebuild();

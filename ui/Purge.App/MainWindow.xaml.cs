@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Purge.App.Shell;
 using Purge.App.Views;
+using Purge.Client;
 using Windows.Graphics;
 
 namespace Purge.App;
@@ -64,12 +65,34 @@ public sealed partial class MainWindow : Window
 
     private async Task LoadWhenReadyAsync() => OnStartup(await Program.Startup);
 
-    private void OnStartup(StartupData data)
+    private void OnStartup(StartupResult data)
     {
         _programs.Load(data);
-        // The "Administrator" chip shows only when the UI itself runs elevated (7a delta 2).
-        ElevationChip.Visibility = data.Hello.Elevated ? Visibility.Visible : Visibility.Collapsed;
+        // The "Administrator" chip shows only when the UI itself runs elevated (7a delta 2); the token is read
+        // off the UI thread, so it also holds when the engine is not used.
+        ElevationChip.Visibility = data.UiElevated ? Visibility.Visible : Visibility.Collapsed;
         if (data.Error is { } error) _programs.ShowEngineNotice(error);
+    }
+
+    private StackPanel? _barHost;
+
+    /// <summary>Explains the Windows admin prompt the first time; false when the user chose "Not now".</summary>
+    public Task<bool> ConfirmFirstElevationAsync() => ElevationPrompts.ConfirmFirstElevationAsync(Root.XamlRoot, Root.ActualTheme);
+
+    /// <summary>Shows the "You cancelled the admin prompt" bar over the top of the page (built on first use).</summary>
+    public void ShowAdminPromptCancelled(Action? tryAgain = null)
+    {
+        if (_barHost is null && ContentCard.Parent is Grid grid)
+        {
+            _barHost = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(16, 12, 16, 0), Spacing = 8 };
+            Grid.SetColumn(_barHost, 1);
+            grid.Children.Add(_barHost);
+        }
+        if (_barHost is null) return;
+        _barHost.Children.Clear();
+        var bar = ElevationPrompts.CancelledBar(Root.ActualTheme, tryAgain);
+        bar.Closed += (s, _) => _barHost.Children.Remove(s);
+        _barHost.Children.Add(bar);
     }
 
     /// <summary>The S3 review page (built on first use), for the scan started from S1.</summary>

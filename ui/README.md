@@ -2,8 +2,11 @@
 
 The WinUI 3 app. This tree is the stopgap UI imported from commit 0d9c008 by package M3-UI-IMPORT and pruned to the
 M3 pages (docs/M3_DESIGN.md sections 7, 7a and 10). The later UI packages restyle the views, wire them to the
-engine and the broker, and replace the hand-written DTOs. Until the JSON-RPC client lands, the app runs on the
-sample-data stub (`FakeEngineClient`) in every mode, with or without `--sample`; no button changes anything on the PC.
+engine and the broker, and replace the hand-written DTOs. The custom `Main` starts `purge-engine --stdio` (next to
+`Purge.exe`, or the file named by `PURGE_ENGINE`) in a kill-on-close job with two inherited pipes and sends
+`engine.hello` and `programs.list` before XAML starts. `--sample` and `--bench-stub` use the sample-data stub
+(`FakeEngineClient`) instead; so does a missing or failing engine, with a notice in the Programs page. The client
+only lists programs so far: scan, remove and undo wait for the broker, and no button changes anything on the PC.
 
 ## Pages (7a, nine)
 
@@ -26,8 +29,10 @@ chip shows only when `engine.hello` says the UI is elevated).
 ## Projects
 
 - `Purge.App/`: the window (`Purge.exe`). Custom `Main` (`Program.cs`) starts the engine request before XAML init.
-- `Purge.Client/`: `IEngineClient`, `FakeEngineClient` (embedded sample JSON; a test double), hand-written DTOs in
-  `Model/`, and `Cli/EngineDocs` (readers for the engine's JSON documents).
+- `Purge.Client/`: `IEngineClient`, `Stdio/StdioEngineClient` (NDJSON JSON-RPC over the engine's stdin/stdout,
+  `Stdio/EngineProcess` for the CreateProcessW + job launch), `EngineLink` (start-up with the fallback to sample
+  data), `FakeEngineClient` (embedded sample JSON), hand-written DTOs in `Model/`, and `Cli/EngineDocs` (readers for
+  the engine's JSON documents).
 - `Purge.Client.Tests/`: xunit tests and fixtures. `Cli/CliEngineClient.cs` (one engine process per verb, kill-on-close
   job, drain timeout) lives here as a test helper only; it is not a product link.
 
@@ -56,7 +61,7 @@ Development switches:
 
 | Switch | Effect |
 |---|---|
-| `--sample` | Sample data (currently the only mode). |
+| `--sample` | Sample data; the engine is not started. Without it the engine is started, and sample data stands in (with a notice) when it is missing or fails. |
 | `--theme light` / `--theme dark` | Override the Windows theme for this run. |
 | `--page <key>` | Open on `programs`, `queue`, `leftovers`, `history`, `vault` or `settings`. |
 | `--bench-exit` | Close right after the first presented frame (launch bench). |

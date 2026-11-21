@@ -2,7 +2,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Settings;
 using Purge.Client;
-using Purge.Client.Model;
+using Purge.Client.Stdio;
 
 namespace Purge.App;
 
@@ -12,11 +12,17 @@ namespace Purge.App;
 /// </summary>
 public static class Program
 {
-    /// <summary>The engine connection (the sample-data stub until the JSON-RPC client lands).</summary>
-    public static IEngineClient Engine { get; private set; } = null!;
+    private static EngineLink _link = null!;
+
+    /// <summary>The engine connection; the sample-data stub when the engine is not used or could not be.</summary>
+    public static IEngineClient Engine => _link.Client;
 
     /// <summary><c>engine.hello</c> + <c>programs.list</c>, started before XAML init.</summary>
-    public static Task<StartupData> Startup { get; private set; } = null!;
+    public static Task<StartupResult> Startup { get; private set; } = null!;
+
+    /// <summary>Next to <c>Purge.exe</c>, or the file named by <c>PURGE_ENGINE</c> (development).</summary>
+    private static string EnginePath() =>
+        Environment.GetEnvironmentVariable("PURGE_ENGINE") is { Length: > 0 } path ? path : Path.Combine(AppContext.BaseDirectory, "purge-engine.exe");
 
     public static StartupOptions Options { get; private set; } = new();
 
@@ -35,19 +41,18 @@ public static class Program
             return 2;
         }
 
-        // (a) "Always start elevated" re-exec goes here (setting not implemented yet).
-        // (b) The engine link. Until the stdio JSON-RPC client lands (M3-RPC-CLIENT) every run uses the sample-data
-        //     stub, with or without --sample; the one-process-per-verb CLI client is a test helper only.
-        Engine = new FakeEngineClient { BenchRows = Options.BenchStub ? 300 : 0 };
-        // (c) Send engine.hello + programs.list; read on a background thread.
-        Startup = Task.Run(async () =>
-        {
-            var hello = await Engine.HelloAsync().ConfigureAwait(false);
-            LaunchMarkers.Mark("engine_ready");
-            var doc = await Engine.ListProgramsAsync().ConfigureAwait(false);
-            LaunchMarkers.Mark("list_reply");
-            return new StartupData(hello, doc);
-        });
+        // (a) "Always start elevated" re-exec goes here (setting not implemented yet; it moves to M4).
+        // (b) The engine link: purge-engine --stdio in a kill-on-close job with two inherited pipes. --sample and
+        //     --bench-stub (the launch bench) use the sample-data stub instead; so does a missing or failing engine,
+        //     with a notice. The broker and UAC are never touched here.
+        // (c) engine.hello + programs.list are sent and read on a background thread.
+        _link = new EngineLink(
+            open: () => StdioEngineClient.Start(EnginePath()),
+            fallback: () => new FakeEngineClient { BenchRows = Options.BenchStub ? 300 : 0 },
+            sample: Options.Sample || Options.BenchStub,
+            engineReady: () => LaunchMarkers.Mark("engine_ready"),
+            listReply: () => LaunchMarkers.Mark("list_reply"));
+        Startup = _link.Startup;
 
         // (d) The XAML optional changes under test (ENGINE_PLAN.md §9.2 step 8); none is on by default.
         // OptimizeApplyStyles is refused: it stays off on Windows App SDK 2.6.5 (ContentDialog regression).
@@ -79,8 +84,6 @@ public static class Program
     }
 }
 
-public sealed record StartupData(EngineHello Hello, InventoryDoc Inventory, string? Error = null);
-
 /// <summary>Command-line switches for development and the launch bench.</summary>
 public sealed class StartupOptions
 {
@@ -93,7 +96,7 @@ public sealed class StartupOptions
     /// <summary><c>--bench-exit</c>: close the window after the first presented frame (launch bench).</summary>
     public bool BenchExit { get; private init; }
 
-    /// <summary><c>--sample</c>: use the sample data (the only mode until the JSON-RPC client lands).</summary>
+    /// <summary><c>--sample</c>: use the sample data without starting the engine.</summary>
     public bool Sample { get; private init; }
 
     /// <summary><c>--bench-stub</c>: the stub engine answers <c>programs.list</c> with 300 rows after 20 ms (launch bench).</summary>
