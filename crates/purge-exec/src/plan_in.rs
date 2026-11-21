@@ -47,10 +47,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purge_guard::live;
+use purge_guard::prefix;
 use purge_model::ObjectKind;
 use purge_model::exec::journal::{GoneMsiForSid, RestorePointPolicy, RunSettings};
 use purge_model::exec::op::{ExecOp, Mismatch, OpId, Sha256Hex, resolve};
-use purge_model::{Action, Band, Blocker, Candidate, CandidateId};
+use purge_model::{Action, Band, Blocker, Candidate, CandidateId, Target};
 use purge_plan::collapse::nests_in;
 use purge_plan::emit::ScanDoc;
 
@@ -568,7 +569,7 @@ pub fn rebind_interrupted(scan: &ScanDoc, state: &JournalState) -> Result<BoundP
     let pool: Vec<usize> = (start..scan.items.len())
         .filter(|&index| {
             let candidate = &scan.items[index];
-            !candidate.id.0.is_empty() && selectable(scan, candidate).is_ok()
+            !candidate.id.0.is_empty() && selectable(scan, candidate, true).is_ok()
         })
         .collect();
     let chosen = find_selection(&pool, missing, |rest| {
@@ -753,6 +754,9 @@ fn select(scan: &ScanDoc, selection: &Selection) -> Result<Vec<usize>, PlanRefus
 
 /// Step 4, second half: every selected item may be acted on; each gets its op id and executor op.
 fn bind_items(scan: &ScanDoc, selected: &[usize]) -> Result<Vec<BoundItem>, PlanRefusal> {
+    // One index for the whole document: a plan whose candidates never nest (the shape `collapse`
+    // produces) needs no descendant scan at all, which keeps a 5,000-item plan linear-ish.
+    let nested = any_nesting(scan.items.iter().chain(&scan.absorbed));
     let mut items = Vec::with_capacity(selected.len());
     for (position, &index) in selected.iter().enumerate() {
         let candidate = &scan.items[index];
@@ -760,7 +764,7 @@ fn bind_items(scan: &ScanDoc, selected: &[usize]) -> Result<Vec<BoundItem>, Plan
             id: candidate.id.clone(),
             why,
         };
-        let exec_op = selectable(scan, candidate).map_err(refuse)?;
+        let exec_op = selectable(scan, candidate, nested).map_err(refuse)?;
         let number =
             u32::try_from(position + 1).map_err(|_| PlanRefusal::TooManyItems(selected.len()))?;
         items.push(BoundItem {
@@ -774,7 +778,11 @@ fn bind_items(scan: &ScanDoc, selected: &[usize]) -> Result<Vec<BoundItem>, Plan
 
 /// Whether `candidate` may be selected, and the executor op it resolves to (`None`: a service, task or
 /// firewall item without its scan-time digest, which the run skips).
-fn selectable(scan: &ScanDoc, candidate: &Candidate) -> Result<Option<ExecOp>, NotSelectable> {
+fn selectable(
+    scan: &ScanDoc,
+    candidate: &Candidate,
+    check_descendants: bool,
+) -> Result<Option<ExecOp>, NotSelectable> {
     let decision = candidate
         .decision
         .as_ref()
@@ -801,13 +809,61 @@ fn selectable(scan: &ScanDoc, candidate: &Candidate) -> Result<Option<ExecOp>, N
         Err(Mismatch::ReportOnly) => return Err(NotSelectable::ReportOnly),
         Err(other) => return Err(NotSelectable::Unresolvable(other)),
     };
-    live::check_protected_descendants(candidate, scan.items.iter().chain(&scan.absorbed))
-        .map_err(|refusal| NotSelectable::ProtectedDescendant(refusal.blocker))?;
+    if check_descendants {
+        live::check_protected_descendants(candidate, scan.items.iter().chain(&scan.absorbed))
+            .map_err(|refusal| NotSelectable::ProtectedDescendant(refusal.blocker))?;
+    }
     Ok(exec_op)
+}
+
+/// Whether any candidate of `candidates` lies inside another, by the rule of [`nests_in`].
+///
+/// Exact, and O(n log n): sorted by the folded place (a key before the values filed under it, with a
+/// tie-break that puts a key before its own default value), a nesting pair is always adjacent. A path
+/// sorts immediately before its descendants, because anything between them shares its prefix.
+fn any_nesting<'a>(candidates: impl IntoIterator<Item = &'a Candidate>) -> bool {
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Family {
+        /// A registry key.
+        Key,
+        /// A value (or value segment) filed under a key.
+        InKey,
+        /// A file or directory.
+        Fs,
+    }
+    let mut places: Vec<(String, Family, &'a Target)> = Vec::new();
+    for candidate in candidates {
+        let (text, family) = match &candidate.target {
+            Target::Path { path } => (path.as_str(), Family::Fs),
+            Target::RegKey { path } => (path.as_str(), Family::Key),
+            Target::RegValue { path, .. }
+            | Target::RegValueChanged { path, .. }
+            | Target::RegMultiSzSegment { path, .. } => (path.as_str(), Family::InKey),
+            Target::Service { .. }
+            | Target::Task { .. }
+            | Target::FirewallRule { .. }
+            | Target::AppxPackage { .. } => continue,
+        };
+        // A separator below every other character puts a parent immediately before its whole
+        // subtree, so the neighbour of a place is a descendant whenever one exists. (Plain byte
+        // order would put `C:\Vendor2` between `C:\Vendor` and `C:\Vendor\a`.)
+        places.push((
+            prefix::fold(text).replace('\\', "\0"),
+            family,
+            &candidate.target,
+        ));
+    }
+    places.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    places.windows(2).any(|pair| nests_in(pair[1].2, pair[0].2))
 }
 
 /// Step 5: of two selected items where one lies inside the other, the inner one comes first.
 fn check_order(scan: &ScanDoc, items: &[BoundItem]) -> Result<(), PlanRefusal> {
+    // No top-level item lies inside another (`collapse` absorbs such a candidate), so no pair can be
+    // out of order. A crafted document with nesting takes the slow, exact path.
+    if !any_nesting(scan.items.iter()) {
+        return Ok(());
+    }
     for (position, outer) in items.iter().enumerate() {
         let outer = &scan.items[outer.index];
         for inner in &items[position + 1..] {

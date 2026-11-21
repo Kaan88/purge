@@ -9,7 +9,11 @@ license.workspace = true
 
 [dependencies]
 purge-engine = { path = "../purge-engine" }
+purge-identity.workspace = true
+purge-inventory.workspace = true
 purge-model.workspace = true
+purge-plan.workspace = true
+purge-policy.workspace = true
 purge-source.workspace = true
 purge-exec.workspace = true
 purge-rpc.workspace = true

@@ -4,16 +4,16 @@
 //! directories); the command line is read; the parent process is opened and its creation time
 //! compared; the pipe is created (first instance only: a name that exists ends the broker); the
 //! standard handles are closed; the local-baseline build starts on its own thread; and the serving
-//! loop runs until it ends. The methods are not wired yet ([`purge_broker::serve::Unwired`]): the
-//! broker serves `engine.hello` and `broker.shutdown`, and answers every other request with a
-//! `runtime` error.
+//! loop runs until it ends. The handler is [`purge_broker::uninstall::Flow`] over the live machine
+//! (M3-BROKER-FLOW): the methods of the other packages are not wired yet and answer a `runtime` error.
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use purge_broker::baseline::{BuildHandle, LiveHost};
 use purge_broker::lifetime::{SystemClock, codes};
-use purge_broker::serve::{Limits, Unwired, Wiring, run};
+use purge_broker::serve::{Limits, Wiring, run};
+use purge_broker::uninstall::{Flow, LiveMachine};
 use purge_broker::wire::{PipeLink, ProcessParent, TaskDialogConsent};
 use purge_broker::{args, start};
 use purge_engine::pipeline::{self, Sources};
@@ -102,7 +102,7 @@ fn main() -> ExitCode {
         settings.local_build = build.clone();
         let exit = run(Wiring {
             link,
-            handler: Unwired,
+            handler: Flow::new(Arc::new(LiveMachine::new(started.store))),
             expected,
             parent: Arc::new(parent),
             consent: Arc::new(TaskDialogConsent),

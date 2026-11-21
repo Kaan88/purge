@@ -635,6 +635,57 @@ fn the_inner_item_must_come_first() {
     );
 }
 
+/// The quick nesting check is exact, including a sibling whose name continues the parent's.
+#[test]
+fn nesting_is_detected_exactly() {
+    let dir = safe("dir", path(r"C:\Vendor"), Action::Quarantine);
+    let neighbour = safe("neighbour", path(r"C:\Vendor2"), Action::Quarantine);
+    let file = safe("file", path(r"C:\Vendor\a.txt"), Action::Quarantine);
+    assert!(any_nesting([&dir, &file]));
+    assert!(
+        any_nesting([&dir, &neighbour, &file]),
+        "the sibling does not hide the child"
+    );
+    assert!(!any_nesting([&dir, &neighbour]));
+    assert!(
+        !any_nesting([&dir, &dir]),
+        "the same place does not nest in itself"
+    );
+
+    let k = safe("key", key(r"HKLM\SOFTWARE\Vendor"), Action::DeleteKey);
+    let v = safe(
+        "val",
+        value(r"HKLM\SOFTWARE\Vendor", "x"),
+        Action::DeleteValue,
+    );
+    let below = safe(
+        "below",
+        value(r"HKLM\SOFTWARE\Vendor\Sub", "x"),
+        Action::DeleteValue,
+    );
+    assert!(any_nesting([&k, &v]));
+    assert!(any_nesting([&k, &below]));
+    assert!(!any_nesting([&v, &below]));
+}
+
+/// A 5,000-item plan of values that never nest (the shape the consent view's stress test uses) binds
+/// without the quadratic descendant scan (BROKER-FLOW, consent note open point 2).
+#[test]
+fn a_large_plan_without_nesting_binds() {
+    let items: Vec<Candidate> = (0..5_000)
+        .map(|n| {
+            safe(
+                &format!("v{n}"),
+                value(r"HKLM\SOFTWARE\Vendor", &format!("v{n}")),
+                Action::DeleteValue,
+            )
+        })
+        .collect();
+    let scan = scan_doc(items, Vec::new());
+    let bound = bind(&request(&scan, Selection::Preselected)).expect("the plan binds");
+    assert_eq!(bound.items().len(), 5_000);
+}
+
 /// The selection search of a resumed run that stopped in its validation: combinations in
 /// lexicographic order, the first that fits, none when nothing fits or too many are asked for.
 #[test]

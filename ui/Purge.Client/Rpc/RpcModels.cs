@@ -19,6 +19,12 @@ public enum AttentionReason
     NotPreselected,
     [JsonStringEnumMemberName("large")]
     Large,
+    [JsonStringEnumMemberName("no_undo")]
+    NoUndo,
+    [JsonStringEnumMemberName("inside")]
+    Inside,
+    [JsonStringEnumMemberName("name")]
+    Name,
 }
 
 /// <summary>
