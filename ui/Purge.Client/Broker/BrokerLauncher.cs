@@ -121,14 +121,6 @@ public static partial class BrokerLauncher
     private const uint SeeMaskNoAsync = 0x00000100;
     private const int SwHide = 0;
     private const int ErrorCancelled = 1223;
-    private const uint GenericRead = 0x80000000;
-    private const uint GenericWrite = 0x40000000;
-    private const uint FileShareRead = 0x00000001;
-    private const uint FileShareWrite = 0x00000002;
-    private const uint OpenExisting = 3;
-    private const uint FileAttributeNormal = 0x00000080;
-    private const uint SecuritySqosPresent = 0x00100000;
-    private const uint SecurityIdentification = 0x00010000;
     private const int ErrorFileNotFound = 2;
     private const int ErrorPipeBusy = 231;
     private const int ErrorSemTimeout = 121;
@@ -213,25 +205,18 @@ public static partial class BrokerLauncher
         {
             while (true)
             {
-                var raw = CreateFile(path, GenericRead | GenericWrite, FileShareRead | FileShareWrite, 0, OpenExisting,
-                    FileAttributeNormal | SecuritySqosPresent | SecurityIdentification, 0);
-                if (raw != -1 && raw != 0)
+                var open = BrokerPipe.TryOpen(path, (int)pid, brokerPath);
+                if (open.Check is { } failed)
                 {
-                    var pipe = new SafeFileHandle(raw, ownsHandle: true);
-                    var check = BrokerServerCheck.Check(pipe, (int)pid, brokerPath);
-                    if (!check.Ok)
-                    {
-                        pipe.Dispose();
-                        Terminate(process);
-                        return BrokerLaunchResult.Failed(BrokerLaunchStatus.ServerCheckFailed, check.Reason);
-                    }
-                    // FileStream takes ownership of the pipe handle; closing the stream closes the client end.
-                    var stream = new FileStream(pipe, FileAccess.ReadWrite, 64 * 1024, isAsync: false);
-                    var rpc = BrokerRpcClient.Over(stream, ownsStream: true);
+                    Terminate(process);
+                    return BrokerLaunchResult.Failed(BrokerLaunchStatus.ServerCheckFailed, failed.Reason);
+                }
+                if (open.Stream is not null)
+                {
+                    var rpc = BrokerRpcClient.Over(open.TakeStream(), ownsStream: true);
                     return BrokerLaunchResult.Started(new BrokerSession(rpc, process, (int)pid, brokerPath));
                 }
-
-                var error = Marshal.GetLastWin32Error();
+                var error = open.Win32Error;
                 if (error != ErrorPipeBusy && error != ErrorFileNotFound && error != ErrorSemTimeout)
                     return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart,
                         "Purge could not connect to the administrator part. " + new Win32Exception(error).Message, error);
@@ -377,10 +362,6 @@ public static partial class BrokerLauncher
     [LibraryImport("shell32.dll", EntryPoint = "ShellExecuteExW", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static unsafe partial bool ShellExecuteEx(ShellExecuteInfo* info);
-
-    [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
-    private static partial nint CreateFile(string fileName, uint access, uint share, nint security, uint creation,
-        uint flags, nint template);
 
     [LibraryImport("kernel32.dll")]
     private static partial nint GetCurrentProcess();
