@@ -10,7 +10,7 @@ use purge_engine::pipeline::Sources;
 use purge_exec::act_typed::WinPackages;
 use purge_exec::execute;
 use purge_exec::journal::{self, JournalError, UndoState};
-use purge_exec::locked::SystemPendingRenames;
+use purge_exec::locked::{ReconcileAlert, SystemPendingRenames};
 use purge_exec::plan_in::BoundPlan;
 use purge_exec::prepare::RestartManager;
 use purge_exec::recover::{
@@ -30,7 +30,7 @@ use purge_model::exec::session::{
 use purge_model::{FileTime, ProgramId};
 use purge_rpc::error::Outcome;
 use purge_rpc::methods::{
-    ConflictRow, HistoryDetail, HistoryItem, OutcomeResult, PendingSession, UndoResult,
+    Alert, ConflictRow, HistoryDetail, HistoryItem, OutcomeResult, PendingSession, UndoResult,
 };
 use purge_source::filesystem::FileSystemSource;
 use purge_source::live::Live;
@@ -206,7 +206,28 @@ fn undo_result(out: &UndoOutput, plan: &BoundPlan) -> UndoResult {
             ModelUndoResult::Finished { .. } => None,
         })
         .collect();
-    UndoResult { outcome, conflicts }
+    UndoResult {
+        outcome,
+        conflicts,
+        alerts: out.alerts.iter().map(alert_of).collect(),
+    }
+}
+
+/// The RPC form of a reconcile alert (review M3-R2 S5).
+fn alert_of(alert: &ReconcileAlert) -> Alert {
+    Alert {
+        op: alert.op,
+        original_path: alert.original_path.clone(),
+        moved_back: alert.moved_back,
+    }
+}
+
+/// The source path of a quarantine move, for a history row's alert; other targets have none.
+fn original_path_of(target: &purge_model::Target) -> String {
+    match target {
+        purge_model::Target::Path { path } => path.clone(),
+        _ => String::new(),
+    }
 }
 
 /// What one recovery did to the items, and whether the session ended recorded (closed, with its report
@@ -343,6 +364,19 @@ impl Backend for LiveBackend {
                     ItemFacts::File(facts) => Some(facts.is_dir),
                     _ => None,
                 };
+                let alert = op.reconciles.iter().rev().find_map(|result| match result {
+                    ReconcileResult::MismatchMovedBack => Some(Alert {
+                        op: op.op,
+                        original_path: original_path_of(&op.target),
+                        moved_back: true,
+                    }),
+                    ReconcileResult::MismatchKept { .. } => Some(Alert {
+                        op: op.op,
+                        original_path: original_path_of(&op.target),
+                        moved_back: false,
+                    }),
+                    _ => None,
+                });
                 HistoryItem {
                     op: op.op,
                     display_name: display_name(&op.target, candidate),
@@ -352,6 +386,7 @@ impl Backend for LiveBackend {
                         op.undo,
                         UndoState::Finished(UndoOutcome::Restored | UndoOutcome::AlreadyRestored)
                     ),
+                    alert,
                 }
             })
             .collect();
@@ -419,11 +454,11 @@ impl Backend for LiveBackend {
                 &mut pending,
             )
         };
-        let outcome = match want {
+        let (outcome, alerts) = match want {
             Want::RetryHeld => {
                 let out = recover::retry_held_expecting(session, env, &preview.mark)
                     .map_err(|e| recover_error(session, e))?;
-                retried_outcome(&out)
+                (retried_outcome(&out), Vec::new())
             }
             Want::Resume | Want::Rollback => {
                 let out = if want == Want::Resume {
@@ -432,9 +467,10 @@ impl Backend for LiveBackend {
                     recover::rollback_expecting(session, env, &preview.mark)
                 }
                 .map_err(|e| recover_error(session, e))?;
-                recovered_outcome(&out, self.report_present(session))
+                let outcome = recovered_outcome(&out, self.report_present(session));
+                (outcome, out.alerts.iter().map(alert_of).collect())
             }
         };
-        Ok(OutcomeResult { outcome })
+        Ok(OutcomeResult { outcome, alerts })
     }
 }

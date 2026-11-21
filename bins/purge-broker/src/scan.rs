@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use purge_engine::pipeline;
 use purge_model::{
-    Action, Band, BaselineTrust, Candidate, CandidateId, Fingerprint, ScanMode, Target,
+    Action, Band, BaselineTrust, Candidate, CandidateId, Fingerprint, ProgramId, ScanMode, Target,
 };
 use purge_policy::explain;
 use purge_rpc::error::{ErrorData, ErrorObject, IdKind, Refusal};
@@ -49,6 +49,9 @@ pub struct Scan {
     pub baseline_trust: BaselineTrust,
     /// The uninstall session it came from; `None` for a stored fingerprint.
     pub session: Option<UninstallSessionId>,
+    /// The program it scanned. A run of this program spends every scan of it, not only the plan's
+    /// (review M3-R2 S2).
+    pub program: ProgramId,
     /// The app's display name, as the broker's own fingerprint names it.
     pub app_name: String,
     /// The install roots of the fingerprint the scan ran with, for the plan's object binding.
@@ -63,6 +66,9 @@ pub struct Scan {
     /// `plan.create` of the same scan is refused until the plan is taken
     /// ([`crate::plan::Plan::release`]).
     live_plan: AtomicU64,
+    /// A run of the same program started: this scan describes the machine before it and can no longer
+    /// be planned (review M3-R2 S2).
+    spent: std::sync::atomic::AtomicBool,
 }
 
 impl Scan {
@@ -86,9 +92,11 @@ impl Scan {
             warnings: Vec::new(),
             baseline_trust: BaselineTrust::None,
             session: None,
+            program: fingerprint.app.program_id.clone(),
             user_sid: user_sid.to_owned(),
             fingerprint: Arc::new(fingerprint),
             live_plan: AtomicU64::new(0),
+            spent: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -105,6 +113,16 @@ impl Scan {
         self.live_plan
             .compare_exchange(plan.bits(), 0, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
+    }
+
+    /// Whether a run of this scan's program has started: the scan describes the machine before it.
+    pub fn spent(&self) -> bool {
+        self.spent.load(Ordering::SeqCst)
+    }
+
+    /// Marks the scan spent (a run of its program started; no plan can be made from it again).
+    pub fn spend(&self) {
+        self.spent.store(true, Ordering::SeqCst);
     }
 }
 
@@ -206,11 +224,13 @@ pub(crate) fn handle<H: FlowHandler>(
         warnings: warnings.clone(),
         baseline_trust,
         session,
+        program: fingerprint.app.program_id.clone(),
         app_name: fingerprint.app.display_name.clone(),
         program_roots,
         user_sid: ctx.user_sid().to_owned(),
         fingerprint: Arc::new(fingerprint),
         live_plan: AtomicU64::new(0),
+        spent: std::sync::atomic::AtomicBool::new(false),
     };
     let scan_id = ctx.add_scan(scan)?;
     serde_json::to_value(ScanResult {

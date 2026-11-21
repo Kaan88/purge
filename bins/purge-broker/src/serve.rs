@@ -262,12 +262,19 @@ struct Shared<H: Handler> {
     lost: AtomicBool,
     /// Stops the reader.
     stop: AtomicBool,
+    /// A write failed: the pipe is broken. Set before the event is sent, because the supervisor may be
+    /// the one that found it and the channel may be full (review M3-R2 S1).
+    broken: AtomicBool,
     events: SyncSender<Event>,
 }
 
 impl<H: Handler> Shared<H> {
     fn mark_broken(&self) {
-        let _ = self.events.send(Event::PipeBroken);
+        // Never blocks: this is reached from `respond`, which the supervisor calls itself, so a
+        // blocking send into a full channel would stop the only receiver. The supervisor reads
+        // `broken` on every tick, so the event is only a way to wake it sooner.
+        self.broken.store(true, Ordering::SeqCst);
+        let _ = self.events.try_send(Event::PipeBroken);
     }
 
     fn respond(&self, id: RequestId, body: Result<Value, ErrorObject>) {
@@ -576,6 +583,7 @@ pub fn run<L: Link, H: Handler>(mut w: Wiring<L, H>) -> Exit {
         user_sid: expected.user_sid.clone(),
         lost: AtomicBool::new(false),
         stop: AtomicBool::new(false),
+        broken: AtomicBool::new(false),
         events: events.clone(),
     });
     let reader = {
@@ -750,6 +758,12 @@ impl<H: Handler> Core<H> {
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return ExitReason::PipeLost,
+            }
+            // A failed write may not have reached the queue (`mark_broken` uses `try_send`): the flag
+            // is the truth, read every tick.
+            if self.shared.broken.load(Ordering::SeqCst) && self.drain.is_none() && lost.is_none() {
+                lost = Some(ExitReason::PipeLost);
+                lost_at = now;
             }
             if lost.is_none() && self.drain.is_none() && self.parent.exited() {
                 lost = Some(ExitReason::ParentLost);

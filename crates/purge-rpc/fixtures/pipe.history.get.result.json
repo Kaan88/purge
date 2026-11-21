@@ -1,6 +1,11 @@
 {
   "items": [
     {
+      "alert": {
+        "moved_back": true,
+        "op": 1,
+        "original_path": "C:\\Program Files\\Git"
+      },
       "display_name": "C:\\Program Files\\Git",
       "kind": "folder",
       "op": 1,

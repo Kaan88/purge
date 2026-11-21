@@ -26,6 +26,29 @@
     "items"
   ],
   "$defs": {
+    "Alert": {
+      "description": "Another object was found in quarantine in place of the one a boot-time move recorded: Purge moved\nit back, or kept it there because it could not (review M3-R2 S5, ruling 1).",
+      "type": "object",
+      "properties": {
+        "moved_back": {
+          "description": "Whether the other object was moved back to `original_path`; `false` when it is kept in\nquarantine.",
+          "type": "boolean"
+        },
+        "op": {
+          "description": "The op whose boot-time move this reconcile looked at.",
+          "$ref": "#/$defs/OpId"
+        },
+        "original_path": {
+          "description": "The source path the boot-time move was to take.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "original_path",
+        "moved_back"
+      ]
+    },
     "Blocker": {
       "description": "A reason against removing a candidate. Serialised as an object tagged by `\"kind\"`, e.g.\n`{\"kind\":\"ReferencedByOtherApp\",\"app\":\"Mozilla Thunderbird\"}`.",
       "oneOf": [
@@ -611,6 +634,17 @@
       "description": "One item of `history.get`.",
       "type": "object",
       "properties": {
+        "alert": {
+          "description": "A reconcile that found another object in quarantine in this op's place (review M3-R2 S5).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Alert"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "display_name": {
           "description": "The name shown.",
           "type": "string"

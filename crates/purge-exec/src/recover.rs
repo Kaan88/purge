@@ -863,6 +863,9 @@ pub struct RecoverOutput {
     pub index_updated: bool,
     /// Anything else the user should know.
     pub warnings: Vec<String>,
+    /// Objects reconcile found in quarantine in place of the recorded ones: the client reports them
+    /// (review M3-R2 S5).
+    pub alerts: Vec<locked::ReconcileAlert>,
 }
 
 /// Continues an interrupted session to the end its run would have reached (`journal resume`; see the
@@ -1132,6 +1135,7 @@ fn recover(
         retries: Vec::new(),
         index_updated: false,
         warnings: Vec::new(),
+        alerts: Vec::new(),
     };
     env.roots.check()?;
     let session = env.roots.open_session(id)?;
@@ -1367,7 +1371,7 @@ fn rollback_run(
             retry: &env.retry,
             objects: env.objects,
         };
-        driver.reconcile(&mut out.warnings)?;
+        driver.reconcile(&mut out.warnings, &mut out.alerts)?;
         driver.run(&undo_order(&read.records, &all))
     };
     out.undone.extend(covered.items);
@@ -1510,7 +1514,7 @@ fn finish_tail(
                     retry: &env.retry,
                     objects: env.objects,
                 };
-                driver.reconcile(&mut out.warnings)?;
+                driver.reconcile(&mut out.warnings, &mut out.alerts)?;
                 driver.run(&undo_order(&read.records, &undoing))
             };
             out.undone.extend(covered.items);

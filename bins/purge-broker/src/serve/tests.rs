@@ -801,3 +801,71 @@ fn the_build_is_asked_to_stop_at_every_end() {
     h.exit(SECS);
     assert!(h.build.stopped.load(Ordering::SeqCst));
 }
+
+/// M3-R2 S1: `mark_broken` is reached from `respond`, on the supervisor thread, which is the only
+/// receiver of the event channel. A full channel must not make it block: the flag it sets is read by
+/// the supervisor every tick.
+#[test]
+fn a_full_event_channel_does_not_block_the_pipe_broken_signal() {
+    use std::io;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc::sync_channel;
+
+    use purge_engine::pipeline::Settings;
+
+    use crate::lifetime::Closer;
+    use crate::serve::{Consent, Event, Out, Shared, Unwired};
+
+    struct NullOut;
+    impl Out for NullOut {
+        fn write_line(&self, _: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct NoConsent;
+    impl Consent for NoConsent {
+        fn ask(
+            &self,
+            _: &[purge_win::taskdialog::Page],
+            _: i32,
+            _: &Closer,
+            _: &(dyn Fn() + Sync),
+        ) -> io::Result<Outcome> {
+            Ok(Outcome::Declined)
+        }
+    }
+
+    let (events, _rx) = sync_channel(1);
+    events
+        .send(Event::ReaderEnded)
+        .expect("the channel takes one");
+    let shared = Arc::new(Shared::<Unwired> {
+        tables: crate::session::Tables::new(),
+        out: Box::new(NullOut),
+        consent: Arc::new(NoConsent),
+        closer: Closer::new(),
+        build: None,
+        settings: Settings::default(),
+        user_sid: "S-1-5-21-1-2-3-1001".into(),
+        lost: AtomicBool::new(false),
+        stop: AtomicBool::new(false),
+        broken: AtomicBool::new(false),
+        events,
+    });
+
+    let worker = shared.clone();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        worker.mark_broken();
+        let _ = finished_tx.send(());
+    });
+    finished_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("mark_broken must not block on a full event channel");
+    assert!(
+        shared.broken.load(Ordering::SeqCst),
+        "the supervisor reads this flag every tick"
+    );
+}

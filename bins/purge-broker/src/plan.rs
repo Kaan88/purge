@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use purge_exec::plan_in::{self, BoundPlan, ExecRequest, ExecSettings, PlanRefusal, Selection};
 use purge_model::exec::op::Sha256Hex;
-use purge_model::{Band, Candidate, CandidateId, Fingerprint};
+use purge_model::{Band, Candidate, CandidateId, Fingerprint, ProgramId};
 use purge_rpc::error::{ErrorData, ErrorObject, Refusal};
 use purge_rpc::methods::{
     AttentionItem, AttentionReason, CandidateRef, ConfirmCode, PlanCounts, PlanCreateParams,
@@ -45,6 +45,8 @@ pub struct Plan {
     pub scan_id: ScanId,
     /// The uninstall session the scan came from, when it came from one.
     pub session: Option<UninstallSessionId>,
+    /// The program the plan acts on: a run spends every scan of it (review M3-R2 S2).
+    pub program: ProgramId,
     /// The executor settings the broker decided when the plan was made (the account, the program roots).
     pub settings: ExecSettings,
     /// The program's name as the scan's fingerprint has it, for the dialog.
@@ -105,6 +107,20 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
     };
     let slot = ctx.tables().scans.get(scan_id)?;
     let scan = &slot.scan;
+    if scan.spent() {
+        return Err(plan_refused(vec![Refusal {
+            candidate_id: None,
+            reason: "the program of this scan was already uninstalled; scan again".into(),
+        }]));
+    }
+    if let Some(session) = scan.session
+        && ctx.tables().sessions.get(session).is_err()
+    {
+        return Err(plan_refused(vec![Refusal {
+            candidate_id: None,
+            reason: "the uninstall session of this scan is gone; scan again".into(),
+        }]));
+    }
     check_unique(&scan.doc)?;
 
     // The ids this request names, in the selection's own order (the hash sorts them).
@@ -265,6 +281,7 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
     let plan = Plan {
         scan_id,
         session: scan.session,
+        program: scan.program.clone(),
         settings,
         app_name: scan.app_name.clone(),
         fingerprint: scan.fingerprint.clone(),

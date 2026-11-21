@@ -151,15 +151,44 @@ pub fn run<H: FlowHandler>(
 ) -> Result<Value, ErrorObject> {
     // A plan id works once, whatever happens next.
     let plan = ctx.tables().plans.take(params.plan_id)?;
+    // A sibling scan of the same program may have been planned before that program's run started; its
+    // document describes the machine before the run (review M3-R2 S2), so it is refused as well.
+    if ctx
+        .tables()
+        .scans
+        .get(plan.scan_id)
+        .is_ok_and(|slot| slot.scan.spent())
+    {
+        plan.release(ctx.tables(), params.plan_id);
+        return Err(ErrorObject::server(ErrorData::PlanRefused {
+            refusals: vec![Refusal {
+                candidate_id: None,
+                reason: "the program of this plan was already uninstalled; scan again".into(),
+            }],
+        }));
+    }
     let ran = Cell::new(false);
     let result = execute_plan(ctx, backend, check_nothing_pending, &plan, &params, &ran);
     if !ran.get() {
         // Nothing was changed: the scan can have its next plan.
         plan.release(ctx.tables(), params.plan_id);
-    } else if let Some(session) = plan.session {
-        // The uninstall session is spent (design 3.6: a completed change with no session left ends
-        // the broker).
-        ctx.tables().sessions.remove(session);
+    } else {
+        // The run spends every scan of this program, not only the plan's: a scan made before the run
+        // describes the machine before it, and a second plan from one would be a second run of the
+        // same items (review M3-R2 S2).
+        let tables = ctx.tables();
+        for id in tables.scans.ids() {
+            if let Ok(slot) = tables.scans.get(id)
+                && slot.scan.program == plan.program
+            {
+                slot.scan.spend();
+            }
+        }
+        if let Some(session) = plan.session {
+            // The uninstall session is spent (design 3.6: a completed change with no session left
+            // ends the broker).
+            tables.sessions.remove(session);
+        }
     }
     result
 }

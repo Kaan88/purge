@@ -750,6 +750,11 @@ mod api_tests {
                         kind: ItemKind::Folder,
                         outcome: ItemOutcome::Done,
                         undone: false,
+                        alert: Some(Alert {
+                            op: OpId(1),
+                            original_path: "C:\\Program Files\\Git".into(),
+                            moved_back: true,
+                        }),
                     }],
                 }),
             );
@@ -761,6 +766,11 @@ mod api_tests {
                         op: OpId(3),
                         display_name: "C:\\Program Files\\Git\\etc".into(),
                         conflict: UndoConflict::DestinationExists,
+                    }],
+                    alerts: vec![Alert {
+                        op: OpId(2),
+                        original_path: "C:\\Program Files\\Git\\cmd".into(),
+                        moved_back: true,
                     }],
                 }),
             );
@@ -780,18 +790,21 @@ mod api_tests {
                 "pipe.journal.resume.result",
                 v(OutcomeResult {
                     outcome: Outcome::Complete,
+                    alerts: Vec::new(),
                 }),
             );
             put(
                 "pipe.journal.rollback.result",
                 v(OutcomeResult {
                     outcome: Outcome::NotClosed,
+                    alerts: Vec::new(),
                 }),
             );
             put(
                 "pipe.journal.retry_held.result",
                 v(OutcomeResult {
                     outcome: Outcome::Partial,
+                    alerts: Vec::new(),
                 }),
             );
             put(

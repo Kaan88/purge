@@ -93,7 +93,9 @@ use crate::gate::{GateCtx, GateItem, GateSetupError};
 use crate::journal::{
     self, JournalError, JournalState, JournalWriter, OpState, OpStatus, UndoState, UndoToken,
 };
-use crate::locked::{self, LockUndo, PendingRenames, ReconcileVerdict, StoreLadder};
+use crate::locked::{
+    self, LockUndo, PendingRenames, ReconcileAlert, ReconcileVerdict, StoreLadder,
+};
 use crate::plan_in::BoundPlan;
 use crate::report;
 use crate::review;
@@ -181,6 +183,9 @@ pub struct UndoOutput {
     /// Set when the run stopped early because the journal could not be written: the error. The ops
     /// after the failure were not touched.
     pub stopped: Option<String>,
+    /// Objects reconcile found in quarantine in place of the recorded ones: the client reports them
+    /// (review M3-R2 S5).
+    pub alerts: Vec<ReconcileAlert>,
 }
 
 /// Why an undo run did not start. Nothing was changed.
@@ -745,7 +750,11 @@ impl Driver<'_> {
     /// Reconciles the session's pending boot-time moves and journals what was found. "Still pending"
     /// and "cannot be told" decide nothing and are not journalled, so reconciling twice writes
     /// nothing the second time.
-    pub(crate) fn reconcile(&mut self, warnings: &mut Vec<String>) -> Result<(), JournalError> {
+    pub(crate) fn reconcile(
+        &mut self,
+        warnings: &mut Vec<String>,
+        alerts: &mut Vec<ReconcileAlert>,
+    ) -> Result<(), JournalError> {
         if self.journal.state().pending_reboot().next().is_none() {
             return Ok(());
         }
@@ -761,6 +770,7 @@ impl Driver<'_> {
         };
         for reconciled in found {
             if let Some(alert) = &reconciled.alert {
+                alerts.push(alert.clone());
                 warnings.push(format!(
                     "op {}: another object than the recorded one was found in quarantine at {} ({}): {}",
                     reconciled.op,
@@ -1372,6 +1382,7 @@ fn run_undo(
 ) -> Result<UndoOutput, UndoError> {
     let started = now();
     let mut warnings = Vec::new();
+    let mut alerts = Vec::new();
     env.roots.check()?;
     let session = env.roots.open_session(&request.session)?;
     let index = read_index(env.roots, &mut warnings)?;
@@ -1424,7 +1435,7 @@ fn run_undo(
     };
     let all: BTreeSet<OpId> = requested.union(&pulled_in).copied().collect();
     let covered = match driver
-        .reconcile(&mut warnings)
+        .reconcile(&mut warnings, &mut alerts)
         .and_then(|()| plan_undo(driver.journal, &undo_order(&read.records, &all)))
     {
         Ok(order) => driver.run(&order),
@@ -1510,5 +1521,6 @@ fn run_undo(
         index_updated,
         labels_file,
         stopped,
+        alerts,
     })
 }

@@ -4,6 +4,14 @@
   "description": "`journal.resume`, `journal.rollback`, `journal.retry_held`.",
   "type": "object",
   "properties": {
+    "alerts": {
+      "description": "Objects reconcile found in quarantine in place of the recorded ones.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Alert"
+      }
+    },
     "outcome": {
       "description": "What the run did.",
       "$ref": "#/$defs/Outcome"
@@ -13,6 +21,35 @@
     "outcome"
   ],
   "$defs": {
+    "Alert": {
+      "description": "Another object was found in quarantine in place of the one a boot-time move recorded: Purge moved\nit back, or kept it there because it could not (review M3-R2 S5, ruling 1).",
+      "type": "object",
+      "properties": {
+        "moved_back": {
+          "description": "Whether the other object was moved back to `original_path`; `false` when it is kept in\nquarantine.",
+          "type": "boolean"
+        },
+        "op": {
+          "description": "The op whose boot-time move this reconcile looked at.",
+          "$ref": "#/$defs/OpId"
+        },
+        "original_path": {
+          "description": "The source path the boot-time move was to take.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "original_path",
+        "moved_back"
+      ]
+    },
+    "OpId": {
+      "description": "The number of one op within a session, counted from 1 in plan order.\n\nEvery selected plan item gets an op id, whether or not it ends up acted on. The id also names the op's\ndirectory and backup files, through [`OpId::file_stem`]. Reading `0` fails: no op has that id. That\nan id is at most the header's item count is checked where the journal is read.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1
+    },
     "Outcome": {
       "description": "What a run did. Carried by results; not an error.",
       "oneOf": [
