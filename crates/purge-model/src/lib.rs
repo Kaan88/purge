@@ -26,6 +26,7 @@
 mod appref;
 mod blocker;
 mod candidate;
+pub mod cap;
 mod evidence;
 pub mod exec;
 mod fingerprint;
@@ -43,6 +44,7 @@ mod target;
 pub use appref::AppRef;
 pub use blocker::Blocker;
 pub use candidate::{Action, Candidate, Decision, Harm, ItemFp, Origin, Reversibility};
+pub use cap::{CAP_ABSOLUTE_BYTES, CAP_VOLUME_PERCENT, cap_bytes};
 pub use evidence::{Evidence, EvidenceKind, Facts, ManifestKind, Tier};
 pub use fingerprint::{
     AnchorKind, AnchorRef, Anchors, AppFileOutsideRoot, BaselineTrust, BaselineViewRef,

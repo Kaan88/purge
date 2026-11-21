@@ -5,19 +5,7 @@ use purge_model::exec::session::{SessionIndex, VolumeUsage};
 
 use super::StorageError;
 
-/// The absolute part of the cap: 10 GiB per volume.
-pub const CAP_ABSOLUTE_BYTES: u64 = 10 * (1 << 30);
-/// The relative part of the cap: 5 % of the volume's total size.
-pub const CAP_VOLUME_PERCENT: u64 = 5;
-
-/// The cap for a volume of `volume_total` bytes: min([`CAP_ABSOLUTE_BYTES`], 5 % of the volume),
-/// rounded down.
-pub fn cap_bytes(volume_total: u64) -> u64 {
-    let share = u128::from(volume_total) * u128::from(CAP_VOLUME_PERCENT) / 100;
-    u64::try_from(share)
-        .unwrap_or(u64::MAX)
-        .min(CAP_ABSOLUTE_BYTES)
-}
+pub use purge_model::cap::{CAP_ABSOLUTE_BYTES, CAP_VOLUME_PERCENT, cap_bytes};
 
 /// A run refused because its backups would push a volume over the cap.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

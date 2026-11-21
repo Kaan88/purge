@@ -14,7 +14,7 @@
 //! | Code | [`Exit`] | When |
 //! |---|---|---|
 //! | 0 | `Ok` | success |
-//! | 1 | `NotImplemented` | `kb lint`, `--stdio`, `--broker` (later milestones) |
+//! | 1 | `NotImplemented` | `kb lint` (a later milestone) |
 //! | 2 | `Usage` | a usage error or a broken precondition (unknown program id, unreadable input file, `--mode post` without an uninstall window, no quiet uninstall command; an unknown session, a store that is not installed, a malformed fault or clock variable) |
 //! | 3 | `Runtime` | a runtime error (an output file cannot be written) |
 //! | 4 | `UninstallFailed` | the uninstaller failed, was cancelled or timed out (`run.json` is still written) |
@@ -406,7 +406,22 @@ fn run_inner(
         ),
         Invocation::BaselineInfo(a) => baseline::info_verb(&a, env),
         Invocation::Hello => hello(env),
+        Invocation::Stdio => run_stdio(env),
         Invocation::Executor(verb) => executor(verb, env),
+    }
+}
+
+/// `--stdio`: the medium engine's JSON-RPC server until stdin ends. Read-only plus `UserRun`; it
+/// writes only the stored program list under `%LOCALAPPDATA%\Purge`.
+fn run_stdio(env: &mut Env<'_>) -> Exit {
+    let sources = env.sources;
+    let settings = env.settings.clone();
+    match crate::stdio::serve_stdio(sources, settings, &mut *env.stdout) {
+        Ok(()) => Exit::Ok,
+        Err(e) => {
+            env.error(&format!("stdio: {e}"));
+            Exit::Runtime
+        }
     }
 }
 
@@ -848,16 +863,11 @@ mod tests {
 
     #[test]
     fn later_milestones_report_not_implemented() {
-        for line in [
-            "--stdio",
-            "--broker --pipe p --parent 1 --parent-ctime 2",
-            "kb lint a.json",
-        ] {
-            let (exit, out, err) = run_line(line);
-            assert_eq!(exit, Exit::NotImplemented, "{line}");
-            assert!(out.is_empty(), "{line}");
-            assert!(err.contains("not implemented yet"), "{line}: {err}");
-        }
+        let line = "kb lint a.json";
+        let (exit, out, err) = run_line(line);
+        assert_eq!(exit, Exit::NotImplemented, "{line}");
+        assert!(out.is_empty(), "{line}");
+        assert!(err.contains("not implemented yet"), "{line}: {err}");
     }
 
     /// Without `rig-exec`, every executor verb is refused with its own code before anything is read.

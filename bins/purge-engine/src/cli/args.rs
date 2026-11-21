@@ -21,8 +21,6 @@ usage: purge-engine <verb> [args]
 
 modes:
   --stdio                                   serve the UI over stdin/stdout (medium integrity)
-  --broker --pipe <name> --parent <pid> --parent-ctime <filetime>
-                                            elevated broker for the UI
 
 verbs:
   inventory [--json] [-o <inv.json>]
@@ -88,8 +86,6 @@ exit codes:
 pub enum Command {
     /// `--stdio`.
     Stdio,
-    /// `--broker`.
-    Broker,
     /// `inventory`.
     Inventory,
     /// `harvest`.
@@ -137,7 +133,6 @@ impl Command {
     pub fn name(self) -> &'static str {
         match self {
             Command::Stdio => "--stdio",
-            Command::Broker => "--broker",
             Command::Inventory => "inventory",
             Command::Harvest => "harvest",
             Command::Uninstall => "uninstall",
@@ -182,7 +177,7 @@ impl Command {
             | Command::PlanFromTargets => "M2",
             Command::BaselineBuild | Command::BaselineInfo | Command::Hello => "BL",
             Command::KbLint => "M4",
-            Command::Stdio | Command::Broker => "M3",
+            Command::Stdio => "M3",
         }
     }
 
@@ -387,6 +382,8 @@ pub enum Invocation {
     Help,
     /// A command of a later milestone, with its arguments (not interpreted).
     NotImplemented(Command, Vec<String>),
+    /// `--stdio`.
+    Stdio,
     /// `inventory`.
     Inventory(InventoryArgs),
     /// `harvest`.
@@ -419,6 +416,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Verb::Run(cmd, rest) => (cmd, rest),
     };
     match cmd {
+        Command::Stdio => no_arguments("--stdio", &rest).map(|()| Invocation::Stdio),
         Command::Inventory => inventory(&rest).map(Invocation::Inventory),
         Command::Harvest => harvest(&rest).map(Invocation::Harvest),
         Command::Uninstall => uninstall(&rest).map(Invocation::Uninstall),
@@ -455,9 +453,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Command::QuarantinePurge => quarantine_purge(&rest)
             .map(ExecVerb::QuarantinePurge)
             .map(Invocation::Executor),
-        other @ (Command::Stdio | Command::Broker | Command::KbLint) => {
-            Ok(Invocation::NotImplemented(other, rest))
-        }
+        Command::KbLint => Ok(Invocation::NotImplemented(Command::KbLint, rest)),
     }
 }
 
@@ -489,7 +485,6 @@ fn verb(args: &[String]) -> Result<Verb, String> {
         "--version" | "-V" => return Ok(Verb::Version),
         "--help" | "-h" | "help" => return Ok(Verb::Help),
         "--stdio" => Command::Stdio,
-        "--broker" => Command::Broker,
         "inventory" => Command::Inventory,
         "harvest" => Command::Harvest,
         "uninstall" => Command::Uninstall,
@@ -869,17 +864,10 @@ mod tests {
 
     #[test]
     fn later_milestone_verbs_are_recognised_and_keep_their_arguments() {
-        let cases = [
-            (
-                "--broker --pipe p --parent 1 --parent-ctime 2",
-                Command::Broker,
-            ),
-            ("--stdio", Command::Stdio),
-            (
-                "kb lint a.json b.json --baselines vm/baselines/",
-                Command::KbLint,
-            ),
-        ];
+        let cases = [(
+            "kb lint a.json b.json --baselines vm/baselines/",
+            Command::KbLint,
+        )];
         for (line, want) in cases {
             match p(line) {
                 Ok(Invocation::NotImplemented(cmd, _)) => {
@@ -889,6 +877,11 @@ mod tests {
                 other => panic!("{line}: {other:?}"),
             }
         }
+        assert_eq!(p("--stdio"), Ok(Invocation::Stdio));
+        assert_eq!(
+            p("--stdio extra"),
+            Err("--stdio: unexpected argument 'extra'".into())
+        );
         assert_eq!(
             p("kb lint a.json"),
             Ok(Invocation::NotImplemented(
