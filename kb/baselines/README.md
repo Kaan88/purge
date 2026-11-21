@@ -8,7 +8,7 @@ never had a test app installed, minus rig-owned items. vm/RIG.md §2 and §8 are
 
 | File | Machine | Source snap-0 | Records (K / V / D / F) |
 |---|---|---|---|
-| `EnterpriseSEval-26100.1742.tsv.gz` | corpus VM `Inbound-Win11-Test`, Enterprise LTSC eval | `vm/runs/null1/snap-null1-0.tsv.gz` | 275,872 / 460,215 / 2,158 / 15,050 |
+| `EnterpriseSEval-26100.1742.tsv.gz` | corpus VM `Inbound-Win11-Test`, Enterprise LTSC eval | `vm/runs/null1/snap-null1-0.tsv.gz` | 275,870 / 460,213 / 2,158 / 15,048 (six records of a test app removed 2026-11-21) |
 | `Professional-26340.9882.tsv.gz` | Clean-Pro VM `Purge-CleanPro`, Pro Insider | `vm/runs/cleanpro-null1/snap-null1-0.tsv.gz` | 309,932 / 528,901 / 6,001 / 37,410 |
 
 The Professional baseline matches a host only on build 26340.9882. A host on another build has no matching

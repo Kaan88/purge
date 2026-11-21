@@ -1781,10 +1781,10 @@ mod tests {
             26100,
             1742,
             RecordCounts {
-                keys: 275_872,
-                values: 460_215,
+                keys: 275_870,
+                values: 460_213,
                 dirs: 2_158,
-                files: 15_050,
+                files: 15_048,
             },
         );
         assert!(Baseline::select(&kb_dir(), "EnterpriseSEval", 26100, 1743).is_none());
