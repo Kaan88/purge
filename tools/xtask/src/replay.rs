@@ -41,6 +41,11 @@
 //! and/or `--neighbour` is the view of trust None that still answers presence from those parts.
 //! [`ViewArgs`] holds the flags, [`l5_violations`] is invariant L5 over two plans.
 //!
+//! `--l5-against <plan.json>` (with `merged`, `local` or `none` and parts) reads the plan a replay of the same
+//! run made with `--baseline-view none` and checks invariant L5 against it: every item of the new plan must be
+//! offered at least as strongly by the no-baseline plan. Each violation is printed and the command fails. This
+//! is how R3 judges S4 of the design (§8.3).
+//!
 //! `replay-all` replays the frozen M0 runs [`M0_RUNS`] into `vm/runs/<id>/plans/purge-replay.json` (the
 //! runs directory is git-ignored; the plan is a new file next to the other tools' plans) and then, when
 //! `vm/rigtool/target/release/rigtool(.exe)` exists, prints `rigtool score --set …` over them.
@@ -75,7 +80,8 @@ pub const RUNS_DIR_VAR: &str = "PURGE_RUNS_DIR";
 
 const REPLAY_USAGE: &str = "usage: cargo xtask replay --run <vm/runs/<id>> --app <truth id> -o <plan.json> \
                             [--overlay <dir>] [--baselines <dir>] [--fp <fp.json>] [--live] \
-                            [--baseline-view exact|merged|local|none] [--local <file>] [--neighbour <file>]...";
+                            [--baseline-view exact|merged|local|none] [--local <file>] [--neighbour <file>]... \
+                            [--l5-against <plan of --baseline-view none>]";
 const REPLAY_ALL_USAGE: &str = "usage: cargo xtask replay-all [--runs <vm/runs>] [--overlay-root <dir>] [--if-present] [--no-score]";
 
 // ---------------------------------------------------------------------------------------------------------
@@ -207,6 +213,7 @@ pub struct Replayed {
     /// `replay-diff`'s reason `msi_root_added`.
     pub msi_roots: Vec<String>,
     /// The fingerprint the scan ran with.
+    #[cfg(test)]
     pub fingerprint: purge_model::Fingerprint,
 }
 
@@ -399,6 +406,7 @@ pub fn replay_case(case: &Case<'_>) -> Result<(Replayed, Scanned)> {
             verify_passed: false,
             co_removed: 0,
             msi_roots: msi_roots(&fp),
+            #[cfg(test)]
             fingerprint: fp,
         };
         return Ok((replayed, scanned));
@@ -445,6 +453,7 @@ pub fn replay_case(case: &Case<'_>) -> Result<(Replayed, Scanned)> {
         verify_passed: verify.is_passed(),
         co_removed: fp.co_removed.len(),
         msi_roots: msi_roots(&fp),
+        #[cfg(test)]
         fingerprint: fp,
     };
     Ok((replayed, scanned))
@@ -944,6 +953,7 @@ pub fn run_one(root: &Path, args: &[String]) -> Result<bool> {
             "--baseline-view",
             "--local",
             "--neighbour",
+            "--l5-against",
         ],
         &["--live"],
         REPLAY_USAGE,
@@ -985,9 +995,36 @@ pub fn run_one(root: &Path, args: &[String]) -> Result<bool> {
         live: f.has("--live"),
         view: choice.inject,
     };
+    // The reference is read before the replay, so a wrong path costs nothing.
+    let reference: Option<(PathBuf, purge_model::Plan)> = match f.get(&["--l5-against"]) {
+        None => None,
+        Some(_) if opts.view.is_none() => bail!(
+            "--l5-against compares a plan made with a view below Exact (--baseline-view merged, local, or none \
+             with --local or --neighbour) with the no-baseline plan\n{REPLAY_USAGE}"
+        ),
+        Some(path) => {
+            let plan = output::read_json(Path::new(path))
+                .map_err(|e| anyhow!("--l5-against: plan {e}"))?;
+            Some((PathBuf::from(path), plan))
+        }
+    };
     let r = replay(&opts)?;
     report(app, &opts.out, &r);
-    Ok(true)
+    let Some((path, none)) = reference else {
+        return Ok(true);
+    };
+    let violations = l5_violations(&none, &r.plan);
+    for v in &violations {
+        eprintln!("replay: {app}: L5: {v}");
+    }
+    println!(
+        "replay: {app}: L5 against {}: {} item(s) below Exact, {} without a baseline, {} violation(s)",
+        path.display(),
+        r.plan.items.len(),
+        none.items.len(),
+        violations.len()
+    );
+    Ok(violations.is_empty())
 }
 
 /// `cargo xtask replay-all …`.
@@ -1327,6 +1364,45 @@ mod tests {
             mode: ScanMode::Post,
             items,
         }
+    }
+
+    /// `--l5-against` needs a plan made with a view below Exact to compare, and a readable reference;
+    /// both are refused before anything is replayed.
+    #[test]
+    fn l5_against_is_refused_without_an_injected_view_or_a_readable_plan() {
+        let root = crate::workspace_root();
+        let args = |extra: &[&str]| -> Vec<String> {
+            ["--run", "no-such-run", "--app", "a", "-o", "p.json"]
+                .iter()
+                .chain(extra)
+                .map(|s| (*s).to_owned())
+                .collect()
+        };
+        for extra in [
+            &["--l5-against", "none.json"][..],
+            &["--l5-against", "none.json", "--baseline-view", "none"][..],
+        ] {
+            let e = run_one(&root, &args(extra)).unwrap_err().to_string();
+            assert!(e.contains("--l5-against compares a plan"), "{e}");
+        }
+        let shipped = root
+            .join("kb")
+            .join("baselines")
+            .join("Professional-26340.9882.tsv.gz");
+        let e = run_one(
+            &root,
+            &args(&[
+                "--l5-against",
+                "no-such-plan.json",
+                "--baseline-view",
+                "none",
+                "--neighbour",
+                shipped.to_str().unwrap(),
+            ]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("--l5-against: plan"), "{e}");
     }
 
     #[test]
