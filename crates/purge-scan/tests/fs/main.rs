@@ -230,6 +230,7 @@ pub fn fingerprint(
 ) -> Fingerprint {
     let strings = |items: &[&str]| items.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, key_name).expect("a valid key name"),

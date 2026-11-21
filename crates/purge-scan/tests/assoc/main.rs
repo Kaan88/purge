@@ -80,6 +80,7 @@ fn safe_eligible(c: &Candidate) -> bool {
     let decision = decide(
         c,
         &PolicyCtx {
+            baseline_trust: purge_model::BaselineTrust::Exact,
             mode: purge_model::ScanMode::Post,
             verify_gone: purge_model::VerifyGone::new(true, true, true),
             target_scope: if per_user {

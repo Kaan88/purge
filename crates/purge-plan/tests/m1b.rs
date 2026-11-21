@@ -1069,9 +1069,14 @@ fn sha256(text: &str) -> String {
 
 /// Captured from the planner before M1B-PLAN (commit dd3a22b, policy m1b.1) for `m1a_shapes`: the plan
 /// hash, and SHA-256 of the compact JSON of the plan and of the scan document.
-const GOLDEN_PLAN_HASH: &str = "3ea67656d0bcc442e8b931fe5ccd0b6ad659ed4c6269ad90bd1c7d02505a7b78";
+///
+/// Policy `bl.1` (BL-POLICY) moved only the version string, which is part of the plan hash and a field
+/// of the scan document: the plan document's value is the one captured under `m1b.1`, and with the
+/// version string set back to `m1b.1` the BL-POLICY code gave the two former values
+/// (`3ea67656…5a7b78`, `8eeb2850…7fc7ed`) unchanged.
+const GOLDEN_PLAN_HASH: &str = "2827a468a393b08af10a26b73858738e8fc4cae3617d0c751ebaec0d7925ffb4";
 const GOLDEN_PLAN_JSON: &str = "3c4854025920d672fbe93df779e7428fd9bdea0393dbe734ac5bfbd167080604";
-const GOLDEN_SCAN_JSON: &str = "8eeb28506b28687df093d9002fdfa655b9db958268d693a47d7ddf125c7fc7ed";
+const GOLDEN_SCAN_JSON: &str = "be558e39d62f38e21de8c8f80a9b1ecbe5ca3d5911072af3b4a90c66feae40b0";
 
 #[test]
 fn plan_hash_golden_unchanged() {
@@ -1084,15 +1089,14 @@ fn plan_hash_golden_unchanged() {
     assert!(!open.is_empty());
     for m1b in [M1bDecide::default(), open] {
         let built = build("vendor-app", m1a_shapes(), &with_m1b(&deny, m1b));
-        assert_eq!(POLICY_VERSION, "m1b.1");
-        assert_eq!(built.scan.plan_hash, GOLDEN_PLAN_HASH);
+        assert_eq!(POLICY_VERSION, "bl.1");
         assert_eq!(
-            sha256(&serde_json::to_string(&built.plan).unwrap()),
-            GOLDEN_PLAN_JSON
-        );
-        assert_eq!(
-            sha256(&serde_json::to_string(&built.scan).unwrap()),
-            GOLDEN_SCAN_JSON
+            (
+                built.scan.plan_hash.as_str(),
+                sha256(&serde_json::to_string(&built.plan).unwrap()).as_str(),
+                sha256(&serde_json::to_string(&built.scan).unwrap()).as_str(),
+            ),
+            (GOLDEN_PLAN_HASH, GOLDEN_PLAN_JSON, GOLDEN_SCAN_JSON)
         );
     }
 }

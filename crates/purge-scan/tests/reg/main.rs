@@ -1047,6 +1047,7 @@ fn env_recorded_variable_with_a_quoted_list_is_not_preselected() {
         let decision = decide(
             &found[0],
             &PolicyCtx {
+                baseline_trust: purge_model::BaselineTrust::Exact,
                 mode: purge_model::ScanMode::Post,
                 verify_gone: purge_model::VerifyGone::new(true, true, true),
                 target_scope: TargetScope::Machine,
@@ -1130,6 +1131,7 @@ fn env_entry_that_holds_more_than_the_apps_directory_is_never_preselected() {
                 let decision = decide(
                     c,
                     &PolicyCtx {
+                        baseline_trust: purge_model::BaselineTrust::Exact,
                         mode: purge_model::ScanMode::Post,
                         verify_gone: purge_model::VerifyGone::new(true, true, true),
                         target_scope: TargetScope::Machine,
@@ -1290,6 +1292,7 @@ fn env_reference_is_expanded_as_windows_does_and_for_whom_the_key_is() {
             decide(
                 c,
                 &PolicyCtx {
+                    baseline_trust: purge_model::BaselineTrust::Exact,
                     mode: purge_model::ScanMode::Post,
                     verify_gone: purge_model::VerifyGone::new(true, true, true),
                     target_scope: TargetScope::Machine,
@@ -1356,6 +1359,7 @@ fn env_recorded_variable_that_leads_there_indirectly_is_not_preselected() {
         let decision = decide(
             &found[0],
             &PolicyCtx {
+                baseline_trust: purge_model::BaselineTrust::Exact,
                 mode: purge_model::ScanMode::Post,
                 verify_gone: purge_model::VerifyGone::new(true, true, true),
                 target_scope: TargetScope::Machine,
@@ -1414,6 +1418,7 @@ fn list_entry_outside_environment_is_read_like_a_path_entry() {
                 let decision = decide(
                     &c,
                     &PolicyCtx {
+                        baseline_trust: purge_model::BaselineTrust::Exact,
                         mode: purge_model::ScanMode::Post,
                         verify_gone: purge_model::VerifyGone::new(true, true, true),
                         target_scope: TargetScope::Machine,
@@ -1563,6 +1568,7 @@ fn list_entry_outside_environment_is_read_like_a_path_entry() {
                 let decision = decide(
                     &c,
                     &PolicyCtx {
+                        baseline_trust: purge_model::BaselineTrust::Exact,
                         mode: purge_model::ScanMode::Post,
                         verify_gone: purge_model::VerifyGone::new(true, true, true),
                         target_scope: TargetScope::Machine,
@@ -1621,6 +1627,7 @@ fn env_single_value_in_a_key_the_log_deletes_whole_keeps_the_entry_caps() {
         let decision = decide(
             &found[0],
             &PolicyCtx {
+                baseline_trust: purge_model::BaselineTrust::Exact,
                 mode: purge_model::ScanMode::Post,
                 verify_gone: purge_model::VerifyGone::new(true, true, true),
                 target_scope: TargetScope::Machine,
@@ -1679,6 +1686,7 @@ fn env_reference_in_another_users_key_is_not_proven() {
                 decide(
                     c,
                     &PolicyCtx {
+                        baseline_trust: purge_model::BaselineTrust::Exact,
                         mode: purge_model::ScanMode::Post,
                         verify_gone: purge_model::VerifyGone::new(true, true, true),
                         target_scope: TargetScope::PerUser,
@@ -1764,6 +1772,7 @@ fn recorded_value_of_another_product_that_holds_more_than_the_apps_path_is_not_p
                 let decision = decide(
                     &c,
                     &PolicyCtx {
+                        baseline_trust: purge_model::BaselineTrust::Exact,
                         mode: purge_model::ScanMode::Post,
                         verify_gone: purge_model::VerifyGone::new(true, true, true),
                         target_scope: TargetScope::Machine,

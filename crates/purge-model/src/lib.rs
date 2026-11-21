@@ -44,10 +44,10 @@ pub use blocker::Blocker;
 pub use candidate::{Action, Candidate, Decision, Harm, ItemFp, Origin, Reversibility};
 pub use evidence::{Evidence, EvidenceKind, Facts, ManifestKind, Tier};
 pub use fingerprint::{
-    AnchorKind, AnchorRef, Anchors, AppFileOutsideRoot, CoRemovedProduct, ExeFile, ExtJournalEntry,
-    Fingerprint, FingerprintSchema, HarvestedToken, IdentitySnapshot, InnoRecord, InnoRecordKind,
-    OsInfo, RefCarrier, RefSnapEntry, RunEntry, SubtreeBaseline, SubtreeValue, TimeWindow,
-    VendorBackup,
+    AnchorKind, AnchorRef, Anchors, AppFileOutsideRoot, BaselineTrust, BaselineViewRef,
+    CoRemovedProduct, ExeFile, ExtJournalEntry, Fingerprint, FingerprintSchema, HarvestedToken,
+    IdentitySnapshot, InnoRecord, InnoRecordKind, OsInfo, RefCarrier, RefSnapEntry, RunEntry,
+    SubtreeBaseline, SubtreeValue, TimeWindow, VendorBackup,
 };
 pub use fingerprint_m1b::{
     BurnFacts, BurnLinked, BurnPackage, MsiComponentFact, MsiFacts, MsiKeyPath, MsiRegRow,

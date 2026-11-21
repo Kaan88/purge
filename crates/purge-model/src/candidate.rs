@@ -259,6 +259,23 @@ impl Candidate {
     pub fn has_soft_blocker(&self) -> bool {
         self.blockers.iter().any(|b| !b.is_hard())
     }
+
+    /// Whether the candidate has evidence of an absence-dependent kind
+    /// ([`Evidence::is_absence_dependent`]: only ever on a registry key target).
+    pub fn has_absence_dependent_evidence(&self) -> bool {
+        self.evidence
+            .iter()
+            .any(|e| e.is_absence_dependent(&self.target))
+    }
+
+    /// The seal check of the trust cap (BASELINE_LOCAL_DESIGN.md §4.4 layer 2): whether the candidate has
+    /// absence-dependent evidence and does **not** carry [`Blocker::BaselineInferred`]. With a baseline
+    /// view whose trust is below Exact such a candidate must not leave the scan: its scanner used
+    /// inferred absence without the carrier. With an exact baseline (or none, where no absence is
+    /// answered) the answer says nothing and must not be acted on.
+    pub fn lacks_baseline_cap(&self) -> bool {
+        self.has_absence_dependent_evidence() && !self.blockers.contains(&Blocker::BaselineInferred)
+    }
 }
 
 #[cfg(test)]

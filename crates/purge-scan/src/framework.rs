@@ -2645,6 +2645,7 @@ pub(crate) mod testkit {
     /// A machine-wide Git fingerprint with one Inno InstallRoot and nothing else.
     pub(crate) fn fingerprint() -> Fingerprint {
         Fingerprint {
+            baseline_view: None,
             schema: FingerprintSchema,
             app: AppRef {
                 program_id: ProgramId::machine(View::K64, "Git_is1").unwrap(),

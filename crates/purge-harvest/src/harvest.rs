@@ -742,6 +742,9 @@ pub fn harvest_report_with(
         msi: msi_harvests.iter().map(|h| h.facts.clone()).collect(),
         burn: burn_harvest.map(|b| b.facts),
         sys: SysObjects::default(),
+        // BL-POLICY added the field; the harvest records its view with BL-FRAMEWORK. `None` reads as
+        // Exact with a matching shipped baseline and as None otherwise, which is what a harvest is today.
+        baseline_view: None,
         os,
         user_sid,
         window: TimeWindow {

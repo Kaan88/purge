@@ -9,11 +9,21 @@
 //! and `place` (`shared`: the evidence was lowered because the value is not in a place of the app's own,
 //! which adds [`shared_place_line`]).
 //!
+//! Detail keys of the baseline trust cap (BASELINE_LOCAL_DESIGN.md §4.4), written by the scanner layer
+//! beside `baseline` when an absence was inferred: [`BASELINE_TRUST_KEY`] (`merged` or `local`),
+//! [`BASELINE_NEIGHBOURS_KEY`] (the names of the shipped neighbours the view merged, `, `-separated) and
+//! [`WINDOWS_BUILD_KEY`] (the host's `<build>.<ubr>`). With an inferred absence the skeleton line reads
+//! "not in this PC's Windows component list, nor in clean Windows <neighbours>" in place of "not on clean
+//! Windows <baseline>", and the blocker `BaselineInferred` (or, without it, the policy note of P-BL-1)
+//! reads "Not preselected: there is no verified clean-install list for Windows build <build.ubr>".
+//!
 //! A Blocked candidate is explained by its hard blockers only ("Kept: …"). Any other candidate lists its
 //! evidence from the strongest kind down, then what speaks against it, then the soft blockers and the
 //! policy notes. Evidence of tier `Ai` is never rendered: AI notes are shown separately by the UI.
 
-use purge_model::{Band, Blocker, Candidate, Evidence, EvidenceKind, ManifestKind, Tier};
+use purge_model::{
+    Band, BaselineTrust, Blocker, Candidate, Evidence, EvidenceKind, ManifestKind, Tier,
+};
 
 use crate::score::effective_weight;
 
@@ -37,6 +47,49 @@ pub fn shared_place_line(owner: &str) -> String {
         clean_name(owner)
     )
 }
+
+/// Detail key naming the baseline (view) an absence was answered from; `Professional-26340.9882` for an
+/// exact baseline.
+pub const BASELINE_KEY: &str = "baseline";
+/// Detail key by which the scanner layer records the trust an absence was answered with
+/// ([`BaselineTrust::as_fact`]). Any value other than `exact` declares the absence inferred
+/// ([`declares_inferred`]).
+pub const BASELINE_TRUST_KEY: &str = "baseline_trust";
+/// Detail key holding the names of the shipped neighbour baselines of a merged view, `, `-separated.
+pub const BASELINE_NEIGHBOURS_KEY: &str = "baseline_neighbours";
+/// Detail key holding the host's Windows build as `<build>.<ubr>`, for the line of the trust cap.
+pub const WINDOWS_BUILD_KEY: &str = "windows_build";
+
+/// Whether `evidence` says of itself that its absence was inferred: it carries [`BASELINE_TRUST_KEY`] with
+/// any value other than `exact` (compared trimmed, without regard to case). An unknown or empty value
+/// counts as inferred, the safe side. Evidence without the key declares nothing.
+#[must_use]
+pub fn declares_inferred(evidence: &Evidence) -> bool {
+    evidence
+        .detail
+        .get(BASELINE_TRUST_KEY)
+        .is_some_and(|trust| {
+            !trust
+                .trim()
+                .eq_ignore_ascii_case(BaselineTrust::Exact.as_fact())
+        })
+}
+
+/// The line of the baseline trust cap: of the blocker `BaselineInferred` and of the policy note
+/// [`Note::BaselineInferred`]. `build` is the host's `<build>.<ubr>`, when a fact names it.
+#[must_use]
+pub fn baseline_inferred_line(build: Option<&str>) -> String {
+    match build.and_then(clean_text) {
+        Some(build) => format!(
+            "Not preselected: there is no verified clean-install list for Windows build {build}"
+        ),
+        None => BASELINE_INFERRED_LINE.to_owned(),
+    }
+}
+
+/// [`baseline_inferred_line`] without a build.
+const BASELINE_INFERRED_LINE: &str =
+    "Not preselected: there is no verified clean-install list for this Windows build";
 
 /// A remark of the policy itself on how it reached a decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,6 +122,9 @@ pub enum Note {
     CannotBeUndone,
     /// A typed object's undo is only partial and no `ReversibilityPartial` blocker says so already.
     PartialUndo,
+    /// P-BL-1: evidence that rests on inferred absence did not support Safe, and no `BaselineInferred`
+    /// blocker says so already (BASELINE_LOCAL_DESIGN.md §4.4 layer 3).
+    BaselineInferred,
 }
 
 /// The line of a policy note.
@@ -99,12 +155,19 @@ pub fn note_line(note: Note) -> &'static str {
         Note::CannotBeUndone => "Removing it cannot be undone",
         // The same line as `Blocker::ReversibilityPartial`.
         Note::PartialUndo => "Undo cannot bring back all of it",
+        // The same line as `Blocker::BaselineInferred`; [`render`] names the build when a fact has it.
+        Note::BaselineInferred => BASELINE_INFERRED_LINE,
     }
 }
 
 /// A detail value made safe for a template: control characters dropped, cut to [`MAX_FACT_CHARS`].
-fn fact<'a>(evidence: &'a Evidence, key: &str) -> Option<String> {
-    let raw: &'a str = evidence.detail.get(key)?;
+fn fact(evidence: &Evidence, key: &str) -> Option<String> {
+    clean_text(evidence.detail.get(key)?)
+}
+
+/// `raw` made safe for a template (control characters dropped, cut to [`MAX_FACT_CHARS`], trimmed);
+/// `None` when nothing is left.
+fn clean_text(raw: &str) -> Option<String> {
     let clean: String = raw
         .chars()
         .filter(|c| !c.is_control())
@@ -129,9 +192,30 @@ fn clean_name(name: &str) -> String {
     }
 }
 
-/// The lines one piece of evidence contributes, for an owner called `owner`.
+/// The lines one piece of evidence contributes, for an owner called `owner`. An absence the evidence
+/// declares inferred ([`declares_inferred`]) is worded as such.
 #[must_use]
 pub fn evidence_lines(evidence: &Evidence, owner: &str) -> Vec<String> {
+    evidence_lines_at(evidence, owner, declares_inferred(evidence))
+}
+
+/// What a skeleton says about the baseline: with an inferred absence the lists it was looked up in, with
+/// a proven one the exact baseline's name (and nothing when no fact names it, as before).
+fn baseline_line(evidence: &Evidence, inferred: bool) -> Option<String> {
+    if inferred {
+        return Some(match fact(evidence, BASELINE_NEIGHBOURS_KEY) {
+            Some(neighbours) => format!(
+                "not in this PC's Windows component list, nor in clean Windows {neighbours}"
+            ),
+            None => "not in this PC's Windows component list".to_owned(),
+        });
+    }
+    fact(evidence, BASELINE_KEY).map(|baseline| format!("not on clean Windows {baseline}"))
+}
+
+/// [`evidence_lines`], with `inferred` saying whether the absence the evidence rests on was inferred
+/// (the evidence declares it, or the candidate is under the trust cap).
+fn evidence_lines_at(evidence: &Evidence, owner: &str, inferred: bool) -> Vec<String> {
     use EvidenceKind::*;
     let owner = clean_name(owner);
     let e = evidence;
@@ -154,9 +238,7 @@ pub fn evidence_lines(evidence: &Evidence, owner: &str) -> Vec<String> {
                 format!("Everything in it belonged to {owner}"),
                 "now empty".to_owned(),
             ];
-            if let Some(baseline) = fact(e, "baseline") {
-                lines.push(format!("not on clean Windows {baseline}"));
-            }
+            lines.extend(baseline_line(e, inferred));
             return lines;
         }
         DanglingRef => match fact(e, "path") {
@@ -254,6 +336,8 @@ pub fn blocker_line(blocker: &Blocker) -> String {
         ObjectChangedSinceHarvest => s("Kept: it changed since the app was examined"),
         ReversibilityPartial => s("Undo cannot bring back all of it"),
         ProgramUnresolved => s("Its program could not be pinned to one file"),
+        // [`render`] names the build when a fact of the candidate has it.
+        BaselineInferred => baseline_inferred_line(None),
     }
 }
 
@@ -286,9 +370,22 @@ pub fn render(candidate: &Candidate, band: Band, notes: &[Note]) -> Vec<String> 
         .collect();
     // Strongest first; the negatives (below zero) end up last. The sort is stable.
     shown.sort_by_key(|e| std::cmp::Reverse(effective_weight(e)));
+    // The trust cap is on the candidate: by its carrier, or by the policy's own note (P-BL-1). Its
+    // absence-dependent evidence is then worded as inferred, whether or not each piece says so itself.
+    let under_cap = candidate
+        .blockers
+        .iter()
+        .any(|b| matches!(b, Blocker::BaselineInferred))
+        || notes.contains(&Note::BaselineInferred);
+    let cap_line = || {
+        let build = shown.iter().find_map(|e| fact(e, WINDOWS_BUILD_KEY));
+        baseline_inferred_line(build.as_deref())
+    };
     let mut shared_place = false;
-    for e in shown {
-        for line in evidence_lines(e, owner) {
+    for e in &shown {
+        let inferred =
+            declares_inferred(e) || (under_cap && e.is_absence_dependent(&candidate.target));
+        for line in evidence_lines_at(e, owner, inferred) {
             push_unique(&mut lines, line);
         }
         shared_place |= e.detail.get(SHARED_PLACE_KEY) == Some(SHARED_PLACE_VALUE);
@@ -297,10 +394,18 @@ pub fn render(candidate: &Candidate, band: Band, notes: &[Note]) -> Vec<String> 
         push_unique(&mut lines, shared_place_line(owner));
     }
     for b in candidate.blockers.iter().filter(|b| !b.is_hard()) {
-        push_unique(&mut lines, blocker_line(b));
+        let line = match b {
+            Blocker::BaselineInferred => cap_line(),
+            other => blocker_line(other),
+        };
+        push_unique(&mut lines, line);
     }
     for note in notes {
-        push_unique(&mut lines, note_line(*note).to_owned());
+        let line = match note {
+            Note::BaselineInferred => cap_line(),
+            other => note_line(*other).to_owned(),
+        };
+        push_unique(&mut lines, line);
     }
     if lines.is_empty() {
         lines.push("Nothing ties it to the app".to_owned());
@@ -418,6 +523,7 @@ mod tests {
             Blocker::InUse,
             Blocker::MsiPackageUnreadable,
             Blocker::ChangedSinceScan,
+            Blocker::BaselineInferred,
         ];
         for b in &all {
             assert_eq!(blocker_line(b).starts_with("Kept: "), b.is_hard(), "{b:?}");
@@ -430,6 +536,74 @@ mod tests {
             blocker_line(&all[22]),
             "Holds 3 items not known to belong to the app"
         );
+    }
+
+    /// BL-POLICY, design §4.4: the two templates of the trust cap, and the facts that fill them.
+    #[test]
+    fn baseline_inferred_templates() {
+        // The blocker and the note share one line; neither says "Kept".
+        let generic =
+            "Not preselected: there is no verified clean-install list for this Windows build";
+        assert_eq!(blocker_line(&Blocker::BaselineInferred), generic);
+        assert_eq!(note_line(Note::BaselineInferred), generic);
+        assert_eq!(baseline_inferred_line(None), generic);
+        assert_eq!(baseline_inferred_line(Some(" \r\n")), generic);
+        assert_eq!(
+            baseline_inferred_line(Some("26300.9974\u{7}")),
+            "Not preselected: there is no verified clean-install list for Windows build 26300.9974"
+        );
+        assert!(!Blocker::BaselineInferred.is_hard());
+
+        // The evidence line: exact names the baseline, inferred names the lists.
+        let skeleton = |facts: Facts| ev(EvidenceKind::ProvenOwnedSkeleton).with_detail(facts);
+        let last = |e: &Evidence| evidence_lines(e, "Git").pop().unwrap();
+        let exact = skeleton(
+            Facts::new()
+                .with(BASELINE_KEY, "Professional-26340.9882")
+                .with(BASELINE_TRUST_KEY, "exact"),
+        );
+        assert!(!declares_inferred(&exact));
+        assert_eq!(last(&exact), "not on clean Windows Professional-26340.9882");
+        let merged = skeleton(
+            Facts::new()
+                .with(BASELINE_KEY, "local-Professional-26300.9974-ab12+2")
+                .with(BASELINE_TRUST_KEY, "merged")
+                .with(
+                    BASELINE_NEIGHBOURS_KEY,
+                    "Professional-26340.9882, EnterpriseSEval-26100.1742",
+                ),
+        );
+        assert!(declares_inferred(&merged));
+        assert_eq!(
+            evidence_lines(&merged, "Git").join(SEPARATOR),
+            "Everything in it belonged to Git · now empty · not in this PC's Windows component \
+             list, nor in clean Windows Professional-26340.9882, EnterpriseSEval-26100.1742"
+        );
+        let local = skeleton(Facts::new().with(BASELINE_TRUST_KEY, "local"));
+        assert!(declares_inferred(&local));
+        assert_eq!(last(&local), "not in this PC's Windows component list");
+        // An inferred absence is never worded as the exact one, whatever `baseline` holds.
+        for line in evidence_lines(&merged, "Git")
+            .iter()
+            .chain(&evidence_lines(&local, "Git"))
+        {
+            assert!(!line.contains("not on clean Windows"), "{line}");
+        }
+        // Any trust value but `exact` declares the absence inferred; no key declares nothing.
+        for (value, inferred) in [
+            ("exact", false),
+            (" Exact ", false),
+            ("merged", true),
+            ("local", true),
+            ("none", true),
+            ("", true),
+            ("proven", true),
+        ] {
+            let e = skeleton(Facts::new().with(BASELINE_TRUST_KEY, value));
+            assert_eq!(declares_inferred(&e), inferred, "{value:?}");
+        }
+        assert!(!declares_inferred(&skeleton(Facts::new())));
+        assert_eq!(BaselineTrust::Merged.as_fact(), "merged");
     }
 
     #[test]

@@ -321,6 +321,97 @@ impl OsInfo {
     }
 }
 
+/// How far a baseline view can be trusted when it says "this key is not Windows' own"
+/// (BASELINE_LOCAL_DESIGN.md §4.1). Serialised by its variant name.
+///
+/// Presence ("Windows has it") blocks at every level. Absence is *proof* only at [`BaselineTrust::Exact`];
+/// at `Merged` and `Local` it is *inferred* and under the trust cap (invariant L4: it never makes an item
+/// Safe or preselected); at `None` it is never answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum BaselineTrust {
+    /// A shipped baseline matches the host's (edition, build, ubr): absence is proof, as at the M1b gate.
+    Exact,
+    /// No exact match; a complete local baseline merged with at least one shipped neighbour.
+    Merged,
+    /// No exact match and no neighbour; a complete local baseline alone.
+    Local,
+    /// Anything else: absence is never answered, the scan works values-only.
+    None,
+}
+
+impl BaselineTrust {
+    /// Whether absence at this trust is *inferred*, so that the trust cap applies: `Merged` and `Local`.
+    /// `Exact` proves and `None` never answers, so neither is capped.
+    #[must_use]
+    pub fn is_inferred(self) -> bool {
+        match self {
+            BaselineTrust::Merged | BaselineTrust::Local => true,
+            BaselineTrust::Exact | BaselineTrust::None => false,
+        }
+    }
+
+    /// Strength rank: Exact > Merged > Local > None.
+    fn rank(self) -> u8 {
+        match self {
+            BaselineTrust::Exact => 3,
+            BaselineTrust::Merged => 2,
+            BaselineTrust::Local => 1,
+            BaselineTrust::None => 0,
+        }
+    }
+
+    /// The weaker of the two: what an absence fact stored at harvest counts as at scan time,
+    /// `min(harvest trust, scan trust)` (design §4.5). Never stronger than either argument.
+    #[must_use]
+    pub fn min(self, other: BaselineTrust) -> BaselineTrust {
+        if other.rank() < self.rank() {
+            other
+        } else {
+            self
+        }
+    }
+
+    /// The trust to hand to the policy (`PolicyCtx::baseline_trust`) for a scan made with a view of trust
+    /// `scan` from a fingerprint harvested at trust `harvest`: inferred as soon as **either** is, because
+    /// the candidates of one scan mix absences answered now with absence facts stored at harvest. (The
+    /// plain minimum would be wrong here: `min(Merged, None)` is `None`, which is not capped.) When both
+    /// are inferred it is the weaker of the two; when neither is, it is `scan`.
+    #[must_use]
+    pub fn for_policy(scan: BaselineTrust, harvest: BaselineTrust) -> BaselineTrust {
+        match (scan.is_inferred(), harvest.is_inferred()) {
+            (true, true) => scan.min(harvest),
+            (false, true) => harvest,
+            (true, false) | (false, false) => scan,
+        }
+    }
+
+    /// The value of the evidence detail fact `baseline_trust` for this trust: `exact`, `merged`, `local`
+    /// or `none` (design §4.4 layer 1).
+    #[must_use]
+    pub fn as_fact(self) -> &'static str {
+        match self {
+            BaselineTrust::Exact => "exact",
+            BaselineTrust::Merged => "merged",
+            BaselineTrust::Local => "local",
+            BaselineTrust::None => "none",
+        }
+    }
+}
+
+/// The baseline view a fingerprint was harvested with (design §4.5): the trust beside the absence facts
+/// the fingerprint stores (`ext_journal`, the subtree records).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct BaselineViewRef {
+    /// The view's name: `Professional-26340.9882` for an exact baseline, `local-…+2` for a merged one.
+    pub name: String,
+    /// Its trust at harvest.
+    pub trust: BaselineTrust,
+    /// The source id of the local baseline the view held; `None` for an exact view or one without a
+    /// local baseline.
+    #[serde(default)]
+    pub local_id: Option<String>,
+}
+
 /// The time window `[install_time, t_start, t_end]` of the session (§5.2).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct TimeWindow {
@@ -406,9 +497,40 @@ pub struct Fingerprint {
     /// out when empty.
     #[serde(default, skip_serializing_if = "SysObjects::is_empty")]
     pub sys: SysObjects,
+    /// The baseline view the harvest ran with (BASELINE_LOCAL_DESIGN.md §4.5). Absent from fingerprints
+    /// written before the field existed, and left out when `None`, so those read and write unchanged;
+    /// what such a fingerprint counts as is [`Fingerprint::harvest_trust`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_view: Option<BaselineViewRef>,
 }
 
 impl Fingerprint {
+    /// The trust of the baseline the harvest's absence facts were made with (design §4.5).
+    ///
+    /// `exact_shipped`: whether the caller holds a shipped baseline that matches [`Fingerprint::os`]
+    /// exactly (name and header), i.e. what the M1b engine required before it used a baseline at all.
+    ///
+    /// - No `baseline_view` (an old fingerprint): `Exact` when `exact_shipped`, otherwise `None`, which
+    ///   is what such a fingerprint was.
+    /// - A recorded `Exact` is believed only when `exact_shipped` and the recorded name is the
+    ///   fingerprint's own [`OsInfo::baseline_name`]; otherwise it is `None`. A document can therefore
+    ///   never claim proof the engine cannot check against a shipped file.
+    /// - A recorded `Merged`, `Local` or `None` is returned as recorded: the first two are under the
+    ///   trust cap, the last answers no absence.
+    pub fn harvest_trust(&self, exact_shipped: bool) -> BaselineTrust {
+        match &self.baseline_view {
+            None if exact_shipped => BaselineTrust::Exact,
+            None => BaselineTrust::None,
+            Some(view) => match view.trust {
+                BaselineTrust::Exact if exact_shipped && view.name == self.os.baseline_name() => {
+                    BaselineTrust::Exact
+                }
+                BaselineTrust::Exact => BaselineTrust::None,
+                recorded => recorded,
+            },
+        }
+    }
+
     /// The app's inventory id.
     pub fn program_id(&self) -> &ProgramId {
         &self.app.program_id
@@ -677,6 +799,170 @@ mod tests {
         ] {
             assert!(schema.contains(name), "schema lacks {name}");
         }
+    }
+
+    /// BL-POLICY: the `baseline_view` field. A fingerprint without it (every fingerprint written so far)
+    /// reads, has `None`, writes back without the field, and counts as Exact or None by the shipped
+    /// baseline alone; with it, every trust round-trips.
+    #[test]
+    fn fingerprint_baseline_view_round_trips_and_old_documents_default() {
+        // Old documents: the full sample, the minimal one, and the M1a gate harvest, byte for byte.
+        for old in [sample(), minimal("HKLM|64|Other")] {
+            assert!(old.get("baseline_view").is_none());
+            let fp: Fingerprint = serde_json::from_value(old.clone()).unwrap();
+            assert_eq!(fp.baseline_view, None);
+            assert_eq!(serde_json::to_value(&fp).unwrap(), old);
+            assert!(
+                !serde_json::to_string(&fp)
+                    .unwrap()
+                    .contains("baseline_view")
+            );
+            assert_eq!(fp.harvest_trust(true), BaselineTrust::Exact);
+            assert_eq!(fp.harvest_trust(false), BaselineTrust::None);
+        }
+        let text = include_str!("../testdata/m1a-7zip.fp.json").replace("\r\n", "\n");
+        let fp: Fingerprint = serde_json::from_str(&text).unwrap();
+        assert_eq!(fp.baseline_view, None);
+        assert_eq!(serde_json::to_string_pretty(&fp).unwrap(), text.trim_end());
+
+        // With the field: every trust, with and without a local id.
+        for (trust, wire) in [
+            (BaselineTrust::Exact, "Exact"),
+            (BaselineTrust::Merged, "Merged"),
+            (BaselineTrust::Local, "Local"),
+            (BaselineTrust::None, "None"),
+        ] {
+            for local_id in [json!(null), json!("9f86d081884c7d65")] {
+                let mut v = minimal("HKLM|64|Other");
+                v["baseline_view"] = json!({
+                    "name": "local-Professional-26340.9882-9f86d081+2",
+                    "trust": wire,
+                    "local_id": local_id
+                });
+                let fp: Fingerprint = serde_json::from_value(v.clone()).unwrap();
+                let view = fp.baseline_view.as_ref().unwrap();
+                assert_eq!(view.trust, trust);
+                assert_eq!(view.local_id.is_some(), !local_id.is_null());
+                assert_eq!(serde_json::to_value(&fp).unwrap(), v);
+                let text = serde_json::to_string_pretty(&fp).unwrap();
+                assert_eq!(serde_json::from_str::<Fingerprint>(&text).unwrap(), fp);
+            }
+        }
+        // `local_id` may be absent; the name and the trust may not, and an unknown trust does not read.
+        let with = |view: Value| {
+            let mut v = minimal("HKLM|64|Other");
+            v["baseline_view"] = view;
+            serde_json::from_value::<Fingerprint>(v)
+        };
+        let short = with(json!({"name": "Professional-26340.9882", "trust": "Exact"})).unwrap();
+        assert_eq!(short.baseline_view.as_ref().unwrap().local_id, None);
+        assert!(with(json!({"name": "x"})).is_err());
+        assert!(with(json!({"trust": "Merged"})).is_err());
+        assert!(with(json!({"name": "x", "trust": "Proven"})).is_err());
+        assert!(with(json!({"name": "x", "trust": "exact"})).is_err());
+        // An explicit null reads as "no field" and is not written back.
+        let null = with(json!(null)).unwrap();
+        assert_eq!(null.baseline_view, None);
+
+        // In a co-removed product's fingerprint too.
+        let mut v = sample();
+        v["co_removed"][1]["fingerprint"]["baseline_view"] =
+            json!({"name": "local-x", "trust": "Local", "local_id": "ab"});
+        let fp: Fingerprint = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&fp).unwrap(), v);
+
+        let schema = serde_json::to_string(&schemars::schema_for!(Fingerprint)).unwrap();
+        for name in [
+            "baseline_view",
+            "BaselineViewRef",
+            "BaselineTrust",
+            "local_id",
+            "Merged",
+        ] {
+            assert!(schema.contains(name), "schema lacks {name}");
+        }
+        // The field is optional in the schema: an old document validates.
+        let schema: Value = serde_json::to_value(schemars::schema_for!(Fingerprint)).unwrap();
+        let required = schema["required"].as_array().unwrap();
+        assert!(!required.contains(&json!("baseline_view")), "{required:?}");
+    }
+
+    /// What a fingerprint's absence facts count as (design §4.5): a recorded Exact is believed only with
+    /// the matching shipped baseline in hand, and only under the fingerprint's own baseline name.
+    #[test]
+    fn harvest_trust_never_exceeds_what_the_shipped_baseline_confirms() {
+        let fp_with = |name: &str, trust: BaselineTrust| {
+            let mut fp: Fingerprint = serde_json::from_value(minimal("HKLM|64|Other")).unwrap();
+            fp.baseline_view = Some(BaselineViewRef {
+                name: name.into(),
+                trust,
+                local_id: None,
+            });
+            fp
+        };
+        let own = "Professional-26340.9882";
+        let exact = fp_with(own, BaselineTrust::Exact);
+        assert_eq!(exact.harvest_trust(true), BaselineTrust::Exact);
+        assert_eq!(exact.harvest_trust(false), BaselineTrust::None);
+        // Exact under another name (a neighbour, a local file) is not Exact.
+        for name in [
+            "EnterpriseSEval-26100.1742",
+            "local-Professional-26340.9882-ab",
+            "",
+        ] {
+            let fp = fp_with(name, BaselineTrust::Exact);
+            assert_eq!(fp.harvest_trust(true), BaselineTrust::None, "{name}");
+            assert_eq!(fp.harvest_trust(false), BaselineTrust::None, "{name}");
+        }
+        // Below Exact the record stands, whatever is shipped now: it is never raised.
+        for trust in [
+            BaselineTrust::Merged,
+            BaselineTrust::Local,
+            BaselineTrust::None,
+        ] {
+            for shipped in [true, false] {
+                assert_eq!(fp_with(own, trust).harvest_trust(shipped), trust);
+            }
+        }
+    }
+
+    #[test]
+    fn baseline_trust_order_and_policy_trust() {
+        use BaselineTrust::{Exact, Local, Merged, None};
+        let all = [Exact, Merged, Local, None];
+        for t in all {
+            assert_eq!(t.is_inferred(), matches!(t, Merged | Local), "{t:?}");
+        }
+        assert_eq!(
+            all.map(BaselineTrust::as_fact),
+            ["exact", "merged", "local", "none"]
+        );
+        // `min` is the weaker one, in the order Exact > Merged > Local > None.
+        for (i, a) in all.into_iter().enumerate() {
+            for (j, b) in all.into_iter().enumerate() {
+                let weaker = all[i.max(j)];
+                assert_eq!(a.min(b), weaker, "{a:?} {b:?}");
+                assert_eq!(b.min(a), weaker, "{a:?} {b:?}");
+                // The policy trust is inferred exactly when either side is, and then never the
+                // stronger of two inferred ones.
+                let p = BaselineTrust::for_policy(a, b);
+                assert_eq!(
+                    p.is_inferred(),
+                    a.is_inferred() || b.is_inferred(),
+                    "{a:?} {b:?}"
+                );
+                if a.is_inferred() && b.is_inferred() {
+                    assert_eq!(p, weaker);
+                }
+                if !p.is_inferred() {
+                    assert_eq!(p, a, "the scan's own trust when nothing is inferred");
+                }
+            }
+        }
+        assert_eq!(BaselineTrust::for_policy(Merged, None), Merged);
+        assert_eq!(BaselineTrust::for_policy(Exact, Merged), Merged);
+        assert_eq!(BaselineTrust::for_policy(None, Local), Local);
+        assert_eq!(BaselineTrust::for_policy(Exact, None), Exact);
     }
 
     #[test]

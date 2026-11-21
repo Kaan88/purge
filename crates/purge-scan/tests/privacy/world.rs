@@ -162,6 +162,7 @@ pub fn pca_blob() -> RegData {
 /// The app: machine-wide, one admin-only InstallRoot that existed at harvest.
 pub fn fingerprint() -> Fingerprint {
     Fingerprint {
+        baseline_view: None,
         schema: FingerprintSchema,
         app: AppRef {
             program_id: ProgramId::machine(View::K64, "App").unwrap(),
@@ -353,6 +354,7 @@ pub fn band(c: &Candidate) -> Band {
     decide(
         c,
         &PolicyCtx {
+            baseline_trust: purge_model::BaselineTrust::Exact,
             mode: ScanMode::Post,
             verify_gone: VerifyGone::new(true, true, true),
             target_scope: TargetScope::PerUser,

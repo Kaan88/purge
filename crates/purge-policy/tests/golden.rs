@@ -14,7 +14,7 @@ use purge_model::{
 use purge_policy::band::{POLICY_VERSION, PolicyCtx, TargetScope, decide, effective_tier, rank};
 
 /// The policy version the rows below were written for.
-const GOLDEN_VERSION: &str = "m1b.1";
+const GOLDEN_VERSION: &str = "bl.1";
 
 const ADMIN: SourceTrust = SourceTrust::AdminOnly;
 const USER: SourceTrust = SourceTrust::UserWritable;
@@ -118,6 +118,7 @@ fn gone() -> VerifyGone {
 }
 fn ctx(mode: ScanMode, target_scope: TargetScope) -> PolicyCtx {
     PolicyCtx {
+        baseline_trust: purge_model::BaselineTrust::Exact,
         mode,
         verify_gone: gone(),
         target_scope,
@@ -1723,6 +1724,7 @@ fn random_candidate(rng: &mut Rng) -> Candidate {
 
 fn random_ctx(rng: &mut Rng) -> PolicyCtx {
     PolicyCtx {
+        baseline_trust: purge_model::BaselineTrust::Exact,
         mode: rng.pick(&[
             ScanMode::Post,
             ScanMode::Post,
