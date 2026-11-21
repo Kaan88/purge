@@ -27,7 +27,7 @@ use purge_rpc::methods::{ExpiringList, ExpiryId, PurgeResult};
 use purge_win::taskdialog::{Outcome, Page};
 use serde_json::{Value, json};
 
-use crate::lifetime::Exit;
+use crate::lifetime::{Exit, ExitReason};
 use crate::serve::{Ctx, Handler, Wiring, run};
 use crate::testkit::{
     Client, FakeClock, FakeHost, FakeParent, Gate, HELLO, MemNet, SECS, ScriptedConsent, expected,
@@ -742,6 +742,53 @@ fn a_declined_bulk_dialog_changes_nothing_and_asks_no_user_data_dialog() {
 // ---------------------------------------------------------------------------------------------------
 // Purge once, and only once.
 // ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn declining_every_dialog_is_consent_declined_and_does_not_end_the_broker() {
+    // Review S3 / flagged point 3: with no dialog approved the answer is `consent_declined`, and an
+    // `Err` is not a completed change, so the broker keeps serving.
+    let source = Arc::new(Scripted::new());
+    source.add_item(item(1, true));
+    source.add_item(item(2, true));
+    let live = Live::start(source.clone());
+    let one = live.wire(&expiry(1));
+    let two = live.wire(&expiry(2));
+
+    live.send_purge(2, &[one, two]);
+    let mut seen = 0;
+    for _ in 0..2 {
+        let (number, _) = live
+            .consent
+            .next_dialog(seen, SECS)
+            .expect("each user-data item has a dialog");
+        seen = number;
+        live.consent.answer(Outcome::Declined);
+    }
+    assert!(
+        live.consent
+            .next_dialog(seen, Duration::from_millis(150))
+            .is_none(),
+        "exactly one dialog per user-data item"
+    );
+
+    let reply = live.client.reply();
+    assert_eq!(kind(&reply), "consent_declined", "{reply}");
+    assert_eq!(source.call_count(), 0, "nothing was purged");
+    assert_eq!(source.held_ids().len(), 2);
+
+    // Still serving: the declined request did not start the drain.
+    live.send(3, "quarantine.expiring", &json!({}));
+    let reply = live.client.reply();
+    assert_eq!(reply["id"], 3, "{reply}");
+    assert!(reply["result"]["items"].is_array(), "{reply}");
+
+    let exit = live.finish();
+    assert_eq!(
+        exit.reason,
+        ExitReason::PipeLost,
+        "the broker ends because the client closed, not as a completed change"
+    );
+}
 
 #[test]
 fn a_second_purge_of_the_same_items_is_gone() {

@@ -117,7 +117,7 @@ use purge_guard::prefix;
 use purge_model::exec::journal::{Expire, Intent, ItemFacts, ReconcileResult, UndoOutcome};
 use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId};
 use purge_model::exec::session::{Expiry, JournalMark, RetentionClass, SessionId, SessionIndex};
-use purge_model::{Blocker, CandidateId, Category, FileTime};
+use purge_model::{Blocker, CandidateId, FileTime};
 use purge_win::fs::FileId;
 use purge_win::fs_write::FsError;
 use purge_win::os::Win32Error;
@@ -962,17 +962,21 @@ impl Categories {
             .chain(&doc.absorbed)
             .map(|c| (&c.id, c))
             .collect();
-        let personal = |c: &purge_model::Candidate| {
-            c.category == Category::UserData || c.blockers.contains(&Blocker::UserData)
-        };
+        let personal = purge_plan::collapse::is_user_data;
         let mut categories = Categories::default();
         for candidate in &doc.items {
             categories.known.insert(candidate.id.clone());
-            // A directory is user data when it or anything nested below it is.
-            let nested_personal = candidate
+            // A directory is user data when it or anything nested below it is. A nested item the
+            // collapse held back is an item of its own and is not in `children` (review M4), so the
+            // whole document is searched for nesting. An unknown child still counts as user data.
+            let unknown_child = candidate
                 .children
                 .iter()
-                .any(|child| all.get(child).is_none_or(|c| personal(c)));
+                .any(|child| !all.contains_key(child));
+            let nested_personal = unknown_child
+                || purge_plan::collapse::nested_candidates(candidate, &doc.items, &doc.absorbed)
+                    .iter()
+                    .any(|nested| personal(nested));
             if personal(candidate) || nested_personal {
                 categories.user_data.insert(candidate.id.clone());
             }

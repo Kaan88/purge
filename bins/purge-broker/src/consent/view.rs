@@ -20,8 +20,9 @@
 //! An entry is an attention entry, listed in full, never cut and never folded into "and N more", when
 //! it is user data, was ticked by the user (not chosen by Purge as Safe), is over 1 GB, cannot be put
 //! back, has an absorbed item inside it that needs attention (those are listed as entries of their own,
-//! because they go with it), will conflict on restore, or when its name is shown with escapes or with
-//! something left out ([`super::text`]). Which of these apply depends on the variant ([`Rules`]).
+//! because they go with it), will conflict on restore, or when its name is shown with escapes, with
+//! something left out, or is a path whose last component is wholly in a look-alike script
+//! ([`super::text`]). Which of these apply depends on the variant ([`Rules`]).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -95,6 +96,8 @@ pub enum Reason {
     Conflict(ConflictKind),
     /// Its name is shown with `\u{...}` escapes.
     EscapedName,
+    /// Its last path component is wholly in a script that borrows Latin shapes.
+    LookAlikeName,
     /// Part of its name is left out.
     ShortenedName,
 }
@@ -115,6 +118,7 @@ impl Reason {
                 "something is there now, this item will be skipped"
             }
             Reason::EscapedName => "name has hidden or look-alike characters",
+            Reason::LookAlikeName => "name is written in a look-alike script",
             Reason::ShortenedName => "name is shortened",
         }
     }
@@ -506,6 +510,9 @@ fn name_reasons(flags: Flags, reasons: &mut Vec<Reason>) {
     if flags.escaped {
         reasons.push(Reason::EscapedName);
     }
+    if flags.look_alike {
+        reasons.push(Reason::LookAlikeName);
+    }
     if flags.shortened {
         reasons.push(Reason::ShortenedName);
     }
@@ -559,12 +566,50 @@ fn descendants<'a>(plan: &'a BoundPlan, candidate: &'a Candidate) -> Vec<&'a Can
     out
 }
 
+/// The entry for a candidate that goes with `parent` (absorbed into it or merely nested in it), and
+/// the flags of its shown target (review M4).
+fn child_row(child: &Candidate, rules: Rules) -> (Option<Entry>, Flags) {
+    let child_target = target_text(&child.target);
+    let mut reasons = Vec::new();
+    if rules.user_data && purge_plan::collapse::is_user_data(child) {
+        reasons.push(Reason::UserData);
+    }
+    if rules.large && child.size_bytes.is_some_and(|b| b > LARGE_BYTES) {
+        reasons.push(Reason::Large);
+    }
+    name_reasons(child_target.flags, &mut reasons);
+    let verb = match rules.verb {
+        Verb::Exec => VERB_WITH_PARENT,
+        Verb::PutBack => VERB_BACK_WITH_PARENT,
+    };
+    let entry = (!reasons.is_empty()).then(|| Entry {
+        id: child.id.0.clone(),
+        text: line(
+            MARK,
+            verb,
+            &child_target.text,
+            child.size_bytes,
+            None,
+            0,
+            &reasons,
+        ),
+        reasons,
+    });
+    (entry, child_target.flags)
+}
+
 fn build_rows(
     plan: &BoundPlan,
     items: &[&BoundItem],
     rules: Rules,
     conflicts: &HashMap<OpId, ConflictKind>,
 ) -> Result<Vec<Row>, ViewError> {
+    let selected: HashSet<&CandidateId> = plan
+        .items()
+        .iter()
+        .filter_map(|item| plan.candidate(item))
+        .map(|candidate| &candidate.id)
+        .collect();
     let mut rows = Vec::with_capacity(items.len());
     for item in items {
         let candidate = plan
@@ -591,42 +636,36 @@ fn build_rows(
         let chosen = decision.is_some_and(|d| d.band == Band::Safe && d.preselected);
         let irreversible = acts && op.is_some_and(ExecOp::is_irreversible);
 
-        let mut child_entries = Vec::new();
+        // What goes with the item: the absorbed children, and every other candidate of the document
+        // that nests in it without having been absorbed (review M4; `collapse` rule 3 keeps a
+        // user-data descendant as an item of its own, so `children` does not name it).
         let below = descendants(plan, candidate);
-        for child in &below {
-            let child_target = target_text(&child.target);
-            let mut reasons = Vec::new();
-            if rules.user_data && child.category == Category::UserData {
-                reasons.push(Reason::UserData);
+        let listed: HashSet<&CandidateId> = below.iter().map(|child| &child.id).collect();
+        let mut nested_extra: Vec<&Candidate> = Vec::new();
+        for child in purge_plan::collapse::nested_candidates(
+            candidate,
+            &plan.scan().items,
+            &plan.scan().absorbed,
+        ) {
+            // A selected item has a line of its own and an op of its own: it does not also ride here.
+            if listed.contains(&child.id) || selected.contains(&child.id) {
+                continue;
             }
-            if rules.large && child.size_bytes.is_some_and(|b| b > LARGE_BYTES) {
-                reasons.push(Reason::Large);
-            }
-            name_reasons(child_target.flags, &mut reasons);
-            flags.merge(child_target.flags);
-            if !reasons.is_empty() {
-                let verb = match rules.verb {
-                    Verb::Exec => VERB_WITH_PARENT,
-                    Verb::PutBack => VERB_BACK_WITH_PARENT,
-                };
-                child_entries.push(Entry {
-                    id: child.id.0.clone(),
-                    text: line(
-                        MARK,
-                        verb,
-                        &child_target.text,
-                        child.size_bytes,
-                        None,
-                        0,
-                        &reasons,
-                    ),
-                    reasons,
-                });
+            nested_extra.push(child);
+        }
+        let mut child_entries = Vec::new();
+        let mut sees_user_data = false;
+        for child in below.iter().copied().chain(nested_extra.iter().copied()) {
+            sees_user_data |= rules.user_data && purge_plan::collapse::is_user_data(child);
+            let (entry, child_flags) = child_row(child, rules);
+            flags.merge(child_flags);
+            if let Some(entry) = entry {
+                child_entries.push(entry);
             }
         }
 
         let mut reasons = Vec::new();
-        if rules.user_data && candidate.category == Category::UserData {
+        if rules.user_data && (purge_plan::collapse::is_user_data(candidate) || sees_user_data) {
             reasons.push(Reason::UserData);
         }
         if rules.not_chosen && !chosen {
@@ -647,7 +686,7 @@ fn build_rows(
         name_reasons(shown_target.flags, &mut reasons);
 
         let id = candidate.id.0.clone();
-        let inside = below.len();
+        let inside = below.len() + nested_extra.len();
         let plain = Entry {
             id: id.clone(),
             text: line(

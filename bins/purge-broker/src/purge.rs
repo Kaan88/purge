@@ -24,7 +24,8 @@
 //! ([`view::view_purge_user_data`]). `view_purge` itself refuses a user-data unit
 //! (`ViewError::UserDataMisplaced`), so a missed split fails closed. Cancelling the bulk dialog
 //! answers `consent_declined` and nothing is purged; cancelling one user-data dialog keeps that item
-//! and leaves the other decisions standing.
+//! and leaves the other decisions standing. When every dialog of the request is declined the answer is
+//! `consent_declined`, not `partial`, and the broker does not end on it (review S3).
 //!
 //! [`PurgeConsent`] is then built from **only** the units whose dialog was approved: the ids are
 //! named, user-data units are confirmed one by one, and every backup file of an approved backup unit
@@ -310,13 +311,10 @@ impl Purger {
             }
         }
 
-        let kept = requested.len().saturating_sub(named.len());
+        // No dialog of this request was approved: the request is declined, not a partial purge. The
+        // broker must not count it as a completed change and must not end (review S3).
         if named.is_empty() {
-            return Ok(PurgeResult {
-                outcome: purge_rpc::error::Outcome::Partial,
-                purged: 0,
-                kept: u32::try_from(kept).unwrap_or(u32::MAX),
-            });
+            return Err(consent_declined());
         }
 
         let mut consent = PurgeConsent::naming(named.iter().cloned());

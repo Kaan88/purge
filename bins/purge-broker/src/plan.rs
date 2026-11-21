@@ -356,7 +356,9 @@ fn attention_item(bound: &BoundPlan, entry: &view::Entry) -> Option<AttentionIte
             Reason::Large => Some(AttentionReason::Large),
             Reason::Irreversible => Some(AttentionReason::NoUndo),
             Reason::Inside => Some(AttentionReason::Inside),
-            Reason::EscapedName | Reason::ShortenedName => Some(AttentionReason::Name),
+            Reason::EscapedName | Reason::ShortenedName | Reason::LookAlikeName => {
+                Some(AttentionReason::Name)
+            }
             Reason::Conflict(_) => None,
         })
         .collect();

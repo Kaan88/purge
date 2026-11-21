@@ -427,6 +427,35 @@ fn write_scan_copy(session: &SessionDir, items: &[Planned<'_>]) {
     file.sync().unwrap();
 }
 
+/// Writes a scan copy whose first item is the parent at `parent_path`, and which also lists
+/// `nested_path` as a user-data item of its own, not absorbed into the parent: the shape `collapse`
+/// rule 3 leaves for a parent that is not absorbing (review M4). The parent's `children` is empty.
+fn write_nested_user_data_scan_copy(session: &SessionDir, parent_path: &str, nested_path: &str) {
+    let candidate = |id: &str, path: &str, category: &str| {
+        serde_json::json!({
+            "id": id,
+            "target": {"type": "Path", "path": path},
+            "action": "Quarantine",
+            "owner": {"program_id": "HKLM|64|Vendor_is1", "display_name": "Vendor"},
+            "origin": "Scanner", "scanner": "REF-ANY", "category": category,
+            "harm": "Low", "reversibility": "Full",
+            "size_bytes": null, "child_count": null, "decision": null
+        })
+    };
+    let doc = serde_json::json!({
+        "schema": "purge.scan/0", "app": "vendor-app", "tool": "purge", "mode": "post",
+        "policy_version": "test", "plan_hash": "h", "items": [
+            candidate(&item_id(1).0, parent_path, "AppData"),
+            candidate("c-777", nested_path, "UserData")
+        ]
+    });
+    let bytes = serde_json::to_vec(&doc).unwrap();
+    serde_json::from_slice::<purge_plan::emit::ScanDoc>(&bytes).unwrap();
+    let mut file = session.create_file(SCAN_FILE).unwrap();
+    file.write_all(&bytes).unwrap();
+    file.sync().unwrap();
+}
+
 fn app<'a>(source: String) -> Planned<'a> {
     Planned {
         source,
@@ -577,6 +606,40 @@ fn user_data_is_purged_only_when_confirmed_one_by_one() {
     assert_eq!(outcome_of(&report, &built.ids[0]), &PurgeOutcome::Purged);
     assert!(!exists(&built.quarantined[0]));
     assert_deletes_inside(&fx.quarantine_of(built.session.id()));
+}
+
+#[test]
+fn a_parent_that_holds_a_user_data_item_is_user_data_and_purged_only_with_its_own_consent() {
+    let fx = Fx::new("nested-userdata");
+    let parent = fx.scratch.dir(r"src\vendor");
+    fx.scratch.file(r"src\vendor\app.exe", b"x");
+    let saves = fx.scratch.file(r"src\vendor\saves\slot1.sav", b"progress");
+    let built = build(&fx, at_day(0), &[app(parent.clone())], false, false);
+    write_nested_user_data_scan_copy(&built.session, &parent, &saves);
+
+    // The parent's own category is AppData and its `children` is empty, but it takes a user-data
+    // folder with it (review M4).
+    let listing = expiring(&fx.roots, at_day(30)).unwrap();
+    assert_eq!(listing.items.len(), 1);
+    assert!(
+        listing.items[0].user_data,
+        "the parent holds user data below it"
+    );
+
+    // The bulk purge leaves it alone without a dialog of its own.
+    let report = purge(&fx.roots, &built.ids, &all(&built.ids), at_day(30)).unwrap();
+    assert_eq!(
+        outcome_of(&report, &built.ids[0]),
+        &PurgeOutcome::Excluded(Exclusion::UserDataNotConfirmed)
+    );
+    assert!(exists(&built.quarantined[0]));
+
+    // Its own dialog (the confirmation) deletes it.
+    let mut consent = all(&built.ids);
+    consent.confirm_user_data(built.ids[0].clone());
+    let report = purge(&fx.roots, &built.ids, &consent, at_day(30)).unwrap();
+    assert_eq!(outcome_of(&report, &built.ids[0]), &PurgeOutcome::Purged);
+    assert!(!exists(&built.quarantined[0]));
 }
 
 #[test]

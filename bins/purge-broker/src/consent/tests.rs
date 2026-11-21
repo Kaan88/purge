@@ -7,8 +7,8 @@ use purge_exec::plan_in::{
 };
 use purge_model::exec::op::OpId;
 use purge_model::{
-    Action, AppRef, Band, Candidate, CandidateId, Category, Decision, FileTime, Harm, Origin,
-    Reversibility, ScanMode, Target, Tool,
+    Action, AppRef, Band, Blocker, Candidate, CandidateId, Category, Decision, FileTime, Harm,
+    Origin, Reversibility, ScanMode, Target, Tool,
 };
 use purge_plan::emit::{ScanDoc, ScanSchema};
 use purge_rpc::methods::ConfirmCode;
@@ -47,6 +47,7 @@ struct Spec {
     category: Category,
     size: Option<u64>,
     children: Vec<String>,
+    blockers: Vec<Blocker>,
 }
 
 impl Spec {
@@ -60,6 +61,7 @@ impl Spec {
             category: Category::AppFiles,
             size: None,
             children: Vec::new(),
+            blockers: Vec::new(),
         }
     }
 
@@ -97,6 +99,11 @@ impl Spec {
         self
     }
 
+    fn blocker(mut self, blocker: Blocker) -> Spec {
+        self.blockers.push(blocker);
+        self
+    }
+
     fn build(self) -> Candidate {
         Candidate {
             id: cid(&self.id),
@@ -110,7 +117,7 @@ impl Spec {
             scanner: "TEST".into(),
             category: self.category,
             evidence: Vec::new(),
-            blockers: Vec::new(),
+            blockers: self.blockers,
             harm: Harm::Low,
             reversibility: Reversibility::Full,
             children: self.children.iter().map(|c| cid(c)).collect(),
@@ -168,6 +175,23 @@ fn plan_full(specs: Vec<Spec>, absorbed: Vec<Spec>, allow_irreversible: bool) ->
 
 fn plan(specs: Vec<Spec>) -> BoundPlan {
     plan_with(specs, Vec::new())
+}
+
+/// A bound plan over `specs` and `absorbed` that selects only `chosen` (candidate ids).
+fn plan_selecting(specs: Vec<Spec>, absorbed: Vec<Spec>, chosen: &[&str]) -> BoundPlan {
+    let items: Vec<Candidate> = specs.into_iter().map(Spec::build).collect();
+    let absorbed: Vec<Candidate> = absorbed.into_iter().map(Spec::build).collect();
+    let ids: Vec<CandidateId> = chosen.iter().map(|id| cid(id)).collect();
+    let scan = scan_doc(items, absorbed);
+    let confirm = confirm_hash(scan.plan_hash.parse().unwrap(), selection_hash(&ids)).to_string();
+    bind(&ExecRequest {
+        scan,
+        confirm,
+        selection: Selection::Ids(ids),
+        allow_irreversible: false,
+        settings: ExecSettings::default(),
+    })
+    .expect("the fixture plan binds")
 }
 
 fn facts() -> Facts {
@@ -594,6 +618,56 @@ fn an_absorbed_item_that_needs_attention_is_listed_with_its_parent() {
     let v = view(&calm, &facts()).unwrap();
     assert!(v.attention.is_empty());
     assert!(v.others[0].text.contains("1 item inside it"));
+}
+
+#[test]
+fn user_data_below_a_ticked_parent_is_listed_and_makes_the_parent_user_data() {
+    // The parent is Likely, so collapse does not absorb it: the user-data folder below it stays an
+    // item of its own (review M4). The user ticks the parent alone.
+    let parent = Spec::file("p", r"C:\Program Files\Vendor").ticked(Band::Likely);
+    let saves = Spec::user_data("saves", r"C:\Program Files\Vendor\saves");
+    let p = plan_selecting(vec![parent, saves], Vec::new(), &["p"]);
+    let v = view(&p, &facts()).unwrap();
+    assert_eq!(ids(&v.attention), ["p", "saves"]);
+    // The parent is not user data by its own category, but what it takes with it is.
+    assert!(
+        v.attention[0].reasons.contains(&Reason::UserData),
+        "{:?}",
+        v.attention[0].reasons
+    );
+    assert!(v.attention[0].reasons.contains(&Reason::NotChosen));
+    assert!(
+        v.attention[0].text.contains("user data"),
+        "{}",
+        v.attention[0].text
+    );
+    assert!(
+        v.attention[0].text.contains("1 item inside it"),
+        "{}",
+        v.attention[0].text
+    );
+    assert_eq!(v.attention[1].reasons, [Reason::UserData]);
+    assert!(v.attention[1].text.contains("Taken with its parent"));
+    assert!(
+        v.attention[1]
+            .text
+            .contains(r#""C:\Program Files\Vendor\saves""#),
+        "{}",
+        v.attention[1].text
+    );
+    assert_eq!((v.counts.items, v.counts.inside), (1, 1));
+    assert!(v.describes_plan(&p));
+
+    // A candidate the scanner marks with the user-data blocker (its category stays AppFiles) is user
+    // data in the dialog too.
+    let blocked = Spec::file("p", r"C:\Program Files\Vendor")
+        .ticked(Band::Likely)
+        .blocker(Blocker::UserData);
+    let p = plan_selecting(vec![blocked], Vec::new(), &["p"]);
+    let v = view(&p, &facts()).unwrap();
+    assert_eq!(ids(&v.attention), ["p"]);
+    assert!(v.attention[0].reasons.contains(&Reason::UserData));
+    assert!(v.attention[0].text.contains("user data"));
 }
 
 // ---------------------------------------------------------------------------------------------------
