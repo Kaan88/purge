@@ -21,8 +21,8 @@ pub mod manifest;
 mod records;
 
 pub use build::{
-    BUILDER_VERSION, BuildOptions, BuildTimings, FileStamps, LocalBaselineFile, SealFloors,
-    SourceStamp, build, file_stamps, iso_utc,
+    BUILDER_VERSION, BuildOptions, BuildTimings, FileStamps, LocalBaselineFile,
+    S3_DENIED_BY_DESIGN, SealFloors, SourceStamp, build, file_stamps, iso_utc,
 };
 pub use file::{
     LocalBaseline, LocalBaselineError, LocalHeader, LocalSource, SourceLine, SourceStatus,

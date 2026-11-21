@@ -40,6 +40,9 @@ use crate::types::{PackageInfo, PackageSignatureKind, SourceError, SourceResult}
 pub const MAX_WALK_DEPTH: u32 = 64;
 /// Most keys one walk yields (as `purge-win` `offreg`).
 pub const MAX_WALK_KEYS: u64 = 2_000_000;
+/// Unreadable and vanished keys a walk names ([`HiveWalk::unreadable_keys`], [`HiveWalk::vanished_keys`]);
+/// the counts are always complete.
+pub const LISTED_WALK_KEYS: usize = 16;
 /// Largest component manifest read; a larger file is an error for that file.
 pub const MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
 /// Largest `AppxManifest.xml` read; a larger file is an error for that package.
@@ -95,11 +98,16 @@ pub struct HiveWalk {
     pub values: u64,
     /// Keys whose values or subkeys could not be read (access denied, any error but "gone").
     pub unreadable: u64,
+    /// The first [`LISTED_WALK_KEYS`] of them in walk order, full paths as the walk spelled them (S3:
+    /// `HKU\.DEFAULT\…`), so the reason of an incomplete seal can be looked at.
+    pub unreadable_keys: Vec<String>,
     /// Listed keys that were not found when the walk opened them: yielded, their content unknown. A
     /// live hive can change while it is read; a source can also fail to open a key its parent lists
     /// (the Live registry maps `HKU\.DEFAULT\Software\Classes\X` onto a `.DEFAULT_Classes` hive that
     /// does not exist).
     pub vanished: u64,
+    /// The first [`LISTED_WALK_KEYS`] of them in walk order, full paths as for [`Self::unreadable_keys`].
+    pub vanished_keys: Vec<String>,
     /// Registry links met; yielded, never followed.
     pub links: u64,
     /// A depth or key cap was reached.
@@ -285,10 +293,12 @@ pub fn walk_registry(
             Ok(i) => i,
             Err(SourceError::NotFound) => {
                 walk.vanished += 1;
+                note_key(&mut walk.vanished_keys, &full);
                 continue;
             }
             Err(_) => {
                 walk.unreadable += 1;
+                note_key(&mut walk.unreadable_keys, &full);
                 continue;
             }
         };
@@ -305,6 +315,7 @@ pub fn walk_registry(
             }
             Err(_) => {
                 walk.unreadable += 1;
+                note_key(&mut walk.unreadable_keys, &full);
                 continue;
             }
         }
@@ -316,6 +327,7 @@ pub fn walk_registry(
             Ok(s) => s,
             Err(_) => {
                 walk.unreadable += 1;
+                note_key(&mut walk.unreadable_keys, &full);
                 continue;
             }
         };
@@ -336,6 +348,13 @@ pub fn walk_registry(
         }
     }
     Ok(walk)
+}
+
+/// Adds `key` to one of a walk's key lists while it holds fewer than [`LISTED_WALK_KEYS`].
+fn note_key(list: &mut Vec<String>, key: &str) {
+    if list.len() < LISTED_WALK_KEYS {
+        list.push(key.to_owned());
+    }
 }
 
 /// The publisher id of a package full name (`Name_Version_Arch_Resource_PublisherId`) or family name

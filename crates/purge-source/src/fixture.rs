@@ -1705,6 +1705,8 @@ mod local_tests {
             ]
         );
         assert_eq!((walk.keys, walk.links, walk.unreadable), (6, 1, 1));
+        assert_eq!(walk.unreadable_keys, [r"HKU\.DEFAULT\Software\Secret"]);
+        assert!(walk.vanished_keys.is_empty());
         assert!(!walk.is_complete());
         // Not there at all: an error.
         let empty = Fixture::new();
