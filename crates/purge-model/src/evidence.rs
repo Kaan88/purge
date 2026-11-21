@@ -122,13 +122,16 @@ pub enum EvidenceKind {
     NameFuzzy,
     /// Negative: the item was modified after the uninstall ended.
     ModifiedAfterUninstall,
+    /// A note from an AI advisor (`purge.advice/1`). Never counted toward the band; a stored negative
+    /// weight moves the item down one band (policy rule 7).
+    Ai,
 }
 
 impl EvidenceKind {
     /// Every kind, in §5.3 order (positives, then `EmptyAfterPlan`, then the negatives). One entry per row:
     /// [`EvidenceKind::InstallerManifest`] appears once, as its Inno form; its Msi and Burn forms have the
     /// same tier, weight and scope.
-    pub const ALL: [EvidenceKind; 25] = [
+    pub const ALL: [EvidenceKind; 26] = [
         EvidenceKind::InsideInstallRoot,
         EvidenceKind::InstallerManifest(ManifestKind::Inno),
         EvidenceKind::InPreUninstallRefSnapshot,
@@ -154,6 +157,7 @@ impl EvidenceKind {
         EvidenceKind::GenericName,
         EvidenceKind::NameFuzzy,
         EvidenceKind::ModifiedAfterUninstall,
+        EvidenceKind::Ai,
     ];
 
     /// Weight of a [`EvidenceKind::VendorContainer`] match when the vendor is a mega-vendor (§5.4).
@@ -188,6 +192,7 @@ impl EvidenceKind {
             ExecutablesPresent | ManyFiles | GenericName | NameFuzzy | ModifiedAfterUninstall => {
                 Tier::C
             }
+            Ai => Tier::Ai,
         }
     }
 
@@ -223,6 +228,7 @@ impl EvidenceKind {
             GenericName => -3,
             NameFuzzy => -2,
             ModifiedAfterUninstall => -4,
+            Ai => 0,
         }
     }
 
@@ -254,6 +260,7 @@ impl EvidenceKind {
             ExecutablesPresent | ManyFiles | GenericName | NameFuzzy | ModifiedAfterUninstall => {
                 ScopeSet::ANY
             }
+            Ai => ScopeSet::ANY,
         }
     }
 
@@ -390,7 +397,8 @@ impl Evidence {
             | ManyFiles
             | GenericName
             | NameFuzzy
-            | ModifiedAfterUninstall => false,
+            | ModifiedAfterUninstall
+            | Ai => false,
         }
     }
 }
@@ -404,7 +412,7 @@ mod tests {
     use Scope::{Key, Object, Package, Path, Value};
 
     /// The §5.3 table, line by line: kind, tier, weight, allowed scopes.
-    const GOLDEN: [(EvidenceKind, Tier, i8, &[Scope]); 25] = [
+    const GOLDEN: [(EvidenceKind, Tier, i8, &[Scope]); 26] = [
         (InsideInstallRoot, Tier::A, 9, &[Path]),
         (
             InstallerManifest(ManifestKind::Inno),
@@ -450,6 +458,7 @@ mod tests {
             -4,
             &[Value, Key, Path, Package, Object],
         ),
+        (Ai, Tier::Ai, 0, &[Value, Key, Path, Package, Object]),
     ];
 
     #[test]

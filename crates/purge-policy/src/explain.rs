@@ -275,6 +275,10 @@ fn evidence_lines_at(evidence: &Evidence, owner: &str, inferred: bool) -> Vec<St
         GenericName => "Against: the name is a common word".to_owned(),
         NameFuzzy => "Against: the name is only similar".to_owned(),
         ModifiedAfterUninstall => "Against: changed after the uninstall finished".to_owned(),
+        Ai => match fact(e, "note") {
+            Some(note) => format!("Assistant note: {note}"),
+            None => "Reviewed by an assistant".to_owned(),
+        },
     };
     vec![line]
 }

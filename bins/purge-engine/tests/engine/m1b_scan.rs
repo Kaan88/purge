@@ -123,6 +123,12 @@ fn scan_post(machine: &Fixture, fp: &Fingerprint) -> Scanned {
         scanned.per_scanner.len(),
         purge_scan::catalog::SCANNER_IDS.len()
     );
+    assert_eq!(
+        scanned.residue.scan_id, scanned.built.scan.plan_hash,
+        "the residue binds to the scan's plan hash"
+    );
+    scanned.residue.validate().expect("the residue validates");
+    assert!(scanned.residue.items.len() <= purge_model::MAX_RESIDUE_ITEMS);
     scanned
 }
 

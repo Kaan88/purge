@@ -30,7 +30,7 @@
 
 use std::borrow::Cow;
 use std::cell::OnceCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
@@ -48,7 +48,7 @@ use purge_model::object::TaskAction;
 use purge_model::{
     Blocker, Candidate, EvidenceKind, Facts, Fingerprint, Hive, InventoryEntry, ManifestKind,
     MsiContext, MsiFacts, MsiKeyPath, MsiOnlyRow, ObjectFp, ObjectKind, ObjectWhy, ProgramId,
-    Scope, Target, Tier,
+    ResidueWhy, Scope, Target, Tier,
 };
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
@@ -89,6 +89,20 @@ pub struct ScanExt {
     /// The registry targets under a Classes root that got `MsiPackageUnreadable` (folded spelling), for
     /// the count in the scan's warnings.
     unknown_ownership: Mutex<BTreeSet<String>>,
+    /// The `Unknown` answers A sites got during the scanner run, for the residue (design §7).
+    residue: Mutex<ResidueLog>,
+}
+
+/// The per-run log of `Unknown` absence answers: the site that asked, the key, and why.
+#[derive(Debug, Default)]
+struct ResidueLog {
+    /// Whether the scan wants a residue. [`ScanExt::none`] does not; the pipeline's [`ScanExt::build`]
+    /// does.
+    collect: bool,
+    /// The scanner whose `scan` is running ([`ScanCtx::run`]).
+    site: Option<&'static str>,
+    /// One entry per (site, folded key); the first reason wins.
+    answers: BTreeMap<(String, String), (String, ResidueWhy)>,
 }
 
 /// Writes a `PURGE_TIMING` phase line when a source meter is installed (the format of
@@ -125,9 +139,15 @@ impl ScanExt {
     /// No hits, an empty ownership index, no system objects: the M1a context.
     pub fn none() -> &'static ScanExt {
         static NONE: OnceLock<ScanExt> = OnceLock::new();
-        NONE.get_or_init(|| ScanExt::new(OwnershipIndex::default(), SysObjectIndex::default()))
+        NONE.get_or_init(|| {
+            let ext = ScanExt::new(OwnershipIndex::default(), SysObjectIndex::default());
+            ext.residue
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .collect = false;
+            ext
+        })
     }
-
     /// Shared data without reference hits.
     pub fn new(ownership: OwnershipIndex, sysobj: SysObjectIndex) -> ScanExt {
         ScanExt {
@@ -139,6 +159,10 @@ impl ScanExt {
             faults: Mutex::new(Vec::new()),
             warnings: Mutex::new(Vec::new()),
             unknown_ownership: Mutex::new(BTreeSet::new()),
+            residue: Mutex::new(ResidueLog {
+                collect: true,
+                ..ResidueLog::default()
+            }),
         }
     }
 
@@ -226,6 +250,44 @@ impl ScanExt {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(line);
+    }
+
+    /// Starts the residue attribution of `site`'s scanner run ([`ScanCtx::run`]).
+    pub(super) fn begin_site(&self, site: &'static str) {
+        let mut log = self.residue.lock().unwrap_or_else(PoisonError::into_inner);
+        if log.collect {
+            log.site = Some(site);
+        }
+    }
+
+    /// Ends the residue attribution of the running scanner.
+    pub(super) fn end_site(&self) {
+        let mut log = self.residue.lock().unwrap_or_else(PoisonError::into_inner);
+        log.site = None;
+    }
+
+    /// Records one `Unknown` absence answer of the running scanner for the residue (design §7). No-op
+    /// when the scan does not collect a residue or no scanner is running.
+    pub(super) fn note_unknown(&self, key: &str, why: ResidueWhy) {
+        let mut log = self.residue.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(site) = log.site else {
+            return;
+        };
+        if !log.collect {
+            return;
+        }
+        log.answers
+            .entry((site.to_owned(), prefix::fold(key)))
+            .or_insert_with(|| (key.to_owned(), why));
+    }
+
+    /// Takes the `Unknown` answers of the scan: (scanner id, key, why), sorted by site then folded key.
+    pub fn take_unknown(&self) -> Vec<(String, String, ResidueWhy)> {
+        let mut log = self.residue.lock().unwrap_or_else(PoisonError::into_inner);
+        std::mem::take(&mut log.answers)
+            .into_iter()
+            .map(|((site, _), (key, why))| (site, key, why))
+            .collect()
     }
 
     /// The scanner faults recorded so far (candidates the sealing dropped), emptied.
