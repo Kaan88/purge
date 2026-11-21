@@ -1,0 +1,12 @@
+{
+  "command": "\"C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\unins000.exe\"",
+  "quiet_command": "\"C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\unins000.exe\" /VERYSILENT",
+  "route": "medium",
+  "running": [
+    {
+      "name": "Code.exe",
+      "pid": 4242
+    }
+  ],
+  "signer": "Microsoft Corporation"
+}

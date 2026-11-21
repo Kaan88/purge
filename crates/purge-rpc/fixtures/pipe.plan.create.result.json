@@ -1,0 +1,25 @@
+{
+  "attention": [
+    {
+      "band": "Likely",
+      "candidate_id": "c-5a5a000000000002",
+      "display_name": "C:\\Users\\u\\.gitconfig",
+      "kind": "file",
+      "reasons": [
+        "user_data",
+        "not_preselected"
+      ],
+      "size_bytes": 812
+    }
+  ],
+  "bytes": 1234567,
+  "code": "A1B2-C3D4",
+  "counts": {
+    "items": 22,
+    "preselected": 20,
+    "ticked": 2
+  },
+  "plan_hash": "a1b2c3d400000000000000000000000000000000000000000000000000000001",
+  "plan_id": "p-feed000000000001",
+  "warnings": []
+}

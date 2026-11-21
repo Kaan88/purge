@@ -1,0 +1,28 @@
+{
+  "counts": {
+    "done": 21,
+    "failed": 0,
+    "held_retry": 1,
+    "pending_reboot": 0,
+    "skipped": 0,
+    "vanished": 0
+  },
+  "held": [
+    {
+      "display_name": "C:\\Program Files\\Git\\git-bash.exe",
+      "lockers": [
+        {
+          "name": "git-bash.exe",
+          "pid": 77
+        }
+      ],
+      "op": 4
+    }
+  ],
+  "outcome": "partial",
+  "restore_point": {
+    "kind": "Created",
+    "sequence": 42
+  },
+  "session": "20251115T101502Z-9f3a6c1d2b7e4a50"
+}

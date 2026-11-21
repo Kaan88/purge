@@ -276,19 +276,20 @@ pub const SITES: &[Site] = &[
         "framework/absence.rs",
         "Absence::Inferred",
         Class::M,
-        2,
+        3,
         0,
-        "the cap arm, and the carrier CandidateBuilder::absence (no production caller)",
+        "the cap arm, the residue's inferred test, and the carrier CandidateBuilder::absence \
+         (no production caller)",
     ),
     site(
         SCAN,
         "framework/absence.rs",
         "trust",
         Class::M,
-        3,
+        4,
         0,
         "matching_exact_baseline and has_foreign_exact_baseline (is the view Exact at all), the seal's \
-         trust test",
+         trust test, and the residue's no-view reason",
     ),
     site(
         SCAN,
@@ -335,9 +336,9 @@ pub const SITES: &[Site] = &[
         "framework.rs",
         "trust",
         Class::M,
-        1,
+        2,
         0,
-        "the seal's fault line names the trust",
+        "the seal's fault line names the trust; the residue records the view's",
     ),
     site(
         SCAN,
@@ -348,7 +349,7 @@ pub const SITES: &[Site] = &[
         0,
         UNION_BLOCK,
     ),
-    site(SCAN, "framework.rs", "has_key", Class::P, 1, 0, UNION_BLOCK),
+    site(SCAN, "framework.rs", "has_key", Class::P, 3, 0, UNION_BLOCK),
     site(
         SCAN,
         "framework.rs",

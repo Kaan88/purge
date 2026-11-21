@@ -1,0 +1,8 @@
+{
+  "verify_gone": {
+    "arp_gone": true,
+    "main_exes_gone": false,
+    "msi_unknown_all_ctx": true,
+    "passed": false
+  }
+}

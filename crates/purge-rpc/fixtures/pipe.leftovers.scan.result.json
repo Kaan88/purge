@@ -1,0 +1,13 @@
+{
+  "baseline_trust": "Exact",
+  "counts": {
+    "blocked": 3,
+    "likely": 4,
+    "preselected": 20,
+    "safe": 20,
+    "weak": 2
+  },
+  "mode": "post",
+  "scan_id": "s-0123456789abcdef",
+  "warnings": []
+}

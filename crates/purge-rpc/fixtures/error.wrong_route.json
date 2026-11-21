@@ -1,0 +1,8 @@
+{
+  "code": -32000,
+  "data": {
+    "kind": "wrong_route",
+    "route": "medium"
+  },
+  "message": "wrong_route"
+}

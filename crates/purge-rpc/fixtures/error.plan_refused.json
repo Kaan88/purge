@@ -1,0 +1,16 @@
+{
+  "code": -32000,
+  "data": {
+    "kind": "plan_refused",
+    "refusals": [
+      {
+        "candidate_id": "c-5a5a000000000002",
+        "reason": "The quarantine cannot hold this item."
+      },
+      {
+        "reason": "Nothing is selected."
+      }
+    ]
+  },
+  "message": "plan_refused"
+}

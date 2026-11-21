@@ -1,0 +1,14 @@
+{
+  "request": 2,
+  "rows": [
+    {
+      "install_time": 134076753020000000,
+      "name": "Git",
+      "program_id": "HKLM|64|Git_is1",
+      "publisher": "The Git Development Community",
+      "scope": "Machine",
+      "size_bytes": 345000000,
+      "version": "2.47.0"
+    }
+  ]
+}

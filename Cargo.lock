@@ -298,6 +298,7 @@ name = "purge-rpc"
 version = "0.1.0"
 dependencies = [
  "purge-model",
+ "schemars",
  "serde",
  "serde_json",
 ]

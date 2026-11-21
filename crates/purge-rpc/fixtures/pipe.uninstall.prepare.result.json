@@ -1,0 +1,31 @@
+{
+  "programs": [
+    {
+      "co_products": [
+        {
+          "name": "Git Credential Manager",
+          "program_id": null
+        }
+      ],
+      "command": "\"C:\\Program Files\\Git\\unins000.exe\"",
+      "fingerprint_summary": {
+        "files": 1830,
+        "objects": 0,
+        "registry": 42,
+        "roots": 1
+      },
+      "program_id": "HKLM|64|Git_is1",
+      "quiet_command": "\"C:\\Program Files\\Git\\unins000.exe\" /SILENT",
+      "route": "broker",
+      "running": [],
+      "session_id": "u-1122334455667788",
+      "signer": "Johannes Schindelin",
+      "warnings": [
+        {
+          "code": "baseline_inferred",
+          "message": "Windows' own items are inferred from a local baseline."
+        }
+      ]
+    }
+  ]
+}

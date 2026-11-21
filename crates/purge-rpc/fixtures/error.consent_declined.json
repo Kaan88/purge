@@ -1,0 +1,7 @@
+{
+  "code": -32000,
+  "data": {
+    "kind": "consent_declined"
+  },
+  "message": "consent_declined"
+}

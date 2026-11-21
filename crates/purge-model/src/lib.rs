@@ -34,6 +34,7 @@ mod ids;
 mod inventory;
 pub mod object;
 mod plan;
+mod residue;
 mod root;
 mod run;
 mod scope;
@@ -64,6 +65,14 @@ pub use object::{
     parse_firewall_rule,
 };
 pub use plan::{Band, Category, Plan, PlanItem, PlanSchema, ScanMode, Tool};
+pub use residue::{
+    AdviceDoc, AdviceItem, AdviceReason, AdviceSchema, AdviceVerdict, BoundAdvice,
+    MAX_ADVICE_ITEMS, MAX_AREA_CHARS, MAX_ID_CHARS, MAX_ITEM_FP_CHARS, MAX_KEY_CHARS,
+    MAX_MODEL_CHARS, MAX_NEIGHBOURS, MAX_NOTE_CHARS, MAX_RESIDUE_ITEMS, MAX_SCAN_ID_CHARS,
+    MAX_SITE_CHARS, ResidueBaselineView, ResidueDoc, ResidueError, ResidueItem, ResidueOwner,
+    ResidueSchema, ResidueShape, ResidueWhy, ResidueWritten, apply, bind,
+    carries_baseline_inferred, item_fp_text,
+};
 pub use root::{Root, RootKind, RootSource, SourceTrust};
 pub use run::{ProcessSeen, RunDoc, RunOutcome, RunSchema, VerifyGone};
 pub use scope::{Scope, ScopeSet};

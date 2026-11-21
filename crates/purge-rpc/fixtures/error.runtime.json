@@ -1,0 +1,8 @@
+{
+  "code": -32000,
+  "data": {
+    "kind": "runtime",
+    "message": "the harvest store could not be opened"
+  },
+  "message": "runtime"
+}

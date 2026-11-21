@@ -1,0 +1,12 @@
+{
+  "conflicts": [
+    {
+      "conflict": {
+        "kind": "DestinationExists"
+      },
+      "display_name": "C:\\Program Files\\Git\\etc",
+      "op": 3
+    }
+  ],
+  "outcome": "undo_conflicts"
+}

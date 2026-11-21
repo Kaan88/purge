@@ -47,9 +47,11 @@
 //!
 //! No production path reaches either with an inferred answer today.
 
+use purge_index::baseline::Baseline;
 use purge_index::baseline_view::Absence;
 use purge_model::{
-    BaselineTrust, Blocker, Candidate, Evidence, EvidenceKind, ManifestKind, OsInfo, Scope, Target,
+    BaselineTrust, Blocker, Candidate, Evidence, EvidenceKind, ManifestKind, OsInfo, ResidueWhy,
+    Scope, Target,
 };
 
 use super::{CandidateBuilder, ScanCtx};
@@ -75,6 +77,11 @@ fn capped(answer: Absence) -> Absence {
     }
 }
 
+/// Whether the view itself inferred absence before the cap turned it into `Unknown`.
+fn inferred(answer: Absence) -> bool {
+    matches!(answer, Absence::Inferred(_))
+}
+
 impl ScanCtx<'_> {
     /// The Windows the scan runs on: the machine as the source reports it now, else as the
     /// fingerprint recorded it.
@@ -87,9 +94,35 @@ impl ScanCtx<'_> {
     /// `Unknown`. Never `Inferred`, and never `Proven` from a baseline of another Windows: see the
     /// module documentation.
     pub fn key_absence(&self, key: &str) -> Absence {
-        match capped(self.baseline.key_absent(key)) {
+        let raw = self.baseline.key_absent(key);
+        let inferred = inferred(raw);
+        let answer = match capped(raw) {
             Absence::Proven if !self.has_exact_baseline() => Absence::Unknown,
             answer => answer,
+        };
+        if answer == Absence::Unknown {
+            let why = if inferred {
+                ResidueWhy::InferredAbsent
+            } else if matches!(raw, Absence::Proven) {
+                // An Exact view of another Windows: present for this machine is not proof.
+                ResidueWhy::NoView
+            } else {
+                self.unknown_why(key)
+            };
+            self.ext.note_unknown(key, why);
+        }
+        answer
+    }
+
+    /// Why the view answered `Unknown` for `key` (design §7), for the residue: no usable view, outside
+    /// the capture scope, or the area not marked for the view's trust.
+    fn unknown_why(&self, key: &str) -> ResidueWhy {
+        if self.baseline.trust() == BaselineTrust::None {
+            ResidueWhy::NoView
+        } else if !Baseline::key_in_scope(key) {
+            ResidueWhy::OutOfScope
+        } else {
+            ResidueWhy::AreaNotAccepted
         }
     }
 

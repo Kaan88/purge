@@ -1,0 +1,9 @@
+{
+  "appeared": [],
+  "disappeared": [
+    {
+      "name": "Git",
+      "program_id": "HKLM|64|Git_is1"
+    }
+  ]
+}
