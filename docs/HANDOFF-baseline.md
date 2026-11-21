@@ -4,7 +4,38 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
-## PAUSED 2026-11-22 (harness switch). Read this section first; everything below it is older history.
+## PAUSED 2026-11-22 02:45 (fifth pause: restarting Claude Code UNELEVATED). Read this first.
+
+Done this session (Claude Code, Opus 5.5, elevated): the "Recommended first move" of the section below.
+- Dirty M1-writer files **stashed** (not dropped): `git stash list` -> "dirty M1-writer leftovers (unwanted, per
+  handoff)". Drop it once nobody wants to inspect them.
+- Installer copied out: `C:\purge-build\installer\Purge-Setup-0.1.0.exe` (SHA-256 matches the one below). The
+  `inno-installer` worktree's `target/` may now be deleted.
+- Merged into `baseline` (local, **NOT pushed**): `r2-s` (ea743b7), `r2-m1` (a7813b4, **no conflicts**),
+  `inno-installer` (d4ee4c3, brings `r2-s7`). Then 3b9c9f6: purge-policy fix below.
+- Checks on the merged tree: fmt, clippy -D warnings, check-deps, gen-dto --check, `dotnet build ui\Purge.App -c
+  Release` (0 warnings), 100/100 UI tests: all green. Rust tests (elevated, from PowerShell): broker 218 + pipe 10
+  + start, engine 68 + 40 + exec_cli + planted_env, rpc 31, exec integration tests all ok; exec lib 461 ok,
+  2 fail **only because elevated** (owner = Administrators S-1-5-32-544, tests expect the user):
+  `gate::tests::key_actions_and_emptiness`, `storage::tests::strict_policy_refuses_and_renames_aside_a_tree_owned_by_a_user`.
+- Unelevated `xtask ci` (`PurgeCiUnelev`, 02:25) EXIT 1 on `purge-policy` `m1a_band_table_unchanged`: the
+  golden.rs fingerprint was stale since M3-ENGINE-OUT 1f680df (two `None` fields added to the `cand` helper, no
+  band row; proven by restoring golden.rs at 1f680df^, which passes on the old value). Fixed in 3b9c9f6 by
+  re-keying `M1A_GOLDEN_FINGERPRINT`. The ci stopped at `cargo test --workspace`, so later ci steps did not run.
+
+Next, in order:
+1. Re-run the unelevated ci (`schtasks /run /tn PurgeCiUnelev`, log `C:\purge-build\ci-unelev-laptop.log`, ends
+   with an `EXIT n` line); once unelevated, plain `cargo xtask ci` in the session works too. Expect all green.
+2. Fable-medium review of 3b9c9f6 (M1a band guard = critical; fable-review-rule). Small: one constant + comment.
+3. Ask the user, then push `baseline`. Then hand over the installer (desktop-PC trial, conditions below).
+4. Remaining M3-R2 items ("Still open from M3-R2" below).
+
+### Harness notes (this session)
+- Git Bash (MSYS) enables SeBackup/SeRestore in its own token when elevated; `cargo test` started from it fails
+  `undo_tests::no_privilege_or_impersonation_outlives_a_request`. Run Rust tests from PowerShell (or unelevated).
+- The suite assumes an UNELEVATED runner (owner checks). Elevated sessions give false failures.
+
+## PAUSED 2026-11-22 (harness switch). Everything below is older history.
 
 State: **M3 waves 1-5 are merged into `baseline` 8c7142f (pushed)**, plus M3-R2 fix round 1. The app can do a full
 uninstall end to end in code. Four branches are FINISHED but **NOT MERGED** (see below). No build/runtime was left
