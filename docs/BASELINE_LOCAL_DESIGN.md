@@ -350,6 +350,14 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
   a second and keeps S1. After a store the two newest files of that source are kept. The loaded local baseline
   is the union of the parts; its source id (the fingerprint's `local_id`) is made from the ids of the parts
   used. The one-file form of §3.5 is still what `baseline build --out` writes for the rig.
+- **A stale part answers presence** (review BL-R1 S5). After a servicing change the rebuild of S1 takes minutes,
+  and until it has ended the engine would have no component manifests at all. On a miss a load therefore takes
+  the newest part of that source of the same edition and build that this builder wrote (any id, any UBR; the
+  two newest files are kept) and marks its `#src` line incomplete with the reason `stale: …`. It is a list of
+  keys Windows owned on this machine before the change, so it only adds presence (L1), at the cost of a few
+  keys of removed components. The local baseline is incomplete with it, so the trust is None (L2) and nothing is
+  inferred; the part still counts as missing for the build, and the local baseline's source id says `stale:`
+  for it, so it is never the id of a complete one.
 - **S3 is never cached.** Nothing an id could be made from says that the live `HKU\.DEFAULT` changed, so
   every load of the view reads it again through the registry source (about 0.3 s) and judges its seal then.
   An engine that is not elevated cannot read all of it and cannot list every user's packages (it takes the

@@ -36,6 +36,17 @@
 //! An engine that is not elevated also cannot list every user's packages, so it cannot compute the
 //! S4 id. It takes the newest S4 part of this Windows and marks it unchecked (incomplete).
 //!
+//! # A stale part, for presence
+//!
+//! After a servicing change (a cumulative update, an inbox package update) the ids of the machine are
+//! new and the build of the changed parts takes minutes. Until it has ended, a load takes the newest
+//! part of that source of the same edition and build that this builder wrote, whatever its id and
+//! revision ([`PartState::Stale`]), and marks its `#src` line incomplete with the reason. It is
+//! still a list of keys Windows owned on this machine a moment ago, so it can say "this is Windows'
+//! own" (L1: at the cost of a few keys of components that were removed); it cannot make the local
+//! baseline complete, so the view's trust is None and nothing is inferred from it (L2). A stale part
+//! still counts as missing for the build ([`LoadedLocal::missing`]).
+//!
 //! # The loaded local baseline
 //!
 //! [`LocalCache::load`] puts the parts together: the union of their hashed sets and of S3's, the four
@@ -293,8 +304,19 @@ pub enum PartState {
     },
     /// S4 only: the newest part of this Windows, used without checking its id (not elevated).
     Unverified,
+    /// No part for the id asked for, and an older part of the same edition and build is used in its
+    /// place for presence only: its `#src` line is incomplete, so the local baseline is incomplete
+    /// and the view's trust is None. The part still has to be built.
+    Stale,
     /// No usable part for the id asked for.
     Missing,
+}
+
+impl PartState {
+    /// Whether a build has to make this part: there is none for the machine as it is now.
+    pub fn needs_build(self) -> bool {
+        matches!(self, PartState::Missing | PartState::Stale)
+    }
 }
 
 /// What [`LocalCache::load`] found.
@@ -310,11 +332,12 @@ pub struct LoadedLocal {
 }
 
 impl LoadedLocal {
-    /// The cached sources that have no usable part (what a build has to make).
+    /// The cached sources that have no part for the machine as it is now (what a build has to
+    /// make): the missing ones and those answered from a stale part.
     pub fn missing(&self) -> Vec<LocalSource> {
         self.parts
             .iter()
-            .filter(|(_, state)| *state == PartState::Missing)
+            .filter(|(_, state)| state.needs_build())
             .map(|(source, _)| *source)
             .collect()
     }
@@ -326,6 +349,8 @@ struct Part {
     line: SourceLine,
     sets: HashedSets,
     derived: bool,
+    /// Not the part of the machine as it is now ([`PartState::Stale`]).
+    stale: bool,
 }
 
 /// The cache directory. See the module documentation.
@@ -419,7 +444,21 @@ impl LocalCache {
             };
         }
 
-        let used_id = |i: usize| loaded[i].as_ref().map(|p| p.header.source_id.as_str());
+        // A stale part goes into the id as what it is, so the id of a local baseline that holds one
+        // is never the id of the complete one it was once part of.
+        let used: Vec<Option<String>> = loaded
+            .iter()
+            .map(|part| {
+                part.as_ref().map(|p| {
+                    if p.stale {
+                        format!("stale:{}", p.header.source_id)
+                    } else {
+                        p.header.source_id.clone()
+                    }
+                })
+            })
+            .collect();
+        let used_id = |i: usize| used[i].as_deref();
         let source_id = PartIds::combined(used_id(0), used_id(1), used_id(2));
         // The header's time and computer are the S1 part's when there is one.
         let first = loaded.iter().flatten().next().map(|p| p.header.clone());
@@ -492,6 +531,7 @@ impl LocalCache {
                 &part_name(&tag, source, id),
                 source,
                 Some(id),
+                false,
                 &mut Vec::new(),
             )
             .is_some()
@@ -507,13 +547,16 @@ impl LocalCache {
         notes: &mut Vec<String>,
     ) -> (Option<Part>, PartState) {
         if let Some(id) = ids.get(source) {
-            return match self.load_part(os, &part_name(os_tag, source, id), source, Some(id), notes)
-            {
+            let name = part_name(os_tag, source, id);
+            return match self.load_part(os, &name, source, Some(id), false, notes) {
                 Some(part) => {
                     let derived = part.derived;
                     (Some(part), PartState::Hit { derived })
                 }
-                None => (None, PartState::Missing),
+                None => match self.load_stale(os, source, Some(id), notes) {
+                    Some(part) => (Some(part), PartState::Stale),
+                    None => (None, PartState::Missing),
+                },
             };
         }
         if source == LocalSource::S4 && ids.s4_unverified {
@@ -523,7 +566,7 @@ impl LocalCache {
                 .into_iter()
                 .find(|f| f.name.starts_with(&format!("local-{os_tag}-")));
             if let Some(file) = newest
-                && let Some(mut part) = self.load_part(os, &file.name, source, None, notes)
+                && let Some(mut part) = self.load_part(os, &file.name, source, None, false, notes)
             {
                 if part.line.status == SourceStatus::Ok {
                     part.line.status = SourceStatus::Incomplete;
@@ -535,18 +578,73 @@ impl LocalCache {
                 return (Some(part), PartState::Unverified);
             }
         }
-        (None, PartState::Missing)
+        // The id is unknown (the source could not be stamped): the newest part, for presence.
+        match self.load_stale(os, source, None, notes) {
+            Some(part) => (Some(part), PartState::Stale),
+            None => (None, PartState::Missing),
+        }
     }
 
+    /// The newest part of `source` for the edition and build of `os`, other than the part of the id
+    /// `current` (which the caller found missing or unusable; `None`: the id is unknown), marked
+    /// for presence only: its `#src` line is incomplete and says why. Any revision of that build
+    /// counts, so the part made before a cumulative update is found after it. A part of another
+    /// edition, another build or another builder version is never taken.
+    fn load_stale(
+        &self,
+        os: &OsInfo,
+        source: LocalSource,
+        current: Option<&str>,
+        notes: &mut Vec<String>,
+    ) -> Option<Part> {
+        let tried = os_tag(os)
+            .zip(current)
+            .map(|(tag, id)| part_name(&tag, source, id));
+        // The edition is plain (`os_tag` said so before any part was looked for).
+        let same_build = format!("local-{}-{}.", os.edition, os.build);
+        for file in self.part_files(source) {
+            if !file.name.starts_with(&same_build) || tried.as_deref() == Some(file.name.as_str()) {
+                continue;
+            }
+            // What makes an old file unusable is not worth a line per load.
+            let Some(mut part) =
+                self.load_part(os, &file.name, source, None, true, &mut Vec::new())
+            else {
+                continue;
+            };
+            part.stale = true;
+            if part.line.status == SourceStatus::Ok {
+                part.line.status = SourceStatus::Incomplete;
+            }
+            let now = current.map_or_else(
+                || "the id of this Windows as it is now is unknown".to_owned(),
+                |id| format!("this Windows now has id {id}"),
+            );
+            let h = &part.header;
+            part.line.reasons.push(format!(
+                "stale: the part with id {} of {}-{}.{} is used for presence only, {now}",
+                h.source_id, h.edition, h.build, h.ubr
+            ));
+            notes.push(format!(
+                "{} is used for presence only until the {source} part of {} is built ({now})",
+                file.name,
+                os.baseline_name()
+            ));
+            return Some(part);
+        }
+        None
+    }
     /// Loads the part file `name`: its bytes hashed, then the derived sets when they are bound to
     /// these bytes (S1), else the text parsed. `id`: the id the header must carry (`None`: the one
-    /// in the name).
+    /// in the name). `any_revision`: the header may name another revision of the build of `os`
+    /// ([`LocalCache::load_stale`]).
     fn load_part(
         &self,
         os: &OsInfo,
         name: &str,
         source: LocalSource,
         id: Option<&str>,
+        any_revision: bool,
         notes: &mut Vec<String>,
     ) -> Option<Part> {
         let path = self.dir.join(name);
@@ -567,7 +665,7 @@ impl LocalCache {
         let mut bytes = Some(bytes);
         if source == LocalSource::S1
             && let Some((header, lines)) = bytes.as_deref().and_then(read_head)
-            && part_matches(&header, &lines, os, source, id)
+            && part_matches(&header, &lines, os, source, id, any_revision)
         {
             // The text is not held while the sets are read (the load's peak memory); it is read
             // again, and must be the same bytes, when the sets turn out not to be its.
@@ -579,6 +677,7 @@ impl LocalCache {
                     line,
                     sets,
                     derived: true,
+                    stale: false,
                 });
             }
         }
@@ -600,7 +699,14 @@ impl LocalCache {
                 return None;
             }
         };
-        if !part_matches(local.header(), local.sources(), os, source, id) {
+        if !part_matches(
+            local.header(),
+            local.sources(),
+            os,
+            source,
+            id,
+            any_revision,
+        ) {
             notes.push(format!(
                 "{name} is not the {source} part of {} with id {id}",
                 os.baseline_name()
@@ -619,6 +725,7 @@ impl LocalCache {
             line,
             sets,
             derived: false,
+            stale: false,
         })
     }
 
@@ -643,7 +750,7 @@ impl LocalCache {
         let os_tag = os_tag(os).ok_or_else(|| invalid("the Windows edition is unknown".into()))?;
         let local = LocalBaseline::from_bytes(&part.bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-        if !part_matches(local.header(), local.sources(), os, part.source, id) {
+        if !part_matches(local.header(), local.sources(), os, part.source, id, false) {
             return Err(invalid(format!(
                 "the part is not the {} part of {} with id {id}",
                 part.source,
@@ -972,17 +1079,18 @@ fn missing_line(source: LocalSource) -> SourceLine {
 }
 
 /// Whether a part's header and `#src` lines are those of the `source` part of `os` with this id,
-/// written by this builder.
+/// written by this builder. `any_revision`: the revision is not compared (a stale part).
 fn part_matches(
     header: &LocalHeader,
     lines: &[SourceLine],
     os: &OsInfo,
     source: LocalSource,
     id: &str,
+    any_revision: bool,
 ) -> bool {
     header.edition.eq_ignore_ascii_case(&os.edition)
         && header.build == os.build
-        && header.ubr == os.ubr
+        && (any_revision || header.ubr == os.ubr)
         && header.builder_version == BUILDER_VERSION
         && header.source_id == id
         && matches!(lines, [one] if one.source == source)
@@ -1491,32 +1599,44 @@ mod tests {
     fn a_change_of_one_source_misses_that_part_only() {
         let dir = scratch("invalidate");
         let c = stored(&dir);
-        // An inbox package update: another S4 id. S1 and S2 stay (review BL-RM S7).
+        // An inbox package update: another S4 id. S1 and S2 stay (review BL-RM S7). The S4 part of
+        // before answers presence until the new one is built (review BL-R1 S5); it is still what
+        // the build has to make, and the local baseline is not complete with it.
         let loaded = c.load(&os(), &ids(ID_A, ID_A, ID_B), s3());
-        assert_eq!(states(&loaded), [DERIVED, HIT, PartState::Missing]);
+        assert_eq!(states(&loaded), [DERIVED, HIT, PartState::Stale]);
         assert_eq!(loaded.missing(), [LocalSource::S4]);
         let local = loaded.local.unwrap();
         assert!(local.has_key(r"HKLM\SOFTWARE\S1Key"));
-        assert!(!local.has_key(r"HKLM\SOFTWARE\Classes\S4Key"));
+        assert!(local.has_key(r"HKLM\SOFTWARE\Classes\S4Key"));
         assert!(!local.complete());
-        assert!(
-            local.incomplete_reasons()[0].starts_with("S4 failed: no cached part"),
-            "{:?}",
-            local.incomplete_reasons()
+        assert_eq!(
+            local.incomplete_reasons(),
+            [
+                "S4 incomplete: stale: the part with id aaaaaaaaaaaaaaaa of Professional-26100.9711 \
+                 is used for presence only, this Windows now has id bbbbbbbbbbbbbbbb"
+            ]
         );
+        // Its id is neither the complete baseline's nor the one without S4.
+        let stale = format!("stale:{ID_A}");
         assert_eq!(
             local.header().source_id,
-            PartIds::combined(Some(ID_A), Some(ID_A), None)
+            PartIds::combined(Some(ID_A), Some(ID_A), Some(&stale))
         );
         // A changed manifest directory stamp: another S1 id.
         let loaded = c.load(&os(), &ids(ID_B, ID_A, ID_A), s3());
-        assert_eq!(states(&loaded), [PartState::Missing, HIT, HIT]);
-        // A new revision: nothing of the old Windows is used.
+        assert_eq!(states(&loaded), [PartState::Stale, HIT, HIT]);
+        assert_eq!(loaded.missing(), [LocalSource::S1]);
+        // A new revision: no part is this Windows' own; those of the revision before answer
+        // presence.
         let newer = OsInfo { ubr: 9712, ..os() };
         let loaded = c.load(&newer, &ids(ID_A, ID_A, ID_A), s3());
-        assert_eq!(states(&loaded), [PartState::Missing; 3]);
-        assert!(loaded.local.is_none());
-        // Without an id (its source could not be stamped) a part is a miss.
+        assert_eq!(states(&loaded), [PartState::Stale; 3]);
+        assert_eq!(loaded.missing(), CACHED_PARTS);
+        let local = loaded.local.unwrap();
+        assert!(!local.complete());
+        assert_eq!(local.header().ubr, 9712);
+        assert!(local.has_key(r"HKLM\SOFTWARE\S1Key"));
+        // Without an id (its source could not be stamped) there is no part of now either.
         let loaded = c.load(
             &os(),
             &PartIds {
@@ -1525,7 +1645,118 @@ mod tests {
             },
             s3(),
         );
-        assert_eq!(states(&loaded), [PartState::Missing, HIT, HIT]);
+        assert_eq!(states(&loaded), [PartState::Stale, HIT, HIT]);
+        assert!(
+            loaded.local.unwrap().incomplete_reasons()[0]
+                .ends_with("the id of this Windows as it is now is unknown")
+        );
+    }
+
+    /// Review BL-R1 S5: after a servicing change the newest part of the same edition and build
+    /// answers presence until the rebuild has ended. It never makes the local baseline complete, so
+    /// a view over it has trust None, with or without a neighbour, and infers nothing.
+    #[test]
+    fn a_stale_part_answers_presence_and_never_gives_trust() {
+        use crate::baseline_view::{Absence, BaselineTrust, BaselineView, fixture};
+
+        let dir = scratch("stale");
+        let c = stored(&dir);
+        // A second S1 part (the build after an earlier change); the first is older.
+        c.store_part(
+            &os(),
+            &part(LocalSource::S1, ID_B, &[r"HKLM\SOFTWARE\S1KeyB"]),
+        )
+        .unwrap();
+        let old = dir.join(part_name("Professional-26100.9711", LocalSource::S1, ID_A));
+        fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(3600))
+            .unwrap();
+
+        // The manifests changed again: id C. The newest part, B, is taken; A is not.
+        let now = ids(ID_C, ID_A, ID_A);
+        let loaded = c.load(&os(), &now, s3());
+        assert_eq!(states(&loaded), [PartState::Stale, HIT, HIT]);
+        assert_eq!(loaded.missing(), [LocalSource::S1]);
+        assert!(!c.has_part(&os(), LocalSource::S1, ID_C));
+        assert_eq!(loaded.notes.len(), 1, "{:?}", loaded.notes);
+        assert!(
+            loaded.notes[0].contains("is used for presence only until the S1 part"),
+            "{:?}",
+            loaded.notes
+        );
+        let local = loaded.local.unwrap();
+        assert!(local.has_key(r"HKLM\SOFTWARE\S1KeyB"));
+        assert!(!local.has_key(r"HKLM\SOFTWARE\S1Key"));
+        assert!(!local.complete());
+        let s1 = &local.sources()[0];
+        assert_eq!(
+            (s1.source, s1.status),
+            (LocalSource::S1, SourceStatus::Incomplete)
+        );
+
+        // The view: trust None, whatever the rules allow and whether or not there is a neighbour.
+        let host = HostOs::new("Professional", 26100, 9711);
+        let rules = fixture::open_rules();
+        let neighbour = || {
+            Neighbour::from_baseline(fixture::shipped(
+                "Professional",
+                26101,
+                1,
+                &[r"HKLM\SOFTWARE\NeighbourKey"],
+            ))
+        };
+        for neighbours in [Vec::new(), vec![neighbour()]] {
+            let view = BaselineView::assemble(&host, Some(local.clone()), neighbours, &rules);
+            assert_eq!(view.trust(), BaselineTrust::None);
+            assert!(view.has_key(r"HKLM\SOFTWARE\S1KeyB"));
+            assert_eq!(
+                view.key_absent(r"HKLM\SOFTWARE\Classes\CLSID\{NotThere}"),
+                Absence::Unknown
+            );
+            assert_eq!(view.key_absent(r"HKLM\SOFTWARE\S1KeyB"), Absence::Present);
+        }
+        // The same parts, all current: complete, and the view may have trust.
+        let current = c.load(&os(), &ids(ID_B, ID_A, ID_A), s3()).local.unwrap();
+        assert!(current.complete());
+        let view = BaselineView::assemble(&host, Some(current), vec![neighbour()], &rules);
+        assert_eq!(view.trust(), BaselineTrust::Merged);
+
+        // Never a part of another edition, another build or another builder version.
+        let other = scratch("stale-other");
+        let c = cache(&other, true);
+        let edition = OsInfo {
+            edition: "ProfessionalN".into(),
+            ..os()
+        };
+        let build = OsInfo {
+            build: 26200,
+            ..os()
+        };
+        for foreign in [&edition, &build] {
+            c.store_part(
+                foreign,
+                &part_of(
+                    foreign,
+                    LocalSource::S1,
+                    ID_A,
+                    &[r"HKLM\SOFTWARE\K"],
+                    BUILDER_VERSION,
+                ),
+            )
+            .unwrap();
+        }
+        let old_builder = part_of(&os(), LocalSource::S1, ID_A, &[r"HKLM\SOFTWARE\K"], "bl.0");
+        fs::write(
+            other.join(part_name("Professional-26100.9711", LocalSource::S1, ID_A)),
+            &old_builder.bytes,
+        )
+        .unwrap();
+        let loaded = c.load(&os(), &ids(ID_C, ID_C, ID_C), s3());
+        assert_eq!(states(&loaded), [PartState::Missing; 3]);
+        assert!(loaded.local.is_none());
     }
 
     #[test]
@@ -1902,18 +2133,21 @@ mod tests {
                 "S4 incomplete: not checked against the installed packages (the engine is not elevated)"
             ]
         );
-        // Not the part of another Windows.
+        // The part of another revision is not this Windows' own: stale, and still to be built.
         let newer = OsInfo { ubr: 9712, ..os() };
-        assert_eq!(
-            states(&c.load(&newer, &unknown, s3()))[2],
-            PartState::Missing
-        );
-        // Unknown without that reason stays a miss.
+        let loaded = c.load(&newer, &unknown, s3());
+        assert_eq!(states(&loaded)[2], PartState::Stale);
+        assert!(loaded.missing().contains(&LocalSource::S4));
+        // Unknown without that reason (an elevated engine that could not list the packages): the
+        // newest part answers presence, and S4 is still to be built.
         let failed = PartIds {
             s4: None,
             ..ids(ID_A, ID_A, ID_A)
         };
-        assert_eq!(states(&c.load(&os(), &failed, s3()))[2], PartState::Missing);
+        let loaded = c.load(&os(), &failed, s3());
+        assert_eq!(states(&loaded)[2], PartState::Stale);
+        assert_eq!(loaded.missing(), [LocalSource::S4]);
+        assert!(!loaded.local.unwrap().complete());
     }
 
     #[test]
