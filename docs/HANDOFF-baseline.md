@@ -25,9 +25,17 @@ so the work can be continued from any harness: read it, then `git log --oneline 
 - BL-R1 Fable review: `docs/reviews/baseline/bl-r1-review.md`, no B; 3 M, 7 S, 11 N. Confirmed: no A site reaches
   an offer below Exact, no plant/poison path for a standard user, no false Exact, `is_admin_only_writable` holds.
 
-## PAUSED 2026-11-21 evening (user continues from Claude Desktop). Pushed: `baseline`, `bl-r1-fixes` (081f507,
-## clean tree), `m3-design` (695bd7e). No agent or build is running. Resume order: 1) BL-R1 final checks and merge,
-## 2) M3 design, 3) answer the M3 open questions with the user.
+## PAUSED 2026-11-21 late (second pause). Nothing pushed this session.
+## - BL-R1 DONE: `bl-r1-fixes` merged into `baseline` (2f64563, local only, not pushed). Final suite passed in the
+##   worktree: fmt, the 3 clippy runs, check-deps, no-new-walks, scanner-coverage, baseline-sites, `cargo test
+##   --workspace` (3 act_fs/fs_write DACL tests fail only with the profile Temp, which has no AI flag; pass with an
+##   AI temp dir, as `C:\purge-build\ci-unelev.cmd` already does). Frozen-run L5 test PASSED end to end (all 4 runs,
+##   2819 s). DECISIONS BL-R1 row confirmed (84df1ed). Unelevated ci started at 2f64563: result in
+##   `C:\purge-build\ci-unelev-laptop.log` : all steps passed, EXIT 0 17:43.
+## - M3: user answered open questions 1-6 (028cab7 on `m3-design`, M3_DESIGN.md section 7 + DECISIONS row).
+##   Reading notes by Flash in `docs/m3-notes/reading-{a,b}.md` (11eeac5) cover section 9's reading list except
+##   the WinAppSDK 2.6.x restore check. Next: Fable finishes M3_DESIGN.{md,json} from the draft + notes, then Q7.
+## - Push of `baseline` and `m3-design` waits for the user.
 
 ## Paused: BL-R1 fixes (critical, Fable), branch `bl-r1-fixes` at 081f507 (pushed, not merged)
 - 10 commits on e285d26; 081f507 adds the review's Disposition section, a DECISIONS row for what the fixes decided
