@@ -94,6 +94,31 @@ pub fn nests_in(child: &Target, parent: &Target) -> bool {
     }
 }
 
+/// Whether the candidate itself is user data: its category says so, or the scanner put the user-data
+/// blocker on it (review M4, `fs_installdir`).
+#[must_use]
+pub fn is_user_data(candidate: &Candidate) -> bool {
+    candidate.category == Category::UserData || candidate.blockers.contains(&Blocker::UserData)
+}
+
+/// The candidates of the scan document that nest in `parent`, top-level and absorbed, `parent` itself
+/// left out (review M4). A whole-tree removal takes them with it even when [`collapse`] did not absorb
+/// them: a parent that is not absorbing keeps a descendant that was held back as an item of its own
+/// (rule 3), so `parent.children` does not name it.
+#[must_use]
+pub fn nested_candidates<'a>(
+    parent: &Candidate,
+    top: &'a [Candidate],
+    absorbed: &'a [Candidate],
+) -> Vec<&'a Candidate> {
+    top.iter()
+        .chain(absorbed)
+        .filter(|candidate| {
+            candidate.id != parent.id && nests_in(&candidate.target, &parent.target)
+        })
+        .collect()
+}
+
 fn band(candidate: &Candidate) -> Option<Band> {
     candidate.decision.as_ref().map(|d| d.band)
 }

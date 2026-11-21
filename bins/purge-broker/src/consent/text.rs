@@ -5,14 +5,17 @@
 //! text from a scan, a program or a journal into the dialog. What [`shown`] does:
 //!
 //! - control characters (C0, DEL, C1), bidirectional controls, zero-width and other invisible
-//!   characters, line and paragraph separators, every space that is not a plain space, private-use and
-//!   non-characters, and the double quote are written as `\u{hex}`;
+//!   characters (the braille blank included), line and paragraph separators, every space that is not
+//!   a plain space, private-use and non-characters, and the double quote are written as `\u{hex}`;
 //! - a plain space is written that way too when it starts or ends a path component or follows another
 //!   space, so `Program Files` and `Program Files ` and `Program  Files` do not look alike;
-//! - in a word that holds an ASCII letter or digit, letters of the blocks that borrow Latin shapes
-//!   (Cyrillic, Greek, Armenian, Cherokee, Coptic, full-width forms, mathematical letters, IPA, letter-like
-//!   symbols) are written that way too, so `Mozill\u{430}` cannot pass for `Mozilla`; a whole word of
-//!   one such script is shown as it is;
+//! - in a word that holds an ASCII letter or digit, every alphanumeric character outside Basic Latin,
+//!   the Latin-1 letters, Latin Extended-A and Latin Extended Additional is written that way, so
+//!   `Mozill\u{430}` and `Goog\u{217c}e` cannot pass for `Mozilla` and `Google`; a whole word of one
+//!   other script is shown as it is;
+//! - a path whose last component is wholly in a script that borrows Latin shapes while the components
+//!   before it are ASCII (a folder under `C:\Vendor` named in Cyrillic letters that read "Apple") is
+//!   shown as it is but flagged: the view adds an attention reason;
 //! - a component of more than [`NAME_CUT`] characters keeps its first 56 and last 24 and says how
 //!   many it left out in between; a whole text over [`LINE_COST`] shown characters keeps both ends the
 //!   same way;
@@ -46,6 +49,10 @@ pub struct Flags {
     pub escaped: bool,
     /// Something was left out (`[N characters not shown]`).
     pub shortened: bool,
+    /// A path's last component is wholly in a script that borrows Latin shapes, while the components
+    /// before it are ASCII. The text is shown as it is; the view turns this into an attention reason
+    /// (review S6).
+    pub look_alike: bool,
 }
 
 impl Flags {
@@ -53,6 +60,7 @@ impl Flags {
     pub fn merge(&mut self, other: Flags) {
         self.escaped |= other.escaped;
         self.shortened |= other.shortened;
+        self.look_alike |= other.look_alike;
     }
 
     /// Whether the text is shown exactly as it is.
@@ -90,6 +98,7 @@ fn hidden(c: char) -> bool {
                 | 0x200B..=0x200F
                 | 0x2028..=0x202F
                 | 0x205F..=0x206F
+                | 0x2800
                 | 0x3164
                 | 0xE000..=0xF8FF
                 | 0xFDD0..=0xFDEF
@@ -104,27 +113,41 @@ fn hidden(c: char) -> bool {
         )
 }
 
-/// Letters of blocks whose shapes can pass for Latin ones.
+/// Letters of blocks whose shapes can pass for Latin ones (review S6 added the small Roman numerals,
+/// the dental click, Lisu, Cherokee small letters and the phonetic small capitals).
 fn borrows_latin_shapes(c: char) -> bool {
     matches!(
         c as u32,
-        0x250..=0x2AF
+        0x1C0
+            | 0x250..=0x2AF
             | 0x370..=0x3FF
             | 0x400..=0x52F
             | 0x531..=0x58F
             | 0x1C80..=0x1C8F
             | 0x13A0..=0x13FF
             | 0x2100..=0x214F
+            | 0x2170..=0x217F
             | 0x2C80..=0x2CFF
+            | 0xA4D0..=0xA4FF
             | 0xA640..=0xA69F
+            | 0xAB70..=0xABBF
             | 0xFF01..=0xFF5E
+            | 0x1D00..=0x1D7F
             | 0x1D400..=0x1D7FF
     )
 }
 
-/// For each character, whether it sits in a word that mixes an ASCII letter or digit with letters of a
-/// block that borrows Latin shapes, and is one of those letters.
-fn mixed_script(chars: &[char]) -> Vec<bool> {
+/// Whether a character may be shown as itself in a word that also holds an ASCII letter or digit:
+/// Basic Latin (letters and digits), the Latin-1 letters, Latin Extended-A and Latin Extended
+/// Additional (review S6).
+fn latin_like(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || (c.is_alphabetic() && matches!(c as u32, 0xC0..=0xFF | 0x100..=0x17F | 0x1E00..=0x1EFF))
+}
+
+/// For each character, whether it sits in a word that holds an ASCII letter or digit and is an
+/// alphanumeric character outside the Latin allow-list of [`latin_like`] (review S6).
+fn look_alike_in_word(chars: &[char]) -> Vec<bool> {
     let mut out = vec![false; chars.len()];
     let mut start = 0;
     while start < chars.len() {
@@ -137,16 +160,27 @@ fn mixed_script(chars: &[char]) -> Vec<bool> {
             end += 1;
         }
         let word = &chars[start..end];
-        if word.iter().any(char::is_ascii_alphanumeric)
-            && word.iter().any(|c| borrows_latin_shapes(*c))
-        {
+        if word.iter().any(char::is_ascii_alphanumeric) {
             for (i, c) in word.iter().enumerate() {
-                out[start + i] = borrows_latin_shapes(*c);
+                out[start + i] = c.is_alphanumeric() && !latin_like(*c);
             }
         }
         start = end;
     }
     out
+}
+
+/// Whether every alphanumeric character of `comp` is in a block that borrows Latin shapes, and there
+/// is at least one.
+fn wholly_look_alike(comp: &str) -> bool {
+    let mut alnum = 0usize;
+    for c in comp.chars().filter(|c| c.is_alphanumeric()) {
+        if !borrows_latin_shapes(c) {
+            return false;
+        }
+        alnum += 1;
+    }
+    alnum > 0
 }
 
 fn escape(c: char) -> String {
@@ -166,7 +200,7 @@ pub fn left_out(n: usize) -> String {
 /// [`NAME_CUT`] of them plus the marker.
 fn component(comp: &str, flags: &mut Flags) -> Vec<String> {
     let chars: Vec<char> = comp.chars().collect();
-    let mixed = mixed_script(&chars);
+    let look_alike = look_alike_in_word(&chars);
     let first_visible = chars.iter().position(|c| *c != ' ');
     let last_visible = chars.iter().rposition(|c| *c != ' ');
     let mut out: Vec<String> = Vec::with_capacity(chars.len().min(NAME_CUT + 1));
@@ -176,7 +210,7 @@ fn component(comp: &str, flags: &mut Flags) -> Vec<String> {
                 || last_visible.is_none_or(|l| i > l)
                 || chars[i - 1] == ' '
         } else {
-            hidden(c) || mixed[i]
+            hidden(c) || look_alike[i]
         };
         if escape_it {
             flags.escaped = true;
@@ -230,13 +264,27 @@ fn cap_line(pieces: &mut Vec<String>, flags: &mut Flags) {
 pub fn shown(text: &str) -> Shown {
     let mut flags = Flags::default();
     let mut pieces: Vec<String> = Vec::new();
+    let mut parts: Vec<(&str, &str)> = Vec::new();
     for part in text.split_inclusive(['\\', '/']) {
         match part.strip_suffix(['\\', '/']) {
-            Some(comp) => {
-                pieces.extend(component(comp, &mut flags));
-                pieces.push(part[comp.len()..].to_owned());
-            }
-            None => pieces.extend(component(part, &mut flags)),
+            Some(comp) => parts.push((comp, &part[comp.len()..])),
+            None => parts.push((part, "")),
+        }
+    }
+    // A path whose last component is wholly in a look-alike script, while the components before it
+    // are ASCII, is shown as it is and flagged (review S6).
+    if let Some(last) = parts.iter().rposition(|(comp, _)| !comp.is_empty()) {
+        if last > 0
+            && parts[..last].iter().all(|(comp, _)| comp.is_ascii())
+            && wholly_look_alike(parts[last].0)
+        {
+            flags.look_alike = true;
+        }
+    }
+    for (comp, sep) in parts {
+        pieces.extend(component(comp, &mut flags));
+        if !sep.is_empty() {
+            pieces.push(sep.to_owned());
         }
     }
     cap_line(&mut pieces, &mut flags);
@@ -361,6 +409,7 @@ mod tests {
             '\u{fe0f}',
             '\u{fffc}',
             '\u{e000}',
+            '\u{2800}',
         ] {
             let sh = shown(&format!("x{c}y"));
             assert_eq!(sh.text, format!("x\\u{{{:x}}}y", c as u32), "{c:?}");
@@ -407,6 +456,64 @@ mod tests {
             shown("\u{42f}\u{43d}\u{434}\u{435}\u{43a}\u{441}7").text,
             r"\u{42f}\u{43d}\u{434}\u{435}\u{43a}\u{441}7"
         );
+    }
+
+    #[test]
+    fn the_added_look_alike_scripts_are_written_out_in_a_latin_word() {
+        // Small Roman numerals (letter numbers), the dental click, Lisu, Cherokee small letters and
+        // the phonetic small capitals (review S6).
+        for c in [
+            '\u{217c}', '\u{2170}', '\u{1c0}', '\u{a4d0}', '\u{ab70}', '\u{1d00}',
+        ] {
+            let sh = shown(&format!("a{c}b"));
+            assert_eq!(sh.text, format!("a\\u{{{:x}}}b", c as u32), "{c:?}");
+            assert!(sh.flags.escaped && !sh.flags.look_alike, "{c:?}");
+        }
+        assert_eq!(shown("Goog\u{217c}e").text, r"Goog\u{217c}e");
+        // Any alphabetic character outside the Latin allow-list is escaped in such a word.
+        assert_eq!(shown("a\u{5d0}b").text, r"a\u{5d0}b");
+        // The Latin allow-list itself needs no escape: Latin-1, Extended-A, Extended Additional.
+        for s in [
+            "Caf\u{e9}",
+            "\u{141}\u{f3}d\u{17a}",
+            "\u{1e62}\u{1e0d}\u{1eb9}",
+        ] {
+            let sh = shown(&format!("x{s}y"));
+            assert!(sh.flags.is_plain(), "{s}: {}", sh.text);
+            assert_eq!(sh.text, format!("x{s}y"));
+        }
+    }
+
+    #[test]
+    fn a_path_whose_last_component_is_look_alike_is_flagged_without_escaping() {
+        let apple = "\u{410}\u{440}\u{440}\u{4cf}\u{435}";
+        let path = format!(r"C:\Vendor\{apple}");
+        let sh = shown(&path);
+        assert_eq!(sh.text, path, "the text is shown as it is");
+        assert!(sh.flags.look_alike && !sh.flags.escaped);
+        assert!(sh.flags.is_plain(), "the legend promises escapes only");
+
+        // The same word as a whole name is shown by design, unflagged.
+        let bare = shown(apple);
+        assert_eq!(bare.text, apple);
+        assert!(bare.flags.is_plain() && !bare.flags.look_alike);
+
+        // Only a path whose components before the last are ASCII takes the flag.
+        for other in [
+            format!("C:\\{apple}\\Vendor"),
+            format!("C:\\{}\\{apple}", '\u{5d0}'),
+            format!("C:\\Vendor\\{}", "\u{65e5}\u{672c}\u{8a9e}"),
+        ] {
+            let sh = shown(&other);
+            assert!(!sh.flags.look_alike, "{other}");
+        }
+    }
+
+    #[test]
+    fn a_braille_blank_is_invisible() {
+        let sh = shown("a\u{2800}b");
+        assert_eq!(sh.text, r"a\u{2800}b");
+        assert!(sh.flags.escaped);
     }
 
     #[test]
