@@ -1,0 +1,372 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErrorObject",
+  "description": "The `error` member of a JSON-RPC response.",
+  "type": "object",
+  "properties": {
+    "code": {
+      "description": "A JSON-RPC code: one of the protocol codes, or [`SERVER_ERROR`].",
+      "type": "integer",
+      "format": "int32"
+    },
+    "data": {
+      "description": "The kind and its details; present exactly when `code` is [`SERVER_ERROR`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorData"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "message": {
+      "description": "A short text for logs. The client does not parse it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "code",
+    "message"
+  ],
+  "$defs": {
+    "CandidateRef": {
+      "type": "string",
+      "pattern": "^c-[0-9a-f]{16}$"
+    },
+    "ErrorData": {
+      "description": "`error.data` of a [`SERVER_ERROR`]: the kind, and what the client needs to show it. Serialised as an\nobject tagged by `\"kind\"`.",
+      "oneOf": [
+        {
+          "description": "Cancel in the consent dialog; nothing was done.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "consent_declined"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "`bind` refused the plan.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "plan_refused"
+            },
+            "refusals": {
+              "description": "The items and reasons.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Refusal"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "refusals"
+          ]
+        },
+        {
+          "description": "An interrupted session comes first.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "needs_recovery"
+            },
+            "sessions": {
+              "description": "The interrupted sessions.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SessionId"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "sessions"
+          ]
+        },
+        {
+          "description": "The store or a journal failed its check.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "store_integrity"
+            },
+            "message": {
+              "description": "What failed.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ]
+        },
+        {
+          "description": "The uninstaller failed.",
+          "type": "object",
+          "properties": {
+            "exit_code": {
+              "description": "Its exit code, when it ran.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "forced_offered": {
+              "description": "Whether a forced-mode scan is offered.",
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "const": "uninstall_failed"
+            }
+          },
+          "required": [
+            "kind",
+            "forced_offered"
+          ]
+        },
+        {
+          "description": "The client runs as another account than the broker (design 3.5).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "other_account"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The broker's token is not elevated.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "not_elevated"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The broker's own directory failed the start checks (design 3.4).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "install_untrusted"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The program belongs to the other route.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "wrong_route"
+            },
+            "route": {
+              "description": "The route it belongs to.",
+              "$ref": "#/$defs/Route"
+            }
+          },
+          "required": [
+            "kind",
+            "route"
+          ]
+        },
+        {
+          "description": "A mutating request is running.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "busy"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "An unknown or expired id.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "Which kind of id.",
+              "$ref": "#/$defs/IdKind"
+            },
+            "kind": {
+              "type": "string",
+              "const": "gone"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "description": "The quarantine cap would be passed.",
+          "type": "object",
+          "properties": {
+            "cap": {
+              "description": "The cap.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "cap_exceeded"
+            },
+            "needed": {
+              "description": "Bytes the plan would add.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "used": {
+              "description": "Bytes the quarantine holds on it now.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "volume": {
+              "description": "The volume's root, for display.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "volume",
+            "used",
+            "needed",
+            "cap"
+          ]
+        },
+        {
+          "description": "Anything else.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "runtime"
+            },
+            "message": {
+              "description": "What happened.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ]
+        }
+      ]
+    },
+    "IdKind": {
+      "description": "Which kind of id a [`ErrorData::Gone`] error is about.",
+      "oneOf": [
+        {
+          "description": "An uninstall session (`session_id`).",
+          "type": "string",
+          "const": "uninstall_session"
+        },
+        {
+          "description": "A scan (`scan_id`).",
+          "type": "string",
+          "const": "scan"
+        },
+        {
+          "description": "A plan (`plan_id`).",
+          "type": "string",
+          "const": "plan"
+        },
+        {
+          "description": "A candidate of a scan.",
+          "type": "string",
+          "const": "candidate"
+        },
+        {
+          "description": "An executor session (`session`).",
+          "type": "string",
+          "const": "session"
+        },
+        {
+          "description": "An expired quarantine entry.",
+          "type": "string",
+          "const": "expiry"
+        },
+        {
+          "description": "A program id.",
+          "type": "string",
+          "const": "program"
+        }
+      ]
+    },
+    "Refusal": {
+      "description": "One reason `plan.create` refused a plan.",
+      "type": "object",
+      "properties": {
+        "candidate_id": {
+          "description": "The item refused; `None` when the reason is about the plan as a whole.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "description": "Why, in words for the user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    },
+    "Route": {
+      "description": "Where a program's uninstaller runs (design 3.2).",
+      "oneOf": [
+        {
+          "description": "In the broker: a machine-scope entry whose uninstaller path has admin-only ancestors.",
+          "type": "string",
+          "const": "broker"
+        },
+        {
+          "description": "In the medium engine, at the user's level: a per-user entry, or a path a user can write.",
+          "type": "string",
+          "const": "medium"
+        }
+      ]
+    },
+    "SessionId": {
+      "description": "UTC start time and 64 random bits, e.g. 20261115T101502Z-9f3a6c1d2b7e4a50",
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"
+    }
+  }
+}

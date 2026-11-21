@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExpiringList",
+  "description": "`quarantine.expiring`.",
+  "type": "object",
+  "properties": {
+    "items": {
+      "description": "The entries.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExpiringItem"
+      }
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "$defs": {
+    "ExpiringItem": {
+      "description": "One entry past retention.",
+      "type": "object",
+      "properties": {
+        "app": {
+          "description": "The app of the session.",
+          "type": "string"
+        },
+        "bytes": {
+          "description": "Bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "class": {
+          "description": "Which retention class expired.",
+          "$ref": "#/$defs/RetentionClass"
+        },
+        "expired": {
+          "description": "When it expired.",
+          "$ref": "#/$defs/FileTime"
+        },
+        "expiry_id": {
+          "description": "The id to purge it by.",
+          "$ref": "#/$defs/ExpiryId"
+        },
+        "files": {
+          "description": "The files and backup files it holds, for display.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session": {
+          "description": "Its session.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "user_data": {
+          "description": "Whether it holds user data (each such item gets a dialog of its own).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "expiry_id",
+        "session",
+        "app",
+        "class",
+        "expired",
+        "files",
+        "bytes",
+        "user_data"
+      ]
+    },
+    "ExpiryId": {
+      "type": "string",
+      "pattern": "^e-[0-9a-f]{16}$"
+    },
+    "FileTime": {
+      "description": "A point in time as a Windows `FILETIME`: 100-nanosecond intervals since 1601-01-01 UTC.\n\nThis is what registry key LastWriteTime, file times and process start times are in, so nothing is\nconverted on the way in. Serialised as a plain integer.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "RetentionClass": {
+      "description": "What a retention period applies to (§7.8).",
+      "oneOf": [
+        {
+          "description": "Quarantined files and directories: [`RETAIN_QUARANTINE_DAYS`].",
+          "type": "string",
+          "const": "Quarantine"
+        },
+        {
+          "description": "Registry backups and typed definitions: [`RETAIN_BACKUP_DAYS`].",
+          "type": "string",
+          "const": "Backup"
+        },
+        {
+          "description": "The journal and the session's reports: [`RETAIN_JOURNAL_DAYS`].",
+          "type": "string",
+          "const": "Journal"
+        }
+      ]
+    },
+    "SessionId": {
+      "description": "UTC start time and 64 random bits, e.g. 20261115T101502Z-9f3a6c1d2b7e4a50",
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"
+    }
+  }
+}

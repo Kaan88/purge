@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PlanCreateParams",
+  "description": "`plan.create`: one of two forms.",
+  "anyOf": [
+    {
+      "description": "The user's selection.",
+      "$ref": "#/$defs/PlanSelectedParams"
+    },
+    {
+      "description": "The scan's preselection.",
+      "$ref": "#/$defs/PlanPreselectedParams"
+    }
+  ],
+  "$defs": {
+    "CandidateRef": {
+      "type": "string",
+      "pattern": "^c-[0-9a-f]{16}$"
+    },
+    "PlanPreselectedParams": {
+      "description": "`plan.create` with the scan's preselection: `{scan_id, preselected: true}`.",
+      "type": "object",
+      "properties": {
+        "preselected": {
+          "description": "Always `true`.",
+          "type": "boolean",
+          "const": true
+        },
+        "scan_id": {
+          "description": "The scan.",
+          "$ref": "#/$defs/ScanId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "scan_id",
+        "preselected"
+      ]
+    },
+    "PlanSelectedParams": {
+      "description": "`plan.create` with the user's selection: `{scan_id, selected[]}`.",
+      "type": "object",
+      "properties": {
+        "scan_id": {
+          "description": "The scan.",
+          "$ref": "#/$defs/ScanId"
+        },
+        "selected": {
+          "description": "The selected candidates, at least one.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CandidateRef"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "scan_id",
+        "selected"
+      ]
+    },
+    "ScanId": {
+      "type": "string",
+      "pattern": "^s-[0-9a-f]{16}$"
+    }
+  }
+}

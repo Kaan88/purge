@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProgramsPatch",
+  "description": "`programs.patch`.",
+  "type": "object",
+  "properties": {
+    "patches": {
+      "description": "The patches.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProgramPatch"
+      }
+    },
+    "request": {
+      "description": "The `programs.list` request.",
+      "$ref": "#/$defs/RequestId"
+    }
+  },
+  "required": [
+    "request",
+    "patches"
+  ],
+  "$defs": {
+    "InstallerKind": {
+      "description": "The installer technology behind an entry.",
+      "oneOf": [
+        {
+          "description": "Windows Installer.",
+          "type": "string",
+          "const": "Msi"
+        },
+        {
+          "description": "Inno Setup.",
+          "type": "string",
+          "const": "Inno"
+        },
+        {
+          "description": "NSIS.",
+          "type": "string",
+          "const": "Nsis"
+        },
+        {
+          "description": "A WiX Burn bundle.",
+          "type": "string",
+          "const": "Burn"
+        },
+        {
+          "description": "Anything else, or not recognised.",
+          "type": "string",
+          "const": "Unknown"
+        }
+      ]
+    },
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "ProgramPatch": {
+      "description": "Details for a row already sent; only the members that are present change.",
+      "type": "object",
+      "properties": {
+        "appx": {
+          "description": "Whether the entry is an AppX package.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "bundle": {
+          "description": "The Burn bundle the entry belongs to.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProgramId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "installer": {
+          "description": "The installer technology.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstallerKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "product_code": {
+          "description": "The MSI ProductCode.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "program_id": {
+          "description": "The entry.",
+          "$ref": "#/$defs/ProgramId"
+        }
+      },
+      "required": [
+        "program_id"
+      ]
+    },
+    "RequestId": {
+      "description": "The id of a request: an unsigned integer the client chooses. Progress notifications name the request\nthey belong to by it.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  }
+}

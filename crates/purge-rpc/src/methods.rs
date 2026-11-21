@@ -1540,6 +1540,32 @@ pub fn dtos() -> Vec<Dto> {
     out
 }
 
+/// One type's schema, once per type, for `xtask gen-dto` (M3_DESIGN.md §6.5).
+#[derive(Debug, Clone)]
+pub struct SchemaExport {
+    /// The schema name, which is also the schema file's stem (`EngineHello.json`).
+    pub name: String,
+    /// Its JSON Schema.
+    pub schema: Schema,
+}
+
+/// The schema of every distinct type in [`dtos`], sorted by name. A type used by several DTOs (a shared
+/// result, `ErrorObject`) appears once.
+pub fn schemas() -> Vec<SchemaExport> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for dto in dtos() {
+        if seen.insert(dto.type_name.clone()) {
+            out.push(SchemaExport {
+                name: dto.type_name.into_owned(),
+                schema: (dto.schema)(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
 /// The `kind` of every [`ErrorData`] variant, one fixture each.
 pub const ERROR_KINDS: [&str; 13] = [
     "consent_declined",

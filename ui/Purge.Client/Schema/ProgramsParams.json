@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProgramsParams",
+  "description": "`{program_ids[]}`: `programs.sizes`, `uninstall.prepare`, `leftovers.stored`.",
+  "type": "object",
+  "properties": {
+    "program_ids": {
+      "description": "The programs, at least one.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProgramId"
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "program_ids"
+  ],
+  "$defs": {
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    }
+  }
+}

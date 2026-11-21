@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PendingList",
+  "description": "`journal.pending`.",
+  "type": "object",
+  "properties": {
+    "sessions": {
+      "description": "The interrupted sessions.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PendingSession"
+      }
+    }
+  },
+  "required": [
+    "sessions"
+  ],
+  "$defs": {
+    "FileTime": {
+      "description": "A point in time as a Windows `FILETIME`: 100-nanosecond intervals since 1601-01-01 UTC.\n\nThis is what registry key LastWriteTime, file times and process start times are in, so nothing is\nconverted on the way in. Serialised as a plain integer.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "PendingSession": {
+      "description": "An interrupted session.",
+      "type": "object",
+      "properties": {
+        "app": {
+          "description": "The app of its plan.",
+          "type": "string"
+        },
+        "done": {
+          "description": "Items done.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "session": {
+          "description": "The session.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "started": {
+          "description": "When it started.",
+          "$ref": "#/$defs/FileTime"
+        },
+        "total": {
+          "description": "Items in all.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "session",
+        "app",
+        "started",
+        "done",
+        "total"
+      ]
+    },
+    "SessionId": {
+      "description": "UTC start time and 64 random bits, e.g. 20261115T101502Z-9f3a6c1d2b7e4a50",
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"
+    }
+  }
+}

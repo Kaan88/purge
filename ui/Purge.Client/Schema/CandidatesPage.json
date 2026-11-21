@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CandidatesPage",
+  "description": "`scan.candidates`.",
+  "type": "object",
+  "properties": {
+    "items": {
+      "description": "The page.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CandidateRow"
+      }
+    },
+    "offset": {
+      "description": "Index of the first item of the page.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "total": {
+      "description": "Candidates of the scan in all.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "total",
+    "offset",
+    "items"
+  ],
+  "$defs": {
+    "Band": {
+      "description": "The confidence band policy assigns to a candidate (ENGINE_PLAN.md §5.8.2).",
+      "oneOf": [
+        {
+          "description": "Proven to belong to the removed app; may be preselected.",
+          "type": "string",
+          "const": "Safe"
+        },
+        {
+          "description": "Probably the app's; shown, preselection depends on mode and category.",
+          "type": "string",
+          "const": "Likely"
+        },
+        {
+          "description": "Weak evidence only; listed, never preselected.",
+          "type": "string",
+          "const": "Weak"
+        },
+        {
+          "description": "A blocker or guard rule applies; shown for transparency, never actionable.",
+          "type": "string",
+          "const": "Blocked"
+        }
+      ]
+    },
+    "CandidateRef": {
+      "type": "string",
+      "pattern": "^c-[0-9a-f]{16}$"
+    },
+    "CandidateRow": {
+      "description": "One candidate of a `scan.candidates` page.",
+      "type": "object",
+      "properties": {
+        "band": {
+          "description": "Its band.",
+          "$ref": "#/$defs/Band"
+        },
+        "candidate_id": {
+          "description": "The candidate.",
+          "$ref": "#/$defs/CandidateRef"
+        },
+        "category": {
+          "description": "Its category.",
+          "$ref": "#/$defs/Category"
+        },
+        "display_name": {
+          "description": "The name shown: a path, a key, a service name.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "What kind of thing it is.",
+          "$ref": "#/$defs/ItemKind"
+        },
+        "owner_program": {
+          "description": "The program it belongs to, when known.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "preselected": {
+          "description": "Whether Purge preselected it.",
+          "type": "boolean"
+        },
+        "size_bytes": {
+          "description": "Bytes, for files and folders.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "warnings": {
+          "description": "Warnings about the item.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
+      },
+      "required": [
+        "candidate_id",
+        "band",
+        "kind",
+        "category",
+        "display_name",
+        "warnings",
+        "preselected"
+      ]
+    },
+    "Category": {
+      "description": "What kind of thing a candidate is, for grouping and preselection (ENGINE_PLAN.md §5.2).",
+      "oneOf": [
+        {
+          "description": "Program files under an install root.",
+          "type": "string",
+          "const": "AppFiles"
+        },
+        {
+          "description": "Settings and state the app wrote for itself.",
+          "type": "string",
+          "const": "AppData"
+        },
+        {
+          "description": "Data the user made or would miss (profiles, saves, backups). Never preselected.",
+          "type": "string",
+          "const": "UserData"
+        },
+        {
+          "description": "Regenerable caches.",
+          "type": "string",
+          "const": "Cache"
+        },
+        {
+          "description": "Registration keys and values (uninstall entries, app keys, App Paths).",
+          "type": "string",
+          "const": "Registration"
+        },
+        {
+          "description": "File and protocol associations.",
+          "type": "string",
+          "const": "Association"
+        },
+        {
+          "description": "Shell extensions and COM registrations.",
+          "type": "string",
+          "const": "ShellCom"
+        },
+        {
+          "description": "Run entries, tasks and other autostart points.",
+          "type": "string",
+          "const": "Startup"
+        },
+        {
+          "description": "Services, drivers, firewall rules and other system integrations.",
+          "type": "string",
+          "const": "System"
+        },
+        {
+          "description": "Usage traces (MRU lists, MuiCache, prefetch).",
+          "type": "string",
+          "const": "Privacy"
+        },
+        {
+          "description": "Installer package caches and AppX packages.",
+          "type": "string",
+          "const": "Package"
+        }
+      ]
+    },
+    "ItemKind": {
+      "description": "What kind of thing an item is, for display.",
+      "oneOf": [
+        {
+          "description": "A file.",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "A folder.",
+          "type": "string",
+          "const": "folder"
+        },
+        {
+          "description": "A registry key.",
+          "type": "string",
+          "const": "registry_key"
+        },
+        {
+          "description": "A registry value.",
+          "type": "string",
+          "const": "registry_value"
+        },
+        {
+          "description": "Data inside a registry value (a changed value, a multi-string segment).",
+          "type": "string",
+          "const": "registry_data"
+        },
+        {
+          "description": "A service.",
+          "type": "string",
+          "const": "service"
+        },
+        {
+          "description": "A scheduled task.",
+          "type": "string",
+          "const": "task"
+        },
+        {
+          "description": "A firewall rule.",
+          "type": "string",
+          "const": "firewall_rule"
+        },
+        {
+          "description": "An AppX package.",
+          "type": "string",
+          "const": "package"
+        }
+      ]
+    },
+    "Warning": {
+      "description": "A warning for the user. `code` is stable for the client to switch on; `message` is shown.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "A stable machine code, e.g. `baseline_inferred`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "The text shown.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    }
+  }
+}

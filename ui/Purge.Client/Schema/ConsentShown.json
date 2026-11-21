@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConsentShown",
+  "description": "`consent.shown`.",
+  "type": "object",
+  "properties": {
+    "code": {
+      "description": "The code the dialog shows.",
+      "$ref": "#/$defs/ConfirmCode"
+    },
+    "request": {
+      "description": "The request that opened the dialog.",
+      "$ref": "#/$defs/RequestId"
+    }
+  },
+  "required": [
+    "request",
+    "code"
+  ],
+  "$defs": {
+    "ConfirmCode": {
+      "type": "string",
+      "pattern": "^[0-9A-F]{4}-[0-9A-F]{4}$"
+    },
+    "RequestId": {
+      "description": "The id of a request: an unsigned integer the client chooses. Progress notifications name the request\nthey belong to by it.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  }
+}

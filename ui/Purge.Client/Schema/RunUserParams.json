@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunUserParams",
+  "description": "`uninstall.run_user {program_id, quiet}`.",
+  "type": "object",
+  "properties": {
+    "program_id": {
+      "description": "The program.",
+      "$ref": "#/$defs/ProgramId"
+    },
+    "quiet": {
+      "description": "Run the quiet uninstall command.",
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "program_id",
+    "quiet"
+  ],
+  "$defs": {
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    }
+  }
+}

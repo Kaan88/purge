@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IconBatch",
+  "description": "`icon.batch`: at most [`ICONS_PER_LINE`] icons.",
+  "type": "object",
+  "properties": {
+    "icons": {
+      "description": "The icons.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Icon"
+      }
+    },
+    "request": {
+      "description": "The `programs.icons` request.",
+      "$ref": "#/$defs/RequestId"
+    }
+  },
+  "required": [
+    "request",
+    "icons"
+  ],
+  "$defs": {
+    "Icon": {
+      "description": "One icon of an `icon.batch`.",
+      "type": "object",
+      "properties": {
+        "bgra": {
+          "description": "`px * px` BGRA pixels, base64; `None` when no icon could be read (the UI shows a placeholder).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "program_id": {
+          "description": "The program.",
+          "$ref": "#/$defs/ProgramId"
+        },
+        "px": {
+          "description": "Edge length in pixels.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "program_id",
+        "px"
+      ]
+    },
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "RequestId": {
+      "description": "The id of a request: an unsigned integer the client chooses. Progress notifications name the request\nthey belong to by it.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  }
+}

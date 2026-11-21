@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProgramParams",
+  "description": "`{program_id}`: `programs.get`, `uninstall.route`.",
+  "type": "object",
+  "properties": {
+    "program_id": {
+      "description": "The program.",
+      "$ref": "#/$defs/ProgramId"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "program_id"
+  ],
+  "$defs": {
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    }
+  }
+}

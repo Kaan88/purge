@@ -1,0 +1,952 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HistoryDetail",
+  "description": "`history.get`.",
+  "type": "object",
+  "properties": {
+    "items": {
+      "description": "Its items.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HistoryItem"
+      }
+    },
+    "session": {
+      "description": "The session.",
+      "$ref": "#/$defs/SessionId"
+    },
+    "state": {
+      "description": "Where it stands.",
+      "$ref": "#/$defs/SessionState"
+    }
+  },
+  "required": [
+    "session",
+    "state",
+    "items"
+  ],
+  "$defs": {
+    "Blocker": {
+      "description": "A reason against removing a candidate. Serialised as an object tagged by `\"kind\"`, e.g.\n`{\"kind\":\"ReferencedByOtherApp\",\"app\":\"Mozilla Thunderbird\"}`.",
+      "oneOf": [
+        {
+          "description": "Hard. A rule of the hard deny-list matches (§5.10).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "DenyListed"
+            },
+            "rule": {
+              "description": "Id of the deny rule.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "rule"
+          ]
+        },
+        {
+          "description": "Hard. The target is a structural container that other software lives in (§5.10).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "StructuralContainer"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The target is part of a clean Windows of this (edition, build). Its children may still go.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "WindowsBaseline"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. A row of an installed MSI product other than the target owns it.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "OwnedByInstalledMsi"
+            },
+            "product": {
+              "description": "ProductCode of the owning product.",
+              "type": "string"
+            },
+            "row": {
+              "description": "The owning row, as `<Table>:<key>`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "product",
+            "row"
+          ]
+        },
+        {
+          "description": "Hard. Another installed app references the target.",
+          "type": "object",
+          "properties": {
+            "app": {
+              "description": "Display name or program id of the other app.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "ReferencedByOtherApp"
+            }
+          },
+          "required": [
+            "kind",
+            "app"
+          ]
+        },
+        {
+          "description": "Hard. The target lies inside another app's root or key.",
+          "type": "object",
+          "properties": {
+            "app": {
+              "description": "Display name or program id of the other app.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "InsideOtherApp"
+            }
+          },
+          "required": [
+            "kind",
+            "app"
+          ]
+        },
+        {
+          "description": "Hard. The target contains another app's root, key or anchor.",
+          "type": "object",
+          "properties": {
+            "app": {
+              "description": "Display name or program id of the other app.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "ContainsOtherApp"
+            }
+          },
+          "required": [
+            "kind",
+            "app"
+          ]
+        },
+        {
+          "description": "Hard. A shared reference count (MSI component clients, `SharedDLLs`) still holds the target.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "SharedRefcount"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The MSI product is still registered in some context.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "MsiProductStillRegistered"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. Other Burn bundles still depend on the package.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "BurnDependentsRemain"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The target existed before the app was installed.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ExistedBeforeInstall"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The key is owned by TrustedInstaller or carries a TrustedInstaller ACE.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "TrustedInstallerOwned"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. A referenced or target file exists and is Microsoft-signed, in WinSxS or in the baseline.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "MicrosoftSystemTarget"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The interface id is a shared one (`kb/shared-iids.json`).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "SharedIid"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The target is under a cloud sync root.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "SyncRoot"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The file has a hard link outside the plan.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "HardLinkOutsidePlan"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The key is a registry link.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "RegLink"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The final path differs from the lexical path (a reparse point on the way).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ReparseMismatch"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The data is managed by Windows and opaque to the engine.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "WindowsManagedOpaque"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The target cannot be backed up, so it is report-only.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "CannotBackUp"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. Verify-gone failed: the app still appears installed (for Safe-only evidence paths).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "NotGone"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. The service is a kernel, file-system or recognizer driver (M1b).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "Driver"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Hard. Other services depend on this service (M1b). They go first, in a later run.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "HasDependents"
+            },
+            "names": {
+              "description": "Names of the dependent services.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "names"
+          ]
+        },
+        {
+          "description": "Hard. The object's identity digest differs from the one the harvest recorded (M1b).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ObjectChangedSinceHarvest"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. The container has children that are not attributed to the app.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "UnmatchedChildren"
+            },
+            "n": {
+              "description": "How many children are not attributed.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "n"
+          ]
+        },
+        {
+          "description": "Soft. The target is user data.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "UserData"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. The target is larger than 2 GB or 50 000 files.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "TooLarge"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. The target is older than the app's install.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "OlderThanInstall"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. Several apps removed in one batch own the target; decided when all are gone (§5.8.4).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "MultiTargetOwner"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. Removing the target cannot be undone.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ReversibilityNone"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. The target is in use.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "InUse"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. An installed product's cached MSI package cannot be read, and its tokens or anchors match.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "MsiPackageUnreadable"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. The target changed between the scan and the execution; it is skipped.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ChangedSinceScan"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. Undo cannot restore everything (M1b), e.g. the stored password of a service account.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ReversibilityPartial"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. The object's program path could not be resolved to one file (M1b).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ProgramUnresolved"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Soft. The proof that the key is not Windows' own rests on *inferred* absence: no shipped baseline\nmatches this Windows exactly, and the key is merely in no list the baseline view holds (trust\nMerged or Local, BASELINE_LOCAL_DESIGN.md §4.4). It carries the trust cap (L4): the item is\noffered, at most Likely, and never preselected.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "BaselineInferred"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "BootMovePair": {
+      "description": "One entry of the boot-time move list (`PendingFileRenameOperations`), as the strings stand in the\nvalue: the session manager renames `src` to `dst` at the next boot.",
+      "type": "object",
+      "properties": {
+        "dst": {
+          "description": "The destination in NT form, unit for unit as stored.",
+          "type": "string"
+        },
+        "src": {
+          "description": "The source in NT form (`\\??\\C:\\dir\\name`), unit for unit as stored, including a leading\n`*<digits>` marker when Windows wrote one.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "src",
+        "dst"
+      ]
+    },
+    "FailCode": {
+      "description": "What kind of failure ended an item.",
+      "oneOf": [
+        {
+          "description": "Access was denied. Purge never raises its own access to get past this.",
+          "type": "string",
+          "const": "AccessDenied"
+        },
+        {
+          "description": "The item stayed in use after the retries and nothing on the locked-file ladder applied.",
+          "type": "string",
+          "const": "InUse"
+        },
+        {
+          "description": "Controlled Folder Access refused the change.",
+          "type": "string",
+          "const": "ControlledFolderAccess"
+        },
+        {
+          "description": "The action reported success but the item is still there.",
+          "type": "string",
+          "const": "VerifyFailed"
+        },
+        {
+          "description": "The package API refused or failed.",
+          "type": "string",
+          "const": "PackageApi"
+        },
+        {
+          "description": "An SCM, Task Scheduler or WMI call failed (M1b); `os_error` holds the HRESULT or Win32 code.",
+          "type": "string",
+          "const": "ObjectApi"
+        },
+        {
+          "description": "Any other operating-system error; `os_error` holds the code.",
+          "type": "string",
+          "const": "Os"
+        },
+        {
+          "description": "An unexpected state inside the executor.",
+          "type": "string",
+          "const": "Internal"
+        }
+      ]
+    },
+    "HistoryItem": {
+      "description": "One item of `history.get`.",
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "description": "The name shown.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "What kind of thing it is.",
+          "$ref": "#/$defs/ItemKind"
+        },
+        "op": {
+          "description": "Its op.",
+          "$ref": "#/$defs/OpId"
+        },
+        "outcome": {
+          "description": "How it ended.",
+          "$ref": "#/$defs/ItemOutcome"
+        },
+        "undone": {
+          "description": "Whether it has been undone.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "op",
+        "display_name",
+        "kind",
+        "outcome",
+        "undone"
+      ]
+    },
+    "ItemKind": {
+      "description": "What kind of thing an item is, for display.",
+      "oneOf": [
+        {
+          "description": "A file.",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "A folder.",
+          "type": "string",
+          "const": "folder"
+        },
+        {
+          "description": "A registry key.",
+          "type": "string",
+          "const": "registry_key"
+        },
+        {
+          "description": "A registry value.",
+          "type": "string",
+          "const": "registry_value"
+        },
+        {
+          "description": "Data inside a registry value (a changed value, a multi-string segment).",
+          "type": "string",
+          "const": "registry_data"
+        },
+        {
+          "description": "A service.",
+          "type": "string",
+          "const": "service"
+        },
+        {
+          "description": "A scheduled task.",
+          "type": "string",
+          "const": "task"
+        },
+        {
+          "description": "A firewall rule.",
+          "type": "string",
+          "const": "firewall_rule"
+        },
+        {
+          "description": "An AppX package.",
+          "type": "string",
+          "const": "package"
+        }
+      ]
+    },
+    "ItemOutcome": {
+      "description": "How one item ended. Serialised as an object tagged by `\"kind\"`.",
+      "oneOf": [
+        {
+          "description": "The action ran and was verified.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "Done"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The item was already gone. Counts as success.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "Vanished"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The item was left untouched.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "Skipped"
+            },
+            "reason": {
+              "description": "Why.",
+              "$ref": "#/$defs/SkipReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ]
+        },
+        {
+          "description": "The item is locked and its path is user-writable: it is left in place and retried at the next\nPurge run.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "HeldRetry"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A boot-time move into quarantine is registered; the item goes at the next restart.",
+          "type": "object",
+          "properties": {
+            "confirmed": {
+              "description": "Whether `pair` was found in the list right after the registration. When it is true, `pair` is\nthe spelling read back from the list; when false, it is the spelling the executor expected,\nand a reader must look the pair up in the list before removing it.",
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "const": "PendingReboot"
+            },
+            "pair": {
+              "description": "The entry of the boot-time move list, as it was written. Reconcile and undo remove or look\nfor exactly this pair; they never rebuild it from the paths.",
+              "$ref": "#/$defs/BootMovePair"
+            }
+          },
+          "required": [
+            "kind",
+            "pair",
+            "confirmed"
+          ]
+        },
+        {
+          "description": "`DeleteService` succeeded but the service is only marked for deletion (M1b): another handle to\nit is open, so its key stays with `DeleteFlag = 1` and the SCM removes it when the last handle\ncloses, at the latest at restart. Until then a re-create fails with 1072. Counted with the\npending reboots in [`OutcomeCounts`].",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "PendingDelete"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The action failed. The item is in its original state unless `code` is\n[`FailCode::VerifyFailed`].",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The kind of failure.",
+              "$ref": "#/$defs/FailCode"
+            },
+            "detail": {
+              "description": "Free text for the report; may be empty.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "Failed"
+            },
+            "os_error": {
+              "description": "The Win32 error code, when there is one.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "code"
+          ]
+        }
+      ]
+    },
+    "OpId": {
+      "description": "The number of one op within a session, counted from 1 in plan order.\n\nEvery selected plan item gets an op id, whether or not it ends up acted on. The id also names the op's\ndirectory and backup files, through [`OpId::file_stem`]. Reading `0` fails: no op has that id. That\nan id is at most the header's item count is checked where the journal is read.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1
+    },
+    "SessionId": {
+      "description": "UTC start time and 64 random bits, e.g. 20261115T101502Z-9f3a6c1d2b7e4a50",
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"
+    },
+    "SessionState": {
+      "description": "Where a session stands.",
+      "oneOf": [
+        {
+          "description": "The journal has neither a commit nor an aborted record: the run is in progress, or it crashed and\nwaits for recovery.",
+          "type": "string",
+          "const": "Open"
+        },
+        {
+          "description": "The run finished and was committed.",
+          "type": "string",
+          "const": "Committed"
+        },
+        {
+          "description": "The run stopped early (a backup or journal write failed); items after the stop are untouched.",
+          "type": "string",
+          "const": "Aborted"
+        },
+        {
+          "description": "Every op that changed the system was undone.",
+          "type": "string",
+          "const": "Undone"
+        },
+        {
+          "description": "Some ops were undone; others remain, or ended in a conflict.",
+          "type": "string",
+          "const": "PartiallyUndone"
+        }
+      ]
+    },
+    "SkipReason": {
+      "description": "Why an item was not acted on. Serialised as an object tagged by `\"kind\"`.",
+      "oneOf": [
+        {
+          "description": "The item is no longer what was validated (other file id, type, data or content).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ChangedSinceScan"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A delete-if-empty item has content now.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "NoLongerEmpty"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A gate of §7.2 refused the item at execute time.",
+          "type": "object",
+          "properties": {
+            "blocker": {
+              "description": "The blocker the gate raised, e.g. `RegLink`, `DenyListed` or `ReversibilityNone` (the\nirreversible acknowledgement is missing).",
+              "$ref": "#/$defs/Blocker"
+            },
+            "kind": {
+              "type": "string",
+              "const": "GateBlocked"
+            }
+          },
+          "required": [
+            "kind",
+            "blocker"
+          ]
+        },
+        {
+          "description": "The backup could not be written or did not verify, so nothing was deleted.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "NoVerifiedBackup"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Taking the backup would exceed the quarantine size cap.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "CapExceeded"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The run was aborted before the item's turn came.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "NotAttempted"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    }
+  }
+}

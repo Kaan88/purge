@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OutcomeResult",
+  "description": "`journal.resume`, `journal.rollback`, `journal.retry_held`.",
+  "type": "object",
+  "properties": {
+    "outcome": {
+      "description": "What the run did.",
+      "$ref": "#/$defs/Outcome"
+    }
+  },
+  "required": [
+    "outcome"
+  ],
+  "$defs": {
+    "Outcome": {
+      "description": "What a run did. Carried by results; not an error.",
+      "oneOf": [
+        {
+          "description": "Everything was done.",
+          "type": "string",
+          "const": "complete"
+        },
+        {
+          "description": "Some items are held or failed; the result names them and what holds them.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "An undo restored what it could and lists conflicts.",
+          "type": "string",
+          "const": "undo_conflicts"
+        },
+        {
+          "description": "The session was not recorded completely; History offers recovery. Wins over the two above.",
+          "type": "string",
+          "const": "not_closed"
+        }
+      ]
+    }
+  }
+}

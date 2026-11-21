@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SizeReady",
+  "description": "`size.ready`.",
+  "type": "object",
+  "properties": {
+    "request": {
+      "description": "The `programs.sizes` request.",
+      "$ref": "#/$defs/RequestId"
+    },
+    "sizes": {
+      "description": "The sizes.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProgramSize"
+      }
+    }
+  },
+  "required": [
+    "request",
+    "sizes"
+  ],
+  "$defs": {
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "ProgramSize": {
+      "description": "One size of a `size.ready`.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Bytes on disk; `None` when they could not be measured.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "program_id": {
+          "description": "The program.",
+          "$ref": "#/$defs/ProgramId"
+        }
+      },
+      "required": [
+        "program_id"
+      ]
+    },
+    "RequestId": {
+      "description": "The id of a request: an unsigned integer the client chooses. Progress notifications name the request\nthey belong to by it.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  }
+}

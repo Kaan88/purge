@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ScanResult",
+  "description": "`leftovers.scan`.",
+  "type": "object",
+  "properties": {
+    "baseline_trust": {
+      "description": "How far absence answers of the baseline view were trusted.",
+      "$ref": "#/$defs/BaselineTrust"
+    },
+    "counts": {
+      "description": "Candidates per band.",
+      "$ref": "#/$defs/BandCounts"
+    },
+    "mode": {
+      "description": "The mode the broker scanned in.",
+      "$ref": "#/$defs/ScanMode"
+    },
+    "scan_id": {
+      "description": "The scan, for the next requests.",
+      "$ref": "#/$defs/ScanId"
+    },
+    "warnings": {
+      "description": "Warnings.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Warning"
+      }
+    }
+  },
+  "required": [
+    "scan_id",
+    "mode",
+    "counts",
+    "baseline_trust",
+    "warnings"
+  ],
+  "$defs": {
+    "BandCounts": {
+      "description": "Candidates per band.",
+      "type": "object",
+      "properties": {
+        "blocked": {
+          "description": "Band Blocked.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "likely": {
+          "description": "Band Likely.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "preselected": {
+          "description": "Preselected, over all bands.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "safe": {
+          "description": "Band Safe.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "weak": {
+          "description": "Band Weak.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "safe",
+        "likely",
+        "weak",
+        "blocked",
+        "preselected"
+      ]
+    },
+    "BaselineTrust": {
+      "description": "How far a baseline view can be trusted when it says \"this key is not Windows' own\"\n(BASELINE_LOCAL_DESIGN.md §4.1). Serialised by its variant name.\n\nPresence (\"Windows has it\") blocks at every level. Absence is *proof* only at [`BaselineTrust::Exact`];\nat `Merged` and `Local` it is *inferred* and under the trust cap (invariant L4: it never makes an item\nSafe or preselected); at `None` it is never answered.",
+      "oneOf": [
+        {
+          "description": "A shipped baseline matches the host's (edition, build, ubr): absence is proof, as at the M1b gate.",
+          "type": "string",
+          "const": "Exact"
+        },
+        {
+          "description": "No exact match; a complete local baseline merged with at least one shipped neighbour.",
+          "type": "string",
+          "const": "Merged"
+        },
+        {
+          "description": "No exact match and no neighbour; a complete local baseline alone.",
+          "type": "string",
+          "const": "Local"
+        },
+        {
+          "description": "Anything else: absence is never answered, the scan works values-only.",
+          "type": "string",
+          "const": "None"
+        }
+      ]
+    },
+    "ScanId": {
+      "type": "string",
+      "pattern": "^s-[0-9a-f]{16}$"
+    },
+    "ScanMode": {
+      "description": "The situation a leftover scan runs in (ENGINE_PLAN.md §5.1).",
+      "oneOf": [
+        {
+          "description": "Right after the vendor uninstaller ran under Purge, with a pre-uninstall harvest.",
+          "type": "string",
+          "const": "post"
+        },
+        {
+          "description": "The app was uninstalled outside Purge; only a cached harvest, if any, is available.",
+          "type": "string",
+          "const": "external"
+        },
+        {
+          "description": "No uninstaller ran (forced removal of a broken or portable app).",
+          "type": "string",
+          "const": "forced"
+        }
+      ]
+    },
+    "Warning": {
+      "description": "A warning for the user. `code` is stable for the client to switch on; `message` is shown.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "A stable machine code, e.g. `baseline_inferred`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "The text shown.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    }
+  }
+}

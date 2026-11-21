@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ObservedParams",
+  "description": "`uninstall.observed {session_id}`.",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "description": "The uninstall session from `uninstall.prepare`.",
+      "$ref": "#/$defs/UninstallSessionId"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "session_id"
+  ],
+  "$defs": {
+    "UninstallSessionId": {
+      "type": "string",
+      "pattern": "^u-[0-9a-f]{16}$"
+    }
+  }
+}

@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PlanCreated",
+  "description": "`plan.create`. A refused plan is the error `plan_refused`.",
+  "type": "object",
+  "properties": {
+    "attention": {
+      "description": "Items that need attention; never cut.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AttentionItem"
+      }
+    },
+    "bytes": {
+      "description": "Bytes the plan moves to quarantine.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "code": {
+      "description": "The short code of the confirm hash; the consent dialog shows the same.",
+      "$ref": "#/$defs/ConfirmCode"
+    },
+    "counts": {
+      "description": "Item counts.",
+      "$ref": "#/$defs/PlanCounts"
+    },
+    "plan_hash": {
+      "description": "The plan hash.",
+      "$ref": "#/$defs/Sha256Hex"
+    },
+    "plan_id": {
+      "description": "The plan, for `plan.execute`.",
+      "$ref": "#/$defs/PlanId"
+    },
+    "warnings": {
+      "description": "Warnings.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Warning"
+      }
+    }
+  },
+  "required": [
+    "plan_id",
+    "plan_hash",
+    "code",
+    "counts",
+    "bytes",
+    "attention",
+    "warnings"
+  ],
+  "$defs": {
+    "AttentionItem": {
+      "description": "An item of a plan's attention list.",
+      "type": "object",
+      "properties": {
+        "band": {
+          "description": "Its band.",
+          "$ref": "#/$defs/Band"
+        },
+        "candidate_id": {
+          "description": "The candidate.",
+          "$ref": "#/$defs/CandidateRef"
+        },
+        "display_name": {
+          "description": "The name shown.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "What kind of thing it is.",
+          "$ref": "#/$defs/ItemKind"
+        },
+        "reasons": {
+          "description": "Why it needs attention, at least one.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttentionReason"
+          }
+        },
+        "size_bytes": {
+          "description": "Bytes, for files and folders.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "candidate_id",
+        "display_name",
+        "kind",
+        "band",
+        "reasons"
+      ]
+    },
+    "AttentionReason": {
+      "description": "Why an item is in a plan's attention list (design 8.1).",
+      "oneOf": [
+        {
+          "description": "The item is user data.",
+          "type": "string",
+          "const": "user_data"
+        },
+        {
+          "description": "The user ticked it; Purge did not preselect it.",
+          "type": "string",
+          "const": "not_preselected"
+        },
+        {
+          "description": "The item is over 1 GB.",
+          "type": "string",
+          "const": "large"
+        }
+      ]
+    },
+    "Band": {
+      "description": "The confidence band policy assigns to a candidate (ENGINE_PLAN.md §5.8.2).",
+      "oneOf": [
+        {
+          "description": "Proven to belong to the removed app; may be preselected.",
+          "type": "string",
+          "const": "Safe"
+        },
+        {
+          "description": "Probably the app's; shown, preselection depends on mode and category.",
+          "type": "string",
+          "const": "Likely"
+        },
+        {
+          "description": "Weak evidence only; listed, never preselected.",
+          "type": "string",
+          "const": "Weak"
+        },
+        {
+          "description": "A blocker or guard rule applies; shown for transparency, never actionable.",
+          "type": "string",
+          "const": "Blocked"
+        }
+      ]
+    },
+    "CandidateRef": {
+      "type": "string",
+      "pattern": "^c-[0-9a-f]{16}$"
+    },
+    "ConfirmCode": {
+      "type": "string",
+      "pattern": "^[0-9A-F]{4}-[0-9A-F]{4}$"
+    },
+    "ItemKind": {
+      "description": "What kind of thing an item is, for display.",
+      "oneOf": [
+        {
+          "description": "A file.",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "A folder.",
+          "type": "string",
+          "const": "folder"
+        },
+        {
+          "description": "A registry key.",
+          "type": "string",
+          "const": "registry_key"
+        },
+        {
+          "description": "A registry value.",
+          "type": "string",
+          "const": "registry_value"
+        },
+        {
+          "description": "Data inside a registry value (a changed value, a multi-string segment).",
+          "type": "string",
+          "const": "registry_data"
+        },
+        {
+          "description": "A service.",
+          "type": "string",
+          "const": "service"
+        },
+        {
+          "description": "A scheduled task.",
+          "type": "string",
+          "const": "task"
+        },
+        {
+          "description": "A firewall rule.",
+          "type": "string",
+          "const": "firewall_rule"
+        },
+        {
+          "description": "An AppX package.",
+          "type": "string",
+          "const": "package"
+        }
+      ]
+    },
+    "PlanCounts": {
+      "description": "Item counts of a plan.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "Selected items.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "preselected": {
+          "description": "Of them, preselected by Purge.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "ticked": {
+          "description": "Of them, ticked by the user.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "items",
+        "preselected",
+        "ticked"
+      ]
+    },
+    "PlanId": {
+      "type": "string",
+      "pattern": "^p-[0-9a-f]{16}$"
+    },
+    "Sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "Warning": {
+      "description": "A warning for the user. `code` is stable for the client to switch on; `message` is shown.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "A stable machine code, e.g. `baseline_inferred`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "The text shown.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    }
+  }
+}

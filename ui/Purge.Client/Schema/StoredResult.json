@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StoredResult",
+  "description": "`leftovers.stored`.",
+  "type": "object",
+  "properties": {
+    "stored": {
+      "description": "The asked programs that have a stored fingerprint.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProgramId"
+      }
+    }
+  },
+  "required": [
+    "stored"
+  ],
+  "$defs": {
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    }
+  }
+}

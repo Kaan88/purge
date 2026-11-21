@@ -685,6 +685,7 @@ dependencies = [
  "purge-index",
  "purge-inventory",
  "purge-model",
+ "purge-rpc",
  "purge-scan",
  "purge-source",
  "roxmltree",

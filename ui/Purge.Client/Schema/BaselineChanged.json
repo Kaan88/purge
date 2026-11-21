@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BaselineChanged",
+  "description": "`baseline.changed`: the build state, and the scans worth making again when a build completed.",
+  "type": "object",
+  "properties": {
+    "rescan_offered": {
+      "description": "Scans made before the build ended.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ScanId"
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "description": "No build runs in this process: an exact shipped baseline, a complete cache, an engine that is\nnot elevated, or no cache directory. `reason` says which.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "Why nothing is built.",
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "const": "none"
+        }
+      },
+      "required": [
+        "state",
+        "reason"
+      ]
+    },
+    {
+      "description": "Deciding whether a build is needed.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "const": "checking"
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    {
+      "description": "Building. A scan made now does not use what is still being built.",
+      "type": "object",
+      "properties": {
+        "parts": {
+          "description": "The sources being built (`S1`, `S2`, `S4`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scan_waiting": {
+          "description": "A scan has asked for the view since the build started, so the build runs at normal\npriority and that scan is worth making again when the build is done.",
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "const": "building"
+        }
+      },
+      "required": [
+        "state",
+        "parts",
+        "scan_waiting"
+      ]
+    },
+    {
+      "description": "Built in this process.",
+      "type": "object",
+      "properties": {
+        "rescan": {
+          "description": "A scan ran before the build ended: making it again uses the new local baseline.",
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "const": "done"
+        }
+      },
+      "required": [
+        "state",
+        "rescan"
+      ]
+    },
+    {
+      "description": "The build did not produce a usable cache.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "Why.",
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "const": "failed"
+        }
+      },
+      "required": [
+        "state",
+        "reason"
+      ]
+    }
+  ],
+  "$defs": {
+    "ScanId": {
+      "type": "string",
+      "pattern": "^s-[0-9a-f]{16}$"
+    }
+  }
+}

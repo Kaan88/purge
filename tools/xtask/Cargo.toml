@@ -17,6 +17,7 @@ purge-identity.workspace = true
 purge-index.workspace = true
 purge-inventory.workspace = true
 purge-model.workspace = true
+purge-rpc.workspace = true
 purge-scan.workspace = true
 purge-source.workspace = true
 serde.workspace = true
