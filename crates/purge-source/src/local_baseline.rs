@@ -61,11 +61,16 @@ pub const REPOSITORY_EXTENSIONS_KEY: &str = r"HKLM\SOFTWARE\Classes\Local Settin
 /// `CN=Microsoft Windows, …`).
 pub const MICROSOFT_PUBLISHER_IDS: [&str; 2] = ["8wekyb3d8bbwe", "cw5n1h2txyewy"];
 
-/// One component manifest: its file name and its bytes as stored, or why they could not be read.
-pub type ManifestItem = (String, SourceResult<Vec<u8>>);
+/// Reads one component manifest: its bytes as stored, or why they could not be read. Called at most
+/// once, on any thread.
+pub type ManifestRead<'a> = Box<dyn FnOnce() -> SourceResult<Vec<u8>> + Send + 'a>;
 
-/// The component manifests, read lazily one by one.
-pub type ManifestIter<'a> = Box<dyn Iterator<Item = ManifestItem> + Send + 'a>;
+/// One component manifest: its file name and the read of its bytes. Taking an item from the listing
+/// reads nothing, so the threads that share one listing read their files at the same time.
+pub type ManifestItem<'a> = (String, ManifestRead<'a>);
+
+/// The component manifests, listed once, each read when its item's read is called.
+pub type ManifestIter<'a> = Box<dyn Iterator<Item = ManifestItem<'a>> + Send + 'a>;
 
 /// One item of a hive walk. Paths are relative to the walked root, `\`-separated, without a leading `\`,
 /// with names as stored; the root itself is the empty path. A key comes before its values and subkeys.
@@ -222,8 +227,9 @@ pub fn list_manifests<'a>(
         .collect();
     names.sort_by_cached_key(|n| n.to_ascii_lowercase());
     Ok(Box::new(names.into_iter().map(move |name| {
-        let bytes = read_capped(fs, &format!(r"{dir}\{name}"), MAX_MANIFEST_BYTES);
-        (name, bytes)
+        let path = format!(r"{dir}\{name}");
+        let read: ManifestRead<'a> = Box::new(move || read_capped(fs, &path, MAX_MANIFEST_BYTES));
+        (name, read)
     })))
 }
 

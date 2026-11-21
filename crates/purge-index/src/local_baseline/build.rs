@@ -601,11 +601,16 @@ fn s1_worker(
     let no_base = SxsBase::from_bytes(Vec::new(), PathBuf::new());
     loop {
         let t = Instant::now();
+        // Only the next name is taken under the lock; the file is read outside it, so the workers
+        // read at the same time.
         let next = queue.lock().unwrap_or_else(PoisonError::into_inner).next();
-        part.read_time += t.elapsed();
-        let Some((name, bytes)) = next else { break };
+        let Some((name, read)) = next else {
+            part.read_time += t.elapsed();
+            break;
+        };
         part.listed += 1;
-        let bytes: SourceResult<Vec<u8>> = bytes;
+        let bytes: SourceResult<Vec<u8>> = read();
+        part.read_time += t.elapsed();
         let bytes = match bytes {
             Ok(b) => b,
             Err(e) => {

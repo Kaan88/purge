@@ -1727,7 +1727,11 @@ mod local_tests {
             .file(&format!(r"{dir}\c.manifest"), 3)
             .dir(&format!(r"{dir}\sub.manifest"))
             .build();
-        let got: Vec<(String, SourceResult<Vec<u8>>)> = f.manifests().unwrap().collect();
+        let got: Vec<(String, SourceResult<Vec<u8>>)> = f
+            .manifests()
+            .unwrap()
+            .map(|(name, read)| (name, read()))
+            .collect();
         assert_eq!(
             got,
             vec![

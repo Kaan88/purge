@@ -328,7 +328,7 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
   `PURGE_KB_DIR`) must pass the same admin-only check, or no shipped baseline is used at all. This closes
   a gap that exists today and that this feature would widen.
 - **Budget** (`PURGE_TIMING` phases `baseline.local.*`; `read` is the workers' time taking the next manifest and
-  reading it): cold build at background I/O and CPU priority,
+  reading it, outside the listing lock since gate M round 2): cold build at background I/O and CPU priority,
   in parallel over the manifests: at most 30 s on the 591-program host, at most 120 s on a 2-vCPU VM;
   peak memory at most 300 MB; file at most 15 MB; source-id check at most 0.3 s; warm load of the view
   (local plus two neighbours) at most 1.5 s and at most 80 MB resident. The build starts when the broker
