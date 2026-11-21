@@ -20,9 +20,13 @@ same newline framing and the same `RpcJsonContext` DTOs.
 
 1. **New files only.** The broker client does not refactor `StdioEngineClient`, so the Programs-page work in
    M3-UI-S1 and this package do not share a file.
-2. **Check before the first byte.** `BrokerLauncher` connects with `CreateFileW` (`FILE_ATTRIBUTE_NORMAL |
-   SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION`), runs `BrokerServerCheck` on the raw handle, and only then
-   makes the `FileStream` and `BrokerRpcClient`. A refused server never reaches a DTO parser.
+2. **Check before the first byte.** `BrokerPipe.TryOpen` (called by `BrokerLauncher`) connects with `CreateFileW` (`FILE_ATTRIBUTE_NORMAL |
+   FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION`), runs `BrokerServerCheck` on the raw handle, and only then
+   makes the `NamedPipeClientStream` (`isAsync: true, isConnected: true`) and `BrokerRpcClient`. A refused server never reaches a DTO parser.
+   The handle must be overlapped (review M3-R2 B2): the reader thread is always inside a read, the broker sends nothing before
+   `engine.hello`, and Windows serialises I/O on a synchronous handle, so a synchronous handle never sends the hello.
+   `BrokerPipeTests` runs the hello against the real Rust pipe server (`bins/purge-broker/examples/pipe_harness.rs`, unelevated,
+   an example target with no release build) and against an in-process server that stays in a pending read.
 3. **Pid, image, elevation.** The pid must equal the process handle from `ShellExecuteExW` (held, so the pid
    cannot be reused); `QueryFullProcessImageNameW` must equal the launched path (ordinal, case-insensitive); the
    process token's `TokenElevation` must be set. On a failure the launched process is terminated, because it is
